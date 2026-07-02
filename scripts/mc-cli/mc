@@ -1,0 +1,21 @@
+#!/usr/bin/env python3
+"""Launcher for the `mc` CLI.
+
+Installed to /home/agent/.local/bin/mc in the agent images. Keeps stdlib-only
+so we don't need pip in the container path.
+"""
+from __future__ import annotations
+
+import os
+import sys
+
+# When installed as a standalone script next to the mc_cli package, add the
+# parent dir to sys.path so `from mc_cli.__main__ import main` works.
+_HERE = os.path.dirname(os.path.abspath(os.path.realpath(__file__)))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+from mc_cli.__main__ import main  # noqa: E402
+
+if __name__ == "__main__":
+    sys.exit(main())

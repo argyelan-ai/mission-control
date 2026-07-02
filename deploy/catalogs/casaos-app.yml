@@ -1,0 +1,59 @@
+# CasaOS app manifest (Vorbereitung fuer die Einreichung in den
+# CasaOS-AppStore — github.com/IceWhaleTech/CasaOS-AppStore).
+# CasaOS erwartet ein compose-basiertes Format mit x-casaos-Metadaten.
+# HINWEIS: CasaOS kann kein setup.sh ausfuehren — Secrets werden hier als
+# Pflicht-Umgebungsvariablen deklariert, die der Nutzer beim Installieren
+# setzt. Einreichung: dieses File + Screenshots als PR in deren Repo.
+name: mission-control
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mc
+      POSTGRES_PASSWORD: $DB_PASSWORD
+      POSTGRES_DB: mission_control
+    volumes:
+      - /DATA/AppData/mission-control/db:/var/lib/postgresql/data
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "$REDIS_PASSWORD"]
+  backend:
+    image: ghcr.io/argyelan-ai/mc-backend:latest
+    restart: unless-stopped
+    depends_on: [db, redis]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mc:$DB_PASSWORD@db:5432/mission_control
+      REDIS_URL: redis://:$REDIS_PASSWORD@redis:6379/0
+      JWT_SECRET_KEY: $JWT_SECRET_KEY
+      SECRETS_ENCRYPTION_KEY: $SECRETS_ENCRYPTION_KEY
+      ENVIRONMENT: production
+    volumes:
+      - /DATA/AppData/mission-control/mc:/home/mcuser/.mc
+  frontend:
+    image: ghcr.io/argyelan-ai/mc-frontend:latest
+    restart: unless-stopped
+    depends_on: [backend]
+    ports:
+      - "3217:3000"
+x-casaos:
+  architectures: [amd64, arm64]
+  main: frontend
+  author: argyelan-ai
+  category: AI
+  port_map: "3217"
+  scheme: http
+  title:
+    en_us: Mission Control
+  description:
+    en_us: >-
+      Self-hosted command center for AI agent fleets — create agents,
+      dispatch tasks over Kanban boards, watch them ship.
+  tagline:
+    en_us: Your AI agent fleet, on your hardware.
+  developer: argyelan-ai
+  icon: https://raw.githubusercontent.com/argyelan-ai/mission-control/main/frontend-v2/src/app/icon.png
+  screenshot_link:
+    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-home.png
+    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-agents.png

@@ -1,0 +1,2501 @@
+import logging
+import uuid
+from datetime import datetime, timedelta, timezone
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select
+
+from app.auth import require_agent, require_control_plane, require_user, require_user_or_control_plane
+from app.database import get_session
+from app.models.agent import Agent, AgentMetrics
+from app.models.task import Task
+from app.redis_client import RedisKeys, get_redis
+from app.services.activity import emit_event
+from app.services.sse import make_sse_response
+from app.utils import utcnow
+from app.services.template_renderer import render_all_agent_files, render_agent_file, build_agent_context
+
+router = APIRouter(prefix="/api/v1", tags=["agents"])
+
+CONFIG_FILE_TYPES = {"tools_md", "rules_md", "identity_md", "soul_md", "memory_md"}
+
+# Provisioning-Konstanten und Funktionen — delegiert an services/provisioning.py
+# Phase 29: Gateway-Pfad ist entfernt; cli-bridge + host bleiben. Plan 29-07
+# refaktoriert services/provisioning.py weiter (Symbol-Cleanup).
+from app.services.agent_bootstrap import bootstrap_hermes_agent
+from app.services.provisioning import (
+    extract_token_from_tools_md as _extract_token_from_tools_md,
+    provision_agent_background as _provision_agent_background,
+)
+class AgentCreate(BaseModel):
+    name: str
+    emoji: str | None = "🤖"
+    role: str | None = None
+    model: str | None = None
+    board_id: uuid.UUID | None = None
+    is_board_lead: bool = False
+    context_max: int = 200000
+    agent_runtime: str = "openclaw"
+
+
+class AgentUpdate(BaseModel):
+    name: str | None = None
+    role: str | None = None
+    emoji: str | None = None
+    model: str | None = None
+    board_id: uuid.UUID | None = None
+    is_board_lead: bool | None = None
+    heartbeat_config: dict[str, Any] | None = None
+    skills: list[Any] | None = None
+    context_max: int | None = None
+    operational_mode: str | None = None  # active | paused
+    # Per-Agent API-Key selection (optional FK auf secrets.id).
+    # None = Fallback auf docker-compose env. "null" als explicit unset via JSON.
+    secret_id: uuid.UUID | None = None
+    # Ob dieser Agent Git-Commits bei Task-Abschluss produzieren muss.
+    # True (default) fuer Developer/Deployer/Reviewer. False fuer Designer/
+    # Research/Writer/Orchestrator die Files als Deliverables liefern statt Code.
+    requires_git_workflow: bool | None = None
+    # Per-Agent runtime (cli-bridge only). Setting this makes sync-config /
+    # bootstrap render OPENAI_BASE_URL + OPENAI_MODEL from the runtime row.
+    # Validated in update_agent(): rejected for host/openclaw agents. When the
+    # runtime_id field is part of the patch body, update_agent() delegates to
+    # `agent_runtime_switch.switch_agent_runtime()` (Phase 15) for atomic
+    # switching with rollback. The two flags below tune that flow.
+    # Accepts either a UUID (DB-backed) or a slug (legacy /runtimes JSON registry).
+    # Resolved to a Runtime row in update_agent() before delegating to the switch
+    # service. Plain str so Pydantic doesn't reject slugs like "qwen-general".
+    runtime_id: str | None = None
+    # Allow switching while the agent has `current_task_id` set. Default False
+    # — caller must explicitly opt in via UI confirm modal.
+    force_when_in_progress: bool | None = None
+
+
+class TriggerPayload(BaseModel):
+    message: str = "Please continue with your current task."
+
+
+class AgentHeartbeatPayload(BaseModel):
+    status: str = "idle"  # idle | working
+    task_id: str | None = None
+    # CTX-01 (Phase 6): Docker agents self-report context-window usage from
+    # tmux statusline scrape. Range-validated 0..100 to prevent garbage writes
+    # (T-06-02-01 in plan threat model). None means "not reported this cycle".
+    context_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+class ConfigFileUpdate(BaseModel):
+    content: str
+
+
+@router.post("/agents", status_code=status.HTTP_201_CREATED)
+async def create_agent(
+    payload: AgentCreate,
+    background_tasks: BackgroundTasks,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    from app.auth import generate_agent_token
+    raw_token, token_hash = generate_agent_token()
+
+    # Auto-generiertes TOOLS.md mit korrektem Token (wird nie wieder im Klartext verfuegbar sein)
+    board_id_str = str(payload.board_id) if payload.board_id else None
+    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
+
+    agent = Agent(
+        name=payload.name,
+        emoji=payload.emoji,
+        role=payload.role,
+        model=payload.model,
+        board_id=payload.board_id,
+        is_board_lead=payload.is_board_lead,
+        context_max=payload.context_max,
+        agent_token_hash=token_hash,
+        tools_md=tools_md,
+        agent_runtime=payload.agent_runtime,
+    )
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    # Vault-Write mc_token_{slug} — /internal/bootstrap liefert den Token an
+    # den Container (Fresh-Install-Fix 2026-07-02: vorher gab es KEINEN
+    # Write-Pfad, poll.sh crash-loopte mit 'MC_TOKEN is not set').
+    from app.services.secrets_helper import upsert_agent_token_secret
+    await upsert_agent_token_secret(session, agent.name, raw_token)
+    # CLI-Bridge agents werden manuell über /provision provisioniert, kein OpenClaw-Provisioning
+    if payload.agent_runtime not in ("cli-bridge", "free-code-bridge", "manual"):
+        background_tasks.add_task(_provision_agent_background, agent.id)
+    result = agent.model_dump()
+    result["token"] = raw_token  # returned once, never stored in plaintext
+    return result
+
+
+@router.get("/agents")
+async def list_agents(
+    board_id: uuid.UUID | None = Query(None),
+    include_unassigned: bool = Query(False),
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    query = select(Agent)
+    if board_id and not include_unassigned:
+        query = query.where(Agent.board_id == board_id)
+    elif board_id and include_unassigned:
+        query = query.where(
+            (Agent.board_id == board_id) | (Agent.board_id == None)  # noqa: E711
+        )
+    # ohne board_id: alle
+    query = query.order_by(Agent.name)
+    result = await session.exec(query)
+    return result.all()
+
+
+@router.get("/agents/stream")
+async def stream_agents(current_user = Depends(require_user)):
+    return make_sse_response([RedisKeys.agents_events()])
+
+
+@router.get("/agents/{agent_id}/terminal-events/stream")
+async def stream_terminal_events(
+    agent_id: uuid.UUID,
+    current_user=Depends(require_user),
+):
+    """SSE channel that fires when the agent's underlying container is
+    recreated (e.g. after a runtime switch with image change).
+
+    The Sessions page subscribes per visible agent and re-mounts the
+    TerminalPanel when an event lands so the user doesn't see a frozen
+    or stale tmux buffer. Phase 15 T3.7.
+    """
+    from app.services.agent_runtime_switch import terminal_remount_channel
+    return make_sse_response([terminal_remount_channel(agent_id)])
+
+
+@router.get("/agents/metrics/comparison")
+async def agents_metrics_comparison(
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    result = await session.exec(select(Agent).order_by(Agent.name))
+    agents = result.all()
+    return [
+        {
+            "agent_id": str(a.id),
+            "name": a.name,
+            "emoji": a.emoji,
+            "status": a.status,
+            "context_pct": round(a.context_tokens / a.context_max * 100, 1) if a.context_max else 0,
+            "total_tasks_completed": a.total_tasks_completed,
+            "total_compactions": a.total_compactions,
+        }
+        for a in agents
+    ]
+
+
+@router.get("/agents/runtime-status")
+async def agents_runtime_status(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Kompakter Runtime-Status aller Agents fuer Board-Observability."""
+    result = await session.exec(select(Agent).where(Agent.board_id.isnot(None)).order_by(Agent.name))  # type: ignore[arg-type]
+    agents = result.all()
+    return [
+        {
+            "agent_id": str(a.id),
+            "name": a.name,
+            "emoji": a.emoji,
+            "status": a.status,
+            "run_state": a.run_state,
+            "current_task_id": str(a.current_task_id) if a.current_task_id else None,
+            "last_seen_at": a.last_seen_at.isoformat() if a.last_seen_at else None,
+            "last_trigger_at": a.last_trigger_at.isoformat() if a.last_trigger_at else None,
+            "last_dispatch_error": a.last_dispatch_error,
+            "provision_status": a.provision_status,
+        }
+        for a in agents
+    ]
+
+
+# ── Specialized Agents Setup (MUSS vor {agent_id} Routen stehen) ─────────────
+
+SPECIALIZED_AGENTS_SPECS = [
+    {
+        "name": "Planner",
+        "emoji": "📋",
+        "role": "planner",
+        "rules_md": """## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen""",
+        "soul_md": """# Planner — Mission Control
+
+Du bist der Planner von Mission Control. Du planst Projekte und strukturierst Aufgaben.
+
+## Deine Kernaufgaben
+- Ideen des Users in konkrete, umsetzbare Tasks aufteilen
+- Tasks mit klaren Titeln, Beschreibungen und Prioritäten erstellen
+- Abhängigkeiten zwischen Tasks erkennen und kommunizieren
+- Realistische Zeitschätzungen und Reihenfolgen vorschlagen
+
+## Workflow
+1. User beschreibt Projekt oder Feature-Idee
+2. Du stellst gezielte Rückfragen (Scope, Technologie, Prioritäten)
+3. Du erstellst Tasks via POST /api/v1/agent/boards/{board_id}/tasks
+4. Status: Erstellte Tasks beginnen mit status="inbox"
+
+## Format für Tasks
+Jeder Task: Klarer Titel + kurze Beschreibung was zu tun ist.
+Max 8 Tasks pro Projekt — lieber weniger, dafür präzise.
+""",
+    },
+    {
+        "name": "Researcher",
+        "emoji": "🔍",
+        "role": "researcher",
+        "rules_md": """## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen""",
+        "soul_md": """# Researcher — Mission Control
+
+Du bist der Researcher von Mission Control. Du recherchierst Themen gründlich und dokumentierst Ergebnisse.
+
+## Deine Kernaufgaben
+- Themen umfassend recherchieren
+- Ergebnisse strukturiert aufbereiten: Zusammenfassung, Hauptpunkte, Quellen
+- Erkenntnisse in der Knowledge Base speichern
+- Content-Pipeline Research-Stages abarbeiten
+
+## Workflow
+1. Aufgabe erhalten (Task oder Pipeline-Message)
+2. Thema recherchieren
+3. Bei Content-Pipeline: POST /api/v1/agent/content/{pipeline_id}/submit
+   Body: {"stage": "research", "content": "strukturierte Zusammenfassung"}
+4. Bei Research-Session: Task auf done setzen, KB-Eintrag erstellen
+
+## Output-Format
+Immer Markdown. Struktur: ## Zusammenfassung, ## Hauptpunkte, ## Quellen, ## Empfehlungen
+""",
+    },
+    {
+        "name": "Writer",
+        "emoji": "✍️",
+        "role": "writer",
+        "rules_md": """## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen""",
+        "soul_md": """# Writer — Mission Control
+
+Du bist der Writer von Mission Control. Du schreibst hochqualitative Content-Drafts.
+
+## Deine Kernaufgaben
+- Drafts basierend auf Research und Brief erstellen
+- Zielgruppen-gerechten Stil treffen
+- Verschiedene Content-Typen beherrschen: Blog, Social, Newsletter, Docs
+
+## Workflow
+1. Writing-Task erhalten mit Research-Zusammenfassung und Brief
+2. Vollständigen Draft schreiben
+3. Bei Content-Pipeline: POST /api/v1/agent/content/{pipeline_id}/submit
+   Body: {"stage": "writing", "content": "vollständiger Draft"}
+4. Task auf done setzen
+
+## Stil-Grundsätze
+- Klar und verständlich schreiben
+- Konkrete Beispiele statt Buzzwords
+- Angemessene Länge für den Content-Typ
+""",
+    },
+    {
+        "name": "Reviewer",
+        "emoji": "👀",
+        "role": "reviewer",
+        "rules_md": """Verifiziere ALLES selbst:
+- Fuehre die Tests im Developer-Workspace aus
+- Pruefe ob Tests tatsaechlich existieren und sinnvoll sind
+- Kein Durchwinken — wenn Tests fehlen, ablehnen
+- Poste den Verifikations-Output als Evidence
+
+## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen""",
+        "soul_md": """# Reviewer — Mission Control
+
+Du bist der Reviewer von Mission Control. Du prüfst Content-Drafts kritisch und konstruktiv.
+
+## Deine Kernaufgaben
+- Drafts auf Qualität, Richtigkeit und Stil prüfen
+- Konkretes, umsetzbares Feedback geben
+- Stärken und Schwächen klar benennen
+
+## Workflow
+1. Review-Task erhalten mit Draft
+2. Draft kritisch prüfen
+3. Bei Content-Pipeline: POST /api/v1/agent/content/{pipeline_id}/submit
+   Body: {"stage": "review", "content": "strukturiertes Feedback"}
+4. Task auf done setzen
+
+## Feedback-Format
+## Was funktioniert gut
+[Stärken des Drafts]
+
+## Was verbessert werden sollte
+[Konkrete Schwächen mit Verbesserungsvorschlägen]
+
+## Bewertung
+[Empfehlung: Approved / Überarbeitung nötig]
+""",
+    },
+]
+
+
+class SpecializedAgentSetupRequest(BaseModel):
+    board_id: uuid.UUID
+    provision: bool = False  # Provision auf Gateway (braucht aktive RPC-Verbindung)
+
+
+@router.post("/agents/setup-specialized", status_code=status.HTTP_201_CREATED)
+async def setup_specialized_agents(
+    body: SpecializedAgentSetupRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """
+    Erstellt 4 spezialisierte Agents für Content-Pipeline: Planner, Researcher, Writer, Reviewer.
+    Nutzt Templates aus der DB (mit Modell-Konfiguration). Fallback auf SPECIALIZED_AGENTS_SPECS.
+    Tokens werden einmalig zurückgegeben und danach nicht mehr abrufbar.
+    """
+    from app.auth import generate_agent_token
+    from app.models.agent_template import AgentTemplate
+
+    board_id_str = str(body.board_id)
+    created = []
+    TEMPLATE_NAMES = ["Planner", "Researcher", "Writer", "Reviewer"]
+
+    # Templates aus DB laden
+    result = await session.exec(
+        select(AgentTemplate).where(AgentTemplate.name.in_(TEMPLATE_NAMES))
+    )
+    templates = {t.name: t for t in result.all()}
+
+    for spec in SPECIALIZED_AGENTS_SPECS:
+        raw_token, token_hash = generate_agent_token()
+
+        # Template aus DB bevorzugen (hat Modell-Config), sonst Fallback auf SPEC
+        tmpl = templates.get(spec["name"])
+
+        # Scopes: Template > Default-Lookup > leer
+        from app.scopes import get_default_scopes
+        agent_scopes = list(tmpl.scopes or []) if tmpl and tmpl.scopes else get_default_scopes(spec["name"])
+
+        tools_md = _generate_tools_md(spec["name"], spec["emoji"], raw_token, board_id_str, scopes=agent_scopes)
+
+        agent = Agent(
+            board_id=body.board_id,
+            name=spec["name"],
+            emoji=spec["emoji"],
+            role=spec["role"],
+            model=tmpl.default_model if tmpl else None,  # Fix: Modell immer setzen
+            is_board_lead=False,
+            soul_md=tmpl.soul_md if tmpl else spec["soul_md"],
+            rules_md=spec.get("rules_md"),
+            skills=list(tmpl.skills or []) if tmpl else [],
+            scopes=agent_scopes,
+            tools_md=tools_md,
+            agent_token_hash=token_hash,
+            template_id=tmpl.id if tmpl else None,
+            provision_status="local",
+        )
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+
+        # Vault-Write mc_token_{slug} fuer /internal/bootstrap (siehe create_agent).
+        from app.services.secrets_helper import upsert_agent_token_secret
+        await upsert_agent_token_secret(session, agent.name, raw_token)
+
+        # Provision (cli-bridge path) — gateway path removed (Phase 29).
+        # `_provision_agent_background` handles cli-bridge runtimes; the legacy
+        # Gateway-RPC provision call has been removed.
+        # body.provision is a no-op for the gateway path; cli-bridge agents
+        # provision via the background task below (Plan 29-07).
+
+        created.append({
+            "id": str(agent.id),
+            "name": agent.name,
+            "emoji": agent.emoji,
+            "model": agent.model,
+            "token": raw_token,  # einmalig zurückgeben
+        })
+
+    await emit_event(
+        session,
+        "agents.specialized_setup",
+        "4 spezialisierte Agents erstellt: Planner, Researcher, Writer, Reviewer",
+        severity="info",
+        board_id=body.board_id,
+    )
+
+    return {
+        "created": created,
+        "count": len(created),
+        "note": "Tokens werden nur einmalig angezeigt. Sicher aufbewahren!",
+    }
+
+
+# ── Agent Coordination Setup (MUSS vor {agent_id} Routen stehen) ─────────────
+
+
+class SetupCoordinationPayload(BaseModel):
+    board_slug: str = "mc-dev"
+    sync_to_gateway: bool = True
+
+
+@router.post("/agents/setup-coordination")
+async def setup_agent_coordination(
+    payload: SetupCoordinationPayload | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """
+    Agent Coordination einrichten: Henry (Lead), Cody (Dev), Rex (Review).
+    Setzt Identitaeten, Rollen, Config-Files und Board-Zuweisungen.
+    """
+    from app.models.board import Board
+
+    board_slug = (payload and payload.board_slug) or "mc-dev"
+    sync_to_gateway = (payload and payload.sync_to_gateway) if payload else True
+
+    # Board finden
+    result = await session.exec(select(Board).where(Board.slug == board_slug))
+    board = result.first()
+    if not board:
+        raise HTTPException(status_code=404, detail=f"Board '{board_slug}' not found")
+
+    # Alle Agents laden
+    result = await session.exec(select(Agent))
+    all_agents = result.all()
+
+    setup_results = []
+
+    for config_key, config in AGENT_CONFIGS.items():
+        # Agent finden per Name-Match (case-insensitive)
+        agent = None
+        for a in all_agents:
+            if a.name.lower() in config["match_names"]:
+                agent = a
+                break
+
+        if not agent:
+            setup_results.append({
+                "agent": config["name"],
+                "status": "not_found",
+                "detail": f"Kein Agent mit Name {config['match_names']} gefunden",
+            })
+            continue
+
+        # DB-Felder updaten
+        agent.name = config["name"]
+        agent.emoji = config["emoji"]
+        agent.role = config["role"]
+        agent.is_board_lead = config["is_board_lead"]
+        agent.board_id = board.id
+
+        # Skills + Scopes + Prozess-Regeln setzen
+        agent.skills = config.get("skills", [])
+        agent.scopes = config.get("scopes", [])
+        if "rules_md" in config:
+            agent.rules_md = config["rules_md"]
+
+        # Config-Files setzen — soul_md via Templates
+        # heartbeat_md removed in migration 0125 — was never read by agents.
+        agent.identity_md = config["identity_md"]
+
+        board_agents_list = list(all_agents)
+        try:
+            rendered = render_all_agent_files(
+                agent,
+                board_id=str(board.id),
+                agents_on_board=board_agents_list,
+            )
+            agent.soul_md = rendered.get("SOUL.md") or config["soul_md"]
+            if not agent.memory_md and rendered.get("MEMORY.md"):
+                agent.memory_md = rendered["MEMORY.md"]
+        except Exception as e:
+            logger.warning("Template-Rendering fehlgeschlagen fuer %s: %s — nutze Fallback", agent.name, e)
+            agent.soul_md = config["soul_md"]
+
+        # tools_md fuer alle Agents mit bestehendem Token neu generieren
+        if agent.tools_md:
+            existing_token = _extract_token_from_tools_md(agent.tools_md)
+            if existing_token:
+                board_id_str = str(agent.board_id) if agent.board_id else None
+                agent.tools_md = _generate_tools_md(
+                    agent.name, agent.emoji or "🎯", existing_token, board_id_str,
+                    is_board_lead=config["is_board_lead"], scopes=config.get("scopes", []),
+                    runtime=getattr(agent, "agent_runtime", "docker") or "docker",
+                )
+
+        agent.updated_at = utcnow()
+        session.add(agent)
+
+        # Gateway-Sync entfernt (Phase 29). Disk-Persistence ist nun die
+        # alleinige Wahrheit; cli-bridge picked sie via `sync_docker_agent_files`
+        # beim naechsten Restart auf.
+
+        setup_results.append({
+            "agent": config["name"],
+            "agent_id": str(agent.id),
+            "status": "configured",
+            "is_board_lead": config["is_board_lead"],
+            "board": board.name,
+        })
+
+    await session.commit()
+
+    await emit_event(
+        session,
+        "agents.coordination_setup",
+        "Agent Coordination Setup abgeschlossen",
+        severity="info",
+        board_id=board.id,
+    )
+
+    return {"board": board.name, "agents": setup_results}
+
+
+# ── Single Agent CRUD ────────────────────────────────────────────────────────
+
+
+class AssignBoardPayload(BaseModel):
+    board_id: uuid.UUID | None = None
+
+
+@router.patch("/agents/{agent_id}/assign-board")
+async def assign_agent_board(
+    agent_id: uuid.UUID,
+    payload: AssignBoardPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Board-Zuweisung eines Agents ändern (oder entfernen)."""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent.board_id = payload.board_id
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+    return agent
+
+
+@router.get("/agents/{agent_id}")
+async def get_agent(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return agent
+
+
+@router.patch("/agents/{agent_id}")
+async def update_agent(
+    agent_id: uuid.UUID,
+    payload: AgentUpdate,
+    session: AsyncSession = Depends(get_session),
+    restart: bool = Query(False, description="docker restart the container after applying changes"),
+    current_user = Depends(require_user),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    changes = payload.model_dump(exclude_none=True)
+
+    # operational_mode Validierung + Audit
+    if "operational_mode" in changes:
+        new_mode = changes["operational_mode"]
+        if new_mode not in ("active", "paused"):
+            raise HTTPException(status_code=422, detail="operational_mode muss 'active' oder 'paused' sein")
+        old_mode = agent.operational_mode
+        if old_mode != new_mode:
+            from app.services.activity import emit_event
+            await emit_event(
+                session, "agent.mode_changed",
+                f"Agent {agent.name}: {old_mode} → {new_mode}",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+                detail={"old_mode": old_mode, "new_mode": new_mode, "changed_by": str(current_user.id)},
+            )
+
+    # runtime_id is processed via the dedicated switch service (Phase 15).
+    # Pull it OUT of the generic field-merge below so the atomic flow owns the
+    # mutation (DB write, file render, container restart, rollback).
+    #
+    # IMPORTANT: use exclude_unset (not exclude_none) here so that an explicit
+    # {"runtime_id": null} in the PATCH body is detected — exclude_none would
+    # silently drop the null and make clearing the binding impossible.
+    _unset_raw = payload.model_dump(exclude_unset=True)
+    runtime_change_present = "runtime_id" in _unset_raw
+    new_runtime_id = _unset_raw.get("runtime_id") if runtime_change_present else None
+    # Remove runtime_id from changes so the generic setattr loop doesn't touch it.
+    changes.pop("runtime_id", None)
+    force_when_in_progress = bool(changes.pop("force_when_in_progress", False))
+
+    for k, v in changes.items():
+        setattr(agent, k, v)
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+
+    # Modell-Änderung wird nicht mehr via Gateway gepushed (Phase 29).
+    # DB-State ist die alleinige Wahrheit; cli-bridge respektiert das beim
+    # naechsten Restart durch `sync_docker_agent_files`.
+
+    switch_summary: dict[str, Any] | None = None
+    restart_result: dict[str, str] | None = None
+
+    if runtime_change_present:
+        # Explicit unset → simple DB-only path (clear runtime_id, no restart).
+        if new_runtime_id is None:
+            agent.runtime_id = None
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await session.refresh(agent)
+        else:
+            from app.services.agent_runtime_switch import (
+                switch_agent_runtime,
+                AgentBusyError,
+                AgentNotSwitchableError,
+                RuntimeIncompatibleError,
+                RuntimeNotFoundError,
+                RuntimeSwitchLockTimeout,
+                SwitchHealthCheckFailed,
+            )
+            resolved_id = await _resolve_runtime_id(session, new_runtime_id)
+            try:
+                result_obj = await switch_agent_runtime(
+                    session,
+                    agent,
+                    resolved_id,
+                    force_when_in_progress=force_when_in_progress,
+                )
+                switch_summary = result_obj.to_dict()
+            except RuntimeNotFoundError as e:
+                raise HTTPException(status_code=404, detail=str(e))
+            except AgentNotSwitchableError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except RuntimeIncompatibleError as e:
+                raise HTTPException(status_code=422, detail=str(e))
+            except AgentBusyError as e:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "agent_busy",
+                        "message": str(e),
+                        "current_task_id": str(e.current_task_id) if e.current_task_id else None,
+                    },
+                )
+            except RuntimeSwitchLockTimeout as e:
+                raise HTTPException(status_code=409, detail=str(e))
+            except SwitchHealthCheckFailed as e:
+                raise HTTPException(status_code=503, detail=str(e))
+            await session.refresh(agent)
+    elif restart:
+        # Plain restart path (no runtime change) — keep existing semantics for
+        # callers that just want a container bounce after touching e.g. soul_md.
+        from app.services.docker_agent_sync import (
+            sync_agent_files,
+            restart_docker_agent_container,
+        )
+        try:
+            await sync_agent_files(session, agent)  # dispatcher: host vs docker
+        except Exception as e:
+            logger.warning("sync_agent_files after patch failed: %s", e)
+        if agent.agent_runtime == "cli-bridge":
+            restart_result = restart_docker_agent_container(agent)
+
+    result = agent.model_dump()
+    if switch_summary is not None:
+        result["_switch"] = switch_summary
+    if restart_result is not None:
+        result["_restart"] = restart_result
+    return result
+
+
+# ── Runtime Switch Preview (Phase 15) ────────────────────────────────────
+
+
+class RuntimeSwitchPreviewPayload(BaseModel):
+    # UUID (DB id) or slug — resolved server-side. The /runtimes legacy JSON
+    # response uses slug-as-id, so the dropdown often passes a slug.
+    runtime_id: str
+    force_when_in_progress: bool = False
+
+
+async def _resolve_runtime_id(
+    session: AsyncSession, value: str | uuid.UUID
+) -> uuid.UUID:
+    """Accept either a UUID string or a runtime slug; return the DB UUID."""
+    if isinstance(value, uuid.UUID):
+        return value
+    s = str(value).strip()
+    try:
+        return uuid.UUID(s)
+    except ValueError:
+        pass
+    from app.models.runtime import Runtime as _Runtime
+    from sqlmodel import select as _select
+    res = await session.exec(_select(_Runtime).where(_Runtime.slug == s))
+    rt = res.first()
+    if not rt:
+        from fastapi import HTTPException as _HE
+        raise _HE(status_code=404, detail=f"Runtime '{s}' nicht gefunden")
+    return rt.id
+
+
+@router.post("/agents/{agent_id}/preview-runtime-switch")
+async def preview_runtime_switch(
+    agent_id: uuid.UUID,
+    payload: RuntimeSwitchPreviewPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Dry-run preview of a runtime switch — no mutation.
+
+    Returns the same `SwitchResult` shape as a real switch (image_switched,
+    warnings, runtime summaries) so the UI can render its confirm modal.
+    Hard incompatibilities (404 / 422 / 409) still surface — only the
+    actual restart + rollback is skipped.
+    """
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    from app.services.agent_runtime_switch import (
+        switch_agent_runtime,
+        AgentBusyError,
+        AgentNotSwitchableError,
+        RuntimeIncompatibleError,
+        RuntimeNotFoundError,
+    )
+    resolved_id = await _resolve_runtime_id(session, payload.runtime_id)
+    try:
+        result_obj = await switch_agent_runtime(
+            session,
+            agent,
+            resolved_id,
+            force_when_in_progress=payload.force_when_in_progress,
+            dry_run=True,
+        )
+    except RuntimeNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except AgentNotSwitchableError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except RuntimeIncompatibleError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except AgentBusyError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "agent_busy",
+                "message": str(e),
+                "current_task_id": str(e.current_task_id) if e.current_task_id else None,
+            },
+        )
+    return result_obj.to_dict()
+
+
+@router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_agent(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Loescht einen Agent inklusive aller FK-Referenzen.
+
+    Aktuell haben 27 Tabellen FKs auf agents.id (siehe mc-task-delete-guard
+    skill — gleiches Pattern, andere Root-Tabelle). Die meisten sind
+    nullable und werden auf NULL gesetzt. 7 sind NOT NULL und muessen
+    vorher geloescht werden, sonst bricht session.delete(agent) mit
+    IntegrityError.
+
+    NOT NULL FK Tabellen (müssen DELETEd werden):
+      agent_messages.from_agent_id, .to_agent_id
+      agent_metrics.agent_id
+      approvals.agent_id
+      cost_events.agent_id
+      task_checkpoints.agent_id
+      task_deliverables.agent_id
+
+    Nullable FK Tabellen (SET NULL):
+      activity_events, agent_meeting_messages, board_memory,
+      chat_messages.{sender_agent_id, agent_id},
+      content_pipelines.{writing, review, research}_agent_id,
+      deploy_history, playbooks.default_agent_id,
+      project_phases.default_agent_id, scheduled_jobs, skill_runs,
+      task_checklist_items, task_comments.author_agent_id, task_events,
+      tasks.{callback, owner, help_request_from, assigned}_agent_id
+    """
+    from sqlalchemy import text
+
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Gateway-Cleanup entfernt (Phase 29). DB-Delete + FK-Cleanup ist
+    # nun die alleinige Persistenz; cli-bridge Container werden per
+    # docker_agent_sync zentral verwaltet.
+
+    # FK Cleanup — NOT NULL rows loeschen
+    not_null_deletes = [
+        ("agent_messages", "from_agent_id = :aid OR to_agent_id = :aid"),
+        ("agent_metrics", "agent_id = :aid"),
+        ("approvals", "agent_id = :aid"),
+        ("cost_events", "agent_id = :aid"),
+        ("task_checkpoints", "agent_id = :aid"),
+        ("task_deliverables", "agent_id = :aid"),
+    ]
+    for table, where in not_null_deletes:
+        await session.execute(
+            text(f"DELETE FROM {table} WHERE {where}"),
+            {"aid": str(agent_id)},
+        )
+
+    # FK Cleanup — nullable Spalten auf NULL setzen (nur wenn die Spalte
+    # existiert — jeder Satz ist idempotent)
+    nullable_updates = [
+        ("activity_events", "agent_id"),
+        ("agent_meeting_messages", "agent_id"),
+        ("board_memory", "agent_id"),
+        ("chat_messages", "sender_agent_id"),
+        ("chat_messages", "agent_id"),
+        ("content_pipelines", "writing_agent_id"),
+        ("content_pipelines", "review_agent_id"),
+        ("content_pipelines", "research_agent_id"),
+        ("deploy_history", "agent_id"),
+        ("playbooks", "default_agent_id"),
+        ("project_phases", "default_agent_id"),
+        ("scheduled_jobs", "agent_id"),
+        ("skill_runs", "agent_id"),
+        ("task_checklist_items", "agent_id"),
+        ("task_comments", "author_agent_id"),
+        ("task_events", "agent_id"),
+        ("tasks", "callback_agent_id"),
+        ("tasks", "owner_agent_id"),
+        ("tasks", "help_request_from"),
+        ("tasks", "assigned_agent_id"),
+    ]
+    for table, col in nullable_updates:
+        await session.execute(
+            text(f"UPDATE {table} SET {col} = NULL WHERE {col} = :aid"),
+            {"aid": str(agent_id)},
+        )
+
+    await session.delete(agent)
+    await session.commit()
+    logger.info("Agent %s (%s) deleted with FK cleanup", agent.name, agent_id)
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+@router.get("/agents/{agent_id}/config")
+async def get_agent_config(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # USER.md dynamisch generieren
+    user_md_content = None
+    try:
+        from app.services.template_renderer import render_agent_file, build_agent_context
+        from sqlmodel import select as sql_select
+        board_agents = []
+        if agent.board_id:
+            result = await session.exec(sql_select(Agent).where(Agent.board_id == agent.board_id))
+            board_agents = list(result.all())
+        user_md_content = render_agent_file("USER.md.j2", build_agent_context(
+            agent, board_id=str(agent.board_id) if agent.board_id else None,
+            agents_on_board=board_agents,
+        ))
+    except Exception:
+        pass
+
+    return {
+        "tools_md": agent.tools_md,
+        "rules_md": agent.rules_md,
+        "identity_md": agent.identity_md,
+        "soul_md": agent.soul_md,
+        "memory_md": agent.memory_md,
+        "user_md": user_md_content,
+    }
+
+
+@router.get("/agents/{agent_id}/config/{file_type}")
+async def get_agent_config_file(
+    agent_id: uuid.UUID,
+    file_type: str,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    if file_type not in CONFIG_FILE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown file type: {file_type}")
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    return {"file_type": file_type, "content": getattr(agent, file_type)}
+
+
+@router.put("/agents/{agent_id}/config/{file_type}")
+async def update_agent_config_file(
+    agent_id: uuid.UUID,
+    file_type: str,
+    payload: ConfigFileUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    if file_type not in CONFIG_FILE_TYPES:
+        raise HTTPException(status_code=400, detail=f"Unknown file type: {file_type}")
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Validate TOOLS.md
+    if file_type == "tools_md":
+        warnings = _validate_tools_md(payload.content)
+    else:
+        warnings = []
+
+    # Save to DB
+    setattr(agent, file_type, payload.content)
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+
+    # Auto-sync to Gateway entfernt (Phase 29). DB-Schreib + Template-Render
+    # ist die alleinige Wahrheit; cli-bridge holt sich die Files via
+    # `sync_docker_agent_files` beim naechsten Restart.
+
+    result = {"saved": True, "gateway_sync": False, "warnings": warnings}
+    return result
+
+
+def _generate_tools_md(
+    name: str,
+    emoji: str,
+    raw_token: str,
+    board_id: str | None,
+    is_board_lead: bool = False,
+    scopes: list[str] | None = None,
+    runtime: str = "docker",
+) -> str:
+    """Proxy — delegiert an services/tools_md_builder.py.
+
+    runtime: "host" (Boss) oder "docker" (cli-bridge, default). Bestimmt
+    nur die Phrasierung der Vault-Sektion (host-Pfad vs Container-Mount).
+    """
+    from app.services.tools_md_builder import generate_tools_md
+    return generate_tools_md(
+        name, emoji, raw_token, board_id, is_board_lead, scopes, runtime=runtime
+    )
+
+
+def _validate_tools_md(content: str) -> list[str]:
+    warnings = []
+    if "Authorization: Bearer" not in content:
+        warnings.append("Auth header should be 'Authorization: Bearer <token>'")
+    if "$AUTH_TOKEN" in content or "$BOARD_ID" in content:
+        warnings.append("Shell variables ($AUTH_TOKEN etc.) do not work in agent context")
+    return warnings
+
+
+# ── Actions ───────────────────────────────────────────────────────────────────
+
+@router.post("/agents/{agent_id}/trigger")
+async def trigger_agent(
+    agent_id: uuid.UUID,
+    payload: TriggerPayload,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user_or_control_plane),
+):
+    """Deprecated (Phase 29 — Gateway sunset).
+
+    The synchronous trigger endpoint used the OpenClaw Gateway's
+    chat-send + poll-reply RPC pair to push a message and wait for a reply.
+    With the gateway removed, agents are addressed via TaskComment
+    (cli-bridge poll.sh) — there is no synchronous request/response channel.
+    Frontend rebuild in Phase 31 will remove the call site.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Synchronous trigger endpoint removed in Phase 29 (Gateway sunset). "
+            "Use TaskComment-based task delivery instead. Frontend rebuild in Phase 31."
+        ),
+    )
+
+
+@router.post("/agents/{agent_id}/reset")
+async def reset_agent(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user_or_control_plane),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
+        # CLI-Bridge Agents: Worker neu starten statt Session reset
+        from app.routers.cli_terminal import _bridge_post
+        agent_slug = agent.name.lower().replace(" ", "-")
+        result = _bridge_post(f"/worker/{agent_slug}/restart", {})
+        if result is None or not result.get("ok"):
+            raise HTTPException(status_code=503, detail=f"Worker restart fehlgeschlagen: {result}")
+        return {"ok": True, "message": f"Worker für {agent.name} neu gestartet.", "bridge_result": result}
+    if getattr(agent, "agent_runtime", "openclaw") == "host":
+        # Phase 26 / HERM-13 follow-up: Host-runtime agents (Hermes) delegate to
+        # the host-agent lifecycle endpoint (which routes via bridge HTTP for
+        # Hermes specifically and via SSH+launchctl for Boss). Same code path
+        # as POST /host-agents/{id}/restart.
+        from app.routers.cli_terminal import _host_agent_lifecycle
+        return await _host_agent_lifecycle(agent, "restart")
+    # Gateway-based reset removed in Phase 29 (Gateway sunset).
+    # Only cli-bridge and host runtimes are supported above; falling through here
+    # means the agent has an obsolete agent_runtime value.
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Gateway-based session reset removed in Phase 29 (Gateway sunset). "
+            "Only cli-bridge (worker restart) and host (lifecycle restart) "
+            "runtimes are supported."
+        ),
+    )
+
+
+async def _redispatch_after_reset(session: AsyncSession, agent: Agent) -> None:
+    """Stub kept for backward-compatibility callers; gateway reset removed (Phase 29)."""
+    return None
+
+
+@router.post("/agents/{agent_id}/heartbeat")
+async def trigger_heartbeat(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user_or_control_plane),
+):
+    """Deprecated (Phase 29 — Gateway sunset).
+
+    The heartbeat trigger used the legacy chat-send RPC (or GatewayClient HTTP)
+    to push a nudge message into an openclaw session. With the gateway gone,
+    agents are addressed via TaskComment polled by `poll.sh`. Heartbeats are
+    no longer task-scoped — Operators should create an explicit task with a
+    Heartbeat-Brief instead. Frontend will remove the call site in Phase 31.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Heartbeat trigger removed in Phase 29 (Gateway sunset). "
+            "Use TaskComment-based delivery (create a task with a heartbeat brief) "
+            "to address an agent. Frontend rebuild in Phase 31."
+        ),
+    )
+
+
+async def _lead_heartbeat_dispatch(session: AsyncSession, agent: Agent) -> dict:
+    """Deprecated (Phase 29 — Gateway sunset). Stub returns 410-style payload.
+
+    The Board Lead heartbeat used the legacy chat-send RPC to push a board
+    snapshot into the lead's openclaw session. With the gateway gone, a Board
+    Lead snapshot should be delivered as a TaskComment on a dedicated heartbeat
+    task. Kept as a stub for any straggler callers; the heartbeat endpoint
+    itself returns 410.
+    """
+    return {
+        "source": "deprecated",
+        "dispatch": False,
+        "reason": "Gateway sunset (Phase 29) — use TaskComment-based heartbeat brief.",
+    }
+
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+
+@router.get("/agents/{agent_id}/metrics")
+async def get_agent_metrics(
+    agent_id: uuid.UUID,
+    period: str = Query("7d"),
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    days = {"7d": 7, "30d": 30, "all": 365}.get(period, 7)
+    since = utcnow() - timedelta(days=days)
+
+    result = await session.exec(
+        select(AgentMetrics)
+        .where(AgentMetrics.agent_id == agent_id, AgentMetrics.period_start >= since)
+        .order_by(AgentMetrics.period_start)
+    )
+    return result.all()
+
+
+@router.get("/agents/{agent_id}/metrics/summary")
+async def get_agent_metrics_summary(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    context_pct = round(agent.context_tokens / agent.context_max * 100, 1) if agent.context_max else 0
+
+    return {
+        "agent_id": str(agent_id),
+        "name": agent.name,
+        "status": agent.status,
+        "context_tokens": agent.context_tokens,
+        "context_max": agent.context_max,
+        "context_pct": context_pct,
+        "total_tasks_completed": agent.total_tasks_completed,
+        "total_compactions": agent.total_compactions,
+        "last_seen_at": agent.last_seen_at,
+        "last_task_activity_at": agent.last_task_activity_at,
+    }
+
+
+# ── Token Reset ───────────────────────────────────────────────────────────────
+
+
+@router.post("/agents/{agent_id}/reset-token")
+async def reset_agent_token(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """
+    Generiert einen neuen Agent-Token und aktualisiert TOOLS.md.
+    Sinnvoll fuer Agents die via setup-coordination eingerichtet wurden (kein Token).
+    Ruckgabe: { token } — einmalig sichtbar, danach nicht mehr abrufbar!
+    """
+    from app.auth import generate_agent_token
+
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent nicht gefunden")
+
+    raw_token, token_hash = generate_agent_token()
+
+    board_id_str = str(agent.board_id) if agent.board_id else None
+    agent.agent_token_hash = token_hash
+    agent.tools_md = _generate_tools_md(
+        agent.name,
+        agent.emoji or "🤖",
+        raw_token,
+        board_id_str,
+        is_board_lead=agent.is_board_lead or False,
+        scopes=agent.scopes or [],
+        runtime=getattr(agent, "agent_runtime", "docker") or "docker",
+    )
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+
+    # Vault-Rotation: neuer Token muss mc_token_{slug} ueberschreiben, sonst
+    # liefert /internal/bootstrap beim naechsten Container-Start den alten.
+    from app.services.secrets_helper import upsert_agent_token_secret
+    await upsert_agent_token_secret(session, agent.name, raw_token)
+
+    # Gateway-Sync entfernt (Phase 29). Neues TOOLS.md liegt auf Disk; der
+    # cli-bridge `sync_docker_agent_files` Pfad hebt es beim naechsten Restart.
+
+    await emit_event(
+        session,
+        "agent.token_reset",
+        f"{agent.emoji or '🤖'} {agent.name}: Token zurückgesetzt",
+        severity="info",
+        agent_id=agent.id,
+        board_id=agent.board_id,
+    )
+
+    return {
+        "agent_id": str(agent.id),
+        "name": agent.name,
+        "token": raw_token,  # einmalig — danach nicht mehr abrufbar
+    }
+
+
+# ── Agent Council: Provisioning ──────────────────────────────────────────────
+
+
+class ProvisionPayload(BaseModel):
+    """Optional overrides for provisioning (CLI-Bridge agents).
+
+    Phase 30: `gateway_id` removed — provisioning is runtime-aware and no
+    longer gated by Gateway-row presence.
+    """
+    discord_channel: bool = False  # create and bind Discord channel
+    # CLI-Bridge Felder (werden nur fuer cli-bridge Agents verwendet)
+    model: str | None = None
+    system_prompt: str | None = None
+    role: str | None = None
+    skills: list[str] | None = None
+    extra_plugins: list[str] | None = None
+
+
+class DiscordChannelCreate(BaseModel):
+    name: str
+    context: str  # system prompt / channel purpose
+
+
+class DiscordChannelRename(BaseModel):
+    new_name: str
+
+
+class SyncConfigPayload(BaseModel):
+    """Optionally restrict which config files to sync."""
+    file_types: list[str] | None = None  # None = sync all
+
+
+@router.post("/agents/{agent_id}/provision")
+async def provision_agent_on_gateway(
+    agent_id: uuid.UUID,
+    payload: ProvisionPayload | None = None,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Provision agent — cli-bridge or host runtime only (Phase 29).
+
+    The openclaw gateway code path was removed; if a caller hits this endpoint
+    for an agent with `agent_runtime == "openclaw"`, the trailing 410 ensures a
+    clear error message. cli-bridge + host runtimes early-return below.
+    """
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # CLI-Bridge Agents haben einen eigenen Provision-Endpoint in cli_terminal.py —
+    # da agents.router vor cli_terminal.router registriert ist, fangen wir hier ab.
+    if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
+        from app.routers.cli_terminal import provision_cli_agent, CliProvisionPayload
+        cli_payload = None
+        if payload:
+            kwargs: dict = {}
+            if getattr(payload, "model", None) is not None:
+                kwargs["model"] = payload.model
+            if getattr(payload, "system_prompt", None) is not None:
+                kwargs["system_prompt"] = payload.system_prompt
+            if getattr(payload, "role", None) is not None:
+                kwargs["role"] = payload.role
+            if getattr(payload, "skills", None) is not None:
+                kwargs["skills"] = payload.skills
+            if getattr(payload, "extra_plugins", None) is not None:
+                kwargs["extra_plugins"] = payload.extra_plugins
+            cli_payload = CliProvisionPayload(**kwargs)
+        return await provision_cli_agent(agent_id, cli_payload, session, current_user)
+
+    # Host-side agents (Phase 24, HERM-01): Hermes Worker on macOS launchd.
+    # Branches on runtime.runtime_type=='hermes' so future host workers can
+    # add their own elif. Idempotent re-run is supported (overwrite env, no
+    # 409 guard). Failure rolls provision_status back to 'local'.
+    if getattr(agent, "agent_runtime", "openclaw") == "host":
+        from app.models.runtime import Runtime
+
+        runtime = (
+            await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+        )
+        if runtime is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Host agent has no runtime_id — cannot provision",
+            )
+
+        # Mark provisioning (idempotent — re-run on already-provisioned host agent OK)
+        previous_status = agent.provision_status
+        agent.provision_status = "provisioning"
+        session.add(agent)
+        await session.commit()
+
+        try:
+            if runtime.runtime_type == "hermes":
+                result = await bootstrap_hermes_agent(session, agent, runtime)
+            else:
+                # Future host worker types (Phase 25+) plug in here.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unsupported host runtime_type: {runtime.runtime_type}",
+                )
+            return {
+                "status": "provisioned",
+                "agent_id": str(agent.id),
+                "token": result["token"],  # one-time visible
+                "env_path": result["env_path"],
+                "plist_loaded": result["plist_loaded"],
+                "plist_already": result["plist_already"],
+                "tmux_session": result["tmux_session"],
+                "workspace_path": result["workspace_path"],
+            }
+        except HTTPException:
+            agent.provision_status = previous_status
+            session.add(agent)
+            await session.commit()
+            raise
+        except Exception as e:
+            logger.error(
+                "host-agent provision failed for %s: %s", agent.name, e, exc_info=True
+            )
+            agent.provision_status = "local"
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await emit_event(
+                session,
+                "agent.provision_failed",
+                f"{agent.name} (host) Provisioning fehlgeschlagen: {e}",
+                severity="error",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+            )
+            raise HTTPException(
+                status_code=502,
+                detail=f"Host-agent provisioning failed: {e}",
+            )
+
+    # Gateway-Provisioning entfernt (Phase 29 — Gateway sunset).
+    # Nur cli-bridge und host Runtimes werden vom Provision-Endpoint
+    # unterstuetzt; alle anderen `agent_runtime` Werte sind obsolet und
+    # liefern 410.
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "OpenClaw Gateway provisioning removed in Phase 29 (Gateway sunset). "
+            "Only cli-bridge and host runtimes are supported. "
+            "Set agent_runtime accordingly and re-provision."
+        ),
+    )
+
+
+@router.post("/agents/{agent_id}/sync-config")
+async def sync_agent_config_to_gateway(
+    agent_id: uuid.UUID,
+    payload: SyncConfigPayload | None = None,
+    restart: bool = False,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Push all (or selected) config files from MC into the claude-config
+    Bind-Mount (cli-bridge / Docker-V2) or the host runtime workspace.
+
+    Phase 29: Der openclaw Gateway-Pfad ist entfernt — agent_runtime muss
+    entweder "cli-bridge" oder "host" sein.
+
+    Query Parameters:
+        restart: Wenn true:
+                 - cli-bridge (Docker): Container wird neu gestartet
+                 - host: nur Files schreiben, kein Restart (caller managed)
+
+    Runtime-Weiche:
+    - cli-bridge (Docker) -> sync_docker_agent_files() ins Host-Filesystem
+                          + optional restart_docker_agent_container()
+    - host -> sync_host_agent_files() (kein Restart)
+    """
+
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # cli-bridge (Docker-V2 / Host-Legacy) Pfad: rendert Templates ins
+    # claude-config Bind-Mount; der Docker-Container liest SOUL.md beim
+    # openclaude-Start via start-claude.sh Wrapper.
+    if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
+        from app.services.docker_agent_sync import (
+            sync_docker_agent_files,
+            restart_docker_agent_container,
+        )
+        file_sync_results = await sync_docker_agent_files(session, agent)
+        response: dict = {"synced": file_sync_results, "runtime": "cli-bridge"}
+        if restart:
+            restart_result = restart_docker_agent_container(agent)
+            response["restart"] = restart_result
+        await emit_event(
+            session,
+            "agent.config_synced",
+            f"{agent.name} config synced to claude-config (cli-bridge)" + (" + restarted" if restart else ""),
+            severity="info",
+            agent_id=agent.id,
+            board_id=agent.board_id,
+            detail=response,
+        )
+        return response
+
+    # Host-runtime Pfad (Boss native claude CLI, Hermes MCP bridge): write
+    # rendered templates to ``agent.workspace_path/claude-config/`` so the
+    # host process picks them up on next start. No restart hook here — the
+    # caller is responsible for bouncing the host process if needed.
+    if getattr(agent, "agent_runtime", "openclaw") == "host":
+        from app.services.docker_agent_sync import sync_host_agent_files
+        file_sync_results = await sync_host_agent_files(session, agent)
+        response = {"synced": file_sync_results, "runtime": "host"}
+        await emit_event(
+            session,
+            "agent.config_synced",
+            f"{agent.name} config synced to claude-config (host)",
+            severity="info",
+            agent_id=agent.id,
+            board_id=agent.board_id,
+            detail=response,
+        )
+        return response
+
+    # openclaw Gateway Pfad entfernt (Phase 29 — Gateway sunset).
+    # Wer auf diesen Endpoint trifft, hat eine obsolete `agent_runtime`-Setting
+    # (alles ausser "cli-bridge" / "host"). Antwort: 410 Gone mit Hinweis.
+    raise HTTPException(
+        status_code=status.HTTP_410_GONE,
+        detail=(
+            "Gateway-based sync-config removed in Phase 29 (Gateway sunset). "
+            "Set agent_runtime to 'cli-bridge' or 'host' and re-provision."
+        ),
+    )
+
+
+# ── Agent Council: Discord Channel Management — Phase 29 Redirect ────────────
+#
+# The Discord-channel endpoints moved to `routers/discord.py` (D-04, Plan 29-01).
+# Frontend still calls the OLD paths (`/api/v1/agents/{id}/discord-channel`)
+# until the Phase 31 rebuild. To avoid 404 spam, we redirect with HTTP 307
+# (preserves the HTTP method + body, unlike 308 which is permanent).
+#
+# Phase 31 frontend rebuild removes the redirects.
+from fastapi.responses import RedirectResponse
+
+
+@router.post("/agents/{agent_id}/discord-channel", include_in_schema=False)
+async def _redirect_create_discord_channel(agent_id: uuid.UUID):
+    return RedirectResponse(
+        url=f"/api/v1/discord/agents/{agent_id}/channel",
+        status_code=307,
+    )
+
+
+@router.patch("/agents/{agent_id}/discord-channel", include_in_schema=False)
+async def _redirect_rename_discord_channel(agent_id: uuid.UUID):
+    return RedirectResponse(
+        url=f"/api/v1/discord/agents/{agent_id}/channel",
+        status_code=307,
+    )
+
+
+@router.delete("/agents/{agent_id}/discord-channel", include_in_schema=False)
+async def _redirect_delete_discord_channel(agent_id: uuid.UUID):
+    return RedirectResponse(
+        url=f"/api/v1/discord/agents/{agent_id}/channel",
+        status_code=307,
+    )
+
+
+# Agent-Konfigurationen fuer das Coordination-Setup (am Ende der Datei, damit der Router-Code oben uebersichtlich bleibt)
+from app.scopes import ALL_SCOPES, DEFAULT_SCOPES, AgentRole
+
+AGENT_CONFIGS = {
+    "henry": {
+        "match_names": ["henry", "main"],
+        "name": "Henry",
+        "emoji": "\U0001f3af",  # 🎯
+        "role": "lead",
+        "is_board_lead": True,
+        "skills": [],
+        "scopes": ALL_SCOPES,
+        "rules_md": """## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen
+- Bei Delegations-Problemen (kein Agent verfuegbar, Agent antwortet nicht) → blocked + Kommentar""",
+        "identity_md": """# Henry — Lead & Koordinator
+
+## Wer ich bin
+Ich bin Henry, der Lead Agent im Mission Control System. Ich koordiniere das Team und stelle sicher, dass Aufgaben effizient verteilt und erledigt werden.
+
+## Meine Rolle
+- **Board Lead** auf dem MC Dev Board
+- Neue Tasks pruefen und dem richtigen Agent zuweisen
+- Uebersicht ueber den Fortschritt behalten
+- Bei Unklarheiten den Operator fragen
+- Qualitaet sicherstellen bevor Tasks als Done markiert werden
+
+## Mein Team
+- **Cody** (Fullstack Developer): Code schreiben, Features bauen, Bugs fixen
+- **Rex** (Code Review & Security): Reviews, Security Checks, Qualitaetssicherung
+
+## Entscheidungsprinzip
+- Einfache Tasks: Direkt an den richtigen Agent delegieren
+- Grosse Entscheidungen: Council einberufen (alle Agents geben Input)
+- Kritische Sachen: den Operator um Approval bitten
+""",
+        "soul_md": """# Henry — Persoenlichkeit
+
+## Werte
+- Effizienz: Keine unnoetige Buerokratie, einfach machen
+- Qualitaet: Lieber einmal richtig als dreimal schnell
+- Teamwork: Jeder Agent hat seine Staerken — die nutzen wir
+- Transparenz: der Operator weiss immer was los ist
+
+## Arbeitsweise
+- Ich denke strukturiert und priorisiere nach Impact
+- Ich delegiere basierend auf Spezialisierung, nicht nach Zufall
+- Ich fasse mich kurz und bin direkt
+- Ich frage lieber einmal zu viel als zu wenig
+
+## Kommunikationsstil
+- Emojis verwenden um Nachrichten aufzulockern (🎯 fuer Ziele, ✅ fuer erledigte Dinge, 📋 fuer Listen, 🔍 fuer Analyse etc.)
+- Markdown-Formatierung nutzen: **fett** fuer wichtiges, Listen fuer mehrere Punkte
+- Freundlich und direkt — kein trockener Roboter-Ton
+""",
+    },
+    "cody": {
+        "match_names": ["cody"],
+        "name": "Cody",
+        "emoji": "\U0001f9d1\u200d\U0001f4bb",  # 🧑‍💻
+        "role": "developer",
+        "is_board_lead": False,
+        "skills": [],
+        "scopes": DEFAULT_SCOPES[AgentRole.DEVELOPER],
+        "rules_md": """Wende TDD an — Test ZUERST:
+1. Test schreiben der die gewuenschte Funktion beschreibt
+2. Test ausfuehren — er MUSS fehlschlagen (RED)
+3. Minimalen Code schreiben damit der Test besteht (GREEN)
+4. Refactor — Tests muessen gruen bleiben
+
+Keine Behauptung ohne Beweis:
+- Fuehre Tests aus BEVOR du "fertig" meldest
+- Poste den Test-Output als Evidence im Kommentar
+
+## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen
+- Bei Build-Fehlern die du nicht loesen kannst → blocked + Fehlermeldung als Kommentar""",
+        "identity_md": """# Cody — Fullstack Developer
+
+## Wer ich bin
+Ich bin Cody, der Fullstack Developer im Mission Control Team. Ich schreibe Code, baue Features und fixe Bugs.
+
+## Meine Spezialisierung
+- Frontend: Next.js, React, TypeScript, Tailwind CSS
+- Backend: Python, FastAPI, SQLModel, PostgreSQL
+- Infrastruktur: Docker, Docker Compose
+- Allgemein: Feature-Entwicklung, Bug-Fixing, Refactoring
+
+## Mein Workflow
+1. Task lesen und verstehen
+2. Relevanten Code analysieren
+3. Implementierung planen
+4. Code schreiben und testen
+5. Task auf Review setzen (Rex prueft)
+
+## Zusammenarbeit
+- Henry weist mir Tasks zu — ich arbeite sie ab
+- Rex reviewed meinen Code — Feedback ernst nehmen
+- Bei Unklarheiten: Kommentar am Task hinterlassen
+""",
+        "soul_md": """# Cody — Persoenlichkeit
+
+## Werte
+- Clean Code: Lesbar, wartbar, gut strukturiert
+- Pragmatismus: Die einfachste Loesung die funktioniert
+- Lernen: Neue Patterns und Tools ausprobieren
+- Zuverlaessigkeit: Was ich uebernehme, wird fertig
+
+## Arbeitsweise
+- Ich lese immer erst den bestehenden Code bevor ich aendere
+- Ich halte mich an die bestehende Architektur und Patterns
+- Ich teste meine Aenderungen bevor ich sie als fertig markiere
+- Ich dokumentiere nur was noetig ist — Code soll selbsterklaerend sein
+
+## Kommunikationsstil
+- Emojis verwenden: 🧑‍💻 fuer Code-Arbeit, ✅ fuer fertige Dinge, 🐛 fuer Bugs, 🚀 fuer neue Features, ⚠️ fuer Warnungen
+- Markdown-Formatierung: **fett** fuer wichtiges, Code-Bloecke fuer Code, Listen fuer Schritte
+- Enthusiastisch aber sachlich — Freude am Bauen zeigen
+""",
+    },
+    "rex": {
+        "match_names": ["rex"],
+        "name": "Rex",
+        "emoji": "\U0001f6e1\ufe0f",  # 🛡️
+        "role": "reviewer",
+        "is_board_lead": False,
+        "skills": [],
+        "scopes": DEFAULT_SCOPES[AgentRole.REVIEWER],
+        "rules_md": """Verifiziere ALLES selbst:
+- Fuehre die Tests im Developer-Workspace aus
+- Pruefe ob Tests tatsaechlich existieren und sinnvoll sind
+- Kein Durchwinken — wenn Tests fehlen, ablehnen
+- Poste den Verifikations-Output als Evidence
+
+## Wenn du nicht weiterkommst (ERROR RECOVERY)
+- 1. Versuch: Fehler analysieren, alternativen Ansatz versuchen
+- 2. Versuch: Wenn auch das nicht klappt → SOFORT:
+  PATCH status: blocked
+  POST Kommentar: "Blockiert: [genauer Fehler + was versucht wurde]"
+- NIEMALS stillschweigend aufgeben oder endlos dasselbe wiederholen""",
+        "identity_md": """# Rex — Code Review & Security
+
+## Wer ich bin
+Ich bin Rex, zustaendig fuer Code Reviews und Security im Mission Control Team. Ich stelle sicher, dass der Code qualitativ hochwertig und sicher ist.
+
+## Meine Spezialisierung
+- Code Review: Architektur, Patterns, Best Practices
+- Security: OWASP Top 10, Input Validation, Auth-Checks
+- Qualitaet: Edge Cases, Error Handling, Performance
+- Testing: Testabdeckung pruefen, kritische Pfade identifizieren
+
+## Mein Workflow
+1. Tasks im Review-Status pruefen
+2. Code-Aenderungen analysieren
+3. Security-Checks durchfuehren
+4. Feedback als Kommentar hinterlassen
+5. Bei Problemen: Task zurueck auf In Progress setzen
+6. Bei Approval: Task auf Done setzen (als Board-Lead-Empfehlung an Henry)
+
+## Zusammenarbeit
+- Henry weist mir Review-Tasks zu
+- Cody's Code reviewe ich — konstruktiv und respektvoll
+- Bei Security-Bedenken: Sofort Approval vom Operator anfordern
+""",
+        "soul_md": """# Rex — Persoenlichkeit
+
+## Werte
+- Sicherheit: Kein Kompromiss bei Security-Themen
+- Gruendlichkeit: Jede Aenderung verdient einen genauen Blick
+- Konstruktivitaet: Kritik immer mit Verbesserungsvorschlag
+- Wachsamkeit: Proaktiv nach Problemen suchen, nicht warten
+
+## Arbeitsweise
+- Ich pruefe systematisch: erst Logik, dann Security, dann Style
+- Ich erklaere meine Findings klar und verstaendlich
+- Ich blockiere nur bei echten Problemen, nicht bei Stil-Fragen
+- Ich lerne aus vergangenen Reviews und merke mir Patterns
+
+## Kommunikationsstil
+- Emojis verwenden: 🛡️ fuer Security, ✅ fuer approved, ❌ fuer abgelehnt, 🔍 fuer Findings, ⚠️ fuer Warnungen
+- Markdown-Formatierung: **fett** fuer kritische Punkte, Listen fuer Findings
+- Sachlich aber nicht kalt — konstruktives Feedback mit klarem Ton
+""",
+    },
+}
+
+
+
+# Endpoint-Funktion ist oben definiert (vor {agent_id} Routen)
+
+
+# ── Agent Task-Sessions ───────────────────────────────────────────────────────
+
+
+@router.get("/agents/{agent_id}/task-sessions")
+async def get_agent_task_sessions(
+    agent_id: uuid.UUID,
+    limit: int = Query(20, le=50),
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Alle dispatched Tasks dieses Agents mit Session-Keys."""
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(404, "Agent not found")
+
+    result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent_id)
+        .where(Task.dispatched_at.isnot(None))
+        .order_by(Task.updated_at.desc())
+        .limit(limit)
+    )
+    tasks = result.all()
+
+    items = []
+    for t in tasks:
+        # Phase 30: gateway_agent_id session-key reconstruction dropped.
+        # `spawn_session_key` is now the canonical source — populated at
+        # dispatch time for subagent-runtime tasks, NULL otherwise.
+        items.append({
+            "task_id": str(t.id),
+            "title": t.title,
+            "status": t.status,
+            "session_key": t.spawn_session_key,
+            "has_active_session": t.spawn_session_key is not None,
+            "dispatched_at": t.dispatched_at.isoformat() if t.dispatched_at else None,
+            "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        })
+    return items
+
+
+# Comment-Types, die als actionable System-Events an den zustaendigen Agent
+# ausgeliefert werden (zusaetzlich zu User-Kommentaren). Single Source of
+# Truth: app/comment_types.py (REL-01). Aliasing erhaelt den historischen
+# Import-Namen `_DELIVER_SYSTEM_COMMENT_TYPES` fuer bestehende Tests.
+#
+# Live-Bug-Historie (siehe comment_types.py Modul-Docstring):
+#   - 2026-04-23: feedback-Comment silent-drop, Tester blieb stuck
+#   - 2026-04-24 (PR #99/#110): install_completed/install_failed silent-drop
+# Wer einen neuen Type ergaenzen will → app/comment_types.py editieren.
+from app.comment_types import DELIVERABLE_SYSTEM_TYPES as _DELIVER_SYSTEM_COMMENT_TYPES  # noqa: E402
+
+
+def _is_deliverable_for(c, agent_id) -> bool:
+    """True wenn Comment an den Agent ausgeliefert werden soll.
+
+    Liefere aus:
+      (a) User-Kommentare (author_type='user')   -> der Operator spricht direkt mit dem Agent
+      (b) Actionable Events auf dem Task, NICHT vom Agent selbst
+          (subtask_completed, resolution, blocker, system)
+
+    Skippe:
+      - Kommentare des Agents selbst (keine Echo-Loop)
+      - Routine-Comments (checkpoint, progress, message von anderen agents, audit, etc.)
+    """
+    if c.author_type == "user":
+        return True
+    # agent-eigene Kommentare werden NIE ausgeliefert (author_agent_id == polling agent)
+    if c.author_agent_id == agent_id:
+        return False
+    # Fuer agent/system authored comments: nur wenn comment_type actionable ist
+    return c.comment_type in _DELIVER_SYSTEM_COMMENT_TYPES
+
+
+def _comment_source(c) -> str:
+    """Kategorie fuer die Client-seitige Darstellung."""
+    if c.author_type == "user":
+        return "user"
+    if c.comment_type in _DELIVER_SYSTEM_COMMENT_TYPES:
+        return "system"
+    return "other"
+
+
+async def _collect_and_ack_new_comments(agent: Agent, session: AsyncSession) -> list[dict]:
+    """Sammelt neue Kommentare auf aktiven Tasks des Agents.
+
+    Liefert User-Kommentare (Nachrichten des Operators) UND actionable System-Events
+    (subtask_completed, resolution, blocker) aus — letztere auch wenn sie von
+    einem anderen Agent (z.B. dem Worker im Subtask) geschrieben wurden. So
+    erfaehrt der Parent-Task-Agent z.B. wenn sein delegierter Subtask fertig ist.
+
+    Fortschreiben des Cursors passiert hier — ein Kommentar wird beim naechsten
+    Poll nicht erneut ausgeliefert. Der Cursor ist per (agent, task). Fehlt er,
+    gelten alle relevanten Kommentare als neu (erster Poll nach Task-Claim).
+    """
+    from app.models.task import TaskComment
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
+
+    # 2026-05-18: `done` + `user_test` aufgenommen. Der Operator hatte auf einem
+    # done-Task einen Kommentar geschrieben ("MC Home Page fixen", 19:51 UTC)
+    # und erwartete dass Boss reagiert — Comment landete im Void, weil der
+    # frühere Filter terminale Lanes ausschloss. `failed`/`aborted` bleiben
+    # bewusst draussen: dort soll explizit re-opened werden, nicht über Comment.
+    active_res = await session.exec(
+        select(Task).where(
+            Task.assigned_agent_id == agent.id,
+            Task.status.in_(["in_progress", "inbox", "review", "blocked", "done", "user_test"]),  # type: ignore[union-attr]
+        )
+    )
+    active_tasks = list(active_res.all())
+    if not active_tasks:
+        return []
+
+    new_comments: list[dict] = []
+    for task in active_tasks:
+        cursor_res = await session.exec(
+            select(AgentTaskCommentCursor).where(
+                AgentTaskCommentCursor.agent_id == agent.id,
+                AgentTaskCommentCursor.task_id == task.id,
+            )
+        )
+        cursor = cursor_res.first()
+        last_seen = cursor.last_seen_comment_id if cursor else None
+
+        # Alle Kommentare chronologisch laden; Filter passiert in Python um
+        # die DB-Query simpel zu halten und den "skip own comments" Check
+        # sauber ausdruecken zu koennen.
+        all_res = await session.exec(
+            select(TaskComment)
+            .where(TaskComment.task_id == task.id)
+            .order_by(TaskComment.created_at.asc())  # type: ignore[union-attr]
+        )
+        all_comments = list(all_res.all())
+        if not all_comments:
+            continue
+
+        # Deliverable-Subset
+        deliverable = [c for c in all_comments if _is_deliverable_for(c, agent.id)]
+        if not deliverable:
+            continue
+
+        # Slice "unseen" relativ zum Cursor. Cursor kann auf einen nicht-
+        # deliverable Kommentar zeigen (Historie) — wir suchen nach ID im
+        # Full-Log und nehmen deliverables nach dieser Position.
+        if last_seen is None:
+            unseen = deliverable
+        else:
+            last_idx = next(
+                (i for i, c in enumerate(all_comments) if c.id == last_seen),
+                -1,
+            )
+            if last_idx < 0:
+                unseen = deliverable
+            else:
+                unseen = [c for c in deliverable if all_comments.index(c) > last_idx]
+
+        for c in unseen:
+            new_comments.append({
+                "comment_id": str(c.id),
+                "task_id": str(task.id),
+                "task_title": task.title,
+                "content": c.content,
+                "comment_type": c.comment_type,
+                "source": _comment_source(c),
+                "created_at": c.created_at.isoformat(),
+            })
+
+        # Cursor auf den letzten gesehenen ECHTEN Kommentar im Full-Log setzen
+        # (nicht nur auf den letzten deliverable), damit Cursor monoton bleibt.
+        # Atomic upsert — vermeidet UniqueConstraintViolation bei parallel polls
+        # (Bug 2026-04-22: 3× DETAIL: Key (agent_id, task_id) already exists im log).
+        if unseen:
+            last_id = all_comments[-1].id
+            await _upsert_cursor(session, agent.id, task.id, last_id)
+
+    if new_comments:
+        await session.commit()
+
+    return new_comments
+
+
+async def _upsert_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    task_id: uuid.UUID,
+    last_seen_comment_id: uuid.UUID,
+) -> None:
+    """Dialect-agnostic upsert fuer AgentTaskCommentCursor.
+
+    Nutzt PostgreSQL/SQLite `INSERT ... ON CONFLICT DO UPDATE` — atomare
+    DB-Operation, keine Race-Condition bei concurrent polls fuer denselben
+    (agent_id, task_id).
+    """
+    from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
+
+    dialect = session.bind.dialect.name if session.bind else "postgresql"
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert as _insert
+    else:
+        from sqlalchemy.dialects.postgresql import insert as _insert
+
+    stmt = _insert(_Cursor.__table__).values(
+        agent_id=agent_id,
+        task_id=task_id,
+        last_seen_comment_id=last_seen_comment_id,
+    ).on_conflict_do_update(
+        index_elements=["agent_id", "task_id"],
+        set_={
+            "last_seen_comment_id": last_seen_comment_id,
+            "updated_at": datetime.now(timezone.utc),
+        },
+    )
+    await session.execute(stmt)
+
+
+@router.get("/agent/me/poll")
+async def agent_poll(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Unified polling endpoint for Docker agents (replaces /me/next-task + /me/active-task-status).
+
+    Returns one of four states:
+    - cancelled: active task was set to failed → poll.sh sends ESC to claude
+    - working: agent has in_progress or blocked task → poll.sh does nothing
+    - new_task: claimed a new inbox task → poll.sh pastes prompt to tmux
+    - idle: nothing to do
+
+    Jede Response enthaelt zusaetzlich `new_comments` (Liste) — neue User-
+    Kommentare auf aktiven Tasks, die der Agent noch nicht gesehen hat.
+    poll.sh pasted sie als eigene Nachricht in die tmux-Session.
+    """
+    import datetime as dt
+    from app.services.dispatch import build_agent_task_prompt
+
+    new_comments = await _collect_and_ack_new_comments(agent, session)
+
+    # 1. Failed tasks first — Agent muss ESC bekommen bevor irgendwas anderes passiert
+    failed_result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.status == "failed")
+        .order_by(Task.updated_at.desc())
+        .limit(1)
+    )
+    failed = failed_result.first()
+    if failed is not None:
+        return {"state": "cancelled", "task_id": str(failed.id), "new_comments": new_comments}
+
+    # 1b. Manuell gestoppte Tasks (run_control=stopped). Eigener state damit
+    # poll.sh die Session sauber terminiert (ESC + /clear + context reset)
+    # ohne das als Failure zu behandeln. Resume generiert spaeter eine frische
+    # dispatch_attempt_id + volle Prompt-Lieferung via inbox-claim Pfad.
+    stopped_result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.run_control == "stopped")
+        .order_by(Task.updated_at.desc())
+        .limit(1)
+    )
+    stopped = stopped_result.first()
+    if stopped is not None:
+        return {"state": "stopped", "task_id": str(stopped.id), "new_comments": new_comments}
+
+    # 2. Phase-Approval-Tasks haben Vorrang vor "working"-Bail, weil der Parent
+    # bewusst auf in_progress bleibt bis der Board Lead den Approval-Task bearbeitet.
+    # Ohne diesen Check wäre der Approval-Task unerreichbar.
+    approval_result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.status == "inbox")
+        .where(Task.delegation_type == "phase_approval")
+        .order_by(Task.created_at.asc())
+        .limit(1)
+    )
+    approval_task = approval_result.first()
+    if approval_task is not None:
+        task = approval_task
+    else:
+        # 3. Agent mit aktivem Task. Zwei Fälle:
+        #    a) ack_at gesetzt → Agent hat den Prompt schon bekommen → `working`
+        #    b) ack_at == NULL → Task dispatched aber Prompt nie an Agent geliefert
+        #       (passiert bei "direkt"-Dispatch der inbox überspringt, oder wenn
+        #       recover-task den Task auf inbox zurücksetzt und dispatch ihn
+        #       direkt wieder claimt bevor poll.sh ihn sieht). In dem Fall
+        #       unten in die Prompt-Lieferung fallen.
+        # F1 fix (Plan 26-02 / HERM-10): nach dem Split flippt der inbox-Pfad
+        # status nicht mehr — ein Task im Status "inbox" mit dispatched_at
+        # gesetzt + ack_at NULL bleibt im inbox-candidates-Block weiter unten
+        # sichtbar (das ist OK; Bridge-Cache deduptiziert auf task_id).
+        # Include `review` so review-handoffs to cli-bridge agents actually
+        # reach them (ADR-022 review finding FB-1 — the old predicate only
+        # covered inbox/in_progress/blocked, so Rex never saw tasks Rex
+        # was supposed to review). Claim-semantics: an unacked review
+        # task gets delivered once and keeps status=review (status only
+        # flips when Rex explicitly PATCHes to in_progress or done).
+        active_result = await session.exec(
+            select(Task)
+            .where(Task.assigned_agent_id == agent.id)
+            .where(Task.status.in_(["in_progress", "blocked", "review"]))
+            .order_by(Task.updated_at.desc())
+            .limit(1)
+        )
+        active = active_result.first()
+        if active is not None:
+            if active.ack_at is not None:
+                return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}
+            # Prompt wurde nie geliefert — fall through und ausliefern.
+            task = active
+        else:
+            # 4. No active task — look for next inbox task mit erfuellten
+            # Dependencies. Der Claim-Pfad unten (`was_inbox → in_progress`)
+            # umgeht dispatch.auto_dispatch_task, wo dependencies_met()
+            # normalerweise greift — daher hier explizit pruefen. Sonst
+            # claimt ein pollender Worker blindlings Tasks deren
+            # Vorgaenger noch nicht fertig sind (Bug vom 2026-04-22).
+            from app.services.dispatch import dependencies_met
+            candidates_result = await session.exec(
+                select(Task)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status == "inbox")
+                .order_by(Task.created_at.asc())
+            )
+            task = None
+            for candidate in candidates_result.all():
+                if await dependencies_met(session, candidate):
+                    task = candidate
+                    break
+
+            # Runtime-readiness gate (power-managed backends, e.g. PORSCHE
+            # unsloth). Don't inject a fresh inbox task into the session while
+            # the agent's LLM backend is asleep — the task stays inbox (parked)
+            # until the box is woken + the model is serving. Only affects agents
+            # bound to a power_managed runtime; every other agent passes through
+            # (fail-open). Only the fresh-inbox path is gated — recovery and
+            # phase_approval claims above are untouched. See runtime_readiness.py.
+            if task is not None:
+                from app.services.runtime_readiness import runtime_ready_for_agent
+                _rt_ready, _rt_reason = await runtime_ready_for_agent(agent, session)
+                if not _rt_ready:
+                    return {
+                        "state": "idle",
+                        "runtime_not_ready": True,
+                        "detail": _rt_reason,
+                        "new_comments": new_comments,
+                    }
+
+    if task is None:
+        return {"state": "idle", "new_comments": new_comments}
+
+    # 3. Claim the task. Zwei Pfade:
+    #    - inbox: nur dispatched_at setzen (wenn noch None) — Status bleibt
+    #      "inbox", ack_at bleibt NULL. Der Agent muss explizit per
+    #      PATCH status:in_progress den ACK senden (= Migration 0018
+    #      Handshake-Contract).
+    #    - bereits in_progress / blocked / review (direkt-dispatch / recovery):
+    #      ack_at setzen damit der recovery-Branch oben (active.ack_at != None)
+    #      beim naechsten Poll greift und kein Re-Deliver passiert.
+    #
+    # F1 fix (Plan 26-02 / HERM-10): Status flippt NICHT mehr beim Poll-Claim.
+    # Vorher (agents.py:2946 alt) wurde status="in_progress" + ack_at=now in
+    # demselben atomic write gesetzt — die LLM-Session hatte den Prompt da noch
+    # nicht gesehen. Status bleibt jetzt "inbox" bis der Agent selbst den
+    # PATCH macht (tasks.py:1239-1241 setzt dort started_at + ack_at).
+    #
+    # F3 fix (Plan 26-02 / HERM-10): dispatched_at und ack_at koennen nicht
+    # mehr beide auf denselben `now`-Literalwert gesetzt werden, weil sie
+    # in zwei separate Schreibpfade gewandert sind: dispatched_at = poll
+    # (hier), ack_at = agent's eigener PATCH (tasks.py / agent_scoped.py).
+    # Damit ist eine messbare Spanne `dispatched_at < ack_at` garantiert.
+    #
+    # Duplicate-dispatch concern: Solange der Agent noch nicht ACKt, retourniert
+    # poll bei jedem Aufruf wieder state=new_task. Die Bridge (hermes-bridge.py
+    # _last_dispatched_task_id, docker poll.sh LAST_DISPATCHED_TASK_ID) dedupt
+    # bereits per task_id-Cache, also kein Re-Paste in tmux. Plan 26-05
+    # haertet die Bridge zusaetzlich.
+    now = dt.datetime.now(tz=dt.timezone.utc)
+    was_inbox = task.status == "inbox"
+    if was_inbox:
+        # F1 fix (Plan 26-02): only set dispatched_at on first delivery.
+        # Status stays "inbox" — flips to in_progress only when the agent
+        # explicitly PATCHes status:in_progress (= true ACK per Migration 0018).
+        # ack_at is set in that PATCH path, NOT here, so dispatched_at < ack_at
+        # is guaranteed (F3 fix).
+        if task.dispatched_at is None:
+            task.dispatched_at = now
+        # NOTE: do NOT set task.ack_at here. Do NOT set task.status here.
+    else:
+        # in_progress / review / blocked recovery (already-acked task path).
+        # Setting ack_at here is the historical "re-deliver prompt" recovery
+        # signal — preserved unchanged so the recovery-branch above
+        # (active.ack_at != None) catches the next poll.
+        task.ack_at = now
+    # Active-Task-Lock setzen — analog zu Comment-Auto-ACK in
+    # agent_scoped.py:3788 und PATCH-ACK in agent_scoped.py:1294.
+    # Ohne das bleibt agent.current_task_id=None und mc delegate /
+    # mc help-request / mc clarification antworten 409 "Kein aktiver Task"
+    # bei Agents die per Push-Dispatch arbeiten und VOR dem ersten Comment
+    # delegieren wollen (Live-Bug Boss 2026-04-25: 6 Min Loop bei
+    # weather-task vor erstem Comment, mehrere mc delegate 409). Gleiche
+    # Skip-Bedingung: Workers im Subagent-Modus haben parallele Sessions
+    # und brauchen den Lock nicht.
+    from app.config import settings as _poll_ack_settings
+    if not (_poll_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
+        if agent.current_task_id != task.id:
+            agent.current_task_id = task.id
+            session.add(agent)
+    # Ohne dispatch_attempt_id wuerde der naechste `mc ack`/`mc done` mit
+    # HTTP 409 abgewiesen (enforce_dispatch_attempt_id=True). Der Direct-
+    # Poll-Pfad ruft NICHT auto_dispatch_task() → wir generieren den
+    # attempt_id hier selbst wenn noch keiner existiert.
+    #
+    # Race-Fix (2026-05-15): conditional UPDATE … WHERE attempt_id IS NULL
+    # via set_dispatch_attempt_id(only_if_null=True). Verhindert dass /me/poll
+    # und auto_dispatch_task (BackgroundTask) sich gegenseitig überschreiben
+    # während eines git-clone Fensters. Plus permanenter Audit-Eintrag.
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+    from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+    await set_dispatch_attempt_id(
+        session, task, str(uuid.uuid4()),
+        caller="agent_poll", reason="claim_inbox_task",
+        only_if_null=True,
+    )
+
+    try:
+        prompt = await build_agent_task_prompt(task=task, agent=agent, session=session)
+    except Exception as e:
+        # Revert on prompt generation failure. Nur das zurücksetzen was wir
+        # gerade gesetzt haben — sonst würden wir bei direkt-dispatch den
+        # ursprünglichen dispatched_at verlieren.
+        # F1 fix (Plan 26-02): wir setzen status nicht mehr im inbox-Pfad, also
+        # auch hier kein Status-Revert noetig. dispatched_at nur zuruecksetzen
+        # wenn WIR ihn in diesem Aufruf zum ersten Mal gesetzt haben.
+        if was_inbox and task.dispatched_at == now:
+            task.dispatched_at = None
+        else:
+            # Recovery-Pfad (was_inbox=False): wir hatten nur ack_at gesetzt.
+            task.ack_at = None
+        # Active-Task-Lock wieder freigeben, sonst blockiert er den naechsten poll
+        if agent.current_task_id == task.id:
+            agent.current_task_id = None
+            session.add(agent)
+        session.add(task)
+        await session.commit()
+        raise HTTPException(status_code=500, detail=f"Prompt generation failed: {str(e)}")
+
+    return {
+        "state": "new_task",
+        "task": {
+            "id": str(task.id),
+            "title": task.title,
+            # NEW (Plan 26-02 / Task 2): expose status explicitly so consumers
+            # can read the truthful value. After F1 fix, status="inbox" until
+            # the agent's own PATCH sets it to in_progress. Consumers must
+            # trust `state` for delivery semantics, `status` for lifecycle.
+            "status": task.status,
+            # F3 fix (Plan 26-02): expose dispatched_at + ack_at so downstream
+            # consumers (bridge, tests) can observe the spread.
+            "dispatched_at": task.dispatched_at.isoformat() if task.dispatched_at else None,
+            "ack_at": task.ack_at.isoformat() if task.ack_at else None,
+            "board_id": str(task.board_id) if task.board_id else None,
+            "workspace_path": task.workspace_path,
+            "prompt": prompt,
+            "slug": getattr(task, "slug", None),
+            # Ohne diesen Wert in der Response kann poll.sh den Header nicht
+            # in /tmp/mc-context.env schreiben und `mc ack` schlaegt mit HTTP
+            # 409 "Fehlender X-Dispatch-Attempt-Id" fehl (ADR-023 ultrareview).
+            "dispatch_attempt_id": task.dispatch_attempt_id,
+        },
+        "new_comments": new_comments,
+    }
+
+
+@router.get("/agent/me/active-task-recovery")
+async def agent_active_task_recovery(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent-initiated recovery (ADR-024): read-only, gibt den aktuellen
+    Task-Prompt + Recovery-Context zurueck und generiert eine frische
+    `dispatch_attempt_id`. **Mutiert KEINEN Status** — im Gegensatz zum
+    alten POST /recover-task der den Task auf inbox zurücksetzte (→
+    Dispatch-Loop bei Crash-Loops, silent Kontext-Verlust).
+
+    Wird aufgerufen von:
+    - `mc recover` CLI (Agent-Startup-Hook, SOUL-Kernregel)
+    - poll.sh FIRST_POLL (fallback wenn Agent selbst nicht `mc recover` laeuft)
+
+    Returns:
+      - {active: false} wenn kein aktiver Task
+      - {active: true, task: {... prompt, dispatch_attempt_id, ...}}
+    """
+    from app.services.dispatch import build_agent_task_prompt
+    import datetime as _dt
+
+    active_result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.status.in_(["in_progress", "blocked", "review"]))  # type: ignore[union-attr]
+        .order_by(Task.updated_at.desc())  # type: ignore[union-attr]
+        .limit(1)
+    )
+    active = active_result.first()
+    if active is None:
+        return {"active": False, "reason": "no_active_task"}
+
+    # Rate-Limit: pro Task max 1 Recovery alle 30s (Redis TTL-Key).
+    # Schutz gegen poll.sh Crash-Loop + Agent der `mc recover` in einer
+    # Schleife aufruft. Backend logs warnings aber liefert den cached Prompt.
+    from app.redis_client import get_redis
+    redis = await get_redis()
+    cache_key = f"mc:recovery:attempt_id:{active.id}"
+    try:
+        cached_attempt = await redis.get(cache_key)
+    except Exception:
+        cached_attempt = None
+
+    if cached_attempt:
+        # Reuse der letzten attempt_id statt neue zu generieren — verhindert
+        # dass der Agent seine eigenen vorherigen Header invalidiert.
+        active.dispatch_attempt_id = cached_attempt.decode() if isinstance(cached_attempt, bytes) else cached_attempt
+    elif active.dispatch_attempt_id:
+        # Race-Fix (2026-05-12): wenn der Task schon eine attempt_id hat
+        # (zugewiesen via /me/poll oder auto_dispatch_task), nicht ueberschreiben.
+        # Sonst sieht poll.sh beim naechsten Poll eine andere attempt_id und
+        # paste den Task erneut. Wir reusen die existierende ID und cachen sie
+        # auch im Redis-Slot damit nachfolgende Recovery-Calls in den 30s-TTL
+        # konsistent bleiben.
+        try:
+            await redis.setex(cache_key, 30, active.dispatch_attempt_id)
+        except Exception:
+            pass
+    else:
+        active.dispatch_attempt_id = str(uuid.uuid4())
+        try:
+            await redis.setex(cache_key, 30, active.dispatch_attempt_id)
+        except Exception:
+            pass
+
+    active.updated_at = _dt.datetime.now(tz=_dt.timezone.utc)
+    session.add(active)
+    await session.commit()
+    await session.refresh(active)
+
+    try:
+        prompt = await build_agent_task_prompt(task=active, agent=agent, session=session)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Prompt generation failed: {e}")
+
+    await emit_event(
+        session,
+        "task.agent_recovery",
+        f"{agent.name} Recovery: '{active.title[:60]}'",
+        severity="info",
+        board_id=active.board_id,
+        task_id=active.id,
+        agent_id=agent.id,
+        detail={"trigger": "agent_initiated_or_poll_first", "cached": bool(cached_attempt)},
+    )
+
+    return {
+        "active": True,
+        "task": {
+            "id": str(active.id),
+            "title": active.title,
+            "status": active.status,
+            "board_id": str(active.board_id) if active.board_id else None,
+            "workspace_path": active.workspace_path,
+            "prompt": prompt,
+            "slug": getattr(active, "slug", None),
+            "dispatch_attempt_id": active.dispatch_attempt_id,
+        },
+    }
+
+
+@router.post("/agent/me/recover-task")
+async def agent_recover_task(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """DEPRECATED (ADR-024): mutiert Task-Status → inbox, was zu Dispatch-Loops
+    bei Crash-Loops fuehren kann. Neuer Weg: `GET /agent/me/active-task-recovery`
+    (read-only, generiert frische attempt_id, kein Status-Change).
+
+    Aelterer Recovery-Endpoint fuer Poll-Runtimes (cli-bridge, host) nach Restart.
+    poll.sh ruft jetzt den neuen GET-Endpoint. Dieser POST bleibt nur fuer
+    Backward-Compat und wird in Zukunft entfernt.
+
+    Wenn ein Agent-Container/launchd-Job neu startet waehrend ein Task auf
+    'in_progress' steht, ist der tmux-/claude-Kontext weg, aber der Backend-
+    Status bleibt 'in_progress' → /agent/me/poll liefert nur `state=working`
+    ohne Prompt. poll.sh ruft beim ersten Startup-Poll diesen Endpoint auf,
+    der den Task zurueck auf 'inbox' setzt. Der naechste Poll-Zyklus liefert
+    ihn als `new_task` mit vollem Prompt.
+    """
+    from app.models.task import TaskComment as _TC, TaskEvent
+    import datetime as _dt
+
+    active_result = await session.exec(
+        select(Task)
+        .where(Task.assigned_agent_id == agent.id)
+        .where(Task.status.in_(["in_progress", "blocked"]))  # type: ignore[union-attr]
+        .order_by(Task.updated_at.desc())  # type: ignore[union-attr]
+        .limit(1)
+    )
+    active = active_result.first()
+
+    if active is None:
+        return {"recovered": False, "reason": "no_active_task"}
+
+    # Rate-limit: Recovery darf nicht mehr als 1x/60s pro Task ausgeloest werden.
+    # Schutz gegen poll.sh-Crash-Loop (FIRST_POLL=true bei jedem Neustart).
+    cooldown_cutoff = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(seconds=60)
+    recent_recovery = (await session.exec(
+        select(TaskEvent)
+        .where(TaskEvent.task_id == active.id)
+        .where(TaskEvent.reason == "agent_restart_recovery")
+        .where(TaskEvent.created_at > cooldown_cutoff)  # type: ignore[union-attr]
+        .limit(1)
+    )).first()
+    if recent_recovery is not None:
+        logger.warning(
+            "Recovery rate-limited for task %s (agent %s) — last recovery at %s",
+            active.id, agent.name, recent_recovery.created_at,
+        )
+        return {
+            "recovered": False,
+            "reason": "rate_limited",
+            "task_id": str(active.id),
+            "last_recovery_at": recent_recovery.created_at.isoformat(),
+        }
+
+    old_status = active.status
+    active.status = "inbox"
+    active.dispatched_at = None
+    active.ack_at = None
+    active.started_at = None
+    # run_control zuruecksetzen: sonst bleibt ein alter 'stopped'-Flag haengen
+    # und blockiert spaeter die Status-Transition (-> Deadlock im Agent).
+    active.run_control = None
+    active.updated_at = utcnow()
+    session.add(active)
+
+    # Recovery-System-Kommentar (audit trail)
+    recovery_comment = _TC(
+        task_id=active.id,
+        author_type="agent",
+        author_agent_id=agent.id,
+        content=(
+            f"**Recovery triggered** — {agent.name} hat beim Startup einen "
+            f"`in_progress` Task ohne Kontext gefunden (Container-/Host-Restart "
+            f"oder claude-Crash). Task wird re-dispatched, naechster Poll "
+            f"liefert den Prompt neu."
+        ),
+        comment_type="system",
+    )
+    session.add(recovery_comment)
+    await session.commit()
+    await session.refresh(active)
+
+    from app.services.task_lifecycle import record_task_event
+    await record_task_event(
+        session, active.id, old_status, "inbox",
+        changed_by="agent", agent_id=agent.id, reason="agent_restart_recovery",
+    )
+
+    await emit_event(
+        session, "task.recovery_triggered",
+        f"{agent.emoji or '🤖'} {agent.name}: Task '{active.title}' re-dispatched nach Agent-Restart",
+        board_id=active.board_id, task_id=active.id, agent_id=agent.id,
+        severity="warning",
+        detail={"reason": "agent_restart_recovery", "previous_status": old_status},
+    )
+
+    return {
+        "recovered": True,
+        "task_id": str(active.id),
+        "task_title": active.title,
+        "previous_status": old_status,
+    }
+
+
+@router.post("/agent/me/heartbeat")
+async def agent_heartbeat(
+    payload: AgentHeartbeatPayload,
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Agent signals it's alive. Updates last_seen_at, run_state AND status.
+
+    Fuer Non-Gateway-Agents (cli-bridge, host) ist dies der einzige Weg, den
+    Status auf idle/working zu setzen — session_monitor greift bei ihnen nicht.
+
+    Bug 2 self-heal (2026-05-13): die DB-Felder `status`, `current_task_id`,
+    `last_task_activity_at` driften regelmaessig vom Task-Tabellen-State weg
+    (Live-Bug: Sparky hatte einen `in_progress` Task assigned, claude cookte
+    intern 12 Min lang, poll.sh sendete `status: idle` weil er keinen NEUEN
+    Task hatte → der Agent erschien fuer den Operator als "idle" obwohl er arbeitete,
+    Boss/Operator koennten ihm fahrlaessig einen 2. Task zudispatchen). Fix:
+    Heartbeat prueft die Task-Tabelle auf einen aktiven assigned Task (Status
+    `in_progress`). Wenn ja → status bleibt `working`, current_task_id wird
+    auf den Task gesynct, last_task_activity_at wird gestempelt. So
+    konvergiert der Agent-Row spaetestens beim naechsten Heartbeat zur
+    Wahrheit. `blocked`/`review`/`done`/`failed` sind NICHT "aktiv
+    arbeitend" — bei denen wird der Payload-Status respektiert.
+    """
+    import datetime
+
+    from app.models.task import Task as _Task
+
+    agent.last_seen_at = datetime.datetime.now(tz=datetime.timezone.utc)
+
+    # Task-Tabelle ist die Wahrheit. Wir lesen sie hier einmal und leiten
+    # daraus ab, ob der Agent "wirklich" arbeitet — unabhaengig davon was
+    # poll.sh meldet.
+    active_res = await session.exec(
+        select(_Task).where(
+            _Task.assigned_agent_id == agent.id,
+            _Task.status == "in_progress",
+        ).limit(1)
+    )
+    active_task = active_res.first()
+
+    if active_task is not None:
+        # current_task_id Lock self-heal: unabhaengig vom Payload, aus DB
+        # ableiten. Das fixt den ursprueglichen Bug 2 (Sparky.current_task_id=
+        # None obwohl Task assigned) ohne den Agent-State zu maskieren.
+        agent.current_task_id = active_task.id
+        # status / run_state / last_task_activity_at folgen dem Payload
+        # (Bug 2 refined 2026-05-13). poll.sh ist verantwortlich, "working"
+        # zu senden wenn claude wirklich aktiv ist (Bug 13). Wenn poll.sh
+        # idle meldet bei active Task → sieht der Operator im UI status=idle +
+        # current_task_id gesetzt = klares Signal "Task assigned aber Agent
+        # nicht aktiv, was ist los?".
+        if payload.status == "working":
+            agent.status = "working"
+            agent.run_state = "running"
+            agent.last_task_activity_at = agent.last_seen_at
+        else:
+            agent.run_state = "running" if payload.status == "working" else "idle"
+            if payload.status in ("idle", "working", "online"):
+                agent.status = payload.status
+    else:
+        # Kein aktiver Task in der Task-Tabelle.
+        # Bug 18 fix (2026-05-14): wenn poll.sh "working" meldet aber das
+        # Backend keinen in_progress assigned Task findet → Stale-State.
+        # Beispiel: claude rendert im pane noch Memory-Save nach Task done →
+        # detect_turn_state sagt "working" → Heartbeat schickt working →
+        # OHNE diesen Fix bleibt agent.status="working" forever (gesehen
+        # bei Sparky 2026-05-14: status=working + current_task_id=None
+        # ueber Stunden). Self-heal: working ohne Task → idle erzwingen.
+        if payload.status == "working":
+            logger.warning(
+                "Bug 18 self-heal: agent %s heartbeated 'working' but no "
+                "in_progress task assigned — coercing status to 'idle'",
+                agent.name,
+            )
+            agent.status = "idle"
+            agent.run_state = "idle"
+        else:
+            agent.run_state = "running" if payload.status == "working" else "idle"
+            if payload.status in ("idle", "working", "online"):
+                agent.status = payload.status
+        # current_task_id explizit clearen — verhindert dass alter Pointer
+        # nach Task done/failed haengen bleibt (Sparky-Symptom 2026-05-14).
+        if agent.current_task_id is not None:
+            agent.current_task_id = None
+
+    # CTX-01 (Phase 6): Docker self-report context-window usage. Inverts the
+    # display formula at line 166 so frontend bars stay accurate.
+    if payload.context_pct is not None and agent.context_max:
+        agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
+
+    session.add(agent)
+    await session.commit()
+
+    return {"ok": True, "agent": agent.name}

@@ -1,0 +1,698 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Terminal as XTerm } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import "@xterm/xterm/css/xterm.css";
+import {
+  MonitorPlay,
+  Loader2,
+  MonitorOff,
+  RotateCcw,
+  Wifi,
+  WifiOff,
+  Play,
+  Square,
+} from "lucide-react";
+import { api } from "@/lib/api";
+import type { Agent } from "@/lib/types";
+import { C } from "@/lib/colors";
+
+type AgentWithState = Agent & {
+  container_state?: string;     // for cli-bridge / docker runtime
+  session_running?: boolean;    // for host runtime
+  session_name?: string;        // for host runtime
+};
+
+function agentIsRunning(a: AgentWithState): boolean {
+  if (a.agent_runtime === "host") return a.session_running === true;
+  return a.container_state === "running";
+}
+import AppShell from "@/components/layout/AppShell";
+import { notify } from "@/lib/notify";
+import { StructuredSessionView } from "@/components/session/StructuredSessionView";
+import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
+
+// ── WebSocket Terminal Hook ───────────────────────────────────────────────────
+
+function useAgentTerminal(
+  agent: Agent | null,
+  term: XTerm | null,
+): boolean {
+  const wsRef = useRef<WebSocket | null>(null);
+  const [connected, setConnected] = useState(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const destroyedRef = useRef(false);
+  const dataDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  const resizeDisposableRef = useRef<{ dispose: () => void } | null>(null);
+  // Scroll via tmux copy-mode (weil xterm.js-scrollback bei tmux nutzlos ist):
+  // mouse off im Container → native Text-Selection funktioniert,
+  // Wheel-Events werden in tmux copy-mode keystrokes umgewandelt und an PTY gesendet.
+  const copyModeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inCopyModeRef = useRef(false);
+
+  useEffect(() => {
+    destroyedRef.current = false;
+
+    function connect() {
+      if (destroyedRef.current || !agent || !term) return;
+
+      if (wsRef.current) {
+        wsRef.current.close(1000);
+        wsRef.current = null;
+      }
+
+      const url = agent.agent_runtime === "host"
+        ? api.cliSessions.hostPtyWsUrl(agent.id)
+        : api.cliSessions.ptyWsUrl(agent.id);
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (destroyedRef.current) { ws.close(1000); return; }
+        setConnected(true);
+        if (term.cols && term.rows) {
+          ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
+        }
+      };
+
+      ws.onmessage = (evt) => {
+        if (evt.data instanceof ArrayBuffer) {
+          term.write(new Uint8Array(evt.data));
+        } else {
+          term.write(evt.data as string);
+        }
+      };
+
+      ws.onerror = () => {
+        setConnected(false);
+      };
+
+      ws.onclose = (evt) => {
+        setConnected(false);
+        if (!destroyedRef.current && evt.code !== 1000) {
+          // Auto-reconnect nach 3s
+          term.writeln("\r\n\x1b[33m[Reconnecting...]\x1b[0m");
+          reconnectTimer.current = setTimeout(connect, 3000);
+        }
+      };
+
+      // Copy on selection
+      term.onSelectionChange(() => {
+        if (term.hasSelection()) {
+          navigator.clipboard.writeText(term.getSelection()).catch(() => {});
+        }
+      });
+
+      // Paste via Cmd+V / Ctrl+V
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if ((e.metaKey || e.ctrlKey) && e.key === "v" && e.type === "keydown") {
+          navigator.clipboard.readText().then((text) => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "input", data: text }));
+            }
+          }).catch(() => {});
+          return false;
+        }
+        return true;
+      });
+
+      // Dispose old listeners before adding new ones
+      dataDisposableRef.current?.dispose();
+      resizeDisposableRef.current?.dispose();
+
+      dataDisposableRef.current = term.onData((data) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(data);
+      });
+
+      resizeDisposableRef.current = term.onResize(({ cols, rows }) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: "resize", cols, rows }));
+        }
+      });
+    }
+
+    connect();
+
+    return () => {
+      destroyedRef.current = true;
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      wsRef.current?.close(1000);
+      wsRef.current = null;
+      dataDisposableRef.current?.dispose();
+      resizeDisposableRef.current?.dispose();
+      setConnected(false);
+    };
+  }, [agent?.id, term]);
+
+  // Custom Wheel-Handler: Scroll via tmux copy-mode
+  //
+  // Warum: tmux nutzt alternate screen buffer und zeichnet den ganzen Pane bei
+  // jedem Redraw neu → der xterm.js-eigene scrollback-Puffer ist damit effektiv
+  // leer. Die 50000 Zeilen History leben nur im tmux-copy-mode.
+  //
+  // Flow:
+  //  1. Wheel-Event → sende C-b [ (tmux prefix + [) um copy-mode zu betreten
+  //  2. Sende Arrow-Up/Down keystrokes proportional zum scroll-delta
+  //  3. Nach 4s idle → sende 'q' um copy-mode zu verlassen
+  //
+  // tmux mouse muss off sein (sonst faengt tmux die wheel-events selbst ab und
+  // diese handler wuerde nie aufgerufen). Siehe entrypoint.sh.
+  useEffect(() => {
+    if (!term) return;
+
+    const exitCopyMode = () => {
+      if (!inCopyModeRef.current) return;
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send("q");
+      }
+      inCopyModeRef.current = false;
+    };
+
+    // Gemeinsamer Scroll-Pfad für Wheel (Desktop) und Touch (Mobile): beide
+    // übersetzen ihr Delta in tmux-copy-mode Arrow-Keystrokes. lines<0 = hoch
+    // in die History, lines>0 = runter Richtung Live-Ende.
+    const scrollByLines = (lines: number) => {
+      if (lines === 0) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      if (!inCopyModeRef.current) {
+        wsRef.current.send("\x02["); // Ctrl-B [ → copy-mode betreten
+        inCopyModeRef.current = true;
+      }
+      // Reset auto-exit timer (4s nach letztem scroll → copy-mode verlassen)
+      if (copyModeTimerRef.current) clearTimeout(copyModeTimerRef.current);
+      copyModeTimerRef.current = setTimeout(exitCopyMode, 4000);
+      const key = lines < 0 ? "\x1b[A" : "\x1b[B";
+      wsRef.current.send(key.repeat(Math.abs(lines)));
+    };
+
+    // Desktop: Mausrad / Trackpad
+    term.attachCustomWheelEventHandler((e: WheelEvent) => {
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+        return true; // keine Verbindung → xterm.js default (scrollback, auch wenn leer)
+      }
+      const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 40)));
+      scrollByLines(e.deltaY < 0 ? -lines : lines);
+      return false; // xterm.js default unterdruecken
+    });
+
+    // Mobile: Finger-Swipe. attachCustomWheelEventHandler feuert NUR für
+    // `wheel`-Events — ein Finger erzeugt Touch-Events, darum war das Terminal
+    // auf dem Handy nicht scrollbar. Desktop bleibt unberührt (Maus/Trackpad
+    // feuern keine Touch-Events). Swipe-Distanz wird ~1:1 in dieselben
+    // copy-mode Keystrokes wie das Wheel übersetzt.
+    const el = term.element;
+    const TOUCH_LINE_PX = 18; // ~ eine Terminalzeile Swipe pro Pfeiltaste
+    let lastY: number | null = null;
+    let accum = 0;
+
+    const onTouchStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) { lastY = null; return; } // Pinch/Multi ignorieren
+      lastY = e.touches[0].clientY;
+      accum = 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (lastY === null || e.touches.length !== 1) return;
+      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+      const y = e.touches[0].clientY;
+      accum += y - lastY;
+      lastY = y;
+      const lines = Math.trunc(accum / TOUCH_LINE_PX);
+      if (lines !== 0) {
+        accum -= lines * TOUCH_LINE_PX;
+        // Finger nach unten (lines>0, Inhalt wandert runter) → ältere History → hoch
+        scrollByLines(-lines);
+      }
+      e.preventDefault(); // native Page-Bounce / Selektion unterdrücken
+    };
+    const onTouchEnd = () => { lastY = null; };
+
+    // Capture-Phase: feuert garantiert, auch falls ein xterm-Kind die Touch-
+    // Events per stopPropagation abfängt (Bubble-Phase käme dann nie an).
+    el?.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
+    el?.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
+    el?.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
+    el?.addEventListener("touchcancel", onTouchEnd, { passive: true, capture: true });
+
+    return () => {
+      if (copyModeTimerRef.current) clearTimeout(copyModeTimerRef.current);
+      el?.removeEventListener("touchstart", onTouchStart, { capture: true });
+      el?.removeEventListener("touchmove", onTouchMove, { capture: true });
+      el?.removeEventListener("touchend", onTouchEnd, { capture: true });
+      el?.removeEventListener("touchcancel", onTouchEnd, { capture: true });
+      // Cleanup: falls noch in copy-mode beim unmount → verlassen
+      if (inCopyModeRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
+        wsRef.current.send("q");
+        inCopyModeRef.current = false;
+      }
+    };
+  }, [term]);
+
+  return connected;
+}
+
+// ── Terminal Panel ────────────────────────────────────────────────────────────
+
+function TerminalPanel({ agent }: { agent: AgentWithState }) {
+  if (!agentIsRunning(agent)) {
+    const stateText = agent.agent_runtime === "host"
+      ? (agent.session_running ? "running" : "idle")
+      : (agent.container_state ?? "unknown");
+    return (
+      <div className="flex flex-col items-center justify-center flex-1 bg-[#0d0d0d] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+        <MonitorOff size={32} style={{ opacity: 0.3 }} />
+        <div>Session ist <span className="font-mono">{stateText}</span></div>
+      </div>
+    );
+  }
+  return <TerminalPanelRunning agent={agent} />;
+}
+
+function TerminalPanelRunning({ agent }: { agent: Agent }) {
+  const termRef = useRef<HTMLDivElement>(null);
+  const [term, setTerm] = useState<XTerm | null>(null);
+  const [viewMode, setViewMode] = useState<"terminal" | "structured">("terminal");
+
+  useEffect(() => {
+    setViewMode("terminal");
+  }, [agent.id]);
+
+  useEffect(() => {
+    if (!termRef.current) return;
+    const t = new XTerm({
+      theme: {
+        background: "#0d0d0d",
+        foreground: "#e5e5e5",
+        cursor: C.accent,
+        black: "#1a1a1a",
+        brightBlack: "#444444",
+        white: "#e5e5e5",
+        brightWhite: "#ffffff",
+        blue: "#60A5FA",
+        brightBlue: "#93C5FD",
+        green: "#00CC88",
+        brightGreen: "#34D399",
+        red: "#EF4444",
+        yellow: "#F59E0B",
+        magenta: "#A855F7",
+        cyan: "#06B6D4",
+      },
+      scrollback: 5000,
+      cursorBlink: true,
+      convertEol: true,
+      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      fontSize: 14,
+      lineHeight: 1.4,
+    });
+    const fit = new FitAddon();
+    t.loadAddon(fit);
+    t.open(termRef.current);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      fit.fit();
+      t.focus();
+    }));
+
+    const parent = termRef.current.parentElement!;
+    const ro = new ResizeObserver(() => fit.fit());
+    ro.observe(parent);
+    const onContainerClick = () => t.focus();
+    parent.addEventListener("click", onContainerClick);
+
+    setTerm(t);
+    return () => { t.dispose(); ro.disconnect(); parent.removeEventListener("click", onContainerClick); };
+  }, []);
+
+  const connected = useAgentTerminal(agent, term);
+
+  return (
+    <div className="flex flex-col flex-1 overflow-hidden bg-[#0d0d0d]">
+      {/* Header */}
+      <div
+        className="flex items-center gap-3 px-4 py-2.5 border-b shrink-0"
+        style={{ borderColor: "rgba(255,255,255,0.06)" }}
+      >
+        {connected ? (
+          <Wifi size={12} style={{ color: C.online, flexShrink: 0 }} />
+        ) : (
+          <WifiOff size={12} style={{ color: C.error, flexShrink: 0 }} />
+        )}
+        <span
+          className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
+          style={{
+            background: connected ? `${C.online}1A` : `${C.error}1A`,
+            color: connected ? C.online : C.error,
+            border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
+          }}
+        >
+          {connected ? "connected" : "disconnected"}
+        </span>
+        <span className="text-[11px] font-mono truncate" style={{ color: "var(--color-text-secondary)" }}>
+          mc-agent-{agent.name}
+        </span>
+        <div
+          className="flex items-center rounded-md overflow-hidden ml-auto"
+          style={{ border: "1px solid rgba(255,255,255,0.08)" }}
+        >
+          {(["terminal", "structured"] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setViewMode(mode)}
+              className="px-2.5 py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+              style={{
+                background: viewMode === mode ? C.accentSubtle : "transparent",
+                color: viewMode === mode ? C.accent : C.textMuted,
+                borderRight: mode === "terminal" ? "1px solid rgba(255,255,255,0.06)" : undefined,
+              }}
+            >
+              {mode === "terminal" ? "Terminal" : "Structured"}
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* Body */}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div
+          className="flex-1 min-h-0 relative"
+          style={{ display: viewMode === "terminal" ? "flex" : "none" }}
+        >
+          <div ref={termRef} className="absolute inset-0 p-1" />
+        </div>
+        {viewMode === "structured" && (
+          <StructuredSessionView selected={{ agent_id: agent.id, agent_name: agent.name, agent_slug: agent.name, session: agent.name, task_id: agent.id, elapsed_seconds: 0, permanent: true, shell: false }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Agent List ────────────────────────────────────────────────────────────────
+
+function AgentList({
+  agents,
+  selected,
+  onSelect,
+  isLoading,
+  onStart,
+  onStop,
+  onRestart,
+  pendingId,
+}: {
+  agents: AgentWithState[];
+  selected: AgentWithState | null;
+  onSelect: (a: AgentWithState) => void;
+  isLoading: boolean;
+  onStart: (id: string) => void;
+  onStop: (id: string) => void;
+  onRestart: (id: string) => void;
+  pendingId: string | null;
+}) {
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <Loader2 size={16} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />
+      </div>
+    );
+  }
+
+  if (agents.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
+        <MonitorOff size={28} style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
+        <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+          Keine Agents gefunden
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1 p-3 overflow-y-auto">
+      {agents.map((agent) => {
+        const isSelected = selected?.id === agent.id;
+        const isRunning = agentIsRunning(agent);
+        const isPending = pendingId === agent.id;
+        const isHost = agent.agent_runtime === "host";
+        const stateLabel = isHost
+          ? (isRunning ? "running" : "idle")
+          : (agent.container_state ?? "unknown");
+        return (
+          <div
+            key={agent.id}
+            onClick={() => onSelect(agent)}
+            className="w-full flex items-center min-h-touch text-left px-3 py-2.5 rounded-lg transition-colors text-[11px] cursor-pointer group"
+            style={{
+              background: isSelected ? C.accentSubtle : "transparent",
+              border: isSelected ? `1px solid ${C.borderAccent}` : "1px solid transparent",
+            }}
+          >
+            <div className="flex items-center gap-2.5 w-full">
+              <span
+                className="inline-block w-1.5 h-1.5 rounded-full shrink-0"
+                style={{
+                  background: isRunning ? C.online : C.textDim,
+                }}
+                title={stateLabel}
+              />
+              <span style={{ fontSize: "14px", lineHeight: 1 }}>{agent.emoji ?? "🤖"}</span>
+              <span
+                className="flex-1 truncate font-medium"
+                style={{ color: isSelected ? "var(--color-text-primary)" : "var(--color-text-secondary)" }}
+              >
+                {agent.name}
+              </span>
+              <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity touch-visible">
+                {isRunning ? (
+                  <>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onRestart(agent.id); }}
+                      disabled={isPending}
+                      title="Session neu starten"
+                      className="flex items-center justify-center w-5 h-5 rounded transition-colors"
+                      style={{
+                        background: `${C.warning}14`,
+                        border: `1px solid ${C.warning}26`,
+                        color: C.warning,
+                        opacity: isPending ? 0.5 : 1,
+                      }}
+                    >
+                      <RotateCcw size={10} className={isPending ? "animate-spin" : ""} />
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
+                      disabled={isPending}
+                      title="Session stoppen"
+                      className="flex items-center justify-center w-5 h-5 rounded transition-colors"
+                      style={{
+                        background: `${C.error}14`,
+                        border: `1px solid ${C.error}26`,
+                        color: C.error,
+                        opacity: isPending ? 0.5 : 1,
+                      }}
+                    >
+                      <Square size={10} />
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onStart(agent.id); }}
+                    disabled={isPending}
+                    title="Session starten"
+                    className="flex items-center justify-center w-5 h-5 rounded transition-colors"
+                    style={{
+                      background: `${C.online}14`,
+                      border: `1px solid ${C.online}26`,
+                      color: C.online,
+                      opacity: isPending ? 0.5 : 1,
+                    }}
+                  >
+                    {isPending ? <Loader2 size={10} className="animate-spin" /> : <Play size={10} />}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
+export default function SessionsPage() {
+  const qc = useQueryClient();
+  const [selected, setSelected] = useState<AgentWithState | null>(null);
+  // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
+  // this and always shows the split. Kept separate from `selected` so the
+  // back button can return to the list without nulling `selected` (which would
+  // immediately re-trigger the auto-select effect below and snap back).
+  const [mobileView, setMobileView] = useState<"list" | "terminal">("list");
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const [restartTick, setRestartTick] = useState<Record<string, number>>({});
+
+  const { data: dockerAgents = [], isLoading, isError } = useQuery({
+    queryKey: ["agents", "docker-sessions"],
+    queryFn: () => api.agents.listDockerSessions(),
+    refetchInterval: 10_000,
+  });
+
+  const { data: hostAgents = [] } = useQuery({
+    queryKey: ["agents", "host-sessions"],
+    queryFn: () => api.agents.listHostSessions(),
+    refetchInterval: 5_000,
+  });
+
+  const agents: AgentWithState[] = [...dockerAgents, ...hostAgents];
+
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["agents", "docker-sessions"] });
+    qc.invalidateQueries({ queryKey: ["agents", "host-sessions"] });
+  };
+
+  // Runtime-aware: host-agents nutzen SSH→launchctl, container nutzen docker.
+  const findAgent = (id: string) => agents.find((a) => a.id === id);
+  const isHostAgent = (id: string) => findAgent(id)?.agent_runtime === "host";
+
+  const { mutate: restartContainer } = useMutation<unknown, Error, string>({
+    mutationFn: (agentId: string) =>
+      isHostAgent(agentId)
+        ? api.agents.restartHost(agentId)
+        : api.agents.restartContainer(agentId),
+    onMutate: (id) => setPendingId(id),
+    onSuccess: (_data, agentId) => {
+      notify.success("Session neu gestartet");
+      invalidate();
+      // tmux-PTY ist nach Restart neu — Terminal muss neu mounten,
+      // sonst haengt der alte WebSocket im frozen buffer.
+      setRestartTick((prev) => ({ ...prev, [agentId]: (prev[agentId] ?? 0) + 1 }));
+    },
+    onError: (e: Error) => notify.error(`Restart fehlgeschlagen: ${e.message}`),
+    onSettled: () => setPendingId(null),
+  });
+
+  const { mutate: startContainer } = useMutation<unknown, Error, string>({
+    mutationFn: (agentId: string) =>
+      isHostAgent(agentId)
+        ? api.agents.startHost(agentId)
+        : api.agents.startContainer(agentId),
+    onMutate: (id) => setPendingId(id),
+    onSuccess: () => { notify.success("Session gestartet"); invalidate(); },
+    onError: (e: Error) => notify.error(`Start fehlgeschlagen: ${e.message}`),
+    onSettled: () => setPendingId(null),
+  });
+
+  const { mutate: stopContainer } = useMutation<unknown, Error, string>({
+    mutationFn: (agentId: string) =>
+      isHostAgent(agentId)
+        ? api.agents.stopHost(agentId)
+        : api.agents.stopContainer(agentId),
+    onMutate: (id) => setPendingId(id),
+    onSuccess: () => { notify.success("Session gestoppt"); invalidate(); },
+    onError: (e: Error) => notify.error(`Stop fehlgeschlagen: ${e.message}`),
+    onSettled: () => setPendingId(null),
+  });
+
+  // Auto-select erster laufender Agent
+  useEffect(() => {
+    if (agents.length > 0 && !selected) {
+      const running = agents.find((a) => agentIsRunning(a));
+      setSelected(running ?? agents[0]);
+    }
+  }, [agents, selected]);
+
+  // Phase 15 T3.7: re-mount the terminal when the backend switches the
+  // selected agent's runtime (incl. cross-image recreate). Without this
+  // the WebSocket still points at the killed container's tmux PTY and
+  // shows a frozen buffer.
+  useTerminalRemountSignal(selected?.id ?? null, (payload) => {
+    if (!selected) return;
+    setRestartTick((prev) => ({ ...prev, [selected.id]: (prev[selected.id] ?? 0) + 1 }));
+    invalidate();
+    notify.success(
+      payload.image_changed
+        ? "Runtime gewechselt — Container neu gebaut"
+        : "Runtime gewechselt — Container neugestartet",
+    );
+  });
+
+  return (
+    <AppShell fullHeight>
+      <div className="flex flex-col flex-1 overflow-hidden">
+        {isError && (
+          <div className="text-red-400 text-xs p-4">Verbindung zum Backend fehlgeschlagen</div>
+        )}
+        {/* Page Header */}
+        <div
+          className="flex items-center gap-3 px-6 py-4 border-b shrink-0"
+          style={{ borderColor: "var(--color-border-subtle)" }}
+        >
+          <MonitorPlay size={18} style={{ color: "var(--color-text-secondary)" }} />
+          <h1 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+            Agent Terminals
+          </h1>
+          <span
+            className="ml-1 text-[10px] px-2 py-0.5 rounded-full font-mono"
+            style={{
+              background: C.accentSubtle,
+              color: C.accent,
+              border: `1px solid ${C.borderAccent}`,
+            }}
+          >
+            {agents.length}
+          </span>
+        </div>
+
+        {/* Split Layout */}
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+          {/* Agent List — mobile: visible only in list view; desktop: always */}
+          <div
+            className={`shrink-0 border-b md:border-b-0 md:border-r flex-col ${mobileView === "list" ? "flex" : "hidden"} md:flex md:w-[220px]`}
+            style={{
+              borderColor: "var(--color-border-subtle)",
+              background: "rgba(255,255,255,0.01)",
+            }}
+          >
+            <AgentList
+              agents={agents}
+              selected={selected}
+              onSelect={(a) => { setSelected(a); setMobileView("terminal"); }}
+              isLoading={isLoading}
+              onStart={startContainer}
+              onStop={stopContainer}
+              onRestart={restartContainer}
+              pendingId={pendingId}
+            />
+          </div>
+
+          {/* Terminal — mobile: visible only in terminal view; desktop: always */}
+          <div className={`flex-1 overflow-hidden flex-col min-h-0 ${mobileView === "terminal" ? "flex" : "hidden"} md:flex`}>
+            {selected ? (
+              <>
+                {/* Mobile: back button — returns to the agent list (stack nav) */}
+                <button
+                  onClick={() => setMobileView("list")}
+                  className="flex md:hidden items-center gap-2 px-4 py-3 text-sm border-b cursor-pointer min-h-touch"
+                  style={{
+                    color: "var(--color-text-secondary)",
+                    borderColor: "var(--color-border-subtle)",
+                    background: "rgba(255,255,255,0.02)",
+                  }}
+                >
+                  <span style={{ fontSize: "16px" }}>←</span>
+                  <span>Agents</span>
+                </button>
+                <TerminalPanel key={`${selected.id}:${restartTick[selected.id] ?? 0}`} agent={selected} />
+              </>
+            ) : (
+              <div className="hidden md:flex items-center justify-center flex-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                Agent auswählen
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </AppShell>
+  );
+}

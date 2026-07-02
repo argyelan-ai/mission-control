@@ -1,0 +1,61 @@
+# Caddyfile.tls.example — HTTPS variant of the shipped Caddyfile.
+#
+# Use this when you want to reach Mission Control from other devices with
+# valid TLS (e.g. via Tailscale: `tailscale cert <your-host>.ts.net`).
+#
+# 1. cp caddy/Caddyfile.tls.example caddy/Caddyfile.local
+# 2. Replace <your-hostname> and put the cert/key into caddy/certs/
+#    (gitignored — never commit certificates).
+# 3. Mount Caddyfile.local over the default — see
+#    docker-compose.override.example.yml.
+
+(common) {
+    encode gzip zstd
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # WebSocket proxy for LiveKit signaling (browser → LK server).
+    handle /livekit-signal/* {
+        uri strip_prefix /livekit-signal
+        reverse_proxy livekit:7880
+    }
+    handle /livekit-signal {
+        uri strip_prefix /livekit-signal
+        reverse_proxy livekit:7880
+    }
+    handle /rtc {
+        reverse_proxy livekit:7880
+    }
+    handle /rtc/* {
+        reverse_proxy livekit:7880
+    }
+
+    # API + health → backend
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    # Default: Next.js frontend
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
+
+# Local HTTP access (from the host itself).
+:80 {
+    import common
+}
+
+# HTTPS endpoint with your own certificate.
+<your-hostname> {
+    tls /etc/caddy/certs/<your-hostname>.crt /etc/caddy/certs/<your-hostname>.key
+    import common
+    header Strict-Transport-Security "max-age=31536000"
+    header X-Frame-Options DENY
+}

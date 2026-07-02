@@ -1,0 +1,1315 @@
+"use client";
+
+import { useState, useMemo } from "react";
+import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { motion, AnimatePresence } from "framer-motion";
+import { format } from "date-fns";
+import Link from "next/link";
+import {
+  AlertTriangle,
+  Check,
+  X,
+  CheckCircle,
+  SlidersHorizontal,
+  RotateCcw,
+  Loader2,
+} from "lucide-react";
+import { api } from "@/lib/api";
+import { useAppStore } from "@/lib/store";
+import { useAgentStream, useActivityStream, useApprovalStream } from "@/lib/sse";
+import { notify } from "@/lib/notify";
+import { timeAgo } from "@/lib/utils";
+import { GlassCard } from "@/components/shared/GlassCard";
+import { Pill } from "@/components/shared/Pill";
+import { ActivityFeed } from "@/components/shared/ActivityFeed";
+import { CreateTaskModal } from "@/components/shared/CreateTaskModal";
+import AppShell from "@/components/layout/AppShell";
+import PipelineView from "@/components/pipeline/PipelineView";
+import type {
+  Agent,
+  AgentStatus,
+  ActivityEvent,
+  Approval,
+  Project,
+  Task,
+  SystemStatus,
+  MetricsSnapshot,
+  MetricsHistoryResponse,
+} from "@/lib/types";
+
+// ── Design tokens ────────────────────────────────────────────────────────────
+
+const C = {
+  deep: "#020203",
+  base: "#050506",
+  elevated: "#0a0a0c",
+  surface: "rgba(255,255,255,0.03)",
+  border: "rgba(255,255,255,0.06)",
+  borderSubtle: "rgba(255,255,255,0.04)",
+  highlight: "rgba(255,255,255,0.1)",
+  accent: "#8B5CF6",
+  accentLight: "#A78BFA",
+  online: "#00CC88",
+  warning: "#F59E0B",
+  error: "#EF4444",
+  info: "#3B82F6",
+  textPrimary: "#EDEDEF",
+  textSecondary: "#8A8F98",
+  textMuted: "#5A5E66",
+};
+
+// ── Animation ────────────────────────────────────────────────────────────────
+
+const sectionVariants = {
+  hidden: { opacity: 0, y: 16 },
+  visible: (i: number) => ({
+    opacity: 1,
+    y: 0,
+    transition: {
+      delay: i * 0.07,
+      duration: 0.5,
+      ease: [0.16, 1, 0.3, 1],
+    },
+  }),
+};
+
+// ── Greeting ─────────────────────────────────────────────────────────────────
+
+function getGreeting(): string {
+  const hour = new Date().getHours();
+  if (hour < 6) return "Gute Nacht";
+  if (hour < 12) return "Guten Morgen";
+  if (hour < 18) return "Guten Tag";
+  return "Guten Abend";
+}
+
+// ── Status helpers ───────────────────────────────────────────────────────────
+
+function resourceColor(pct: number): string {
+  if (pct < 60) return C.online;
+  if (pct < 85) return C.warning;
+  return C.error;
+}
+
+function latencyColor(ms: number): string {
+  if (ms < 50) return C.online;
+  if (ms < 200) return C.warning;
+  return C.error;
+}
+
+function serviceStatusColor(status: string): string {
+  switch (status) {
+    case "ok":
+    case "running":
+      return C.online;
+    case "degraded":
+    case "warning":
+      return C.warning;
+    case "error":
+    case "down":
+    case "offline":
+      return C.error;
+    default:
+      return C.textMuted;
+  }
+}
+
+const AGENT_STATUS_COLORS: Record<AgentStatus, string> = {
+  online: C.online,
+  busy: C.accent,
+  idle: C.textMuted,
+  offline: C.textMuted,
+  error: C.error,
+  provisioning: C.warning,
+  restarting: C.warning,
+  archived: C.textMuted,
+};
+
+const RUN_STATE_COLORS: Record<string, string> = {
+  idle: C.textMuted,
+  running: C.online,
+  recovering: C.warning,
+  blocked: C.error,
+  aborted: C.error,
+};
+
+// ── Section heading ──────────────────────────────────────────────────────────
+
+function SectionHeading({
+  title,
+  right,
+}: {
+  title: string;
+  right?: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-center justify-between mb-2">
+      <h2
+        className="text-[11px] font-semibold uppercase tracking-[0.1em]"
+        style={{ color: C.textMuted }}
+      >
+        {title}
+      </h2>
+      {right}
+    </div>
+  );
+}
+
+// ── Glass widget wrapper ─────────────────────────────────────────────────────
+
+function WidgetCard({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <GlassCard className={`p-4 h-full flex flex-col ${className}`}>
+      {children}
+    </GlassCard>
+  );
+}
+
+// ── System Health Panel (inline) ─────────────────────────────────────────────
+
+// ── Sparkline Chart (SVG) ────────────────────────────────────────────────────
+
+function SparklineChart({
+  data,
+  color,
+  label,
+  value,
+  height = 64,
+}: {
+  data: number[];
+  color: string;
+  label: string;
+  value: string;
+  height?: number;
+}) {
+  if (data.length < 2) {
+    return (
+      <div className="flex flex-col gap-1">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-medium" style={{ color: C.textMuted }}>{label}</span>
+          <span className="text-[11px] font-mono font-semibold" style={{ color }}>{value}</span>
+        </div>
+        <div className="rounded" style={{ height, backgroundColor: C.elevated }} />
+      </div>
+    );
+  }
+
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const range = max - min || 1;
+  const w = 200;
+  const h = height;
+  const pad = 2;
+
+  const points = data.map((v, i) => {
+    const x = pad + (i / (data.length - 1)) * (w - pad * 2);
+    const y = h - pad - ((v - min) / range) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+
+  const linePath = `M${points.join(" L")}`;
+  const fillPath = `${linePath} L${w - pad},${h} L${pad},${h} Z`;
+  const gradientId = `grad-${label.toLowerCase().replace(/\s/g, "")}`;
+
+  return (
+    <div
+      className="rounded-xl p-2.5 flex flex-col gap-1"
+      style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSubtle}` }}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.06em]" style={{ color: C.textMuted }}>{label}</span>
+        <span className="text-[11px] font-mono font-bold" style={{ color, textShadow: `0 0 10px ${color}44` }}>{value}</span>
+      </div>
+      <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={height} preserveAspectRatio="none" className="overflow-visible">
+        <defs>
+          <linearGradient id={gradientId} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.15} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <path d={fillPath} fill={`url(#${gradientId})`} />
+        <path d={linePath} fill="none" stroke={color} strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" style={{ filter: `drop-shadow(0 0 3px ${color}55)` }} />
+        {points.length > 0 && (() => {
+          const last = points[points.length - 1].split(",");
+          return (
+            <circle cx={last[0]} cy={last[1]} r={2.5} fill={color} stroke={C.base} strokeWidth={1}>
+              <animate attributeName="r" values="2.5;3.5;2.5" dur="2s" repeatCount="indefinite" />
+            </circle>
+          );
+        })()}
+      </svg>
+    </div>
+  );
+}
+
+function ResourceBar({
+  label,
+  value,
+  pct,
+}: {
+  label: string;
+  value: string;
+  pct: number;
+}) {
+  const color = resourceColor(pct);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <span
+          className="text-[11px] font-medium"
+          style={{ color: C.textMuted }}
+        >
+          {label}
+        </span>
+        <span
+          className="text-xs font-mono font-semibold"
+          style={{ color }}
+        >
+          {value}
+        </span>
+      </div>
+      <div
+        className="rounded-full overflow-hidden"
+        style={{ height: 3, backgroundColor: C.elevated }}
+      >
+        <div
+          className="h-full rounded-full transition-all duration-700"
+          style={{
+            width: `${Math.min(Math.round(pct), 100)}%`,
+            backgroundColor: color,
+            boxShadow: `0 0 6px ${color}66`,
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function ServiceDot({
+  label,
+  status,
+  detail,
+  detailColor,
+}: {
+  label: string;
+  status: string;
+  detail: string;
+  detailColor?: string;
+}) {
+  const color = serviceStatusColor(status);
+  const isOk = status === "ok" || status === "running";
+  return (
+    <div className="flex items-center gap-2">
+      <span
+        className="w-1.5 h-1.5 rounded-full shrink-0"
+        style={{
+          backgroundColor: color,
+          boxShadow: isOk ? `0 0 6px ${color}66` : "none",
+        }}
+      />
+      <span className="text-[11px]" style={{ color: C.textSecondary }}>
+        {label}
+      </span>
+      <span
+        className="text-[10px] font-mono"
+        style={{ color: detailColor ?? C.textMuted }}
+      >
+        {detail}
+      </span>
+    </div>
+  );
+}
+
+function SystemActivityFeed() {
+  const { activeBoardId } = useAppStore();
+  const { data: events = [] } = useQuery({
+    queryKey: ["activity", activeBoardId, "compact"],
+    queryFn: () => api.activity.list({ board_id: activeBoardId!, limit: 15 }),
+    enabled: !!activeBoardId,
+    refetchInterval: 15_000,
+  });
+
+  if (events.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <span className="text-[11px]" style={{ color: C.textMuted }}>Keine Aktivität</span>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1">
+      {events.slice(0, 15).map((event: ActivityEvent) => (
+        <div key={event.id} className="flex items-start gap-2 py-1">
+          <span
+            className="w-1 h-1 rounded-full shrink-0 mt-1.5"
+            style={{ backgroundColor: event.event_type?.includes("fail") || event.event_type?.includes("error") ? C.error : event.event_type?.includes("done") || event.event_type?.includes("complete") ? C.online : C.textMuted }}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-[11px] truncate" style={{ color: C.textSecondary }}>
+              {event.title}
+            </div>
+            <div className="text-[10px]" style={{ color: C.textMuted }}>
+              {timeAgo(event.created_at)}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
+  const { activeBoardId } = useAppStore();
+  const { data: events = [] } = useQuery({
+    queryKey: ["activity", "full-history"],
+    queryFn: () => api.activity.list({ board_id: activeBoardId ?? undefined, limit: 100 }),
+    refetchInterval: 15_000,
+  });
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      className="fixed inset-0 z-50 flex items-start justify-end p-4 pt-16"
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      {/* Backdrop */}
+      <div
+        className="absolute inset-0"
+        style={{ backgroundColor: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+      />
+
+      {/* Panel — slide in from right */}
+      <motion.div
+        initial={{ opacity: 0, x: 40 }}
+        animate={{ opacity: 1, x: 0 }}
+        exit={{ opacity: 0, x: 40 }}
+        transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }}
+        className="relative w-full max-w-md h-[80vh] rounded-2xl overflow-hidden flex flex-col"
+        style={{
+          background: C.elevated,
+          border: `1px solid rgba(255,255,255,0.08)`,
+          boxShadow: `0 0 60px rgba(139,92,246,0.08), 0 25px 80px rgba(0,0,0,0.6)`,
+        }}
+      >
+        {/* Top edge */}
+        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
+          <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>Activity Historie</span>
+          <button onClick={onClose} className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
+            <X size={16} />
+          </button>
+        </div>
+
+        {/* Events list — scrollable */}
+        <div className="flex-1 overflow-y-auto p-4">
+          {events.length === 0 ? (
+            <div className="flex items-center justify-center h-full">
+              <span className="text-sm" style={{ color: C.textMuted }}>Keine Aktivitaet</span>
+            </div>
+          ) : (
+            <div className="flex flex-col gap-2">
+              {events.map((event: ActivityEvent) => {
+                const isError = event.event_type?.includes("fail") || event.event_type?.includes("error");
+                const isSuccess = event.event_type?.includes("done") || event.event_type?.includes("complete") || event.event_type?.includes("approved");
+                const dotColor = isError ? C.error : isSuccess ? C.online : C.textMuted;
+
+                return (
+                  <div
+                    key={event.id}
+                    className="flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors"
+                    style={{ backgroundColor: "rgba(255,255,255,0.02)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)")}
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0 mt-1.5"
+                      style={{ backgroundColor: dotColor, boxShadow: isSuccess || isError ? `0 0 6px ${dotColor}44` : "none" }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-[12px] leading-relaxed" style={{ color: C.textPrimary }}>
+                        {event.title}
+                      </div>
+                      <div className="flex items-center gap-2 mt-0.5">
+                        <span className="text-[10px]" style={{ color: C.textMuted }}>
+                          {timeAgo(event.created_at)}
+                        </span>
+                        {event.severity && event.severity !== "info" && (
+                          <span
+                            className="text-[9px] font-medium px-1.5 py-0.5 rounded-full uppercase"
+                            style={{
+                              color: event.severity === "error" ? C.error : event.severity === "warning" ? C.warning : C.textMuted,
+                              backgroundColor: event.severity === "error" ? `${C.error}15` : event.severity === "warning" ? `${C.warning}15` : "transparent",
+                            }}
+                          >
+                            {event.severity}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function SystemHealthSection({
+  status,
+  loading,
+  onOpenActivity,
+}: {
+  status: SystemStatus | undefined;
+  loading: boolean;
+  onOpenActivity: () => void;
+}) {
+
+  const { data: historyData } = useQuery({
+    queryKey: ["system", "metrics-history"],
+    queryFn: () => api.system.metricsHistory(),
+    refetchInterval: 60_000,
+  });
+
+  if (loading || !status) {
+    return (
+      <GlassCard className="p-4">
+        <SectionHeading title="System" />
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-8 rounded animate-pulse" style={{ backgroundColor: C.elevated }} />
+          ))}
+        </div>
+      </GlassCard>
+    );
+  }
+
+  const { database, redis, gateway, watchdog: wd } = status.components;
+  const res = status.resources;
+
+  const cpuPct = res?.cpu_pct ?? 0;
+  const memUsed = res?.memory_used_gb ?? 0;
+  const memTotal = res?.memory_total_gb ?? 0;
+  const memPct = res?.memory_pct ?? 0;
+  const diskUsed = res?.disk_used_gb ?? 0;
+  const diskTotal = res?.disk_total_gb ?? 0;
+  const diskPct = res?.disk_pct ?? 0;
+
+  const dbDetail =
+    database.latency_ms !== undefined
+      ? `${database.latency_ms.toFixed(1)}ms`
+      : database.error ?? database.status;
+  const redisDetail =
+    redis.latency_ms !== undefined
+      ? `${redis.latency_ms.toFixed(1)}ms`
+      : redis.error ?? redis.status;
+  const gatewayDetail =
+    gateway.status === "ok" ? "connected" : gateway.error ?? "offline";
+  const watchdogDetail = wd
+    ? wd.status === "running"
+      ? `${wd.checks_total ?? 0} checks`
+      : wd.status
+    : "unknown";
+
+  const gwStatus = gateway.status;
+  const wdStatus =
+    wd?.status === "running" ? "ok" : wd?.status ?? "unknown";
+  const allOk =
+    database.status === "ok" &&
+    redis.status === "ok" &&
+    gwStatus === "ok" &&
+    (wdStatus === "ok" || wdStatus === "running");
+  const hasError =
+    database.status === "error" ||
+    redis.status === "error" ||
+    gwStatus === "error" ||
+    wdStatus === "error";
+  const overallColor = hasError ? C.error : allOk ? C.online : C.warning;
+
+  // Extract history arrays for sparklines
+  const cpuHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.cpu_pct ?? 0) ?? [];
+  const memHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.memory_pct ?? 0) ?? [];
+  const diskHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.disk_pct ?? 0) ?? [];
+
+  return (
+    <GlassCard className="p-4">
+      {/* Header: System label + status dot + services */}
+      <div className="flex items-center gap-4 mb-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span
+            className="w-2 h-2 rounded-full shrink-0"
+            style={{
+              backgroundColor: overallColor,
+              boxShadow: allOk ? `0 0 8px ${overallColor}66` : "none",
+            }}
+          />
+          <span className="text-[11px] font-semibold uppercase tracking-[0.08em]" style={{ color: C.textMuted }}>
+            System
+          </span>
+        </div>
+        <ServiceDot
+          label="DB"
+          status={database.status}
+          detail={dbDetail}
+          detailColor={
+            database.latency_ms !== undefined
+              ? latencyColor(database.latency_ms)
+              : undefined
+          }
+        />
+        <ServiceDot
+          label="Redis"
+          status={redis.status}
+          detail={redisDetail}
+          detailColor={
+            redis.latency_ms !== undefined
+              ? latencyColor(redis.latency_ms)
+              : undefined
+          }
+        />
+        <ServiceDot label="Gateway" status={gwStatus} detail={gatewayDetail} />
+        <ServiceDot label="Watchdog" status={wdStatus} detail={watchdogDetail} />
+        <div className="flex items-center gap-2 ml-auto">
+          <span className="text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: C.textMuted }}>
+            Activity
+          </span>
+          <button
+            onClick={onOpenActivity}
+            className="text-[10px] hover:opacity-80 transition-opacity cursor-pointer"
+            style={{ color: C.accent, background: "none", border: "none" }}
+          >
+            Alle →
+          </button>
+        </div>
+      </div>
+
+      {/* Content: 3/4 charts + 1/4 activity, fixed height row */}
+      <div className="flex gap-4" style={{ height: 90 }}>
+        {/* Charts — 3/4 width */}
+        <div className="flex-[3] grid grid-cols-3 gap-3 min-w-0 items-start content-start">
+          <SparklineChart
+            data={cpuHistory.length > 1 ? cpuHistory : [cpuPct * 0.8, cpuPct * 0.9, cpuPct]}
+            color={resourceColor(cpuPct)}
+            label="CPU"
+            value={`${cpuPct.toFixed(1)}%`}
+            height={40}
+          />
+          <SparklineChart
+            data={memHistory.length > 1 ? memHistory : [memPct * 0.9, memPct * 0.95, memPct]}
+            color={resourceColor(memPct)}
+            label="RAM"
+            value={`${memUsed}/${memTotal} GB`}
+            height={40}
+          />
+          <SparklineChart
+            data={diskHistory.length > 1 ? diskHistory : [diskPct * 0.98, diskPct * 0.99, diskPct]}
+            color={resourceColor(diskPct)}
+            label="Disk"
+            value={`${diskUsed}/${diskTotal} GB`}
+            height={40}
+          />
+        </div>
+
+        {/* Activity Feed — 1/4 width, same height as charts */}
+        <div
+          className="flex-[1] min-w-0 overflow-y-auto border-l pl-4"
+          style={{ borderColor: C.borderSubtle }}
+        >
+          <SystemActivityFeed />
+        </div>
+      </div>
+    </GlassCard>
+  );
+}
+
+// ── Agents Widget ────────────────────────────────────────────────────────────
+
+function lastSeenMinutes(lastSeenAt: string | null): number | null {
+  if (!lastSeenAt) return null;
+  try {
+    return Math.floor(
+      (Date.now() - new Date(lastSeenAt).getTime()) / 60000
+    );
+  } catch {
+    return null;
+  }
+}
+
+function lastSeenColor(mins: number | null): string {
+  if (mins === null) return C.textMuted;
+  if (mins < 5) return C.online;
+  if (mins <= 15) return C.warning;
+  return C.error;
+}
+
+function AgentStrip({
+  agents,
+  taskMap,
+}: {
+  agents: Agent[] | undefined;
+  taskMap: Record<string, string>;
+}) {
+  const [resettingId, setResettingId] = useState<string | null>(null);
+  const qc = useQueryClient();
+
+  const handleReset = async (e: React.MouseEvent, agentId: string) => {
+    e.preventDefault(); // prevent Link navigation
+    e.stopPropagation();
+    setResettingId(agentId);
+    try {
+      await api.agents.reset(agentId);
+      qc.invalidateQueries({ queryKey: ["agents"] });
+      notify.success("Session reset");
+    } catch {
+      notify.error("Reset fehlgeschlagen");
+    } finally {
+      setResettingId(null);
+    }
+  };
+  const sorted = [...(agents ?? [])].sort((a, b) => {
+    // Running agents first (only if actually online/busy)
+    const aOnline = a.status === "online" || a.status === "busy";
+    const bOnline = b.status === "online" || b.status === "busy";
+    const aRunning = (aOnline && a.run_state === "running") ? 0 : 1;
+    const bRunning = (bOnline && b.run_state === "running") ? 0 : 1;
+    if (aRunning !== bRunning) return aRunning - bRunning;
+    // Then board lead
+    if (a.is_board_lead && !b.is_board_lead) return -1;
+    if (!a.is_board_lead && b.is_board_lead) return 1;
+    // Then by status
+    const order: Record<string, number> = { online: 0, busy: 1, idle: 2, offline: 3, error: 4, provisioning: 5, restarting: 6 };
+    return (order[a.status] ?? 9) - (order[b.status] ?? 9);
+  });
+
+  const C_AGENT_STATUS: Record<string, string> = {
+    online: "#00CC88", busy: "#8B5CF6", idle: "#5A5E66", offline: "#333",
+    error: "#EF4444", provisioning: "#F59E0B", restarting: "#F59E0B",
+  };
+  const C_RUN_STATE: Record<string, string> = {
+    idle: "#5A5E66", running: "#00CC88", recovering: "#F59E0B",
+    blocked: "#EF4444", aborted: "#EF4444",
+  };
+
+  if (sorted.length === 0) return null;
+
+  return (
+    <div className="flex gap-3 overflow-x-auto scroll-x-snap pb-1 -mx-4 px-4 md:mx-0 md:px-0" style={{ scrollbarWidth: "none" }}>
+      {sorted.map((agent) => {
+        const contextPct = agent.context_max > 0 ? agent.context_tokens / agent.context_max : 0;
+        const ctxColor = contextPct >= 0.9 ? "#EF4444" : contextPct >= 0.7 ? "#F59E0B" : "#00CC88";
+        const currentTask = agent.current_task_id ? taskMap[agent.current_task_id] : null;
+        const statusColor = C_AGENT_STATUS[agent.status] ?? "#5A5E66";
+        const isOnline = agent.status === "online" || agent.status === "busy";
+        const runStateColor = C_RUN_STATE[agent.run_state] ?? "#5A5E66";
+
+        return (
+          <Link
+            key={agent.id}
+            href={`/agents/${agent.id}`}
+            className="shrink-0 snap-card rounded-xl p-3 flex flex-col gap-2 transition-all hover:scale-[1.02] cursor-pointer relative"
+            style={{
+              width: 180,
+              background: "rgba(255,255,255,0.03)",
+              backdropFilter: "blur(12px)",
+              border: `1px solid ${isOnline ? `${statusColor}25` : "rgba(255,255,255,0.06)"}`,
+              boxShadow: isOnline ? `0 0 20px ${statusColor}10` : "none",
+            }}
+          >
+            {/* Reset button — top right corner */}
+            <button
+              onClick={(e) => handleReset(e, agent.id)}
+              disabled={resettingId === agent.id}
+              className="absolute top-2 right-2 flex items-center gap-1 px-1.5 py-1 rounded-lg transition-all cursor-pointer hover:opacity-100 disabled:opacity-50"
+              style={{
+                opacity: 0.5,
+                color: "#8A8F98",
+                backgroundColor: "rgba(255,255,255,0.04)",
+                border: "1px solid rgba(255,255,255,0.06)",
+              }}
+              title="Session Reset"
+            >
+              {resettingId === agent.id ? (
+                <Loader2 size={10} className="animate-spin" />
+              ) : (
+                <RotateCcw size={10} />
+              )}
+            </button>
+            <div className="flex items-center gap-2">
+              <span className="text-lg">{agent.emoji ?? "🤖"}</span>
+              <div className="flex-1 min-w-0 pr-14">
+                <div className="text-[13px] font-semibold truncate" style={{ color: "#EDEDEF" }}>{agent.name}</div>
+              </div>
+            </div>
+            {currentTask && isOnline && (
+              <div className="text-[10px] truncate" style={{ color: "#8A8F98" }}>{currentTask}</div>
+            )}
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[9px] uppercase tracking-wider" style={{ color: "#5A5E66" }}>Context</span>
+                <span className="text-[9px] font-mono" style={{ color: ctxColor }}>{Math.round(contextPct * 100)}%</span>
+              </div>
+              <div className="rounded-full overflow-hidden" style={{ height: 3, backgroundColor: "#0a0a0c" }}>
+                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(Math.round(contextPct * 100), 100)}%`, backgroundColor: ctxColor, boxShadow: contextPct >= 0.7 ? `0 0 6px ${ctxColor}55` : "none" }} />
+              </div>
+            </div>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── Attention Widget ─────────────────────────────────────────────────────────
+
+function AttentionWidget({
+  approvals,
+  failedTasks,
+  stuckTasks,
+  agentMap,
+  onResolve,
+  resolving,
+}: {
+  approvals: Approval[];
+  failedTasks: Task[];
+  stuckTasks: Task[];
+  agentMap: Record<string, Agent>;
+  onResolve: (id: string, status: "approved" | "rejected") => void;
+  resolving: boolean;
+}) {
+  const totalCount = approvals.length + failedTasks.length + stuckTasks.length;
+
+  return (
+    <WidgetCard>
+      <SectionHeading
+        title="Aufmerksamkeit"
+        right={
+          totalCount > 0 ? (
+            <span
+              className="text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+              style={{
+                backgroundColor: `${C.error}22`,
+                color: C.error,
+              }}
+            >
+              {totalCount}
+            </span>
+          ) : null
+        }
+      />
+
+      {totalCount === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-6 flex-1 justify-center">
+          <CheckCircle size={22} style={{ color: C.online }} />
+          <span className="text-sm" style={{ color: C.textMuted }}>
+            Alles in Ordnung
+          </span>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-2 flex-1">
+          {/* Pending Approvals */}
+          {approvals.slice(0, 3).map((approval) => {
+            const agent = agentMap[approval.agent_id];
+            return (
+              <div key={approval.id} className="flex items-center gap-2">
+                <span className="text-sm shrink-0">
+                  {agent?.emoji ?? "?"}
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div
+                    className="text-xs font-medium truncate"
+                    style={{ color: C.textPrimary }}
+                  >
+                    {agent?.name ?? "Agent"}:{" "}
+                    {approval.action_type === "dispatch_escalation"
+                      ? "Not responding"
+                      : approval.action_type === "recovery_failed"
+                        ? "Recovery failed"
+                        : approval.action_type.replaceAll("_", " ")}
+                  </div>
+                  <div
+                    className="text-[10px]"
+                    style={{ color: C.textMuted }}
+                  >
+                    {timeAgo(approval.created_at)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => onResolve(approval.id, "approved")}
+                    disabled={resolving}
+                    className="p-1 rounded transition-colors cursor-pointer disabled:opacity-40"
+                    style={{
+                      color: C.online,
+                      backgroundColor: `${C.online}18`,
+                    }}
+                    title="Approve"
+                  >
+                    <Check size={12} />
+                  </button>
+                  <button
+                    onClick={() => onResolve(approval.id, "rejected")}
+                    disabled={resolving}
+                    className="p-1 rounded transition-colors cursor-pointer disabled:opacity-40"
+                    style={{
+                      color: C.error,
+                      backgroundColor: `${C.error}18`,
+                    }}
+                    title="Dismiss"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Failed Tasks */}
+          {failedTasks.slice(0, 3).map((task) => (
+            <Link
+              key={task.id}
+              href={`/tasks?task=${task.id}`}
+              className="flex items-center gap-2 transition-opacity"
+              style={{}}
+              onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+              onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+            >
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: C.error }}
+              />
+              <span
+                className="text-xs flex-1 min-w-0 truncate"
+                style={{ color: C.textPrimary }}
+              >
+                {task.title}
+              </span>
+              <Pill color={C.error} size="sm">
+                failed
+              </Pill>
+            </Link>
+          ))}
+
+          {/* Stuck Tasks */}
+          {stuckTasks.slice(0, 3).map((task) => {
+            const agent = agentMap[task.assigned_agent_id ?? ""];
+            const mins = task.last_activity_at
+              ? Math.floor(
+                  (Date.now() -
+                    new Date(task.last_activity_at).getTime()) /
+                    60000
+                )
+              : 0;
+            return (
+              <Link
+                key={`stuck-${task.id}`}
+                href={`/tasks?task=${task.id}`}
+                className="flex items-center gap-2 transition-opacity"
+                style={{}}
+                onMouseEnter={(e) =>
+                  (e.currentTarget.style.opacity = "0.8")
+                }
+                onMouseLeave={(e) =>
+                  (e.currentTarget.style.opacity = "1")
+                }
+              >
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: C.warning }}
+                />
+                <span
+                  className="text-xs flex-1 min-w-0 truncate"
+                  style={{ color: C.textPrimary }}
+                >
+                  {agent?.emoji ?? "?"} {task.title}
+                </span>
+                <Pill color={C.warning} size="sm">
+                  {mins}m stuck
+                </Pill>
+              </Link>
+            );
+          })}
+
+          {totalCount > 0 && (
+            <Link
+              href="/inbox"
+              className="text-[11px] mt-auto pt-1 transition-colors"
+              style={{ color: C.accent }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.color = C.accentLight)
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = C.accent)
+              }
+            >
+              Alle Approvals ansehen
+            </Link>
+          )}
+        </div>
+      )}
+    </WidgetCard>
+  );
+}
+
+// ── Active Projects Widget ───────────────────────────────────────────────────
+
+const PROJECT_EMOJIS: Record<string, string> = {
+  feature: "?",
+  website: "?",
+  content: "?",
+  research: "?",
+  automation: "?",
+  design: "?",
+  free: "?",
+};
+
+const PROJECT_STATUS_COLORS: Record<string, string> = {
+  active: C.online,
+  planning: C.info,
+  draft: C.textMuted,
+  paused: C.warning,
+  done: C.online,
+  archived: C.textMuted,
+};
+
+const PROJECT_STATUS_LABELS: Record<string, string> = {
+  active: "Aktiv",
+  planning: "Planung",
+  draft: "Entwurf",
+  paused: "Pausiert",
+  done: "Fertig",
+  archived: "Archiv",
+};
+
+function ActiveProjectsWidget({
+  projects,
+}: {
+  projects: Project[] | undefined;
+}) {
+  const active = (projects ?? [])
+    .filter((p) => p.status === "active" || p.status === "planning")
+    .slice(0, 4);
+
+  return (
+    <WidgetCard>
+      <SectionHeading
+        title="Projekte"
+        right={
+          <Link
+            href="/planner"
+            className="text-[11px] font-medium transition-colors"
+            style={{ color: C.accent }}
+            onMouseEnter={(e) =>
+              (e.currentTarget.style.color = C.accentLight)
+            }
+            onMouseLeave={(e) => (e.currentTarget.style.color = C.accent)}
+          >
+            Planner
+          </Link>
+        }
+      />
+
+      {active.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-6 flex-1 justify-center">
+          <span className="text-sm" style={{ color: C.textMuted }}>
+            Keine aktiven Projekte
+          </span>
+          <Link
+            href="/planner"
+            className="text-[11px] transition-colors"
+            style={{ color: C.accent }}
+          >
+            Zum Planner
+          </Link>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3 flex-1">
+          {active.map((project) => {
+            const statusColor =
+              PROJECT_STATUS_COLORS[project.status] ?? C.textMuted;
+            return (
+              <div key={project.id} className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm shrink-0">
+                    {PROJECT_EMOJIS[project.project_type] ?? "?"}
+                  </span>
+                  <span
+                    className="text-sm font-medium flex-1 min-w-0 truncate"
+                    style={{ color: C.textPrimary }}
+                  >
+                    {project.name}
+                  </span>
+                  <Pill color={statusColor} size="sm">
+                    {PROJECT_STATUS_LABELS[project.status] ?? project.status}
+                  </Pill>
+                </div>
+                <div
+                  className="rounded-full overflow-hidden"
+                  style={{ height: 3, backgroundColor: C.elevated }}
+                >
+                  <div
+                    className="rounded-full transition-all duration-500"
+                    style={{
+                      height: 3,
+                      width: `${Math.min(100, project.progress_pct)}%`,
+                      backgroundColor: C.accent,
+                      boxShadow: `0 0 6px ${C.accent}44`,
+                    }}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </WidgetCard>
+  );
+}
+
+// ── Home Page ────────────────────────────────────────────────────────────────
+
+function HomePage() {
+  const qc = useQueryClient();
+  const { activeBoardId, currentUser } = useAppStore();
+  const [showActivityPanel, setShowActivityPanel] = useState(false);
+
+  // ── Queries (optimized: fewer calls, longer staleTime, SSE handles updates) ──
+
+  const { data: systemStatus, isLoading: statusLoading } = useQuery({
+    queryKey: ["system-status"],
+    queryFn: api.system.status,
+    refetchInterval: 30_000,
+  });
+
+  const { data: agents } = useQuery({
+    queryKey: ["agents", activeBoardId],
+    queryFn: () => api.agents.list(activeBoardId ?? undefined),
+  });
+
+  const { data: tasks } = useQuery({
+    queryKey: ["tasks", activeBoardId, "active"],
+    queryFn: () => api.tasks.list(activeBoardId!, { status: "in_progress" }),
+    enabled: !!activeBoardId,
+  });
+
+  // ── SSE Streams ──────────────────────────────────────────────────────────
+
+  useAgentStream((event, data) => {
+    qc.invalidateQueries({ queryKey: ["agents"] });
+    // Task-related agent events → refresh pipeline too
+    if (event?.startsWith("task.")) {
+      qc.invalidateQueries({ queryKey: ["pipeline"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    }
+    if (event === "agent.context_warning") {
+      notify.warning(data?.title as string);
+    }
+  });
+
+  useActivityStream((event) => {
+    qc.invalidateQueries({ queryKey: ["activity"] });
+    // Any activity event could mean task/agent state changed
+    if (event?.startsWith("task.")) {
+      qc.invalidateQueries({ queryKey: ["pipeline"] });
+      qc.invalidateQueries({ queryKey: ["tasks"] });
+    }
+  });
+
+  // ── Derived Data ─────────────────────────────────────────────────────────
+
+  const greeting = useMemo(getGreeting, []);
+  const displayName = currentUser?.name?.split(" ")[0] || "Operator";
+  const taskMap = Object.fromEntries(
+    (tasks ?? []).map((t) => [t.id, t.title])
+  );
+
+  // ── Context Warning Alerts ───────────────────────────────────────────────
+
+  const alerts: { label: string; color: string; href: string }[] = [];
+  agents
+    ?.filter(
+      (a) => a.context_max && a.context_tokens / a.context_max >= 0.9
+    )
+    .forEach((a) => {
+      const pct = Math.round((a.context_tokens / a.context_max) * 100);
+      alerts.push({
+        label: `${a.name}: Context ${pct}%`,
+        color: C.error,
+        href: `/agents/${a.id}`,
+      });
+    });
+
+  // ── No board selected ────────────────────────────────────────────────────
+
+  if (!activeBoardId) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <div className="text-center space-y-2">
+          <div
+            className="text-lg font-semibold"
+            style={{ color: C.textPrimary }}
+          >
+            {greeting}, {displayName}
+          </div>
+          <div className="text-sm" style={{ color: C.textMuted }}>
+            Kein Board ausgewaehlt
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
+  return (
+    <div className="flex flex-col gap-5 max-w-6xl mx-auto">
+      {/* ── Header ─────────────────────────────────────────────────────── */}
+      <motion.div
+        custom={0}
+        variants={sectionVariants}
+        initial="hidden"
+        animate="visible"
+      >
+        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+          <h1
+            className="text-xl sm:text-2xl font-bold tracking-tight"
+            style={{ color: C.textPrimary }}
+          >
+            {greeting}, {displayName}
+          </h1>
+          <div className="flex items-center gap-3 shrink-0">
+            <span
+              className="text-sm font-mono"
+              style={{ color: C.textMuted }}
+            >
+              {format(new Date(), "EEE, d. MMM yyyy")}
+            </span>
+            <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
+          </div>
+        </div>
+        {/* Gradient accent line */}
+        <div
+          className="mt-3 rounded-full"
+          style={{
+            height: 2,
+            background: `linear-gradient(90deg, ${C.accent}, ${C.accentLight}44, transparent)`,
+          }}
+        />
+      </motion.div>
+
+      {/* ── Context Warning Alerts ─────────────────────────────────────── */}
+      {alerts.length > 0 && (
+        <motion.div
+          custom={1}
+          variants={sectionVariants}
+          initial="hidden"
+          animate="visible"
+        >
+          <GlassCard className="px-4 py-2.5">
+            <div className="flex items-center gap-4 text-sm flex-wrap">
+              <AlertTriangle
+                size={14}
+                style={{ color: C.warning }}
+                className="shrink-0"
+              />
+              {alerts.map((alert, i) => (
+                <Link
+                  key={i}
+                  href={alert.href}
+                  className="text-xs font-medium transition-opacity hover:opacity-80"
+                  style={{ color: alert.color }}
+                >
+                  {alert.label}
+                </Link>
+              ))}
+            </div>
+          </GlassCard>
+        </motion.div>
+      )}
+
+      {/* ── System Health ──────────────────────────────────────────────── */}
+      <motion.div
+        custom={2}
+        variants={sectionVariants}
+        initial="hidden"
+        animate="visible"
+      >
+        <SystemHealthSection status={systemStatus} loading={statusLoading} onOpenActivity={() => setShowActivityPanel(true)} />
+      </motion.div>
+
+      {/* ── Bento Grid ─────────────────────────────────────────────────── */}
+      <motion.div
+        custom={3}
+        variants={sectionVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid gap-4"
+        style={{
+          gridTemplateColumns: "1fr 1fr",
+          gridTemplateAreas: `
+            "agents agents"
+            "pipeline pipeline"
+          `,
+        }}
+      >
+        {/* Pipeline — full width */}
+        <div style={{ gridArea: "pipeline" }}>
+          <PipelineView boardId={activeBoardId} agents={agents} />
+        </div>
+
+        {/* Agents — full width, horizontal cards */}
+        <div style={{ gridArea: "agents" }}>
+          <AgentStrip agents={agents} taskMap={taskMap} />
+        </div>
+
+      </motion.div>
+
+      {/* Activity History Panel — rendered at root level for correct z-index */}
+      <AnimatePresence>
+        {showActivityPanel && (
+          <ActivityHistoryPanel onClose={() => setShowActivityPanel(false)} />
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Responsive bento grid styles ─────────────────────────────────────────────
+
+const bentoMediaStyles = `
+@media (max-width: 768px) {
+  [style*="grid-template-areas"] {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "pipeline"
+      "agents"
+      "activity"
+      "attention"
+      "projects" !important;
+  }
+}
+`;
+
+// ── Page export ──────────────────────────────────────────────────────────────
+
+export default function Page() {
+  return (
+    <AppShell>
+      <style dangerouslySetInnerHTML={{ __html: bentoMediaStyles }} />
+      <HomePage />
+    </AppShell>
+  );
+}

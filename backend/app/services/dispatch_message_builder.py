@@ -1,0 +1,1076 @@
+"""
+Dispatch Message Builder — Message Assembly extracted from dispatch.py (REF-01).
+
+Owns: DispatchSection + budget constants + curl/auth-token formatters +
+_build_review_message + _build_test_message + _build_dispatch_message +
+build_planning_brief + _format_dispatch_message.
+
+Phase-4 Boundary: Pure builder/formatter. No RPC. No DB writes (reads only via
+the AsyncSession passed to async builders). Imports DispatchContext from
+task_context_builder for type signatures.
+
+Sibling of task_context_builder.py — together they replaced the dispatch.py
+message-assembly block (Plan 04-02, REF-01 step 2). Re-export shim in
+dispatch.py preserves all import sites and race-test patches (Pattern S1).
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from dataclasses import dataclass
+
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.config import settings
+from app.models.agent import Agent
+from app.models.board import Project
+from app.models.deliverable import TaskDeliverable
+from app.models.task import Task, TaskComment
+from app.services.runtime_context import workspace_path_for_runtime
+from app.services.task_context_builder import DispatchContext, _load_dispatch_context
+
+logger = logging.getLogger(__name__)
+
+# API Base fuer Agent-Callbacks — als Shell-Variable, wird im Agent-Context expandiert
+# Docker-Agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
+# Host/Gateway-Agents: MC_API_URL=http://localhost (via agent.env / workspace/.env)
+_API_BASE = "$MC_API_URL"
+
+# Dedup set for size warnings — keyed by (task_id, dispatch_attempt_id). The
+# poll endpoint re-renders the dispatch message on every `/agent/me/poll`
+# request, which spammed identical "over budget" lines under the prior ERROR
+# log. We log once per attempt; a new attempt_id (re-dispatch on review fail,
+# unblock, etc.) re-arms the log. Sized cap evicts FIFO so the set can't grow
+# unbounded across a long-running process. See Bug 2026-05-12.
+_SIZE_LOG_DEDUP: set[tuple[str, str]] = set()
+
+
+# ── Dispatch-Message Budget (Workstream A2) ─────────────────────────────
+#
+# Token-wise claude-sonnet-4-6 has 200k context, but agent quality degrades
+# past ~2000 token task-prompts ("lost in the middle"). These targets apply
+# to the task-prompt body only — SOUL.md is accounted separately.
+#
+# Zone semantics:
+#   0 .. TARGET   — green, best quality
+#   TARGET .. WARN — yellow, logged info only
+#   WARN .. HARD  — orange, warning event + still sent
+#   > HARD        — red, graceful degradation drops optional sections until
+#                    the message fits; mandatory sections are never cut.
+DISPATCH_TARGET_CHARS = 2000
+DISPATCH_WARN_CHARS = 2500
+DISPATCH_HARD_CHARS = 4000
+
+# When Qdrant/board memory is attached automatically, cap total size here.
+# Agents pull more via `mc memory search` on demand (Workstream A3).
+MEMORY_AUTO_MAX_CHARS = 800
+
+# Phase 1 Adoption: agent lessons are injected as a droppable section.
+# Budget separate from MEMORY_AUTO_MAX_CHARS — lessons are per-agent
+# context, not per-task semantic hits.
+LESSON_AUTO_MAX_CHARS = 400
+
+@dataclass
+class DispatchSection:
+    """One renderable chunk of a dispatch message, with drop priority.
+
+    `priority=0` is mandatory (task header, description, AC, credentials,
+    recovery snippet). Higher values get dropped first when the message
+    exceeds DISPATCH_HARD_CHARS.
+    """
+    name: str
+    content: str
+    priority: int = 0  # 0 = mandatory, higher = drop first
+
+
+def render_agent_lessons_section(lessons_context: str) -> DispatchSection | None:
+    """Render agent lessons as an optional dispatch section.
+
+    Returns None if no lessons available (caller should skip).
+    """
+    if not lessons_context or not lessons_context.strip():
+        return None
+
+    lines = [l for l in lessons_context.strip().split("\n") if l.strip()]
+    if not lines:
+        return None
+
+    header = "## Deine bisherigen Erkenntnisse\n"
+    budget = LESSON_AUTO_MAX_CHARS - len(header)
+    kept = []
+    used = 0
+
+    for line in lines:
+        if used + len(line) + 1 > budget:
+            break
+        kept.append(line)
+        used += len(line) + 1
+
+    body = "\n".join(kept)
+    if len(kept) < len(lines):
+        body += "\n_(weitere via `mc vault-search`)_"
+
+    return DispatchSection(
+        name="agent_lessons",
+        content=header + body,
+        priority=2,
+    )
+
+
+def _assemble_with_budget(
+    sections: list[DispatchSection],
+    *,
+    target: int = DISPATCH_TARGET_CHARS,
+    warn: int = DISPATCH_WARN_CHARS,
+    hard: int = DISPATCH_HARD_CHARS,
+    task_id: str | uuid.UUID | None = None,
+) -> str:
+    """Join sections into a dispatch message while staying within the budget.
+
+    Never truncates section content mid-stream — only drops entire optional
+    sections in descending-priority order. Emits a warning log past `warn`
+    and an error log past `hard` (after dropping).
+    """
+    keep = list(sections)
+    total = sum(len(s.content) for s in keep)
+
+    while total > hard and any(s.priority > 0 for s in keep):
+        # Drop the lowest-priority (= highest number) optional section.
+        dropped = max((s for s in keep if s.priority > 0), key=lambda s: s.priority)
+        keep.remove(dropped)
+        total -= len(dropped.content)
+        logger.info(
+            "dispatch_budget: dropped section=%s size=%d task=%s",
+            dropped.name, len(dropped.content), task_id,
+        )
+
+    if total > hard:
+        # All mandatory — we must send it anyway but the caller should know.
+        logger.error(
+            "dispatch_budget: over hard cap size=%d hard=%d task=%s "
+            "(mandatory-only sections remain)",
+            total, hard, task_id,
+        )
+    elif total > warn:
+        logger.warning(
+            "dispatch_budget: past warn cap size=%d warn=%d target=%d task=%s",
+            total, warn, target, task_id,
+        )
+    elif total > target:
+        logger.debug("dispatch_budget: past target size=%d task=%s", total, task_id)
+
+    return "\n".join(s.content for s in keep)
+
+
+def _extract_auth_token(agent: Agent) -> str | None:
+    """Bearer-Token-Placeholder fuer Dispatch-Curl-Befehle.
+
+    Nach ADR-023 Ultrareview (Security-Finding): NIEMALS Plaintext-Tokens in
+    Dispatch-Messages einbauen — die landen in Redis-Pubsub, Recovery-Recaps,
+    Discord-Logs, SSE-Streams.
+    Alle Runtimes (cli-bridge, host, openclaw) bekommen `$MC_AGENT_TOKEN` als
+    Shell-Variable. OpenClaw Gateway injiziert den Token pro Session in die
+    Env-Variable, cli-bridge/host liest ihn aus agent.env.
+    """
+    return "$MC_AGENT_TOKEN"
+
+
+def _curl(method: str, path: str, token: str | None, body: str | None = None,
+          dispatch_attempt_id: str | None = None) -> str:
+    """Vollstaendigen curl-Befehl bauen — self-contained, kein TOOLS.md-Lookup noetig."""
+    parts = [f'curl -X {method} "{_API_BASE}{path}"']
+    if token:
+        parts.append(f'  -H "Authorization: Bearer {token}"')
+    if dispatch_attempt_id:
+        parts.append(f'  -H "X-Dispatch-Attempt-Id: {dispatch_attempt_id}"')
+    if body:
+        parts.append('  -H "Content-Type: application/json"')
+        parts.append(f"  -d '{body}'")
+    return " \\\n".join(parts)
+
+
+async def _build_review_message(
+    task: Task,
+    reviewer: Agent,
+    session: AsyncSession,
+    developer: Agent | None = None,
+) -> str:
+    """Review-Nachricht fuer Reviewer-Agents — mit Developer-Code-Kontext.
+
+    Laedt die letzten Developer-Kommentare (progress/resolution) und den
+    Workspace-Pfad, damit der Reviewer weiss WO und WAS zu pruefen ist.
+
+    Alle API-Aufrufe als vollstaendige curl-Befehle — self-contained.
+    """
+    token = _extract_auth_token(reviewer)
+    task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
+    review_path = f"{task_path}/review"
+
+    # curl-Befehle vorberechnen — neuer Review-Endpoint (1 Aktion statt 2)
+    approve_curl = _curl("POST", review_path, token,
+                         '{"decision": "approve", "comment": "Update — Approved: [Grund]"}')
+    reject_curl = _curl("POST", review_path, token,
+                        '{"decision": "request_changes", "comment": "Problem — ... / Erwartung — ... / Action — ..."}')
+
+    # ── Developer ermitteln (fuer Workspace-Pfad + Name) ──
+    if not developer and task.assigned_agent_id:
+        # Beim Review-Handoff wurde assigned_agent_id schon auf Reviewer gesetzt.
+        # Developer ueber letzten progress-Kommentar finden.
+        dev_comment_result = await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_type == "agent",
+                TaskComment.comment_type.in_(["progress", "resolution"]),  # type: ignore[union-attr]
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+        last_dev_comment = dev_comment_result.first()
+        if last_dev_comment and last_dev_comment.author_agent_id:
+            developer = await session.get(Agent, last_dev_comment.author_agent_id)
+
+    # ── Developer-Kommentare laden (progress + resolution) ──
+    dev_comments_text = ""
+    try:
+        comments_result = await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.author_type == "agent",
+                TaskComment.comment_type.in_(["progress", "resolution"]),  # type: ignore[union-attr]
+            )
+            .order_by(TaskComment.created_at.asc())  # type: ignore[union-attr]
+        )
+        dev_comments = comments_result.all()
+        if dev_comments:
+            comment_lines = []
+            for c in dev_comments[-3:]:  # Maximal 3 neueste
+                # Auf 800 Zeichen begrenzen damit die Message nicht explodiert
+                content = c.content[:800]
+                if len(c.content) > 800:
+                    content += "\n[...gekuerzt]"
+                comment_lines.append(f"### {c.comment_type.title()} ({c.created_at.strftime('%H:%M')})\n{content}")
+            dev_comments_text = "\n\n".join(comment_lines)
+    except Exception:
+        pass  # best-effort
+
+    # ── Phase-Review vs Code-Review unterscheiden ──
+    _child_result = await session.exec(
+        select(Task).where(Task.parent_task_id == task.id).limit(1)
+    )
+    _is_phase_review = _child_result.first() is not None
+
+    # ── Message zusammenbauen ──
+    dev_name = developer.name if developer else "Unbekannt"
+
+    if _is_phase_review:
+        # Phase-/Root-Review: Gesamtergebnis pruefen, nicht einzelnen Code
+        msg = f"# Phase-Review: {task.title}\n\n"
+        msg += f"**Task-ID:** {task.id}\n"
+        msg += f"**Board:** {task.board_id}\n\n"
+        msg += "## WICHTIG: Dies ist ein Phase-Review\n"
+        msg += "Du reviewst das **Gesamtergebnis** dieser Phase, nicht einen einzelnen Code-Task.\n"
+        msg += "Alle Subtasks dieser Phase sind abgeschlossen.\n\n"
+        msg += "**Pruefe:**\n"
+        msg += "- Erfuellt das Gesamtergebnis den Auftrag?\n"
+        msg += "- Sind alle geforderten Artefakte vorhanden?\n"
+        msg += "- Gibt es offensichtliche Luecken oder Fehler?\n\n"
+        msg += "**NICHT pruefen:** Einzelne Code-Zeilen (das haben die Subtasks bereits abgedeckt).\n\n"
+    else:
+        msg = f"# Code Review: {task.title}\n\n"
+        msg += f"**Task-ID:** {task.id}\n"
+        msg += f"**Board:** {task.board_id}\n"
+        msg += f"**Entwickler:** {dev_name}\n\n"
+
+    if task.description:
+        msg += f"## Beschreibung\n{task.description}\n\n"
+
+    # Code-Speicherort: Task.workspace_path (Source of Truth, Bundle 4)
+    # Fallback: Projekt-Workspace > mc_repo_path > Agent-Workspace
+    _code_path = getattr(task, "workspace_path", None)
+    _project: Project | None = None
+    if task.project_id:
+        _project = await session.get(Project, task.project_id)
+    if not _code_path and _project and _project.workspace_path:
+        _code_path = _project.workspace_path
+    if not _code_path:
+        _code_path = getattr(settings, 'mc_repo_path', None)
+    if not _code_path and developer:
+        _code_path = developer.workspace_path
+    if _code_path:
+        # Review FS-2: the path is embedded in the reviewer's prompt, so
+        # rewrite against the reviewer's runtime (cli-bridge → /workspace/…)
+        # instead of the developer's. Matters when reviewer + developer
+        # are on different runtimes (reviewer on cli-bridge, developer on
+        # host for example); otherwise no visible diff.
+        _agent_path = workspace_path_for_runtime(reviewer, _code_path)
+        msg += f"## Code-Speicherort\n"
+        msg += f"**Arbeitsverzeichnis:** `{_agent_path}/`\n"
+        if getattr(task, "workspace_port", None):
+            msg += f"**Dev-Server Port:** {task.workspace_port}\n"
+        msg += f"Wechsle ZUERST in dieses Verzeichnis: `cd {_agent_path}`\n"
+        msg += f"Durchsuche dort nach den relevanten Dateien.\n\n"
+
+    # T-1 Phase D: Projekt-Config-Sektion aus project_config
+    if _project and _project.project_config:
+        from app.services.work_context import resolve_project_config, build_config_dispatch_section
+        _resolved = resolve_project_config(
+            auto_config=None,
+            manual_config=_project.project_config,
+        )
+        if _resolved:
+            _port = getattr(task, "workspace_port", None)
+            msg += build_config_dispatch_section(_project.name, _resolved, port=_port) + "\n\n"
+
+    if task.target_url:
+        msg += f"**Ziel-URL:** {task.target_url}\n"
+        msg += "Oeffne diese URL im Browser um das Ergebnis visuell zu pruefen.\n\n"
+
+    # Developer-Kommentare (Evidence was gemacht wurde)
+    if dev_comments_text:
+        msg += f"## Was der Entwickler gemacht hat\n{dev_comments_text}\n\n"
+
+    # ── Subtask-Evidenz (nur bei Phase-/Root-Reviews) ──
+    # Subtasks sind nach Abschluss `done` und im Board-Kontext nicht mehr sichtbar.
+    # Wir laden sie hier explizit damit der Reviewer die geleistete Arbeit sehen kann.
+    if _is_phase_review:
+        subtasks_result = await session.exec(
+            select(Task).where(Task.parent_task_id == task.id)
+        )
+        subtasks = subtasks_result.all()
+        if subtasks:
+            agent_id_map: dict = {}
+            subtask_sections = []
+            for sub in subtasks:
+                # Agent-Name cachen
+                if sub.assigned_agent_id and sub.assigned_agent_id not in agent_id_map:
+                    sub_agent = await session.get(Agent, sub.assigned_agent_id)
+                    agent_id_map[sub.assigned_agent_id] = sub_agent.name if sub_agent else "?"
+                sub_agent_name = agent_id_map.get(sub.assigned_agent_id, "?") if sub.assigned_agent_id else "?"
+
+                section = f"### [{sub.status}] {sub.title} ({sub_agent_name})\n"
+                section += f"ID: `{sub.id}`\n"
+
+                # Kommentare des Subtasks (progress + resolution, max 3 neueste)
+                sub_comments_result = await session.exec(
+                    select(TaskComment)
+                    .where(
+                        TaskComment.task_id == sub.id,
+                        TaskComment.author_type == "agent",
+                        TaskComment.comment_type.in_(["progress", "resolution"]),  # type: ignore[union-attr]
+                    )
+                    .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                    .limit(3)
+                )
+                sub_comments = list(reversed(sub_comments_result.all()))
+                if sub_comments:
+                    for c in sub_comments:
+                        content = c.content[:600]
+                        if len(c.content) > 600:
+                            content += "\n[...gekuerzt]"
+                        section += f"\n**{c.comment_type.title()}** ({c.created_at.strftime('%H:%M')}):\n{content}\n"
+
+                # Deliverables des Subtasks
+                sub_deliverables_result = await session.exec(
+                    select(TaskDeliverable).where(TaskDeliverable.task_id == sub.id)
+                )
+                sub_deliverables = sub_deliverables_result.all()
+                if sub_deliverables:
+                    section += "\n**Deliverables:**\n"
+                    for d in sub_deliverables:
+                        path_hint = f" → `{d.path}`" if d.path else ""
+                        section += f"- [{d.deliverable_type}] {d.title}{path_hint}\n"
+
+                subtask_sections.append(section)
+
+            msg += "## Subtask-Evidenz\n"
+            msg += "*(Subtasks sind nach Abschluss `done` und im Board-Kontext nicht mehr sichtbar — hier explizit geladen)*\n\n"
+            msg += "\n---\n".join(subtask_sections) + "\n\n"
+
+    # PR-Link laden (wenn vorhanden)
+    pr_comment = None
+    try:
+        pr_result = await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.content.like("%PR erstellt:%"),
+            )
+            .order_by(TaskComment.created_at.desc())
+            .limit(1)
+        )
+        pr_comment = pr_result.first()
+    except Exception:
+        pass
+
+    if pr_comment:
+        msg += f"## Pull Request\n{pr_comment.content}\n\n"
+        msg += f"Nutze `gh pr diff` oder die GitHub-UI um die Aenderungen zu pruefen.\n\n"
+
+    # Prozess-Regeln des Reviewers (aus rules_md)
+    if reviewer.rules_md:
+        msg += f"## Prozess-Regeln (PFLICHT)\n\n{reviewer.rules_md}\n\n"
+
+    msg += f"""## Deine Aufgabe
+
+Lies den relevanten Code im Workspace des Entwicklers. Fuehre die Tests aus. Entscheide: Approved oder Request Changes.
+
+**WICHTIG:** Nutze den Review-Endpoint — EINE Aktion fuer Kommentar + Entscheidung:
+
+---
+
+### APPROVED — Review bestanden
+Wenn der Code gut ist, Tests bestehen, Anforderungen erfuellt:
+
+```bash
+{approve_curl}
+```
+
+---
+
+### REQUEST CHANGES — Aenderungen noetig
+NUR wenn es echte Probleme gibt, die nachgebessert werden muessen:
+
+```bash
+{reject_curl}
+```
+
+Kommentar-Format bei Rejection:
+**Problem** — Was konkret nicht stimmt
+**Erwartung** — Wie es sein sollte
+**Action** — Was der Developer aendern soll
+
+---
+
+**Ein Kommentar allein schliesst kein Review ab.** Du MUSST den Review-Endpoint nutzen.
+
+Du schreibst und aenderst keinen Code. Nur lesen und beurteilen."""
+    return msg
+
+
+async def _build_test_message(
+    task: Task,
+    tester: Agent,
+    session: AsyncSession,
+) -> str:
+    """Test-Message fuer Tester-Agent — Browser-basierte QA."""
+    token = _extract_auth_token(tester)
+    task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
+
+    ack_curl = _curl("PATCH", task_path, token, '{"status": "in_progress"}')
+    done_curl = _curl("PATCH", task_path, token, '{"status": "done"}')
+    reject_curl = _curl("PATCH", task_path, token, '{"status": "in_progress"}')
+    comment_curl = _curl("POST", f"{task_path}/comments", token,
+                         '{"content": "...", "comment_type": "progress"}')
+
+    msg = f"# QA-Test: {task.title}\n\n"
+    msg += f"**Task-ID:** {task.id}\n"
+    msg += f"**Board:** {task.board_id}\n\n"
+
+    # ── Test-URL bestimmen: target_url > workspace_port > localhost ──
+    if task.target_url:
+        _test_url = task.target_url
+    elif getattr(task, "workspace_port", None):
+        _test_url = f"http://localhost:{task.workspace_port}"
+    else:
+        _test_url = "http://localhost"
+
+    if task.description:
+        msg += f"## Auftrag\n{task.description}\n\n"
+
+    if task.acceptance_criteria:
+        msg += f"## Akzeptanzkriterien\n{task.acceptance_criteria}\n\n"
+
+    if task.target_url:
+        msg += f"**Ziel-URL:** {task.target_url}\n\n"
+    elif getattr(task, "workspace_port", None):
+        msg += f"**Dev-Server:** http://localhost:{task.workspace_port}\n\n"
+
+    msg += f"""## Deine Aufgabe
+
+Du bist der QA-Tester. PASS nur wenn alles funktioniert wenn man es BENUTZT.
+
+### Pflicht-Ablauf
+
+**Schritt 1: Task ACKen**
+```bash
+{ack_curl}
+```
+
+**Schritt 2: Desktop-Test**
+```bash
+dev-browser <<'EOF'
+const page = await browser.getPage("desktop");
+await page.goto("{_test_url}");
+await page.waitForLoadState("networkidle");
+const buf = await page.screenshot({{ fullPage: true }});
+const path = await saveScreenshot(buf, "test-desktop.png");
+console.log(path);
+EOF
+```
+Pruefe: Laedt die Seite? Alle Elemente sichtbar? Layout korrekt? Farben/Schriften OK?
+
+**Schritt 3: Interaktionen testen**
+- Formulare ausfuellen und submitten
+- Buttons und Links klicken
+- Navigation pruefen
+```bash
+dev-browser <<'EOF'
+const page = await browser.getPage("desktop");
+const result = await page.snapshotForAI();
+console.log(result.full);
+EOF
+# Element klicken/fuellen basierend auf Snapshot:
+dev-browser <<'EOF'
+const page = await browser.getPage("desktop");
+await page.fill("#email", "test@example.com");
+await page.getByRole("button", {{ name: "Submit" }}).click();
+const buf = await page.screenshot({{ fullPage: true }});
+const path = await saveScreenshot(buf, "test-interaction.png");
+console.log(path);
+EOF
+```
+
+**Schritt 4: Mobile-Test**
+```bash
+dev-browser <<'EOF'
+const page = await browser.getPage("mobile");
+await page.setViewportSize({{ width: 402, height: 874 }});
+await page.goto("{_test_url}");
+await page.waitForLoadState("networkidle");
+const buf = await page.screenshot({{ fullPage: true }});
+const path = await saveScreenshot(buf, "test-mobile.png");
+console.log(path);
+EOF
+```
+
+**Schritt 5: Ergebnis dokumentieren**
+```bash
+{comment_curl}
+```
+
+Bei PASS:
+```
+**Ergebnis:** TEST_PASS
+**Desktop:** /tmp/test-desktop.png — OK
+**Mobile:** /tmp/test-mobile.png — OK
+**Interaktionen:** [was getestet] — OK
+**Zusammenfassung:** Alles funktioniert wie erwartet
+```
+
+Bei FAIL:
+```
+**Ergebnis:** TEST_FAIL
+**Problem:** [welches Element] — erwartet: [X], tatsaechlich: [Y]
+**Screenshots:** [Pfade]
+**Empfehlung:** [Was der Builder fixen muss]
+```
+
+**Schritt 6: Entscheidung**
+- TEST_PASS → done:
+```bash
+{done_curl}
+```
+- TEST_FAIL → zurueck an Builder (in_progress):
+```bash
+{reject_curl}
+```
+Bei FAIL: Der Task geht automatisch zurueck an den Developer der ihn gebaut hat.
+
+### VERBOTEN
+- KEINEN Code aendern
+- KEINE Fixes selbst machen — das ist der Job des Builders
+- NUR testen und dokumentieren
+"""
+
+    return msg
+
+
+async def _build_dispatch_message(
+    task: Task,
+    agent: Agent,
+    session: AsyncSession,
+    recovery_context: str | None = None,
+) -> str:
+    """Strukturierte Dispatch-Message mit Kontext + Callback-Protokoll.
+
+    Fuer Review-Tasks (status='review') wird automatisch _build_review_message genutzt.
+    Nutzt DispatchContext fuer parallele DB-Queries (asyncio.gather).
+    """
+    if task.status == "review":
+        return await _build_review_message(task, agent, session)
+
+    if task.parent_task_id and (not task.credentials_encrypted or not task.credential_id):
+        parent_task = await session.get(Task, task.parent_task_id)
+        if parent_task is not None:
+            # Inline-Credentials vom Parent erben (bestehend)
+            if not task.credentials_encrypted and parent_task.credentials_encrypted:
+                setattr(task, "_inherited_credentials_encrypted", parent_task.credentials_encrypted)
+            # Vault-Credential-ID vom Parent erben — symmetrisch zur Inline-Vererbung.
+            # Ohne diesen Block bleibt credential_id auf root-task isoliert; Subtasks
+            # bekommen die Vault-Credentials nicht in ihren Dispatch-Kontext.
+            if not task.credential_id and parent_task.credential_id:
+                setattr(task, "_inherited_credential_id", parent_task.credential_id)
+
+    ctx = await _load_dispatch_context(task, agent, session)
+    return _format_dispatch_message(task, agent, ctx, recovery_context)
+
+
+def build_planning_brief(task: Task) -> str | None:
+    """Baut strukturierten Planning-Brief aus Operator-Intake-Feldern.
+
+    Nur fuer Root-/Intake-Tasks mit intake_mode gesetzt.
+    Workers bekommen diesen Brief NICHT — nur Henry (Board Lead).
+    """
+    if not getattr(task, "intake_mode", None):
+        return None
+
+    sections = [f"\n## Operator-Briefing ({task.intake_mode})"]
+
+    if task.request_kind:
+        sections.append(f"**Auftragstyp:** {task.request_kind}")
+    if getattr(task, "desired_output", None):
+        sections.append(f"**Gewuenschtes Ergebnis:** {task.desired_output}")
+    if task.acceptance_criteria:
+        sections.append(f"**Akzeptanzkriterien:** {task.acceptance_criteria}")
+    if getattr(task, "scope_out", None):
+        sections.append(f"**Nicht im Scope:** {task.scope_out}")
+    if getattr(task, "risk_notes", None):
+        sections.append(f"**Risiken / Nicht kaputtmachen:** {task.risk_notes}")
+    if getattr(task, "needs_browser", None):
+        sections.append("**Browser noetig:** Ja")
+    if task.requires_auth:
+        sections.append("**Credentials noetig:** Ja")
+    if getattr(task, "approval_policy", None):
+        sections.append(f"**Freigabe-Regel:** {task.approval_policy}")
+    if getattr(task, "autonomy_level", None):
+        sections.append(f"**Autonomie:** {task.autonomy_level}")
+    ref_urls = getattr(task, "reference_urls", None)
+    if ref_urls:
+        sections.append(f"**Referenzen:** {', '.join(ref_urls)}")
+    if getattr(task, "reference_notes", None):
+        sections.append(f"**Notizen:** {task.reference_notes}")
+    if getattr(task, "publish_allowed", None) is not None:
+        sections.append(f"**Veroeffentlichung:** {'Erlaubt' if task.publish_allowed else 'Nicht erlaubt'}")
+
+    return "\n".join(sections) if len(sections) > 1 else None
+
+
+def _format_dispatch_message(
+    task: Task,
+    agent: Agent,
+    ctx: DispatchContext,
+    recovery_context: str | None = None,
+) -> str:
+    """Pure function — baut die Dispatch-Message aus vorgeladenem Kontext.
+
+    Keine DB-Abhaengigkeit, damit unit-testbar.
+    """
+    is_redispatch = bool(ctx.feedback_context)
+
+    # ── Phase 3: Sections with priority. Optional sections (priority>0) are
+    # dropped by `_assemble_with_budget` when total exceeds DISPATCH_HARD_CHARS.
+    # Priority key:
+    #   0 = mandatory (header, description, credentials, recovery, role-specific orchestration)
+    #   1 = drop second-to-last (project context, dependency context — re-queryable)
+    #   2 = drop second (semantic memory, child-task list — informational)
+    #   3 = drop first (planning brief — Board Lead has task.description anyway)
+    sections: list[DispatchSection] = []
+
+    def _add(name: str, content: str, priority: int = 0) -> None:
+        sections.append(DispatchSection(name=name, content=content, priority=priority))
+
+    # Header (mandatory)
+    _add("header", "\n".join([
+        f"# {'KORREKTUR NOETIG' if is_redispatch else 'Neue Aufgabe'}: {task.title}",
+        f"**Priority:** {task.priority}",
+        f"**Task-ID:** {task.id}",
+        f"**Board-ID:** {task.board_id}",
+    ]))
+
+    # Bei Re-Dispatch: Reviewer-Feedback prominent anzeigen (mandatory)
+    if ctx.feedback_context:
+        _add("feedback", f"\n## ⚠ Review-Feedback — das musst du korrigieren\n{ctx.feedback_context}")
+
+    if task.description:
+        _add("description", f"\n## Beschreibung\n{task.description}")
+
+    if task.target_url:
+        _add("target_url", f"**Ziel-URL:** {task.target_url}")
+
+    # Help Request Kontext (mandatory)
+    if task.help_request_from:
+        requester_info = task.auto_reason or "ein anderer Agent"
+        _add("help_request", f"""
+---
+## ⚡ Help Request
+Dies ist ein Help Request von {requester_info}.
+Der anfragende Agent ist blockiert und wartet auf dein Ergebnis.
+
+**Was du tun musst:**
+1. Aufgabe bearbeiten (siehe Beschreibung oben)
+2. Ergebnis als Deliverable registrieren (POST deliverables)
+3. Kurzen Kommentar mit Zusammenfassung schreiben (POST comments)
+4. Task auf done setzen (PATCH status: done)
+
+Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
+---""")
+
+    # Planning Brief (optional, priority=3) — Board Lead + Root-Task only,
+    # recaps operator-intake fields. Board Lead has task.description anyway.
+    if agent.is_board_lead and not task.parent_task_id:
+        brief = build_planning_brief(task)
+        if brief:
+            _add("planning_brief", brief, priority=3)
+
+    # Verschluesselte Credentials entschluesseln und mitgeben
+    # Prioritaet: 1) Vault-Credential (vorgeladen in ctx), 2) Inline (credentials_encrypted), 3) Parent-Inherited
+    creds_text = ctx.credentials_text
+
+    if not creds_text:
+        # Inline-Credentials oder Parent-Inherited (wie bisher)
+        creds_encrypted = task.credentials_encrypted or getattr(task, "_inherited_credentials_encrypted", None)
+        if creds_encrypted:
+            from app.services.encryption import safe_decrypt
+            decrypted_creds = safe_decrypt(creds_encrypted)
+            if decrypted_creds:
+                creds_text = decrypted_creds
+
+    if creds_text:
+        # Credentials are mandatory — agent literally cannot do the task without them
+        _add("credentials", f"\n## Zugangsdaten\n{creds_text}")
+
+    # Projekt-Kontext (optional priority=1 — agent can read project via API if needed)
+    if ctx.project:
+        project_parts = ["\n## Projekt-Kontext", f"**Projekt:** {ctx.project.name}"]
+        if ctx.project_tags:
+            project_parts.append(f"**Tags:** {', '.join(ctx.project_tags)}")
+        if ctx.project.description:
+            project_parts.append(f"**Beschreibung:** {ctx.project.description}")
+        _add("project_context", "\n".join(project_parts), priority=1)
+
+    # Dependency context (optional priority=1 — re-queryable via mc context predecessors)
+    if ctx.dependency_context:
+        _add(
+            "dependency_context",
+            f"\n## Ergebnisse der Vorgaenger-Tasks\n\nDiese Tasks wurden vor dir abgeschlossen. Nutze ihre Workspaces und Outputs als Ausgangspunkt:\n\n{ctx.dependency_context}",
+            priority=1,
+        )
+
+    # Memory (optional priority=2 — Top-3 semantic hits. Agent can pull more via
+    # `mc memory search` on demand. Capped at MEMORY_AUTO_MAX_CHARS even if kept.)
+    if ctx.semantic_memory_context:
+        _mem = ctx.semantic_memory_context
+        if len(_mem) > MEMORY_AUTO_MAX_CHARS:
+            _mem = _mem[: MEMORY_AUTO_MAX_CHARS - 40].rstrip() + (
+                "\n\n(weitere Treffer via `mc memory search`)"
+            )
+        _add("semantic_memory", f"\n## Relevantes Memory (Top-3 Vektor)\n{_mem}", priority=2)
+
+    # Agent Lessons (Phase 1 Adoption): rendered as a DispatchSection so they
+    # participate in _assemble_with_budget and can be dropped under pressure.
+    _lessons_section: DispatchSection | None = None
+    if ctx.agent_lessons_context:
+        _lessons_section = render_agent_lessons_section(ctx.agent_lessons_context)
+
+    # Prozess-Regeln des Agents (mandatory — agent-specific extra rules from DB)
+    if agent.rules_md:
+        _add("agent_rules", f"\n## Prozess-Regeln (PFLICHT)\n\n{agent.rules_md}")
+
+    # Auth-Token aus TOOLS.md fuer self-contained curl-Befehle — Board-Lead /
+    # Planner blocks below still render curl (their orchestration workflow
+    # needs create_task payloads that `mc` does not yet cover).
+    token = _extract_auth_token(agent)
+    task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
+    comment_path = f"{task_path}/comments"
+    attempt_id = getattr(task, "dispatch_attempt_id", None)
+    # Subtasks → `mc done` (Phase-Review laeuft auf Parent-Ebene).
+    # Roots → Dev entscheidet selbst (ADR-023): `mc review` wenn Code/API/Security,
+    # sonst `mc done` direkt. Policy-Details in SOUL.md (## Review-Policy).
+    _is_subtask = task.parent_task_id is not None
+
+    # ── ACK-Reminder (Lifecycle moved to SOUL.md.j2 — Phase 2/2.2) ───────
+    # The full Lifecycle command catalog (progress/blocked/failed/finish syntax)
+    # now lives in SOUL.md worker footer + role blocks. The ONE thing dispatch
+    # adds that's task-specific is the "ACK or get re-assigned in 10 min" hint
+    # for tasks that haven't been ACK'd yet. For re-dispatch (status already
+    # in_progress, recovery context attached), no ACK reminder is needed —
+    # SOUL footer "Recovery-Protokoll" covers what the agent needs.
+    if task.status != "in_progress":
+        _add(
+            "ack_reminder",
+            "\n**ACK SOFORT** mit `mc ack` bevor du startest — ohne ACK wird "
+            "der Task nach 10 Min neu zugewiesen. "
+            "Fortschritt: `mc comment progress \"...\"`. "
+            "Bei Problemen: `mc blocked --question \"...\"`. "
+            "Vollstaendiger Lifecycle (finish/failed/help/question) siehe SOUL.md.",
+        )
+
+    # ── Recovery-Kontext (mandatory — without it, the agent re-starts from scratch
+    #    after session loss, duplicating work) ──
+    if recovery_context:
+        _add("recovery_context", recovery_context)
+
+    # ── Per-Phase 1+2 (2026-05-23): Worker-Truth/Lifecycle/Two-Zone moved
+    #    to SOUL.md.j2. HEARTBEAT.md was deleted in migration 0125 (never
+    #    read by agents). Only role-specific task-content (orchestrator
+    #    delegation block / worker arbeitsweise+git_section) stays here. ──
+
+    # ── Aktive Subtasks (optional priority=2 — Board Lead overview, informational;
+    #    re-queryable via mc tasks list) ──
+    if agent.is_board_lead and ctx.child_tasks:
+        agent_name_map = {a.id: a.name for a in ctx.team_agents}
+        agent_name_map[agent.id] = agent.name
+        child_lines = []
+        for ct in ctx.child_tasks:
+            agent_label = agent_name_map.get(ct.assigned_agent_id, "?") if ct.assigned_agent_id else "unassigned"
+            child_lines.append(f"- [{ct.status}] \"{ct.title}\" ({agent_label})")
+        _add("child_tasks", "\n## Aktive Subtasks\n" + "\n".join(child_lines), priority=2)
+
+    if agent.is_board_lead:
+        # ── Board Lead: Delegierungs-Anweisungen statt Implementierung ──
+        create_task_path = f"/api/v1/agent/boards/{task.board_id}/tasks"
+
+        team_lines = []
+        developer_names = []
+        reviewer_names = []
+        for ta in ctx.team_agents:
+            role_hint = ta.role or ta.name
+            runtime_hint = f", runtime={ta.agent_runtime}" if getattr(ta, "agent_runtime", "openclaw") != "openclaw" else ""
+            team_lines.append(f"- **{ta.name}** ({role_hint}{runtime_hint}): `{ta.id}`")
+            r = (ta.role or "").lower()
+            if "review" in r:
+                reviewer_names.append(ta.name)
+            elif r not in ("lead", "planner"):
+                developer_names.append(ta.name)
+
+        team_section = "\n".join(team_lines) if team_lines else "- (Keine Team-Agents gefunden — pruefe Board-Konfiguration)"
+        _dev_names_str = ", ".join(developer_names) if developer_names else "Developer-Agents"
+        _rev_names_str = ", ".join(reviewer_names) if reviewer_names else "Reviewer-Agents"
+
+        subtask_body = (
+            '{"title": "Konkrete Aufgabe", '
+            '"description": "## Ziel\\nWas genau erreicht werden soll.\\n\\n'
+            '## Kontext\\n- Pfad: ~/Workspace/Projects/mission-control/\\n'
+            '- URL: http://localhost\\n- Stack: FastAPI + Next.js\\n\\n'
+            '## Guardrails\\n- Kein DB-Schema aendern\\n- Nur PR, nicht mergen\\n\\n'
+            '## Erwarteter Output\\n- PR mit Aenderungen\\n- Vorher/Nachher Screenshots\\n\\n'
+            '## Definition of Done\\n- Tests gruen\\n- Screenshots beigefuegt", '
+            '"credential_id": "CREDENTIAL-UUID-AUS-VAULT-ODER-WEGLASSEN", '
+            f'"parent_task_id": "{task.id}", '
+            '"assigned_agent_id": "AGENT-UUID-HIER", '
+            '"priority": "medium", '
+            '"tags": ["relevanter-tag"]}'
+        )
+        delegate_curl = _curl("POST", create_task_path, token, subtask_body)
+
+        # Planner-Modus-Instruktion entfernt (Phase 6, 2026-04-11).
+        # Boss plant selbst via openclaude-Subagents, delegiert direkt an Worker.
+        _planner_instruction = ""  # leer — wird im Template-String unten nicht mehr gerendert
+
+        _add("orchestrator_instructions", f"""
+## Orchestrator-Anweisungen
+
+Du bist der Orchestrator. Implementiere NICHTS selbst — delegiere ALLES an dein Team.
+
+### Dein Team
+{team_section}
+
+### Schritt 1: Subtask erstellen und delegieren
+```bash
+{delegate_curl}
+```
+Ersetze "AGENT-UUID-HIER" mit der UUID des passenden Agents.
+WICHTIG: parent_task_id MUSS `{task.id}` sein (deine Task-ID).
+
+Erstelle pro Agent einen Subtask. Wenn ein Subtask auf einen anderen warten muss:
+Fuege `"depends_on": ["andere-subtask-id"]` hinzu.
+
+### PFLICHT: Delegations-Checkliste
+Jede Task-Beschreibung MUSS diese 5 Punkte enthalten:
+1. **Ziel** — Was genau soll erreicht werden?
+2. **Kontext** — Pfade, URLs, Dateien, Stack-Infos
+3. **Guardrails** — Was NICHT gemacht werden soll
+4. **Erwarteter Output** — Screenshots, PRs, Dateien
+5. **Definition of Done** — Messbare Fertig-Kriterien
+
+**Credentials** (ADR-033) — Falls ein Task einen Login/Token braucht:
+- **Primaer:** `credential_id` (UUID aus dem Vault, Settings → Credentials). Agent holt sie zur Laufzeit per `GET /api/v1/agent/boards/{{board_id}}/credentials/{{credential_id}}`.
+- **Fallback (One-Shot):** Inline `credentials`-Feld `"credentials": "email: x@y.z / password: ..."`. Wird verschluesselt gespeichert, Agent bekommt sie entschluesselt.
+- **NIE** Login/Key in die Description schreiben. Wenn unbekannt: den Operator fragen, NICHT raten.
+- **NIE** System-Tokens (OpenAI, GitHub, Discord, OpenClaw) referenzieren — die liegen in `secrets` und Backend-Services holen sie selbst.
+
+WICHTIG: Der Agent kennt KEINEN Chat-Kontext. Alles muss in der Beschreibung stehen.
+
+### WICHTIG: Keine Review-Tasks erstellen
+Erstelle NUR Implementierungs-Tasks fuer Developer-Agents ({_dev_names_str}).
+KEINE separaten Review-Tasks fuer Reviewer-Agents ({_rev_names_str}).
+Das Review passiert AUTOMATISCH — wenn ein Developer seinen Task auf "review" setzt, wird
+automatisch ein Reviewer benachrichtigt und prueft den Code.
+
+Wenn du manuell einen Review-Task erstellst, reviewed der Reviewer BEVOR der Developer fertig ist.
+
+### Schritt 2: Progress-Kommentar schreiben
+```bash
+mc comment progress "**Update** — Subtask X an {_dev_names_str.split(", ")[0] if developer_names else "Developer"} delegiert
+**Evidence** — Subtask-IDs: [IDs hier]
+**Next** — Warte auf Fertigstellung"
+```
+
+### Schritt 3: Warten
+Dein Parent-Task wird automatisch auf in_progress gesetzt wenn du den ersten Subtask erstellst.
+Wenn alle Subtasks fertig sind, setzt der Watchdog deinen Task automatisch auf review.
+
+WICHTIG: Erstelle NIEMALS Tasks ohne parent_task_id — sonst werden sie dir selbst zugewiesen.
+
+### Projekt-Workflow
+Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
+1. Projekt erstellen: POST {create_task_path.rsplit('/tasks', 1)[0]}/projects
+   Body: {{"name": "Projektname", "description": "...", "project_type": "feature"}}
+2. Subtasks mit parent_task_id + project_id erstellen
+3. Phasen laufen danach vollautomatisch — du musst NICHT auf den Operator warten""")
+        # End of _add("orchestrator_instructions", ...)
+    # Planner branch removed (Migration 0086, ADR-022 review) — Boss
+    # orchestrates directly. Any legacy task with `delegation_type="planning"`
+    # or an agent with "planner" in role falls through to the regular
+    # worker branch; Boss re-assigns via his standard orchestration flow.
+    else:
+        # ── Regulaerer Agent: Implementierungs-Anweisungen ──
+        project = ctx.project
+
+        # Zwei-Zonen-Konvention moved to SOUL.md.j2 (common header Zone 1/Zone 2
+        # + per-role blocks). Was duplicated per task; now lives only in SOUL.
+
+        # ── Git-Sektion: dynamisch basierend auf Projekt-Repo ──
+        if not getattr(agent, 'requires_git_workflow', True):
+            git_section = ""  # Non-Coder Agent — keine Git-Instruktionen
+        elif project and project.github_repo_url and agent.workspace_path:
+            from app.services.git_service import slugify_project
+            _proj_slug = slugify_project(project.name)
+            _task_slug = slugify_project(task.title)
+            _work_dir_host = getattr(task, "workspace_path", None) or project.workspace_path or f"{agent.workspace_path}/{_proj_slug}"
+            _work_dir = workspace_path_for_runtime(agent, _work_dir_host) or _work_dir_host
+            git_section = (
+                f"**Git-Workflow:**\n"
+                f"- Repository: `{project.github_repo_name}`\n"
+                f"- Dein Branch: `task/{_task_slug}`\n"
+                f"- Arbeitsverzeichnis: `{_work_dir}/`\n"
+                f"- Committe nach jedem groesseren Schritt mit sinnvoller Message\n"
+                f"- Vor Review: `git add . && git commit -m \"...\" && git push origin task/{_task_slug}`\n"
+                f"- NIEMALS auf main committen — nur auf deinem Task-Branch\n"
+                f"- Keine API-Keys, Tokens oder Passwoerter committen"
+            )
+            if task.workspace_port:
+                git_section += (
+                    f"\n\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
+                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                )
+        elif project and project.workspace_path:
+            git_section = (
+                f"**Arbeitsverzeichnis:** `{project.workspace_path}/`\n"
+                f"**Git:** Committe nach jedem groesseren Schritt mit sinnvoller Message. Pushe auf GitHub.\n"
+                "Feature-Branch nutzen — nie direkt auf main."
+            )
+            if task.workspace_port:
+                git_section += (
+                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
+                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                )
+        elif getattr(task, "workspace_path", None):
+            # Task hat eigenen Workspace (Worktree, Bundle 4) aber kein Projekt-Repo
+            _ws_host = task.workspace_path
+            _ws_view = workspace_path_for_runtime(agent, _ws_host) or _ws_host
+            git_section = (
+                f"**Arbeitsverzeichnis:** `{_ws_view}/`\n"
+                f"Wechsle ZUERST dorthin: `cd {_ws_view}`\n\n"
+                "**Git:** Feature-Branch erstellen, nie direkt auf main committen.\n"
+                "Committe nach jedem groesseren Schritt. Pushe auf GitHub."
+            )
+            if task.workspace_port:
+                git_section += (
+                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
+                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                )
+        else:
+            # Fallback: mc_repo_path Config (greift nur bei Tasks ohne Projekt und ohne Git-Repo)
+            _mc_repo_path = getattr(settings, 'mc_repo_path', None)
+            if _mc_repo_path:
+                git_section = (
+                    f"**Arbeitsverzeichnis (Fallback):** `{_mc_repo_path}/`\n"
+                    f"Wechsle ZUERST dorthin: `cd {_mc_repo_path}`\n\n"
+                    "**Git:** Feature-Branch erstellen, nie direkt auf main committen.\n"
+                    "Committe nach jedem groesseren Schritt. Pushe auf GitHub."
+                )
+            else:
+                git_section = (
+                    "**Git:** Committe nach jedem groesseren Schritt mit sinnvoller Message. Pushe auf GitHub.\n"
+                    "Feature-Branch nutzen — nie direkt auf main."
+                )
+            if task.workspace_port:
+                git_section += (
+                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
+                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                )
+
+        # Worker-Contract content (Task-Status truth, 5-Min-Blocker, Fokus-Regel,
+        # Output-Location-Regel) moved to SOUL.md.j2 worker footer in Phase 1.
+        # SOUL.md is loaded as --append-system-prompt at openclaude start and
+        # reaches ALL non-lead worker roles persistently. Repeating it per-task
+        # was redundant boilerplate that pushed messages over the HARD cap.
+
+        _add("worker_arbeitsweise", f"""
+## Arbeitsweise
+
+Arbeite selbstaendig an diesem Task bis er fertig ist:
+1. `mc checklist add "..."` fuer jeden Schritt — Checkliste ist Single Source
+   of Truth fuer Fortschritt (Recovery liest sie)
+2. Jeden Punkt abarbeiten, nach Abschluss `mc checklist done <id>`
+3. Zwischendurch `mc comment progress "Update/Evidence/Next"` fuer Audit Trail
+4. Wenn alles fertig: `mc {'done' if _is_subtask else 'review'}`
+
+Deliverable registrieren: `mc deliverable --title "..." --path /deliverables/{task.id}/<datei>`  (absoluter Container-Pfad, ADR-022)
+
+{git_section}
+
+WICHTIG: Hoere NICHT auf bevor der Task auf "{'done' if _is_subtask else 'review'}" steht.""")
+
+    # Add agent lessons section if available
+    if _lessons_section:
+        sections.append(_lessons_section)
+
+    # ── Phase 3: live budget enforcement ────────────────────────────────
+    # _assemble_with_budget drops optional sections in priority order until
+    # the message fits under DISPATCH_HARD_CHARS, or logs at ERROR if even
+    # mandatory-only content exceeds the cap. Dedup on (task_id, attempt_id)
+    # prevents poll-cycle log spam (Bug 2026-05-12) — the dispatch message
+    # is re-rendered on every /agent/me/poll call.
+    _attempt_id = getattr(task, "dispatch_attempt_id", None)
+    _dedup_key = (str(task.id), _attempt_id or "")
+    _already_logged = _dedup_key in _SIZE_LOG_DEDUP
+
+    if _already_logged:
+        # Suppress logging by passing very-high thresholds so internal
+        # warn/error logs don't fire. The drop logic itself still runs.
+        rendered = _assemble_with_budget(
+            sections,
+            target=10**9,  # effectively disable target/warn/error logs
+            warn=10**9,
+            hard=DISPATCH_HARD_CHARS,
+            task_id=task.id,
+        )
+    else:
+        rendered = _assemble_with_budget(
+            sections,
+            target=DISPATCH_TARGET_CHARS,
+            warn=DISPATCH_WARN_CHARS,
+            hard=DISPATCH_HARD_CHARS,
+            task_id=task.id,
+        )
+        _SIZE_LOG_DEDUP.add(_dedup_key)
+        if len(_SIZE_LOG_DEDUP) > 256:
+            for _stale in list(_SIZE_LOG_DEDUP)[:128]:
+                _SIZE_LOG_DEDUP.discard(_stale)
+    return rendered

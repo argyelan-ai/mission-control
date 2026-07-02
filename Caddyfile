@@ -1,0 +1,53 @@
+# Mission Control — Caddy reverse proxy.
+#
+# Serves plain HTTP on :80 — fine for localhost (secure context for WebRTC).
+# For HTTPS (Tailscale / LAN certs), see caddy/Caddyfile.tls.example and
+# docker-compose.override.example.yml — never commit certs or hostnames here.
+#
+# /livekit-signal is the WebSocket proxy to LiveKit signaling (RTC media
+# ports 7881/7882 are exposed separately on 0.0.0.0).
+
+(common) {
+    encode gzip zstd
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        -Server
+    }
+
+    # WebSocket-Proxy fuer LiveKit-Signaling (vom Browser zum LK-Server).
+    # LiveKit's Web-SDK upgrades auf WS — Caddy handles upgrade transparent.
+    handle /livekit-signal/* {
+        uri strip_prefix /livekit-signal
+        reverse_proxy livekit:7880
+    }
+    handle /livekit-signal {
+        uri strip_prefix /livekit-signal
+        reverse_proxy livekit:7880
+    }
+    handle /rtc {
+        reverse_proxy livekit:7880
+    }
+    handle /rtc/* {
+        reverse_proxy livekit:7880
+    }
+
+    # API + Health → backend
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+    handle /health {
+        reverse_proxy backend:8000
+    }
+
+    # Default: Next.js frontend
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
+
+# Local HTTP access. No TLS needed — localhost is a secure context for
+# browser WebRTC.
+:80 {
+    import common
+}

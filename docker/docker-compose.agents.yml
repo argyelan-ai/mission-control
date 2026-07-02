@@ -1,0 +1,284 @@
+# docker/docker-compose.agents.yml
+# Hybrid Fleet (2026-04-21 — ~/.mc/ home layout, see ADR-022):
+#   - 7 Agents auf mc-claude-agent:latest (native claude-code CLI +
+#     Anthropic Pro/Max OAuth via CLAUDE_CODE_OAUTH_TOKEN). Kein
+#     OpenAI-Shim.
+#   - 1 Agent (Sparky) auf mc-agent-base:latest (openclaude + Ollama/
+#     LM Studio, fixierte Version 0.1.8 für Security).
+#   - Boss läuft auf Host (launchd com.openclaw.boss, nicht hier).
+#   - Henry läuft auf openclaw Gateway (nicht hier).
+#
+# Entfernt im Workstream E (2026-04-20):
+#   - Planner: kein DB-Agent, Orchestrierung liegt bei Boss.
+#   - Neo: zu schwammig, vom Operator rausgenommen.
+#
+# Workspace-Layout (ADR-022):
+#   /workspace         rw  → ~/.mc/workspaces/<slug>/     Per-Agent Arbeitszone
+#   /workspace-ref     ro  → ~/Workspace/Projects/        Code des Operators als Referenz
+#   /deliverables      rw  → ~/.mc/deliverables/<slug>/   Output-Drop
+#   /home/agent/.claude rw → ~/.mc/agents/<slug>/claude-config/  Agent-Config
+#   /mc-servers        ro  → ~/.mc/mcp-servers/           MCP-Server
+#
+# Shakespeare + Davinci bekommen KEIN /workspace-ref (brauchen keinen
+# Code-Zugriff, Security-Reduktion).
+#
+# Auth:
+#   - CLAUDE_CODE_OAUTH_TOKEN: 1-Jahres-OAuth-Token via `claude setup-token`
+#     auf Host. In .env (root repo .env, NICHT docker/.env.agents).
+#   - MC_TOKEN_*: PBKDF2-gehashte Agent-Tokens, in .env.agents.
+#   - GH_TOKEN: GitHub OAuth, in root .env, via Bootstrap.
+#   - OLLAMA_API_KEY: nur für Sparky.
+
+# Claude-Fleet Base (7 Anthropic-Agents)
+x-claude-agent-base: &claude-agent-base
+  image: mc-claude-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  # env_file laedt docker/.env.shared IMMER — auch bei ad-hoc `docker compose
+  # up` ohne --env-file flags. Verhindert silent CLAUDE_CODE_OAUTH_TOKEN=
+  # <EMPTY> Container-Erstellung. .env.shared wird von start-all.sh aus root
+  # .env generiert (nur Agent-relevante globale Tokens, keine DB-/Backend-
+  # Secrets). PFAD ist relativ zum project-directory (= cwd des compose
+  # call) — canonical: aufruf von ~/Workspace/Projects/mission-control/.
+  # Siehe SKILL mc-container-lifecycle.
+  env_file:
+    - docker/.env.shared
+
+# OpenClaude Base (nur Sparky)
+x-openclaude-agent-base: &openclaude-agent-base
+  image: mc-agent-base:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  # docker/.env.shared brings TAVILY_API_KEY (used by openclaude 0.7+ built-in
+  # WebSearch adapter), GH_TOKEN, etc. — same source as the Anthropic fleet.
+  env_file:
+    - docker/.env.shared
+  environment:
+    - CLAUDE_CODE_USE_OPENAI=1
+    - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+
+# omp Headless Base (ADR-045) — third harness image. Window 0 runs
+# `bridge.py --serve` (the persistent poll→omp→lifecycle driver), NOT an
+# interactive openclaude pane. omp speaks OpenAI-completions natively and
+# drives Qwen on the DGX Spark directly (no openclaude shim). The .env is
+# produced by the SAME OpenAI-style code path as the openclaude fleet
+# (OPENAI_BASE_URL/OPENAI_MODEL/OPENAI_API_KEY) — no duplicated token routing.
+x-omp-agent-base: &omp-agent-base
+  image: mc-omp-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  env_file:
+    - docker/.env.shared
+
+services:
+  # ── Anthropic Claude Fleet (7 Agents auf claude-sonnet-4-6) ─────────
+
+  mc-agent-rex:
+    <<: *claude-agent-base
+    container_name: mc-agent-rex
+    environment:
+      - AGENT_NAME=rex
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_REX}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/rex
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=rex
+    volumes:
+      - ${HOME}/.mc/agents/rex/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/rex:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/rex:/deliverables
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-freecode:
+    <<: *claude-agent-base
+    image: mc-claude-agent:latest
+    container_name: mc-agent-freecode
+    environment:
+      - AGENT_NAME=freecode
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_FREECODE}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/freecode
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=freecode
+    volumes:
+      - ${HOME}/.mc/agents/freecode/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/freecode:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/freecode:/deliverables
+      - mc_shared_deliverables:/shared-deliverables:ro
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-tester:
+    <<: *claude-agent-base
+    image: mc-claude-agent:latest
+    container_name: mc-agent-tester
+    environment:
+      - AGENT_NAME=tester
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_TESTER}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/tester
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=tester
+    volumes:
+      - ${HOME}/.mc/agents/tester/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/tester:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/tester:/deliverables
+      # Shared volume mit mc-playwright Screenshots — Tester muss eigene
+      # Verify-Outputs visuell prüfen können (Bug A, 2026-04-23 — sonst
+      # Halluzinations-Risiko: "alles ok" ohne das Bild gesehen zu haben).
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      - mc_shared_deliverables:/shared-deliverables:ro
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-deployer:
+    <<: *claude-agent-base
+    image: mc-claude-agent:latest
+    container_name: mc-agent-deployer
+    build:
+      context: ./mc-claude-agent
+      args:
+        INSTALL_VERCEL: "true"
+    environment:
+      - AGENT_NAME=deployer
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_DEPLOYER}
+      - VERCEL_TOKEN=${VERCEL_TOKEN}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/deployer
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=deployer
+    volumes:
+      - ${HOME}/.mc/agents/deployer/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/deployer:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      - ${HOME}/.mc/deliverables/deployer:/deliverables
+      - mc_shared_deliverables:/shared-deliverables:ro
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-researcher:
+    <<: *claude-agent-base
+    image: mc-agent-base:latest
+    container_name: mc-agent-researcher
+    environment:
+      - AGENT_NAME=researcher
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_RESEARCHER}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/researcher
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=researcher
+    volumes:
+      - ${HOME}/.mc/agents/researcher/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/researcher:/workspace
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/researcher:/deliverables
+      - mc_shared_deliverables:/shared-deliverables:ro
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-shakespeare:
+    <<: *claude-agent-base
+    image: mc-agent-base:latest
+    container_name: mc-agent-shakespeare
+    environment:
+      - AGENT_NAME=shakespeare
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_SHAKESPEARE}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+    # Kein /workspace-ref — Shakespeare schreibt Content, braucht keinen
+    # Code-Zugriff. Reduziert Security-Fläche.
+      - AGENT_VAULT_PATH=/vault/agents/shakespeare
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=shakespeare
+    volumes:
+      - ${HOME}/.mc/agents/shakespeare/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/shakespeare:/workspace
+      - ${HOME}/.mc/deliverables/shakespeare:/deliverables
+      - ${HOME}/.mc/vault:/vault:rw
+
+  mc-agent-davinci:
+    <<: *claude-agent-base
+    image: mc-claude-agent:latest
+    container_name: mc-agent-davinci
+    build:
+      context: ./mc-claude-agent
+      args:
+        INSTALL_HIGGSFIELD: "true"
+        INSTALL_REMOTION: "true"
+    environment:
+      - AGENT_NAME=davinci
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_DAVINCI}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+    # Kein /workspace-ref — Davinci arbeitet mit Bildern, keinen Code.
+      - AGENT_VAULT_PATH=/vault/agents/davinci
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=davinci
+    volumes:
+      - ${HOME}/.mc/agents/davinci/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/davinci:/workspace
+      - ${HOME}/.mc/deliverables/davinci:/deliverables
+      # Higgsfield CLI credentials — der Host-Login des Operators wird in den Container
+      # durchgereicht. Read-only damit der Container keine Tokens überschreibt.
+      # Refresh-Tokens cycle automatisch wenn der Operator sich auf dem Host neu einloggt.
+      - ${HOME}/.config/higgsfield:/home/agent/.config/higgsfield:ro
+
+  # ── Sparky (openclaude + qwen3-coder-next via LM Studio) ──
+      - ${HOME}/.mc/vault:/vault:rw
+  mc-agent-sparky:
+    <<: *openclaude-agent-base
+    image: mc-agent-base:latest
+    container_name: mc-agent-sparky
+    build:
+      context: ./mc-agent-base
+      args:
+        INSTALL_GH_CLI: "true"
+    environment:
+      - AGENT_NAME=sparky
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_SPARKY}
+      - CLAUDE_CODE_USE_OPENAI=1
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      # Vault M.2 pilot: Sparky writes Lessons directly to ~/.mc/vault/agents/sparky/
+      # Cross-agent writes still go via Backend API (POST /agent/vault/note).
+      # M.3 will roll out vault access to remaining agents.
+      - AGENT_VAULT_PATH=/vault/agents/sparky
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=sparky
+    volumes:
+      - ${HOME}/.mc/agents/sparky/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/sparky:/workspace
+      - ${HOME}/Workspace/Projects:/workspace-ref:ro
+      - ${HOME}/.mc/deliverables/sparky:/deliverables
+      # Vault mount — rw for Sparky (M.2 pilot). Other agents get :ro in M.3.
+      - ${HOME}/.mc/vault:/vault:rw
+
+networks:
+  mission-control_default:
+    external: true  # Created by main docker-compose.yml — start main stack first: docker compose up -d
+
+volumes:
+  # Shared volume mit mc-playwright Screenshots (rw vom mc-playwright,
+  # ro fuer Worker-Agents). Wird vom main docker-compose.yml erstellt.
+  mc_shared_deliverables:
+    external: true
+    name: mission-control_mc_shared_deliverables

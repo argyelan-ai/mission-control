@@ -1,0 +1,413 @@
+@import "tailwindcss";
+
+/* ============================================================
+   Mission Control — „Der Leitstand" (siehe DESIGN.md)
+   Dark mode only. Ein Akzent: Teal. Werte spiegeln src/lib/colors.ts
+   (Single Source) — Änderungen IMMER dort zuerst.
+   ============================================================ */
+
+@theme {
+  /* ---- Backgrounds (Stufung = Tiefe: deep → hover) ---- */
+  --color-bg-dark: #050505;
+  --color-bg-deep: #050505;
+  --color-bg-base: #0a0a0a;
+  --color-bg-surface: #111111;
+  --color-bg-elevated: #161616;
+  --color-bg-hover: #1c1c1c;
+
+  /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf #050505–#161616) ---- */
+  --color-text-primary: #ededed;
+  --color-text-secondary: #a1a1a1;
+  --color-text-muted: #888888;
+  --color-text-body: #ededed;
+
+  /* ---- Borders (mirrors colors.ts) ---- */
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-border: rgba(255, 255, 255, 0.06);
+  --color-border-strong: rgba(255, 255, 255, 0.1);
+
+  /* ---- Typography scale ---- */
+  --text-xs: 12px;
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 32px;
+  --text-3xl: 40px;
+
+  /* ---- Font weights ---- */
+  --font-body: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+
+  /* ---- Easing (Task-Spezifikation) ---- */
+  --ease-spring: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* ---- Spacing (consistent rhythm) ---- */
+  --space-px: 1px;
+  --space-0: 0px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-16: 64px;
+
+  /* ---- Radii ---- */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* ---- Blur ---- */
+  --blur-glass: 16px;
+  --blur-heavy: 40px;
+
+  /* ---- Shadows ---- */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.2);
+  --shadow-elevated: 0 4px 24px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.3);
+
+  /* ---- Keyframe durations ---- */
+  --duration-micro: 100ms;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --duration-slow: 300ms;
+}
+
+/* ============================================================
+   Runtime tokens — MC Teal (single source, mirrors homepage/colors.ts)
+   These are consumed via var() in TSX. Tailwind v4 tree-shakes @theme
+   variables that aren't referenced in CSS, so runtime-only tokens must
+   live in a plain :root block to always be emitted.
+   ============================================================ */
+
+:root {
+  /* Accent */
+  --color-accent: #0fa3a3;
+  --color-accent-light: #14c4c4;
+  --color-accent-subtle: rgba(15, 163, 163, 0.12);
+  --color-text: #ededed; /* alias used by a few components */
+
+  /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
+  --color-status-error-text: #d05f5f;
+  --color-status-info-text: #5a8ce0;
+
+  /* Status (desaturated, mirrors colors.ts C — used app-wide via lib/utils.ts) */
+  --color-online: #2b9a4a;
+  --color-error: #c23838;
+  --color-warning: #b8870a;
+  --color-info: #2e6fd8;
+  --color-status-online: #2b9a4a;
+  --color-status-error: #c23838;
+  --color-status-warning: #b8870a;
+  --color-status-info: #2e6fd8;
+
+  /* Mono font alias (Geist Mono variable set in layout.tsx) */
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+}
+
+/* ============================================================
+   Base Styles
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scroll-behavior: smooth;
+  /* iOS: kein Text-Upscaling bei Rotation (MOBILE-SPEC M2) */
+  -webkit-text-size-adjust: 100%;
+}
+
+/* ── Touch-Grundregeln (MOBILE-SPEC M6) ───────────────────────────────────────
+   Kein grauer Tap-Blitz; Doppeltipp-Zoom auf Interaktivem aus (kein 300ms-
+   Restverhalten); Pinch-Zoom der Seite bleibt erlaubt (WCAG 1.4.4). */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+button, a, [role="button"], input, select, textarea, [role="tab"] {
+  touch-action: manipulation;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100dvh;
+  background-color: var(--color-bg-dark);
+  color: var(--color-text-primary);
+  font-size: var(--text-base);
+  font-weight: var(--font-body);
+  line-height: 1.6;
+}
+
+/* ============================================================
+   Focus visibility — keyboard a11y (WCAG 2.4.7)
+   Inline-styled buttons/links lose the default ring; restore a
+   consistent accent ring for keyboard users only (not mouse clicks).
+   ============================================================ */
+
+:where(a, button, [role="button"], input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ============================================================
+   Glass Card
+   ============================================================ */
+
+.glass-card {
+  position: relative;
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(var(--blur-glass));
+  -webkit-backdrop-filter: blur(var(--blur-glass));
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+
+.glass-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08) 30%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.08) 70%, transparent);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  pointer-events: none;
+}
+
+.glass-card-hover {
+  transition: background var(--duration-normal) var(--ease-spring), border-color var(--duration-normal) var(--ease-spring), box-shadow var(--duration-normal) var(--ease-spring);
+}
+
+.glass-card-hover:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-elevated);
+}
+
+/* ============================================================
+   Keyframe Animations
+   ============================================================ */
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.animate-fade-up {
+  animation: fade-up var(--duration-slow) var(--ease-spring) forwards;
+}
+
+.animate-fade-in {
+  animation: fade-in var(--duration-slow) var(--ease-spring) forwards;
+}
+
+.animate-float {
+  animation: float 6s ease-in-out infinite;
+}
+
+/* ============================================================
+   Utility Classes
+   ============================================================ */
+
+.text-secondary { color: var(--color-text-secondary); }
+.text-muted { color: var(--color-text-muted); }
+
+.border-subtle { border-color: var(--color-border-subtle); }
+
+/* ============================================================
+   Mobile / Safe-Area Utilities (iPhone 14 Pro+ / Dynamic Island)
+   ============================================================ */
+
+/* safe-area-inset-top deckt das Dynamic Island automatisch ab (~59pt).
+   pt-island gibt zusätzliche 12px Abstand damit Buttons nicht an der Insel kleben. */
+.pt-safe   { padding-top: max(env(safe-area-inset-top), 0.5rem); }
+.pt-island { padding-top: calc(env(safe-area-inset-top) + 0.75rem); }
+.pb-safe   { padding-bottom: max(env(safe-area-inset-bottom), 0.5rem); }
+.pl-safe   { padding-left: env(safe-area-inset-left); }
+.pr-safe   { padding-right: env(safe-area-inset-right); }
+.px-safe   { padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right); }
+
+/* Touch target minimum (WCAG 2.5.5) */
+.min-h-touch { min-height: 44px; }
+.min-w-touch { min-width: 44px; }
+
+/* Horizontal scroll snap — for card strips on mobile.
+   overscroll-x contain: verhindert versehentlichen Safari-Back-Swipe (M17).
+   (-webkit-overflow-scrolling ist seit iOS 13 obsolet — entfernt, M16) */
+.scroll-x-snap {
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.scroll-x-snap::-webkit-scrollbar { display: none; }
+.snap-card { scroll-snap-align: start; }
+
+/* Reusable: hide scrollbar visually but keep scroll behaviour functional.
+   Use for floating side panels where the scrollbar track breaks the
+   surface aesthetic (e.g. GraphFilterSidebar overlay). */
+.scrollbar-none {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.scrollbar-none::-webkit-scrollbar { display: none; }
+
+/* iOS input zoom prevention — set font-size ≥ 16px on inputs */
+@media (max-width: 767px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="search"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Brave Shields + Aggressive Fingerprint Protection strip inline
+   color-scheme on form controls, which makes the OS-painted <option>
+   popup fall back to system light. Anchor color-scheme in CSS *and*
+   hard-paint <option> so the dropdown survives the strip. */
+:root {
+  color-scheme: dark;
+}
+select,
+option {
+  background-color: var(--color-bg-elevated);
+  color: var(--color-text-primary);
+}
+
+/* Main content top padding:
+   Mobile: below Dynamic Island + MobileNav (safe-area + 5.5rem = nav 3.5rem + 2rem breathing room)
+   Desktop: normal 1.5rem (md:pt-6 equivalent) */
+.main-content-pt {
+  padding-top: calc(env(safe-area-inset-top) + 5.5rem);
+}
+@media (min-width: 768px) {
+  .main-content-pt {
+    padding-top: 1.5rem;
+  }
+}
+
+/* ── Tab-Strip — horizontaler Scroller für Tab-Leisten (MOBILE-SPEC M17)
+   Problem: Tab-Leisten scrollen auf Mobile nicht und schneiden Tabs rechts ab.
+   Lösung: overflow-x-auto + scrollbar-none + overscroll-x-contain + snap.
+   Kinder erhalten scroll-snap-align: start via .tab-strip > * oder direkt.
+
+   Edge-Fade rechts als Scroll-Hinweis (statisch — stört nicht am Scroll-Ende,
+   verschwindet wenn kein overflow vorhanden ist weil mask außerhalb greift).
+   Nur auf Mobile aktiv (<768px), Desktop bleibt unverändert. */
+.tab-strip {
+  /* Mobile: horizontal scroll */
+  overflow-x: auto;
+  scrollbar-width: none;           /* Firefox */
+  -ms-overflow-style: none;        /* IE */
+  overscroll-behavior-x: contain;  /* M17: kein Back-Swipe */
+  scroll-snap-type: x proximity;
+  /* flex-Kinder bleiben in einer Zeile */
+  flex-wrap: nowrap !important;
+  /* Edge-Fade rechts als visueller Scroll-Hinweis */
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+}
+.tab-strip::-webkit-scrollbar { display: none; }
+
+/* Scroll-snap je Kind-Element */
+.tab-strip > * {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+}
+
+/* Desktop: keine Maske, kein erzwungenes nowrap */
+@media (min-width: 768px) {
+  .tab-strip {
+    overflow-x: visible;
+    -webkit-mask-image: none;
+    mask-image: none;
+    flex-wrap: wrap !important;
+    scroll-snap-type: none;
+    overscroll-behavior-x: auto;
+  }
+  .tab-strip > * {
+    flex-shrink: 1;
+  }
+}
+
+/* ── Settings-Nav: wie tab-strip aber ohne overflow-Reset auf Desktop
+   (Desktop-Nav braucht overflow-y:auto für vertikales Scrollen) */
+.tab-strip-nav {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 32px), transparent 100%);
+}
+.tab-strip-nav::-webkit-scrollbar { display: none; }
+.tab-strip-nav > * { scroll-snap-align: start; }
+
+@media (min-width: 768px) {
+  .tab-strip-nav {
+    -webkit-mask-image: none;
+    mask-image: none;
+    scroll-snap-type: none;
+    overscroll-behavior-x: auto;
+  }
+}
+
+/* ── Mobile Wave 3 — Touch-Sichtbarkeit (MOBILE-SPEC M5) ─────────────────────
+   Hover-only-Controls (opacity-0/hidden group-hover:) sind auf Touch unsichtbar.
+   .touch-visible macht sie immer sichtbar auf Geräten mit grobem Zeiger (Finger).
+   Sekundäre Aktionen erhalten opacity-60 statt 100 um Reihen nicht zu überladen.
+   Desktop-Verhalten bleibt UNVERÄNDERT — nur pointer:coarse betroffen.
+
+   Verwendung: Klasse touch-visible ZUSÄTZLICH zu den bestehenden Hover-Klassen.
+   Die bestehenden Klassen bleiben für Desktop-Hover-Verhalten erhalten.
+   ─────────────────────────────────────────────────────────────────────────── */
+@media (pointer: coarse) {
+  .touch-visible {
+    opacity: 1 !important;
+    display: flex !important;
+  }
+  /* Sekundäre Aktionen: sichtbar aber gedämpft (nicht überladen) */
+  .touch-visible-secondary {
+    opacity: 0.6 !important;
+    display: flex !important;
+  }
+}
+
+/* ── Touch :active-Feedback (MOBILE-SPEC M6) ────────────────────────────────
+   Generisches Tap-Feedback auf Touch-Geräten — kein grauer Blitz (schon via
+   -webkit-tap-highlight-color: transparent oben), aber visueller Press-State.
+   Kein Konflikt mit bestehenden :active-Definitionen (es gibt keine app-weit). */
+@media (pointer: coarse) {
+  :where(button, [role="button"]):active {
+    opacity: 0.7;
+  }
+}

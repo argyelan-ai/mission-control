@@ -1,0 +1,151 @@
+#!/bin/bash
+# Mission Control — Persistent Worker for {{ agent_name }}
+# Laeuft permanent in tmux session "{{ agent_slug }}", verarbeitet Tasks aus der Queue.
+
+AGENT_NAME="{{ agent_slug }}"
+AGENT_DIR="$HOME/.mc/agents/$AGENT_NAME"
+QUEUE_DIR="$AGENT_DIR/queue"
+SETTINGS="$AGENT_DIR/settings.json"
+CLI_BIN="{{ cli_bin }}"
+MODEL_PROFILES="{{ model_profiles }}"
+SHARED_ENV="{{ shared_env }}"
+AGENT_ENV="$AGENT_DIR/agent.env"
+
+mkdir -p "$QUEUE_DIR/pending" "$QUEUE_DIR/running" "$QUEUE_DIR/done" "$QUEUE_DIR/failed"
+LOCK_FILE="$AGENT_DIR/queue.lock"
+
+# Startup-Cleanup: Stale Lock freigeben (Worker startet frisch, kein Task laeuft gerade)
+if [ -d "$LOCK_FILE.d" ]; then
+  rmdir "$LOCK_FILE.d" 2>/dev/null
+  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [STARTUP] Stale Queue-Lock freigegeben"
+fi
+
+# Orphan-Recovery: running/*.json immer zurueck nach pending/ beim Start
+# (Worker startet neu = kein Task wird gerade verarbeitet, egal ob Session noch existiert)
+for _orphan in "$QUEUE_DIR/running"/*.json; do
+  [ -f "$_orphan" ] || continue
+  mv "$_orphan" "$QUEUE_DIR/pending/"
+  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [RECOVERY] Orphan zurueckgesetzt: $(basename "$_orphan")"
+done
+
+{% if not is_claude_bin %}
+# Shared Env laden (Modell-URLs, Flags) — nur fuer openclaude-Agents
+if [ -f "$SHARED_ENV" ]; then
+  set -a
+  source "$SHARED_ENV"
+  set +a
+fi
+{% endif %}
+
+# Agent-spezifische Env laden (MC_AGENT_TOKEN, CLAUDE_CONFIG_DIR) — ueberschreibt shared
+if [ -f "$AGENT_ENV" ]; then
+  set -a
+  source "$AGENT_ENV"
+  set +a
+fi
+
+export FREE_CODE_MODEL_PROFILES_FILE="$MODEL_PROFILES"
+export HOME="{{ home_dir }}"
+
+echo "[$(date '+%Y-%m-%dT%H:%M:%S')] {{ agent_name }} Worker gestartet. Warte auf Tasks in $QUEUE_DIR/pending/ ..."
+
+while true; do
+  for task_file in "$QUEUE_DIR/pending"/*.json; do
+    [ -f "$task_file" ] || continue
+
+    task_id=$(python3 -c "import json; d=json.load(open('$task_file')); print(d['task_id'])")
+    workspace=$(python3 -c "import json; d=json.load(open('$task_file')); print(d['workspace'])")
+    prompt_b64=$(python3 -c "import json; d=json.load(open('$task_file')); print(d['prompt_b64'])")
+
+    running_file="$QUEUE_DIR/running/$(basename "$task_file")"
+    # mkdir-basiertes Lock (atomar auf macOS + Linux, kein flock noetig)
+    if ! mkdir "$LOCK_FILE.d" 2>/dev/null; then
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [WARN] Queue-Lock belegt, ueberspringe $task_id"
+      continue
+    fi
+    mv "$task_file" "$running_file"
+
+    echo ""
+    echo "══════════════════════════════════════════════"
+    echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task gestartet: $task_id"
+    echo "Workspace: $workspace"
+    echo "══════════════════════════════════════════════"
+    echo ""
+
+    prompt_file="/tmp/mc_prompt_${task_id}.txt"
+    echo "$prompt_b64" | base64 -d > "$prompt_file"
+
+    cd "$workspace" 2>/dev/null || cd "$HOME"
+
+    "$CLI_BIN" \
+{%- if is_claude_bin %}
+      --model "{{ model }}" \
+{%- else %}
+      --settings "$SETTINGS" \
+      --verbose \
+{%- endif %}
+      --dangerously-skip-permissions \
+      --output-format stream-json \
+      --verbose \
+      -p "$(cat "$prompt_file")" | python3 -u -c "
+import sys, json
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        ev = json.loads(line)
+    except Exception:
+        print(line, flush=True)
+        continue
+    t = ev.get('type', '')
+    if t == 'assistant':
+        for block in ev.get('message', {}).get('content', []):
+            btype = block.get('type', '')
+            if btype == 'text':
+                text = block.get('text', '').strip()
+                if text:
+                    print(f'[AI] {text}', flush=True)
+            elif btype == 'tool_use':
+                name = block.get('name', '?')
+                inp = block.get('input', {})
+                inp_str = json.dumps(inp, ensure_ascii=False)[:300]
+                print(f'[TOOL] {name}  {inp_str}', flush=True)
+    elif t == 'user':
+        for block in ev.get('message', {}).get('content', []):
+            if block.get('type') == 'tool_result':
+                content = block.get('content', '')
+                if isinstance(content, list):
+                    content = ' '.join(c.get('text','') for c in content if c.get('type')=='text')
+                snippet = str(content).strip()[:200]
+                if snippet:
+                    print(f'[OUT]  {snippet}', flush=True)
+    elif t == 'result':
+        subtype = ev.get('subtype', '')
+        cost = ev.get('usage', {})
+        print(f'[DONE] {subtype}  tokens={cost}', flush=True)
+    elif t == 'system':
+        model = ev.get('model', '')
+        if model:
+            print(f'[SYS]  model={model}', flush=True)
+"
+    rm -f "$prompt_file"
+
+    EXIT_CODE=$?
+
+    echo ""
+    if [ "$EXIT_CODE" -eq 0 ]; then
+      mv "$running_file" "$QUEUE_DIR/done/"
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task erledigt: $task_id (exit=0)"
+    else
+      mv "$running_file" "$QUEUE_DIR/failed/"
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task fehlgeschlagen: $task_id (exit=$EXIT_CODE)"
+    fi
+    rmdir "$LOCK_FILE.d" 2>/dev/null
+
+    echo ""
+    echo "Warte auf naechsten Task ..."
+  done
+
+  sleep 1
+done

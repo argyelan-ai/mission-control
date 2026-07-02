@@ -1,0 +1,41 @@
+# docker-compose.override.example.yml
+#
+# Host-specific additions that do NOT belong in the shared docker-compose.yml.
+# Copy to `docker-compose.override.yml` (gitignored — docker compose picks it
+# up automatically) and uncomment only the blocks you actually use.
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# Note: `volumes` lists in an override are MERGED (appended) with the base
+# docker-compose.yml, so the entries below are additions, not replacements.
+
+services: {}
+
+# services:
+#   backend:
+#     volumes:
+#       # ── Remote runtime management via SSH (optional) ──────────────────
+#       # Needed only if MC manages LLM runtimes on a separate host (e.g. a
+#       # DGX box via DGX_SSH_HOST/DGX_SSH_USER in .env). Mounts your SSH keys
+#       # read-only into the backend container.
+#       - ~/.ssh:/home/mcuser/.ssh:ro
+#
+#       # ── free-code sandbox (optional, host-specific) ────────────────────
+#       # Local sandbox env for the free-code bridge agent. Paths are examples;
+#       # adjust to your machine. See FREE_CODE_PATH_MAPPINGS in .env.
+#       - /path/to/free-code-local/free-code.local.env:/home/mcuser/free-code.env:ro
+#       - /path/to/free-code-local/model-profiles.json:/home/mcuser/model-profiles.json:ro
+#       - /path/to/free-code-local/claude-config:/home/mcuser/.claude:rw
+#       - /path/to/FreeCode/projects:/home/mcuser/free-code-projects:rw
+#
+#   # ── HTTPS via your own certs (optional) ──────────────────────────────
+#   # The shipped Caddyfile serves plain HTTP on :80 (fine for localhost).
+#   # For TLS (e.g. Tailscale or LAN certs): copy caddy/Caddyfile.tls.example
+#   # to caddy/Caddyfile.local, put certs in caddy/certs/ (gitignored), then
+#   # mount your Caddyfile over the default one:
+#   caddy:
+#     volumes:
+#       - ./caddy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+#       - ./caddy/certs:/etc/caddy/certs:ro
+#       - caddy_data:/data
+#       - caddy_config:/config

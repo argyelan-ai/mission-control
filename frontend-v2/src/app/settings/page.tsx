@@ -1,0 +1,1856 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  User,
+  Shield,
+  Users,
+  Key,
+  KeyRound,
+  Zap,
+  SlidersHorizontal,
+  Keyboard,
+  Info,
+  Save,
+  Loader2,
+  Check,
+  AlertCircle,
+  Plus,
+  Eye,
+  EyeOff,
+  X,
+  Trash2,
+  Play,
+  ExternalLink,
+  DollarSign,
+  type LucideIcon,
+} from "lucide-react";
+import { api, setStoredUser } from "@/lib/api";
+import { useAppStore, type AuthUser } from "@/lib/store";
+import type { IntelligenceConfig, ProviderTemplate, SecretEntry } from "@/lib/types";
+import { cn } from "@/lib/utils";
+import AppShell from "@/components/layout/AppShell";
+import { CredentialsTab } from "@/components/settings/CredentialsTab";
+import { CostPricesTab } from "@/components/settings/CostPricesTab";
+import { C } from "@/lib/colors";
+
+// ── Section Registry ──────────────────────────────────────────────────────────
+
+interface SettingsSection {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  adminOnly?: boolean;
+}
+
+const SECTIONS: SettingsSection[] = [
+  { id: "profile", label: "Profil", icon: User },
+  { id: "security", label: "Sicherheit", icon: Shield },
+  { id: "autonomy", label: "Autonomy", icon: SlidersHorizontal, adminOnly: true },
+  { id: "intelligence", label: "Intelligence", icon: Zap, adminOnly: true },
+  { id: "apikeys", label: "API Keys", icon: Key, adminOnly: true },
+  { id: "credentials", label: "Credentials", icon: KeyRound, adminOnly: true },
+  { id: "costs", label: "Kosten", icon: DollarSign, adminOnly: true },
+  { id: "users", label: "Benutzer", icon: Users, adminOnly: true },
+  { id: "shortcuts", label: "Tastenkuerzel", icon: Keyboard },
+  { id: "about", label: "Ueber", icon: Info },
+];
+
+// ── Keyboard shortcuts reference ──────────────────────────────────────────────
+
+const SHORTCUTS = [
+  { keys: ["Cmd", "K"], description: "Command Palette oeffnen" },
+  { keys: ["Cmd", "B"], description: "Sidebar ein-/ausklappen" },
+  { keys: ["Cmd", "N"], description: "Neuer Task" },
+  { keys: ["Cmd", "Shift", "A"], description: "Alle Approvals genehmigen" },
+  { keys: ["Esc"], description: "Dialog/Palette schliessen" },
+  { keys: ["?"], description: "Hilfe (Command Palette)" },
+  { keys: ["g", "h"], description: "Gehe zu Home" },
+  { keys: ["g", "t"], description: "Gehe zu Tasks" },
+  { keys: ["g", "a"], description: "Gehe zu Agents" },
+  { keys: ["g", "i"], description: "Gehe zu Inbox" },
+  { keys: ["g", "s"], description: "Gehe zu Settings" },
+];
+
+// ── Timezones ─────────────────────────────────────────────────────────────────
+
+const TIMEZONES = [
+  "Europe/Berlin",
+  "Europe/Zurich",
+  "Europe/Vienna",
+  "Europe/London",
+  "Europe/Paris",
+  "Europe/Amsterdam",
+  "Europe/Rome",
+  "Europe/Madrid",
+  "Europe/Stockholm",
+  "Europe/Moscow",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Asia/Tokyo",
+  "Asia/Shanghai",
+  "Asia/Kolkata",
+  "Asia/Dubai",
+  "Australia/Sydney",
+  "Pacific/Auckland",
+  "UTC",
+];
+
+// ── Autonomy Labels ───────────────────────────────────────────────────────────
+
+const AUTONOMY_LABELS: Record<string, { label: string; desc: string }> = {
+  deploy: { label: "Deploy", desc: "Vercel/Cloudflare Deployments" },
+  external_post: { label: "External Post", desc: "Social Media, Emails" },
+  config_change: { label: "Config Change", desc: "System-Konfiguration aendern" },
+  browser_action: { label: "Browser Action", desc: "Webseiten besuchen" },
+  visual_review: { label: "Visual Review", desc: "Screenshot-Vergleiche" },
+  blocker_decision: { label: "Blocker Decision", desc: "Blockierte Tasks eskalieren" },
+  question: { label: "Question", desc: "Fragen an den Operator" },
+  code_change: { label: "Code Change", desc: "Code schreiben/aendern" },
+  mark_done: { label: "Mark Done", desc: "Tasks als erledigt markieren" },
+  dispatch_escalation: { label: "Dispatch Escalation", desc: "Agent reagiert nicht" },
+  recovery_failed: { label: "Recovery Failed", desc: "Automatische Recovery gescheitert" },
+};
+
+const LEVEL_OPTIONS = [
+  { value: "L1", label: "Auto", color: C.online },
+  { value: "L2", label: "Notify", color: C.warning },
+  { value: "L3", label: "Approve", color: C.error },
+];
+
+// ── Shared Components ─────────────────────────────────────────────────────────
+
+function SectionHeader({ title, description }: { title: string; description: string }) {
+  return (
+    <div className="mb-6">
+      <h2
+        className="text-base font-semibold"
+        style={{ color: "var(--color-text-primary)" }}
+      >
+        {title}
+      </h2>
+      <p
+        className="text-sm mt-1"
+        style={{ color: "var(--color-text-muted)" }}
+      >
+        {description}
+      </p>
+    </div>
+  );
+}
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label
+      className="text-xs font-medium uppercase tracking-widest block mb-1.5"
+      style={{ color: "var(--color-text-secondary)" }}
+    >
+      {children}
+    </label>
+  );
+}
+
+const inputBaseClasses =
+  "w-full rounded-lg px-3 py-2.5 text-sm outline-none transition-all duration-200";
+
+const cardStyle = {
+  background: C.bgSurface,
+  border: `1px solid ${C.border}`,
+  borderRadius: 12,
+} as const;
+
+function InputField({
+  value,
+  onChange,
+  placeholder,
+  type = "text",
+  readOnly,
+  rightElement,
+  ariaLabel,
+}: {
+  value: string;
+  onChange?: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  readOnly?: boolean;
+  rightElement?: React.ReactNode;
+  ariaLabel?: string;
+}) {
+  return (
+    <div className="relative">
+      <input
+        type={type}
+        value={value}
+        onChange={(e) => onChange?.(e.target.value)}
+        placeholder={placeholder}
+        aria-label={ariaLabel ?? placeholder}
+        readOnly={readOnly}
+        className={cn(
+          inputBaseClasses,
+          readOnly ? "opacity-50 cursor-not-allowed" : "cursor-text",
+          rightElement && "pr-10"
+        )}
+        style={{
+          backgroundColor: C.bgDeep,
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "rgba(255, 255, 255, 0.08)",
+          color: readOnly ? "var(--color-text-muted)" : "var(--color-text-primary)",
+        }}
+        onFocus={(e) => {
+          if (!readOnly) {
+            e.currentTarget.style.borderColor = C.borderAccent;
+          }
+        }}
+        onBlur={(e) => {
+          e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+        }}
+      />
+      {rightElement && (
+        <div className="absolute right-3 top-1/2 -translate-y-1/2">
+          {rightElement}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SaveButton({
+  onClick,
+  loading,
+  disabled,
+  success,
+  label = "Speichern",
+}: {
+  onClick: () => void;
+  loading: boolean;
+  disabled?: boolean;
+  success?: boolean;
+  label?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={loading || disabled}
+      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+      style={{
+        background: success
+          ? C.online
+          : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+      }}
+    >
+      {loading ? (
+        <Loader2 size={14} className="animate-spin" />
+      ) : success ? (
+        <Check size={14} />
+      ) : (
+        <Save size={14} />
+      )}
+      {success ? "Gespeichert" : label}
+    </button>
+  );
+}
+
+function ErrorBanner({ message }: { message: string }) {
+  return (
+    <div
+      className="flex items-center gap-2 text-xs rounded-lg px-3 py-2 mb-4"
+      style={{
+        backgroundColor: `${C.error}12`,
+        border: `1px solid ${C.error}33`,
+        color: C.error,
+      }}
+    >
+      <AlertCircle size={14} />
+      {message}
+    </div>
+  );
+}
+
+// ── Section transition wrapper ────────────────────────────────────────────────
+
+function SectionMotion({ children, sectionKey }: { children: React.ReactNode; sectionKey: string }) {
+  return (
+    <motion.div
+      key={sectionKey}
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      exit={{ opacity: 0, y: -4 }}
+      transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
+// ── Profile Section ───────────────────────────────────────────────────────────
+
+function ProfileSection() {
+  const { currentUser, setCurrentUser } = useAppStore();
+  const [name, setName] = useState("");
+  const [preferredName, setPreferredName] = useState("");
+  const [timezone, setTimezone] = useState("Europe/Berlin");
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  const { data: profile } = useQuery({
+    queryKey: ["profile"],
+    queryFn: api.auth.me,
+  });
+
+  useEffect(() => {
+    if (profile) {
+      setName(profile.name ?? "");
+      setPreferredName(profile.preferred_name ?? "");
+      setTimezone(profile.timezone ?? "Europe/Berlin");
+    }
+  }, [profile]);
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.auth.updateProfile({
+        name: name.trim(),
+        preferred_name: preferredName.trim(),
+        timezone,
+      }),
+    onSuccess: (updated) => {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 2000);
+      setError("");
+      if (currentUser) {
+        const newUser: AuthUser = { ...currentUser, name: updated.name };
+        setCurrentUser(newUser);
+        setStoredUser(newUser);
+      }
+    },
+    onError: (err: Error) => {
+      setError(err.message.replace(/^.*?:\s*/, "").replace(/^"/, "").replace(/"$/, ""));
+    },
+  });
+
+  const hasChanges =
+    profile &&
+    (name.trim() !== (profile.name ?? "") ||
+      preferredName.trim() !== (profile.preferred_name ?? "") ||
+      timezone !== (profile.timezone ?? "Europe/Berlin"));
+
+  return (
+    <SectionMotion sectionKey="profile">
+      <SectionHeader title="Profil" description="Deine persoenlichen Informationen." />
+
+      {error && <ErrorBanner message={error} />}
+
+      <div className="mc-card p-6 space-y-5" style={cardStyle}>
+        {/* Email (read-only) */}
+        <div>
+          <FieldLabel>E-Mail</FieldLabel>
+          <InputField value={profile?.email ?? ""} readOnly ariaLabel="E-Mail (schreibgeschützt)" />
+          <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
+            E-Mail kann nicht geaendert werden.
+          </p>
+        </div>
+
+        {/* Name */}
+        <div>
+          <FieldLabel>Name</FieldLabel>
+          <InputField
+            value={name}
+            onChange={setName}
+            placeholder="Dein vollstaendiger Name"
+          />
+        </div>
+
+        {/* Preferred Name */}
+        <div>
+          <FieldLabel>Anzeigename</FieldLabel>
+          <InputField
+            value={preferredName}
+            onChange={setPreferredName}
+            placeholder="Optional: wie du angesprochen werden moechtest"
+          />
+        </div>
+
+        {/* Timezone */}
+        <div>
+          <FieldLabel>Zeitzone</FieldLabel>
+          <select
+            value={timezone}
+            onChange={(e) => setTimezone(e.target.value)}
+            aria-label="Zeitzone auswählen"
+            className={inputBaseClasses}
+            style={{
+              backgroundColor: C.bgDeep,
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "rgba(255, 255, 255, 0.08)",
+              color: "var(--color-text-primary)",
+              cursor: "pointer",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = C.borderAccent;
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+            }}
+          >
+            {TIMEZONES.map((tz) => (
+              <option key={tz} value={tz}>
+                {tz.replace(/_/g, " ")}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Role (read-only display) */}
+        <div>
+          <FieldLabel>Rolle</FieldLabel>
+          <div className="flex items-center gap-2">
+            <span
+              className="px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider"
+              style={{
+                backgroundColor: C.accentSubtle,
+                color: C.accent,
+                border: `1px solid ${C.borderAccent}`,
+              }}
+            >
+              {currentUser?.role ?? "viewer"}
+            </span>
+            <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+              Kann nur von einem Admin geaendert werden.
+            </span>
+          </div>
+        </div>
+
+        {/* Save */}
+        <div className="pt-2">
+          <SaveButton
+            onClick={() => mutation.mutate()}
+            loading={mutation.isPending}
+            disabled={!hasChanges}
+            success={success}
+          />
+        </div>
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── Security Section ──────────────────────────────────────────────────────────
+
+function SecuritySection() {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showCurrent, setShowCurrent] = useState(false);
+  const [showNew, setShowNew] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.auth.updateProfile({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    onSuccess: () => {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      setError("");
+    },
+    onError: (err: Error) => {
+      setError(err.message.replace(/^.*?:\s*/, "").replace(/^"/, "").replace(/"$/, ""));
+    },
+  });
+
+  function handleSubmit() {
+    setError("");
+    if (newPassword.length < 6) {
+      setError("Neues Passwort muss mindestens 6 Zeichen lang sein.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError("Passwoerter stimmen nicht ueberein.");
+      return;
+    }
+    mutation.mutate();
+  }
+
+  const canSubmit =
+    currentPassword.length > 0 &&
+    newPassword.length >= 6 &&
+    confirmPassword.length > 0;
+
+  return (
+    <SectionMotion sectionKey="security">
+      <SectionHeader
+        title="Sicherheit"
+        description="Passwort aendern und Sicherheitseinstellungen verwalten."
+      />
+
+      {error && <ErrorBanner message={error} />}
+
+      <div className="mc-card p-6 space-y-5" style={cardStyle}>
+        <h3
+          className="text-sm font-medium"
+          style={{ color: "var(--color-text-primary)" }}
+        >
+          Passwort aendern
+        </h3>
+
+        <div>
+          <FieldLabel>Aktuelles Passwort</FieldLabel>
+          <InputField
+            type={showCurrent ? "text" : "password"}
+            value={currentPassword}
+            onChange={setCurrentPassword}
+            placeholder="Dein aktuelles Passwort"
+            rightElement={
+              <button
+                type="button"
+                onClick={() => setShowCurrent(!showCurrent)}
+                className="cursor-pointer"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                {showCurrent ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            }
+          />
+        </div>
+
+        <div>
+          <FieldLabel>Neues Passwort</FieldLabel>
+          <InputField
+            type={showNew ? "text" : "password"}
+            value={newPassword}
+            onChange={setNewPassword}
+            placeholder="Min. 6 Zeichen"
+            rightElement={
+              <button
+                type="button"
+                onClick={() => setShowNew(!showNew)}
+                className="cursor-pointer"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                {showNew ? <EyeOff size={14} /> : <Eye size={14} />}
+              </button>
+            }
+          />
+        </div>
+
+        <div>
+          <FieldLabel>Neues Passwort bestaetigen</FieldLabel>
+          <InputField
+            type="password"
+            value={confirmPassword}
+            onChange={setConfirmPassword}
+            placeholder="Nochmal eingeben"
+          />
+          {confirmPassword && newPassword !== confirmPassword && (
+            <p className="text-xs mt-1" style={{ color: C.error }}>
+              Passwoerter stimmen nicht ueberein.
+            </p>
+          )}
+        </div>
+
+        <SaveButton
+          onClick={handleSubmit}
+          loading={mutation.isPending}
+          disabled={!canSubmit}
+          success={success}
+          label="Passwort aendern"
+        />
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── Autonomy Section (Admin only) ─────────────────────────────────────────────
+
+function AutonomySection() {
+  const qc = useQueryClient();
+
+  const { data: config } = useQuery({
+    queryKey: ["autonomy-config"],
+    queryFn: api.settings.autonomy,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: (levels: Record<string, string>) =>
+      api.settings.updateAutonomy(levels),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["autonomy-config"] });
+    },
+  });
+
+  const levels = config?.levels ?? {};
+  const defaults = config?.defaults ?? {};
+
+  const handleChange = (action: string, newLevel: string) => {
+    updateMutation.mutate({ ...levels, [action]: newLevel });
+  };
+
+  return (
+    <SectionMotion sectionKey="autonomy">
+      <SectionHeader
+        title="Autonomy Levels"
+        description="Bestimme fuer jede Aktion, ob Agents autonom handeln (L1), dich informieren (L2) oder auf Genehmigung warten (L3)."
+      />
+
+      <div className="mc-card p-4 sm:p-6" style={cardStyle}>
+        {/* Desktop header row — hidden on mobile */}
+        <div
+          className="hidden sm:grid items-center gap-3 px-3 py-2 mb-1"
+          style={{
+            gridTemplateColumns: "1fr 80px 80px 80px",
+            color: "var(--color-text-muted)",
+          }}
+        >
+          <span className="text-xs font-medium uppercase tracking-wide">Aktion</span>
+          {LEVEL_OPTIONS.map((opt) => (
+            <span key={opt.value} className="text-xs font-medium text-center" style={{ color: opt.color }}>
+              {opt.label}
+            </span>
+          ))}
+        </div>
+
+        {/* Action Rows */}
+        <div className="flex flex-col gap-1.5">
+          {Object.keys(defaults).map((action) => {
+            const meta = AUTONOMY_LABELS[action] ?? { label: action, desc: "" };
+            const current = levels[action] ?? defaults[action] ?? "L3";
+            const isDefault = !levels[action] || levels[action] === defaults[action];
+
+            return (
+              <div
+                key={action}
+                className="rounded-md px-3 py-2.5 transition-colors"
+                style={{
+                  backgroundColor: "rgba(255, 255, 255, 0.02)",
+                  border: "1px solid rgba(255, 255, 255, 0.04)",
+                }}
+              >
+                {/* Mobile: stacked layout */}
+                <div className="sm:hidden">
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                      {meta.label}
+                    </span>
+                    {!isDefault && (
+                      <span className="text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
+                        custom
+                      </span>
+                    )}
+                  </div>
+                  {meta.desc && (
+                    <div className="text-xs mb-2.5" style={{ color: "var(--color-text-muted)" }}>{meta.desc}</div>
+                  )}
+                  <div className="grid grid-cols-3 gap-2">
+                    {LEVEL_OPTIONS.map((opt) => {
+                      const isActive = current === opt.value;
+                      return (
+                        <button
+                          key={opt.value}
+                          onClick={() => handleChange(action, opt.value)}
+                          disabled={updateMutation.isPending}
+                          className="flex items-center justify-center gap-1 h-8 rounded-md text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
+                          style={{
+                            backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
+                            color: isActive ? opt.color : "var(--color-text-muted)",
+                            border: `1px solid ${isActive ? opt.color : "rgba(255,255,255,0.06)"}`,
+                          }}
+                        >
+                          {isActive && <Check size={11} />}
+                          <span>{opt.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Desktop: grid layout */}
+                <div
+                  className="hidden sm:grid items-center gap-3"
+                  style={{ gridTemplateColumns: "1fr 80px 80px 80px" }}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                      {meta.label}
+                      {!isDefault && (
+                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
+                          custom
+                        </span>
+                      )}
+                    </div>
+                    {meta.desc && (
+                      <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>{meta.desc}</div>
+                    )}
+                  </div>
+                  {LEVEL_OPTIONS.map((opt) => {
+                    const isActive = current === opt.value;
+                    return (
+                      <button
+                        key={opt.value}
+                        onClick={() => handleChange(action, opt.value)}
+                        disabled={updateMutation.isPending}
+                        className="flex items-center justify-center h-7 rounded-md text-xs font-medium transition-all duration-200 cursor-pointer disabled:opacity-50"
+                        style={{
+                          backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
+                          color: isActive ? opt.color : "var(--color-text-muted)",
+                          border: `1px solid ${isActive ? opt.color : "rgba(255,255,255,0.06)"}`,
+                        }}
+                      >
+                        {isActive && <Check size={12} className="mr-0.5" />}
+                        {opt.value}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 text-xs" style={{ color: "var(--color-text-muted)" }}>
+          L1 = Auto | L2 = Notify | L3 = Approve
+        </div>
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── Intelligence Section (Admin only) ─────────────────────────────────────────
+
+function IntelligenceSection() {
+  const queryClient = useQueryClient();
+  const [config, setConfig] = useState<IntelligenceConfig | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [triggerSuccess, setTriggerSuccess] = useState(false);
+  const [error, setError] = useState("");
+
+  const { data, isLoading } = useQuery({
+    queryKey: ["intelligence-config"],
+    queryFn: api.intelligence.config,
+  });
+
+  useEffect(() => {
+    if (data) setConfig(data);
+  }, [data]);
+
+  const saveMutation = useMutation({
+    mutationFn: (c: IntelligenceConfig) => api.intelligence.updateConfig(c),
+    onSuccess: () => {
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 2000);
+      setError("");
+      queryClient.invalidateQueries({ queryKey: ["intelligence-config"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  const triggerMutation = useMutation({
+    mutationFn: () => api.intelligence.trigger(),
+    onSuccess: () => {
+      setTriggerSuccess(true);
+      setTimeout(() => setTriggerSuccess(false), 3000);
+      queryClient.invalidateQueries({ queryKey: ["intelligence-insights"] });
+    },
+    onError: (err: Error) => setError(err.message),
+  });
+
+  if (isLoading || !config) {
+    return (
+      <SectionMotion sectionKey="intelligence">
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="animate-spin" size={20} style={{ color: "var(--color-text-muted)" }} />
+        </div>
+      </SectionMotion>
+    );
+  }
+
+  const update = (patch: Partial<IntelligenceConfig>) => setConfig({ ...config, ...patch });
+
+  return (
+    <SectionMotion sectionKey="intelligence">
+      <SectionHeader
+        title="Intelligence Service"
+        description="Konfiguration fuer automatische Analyse und LLM-Destillation."
+      />
+
+      {error && <ErrorBanner message={error} />}
+
+      <div className="space-y-6">
+        {/* Enabled Toggle */}
+        <div className="mc-card p-5 flex items-center justify-between" style={cardStyle}>
+          <div>
+            <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+              Service aktiv
+            </span>
+            <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+              Periodische Analyse im Hintergrund ausfuehren.
+            </p>
+          </div>
+          <button
+            onClick={() => update({ enabled: !config.enabled })}
+            className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
+            style={{
+              backgroundColor: config.enabled ? C.accent : "rgba(255, 255, 255, 0.06)",
+              border: config.enabled ? "none" : "1px solid rgba(255, 255, 255, 0.08)",
+            }}
+          >
+            <span
+              className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform"
+              style={{ left: config.enabled ? "calc(100% - 22px)" : "2px" }}
+            />
+          </button>
+        </div>
+
+        {/* Analyse */}
+        <div className="mc-card p-5 space-y-4" style={cardStyle}>
+          <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+            Analyse
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <FieldLabel>Analyse-Intervall (Sekunden)</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.interval_seconds)}
+                onChange={(v) => update({ interval_seconds: Math.max(60, parseInt(v) || 60) })}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>Min. 60s</p>
+            </div>
+            <div>
+              <FieldLabel>Analyse-Fenster (Tage)</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.analysis_window_days)}
+                onChange={(v) => update({ analysis_window_days: Math.max(1, parseInt(v) || 1) })}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Ollama / LLM */}
+        <div className="mc-card p-5 space-y-4" style={cardStyle}>
+          <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+            Ollama / LLM
+          </h3>
+          <div>
+            <FieldLabel>Modell</FieldLabel>
+            <InputField
+              value={config.ollama_model}
+              onChange={(v) => update({ ollama_model: v })}
+              placeholder="qwen2.5-coder:14b"
+            />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <FieldLabel>Temperatur</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.temperature)}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  if (!isNaN(n)) update({ temperature: Math.min(1, Math.max(0, n)) });
+                }}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>0.0 - 1.0</p>
+            </div>
+            <div>
+              <FieldLabel>Max Tokens</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.max_tokens)}
+                onChange={(v) => update({ max_tokens: Math.min(8192, Math.max(100, parseInt(v) || 100)) })}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>100 - 8192</p>
+            </div>
+          </div>
+          <div>
+            <FieldLabel>System-Prompt</FieldLabel>
+            <textarea
+              aria-label="System-Prompt"
+              value={config.system_prompt}
+              onChange={(e) => update({ system_prompt: e.target.value })}
+              rows={6}
+              placeholder="Leer lassen fuer Standard-Prompt"
+              className={cn(inputBaseClasses, "resize-y")}
+              style={{
+                backgroundColor: C.bgDeep,
+                borderWidth: 1,
+                borderStyle: "solid",
+                borderColor: "rgba(255, 255, 255, 0.08)",
+                color: "var(--color-text-primary)",
+              }}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = C.borderAccent;
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+              }}
+            />
+            <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
+              Leer lassen fuer Standard-Prompt. Analyse-Daten werden automatisch angehaengt.
+            </p>
+          </div>
+        </div>
+
+        {/* Schwellenwerte */}
+        <div className="mc-card p-5 space-y-4" style={cardStyle}>
+          <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+            Schwellenwerte
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <FieldLabel>Outlier-Multiplikator</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.outlier_multiplier)}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  if (!isNaN(n) && n > 1) update({ outlier_multiplier: n });
+                }}
+              />
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>&gt;1.0x</p>
+            </div>
+            <div>
+              <FieldLabel>Success Rate Min. (%)</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.success_rate_threshold)}
+                onChange={(v) => {
+                  const n = parseFloat(v);
+                  if (!isNaN(n)) update({ success_rate_threshold: Math.min(100, Math.max(0, n)) });
+                }}
+              />
+            </div>
+            <div>
+              <FieldLabel>Failure Max.</FieldLabel>
+              <InputField
+                type="number"
+                value={String(config.failure_count_threshold)}
+                onChange={(v) => update({ failure_count_threshold: Math.max(1, parseInt(v) || 1) })}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="flex items-center gap-3 pt-2">
+          <SaveButton
+            onClick={() => saveMutation.mutate(config)}
+            loading={saveMutation.isPending}
+            success={success}
+          />
+          <button
+            onClick={() => triggerMutation.mutate()}
+            disabled={triggerMutation.isPending}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            style={{
+              backgroundColor: triggerSuccess ? C.online : "transparent",
+              color: triggerSuccess ? "white" : "var(--color-text-primary)",
+              border: triggerSuccess ? "none" : "1px solid rgba(255, 255, 255, 0.08)",
+            }}
+          >
+            {triggerMutation.isPending ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : triggerSuccess ? (
+              <Check size={14} />
+            ) : (
+              <Play size={14} />
+            )}
+            {triggerSuccess ? "Analyse gestartet" : "Jetzt analysieren"}
+          </button>
+        </div>
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── API Keys Section (Admin only) ─────────────────────────────────────────────
+
+function ApiKeysSection() {
+  const queryClient = useQueryClient();
+  const [addingKey, setAddingKey] = useState<string | null>(null);
+  const [newValue, setNewValue] = useState("");
+  const [editingKey, setEditingKey] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState("");
+  const [showValue, setShowValue] = useState<string | null>(null);
+
+  const { data: providers } = useQuery<ProviderTemplate[]>({
+    queryKey: ["secret-providers"],
+    queryFn: () => api.secrets.providers(),
+  });
+
+  const { data: secrets, isLoading } = useQuery<SecretEntry[]>({
+    queryKey: ["secrets"],
+    queryFn: () => api.secrets.list(),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: (data: { key: string; value: string; provider?: string; label?: string; description?: string }) =>
+      api.secrets.create(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["secrets"] });
+      setAddingKey(null);
+      setNewValue("");
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: string }) =>
+      api.secrets.update(key, { value }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["secrets"] });
+      setEditingKey(null);
+      setEditValue("");
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (key: string) => api.secrets.delete(key),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["secrets"] });
+    },
+  });
+
+  const secretsByKey = new Map(secrets?.map((s) => [s.key, s]) ?? []);
+
+  return (
+    <SectionMotion sectionKey="apikeys">
+      <SectionHeader
+        title="API Keys"
+        description="API-Schluessel fuer AI-Provider und Integrationen. Alle Keys werden verschluesselt gespeichert. Provider-Health (LM Studio / Ollama / vLLM / Anthropic Live-Status) siehe /runtimes."
+      />
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="animate-spin" size={20} style={{ color: "var(--color-text-muted)" }} />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {(providers ?? []).map((tmpl) => {
+            const existing = secretsByKey.get(tmpl.key);
+            const isSet = !!existing;
+            const isAdding = addingKey === tmpl.key;
+            const isEditing = editingKey === tmpl.key;
+
+            return (
+              <div
+                key={tmpl.key}
+                className="mc-card p-4 transition-colors"
+                style={cardStyle}
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="text-sm font-medium"
+                        style={{ color: "var(--color-text-primary)" }}
+                      >
+                        {tmpl.label}
+                      </span>
+                      <span
+                        className="text-[10px] px-1.5 py-0.5 rounded uppercase"
+                        style={{
+                          backgroundColor: isSet
+                            ? "rgba(0, 204, 136, 0.1)"
+                            : "rgba(255, 255, 255, 0.04)",
+                          color: isSet ? C.online : "var(--color-text-muted)",
+                        }}
+                      >
+                        {isSet ? "Gesetzt" : "Nicht gesetzt"}
+                      </span>
+                    </div>
+                    <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                      {tmpl.description}
+                    </p>
+                    {existing && (
+                      <div
+                        className="text-xs font-mono mt-1.5"
+                        style={{ color: "var(--color-text-secondary)" }}
+                      >
+                        {existing.value_masked}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center gap-1 shrink-0">
+                    {existing ? (
+                      <>
+                        <button
+                          onClick={() => {
+                            setEditingKey(isEditing ? null : tmpl.key);
+                            setEditValue("");
+                          }}
+                          className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                          style={{ color: "var(--color-text-secondary)" }}
+                        >
+                          {isEditing ? "Abbrechen" : "Aendern"}
+                        </button>
+                        <button
+                          onClick={() => {
+                            if (confirm(`${tmpl.label} wirklich loeschen?`)) {
+                              deleteMutation.mutate(tmpl.key);
+                            }
+                          }}
+                          className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                          style={{ color: C.error }}
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setAddingKey(isAdding ? null : tmpl.key);
+                          setNewValue("");
+                        }}
+                        className="flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                        style={{
+                          backgroundColor: isAdding
+                            ? "rgba(255, 255, 255, 0.04)"
+                            : C.accentSubtle,
+                          color: isAdding ? "var(--color-text-muted)" : C.accent,
+                        }}
+                      >
+                        {isAdding ? <X size={12} /> : <Plus size={12} />}
+                        {isAdding ? "Abbrechen" : "Hinzufuegen"}
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Add form */}
+                {isAdding && (
+                  <div
+                    className="mt-3 pt-3 border-t flex gap-2"
+                    style={{ borderColor: "rgba(255, 255, 255, 0.06)" }}
+                  >
+                    <InputField
+                      type={showValue === tmpl.key ? "text" : "password"}
+                      value={newValue}
+                      onChange={setNewValue}
+                      placeholder={tmpl.placeholder}
+                      rightElement={
+                        <button
+                          type="button"
+                          onClick={() => setShowValue(showValue === tmpl.key ? null : tmpl.key)}
+                          className="cursor-pointer"
+                          style={{ color: "var(--color-text-muted)" }}
+                        >
+                          {showValue === tmpl.key ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      }
+                    />
+                    <button
+                      onClick={() => {
+                        if (newValue) {
+                          createMutation.mutate({
+                            key: tmpl.key,
+                            value: newValue,
+                            provider: tmpl.provider,
+                            label: tmpl.label,
+                            description: tmpl.description,
+                          });
+                        }
+                      }}
+                      disabled={!newValue || createMutation.isPending}
+                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-white"
+                      style={{
+                        background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+                      }}
+                    >
+                      {createMutation.isPending ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        "Speichern"
+                      )}
+                    </button>
+                  </div>
+                )}
+
+                {/* Edit form */}
+                {isEditing && (
+                  <div
+                    className="mt-3 pt-3 border-t flex gap-2"
+                    style={{ borderColor: "rgba(255, 255, 255, 0.06)" }}
+                  >
+                    <InputField
+                      type={showValue === tmpl.key ? "text" : "password"}
+                      value={editValue}
+                      onChange={setEditValue}
+                      placeholder="Neuer Wert..."
+                      rightElement={
+                        <button
+                          type="button"
+                          onClick={() => setShowValue(showValue === tmpl.key ? null : tmpl.key)}
+                          className="cursor-pointer"
+                          style={{ color: "var(--color-text-muted)" }}
+                        >
+                          {showValue === tmpl.key ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      }
+                    />
+                    <button
+                      onClick={() => {
+                        if (editValue) {
+                          updateMutation.mutate({ key: tmpl.key, value: editValue });
+                        }
+                      }}
+                      disabled={!editValue || updateMutation.isPending}
+                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-white"
+                      style={{
+                        background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+                      }}
+                    >
+                      {updateMutation.isPending ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        "Aktualisieren"
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </SectionMotion>
+  );
+}
+
+// ── Users Section (Admin only) ────────────────────────────────────────────────
+
+function UsersSection() {
+  const queryClient = useQueryClient();
+  const [showCreateForm, setShowCreateForm] = useState(false);
+
+  const { data: users, isLoading } = useQuery({
+    queryKey: ["admin-users"],
+    queryFn: api.auth.users.list,
+  });
+
+  return (
+    <SectionMotion sectionKey="users">
+      <SectionHeader
+        title="Benutzer verwalten"
+        description="Benutzer erstellen, Rollen zuweisen und Konten verwalten."
+      />
+
+      {/* Create button */}
+      <div className="flex justify-end mb-4">
+        <button
+          onClick={() => setShowCreateForm(!showCreateForm)}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer text-white"
+          style={{
+            background: showCreateForm
+              ? "transparent"
+              : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+            color: showCreateForm ? "var(--color-text-secondary)" : "white",
+            border: showCreateForm ? "1px solid rgba(255, 255, 255, 0.08)" : "none",
+          }}
+        >
+          {showCreateForm ? (
+            <>
+              <X size={12} /> Abbrechen
+            </>
+          ) : (
+            <>
+              <Plus size={12} /> Neuer Benutzer
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Create form */}
+      {showCreateForm && (
+        <CreateUserForm
+          onCreated={() => {
+            setShowCreateForm(false);
+            queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+          }}
+        />
+      )}
+
+      {/* Users list */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="animate-spin" size={20} style={{ color: "var(--color-text-muted)" }} />
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {users?.map((user) => (
+            <UserRow
+              key={user.id}
+              user={user}
+              onUpdated={() =>
+                queryClient.invalidateQueries({ queryKey: ["admin-users"] })
+              }
+            />
+          ))}
+        </div>
+      )}
+    </SectionMotion>
+  );
+}
+
+// ── Create User Form ──────────────────────────────────────────────────────────
+
+function CreateUserForm({ onCreated }: { onCreated: () => void }) {
+  const [email, setEmail] = useState("");
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [role, setRole] = useState("operator");
+  const [error, setError] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.auth.users.create({ email: email.trim(), name: name.trim(), password, role }),
+    onSuccess: () => {
+      onCreated();
+      setError("");
+    },
+    onError: (err: Error) => {
+      setError(err.message.replace(/^.*?:\s*/, "").replace(/^"/, "").replace(/"$/, ""));
+    },
+  });
+
+  return (
+    <div className="mc-card p-5 mb-4 space-y-4" style={cardStyle}>
+      {error && <ErrorBanner message={error} />}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <FieldLabel>Name</FieldLabel>
+          <InputField value={name} onChange={setName} placeholder="Name" />
+        </div>
+        <div>
+          <FieldLabel>E-Mail</FieldLabel>
+          <InputField value={email} onChange={setEmail} placeholder="user@example.com" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <FieldLabel>Passwort</FieldLabel>
+          <InputField
+            type="password"
+            value={password}
+            onChange={setPassword}
+            placeholder="Min. 6 Zeichen"
+          />
+        </div>
+        <div>
+          <FieldLabel>Rolle</FieldLabel>
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            aria-label="Rolle auswählen"
+            className={inputBaseClasses}
+            style={{
+              backgroundColor: C.bgDeep,
+              borderWidth: 1,
+              borderStyle: "solid",
+              borderColor: "rgba(255, 255, 255, 0.08)",
+              color: "var(--color-text-primary)",
+              cursor: "pointer",
+            }}
+            onFocus={(e) => {
+              e.currentTarget.style.borderColor = C.borderAccent;
+            }}
+            onBlur={(e) => {
+              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+            }}
+          >
+            <option value="admin">Admin</option>
+            <option value="operator">Operator</option>
+            <option value="viewer">Viewer</option>
+          </select>
+        </div>
+      </div>
+
+      <SaveButton
+        onClick={() => mutation.mutate()}
+        loading={mutation.isPending}
+        disabled={!email.trim() || !name.trim() || password.length < 6}
+        label="Benutzer erstellen"
+      />
+    </div>
+  );
+}
+
+// ── User Row ──────────────────────────────────────────────────────────────────
+
+function UserRow({
+  user,
+  onUpdated,
+}: {
+  user: AuthUser & { is_active: boolean; has_password: boolean; created_at: string };
+  onUpdated: () => void;
+}) {
+  const currentUser = useAppStore((s) => s.currentUser);
+  const isSelf = currentUser?.id === user.id;
+  const [editing, setEditing] = useState(false);
+  const [role, setRole] = useState(user.role);
+  const [error, setError] = useState("");
+
+  const updateMutation = useMutation({
+    mutationFn: (data: { role?: string; is_active?: boolean }) =>
+      api.auth.users.update(user.id, data),
+    onSuccess: () => {
+      onUpdated();
+      setEditing(false);
+      setError("");
+    },
+    onError: (err: Error) => {
+      setError(err.message.replace(/^.*?:\s*/, "").replace(/^"/, "").replace(/"$/, ""));
+    },
+  });
+
+  const roleColors: Record<string, { bg: string; text: string }> = {
+    admin: { bg: C.accentSubtle, text: C.accent },
+    operator: { bg: `${C.warning}1F`, text: C.warning },
+    viewer: { bg: "rgba(255, 255, 255, 0.04)", text: "var(--color-text-muted)" },
+  };
+
+  const rc = roleColors[user.role] ?? roleColors.viewer;
+
+  return (
+    <div
+      className="mc-card px-4 py-3 transition-colors"
+      style={{ ...cardStyle, opacity: user.is_active ? 1 : 0.5 }}
+    >
+      {/* Top row: avatar + info + role */}
+      <div className="flex items-center gap-3">
+        {/* Avatar circle */}
+        <div
+          className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-sm font-semibold"
+          style={{
+            backgroundColor: "rgba(255, 255, 255, 0.04)",
+            color: "var(--color-text-secondary)",
+          }}
+        >
+          {(user.name ?? "?").charAt(0).toUpperCase()}
+        </div>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span
+              className="text-sm font-medium"
+              style={{ color: "var(--color-text-primary)" }}
+            >
+              {user.name}
+            </span>
+            {isSelf && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{
+                  backgroundColor: "rgba(255, 255, 255, 0.04)",
+                  color: "var(--color-text-muted)",
+                }}
+              >
+                Du
+              </span>
+            )}
+            {!user.is_active && (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded"
+                style={{
+                  backgroundColor: `${C.error}1F`,
+                  color: C.error,
+                }}
+              >
+                Deaktiviert
+              </span>
+            )}
+            {/* Role badge — inline with name */}
+            {!editing ? (
+              <span
+                className="px-1.5 py-0.5 rounded text-[10px] font-medium uppercase"
+                style={{ backgroundColor: rc.bg, color: rc.text }}
+              >
+                {user.role}
+              </span>
+            ) : (
+              <select
+                aria-label="Rolle ändern"
+                value={role}
+                onChange={(e) => setRole(e.target.value)}
+                className="rounded px-2 py-1 text-xs outline-none cursor-pointer"
+                style={{
+                  backgroundColor: C.bgDeep,
+                  border: "1px solid rgba(255, 255, 255, 0.08)",
+                  color: "var(--color-text-primary)",
+                }}
+              >
+                <option value="admin">Admin</option>
+                <option value="operator">Operator</option>
+                <option value="viewer">Viewer</option>
+              </select>
+            )}
+          </div>
+          <div className="text-xs truncate" style={{ color: "var(--color-text-muted)" }}>
+            {user.email}
+          </div>
+        </div>
+      </div>
+
+      {/* Actions row — below on all sizes */}
+      {!isSelf && (
+        <div className="flex items-center gap-1 mt-2 pl-12">
+          {editing ? (
+            <>
+              <button
+                onClick={() => updateMutation.mutate({ role })}
+                disabled={updateMutation.isPending}
+                className="px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors text-white"
+                style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
+              >
+                {updateMutation.isPending ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  "Speichern"
+                )}
+              </button>
+              <button
+                onClick={() => {
+                  setEditing(false);
+                  setRole(user.role);
+                  setError("");
+                }}
+                className="px-2 py-1 rounded text-xs cursor-pointer"
+                style={{ color: "var(--color-text-muted)" }}
+              >
+                Abbrechen
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                onClick={() => setEditing(true)}
+                className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                style={{ color: "var(--color-text-secondary)" }}
+              >
+                Bearbeiten
+              </button>
+              <button
+                onClick={() =>
+                  updateMutation.mutate({ is_active: !user.is_active })
+                }
+                className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
+                style={{
+                  color: user.is_active ? C.error : C.online,
+                }}
+              >
+                {user.is_active ? "Deaktivieren" : "Aktivieren"}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {error && (
+        <div className="text-xs" style={{ color: C.error }}>
+          {error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Shortcuts Section ─────────────────────────────────────────────────────────
+
+function ShortcutsSection() {
+  const stagger = {
+    initial: { opacity: 0, y: 8 },
+    animate: (i: number) => ({
+      opacity: 1,
+      y: 0,
+      transition: { delay: i * 0.05, duration: 0.3, ease: [0.16, 1, 0.3, 1] },
+    }),
+  };
+
+  return (
+    <SectionMotion sectionKey="shortcuts">
+      <SectionHeader
+        title="Tastenkuerzel"
+        description="Vim-Style Chord-Shortcuts: druecke g gefolgt von einem Buchstaben"
+      />
+
+      <div className="mc-card p-6" style={cardStyle}>
+        <div className="space-y-1">
+          {SHORTCUTS.map((shortcut, i) => (
+            <motion.div
+              key={shortcut.description}
+              custom={i}
+              initial="initial"
+              animate="animate"
+              variants={stagger}
+              className="flex items-center justify-between py-2.5 px-3 rounded-lg transition-colors"
+              style={{
+                backgroundColor:
+                  i % 2 === 0 ? "rgba(255, 255, 255, 0.02)" : "transparent",
+              }}
+            >
+              <span className="text-sm" style={{ color: "var(--color-text-body)" }}>
+                {shortcut.description}
+              </span>
+              <div className="flex items-center gap-1">
+                {shortcut.keys.map((key, j) => (
+                  <span key={j}>
+                    {j > 0 && (
+                      <span
+                        className="text-xs mx-0.5"
+                        style={{ color: "var(--color-text-muted)" }}
+                      >
+                        +
+                      </span>
+                    )}
+                    <kbd
+                      className="inline-block px-2 py-1 rounded text-xs font-mono"
+                      style={{
+                        backgroundColor: "rgba(255, 255, 255, 0.05)",
+                        border: "1px solid rgba(255, 255, 255, 0.08)",
+                        color: "var(--color-text-secondary)",
+                        boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
+                      }}
+                    >
+                      {key}
+                    </kbd>
+                  </span>
+                ))}
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── About Section ─────────────────────────────────────────────────────────────
+
+function AboutSection() {
+  const { data: version } = useQuery({
+    queryKey: ["system-version"],
+    queryFn: api.system.version,
+    staleTime: 60 * 60 * 1000,
+  });
+  return (
+    <SectionMotion sectionKey="about">
+      <SectionHeader title="Ueber" description="System-Informationen und Links." />
+
+      <div className="space-y-6">
+        {/* System info */}
+        <div className="mc-card p-6" style={cardStyle}>
+          <h3
+            className="text-sm font-semibold mb-6"
+            style={{ color: "var(--color-text-primary)" }}
+          >
+            System
+          </h3>
+          <div className="space-y-4">
+            {[
+              { label: "Version", value: version?.current ?? "…" },
+              { label: "Frontend", value: "Next.js 15 + TypeScript + Tailwind v4" },
+              { label: "Backend", value: "FastAPI + PostgreSQL + Redis" },
+            ].map(({ label, value }) => (
+              <div key={label} className="flex items-center justify-between">
+                <span className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
+                  {label}
+                </span>
+                <span className="text-sm font-mono" style={{ color: "var(--color-text-primary)" }}>
+                  {value}
+                </span>
+              </div>
+            ))}
+            {version?.update_available && version.release_url && (
+              <div className="flex items-center justify-between pt-2" style={{ borderTop: "1px solid var(--color-border)" }}>
+                <span className="text-sm" style={{ color: "var(--color-warning)" }}>
+                  Update verfuegbar: {version.latest}
+                </span>
+                <a
+                  href={version.release_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-mono hover:underline"
+                  style={{ color: "var(--color-accent)" }}
+                >
+                  Release-Notes →
+                </a>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Links */}
+        <div className="mc-card p-6" style={cardStyle}>
+          <h3
+            className="text-sm font-semibold mb-4"
+            style={{ color: "var(--color-text-primary)" }}
+          >
+            Links
+          </h3>
+          <div className="space-y-2">
+            <a
+              href={`https://github.com/${process.env.NEXT_PUBLIC_GITHUB_OWNER || "your-github-user"}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-sm transition-colors"
+              style={{ color: "var(--color-text-secondary)" }}
+              onMouseEnter={(e) =>
+                (e.currentTarget.style.color = C.accent)
+              }
+              onMouseLeave={(e) =>
+                (e.currentTarget.style.color = "var(--color-text-secondary)")
+              }
+            >
+              <ExternalLink size={13} />
+              GitHub
+            </a>
+          </div>
+        </div>
+
+        {/* Credits */}
+        <div
+          className="text-center py-4 text-xs"
+          style={{ color: "var(--color-text-muted)" }}
+        >
+          Built with care by the Operator & Claude
+        </div>
+      </div>
+    </SectionMotion>
+  );
+}
+
+// ── Main Page ─────────────────────────────────────────────────────────────────
+
+function SettingsContent() {
+  const [activeSection, setActiveSection] = useState("profile");
+  const currentUser = useAppStore((s) => s.currentUser);
+  const isAdmin = currentUser?.role === "admin";
+
+  const visibleSections = SECTIONS.filter((s) => !s.adminOnly || isAdmin);
+
+  return (
+    <div className="h-full flex flex-col overflow-hidden md:-m-6">
+      {/* Header */}
+      <motion.div
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="shrink-0 px-4 py-4 md:px-6"
+        style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.04)" }}
+      >
+        <h1 className="text-heading-page">Einstellungen</h1>
+        <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
+          Profil, Sicherheit, System-Konfiguration
+        </p>
+      </motion.div>
+
+      <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+        {/* Left: Section Nav (glass sidebar) */}
+        <motion.nav
+          initial={{ opacity: 0, x: -8 }}
+          animate={{ opacity: 1, x: 0 }}
+          transition={{ delay: 0.1, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r overflow-x-auto md:overflow-y-auto py-3 tab-strip-nav"
+          style={{
+            borderColor: "rgba(255, 255, 255, 0.04)",
+            backgroundColor: "rgba(255, 255, 255, 0.01)",
+          }}
+        >
+          <ul className="flex md:flex-col gap-1 md:gap-0.5 px-2 min-w-max md:min-w-0">
+            {visibleSections.map((section) => {
+              const Icon = section.icon;
+              const isActive = activeSection === section.id;
+              return (
+                <li key={section.id}>
+                  <button
+                    onClick={() => setActiveSection(section.id)}
+                    className={cn(
+                      "relative flex items-center gap-3 w-full px-3 py-2 rounded-lg text-sm transition-all duration-200 cursor-pointer",
+                      isActive ? "font-medium" : ""
+                    )}
+                    style={{
+                      color: isActive
+                        ? "var(--color-text-primary)"
+                        : "var(--color-text-secondary)",
+                      backgroundColor: isActive
+                        ? C.accentSubtle
+                        : "transparent",
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.03)";
+                      }
+                    }}
+                    onMouseLeave={(e) => {
+                      if (!isActive) {
+                        e.currentTarget.style.backgroundColor = "transparent";
+                      }
+                    }}
+                  >
+                    {isActive && (
+                      <motion.div
+                        layoutId="settings-section-indicator"
+                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
+                        style={{ backgroundColor: C.accent }}
+                        transition={{ type: "spring", stiffness: 380, damping: 30 }}
+                      />
+                    )}
+                    <Icon
+                      size={16}
+                      style={{
+                        color: isActive ? C.accent : undefined,
+                      }}
+                    />
+                    <span className="whitespace-nowrap">{section.label}</span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </motion.nav>
+
+        {/* Right: Section Content */}
+        <div className="flex-1 overflow-y-auto p-4 md:p-6 min-w-0">
+          <div className="max-w-2xl min-w-0">
+            <AnimatePresence mode="wait">
+              {activeSection === "profile" && <ProfileSection />}
+              {activeSection === "security" && <SecuritySection />}
+              {activeSection === "autonomy" && isAdmin && <AutonomySection />}
+              {activeSection === "intelligence" && isAdmin && <IntelligenceSection />}
+              {activeSection === "apikeys" && isAdmin && <ApiKeysSection />}
+              {activeSection === "credentials" && isAdmin && <CredentialsTab />}
+              {activeSection === "costs" && isAdmin && <CostPricesTab />}
+              {activeSection === "users" && isAdmin && <UsersSection />}
+              {activeSection === "shortcuts" && <ShortcutsSection />}
+              {activeSection === "about" && <AboutSection />}
+            </AnimatePresence>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function SettingsPage() {
+  return (
+    <AppShell>
+      <SettingsContent />
+    </AppShell>
+  );
+}

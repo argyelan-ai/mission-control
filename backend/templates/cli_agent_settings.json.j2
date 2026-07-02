@@ -1,0 +1,7 @@
+{
+  "systemPrompt": {{ system_prompt | tojson }},
+  "model": "{{ model }}",
+  "enabledPlugins": {{ enabled_plugins | tojson(indent=4) }},
+  {% if extra_marketplaces %}"extraKnownMarketplaces": {{ extra_marketplaces | tojson(indent=4) }},
+  {% endif %}"skipDangerousModePermissionPrompt": true
+}

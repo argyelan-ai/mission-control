@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.boss</string>
+    <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/YOUR_USER/.mc/agents/boss-host/entrypoint.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/.mc/agents/boss-host/logs/launchd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/.mc/agents/boss-host/logs/launchd.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/Users/YOUR_USER/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>/Users/YOUR_USER</string>
+    </dict>
+</dict>
+</plist>

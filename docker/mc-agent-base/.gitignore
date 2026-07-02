@@ -1,0 +1,8 @@
+# Synced by scripts/build-agent-images.sh from canonical sources — do not edit here.
+# Edit the originals instead:
+#   scripts/mc-cli/                 → mc-cli/
+#   docker/shared/poll.sh           → poll.sh
+#   docker/shared/recycler-lib.sh   → recycler-lib.sh
+mc-cli/
+poll.sh
+recycler-lib.sh

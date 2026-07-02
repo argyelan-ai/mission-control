@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.boss-ttyd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing -->
+        <!-- Update path if Intel Mac uses /usr/local/bin/ttyd -->
+        <string>/opt/homebrew/bin/ttyd</string>
+        <!-- Bind to 127.0.0.1 only (no external network) -->
+        <string>-i</string>
+        <string>127.0.0.1</string>
+        <!-- Port -->
+        <string>-p</string>
+        <string>7681</string>
+        <!-- Writable mode (allow input from frontend, not just read-only) -->
+        <string>-W</string>
+        <!-- Allow client-side overrides for terminal title -->
+        <string>-t</string>
+        <string>titleFixed=Boss Host</string>
+        <!-- Command: tmux attach to Boss-Host session via custom socket -->
+        <string>tmux</string>
+        <string>-S</string>
+        <string>/Users/YOUR_USER/.mc/agents/boss-host/.tmux.sock</string>
+        <string>attach-session</string>
+        <string>-t</string>
+        <string>boss-host:0</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/.mc/agents/boss-host/logs/ttyd.out</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/.mc/agents/boss-host/logs/ttyd.err</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+</dict>
+</plist>

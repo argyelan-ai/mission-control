@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mc.hermes-bridge</string>
+  <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>/Users/YOUR_USER/Workspace/Projects/mission-control/scripts/hermes-bridge.py</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- KeepAlive: true (Phase 26, HERM-12) — always restart, regardless
+       of exit code. Previous KeepAlive { SuccessfulExit: false } missed
+       silent exits during 12:03–12:15 incident on 2026-05-01. Combined
+       with hermes-bridge.py crash-safe main loop (Task 1) which now
+       explicitly raises SystemExit(1) on crash. -->
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/.mc/agents/hermes/logs/launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/.mc/agents/hermes/logs/launchd.err</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/YOUR_USER/.local/bin:/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/YOUR_USER</string>
+  </dict>
+</dict>
+</plist>

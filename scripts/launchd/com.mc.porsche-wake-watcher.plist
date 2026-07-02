@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mc.porsche-wake-watcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>/Users/YOUR_USER/Workspace/Projects/mission-control/scripts/porsche-wake-watcher.py</string>
+    </array>
+
+    <!-- Fire whenever the wake-requests dir changes (file dropped/removed). -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/YOUR_USER/.mc/wake-requests</string>
+    </array>
+
+    <!-- Safety net: also scan every 30s in case a WatchPaths event is missed. -->
+    <key>StartInterval</key>
+    <integer>30</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/.mc/logs/porsche-wake-watcher.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/.mc/logs/porsche-wake-watcher.err.log</string>
+
+    <!-- Ensure HOME_HOST resolves correctly for the watcher's path defaults. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME_HOST</key>
+        <string>/Users/YOUR_USER</string>
+    </dict>
+</dict>
+</plist>

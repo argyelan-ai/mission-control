@@ -1,0 +1,4 @@
+{"type": "session", "version": 3, "id": "fixture-0001", "timestamp": "2026-07-01T00:00:00.000Z", "cwd": "/work"}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {"command": "curl https://api.example/slow"}, "intent": "run"}

@@ -1,0 +1,3 @@
+livekit-agents[xai]~=1.5
+httpx>=0.27
+python-dotenv>=1.0

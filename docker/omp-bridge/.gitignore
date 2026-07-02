@@ -1,0 +1,4 @@
+# Synced by scripts/build-agent-images.sh from canonical sources — do not edit here.
+# Edit the original instead:
+#   scripts/mc-cli/   → mc-cli/
+mc-cli/

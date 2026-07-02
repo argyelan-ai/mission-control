@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mc.memory-sampler</string>
+
+    <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/YOUR_USER/.mc/memory-sampler.sh</string>
+    </array>
+
+    <key>StartInterval</key>
+    <integer>1800</integer>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/mc-memory-sampler.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/YOUR_USER/Library/Logs/mc-memory-sampler.log</string>
+</dict>
+</plist>

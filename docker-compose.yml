@@ -1,0 +1,387 @@
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    volumes:
+      - mc_postgres_data:/var/lib/postgresql/data
+      - ./pg_hba.conf:/pg_hba_custom.conf:ro
+    command: ["postgres", "-c", "hba_file=/pg_hba_custom.conf"]
+    environment:
+      POSTGRES_USER: mc
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: mission_control
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mc"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
+    volumes:
+      - mc_redis_data:/data
+    ports:
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Docker-API-Filter (Hardening): das Backend spricht NIE direkt mit
+  # /var/run/docker.sock, sondern via DOCKER_HOST mit diesem Proxy. Der
+  # Proxy whitelistet nur die API-Pfade, die MC braucht (Container-
+  # Lifecycle, exec fuer tmux-respawn, images/networks/volumes fuer
+  # compose up). Swarm/Secrets/Build/System bleiben geblockt — ein
+  # kompromittiertes Backend kann den Host nicht via Docker uebernehmen.
+  docker-socket-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: 1   # inspect/list + lifecycle (mit POST)
+      IMAGES: 1       # compose up prueft Images
+      NETWORKS: 1     # compose verbindet Agent-Container
+      VOLUMES: 1      # compose inspiziert benannte Volumes
+      EXEC: 1         # tmux respawn-window / Sessions-Terminal
+      INFO: 1         # docker compose ruft /info
+      POST: 1         # Schreiboperationen generell (gefiltert durch obige)
+      ALLOW_START: 1
+      ALLOW_STOP: 1
+      ALLOW_RESTARTS: 1
+      BUILD: 0        # Image-Builds laufen auf dem Host, nie im Backend
+      SWARM: 0
+      SYSTEM: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    # Bewusst KEIN ports:-Eintrag — nur intern erreichbar.
+
+  backend:
+    # Offizielles Image (GHCR) — `docker compose pull` holt es; wenn es lokal
+    # fehlt UND nicht pullbar ist, greift der build:-Fallback (pull_policy
+    # default 'build' bei vorhandener build:-Sektion). MC_IMAGE_TAG pinnt
+    # Versionen (default latest).
+    image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      docker-socket-proxy:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      AUTH_MODE: local
+      LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
+      DISCORD_GUILD_ID: ${DISCORD_GUILD_ID:-}
+      DISCORD_CATEGORY_ID: ${DISCORD_CATEGORY_ID:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
+      TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
+      MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
+      # Operator identity + newsletter branding (see .env.example)
+      OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
+      NEWSLETTER_BRAND: ${NEWSLETTER_BRAND:-AI Weekly}
+      HOST_SSH_USER: ${HOST_SSH_USER:-}
+      # Externally reachable host (Tailscale IP / LAN / DNS) — CORS allowlist +
+      # phone-test deep links (ADR-040, replaces hardcoded IPs in product code).
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
+      EXTRA_CORS_ORIGINS: ${EXTRA_CORS_ORIGINS:-}
+      GH_TOKEN: ${GH_TOKEN:-}
+      # Kill-switch: false = legacy single-session dispatch (see ADR-002).
+      # NOTE: still live in 7 call sites — CLAUDE.md's "obsolete" note is stale.
+      USE_SUBAGENT_DISPATCH: ${USE_SUBAGENT_DISPATCH:-true}
+      # GitHub owner (user/org) for the agent git workflow (repos, PRs).
+      GITHUB_OWNER: ${GITHUB_OWNER:-}
+      # Repo-name prefixes the visibility monitor keeps private.
+      MC_OWNED_REPO_PREFIXES: ${MC_OWNED_REPO_PREFIXES:-mc-,mc-task-,t2-}
+      # Optional: news-site export repo (news deploy endpoint).
+      NEWS_REPO_PATH: ${NEWS_REPO_PATH:-}
+      # Voice-Agent: LiveKit-Token-Signing braucht api_key + secret separat.
+      # PUBLIC_URL = was der Browser-Client erreicht (vs internal ws://livekit:7880).
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      # LIVEKIT_PUBLIC_URL leer = dynamic derivation aus Request-Origin
+      # (siehe routers/voice.py:_derive_ws_url). Caddy proxiert /livekit-signal.
+      LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
+      # ADR-023 ultrareview / ADR-006 SSoT: nur `.env`-Vars mit Defaults,
+      # keine Hardcodes in compose. `.env.example` dokumentiert die Keys.
+      DGX_SSH_HOST: ${DGX_SSH_HOST:-}
+      DGX_SSH_USER: ${DGX_SSH_USER:-}
+      DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}
+      ENABLE_DISPATCH_GATING: ${ENABLE_DISPATCH_GATING:-false}
+      STRUCTURED_INTAKE_ENABLED: ${STRUCTURED_INTAKE_ENABLED:-false}
+      ENABLE_PROMOTE_ORCHESTRATOR: ${ENABLE_PROMOTE_ORCHESTRATOR:-false}
+      ENVIRONMENT: production
+      # Docker-Zugriff ausschliesslich ueber den gefilterten Socket-Proxy
+      # (Service oben). Der docker-CLI + compose respektieren DOCKER_HOST;
+      # alle Backend-Subprozesse erben os.environ.
+      DOCKER_HOST: tcp://docker-socket-proxy:2375
+      HOME_HOST: ${HOME}
+      # Absolute host path of this repo checkout — the Python side
+      # (settings.mc_repo_path: force-recreate, runtime-switch, compose
+      # renderer) needs it INSIDE the container; the volume interpolation
+      # below only resolves it on the host.
+      MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      # Host UID — used by cli_terminal._user_default_tmux_socket() to build the
+      # tmux socket path (/tmp/tmux-<uid>/default) that the host-pty-bridge will
+      # attach to. Without this, getuid() returns 1000 (the in-container user)
+      # and the bridge fails with "no such file or directory" on the host.
+      HOST_UID: ${HOST_UID:-502}
+      # ADR-022: MC-Home unter ~/.mc/. Stage-2-Entkopplung (2026-06-01): aller
+      # Backend-Code referenziert jetzt direkt ~/.mc/...; der Legacy ~/.openclaw
+      # Mount wurde entfernt (Host-Symlinks bleiben bis Stage 3 bestehen).
+      MC_MCP_REGISTRY_DIR: ${HOME}/.mc/mcp-servers
+      MC_AGENTS_ROOT: ${HOME}/.mc/agents
+    volumes:
+      - ${HOME}/.mc:${HOME}/.mc
+      - ${HOME}/.agents/skills:${HOME}/.agents/skills:ro
+      # Host-specific extras (SSH keys for remote runtimes, free-code sandbox
+      # mounts, custom Caddyfile) belong in docker-compose.override.yml —
+      # see docker-compose.override.example.yml. Do NOT hardcode them here.
+      # Deliverables-Mount: Agents schreiben unter /deliverables/<task_id>/
+      # (im Agent-Container) — der Host-Pfad ist ~/.mc/deliverables/<slug>/.
+      # Backend mountet alle Agent-Slugs zusammengefasst unter /deliverables/
+      # damit FileResponse den path-Wert aus der DB direkt aufloesen kann.
+      - ${HOME}/.mc/deliverables:/deliverables:ro
+      # Shared Deliverables fuer mc-playwright Screenshots (read-only fuer Backend)
+      - mc_shared_deliverables:/shared-deliverables:ro
+      # MCP Screenshots (Microsoft Playwright MCP Sidecar) — read-only fuer
+      # Backend's `mc deliverable from-mcp` Validierung + FileResponse.
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      # Token-Harvester liest Boss-Transkripte (read-only — keine Schreibzugriffe).
+      # Boss schreibt seine JSONL-Sessions in ~/.claude/projects/ (Host-native).
+      # Boss-Attribution via cwd/gitBranch-Heuristik verhindert, dass private
+      # Sessions des Operators faelschlicherweise dem Boss zugerechnet werden.
+      - ${HOME}/.claude:${HOME}/.claude:ro
+      # Templates als Live-Mount — Aenderungen an *.j2 werden vom
+      # template_renderer.py (FileSystemLoader mit auto_reload) sofort
+      # aufgenommen. Kein Backend-Rebuild mehr bei Template-Aenderungen.
+      - ./backend/templates:/app/templates:ro
+      # docker/ Live-Mount fuer compose_renderer.py — der Renderer liest +
+      # schreibt docker-compose.agents.yml beim Cross-Image Runtime-Switch.
+      # Mount unter dem absoluten Host-Pfad, weil der Code via HOME_HOST den
+      # gleichen Pfad in-container erwartet (ADR-027 / Phase 15).
+      # MC_REPO_PATH = absolute host path of this repo checkout (set by setup.sh).
+      - ./docker:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker:rw
+      # docker-compose.yml + .env fuer `docker compose -f ... up -d
+      # --force-recreate` Cross-Image Switches (ADR-027 / Phase 15).
+      - ./docker-compose.yml:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker-compose.yml:ro
+      - ./.env:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/.env:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    # Prebuilt-Image nutzt die Default-Brand ("Mission.Control"); eigene
+    # NEXT_PUBLIC_BRAND braucht einen lokalen Build (Build-Arg wird gebacken).
+    image: ghcr.io/argyelan-ai/mc-frontend:${MC_IMAGE_TAG:-latest}
+    build:
+      context: ./frontend-v2
+      args:
+        # Baked into the Next.js build (server-actions origin allowlist).
+        PUBLIC_HOST: ${PUBLIC_HOST:-}
+        # Wordmark/brand, e.g. "my-lab.io" ("main.accent" split at last dot).
+        NEXT_PUBLIC_BRAND: ${NEXT_PUBLIC_BRAND:-}
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NEXT_PUBLIC_API_URL: ""
+      NEXT_PUBLIC_APP_VERSION: "2.0.0"
+      PUBLIC_HOST: ${PUBLIC_HOST:-}
+    ports:
+      - "127.0.0.1:3000:3000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:3000', r => process.exit(r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6333:6333"
+    volumes:
+      - mc_qdrant_data:/qdrant/storage
+    healthcheck:
+      # qdrant image enthaelt kein curl — TCP check via bash /dev/tcp fallback,
+      # alternativ via 'exec 3<>/dev/tcp/localhost/6333' oder 'timeout 2 bash -c'.
+      # Einfachste portable Loesung: node via shell file-descriptor trick.
+      test: ["CMD-SHELL", "bash -c ': > /dev/tcp/localhost/6333' 2>/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - frontend
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/certs:/etc/caddy/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+  # Visual-Verifier Service — zentrales Playwright-Setup damit Agents keine
+  # eigene Browser-Installation brauchen (Bug 3 vom 2026-04-22). Ruft Backend
+  # ueber `mc verify` CLI oder direkt POST /verify hier auf, schreibt
+  # Screenshots in gemeinsames Volume das Backend als Deliverables registriert.
+  mc-playwright:
+    build: ./docker/mc-playwright
+    # Optional: nur mit COMPOSE_PROFILES=browser (Visual-Verify fuer Agents).
+    profiles: ["browser"]
+    restart: unless-stopped
+    environment:
+      SHARED_DELIVERABLES: /shared-deliverables
+    volumes:
+      - mc_shared_deliverables:/shared-deliverables
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8790/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Playwright MCP Server (Sidecar) — replaces mc-playwright HTTP service for
+  # agent-driven browser tests. Agents see screenshots inline as image content
+  # in the MCP tool response (no more "blind" hallucination problem from the
+  # 2026-04-23 visual-verify bug class). mc-playwright above stays for
+  # CI-style automated reporting workflows.
+  #
+  # Connection from agents: http://playwright-mcp:8931/mcp (HTTP transport)
+  # Image-Responses are enabled by default (--image-responses allow).
+  # LiveKit Voice-Server — Grundlage fuer den Voice-Agent (Voice-Worker Runtime).
+  # LIVEKIT_KEYS Format: "<api_key>: <api_secret>" (YAML-Mapping mit Colon+Space).
+  # Beide Werte liegen im credentials-Store (ADR-033, Settings → Credentials),
+  # NICHT im secrets-Store. Format-Doku: server logged "needs to be exactly,
+  # 'key: secret', including the space" wenn der Space fehlt. --dev = self-
+  # signed TLS, kein Cert-Needed.
+  livekit:
+    image: livekit/livekit-server:latest
+    # Optional: nur mit COMPOSE_PROFILES=voice (oder --profile voice) aktiv.
+    profiles: ["voice"]
+    restart: unless-stopped
+    # --node-ip: the RTC candidate IP LiveKit advertises to clients. Set
+    # LIVEKIT_NODE_IP in .env to your host's LAN/VPN IP so other devices
+    # (phone, desktop) can reach voice. Default 127.0.0.1 = local-only.
+    command: ["--dev", "--bind", "0.0.0.0", "--node-ip", "${LIVEKIT_NODE_IP:-127.0.0.1}"]
+    environment:
+      LIVEKIT_KEYS: ${LIVEKIT_KEYS}
+    ports:
+      # Signaling-Port (WS): nur localhost + Caddy-Proxy braucht's. Andere
+      # Verbindungen kommen ueber Caddy /livekit-signal mit TLS.
+      - "127.0.0.1:7880:7880"
+      # WebRTC TCP-Fallback fuer Browser ohne UDP-Erreichbarkeit (z.B. iPhone
+      # ohne Tailscale-UDP). 0.0.0.0 damit Tailscale-Verkehr durchkommt.
+      - "7881:7881"
+      # WebRTC UDP (primary media path). 0.0.0.0 fuer Tailscale-Zugriff.
+      - "7882:7882/udp"
+    healthcheck:
+      # livekit/livekit-server ist busybox-basiert (kein bash, kein curl) —
+      # nc (BusyBox netcat) prueft TCP-Connect auf :7880 ohne externe deps.
+      test: ["CMD-SHELL", "nc -z localhost 7880 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # voice-worker — persoenlicher Sprachassistent des Operators.
+  # Hosted-Persona: Jarvis (ADR-038). Service-Name + LiveKit-Infra bleiben
+  # "voice" — der Agent dahinter heisst seit dem Rename Jarvis.
+  # Joint einen LiveKit-Room als Agent und spricht mit dem Operator via xAI
+  # Grok Realtime API. Tool-Calls gehen ans MC-Backend mit dem Jarvis-Agent
+  # PBKDF2-Token (Boss-equivalente Scopes — siehe agents.scopes in DB).
+  voice-worker:
+    build: ./voice_worker
+    profiles: ["voice"]
+    restart: unless-stopped
+    depends_on:
+      livekit:
+        condition: service_healthy
+      backend:
+        condition: service_started
+    environment:
+      LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      MC_BACKEND_URL: http://backend:8000
+      VOICE_VOICE_ID: ${VOICE_VOICE_ID:-ara}
+
+  playwright-mcp:
+    image: mcr.microsoft.com/playwright/mcp:latest
+    profiles: ["browser"]
+    restart: unless-stopped
+    # Default entrypoint is `node /app/cli.js --headless --browser chromium --no-sandbox`
+    # — we override only the trailing args to add HTTP transport + isolation.
+    command: [
+      "--headless",
+      "--browser", "chromium",
+      "--no-sandbox",
+      "--port", "8931",
+      "--host", "0.0.0.0",
+      "--isolated",
+      # Output-Dir auf shared bind-mount damit Backend + Agents die Screenshots
+      # als Files sehen koennen (und der Operator im UI). Convention: Agent ruft
+      # browser_take_screenshot(filename="<task_id>/<descriptive>.png") auf,
+      # Backend's mc deliverable from-mcp endpoint validiert + registriert.
+      "--output-dir", "/output",
+      # Allow agent containers to reach this server. We use '*' (no DNS-rebinding
+      # protection) because the service is only on the internal docker network
+      # and the entire stack trusts each other. If you ever expose this beyond
+      # the docker network, switch to an explicit host list.
+      "--allowed-hosts", "*"
+    ]
+    volumes:
+      # Bind-mount nach ~/.mc/mcp-screenshots/ — folgt dem mc-Layout der
+      # anderen Services (~/.mc/...). Backend mountet denselben Pfad als
+      # /shared-mcp:ro damit `mc deliverable from-mcp` File-Existenz und
+      # Inhalt verifizieren kann ohne Container-Boundary-Tricks.
+      - ${HOME}/.mc/mcp-screenshots:/output
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:8931/mcp', r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  mc_postgres_data:
+  mc_redis_data:
+  mc_qdrant_data:
+  mc_shared_deliverables:
+  caddy_data:
+  caddy_config:
+
+# ADR-023 ultrareview: explizit den Default-Network-Namen fixieren damit
+# docker-compose.agents.yml ihn via `external: true` als
+# `mission-control_default` auflösen kann, unabhängig vom COMPOSE_PROJECT_NAME.
+# Ohne das bricht der Agent-Stack wenn jemand das Repo umbenennt oder mit
+# einem anderen Projekt-Namen startet (z.B. in CI).
+networks:
+  default:
+    name: mission-control_default

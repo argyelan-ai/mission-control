@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feature/*"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          pip install -e ".[test]"
+
+      - name: Run tests
+        run: pytest -x --tb=short -q
+
+  frontend-v2:
+    name: Frontend Checks
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-v2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"  # muss zum Runtime-Image passen (frontend Dockerfile: node:22)
+          cache: npm
+          cache-dependency-path: frontend-v2/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npm run test:run
+
+  deploy-portability:
+    name: Fresh-boot E2E (setup.sh → migrations → register)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare ~/.mc for the container user
+        # Runner-UID (1001) != Container-UID (mcuser 1000): das ${HOME}/.mc
+        # Bind-Mount muss fuer den Containernutzer beschreibbar sein
+        # (vault/agents/deliverables werden zur Laufzeit angelegt).
+        run: mkdir -p ~/.mc && chmod 777 ~/.mc
+      - name: docker compose config validates
+        run: |
+          ./setup.sh   # nur fuer die config-Validierung; install.sh ruft es erneut (idempotent)
+          docker compose config -q
+      - name: setup.ps1 parses (Windows path is experimental but must not be broken)
+        shell: pwsh
+        run: $null = [scriptblock]::Create((Get-Content -Raw setup.ps1))
+      - name: install.sh — the advertised one-liner IS the tested path
+        # Baut + bootet den vollen Stack, laeuft Migrationen, wartet auf health.
+        run: ./install.sh --here
+      - name: Register first admin + authenticated API call
+        run: |
+          TOKEN=$(curl -sf -X POST http://localhost:8000/api/v1/auth/register \
+            -H "Content-Type: application/json" \
+            -d '{"email":"ci@example.com","password":"ci-test-password-123","name":"CI"}' \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['access_token'])")
+          test -n "$TOKEN"
+          curl -sf -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/boards >/dev/null
+          echo "fresh-boot E2E OK"
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs backend db --tail=80
+
+  docker:
+    name: Docker Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t mc-backend-test ./backend
+
+      - name: Build frontend-v2 image
+        run: docker build -t mc-frontend-v2-test ./frontend-v2

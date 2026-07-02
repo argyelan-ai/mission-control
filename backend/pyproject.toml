@@ -1,0 +1,66 @@
+[project]
+name = "mission-control-backend"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "sqlmodel>=0.0.22",
+    "asyncpg>=0.30.0",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14.0",
+    "sse-starlette>=2.1.3",
+    "httpx>=0.28.0",
+    "redis[hiredis]>=5.2.0",
+    "passlib[bcrypt]>=1.7.4",
+    "python-multipart>=0.0.18",
+    "pydantic-settings>=2.6.0",
+    "python-jose[cryptography]>=3.3.0",
+    "anyio>=4.7.0",
+    "websockets>=13.0",
+    "cryptography>=44.0.0",
+    "psutil>=6.0.0",
+    "jinja2>=3.1.0",
+    "apscheduler>=3.10,<4.0",
+    "slowapi>=0.1.9",
+    "structlog>=25.1.0",
+    "asyncssh>=2.18.0",
+    "qdrant-client>=1.12.0",
+    "feedparser>=6.0.0",
+    "trafilatura>=2.0",
+    "watchdog>=4.0.0",
+    "python-frontmatter>=1.1.0",
+    "scikit-learn>=1.5.0",
+    "pdfplumber>=0.11.0",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "httpx>=0.28.0",
+    "fakeredis[json]>=2.25.0",
+    "aiosqlite>=0.20.0",
+    # tests/test_mc_mcp_routes.py imports scripts/mc-mcp.py, which needs fastmcp
+    "fastmcp>=3.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = "-m 'not integration'"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "integration: live integration test requiring Spark/network reachability",
+]

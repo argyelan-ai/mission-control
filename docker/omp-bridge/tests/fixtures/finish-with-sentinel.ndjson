@@ -1,0 +1,7 @@
+{"type": "session", "version": 3, "id": "fixture-0001", "timestamp": "2026-07-01T00:00:00.000Z", "cwd": "/work"}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "tool_execution_start", "toolCallId": "t1", "toolName": "bash", "args": {"command": "python3 buggy.py"}, "intent": "run"}
+{"type": "tool_execution_end", "toolCallId": "t1", "toolName": "bash", "result": {"content": [{"type": "text", "text": "Result is 42\nOK\n"}], "details": {"exitCode": 0, "wallTimeMs": 40.0}}, "isError": false}
+{"type": "turn_end", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "\u2026"}, {"type": "text", "text": "\n\nDone.\n\n## Was wurde gemacht\nbuggy.py mit NameError erstellt, mit python3 ausgefuehrt, Fehler beobachtet, x=42 ergaenzt und erneut ausgefuehrt.\n## Was hat funktioniert\nDer Fix war eindeutig; zweiter Lauf druckt OK mit exit 0.\n## Was war unklar\nNichts Wesentliches \u2014 Aufgabe war deterministisch.\n## Lesson fuer Agent-Memory\nNameError immer erst reproduzieren, dann die fehlende Bindung ergaenzen.\nTASK_COMPLETE"}], "stopReason": "stop"}, "toolResults": []}
+{"type": "agent_end", "messages": [{"role": "assistant", "stopReason": "stop"}]}

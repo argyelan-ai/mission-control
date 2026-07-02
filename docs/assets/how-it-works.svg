@@ -1,0 +1,62 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="290" viewBox="0 0 1200 290" font-family="ui-sans-serif, -apple-system, 'Segoe UI', sans-serif">
+  <rect width="1200" height="290" rx="14" fill="#0A0A0A"/>
+  <rect x="0.5" y="0.5" width="1199" height="289" rx="14" fill="none" stroke="#232323"/>
+
+  <!-- step 1: create task -->
+  <g transform="translate(40,58)">
+    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
+    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">1 · YOU</text>
+    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Create a task</text>
+    <rect x="16" y="72" width="198" height="26" rx="5" fill="#161616" stroke="#2A2A2A"/>
+    <text x="26" y="89" fill="#B8B8B8" font-size="12">Build the landing page</text>
+    <rect x="16" y="104" width="120" height="26" rx="5" fill="#161616" stroke="#2A2A2A"/>
+    <text x="26" y="121" fill="#6E6E6E" font-size="12">priority: high</text>
+  </g>
+
+  <!-- arrow -->
+  <g stroke="#0FA3A3" stroke-width="2" fill="none">
+    <path d="M282 133 h 36"/><path d="M312 126 l 8 7 -8 7"/>
+  </g>
+
+  <!-- step 2: dispatch -->
+  <g transform="translate(332,58)">
+    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
+    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">2 · MISSION CONTROL</text>
+    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Dispatches an agent</text>
+    <circle cx="30" cy="106" r="12" fill="#161616" stroke="#0FA3A3"/>
+    <text x="30" y="110" fill="#0FA3A3" font-size="11" text-anchor="middle">⚡</text>
+    <text x="52" y="102" fill="#B8B8B8" font-size="12">Sparky · claims the task</text>
+    <text x="52" y="120" fill="#6E6E6E" font-size="11">Claude Code or any local LLM</text>
+  </g>
+
+  <g stroke="#0FA3A3" stroke-width="2" fill="none">
+    <path d="M574 133 h 36"/><path d="M604 126 l 8 7 -8 7"/>
+  </g>
+
+  <!-- step 3: agent works -->
+  <g transform="translate(624,58)">
+    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
+    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">3 · AGENT</text>
+    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Codes on a branch</text>
+    <text x="16" y="86" fill="#B8B8B8" font-size="12" font-family="ui-monospace, monospace">git checkout -b task/landing</text>
+    <text x="16" y="106" fill="#B8B8B8" font-size="12" font-family="ui-monospace, monospace">… work, commit, push …</text>
+    <text x="16" y="126" fill="#2B9A4A" font-size="12" font-family="ui-monospace, monospace">↑ opens a pull request</text>
+  </g>
+
+  <g stroke="#0FA3A3" stroke-width="2" fill="none">
+    <path d="M866 133 h 36"/><path d="M896 126 l 8 7 -8 7"/>
+  </g>
+
+  <!-- step 4: review & done -->
+  <g transform="translate(916,58)">
+    <rect width="230" height="150" rx="10" fill="#0D0D0D" stroke="#232323"/>
+    <text x="16" y="30" fill="#0FA3A3" font-size="12" font-weight="700" letter-spacing="2">4 · REVIEW GATE</text>
+    <text x="16" y="56" fill="#F5F5F5" font-size="16" font-weight="600">Reviewed, merged</text>
+    <text x="16" y="86" fill="#B8B8B8" font-size="12">Reviewer agent checks the PR,</text>
+    <text x="16" y="104" fill="#B8B8B8" font-size="12">watchdogs catch silent failures.</text>
+    <rect x="16" y="116" width="86" height="24" rx="12" fill="#101510" stroke="#2B9A4A"/>
+    <text x="59" y="132" fill="#2B9A4A" font-size="12" text-anchor="middle" font-weight="600">✓ done</text>
+  </g>
+
+  <text x="600" y="252" fill="#6E6E6E" font-size="13" text-anchor="middle">You stay in the control room — boards, live terminals, approvals. The fleet does the typing.</text>
+</svg>

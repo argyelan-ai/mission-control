@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-10",
+  "title": "Design System: Mission Control",
+  "extensions": {
+    "colorMeta": {
+      "accent": { "role": "primary", "displayName": "Leitstand-Teal", "canonical": "#0FA3A3", "tonalRamp": ["#052A2A", "#084747", "#0B6565", "#0E8484", "#0FA3A3", "#14C4C4", "#5FD9D9", "#B5EFEF"] },
+      "bg-deep": { "role": "neutral", "displayName": "Tiefschwarz", "canonical": "#050505", "tonalRamp": ["#050505", "#0A0A0A", "#111111", "#161616", "#1C1C1C", "#3A3A3A", "#888888", "#EDEDED"] },
+      "text-primary": { "role": "neutral", "displayName": "Instrumenten-Weiss", "canonical": "#EDEDED", "tonalRamp": ["#1C1C1C", "#3A3A3A", "#6E6E6E", "#888888", "#A1A1A1", "#C4C4C4", "#EDEDED", "#FFFFFF"] },
+      "status-online": { "role": "status", "displayName": "Online-Grün", "canonical": "#2B9A4A", "tonalRamp": ["#0A2615", "#114222", "#175E30", "#1E7A3D", "#2B9A4A", "#4DB46A", "#84CD99", "#C2E6CC"] },
+      "status-warning": { "role": "status", "displayName": "Warn-Ocker", "canonical": "#B8870A", "tonalRamp": ["#2E2203", "#4D3804", "#6C4F06", "#8B6608", "#B8870A", "#D4A52E", "#E5C470", "#F2E2B8"] },
+      "status-error": { "role": "status", "displayName": "Fehler-Rot", "canonical": "#C23838", "tonalRamp": ["#300E0E", "#521717", "#742121", "#962A2A", "#C23838", "#D05F5F", "#DF9090", "#EFC7C7"] },
+      "status-info": { "role": "status", "displayName": "Info-Blau", "canonical": "#2E6FD8", "tonalRamp": ["#0B1B36", "#132E5A", "#1A417E", "#2254A2", "#2E6FD8", "#5A8CE0", "#92B4EB", "#C8D9F5"] }
+    },
+    "typographyMeta": {
+      "headline": { "displayName": "Headline", "purpose": "Seitentitel — eine pro Seite." },
+      "title": { "displayName": "Title", "purpose": "Sektions- und Kartentitel." },
+      "body": { "displayName": "Body", "purpose": "Inhalte, Beschreibungen, Kommentare." },
+      "label": { "displayName": "Label", "purpose": "Formular-Labels, Meta, Tabellen-Header." },
+      "mono": { "displayName": "Mono", "purpose": "IDs, Branches, Terminals, Metriken." }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)", "purpose": "Nur Modals/Dropdowns/Drawer — Flächen im Seitenfluss bleiben flach." }
+    ],
+    "motion": [
+      { "name": "ease-out-quint", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Standard für Reveals/Slides (sectionVariants in colors.ts)." },
+      { "name": "duration-micro", "value": "100ms", "purpose": "Hover/Press-Feedback." },
+      { "name": "duration-normal", "value": "200ms", "purpose": "Zustandswechsel, Panels." },
+      { "name": "duration-slow", "value": "300ms", "purpose": "Modals, Section-Reveals (max 400ms)." }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Hauptaktion — Teal-Fläche, grosse Submits optional mit dezentem Teal-Verlauf.",
+      "html": "<button class=\"ds-btn-primary\">Auftrag erstellen</button>",
+      "css": ".ds-btn-primary { background: linear-gradient(135deg, #14C4C4, #0FA3A3); color: #EDEDED; font: 500 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 16px; border: none; border-radius: 8px; cursor: pointer; transition: filter 150ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { filter: brightness(1.12); } .ds-btn-primary:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Sekundäraktion — transparent mit Rahmen, hellt bei Hover eine Stufe auf.",
+      "html": "<button class=\"ds-btn-ghost\">Abbrechen</button>",
+      "css": ".ds-btn-ghost { background: transparent; color: #A1A1A1; font: 500 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 16px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; cursor: pointer; transition: background 150ms, color 150ms; } .ds-btn-ghost:hover { background: #1C1C1C; color: #EDEDED; } .ds-btn-ghost:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; }"
+    },
+    {
+      "name": "Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Formularfeld — bg-deep Fläche, Teal-Fokus.",
+      "html": "<input class=\"ds-input\" placeholder=\"Kurzer, klarer Aufgabentitel\" />",
+      "css": ".ds-input { background: #050505; color: #EDEDED; font: 400 13px 'Geist Sans', system-ui, sans-serif; padding: 8px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; width: 100%; transition: border-color 150ms; } .ds-input::placeholder { color: #888888; } .ds-input:focus-visible { outline: 2px solid #0FA3A3; outline-offset: 2px; border-color: rgba(15,163,163,0.30); }"
+    },
+    {
+      "name": "Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "Standard-Container — eine Tonstufe über dem Seitengrund, flach, 1px Rahmen.",
+      "html": "<div class=\"ds-card\"><div class=\"ds-card-title\">Agent Performance</div><div class=\"ds-card-body\">Tiefe entsteht durch Flächenton, nicht durch Schatten.</div></div>",
+      "css": ".ds-card { background: #111111; border: 1px solid rgba(255,255,255,0.06); border-radius: 12px; padding: 16px; transition: background 200ms, border-color 200ms; } .ds-card:hover { background: #161616; border-color: rgba(255,255,255,0.10); } .ds-card-title { font: 600 14px 'Geist Sans', system-ui, sans-serif; color: #EDEDED; margin-bottom: 8px; } .ds-card-body { font: 400 13px/1.6 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; }"
+    },
+    {
+      "name": "Chip (aktiv)",
+      "kind": "chip",
+      "refersTo": "chip-active",
+      "description": "Farbton-22-Muster: ${farbe}22 Fläche + ${farbe}55 Rahmen + Farbtext.",
+      "html": "<span class=\"ds-chip-active\">Mit Planner</span> <span class=\"ds-chip\">Direkt</span>",
+      "css": ".ds-chip-active { background: #0FA3A322; color: #0FA3A3; font: 500 11px 'Geist Sans', system-ui, sans-serif; padding: 4px 10px; border: 1px solid #0FA3A355; border-radius: 8px; display: inline-block; } .ds-chip { background: transparent; color: #888888; font: 500 11px 'Geist Sans', system-ui, sans-serif; padding: 4px 10px; border: 1px solid rgba(255,255,255,0.06); border-radius: 8px; display: inline-block; }"
+    },
+    {
+      "name": "StatusDot",
+      "kind": "custom",
+      "refersTo": "status-dot",
+      "description": "Signature-Komponente: 8px Punkt in STATUS-Farbe + Textlabel — Farbe trägt nie allein.",
+      "html": "<span class=\"ds-status\"><span class=\"ds-status-dot\"></span>Online</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; gap: 6px; font: 500 12px 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; } .ds-status-dot { width: 8px; height: 8px; border-radius: 9999px; background: #2B9A4A; }"
+    },
+    {
+      "name": "Sidebar-Eintrag",
+      "kind": "nav",
+      "refersTo": "nav-item",
+      "description": "Navigation: aktiv = accent-subtle Fläche + Teal, inaktiv text-secondary.",
+      "html": "<nav class=\"ds-nav\"><a class=\"ds-nav-item ds-nav-item-active\" href=\"#\">Home</a><a class=\"ds-nav-item\" href=\"#\">Agents</a></nav>",
+      "css": ".ds-nav { display: flex; flex-direction: column; gap: 2px; background: #0A0A0A; padding: 8px; border-radius: 12px; } .ds-nav-item { font: 500 13px 'Geist Sans', system-ui, sans-serif; color: #A1A1A1; text-decoration: none; padding: 8px 12px; border-radius: 8px; transition: background 150ms, color 150ms; } .ds-nav-item:hover { background: #1C1C1C; color: #EDEDED; } .ds-nav-item-active { background: #0FA3A31F; color: #0FA3A3; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Der Leitstand",
+    "overview": "Mission Control ist ein Leitstand: der ruhige, dunkle Kontrollraum, von dem aus der Operator seine AI-Agent-Flotte überwacht und steuert. Fast schwarz, präzise beschriftet — Farbe erscheint nur, wo sie etwas bedeutet: ein Teal-Signal für Aktion und Fokus, gedämpfte Zustandsfarben für die Lage der Flotte. Referenzen: Bloomberg Terminal, Linear.app, Stripe Dashboard. Abgelehnt wird das generische AI-Tool-Lila, Neon-Glow, Glassmorphism als Deko und SaaS-Marketing-Ästhetik.",
+    "keyCharacteristics": [
+      "Fast-schwarze tonale Schichtung (#050505 → #1C1C1C) statt Schatten-Tiefe",
+      "Ein Akzent (Teal #0FA3A3), bewusst entsättigt — nie Neon",
+      "Status-Vokabular app-weit identisch (STATUS/LANE in colors.ts)",
+      "Hohe Informationsdichte: 11–14px UI-Text, klare Label-Hierarchie",
+      "Ruhige Motion: kurze Fades/Slides mit ease-out, kein Bounce"
+    ],
+    "rules": [
+      { "name": "Die Eine-Stimme-Regel", "body": "Teal ist die einzige Akzentfarbe und belegt ≤10% jeder Fläche. Eine zweite Akzentfarbe einzuführen ist verboten.", "section": "colors" },
+      { "name": "Die Vokabular-Regel", "body": "Farben kommen ausschliesslich aus colors.ts (C, STATUS, LANE). Lokale Paletten und Inline-Hex in Komponenten sind Regressionen und werden entfernt.", "section": "colors" },
+      { "name": "Die Lila-Null-Regel", "body": "Kein Purple/Violett in irgendeiner Form — auch nicht „nur für diese eine Karte\".", "section": "colors" },
+      { "name": "Die Dichte-Regel", "body": "Leitstand-Dichte ist gewollt: 11–14px UI-Text ist Standard, aber jede Stufe unter 13px braucht ≥5.3:1 Kontrast und 500er-Gewicht oder besser.", "section": "typography" },
+      { "name": "Die Flach-Regel", "body": "Karten und Sektionen im Seitenfluss tragen keinen Schatten — Rahmen + Flächenton genügen. Wer einen Schatten setzen will, baut in Wahrheit ein Overlay.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do jede Farbe aus colors.ts beziehen (C, STATUS, LANE) — neue Bedeutung ⇒ neues Token, erst dann verwenden.",
+      "Do Tiefe über Flächenton lösen (eine Stufe heller = eine Ebene höher).",
+      "Do Kontraste prüfen: Body/Labels ≥4.5:1; text-muted (#888888) ist die dunkelste zulässige Textfarbe.",
+      "Do jeden interaktiven Zustand sichtbar machen: Hover, Fokus-Ring, aktive Chips mit Fläche+Rahmen.",
+      "Do prefers-reduced-motion respektieren; Motion = kurzes Fade/Slide mit ease-out (100–300ms)."
+    ],
+    "donts": [
+      "Don't Lila/Violett in irgendeiner Form — das „generische AI-Tool-Lila\" (#8B5CF6, #7C3AED, #A78BFA) ist die zentrale Anti-Referenz.",
+      "Don't Neon-Glow, farbige Schatten, backdrop-blur als Deko — .glass-card nicht neu verwenden.",
+      "Don't Gradient-Text (background-clip: text) — GradientText wird entfernt, nicht nachgeahmt.",
+      "Don't lokale Farbpaletten oder Inline-Hex in Komponenten anlegen — auch nicht „nur temporär\".",
+      "Don't Statusfarben für Deko nutzen oder pro Seite umdeuten.",
+      "Don't Side-Stripe-Borders >1px als Farbakzent, Hero-Metrik-Schablonen oder identische Karten-Grids."
+    ]
+  }
+}

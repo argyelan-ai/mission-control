@@ -1,0 +1,18 @@
+{
+  "version": "3",
+  "templates": [
+    {
+      "type": 3,
+      "title": "Mission Control",
+      "description": "Self-hosted command center for AI agent fleets — create agents, dispatch tasks over Kanban boards, watch them ship. FastAPI + Next.js + Postgres.",
+      "categories": ["AI", "Productivity", "Self-hosted"],
+      "platform": "linux",
+      "logo": "https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/social-preview.png",
+      "repository": {
+        "url": "https://github.com/argyelan-ai/mission-control",
+        "stackfile": "docker-compose.yml"
+      },
+      "note": "Run ./setup.sh (or setup.ps1) once to generate the .env with secure secrets before deploying the stack. Details: https://github.com/argyelan-ai/mission-control#quickstart"
+    }
+  ]
+}

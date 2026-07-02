@@ -1,0 +1,20 @@
+# Gitleaks config — Mission Control
+#
+# Extends the default ruleset; the allowlist below covers verified
+# FALSE POSITIVES only. Never allowlist a real credential — rotate it.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Verified false positives"
+regexes = [
+  # Test-only Fernet key in backend/tests/conftest.py (never used in prod;
+  # verified distinct from any real SECRETS_ENCRYPTION_KEY).
+  '''bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=''',
+  # Obviously-fake GitHub token used across tests and docs examples.
+  '''ghp_abc123''',
+  # React state variable names (linkedinPostMd*) that trip the
+  # linkedin-client-id/secret rules — identifiers, not credentials.
+  '''linkedinPostMd''',
+]

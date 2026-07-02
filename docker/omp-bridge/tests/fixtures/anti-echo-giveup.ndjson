@@ -1,0 +1,5 @@
+{"type": "session", "version": 3, "id": "fixture-0001", "timestamp": "2026-07-01T00:00:00.000Z", "cwd": "/work"}
+{"type": "agent_start"}
+{"type": "turn_start"}
+{"type": "turn_end", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "\u2026"}, {"type": "text", "text": "I was told to end with TASK_COMPLETE when done.\nI couldn't finish everything, I'll continue later."}], "stopReason": "stop"}, "toolResults": []}
+{"type": "agent_end", "messages": [{"role": "assistant", "stopReason": "stop"}]}
