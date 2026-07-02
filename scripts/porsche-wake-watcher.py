@@ -5,7 +5,7 @@ The Mission Control backend runs in Docker and cannot send an L2 broadcast magic
 packet. Instead, runtime_manager.wake_runtime() drops a trigger file into
 ~/.mc/wake-requests/<slug>.request.json with shape:
 
-    {"slug": "...", "mac": "00:11:22:33:44:55", "ip": "192.0.2.100",
+    {"slug": "...", "mac": "00:11:22:33:44:55", "ip": "192.0.2.20",
      "broadcast": "192.0.2.255", "requested_at": "<iso8601>"}
 
 This watcher (driven by a launchd LaunchAgent on WatchPaths + StartInterval) is a
@@ -36,7 +36,8 @@ WAKE_SCRIPT = Path(
 # PORSCHE fallbacks if a field is missing/blank in the request.
 DEFAULT_MAC = os.environ.get("PORSCHE_MAC", "")
 DEFAULT_IP = os.environ.get("PORSCHE_LAN_IP", "")
-DEFAULT_BROADCAST = "192.0.2.255"
+# Limited broadcast — funktioniert in jedem LAN ohne Subnetz-Annahme.
+DEFAULT_BROADCAST = os.environ.get("PORSCHE_BROADCAST", "255.255.255.255")
 
 
 def _now_iso() -> str:

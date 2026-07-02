@@ -24,7 +24,7 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 
 
-OMP_ENDPOINT = "http://192.0.2.100:8000/v1"
+OMP_ENDPOINT = "http://192.0.2.20:8000/v1"
 OMP_MODEL = "nvidia/Qwen3.6-35B-A3B-NVFP4"
 OMP_IMAGE = "mc-omp-agent:latest"
 

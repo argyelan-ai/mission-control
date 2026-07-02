@@ -17,11 +17,11 @@ PORSCHE_RT = {
     "slug": "unsloth-porsche",
     "display_name": "Unsloth (PORSCHE)",
     "runtime_type": "unsloth_porsche",
-    "endpoint": "http://192.0.2.100:8000/v1",
+    "endpoint": "http://192.0.2.20:8000/v1",
     "healthcheck_path": "/v1/models",
-    "control_url": "http://192.0.2.100:5555",
+    "control_url": "http://192.0.2.20:5555",
     "wol_mac_address": "00:11:22:33:44:55",
-    "host": "192.0.2.100",
+    "host": "192.0.2.20",
     "power_managed": True,
     "launch_command": "Start-Process unsloth-server",
 }
@@ -52,13 +52,13 @@ async def test_state_booted_no_model_when_awake_but_no_http():
 async def test_state_probe_avoids_double_v1():
     """Regression (review finding A): endpoint '.../v1' + healthcheck '/v1/models'
     must NOT probe '.../v1/v1/models'. The branch strips the redundant /v1."""
-    rt = {**PORSCHE_RT, "endpoint": "http://192.0.2.100:8000/v1", "healthcheck_path": "/v1/models"}
+    rt = {**PORSCHE_RT, "endpoint": "http://192.0.2.20:8000/v1", "healthcheck_path": "/v1/models"}
     probe = AsyncMock(return_value=True)
     with patch.object(runtime_manager, "_porsche_reachable", new=AsyncMock(return_value=True)), \
          patch.object(runtime_manager, "_probe_http", new=probe):
         state = await runtime_manager.get_runtime_state(rt)
     # normalized: probed path is /models (→ final URL .../v1/models), not /v1/models
-    assert probe.await_args.args == ("http://192.0.2.100:8000/v1", "/models")
+    assert probe.await_args.args == ("http://192.0.2.20:8000/v1", "/models")
     assert state["state"] == "ready"
 
 

@@ -118,6 +118,8 @@ services:
       LIVEKIT_PUBLIC_URL: ${LIVEKIT_PUBLIC_URL:-}
       # ADR-023 ultrareview / ADR-006 SSoT: nur `.env`-Vars mit Defaults,
       # keine Hardcodes in compose. `.env.example` dokumentiert die Keys.
+      SPARK_EMBEDDING_URL: ${SPARK_EMBEDDING_URL:-http://192.0.2.10:1234/v1/embeddings}
+      SPARK_LLM_URL: ${SPARK_LLM_URL:-http://192.0.2.10:8000/v1}
       DGX_SSH_HOST: ${DGX_SSH_HOST:-}
       DGX_SSH_USER: ${DGX_SSH_USER:-}
       DGX_SSH_KEY_PATH: ${DGX_SSH_KEY_PATH:-/home/mcuser/.ssh/id_rsa}

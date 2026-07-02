@@ -31,6 +31,7 @@ from uuid import UUID
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from app.config import settings
 from app.database import engine
 from app.models.runtime import Runtime
 from app.redis_client import get_redis
@@ -193,11 +194,16 @@ async def get_spark_vllm_runtime(session: AsyncSession) -> Runtime | None:
 
     Returns the first enabled vLLM runtime whose endpoint targets the Spark
     host on port 8000. This is the canonical "the GPU is serving X" runtime.
+    The host:port to match comes from settings.spark_llm_url (env-configurable)
+    instead of a hardcoded LAN IP.
     """
+    from urllib.parse import urlparse
+
+    spark_netloc = urlparse(settings.spark_llm_url).netloc
     stmt = (
         select(Runtime)
         .where(Runtime.runtime_type == "vllm_docker")
-        .where(Runtime.endpoint.like("%192.0.2.10:8000%"))  # type: ignore[union-attr]
+        .where(Runtime.endpoint.like(f"%{spark_netloc}%"))  # type: ignore[union-attr]
         .where(Runtime.enabled.is_(True))  # type: ignore[union-attr]
     )
     result = await session.exec(stmt)

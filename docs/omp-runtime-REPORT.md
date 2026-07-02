@@ -19,7 +19,7 @@
 | Sparky live umschalten | ⛔ GATED — braucht Build + Mensch |
 
 **Was einem funktionierenden Live-Switch noch im Weg steht (harte Gates, kein Code-Problem):**
-1. **Modell-ID unbestätigt.** Seed nutzt `nvidia/Qwen3.6-35B-A3B-NVFP4`. Der **hermes**-Eintrag auf **demselben** vLLM (`:8000`) nennt `Qwen/Qwen3.6-35B-A3B-FP8`. Ein vLLM serviert **eine** Modell-ID → max. eine stimmt. **Vor dem Switch `GET http://192.0.2.100:8000/v1/models` abfragen und die echte ID setzen.** Falsche ID = omp startet nicht → jede Task sofort `blocked` (terminal, aber 100 % funktionslos).
+1. **Modell-ID unbestätigt.** Seed nutzt `nvidia/Qwen3.6-35B-A3B-NVFP4`. Der **hermes**-Eintrag auf **demselben** vLLM (`:8000`) nennt `Qwen/Qwen3.6-35B-A3B-FP8`. Ein vLLM serviert **eine** Modell-ID → max. eine stimmt. **Vor dem Switch `GET http://192.0.2.20:8000/v1/models` abfragen und die echte ID setzen.** Falsche ID = omp startet nicht → jede Task sofort `blocked` (terminal, aber 100 % funktionslos).
 2. **omp-Paket-Pin ungetestet.** `ARG OMP_PACKAGE=omp@16.2.13` — Vendor/Name/Pin muss vor dem ersten `docker build` bestätigt werden.
 3. **Live-Sentinel/Reflection unverifiziert.** Der `TASK_COMPLETE` + 4-Feld-Reflection-Vertrag ist nur gegen synthetische/Qwen-förmige Fixtures getestet. Verlässlichkeit auf echtem Qwen (False-Pos/Neg) ist ein Phase-2-Gate.
 
@@ -65,7 +65,7 @@ Breite Selektion `-k "runtime or build_runtime_env or image or switch or omp"`: 
 |---|---|
 | Anzeigename | **omp headless (Qwen)** |
 | runtime_type | `omp` (neu, distinkt) |
-| Endpoint | `http://192.0.2.100:8000/v1` (DGX-Spark Qwen vLLM) |
+| Endpoint | `http://192.0.2.20:8000/v1` (DGX-Spark Qwen vLLM) |
 | Modell | `nvidia/Qwen3.6-35B-A3B-NVFP4` (⚠ vor Switch gegen `/v1/models` prüfen) |
 | Image | `mc-omp-agent:latest` (aus `runtime_type`, nicht als Feld) |
 | supports_tools / reasoning / streaming | true / true / true |
@@ -87,7 +87,7 @@ cd .. && OMP_TASK_LOCK_FILE=/tmp/omp.lock python3 docker/omp-bridge/tests/test_s
   && python3 docker/omp-bridge/tests/test_bridge.py
 
 # --- PRECHECK (Gate 1): echte Modell-ID bestätigen, Widerspruch mit hermes auflösen ---
-curl -s http://192.0.2.100:8000/v1/models | jq '.data[].id'
+curl -s http://192.0.2.20:8000/v1/models | jq '.data[].id'
 #  -> stimmt die ID NICHT mit runtimes.json (nvidia/Qwen3.6-35B-A3B-NVFP4) überein:
 #     backend/config/runtimes.json:omp-qwen.model_identifier anpassen BEVOR gebaut/registriert wird.
 

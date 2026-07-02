@@ -38,7 +38,7 @@ already exists in this worktree at `docker/omp-bridge/`:
   `<<< >>>` markers, commented omp install) to be made real in Phase 2.
 
 Proven-working invocation (local, read-only, omp v16.2.13 against Qwen vLLM at
-`http://192.0.2.100:8000/v1`):
+`http://192.0.2.20:8000/v1`):
 
 ```
 env -u LM_STUDIO_BASE_URL OMP_PROFILE=mc-agent \
@@ -61,7 +61,7 @@ DGX-Spark Qwen vLLM endpoint. Concretely:
    OpenAI-style single code path** — it does **not** get anthropic tokens.
 
 2. **Runtime row `omp-qwen`** (seeded, insert-only, idempotent):
-   `runtime_type=omp`, `endpoint=http://192.0.2.100:8000/v1`,
+   `runtime_type=omp`, `endpoint=http://192.0.2.20:8000/v1`,
    `model_identifier=nvidia/Qwen3.6-35B-A3B-NVFP4`, `supports_tools=true`,
    `enabled=true`. The slug deliberately does **not** start with
    `anthropic-claude-`, so `build_runtime_env` and `docker_agent_sync` emit

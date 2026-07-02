@@ -6,7 +6,7 @@
 
 ## Kontext
 
-PORSCHE ist eine **Windows-Box** (LAN `192.0.2.100`, Tailscale `<tailscale-ip>`,
+PORSCHE ist eine **Windows-Box** (LAN `192.0.2.20`, Tailscale `<tailscale-ip>`,
 MAC `00:11:22:33:44:55`), die einen lokalen **unsloth-OpenAI-Server** betreibt.
 Sie soll als LLM-Runtime in Mission Control nutzbar werden — sodass bestehende
 cli-bridge/host-Agenten sich per `agent.runtime_id` daran binden, **genau wie heute
@@ -169,7 +169,7 @@ Konkret umgesetzt (bereits committed auf `feat/porsche-unsloth-runtime`):
 - **Platzhalter-Werte.** Der Seed ist `enabled=false`; `endpoint`, `model_identifier`
   und `launch_command` sind TODO-Platzhalter, bis die echten PORSCHE-Werte feststehen.
   `start_runtime` verweigert den Start, solange `launch_command` mit `TODO` beginnt.
-- **DHCP-Risiko.** `192.0.2.100` kann wechseln → DHCP-Reservation oder mDNS-Fallback
+- **DHCP-Risiko.** `192.0.2.20` kann wechseln → DHCP-Reservation oder mDNS-Fallback
   empfohlen (offener Betriebspunkt).
 - Der Modell-Warmup (1–3 Min nach Start) liest kurz als `booted_no_model`, bis
   `/v1/models` antwortet — für v1 akzeptiert; die Start-Meldung weist darauf hin.
