@@ -225,6 +225,9 @@ Updating an install: [docs/setup/updating.md](docs/setup/updating.md).
 
 ## Development
 
+`make help` shows the common entry points (`make test`, `make up`,
+`make build-dev`, …). Manually:
+
 ```bash
 # Backend tests (pytest — SQLite in-memory + fakeredis, no Docker needed)
 cd backend && python3.12 -m venv .venv && source .venv/bin/activate

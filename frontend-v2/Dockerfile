@@ -27,6 +27,16 @@ ENV NEXT_PUBLIC_BRAND=$NEXT_PUBLIC_BRAND
 RUN npm run build
 
 # Production runner
+# ── dev target ───────────────────────────────────────────────────────────────
+# `docker build --target dev`: hot-reload dev server, no standalone build.
+# The production runner below stays last = the default build target.
+FROM deps AS dev
+WORKDIR /app
+COPY . .
+ENV NEXT_TELEMETRY_DISABLED=1
+EXPOSE 3000
+CMD ["npm", "run", "dev"]
+
 FROM base AS runner
 WORKDIR /app
 

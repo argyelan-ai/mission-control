@@ -33,7 +33,23 @@ WORKDIR /app
 COPY pyproject.toml requirements.lock ./
 RUN uv pip install --system --no-cache -r requirements.lock
 
-# Copy application code
+# ── dev target ───────────────────────────────────────────────────────────────
+# `docker build --target dev` / compose `target: dev`: test extras + hot
+# reload. Not what compose builds by default — the release stage below is
+# last, so an untargeted build always produces the production image.
+FROM base AS dev
+COPY . .
+RUN uv pip install --system --no-cache -e ".[test]" \
+    && adduser --disabled-password --gecos "" mcuser \
+    && chown -R mcuser:mcuser /app/config
+USER mcuser
+EXPOSE 8000
+COPY --chmod=755 docker-entrypoint.sh /docker-entrypoint.sh
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+# ── release target (default) ─────────────────────────────────────────────────
+FROM base AS release
 COPY . .
 
 # Create non-root user and give write access to config
