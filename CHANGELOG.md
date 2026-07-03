@@ -4,6 +4,37 @@ All notable changes to Mission Control are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
+## [0.1.1] — 2026-07-03
+
+### Added
+
+- **App-store packages** (`deploy/catalogs/`) — prepared submissions for
+  Umbrel (digest-pinned multi-arch images, `exports.sh` secret derivation)
+  and Runtipi (custom-store layout), plus a Portainer template and a fixed
+  CasaOS manifest. All bundle a small Caddy proxy: the prebuilt frontend
+  makes same-origin API calls, so `/api/*` must be routed alongside it.
+- **Makefile** — self-documenting entry points (`make help`): setup, up,
+  test, build, seed, update.
+- **Dev/release Docker targets** — `make build-dev` builds backend/frontend
+  images with hot reload and test extras; untargeted builds stay production.
+- **Vertical tutorial** — `docs/setup/build-a-vertical.md`
+  (community contribution, #9).
+- README: full feature list, supported-runtimes matrix, live sessions
+  screenshot.
+
+### Changed
+
+- `SECRETS_ENCRYPTION_KEY` may now be any passphrase — the backend derives
+  a proper Fernet key from non-Fernet values (app-store installs can only
+  supply random strings). Existing valid keys are used unchanged.
+
+### Fixed
+
+- Watchdog: review-stuck escalation no longer fires for tasks on archived
+  boards.
+- CI: all actions SHA-pinned (org policy); leak gate runs the license-free
+  gitleaks CLI, digest-pinned.
+
 ## [0.1.0] — 2026-07-02
 
 Initial public release. 🎉

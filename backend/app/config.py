@@ -138,7 +138,7 @@ class Settings(BaseSettings):
     environment: str = "development"
     # Entspricht dem Public-Release-Tag (CHANGELOG.md / GitHub Releases).
     # Release-Prozess: hier + pyproject.toml + CHANGELOG bumpen, dann taggen.
-    app_version: str = "0.1.0"
+    app_version: str = "0.1.1"
     # Fallback-Arbeitsverzeichnis fuer Tasks OHNE Projekt-Kontext.
     # Primaer nutzt dispatch.py project.workspace_path (via default_project_id auf Board).
     # mc_repo_path greift nur wenn kein Projekt und kein Agent-Workspace vorhanden ist.
