@@ -7,6 +7,8 @@ Thanks for your interest! A few ground rules keep this codebase healthy.
 1. Fork + clone, then follow the Quickstart in [README.md](README.md).
 2. Backend tests: `cd backend && source .venv/bin/activate && pytest -v`
 3. Frontend tests: `cd frontend-v2 && npm run test:run`
+4. Building an optional feature bundle? Start with
+   [Build a vertical](docs/setup/build-a-vertical.md).
 
 ## Workflow
 

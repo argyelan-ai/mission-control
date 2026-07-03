@@ -31,7 +31,8 @@ configures secrets, boots the stack and opens the browser — where a first-run
 wizard walks you through admin account, LLM provider key and a demo board.
 Updating later is `./install.sh --update`. Details in
 [Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
-[Updating](docs/setup/updating.md).
+[Updating](docs/setup/updating.md) ·
+[Build a vertical](docs/setup/build-a-vertical.md).
 
 ## Highlights
 
