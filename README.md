@@ -52,6 +52,47 @@ Updating later is `./install.sh --update`. Details in
   JWT user auth with roles.
 
 <details>
+<summary><b>Full feature list</b></summary>
+
+### Orchestration
+- **Home pipeline** — swim-lane view of tasks across inbox, in progress, review, blocked, done
+- **Projects & phases** — Linear-style hierarchy: lead agent plans phases, subtasks auto-dispatch to workers
+- **Dispatch ACK handshake** — a task counts as picked up only when the agent explicitly confirms
+- **Git workflow** — repo per project, branch per task, PR on review, squash-merge on approval
+- **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
+- **Workflows, automations & scheduler** — reusable action sequences and cron jobs with run history
+- **Multi-agent consensus** — ask several agents the same question, aggregate the answers
+- **Watchdogs** — ACK timeouts, stuck-review escalation, silent-abort auto-block (ADR-046)
+
+### Agents & runtimes
+- **Agent registry & detail** — overview, skills, config and memory per agent; templates for one-click roles
+- **Multi-runtime fleet** — agents as Docker containers or native host processes
+- **Runtime registry & one-click switching** — move an agent between Claude and local models with rollback
+- **Live sessions** — real terminal into every agent, right in the browser
+- **Scope-based permissions** — 16 fine-grained API scopes per agent, PBKDF2 agent tokens
+- **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
+- **Discord & Telegram** — per-agent channels, notifications, approvals on your phone
+- **Voice assistant** — real-time spoken conversation with the fleet
+- **Office view** — a playful 3D visualization of who's working on what
+
+### Knowledge & operations
+- **Memory & knowledge base** — board memory, agent lessons, global knowledge with vector search
+- **Vault & files** — searchable notes archive and a workspace file browser
+- **Insights** — KPIs, cost/token tracking, failure patterns, daily LLM-distilled reports
+- **Secrets & credentials** — Fernet-encrypted stores for provider keys and task-scoped logins
+- **Research & webhooks** — AI-assisted research into the knowledge base; external event ingestion
+- **First-run wizard & demo seed** — from empty install to a working board in minutes
+
+</details>
+
+### Talk to your agents — live
+
+![Live agent terminal](docs/assets/mc-sessions.png)
+
+Every agent runs in a real terminal session you can watch and type into from
+the browser — the same Claude Code (or local-LLM) REPL the agent itself uses.
+
+<details>
 <summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
 
 *The first-run wizard — from empty install to configured in three steps:*
@@ -63,6 +104,25 @@ Updating later is `./install.sh --update`. Details in
 *The runtime manager — GPU hosts, models, live binding of agents to runtimes:*
 ![Runtime manager](docs/assets/mc-runtimes.png)
 </details>
+
+## Supported runtimes
+
+| Runtime | What it is | Agent harness |
+|---|---|---|
+| **Claude Code** (Anthropic) | Opus/Sonnet via Pro/Max subscription — `claude setup-token` | `claude` binary in `mc-claude-agent` |
+| **vLLM** (self-hosted) | Your own GPU box; lifecycle (start/stop) managed over SSH | OpenAI-shim in `mc-agent-base` |
+| **LM Studio** | Locally loaded models, `lms load/unload` managed | OpenAI-shim in `mc-agent-base` |
+| **Ollama Cloud / any OpenAI-compatible `/v1`** | Hosted or hand-registered endpoints | OpenAI-shim in `mc-agent-base` |
+| **omp** (headless) | Structured NDJSON lifecycle instead of a scraped terminal — newest harness (ADR-045) | `bridge.py` in `mc-omp-agent` |
+| **Host agents** | Native processes on the host machine (macOS launchd) instead of containers | native `claude` binary |
+
+Agents are bound to a runtime and can be **switched in one click** — Claude ↔
+local model — through an atomic switch service: config is re-rendered, the
+container swaps only when the image family changes (seconds for same-family
+switches), a health check gates the result and everything rolls back on
+failure. Credential routing is centralized: Anthropic runtimes get the OAuth
+token, everything else gets `OPENAI_BASE_URL`/`OPENAI_MODEL` — the paths never
+mix.
 
 ## Architecture
 
