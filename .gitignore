@@ -69,6 +69,7 @@ caddy/Caddyfile.local
 # ── Private dev overlay (scripts/dev-overlay.sh) ─────────────────────────
 # Maintainer-private verticals & config live in a separate private repo and
 # are synced into these paths locally. Never committed here.
+backend/scripts/test_news_bridge.py
 backend/app/verticals/*
 !backend/app/verticals/__init__.py
 !backend/app/verticals/hooks.py
