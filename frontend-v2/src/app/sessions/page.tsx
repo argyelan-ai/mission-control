@@ -46,11 +46,7 @@ function useAgentTerminal(
   const destroyedRef = useRef(false);
   const dataDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const resizeDisposableRef = useRef<{ dispose: () => void } | null>(null);
-  // Scroll via tmux copy-mode (because xterm.js scrollback is useless with tmux):
-  // mouse off in the container → native text selection works,
-  // wheel events get translated into tmux copy-mode keystrokes and sent to the PTY.
-  const copyModeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const inCopyModeRef = useRef(false);
+  // wsRef used below for touch scroll (synthetic mouse wheel CSI sequences).
 
   useEffect(() => {
     destroyedRef.current = false;
@@ -147,69 +143,33 @@ function useAgentTerminal(
     };
   }, [agent?.id, term]);
 
-  // Custom wheel handler: scroll via tmux copy-mode
+  // Scroll: tmux mouse on + xterm.js native mouse tracking.
   //
-  // Why: tmux uses the alternate screen buffer and redraws the whole pane on
-  // every update → xterm.js's own scrollback buffer is effectively empty
-  // because of that. The 50000 lines of history only live in tmux copy-mode.
+  // Why: tmux uses the alternate screen buffer, so xterm.js's own scrollback
+  // is useless. The 50000-line history lives in tmux. With "mouse on" in
+  // tmux's config, tmux handles wheel events: xterm.js (in mouse-tracking mode
+  // because tmux enables it) fires onData with mouse button 4/5 CSI sequences
+  // on wheel, which our onData handler forwards via ws → backend → PTY → tmux.
   //
-  // Flow:
-  //  1. Wheel event → send C-b [ (tmux prefix + [) to enter copy-mode
-  //  2. Send Arrow-Up/Down keystrokes proportional to the scroll delta
-  //  3. After 4s idle → send 'q' to leave copy-mode
+  // No attachCustomWheelEventHandler here: returning false from it would
+  // suppress xterm.js's mouse-tracking path (the working path). We let
+  // xterm.js handle wheel natively.
   //
-  // tmux mouse must be off (otherwise tmux would intercept the wheel events
-  // itself and this handler would never be called). See entrypoint.sh.
+  // Mobile (touch): no wheel events → synthesize the same mouse button 4/5
+  // SGR sequences manually and send them directly to the PTY. tmux intercepts
+  // them the same way it intercepts real wheel events.
+  //   \x1b[<64;1;1M = mouse button 64 (wheel up / scroll to older history)
+  //   \x1b[<65;1;1M = mouse button 65 (wheel down / scroll to live end)
   useEffect(() => {
     if (!term) return;
 
-    const exitCopyMode = () => {
-      if (!inCopyModeRef.current) return;
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send("q");
-      }
-      inCopyModeRef.current = false;
-    };
-
-    // Shared scroll path for wheel (desktop) and touch (mobile): both
-    // translate their delta into tmux copy-mode arrow keystrokes. lines<0 = up
-    // into history, lines>0 = down toward the live end.
-    const scrollByLines = (lines: number) => {
-      if (lines === 0) return;
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-      if (!inCopyModeRef.current) {
-        wsRef.current.send("\x02["); // Ctrl-B [ → enter copy-mode
-        inCopyModeRef.current = true;
-      }
-      // Reset auto-exit timer (4s after the last scroll → leave copy-mode)
-      if (copyModeTimerRef.current) clearTimeout(copyModeTimerRef.current);
-      copyModeTimerRef.current = setTimeout(exitCopyMode, 4000);
-      const key = lines < 0 ? "\x1b[A" : "\x1b[B";
-      wsRef.current.send(key.repeat(Math.abs(lines)));
-    };
-
-    // Desktop: mouse wheel / trackpad
-    term.attachCustomWheelEventHandler((e: WheelEvent) => {
-      if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        return true; // no connection → xterm.js default (scrollback, even if empty)
-      }
-      const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 40)));
-      scrollByLines(e.deltaY < 0 ? -lines : lines);
-      return false; // suppress xterm.js default
-    });
-
-    // Mobile: finger swipe. attachCustomWheelEventHandler fires ONLY for
-    // `wheel` events — a single finger produces touch events, which is why the
-    // terminal wasn't scrollable on phones. Desktop is unaffected (mouse/trackpad
-    // don't fire touch events). Swipe distance is translated ~1:1 into the same
-    // copy-mode keystrokes as the wheel.
     const el = term.element;
-    const TOUCH_LINE_PX = 18; // ~ one terminal line of swipe per arrow keystroke
+    const TOUCH_LINE_PX = 18; // ~1 terminal line per scroll unit
     let lastY: number | null = null;
     let accum = 0;
 
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) { lastY = null; return; } // ignore pinch/multi-touch
+      if (e.touches.length !== 1) { lastY = null; return; }
       lastY = e.touches[0].clientY;
       accum = 0;
     };
@@ -222,31 +182,26 @@ function useAgentTerminal(
       const lines = Math.trunc(accum / TOUCH_LINE_PX);
       if (lines !== 0) {
         accum -= lines * TOUCH_LINE_PX;
-        // Finger moving down (lines>0, content moves down) → older history → up
-        scrollByLines(-lines);
+        // lines > 0 = finger moving down = scroll up into older history
+        const btn = lines > 0 ? "\x1b[<64;1;1M" : "\x1b[<65;1;1M";
+        for (let i = 0; i < Math.abs(lines); i++) {
+          wsRef.current.send(btn);
+        }
       }
-      e.preventDefault(); // suppress native page bounce / selection
+      e.preventDefault();
     };
     const onTouchEnd = () => { lastY = null; };
 
-    // Capture phase: fires reliably, even if an xterm child intercepts the
-    // touch events via stopPropagation (bubble phase would then never arrive).
     el?.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
     el?.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
     el?.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
     el?.addEventListener("touchcancel", onTouchEnd, { passive: true, capture: true });
 
     return () => {
-      if (copyModeTimerRef.current) clearTimeout(copyModeTimerRef.current);
       el?.removeEventListener("touchstart", onTouchStart, { capture: true });
       el?.removeEventListener("touchmove", onTouchMove, { capture: true });
       el?.removeEventListener("touchend", onTouchEnd, { capture: true });
       el?.removeEventListener("touchcancel", onTouchEnd, { capture: true });
-      // Cleanup: if still in copy-mode on unmount → leave it
-      if (inCopyModeRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send("q");
-        inCopyModeRef.current = false;
-      }
     };
   }, [term]);
 
