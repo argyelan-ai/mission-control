@@ -1,0 +1,43 @@
+{
+  "$schema": "https://raw.githubusercontent.com/runtipi/runtipi-appstore/master/apps/app-info-schema.json",
+  "id": "mission-control",
+  "available": true,
+  "name": "Mission Control",
+  "port": 3217,
+  "exposable": false,
+  "supported_architectures": ["amd64", "arm64"],
+  "categories": ["ai", "automation"],
+  "version": "0.1.0",
+  "tipi_version": 1,
+  "short_desc": "Self-hosted command center for AI agent fleets",
+  "description": "Mission Control is a self-hosted command center for AI agent fleets. Create agents, dispatch tasks over Kanban boards, and watch them ship — with live terminal sessions, a knowledge vault, budgets and cost tracking, and support for multiple runtimes (Claude Code, vLLM, LM Studio, OpenAI-compatible APIs). A first-run wizard walks you through creating the admin account and connecting an LLM provider.",
+  "author": "argyelan-ai",
+  "source": "https://github.com/argyelan-ai/mission-control",
+  "website": "https://github.com/argyelan-ai/mission-control",
+  "form_fields": [
+    {
+      "type": "random",
+      "label": "Database password",
+      "min": 32,
+      "env_variable": "MC_DB_PASSWORD"
+    },
+    {
+      "type": "random",
+      "label": "Redis password",
+      "min": 32,
+      "env_variable": "MC_REDIS_PASSWORD"
+    },
+    {
+      "type": "random",
+      "label": "JWT secret",
+      "min": 32,
+      "env_variable": "MC_JWT_SECRET_KEY"
+    },
+    {
+      "type": "random",
+      "label": "Secrets encryption passphrase",
+      "min": 32,
+      "env_variable": "MC_SECRETS_ENCRYPTION_KEY"
+    }
+  ]
+}

@@ -8,6 +8,8 @@ Key generieren:
   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """
 
+import base64
+import hashlib
 import logging
 
 from cryptography.fernet import Fernet, InvalidToken
@@ -36,11 +38,18 @@ def _get_fernet() -> Fernet:
     # Key muss ein gültiger Fernet-Key sein (URL-safe base64, 32 Bytes)
     try:
         _fernet = Fernet(key.encode() if isinstance(key, str) else key)
-    except Exception as e:
-        raise RuntimeError(
-            f"SECRETS_ENCRYPTION_KEY is invalid (not a valid Fernet key): {e}. "
-            "Generate a valid key with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
-        ) from e
+    except Exception:
+        # App-store installs (CasaOS, Runtipi, ...) can only supply an
+        # arbitrary random string, not a Fernet-formatted key. Derive a
+        # proper key from the passphrase instead of refusing to boot. A
+        # value that already IS a valid Fernet key never reaches this path,
+        # so existing installs are unaffected.
+        raw = key.encode() if isinstance(key, str) else key
+        _fernet = Fernet(base64.urlsafe_b64encode(hashlib.sha256(raw).digest()))
+        logger.info(
+            "SECRETS_ENCRYPTION_KEY is not a Fernet-formatted key - "
+            "derived one from it (sha256). Keep the original value stable."
+        )
 
     return _fernet
 

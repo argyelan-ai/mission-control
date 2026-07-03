@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Umbrel app icon: square corners by guideline (rounding is applied by
+       the store UI). Mirrors frontend-v2/src/app/icon.png. -->
+  <defs>
+    <radialGradient id="glow" cx="62%" cy="62%" r="55%">
+      <stop offset="0%" stop-color="#1aa8b5" stop-opacity="0.28"/>
+      <stop offset="100%" stop-color="#1aa8b5" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="256" height="256" fill="#17191f"/>
+  <rect width="256" height="256" fill="url(#glow)"/>
+  <circle cx="128" cy="128" r="112" fill="none" stroke="#3a3f4a" stroke-width="1.5"/>
+  <text x="112" y="164" text-anchor="middle" fill="#f2f3f5"
+        font-family="Helvetica Neue, Helvetica, Arial, sans-serif"
+        font-size="118" font-weight="400">a</text>
+  <circle cx="172" cy="150" r="17" fill="#1aa8b5"/>
+</svg>

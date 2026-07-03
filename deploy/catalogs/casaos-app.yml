@@ -4,6 +4,11 @@
 # HINWEIS: CasaOS kann kein setup.sh ausfuehren — Secrets werden hier als
 # Pflicht-Umgebungsvariablen deklariert, die der Nutzer beim Installieren
 # setzt. Einreichung: dieses File + Screenshots als PR in deren Repo.
+#
+# Topologie: Der Browser MUSS ueber den proxy-Service rein (:80 im
+# Container), der /api/* ans Backend und alles andere ans Frontend routet —
+# das Frontend-Image macht relative API-Calls (same-origin). Frontend
+# direkt exponieren funktioniert NICHT.
 name: mission-control
 services:
   db:
@@ -35,11 +40,37 @@ services:
     image: ghcr.io/argyelan-ai/mc-frontend:latest
     restart: unless-stopped
     depends_on: [backend]
+  proxy:
+    # Same-origin-Router (wie der Caddy-Service im Haupt-Compose): /api/*
+    # und /health gehen ans Backend, der Rest ans Frontend. Config wird
+    # inline erzeugt, weil Kataloge keine Repo-Dateien mounten koennen.
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [frontend, backend]
     ports:
-      - "3217:3000"
+      - "3217:80"
+    command:
+      - sh
+      - -c
+      - |
+        cat > /etc/caddy/Caddyfile <<'EOF'
+        :80 {
+          encode gzip zstd
+          handle /api/* {
+            reverse_proxy backend:8000
+          }
+          handle /health {
+            reverse_proxy backend:8000
+          }
+          handle {
+            reverse_proxy frontend:3000
+          }
+        }
+        EOF
+        exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
 x-casaos:
   architectures: [amd64, arm64]
-  main: frontend
+  main: proxy
   author: argyelan-ai
   category: AI
   port_map: "3217"
@@ -56,4 +87,5 @@ x-casaos:
   icon: https://raw.githubusercontent.com/argyelan-ai/mission-control/main/frontend-v2/src/app/icon.png
   screenshot_link:
     - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-home.png
+    - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-sessions.png
     - https://raw.githubusercontent.com/argyelan-ai/mission-control/main/docs/assets/mc-agents.png
