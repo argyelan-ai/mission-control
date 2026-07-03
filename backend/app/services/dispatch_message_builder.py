@@ -97,7 +97,7 @@ def render_agent_lessons_section(lessons_context: str) -> DispatchSection | None
     if not lines:
         return None
 
-    header = "## Deine bisherigen Erkenntnisse\n"
+    header = "## Your Prior Lessons Learned\n"
     budget = LESSON_AUTO_MAX_CHARS - len(header)
     kept = []
     used = 0
@@ -110,7 +110,7 @@ def render_agent_lessons_section(lessons_context: str) -> DispatchSection | None
 
     body = "\n".join(kept)
     if len(kept) < len(lines):
-        body += "\n_(weitere via `mc vault-search`)_"
+        body += "\n_(more via `mc vault-search`)_"
 
     return DispatchSection(
         name="agent_lessons",
@@ -251,7 +251,7 @@ async def _build_review_message(
                 # Cap at 800 characters so the message doesn't explode
                 content = c.content[:800]
                 if len(c.content) > 800:
-                    content += "\n[...gekuerzt]"
+                    content += "\n[...truncated]"
                 comment_lines.append(f"### {c.comment_type.title()} ({c.created_at.strftime('%H:%M')})\n{content}")
             dev_comments_text = "\n\n".join(comment_lines)
     except Exception:
@@ -264,29 +264,29 @@ async def _build_review_message(
     _is_phase_review = _child_result.first() is not None
 
     # ── Assemble message ──
-    dev_name = developer.name if developer else "Unbekannt"
+    dev_name = developer.name if developer else "Unknown"
 
     if _is_phase_review:
         # Phase/root review: check the overall result, not individual code
-        msg = f"# Phase-Review: {task.title}\n\n"
-        msg += f"**Task-ID:** {task.id}\n"
+        msg = f"# Phase Review: {task.title}\n\n"
+        msg += f"**Task ID:** {task.id}\n"
         msg += f"**Board:** {task.board_id}\n\n"
-        msg += "## WICHTIG: Dies ist ein Phase-Review\n"
-        msg += "Du reviewst das **Gesamtergebnis** dieser Phase, nicht einen einzelnen Code-Task.\n"
-        msg += "Alle Subtasks dieser Phase sind abgeschlossen.\n\n"
-        msg += "**Pruefe:**\n"
-        msg += "- Erfuellt das Gesamtergebnis den Auftrag?\n"
-        msg += "- Sind alle geforderten Artefakte vorhanden?\n"
-        msg += "- Gibt es offensichtliche Luecken oder Fehler?\n\n"
-        msg += "**NICHT pruefen:** Einzelne Code-Zeilen (das haben die Subtasks bereits abgedeckt).\n\n"
+        msg += "## IMPORTANT: This is a phase review\n"
+        msg += "You're reviewing the **overall result** of this phase, not a single code task.\n"
+        msg += "All subtasks of this phase are complete.\n\n"
+        msg += "**Check:**\n"
+        msg += "- Does the overall result fulfill the request?\n"
+        msg += "- Are all required artifacts present?\n"
+        msg += "- Are there any obvious gaps or errors?\n\n"
+        msg += "**Do NOT check:** individual lines of code (the subtasks already covered that).\n\n"
     else:
         msg = f"# Code Review: {task.title}\n\n"
-        msg += f"**Task-ID:** {task.id}\n"
+        msg += f"**Task ID:** {task.id}\n"
         msg += f"**Board:** {task.board_id}\n"
-        msg += f"**Entwickler:** {dev_name}\n\n"
+        msg += f"**Developer:** {dev_name}\n\n"
 
     if task.description:
-        msg += f"## Beschreibung\n{task.description}\n\n"
+        msg += f"## Description\n{task.description}\n\n"
 
     # Code location: Task.workspace_path (source of truth, Bundle 4)
     # Fallback: project workspace > mc_repo_path > agent workspace
@@ -307,12 +307,12 @@ async def _build_review_message(
         # are on different runtimes (reviewer on cli-bridge, developer on
         # host for example); otherwise no visible diff.
         _agent_path = workspace_path_for_runtime(reviewer, _code_path)
-        msg += f"## Code-Speicherort\n"
-        msg += f"**Arbeitsverzeichnis:** `{_agent_path}/`\n"
+        msg += f"## Code Location\n"
+        msg += f"**Working directory:** `{_agent_path}/`\n"
         if getattr(task, "workspace_port", None):
-            msg += f"**Dev-Server Port:** {task.workspace_port}\n"
-        msg += f"Wechsle ZUERST in dieses Verzeichnis: `cd {_agent_path}`\n"
-        msg += f"Durchsuche dort nach den relevanten Dateien.\n\n"
+            msg += f"**Dev server port:** {task.workspace_port}\n"
+        msg += f"Change into this directory FIRST: `cd {_agent_path}`\n"
+        msg += f"Search there for the relevant files.\n\n"
 
     # T-1 Phase D: project config section from project_config
     if _project and _project.project_config:
@@ -326,12 +326,12 @@ async def _build_review_message(
             msg += build_config_dispatch_section(_project.name, _resolved, port=_port) + "\n\n"
 
     if task.target_url:
-        msg += f"**Ziel-URL:** {task.target_url}\n"
-        msg += "Oeffne diese URL im Browser um das Ergebnis visuell zu pruefen.\n\n"
+        msg += f"**Target URL:** {task.target_url}\n"
+        msg += "Open this URL in the browser to visually check the result.\n\n"
 
     # Developer comments (evidence of what was done)
     if dev_comments_text:
-        msg += f"## Was der Entwickler gemacht hat\n{dev_comments_text}\n\n"
+        msg += f"## What the developer did\n{dev_comments_text}\n\n"
 
     # ── Subtask evidence (only for phase/root reviews) ──
     # Subtasks are `done` after completion and no longer visible in the board context.
@@ -370,7 +370,7 @@ async def _build_review_message(
                     for c in sub_comments:
                         content = c.content[:600]
                         if len(c.content) > 600:
-                            content += "\n[...gekuerzt]"
+                            content += "\n[...truncated]"
                         section += f"\n**{c.comment_type.title()}** ({c.created_at.strftime('%H:%M')}):\n{content}\n"
 
                 # Deliverables of the subtask
@@ -386,8 +386,8 @@ async def _build_review_message(
 
                 subtask_sections.append(section)
 
-            msg += "## Subtask-Evidenz\n"
-            msg += "*(Subtasks sind nach Abschluss `done` und im Board-Kontext nicht mehr sichtbar — hier explizit geladen)*\n\n"
+            msg += "## Subtask Evidence\n"
+            msg += "*(Subtasks are `done` once complete and no longer visible in the board context — loaded explicitly here)*\n\n"
             msg += "\n---\n".join(subtask_sections) + "\n\n"
 
     # Load PR link (if present)
@@ -408,22 +408,22 @@ async def _build_review_message(
 
     if pr_comment:
         msg += f"## Pull Request\n{pr_comment.content}\n\n"
-        msg += f"Nutze `gh pr diff` oder die GitHub-UI um die Aenderungen zu pruefen.\n\n"
+        msg += f"Use `gh pr diff` or the GitHub UI to check the changes.\n\n"
 
     # Reviewer's process rules (from rules_md)
     if reviewer.rules_md:
-        msg += f"## Prozess-Regeln (PFLICHT)\n\n{reviewer.rules_md}\n\n"
+        msg += f"## Process Rules (MANDATORY)\n\n{reviewer.rules_md}\n\n"
 
-    msg += f"""## Deine Aufgabe
+    msg += f"""## Your Task
 
-Lies den relevanten Code im Workspace des Entwicklers. Fuehre die Tests aus. Entscheide: Approved oder Request Changes.
+Read the relevant code in the developer's workspace. Run the tests. Decide: Approved or Request Changes.
 
-**WICHTIG:** Nutze den Review-Endpoint — EINE Aktion fuer Kommentar + Entscheidung:
+**IMPORTANT:** Use the review endpoint — ONE action for comment + decision:
 
 ---
 
-### APPROVED — Review bestanden
-Wenn der Code gut ist, Tests bestehen, Anforderungen erfuellt:
+### APPROVED — review passed
+If the code is good, tests pass, requirements are met:
 
 ```bash
 {approve_curl}
@@ -431,23 +431,23 @@ Wenn der Code gut ist, Tests bestehen, Anforderungen erfuellt:
 
 ---
 
-### REQUEST CHANGES — Aenderungen noetig
-NUR wenn es echte Probleme gibt, die nachgebessert werden muessen:
+### REQUEST CHANGES — changes needed
+ONLY if there are real problems that need to be fixed:
 
 ```bash
 {reject_curl}
 ```
 
-Kommentar-Format bei Rejection:
-**Problem** — Was konkret nicht stimmt
-**Erwartung** — Wie es sein sollte
-**Action** — Was der Developer aendern soll
+Comment format for rejection:
+**Problem** — what exactly is wrong
+**Expectation** — how it should be
+**Action** — what the developer should change
 
 ---
 
-**Ein Kommentar allein schliesst kein Review ab.** Du MUSST den Review-Endpoint nutzen.
+**A comment alone does not close a review.** You MUST use the review endpoint.
 
-Du schreibst und aenderst keinen Code. Nur lesen und beurteilen."""
+You don't write or change any code. Only read and judge."""
     return msg
 
 
@@ -466,8 +466,8 @@ async def _build_test_message(
     comment_curl = _curl("POST", f"{task_path}/comments", token,
                          '{"content": "...", "comment_type": "progress"}')
 
-    msg = f"# QA-Test: {task.title}\n\n"
-    msg += f"**Task-ID:** {task.id}\n"
+    msg = f"# QA Test: {task.title}\n\n"
+    msg += f"**Task ID:** {task.id}\n"
     msg += f"**Board:** {task.board_id}\n\n"
 
     # ── Determine test URL: target_url > workspace_port > localhost ──
@@ -479,28 +479,28 @@ async def _build_test_message(
         _test_url = "http://localhost"
 
     if task.description:
-        msg += f"## Auftrag\n{task.description}\n\n"
+        msg += f"## Assignment\n{task.description}\n\n"
 
     if task.acceptance_criteria:
-        msg += f"## Akzeptanzkriterien\n{task.acceptance_criteria}\n\n"
+        msg += f"## Acceptance Criteria\n{task.acceptance_criteria}\n\n"
 
     if task.target_url:
-        msg += f"**Ziel-URL:** {task.target_url}\n\n"
+        msg += f"**Target URL:** {task.target_url}\n\n"
     elif getattr(task, "workspace_port", None):
-        msg += f"**Dev-Server:** http://localhost:{task.workspace_port}\n\n"
+        msg += f"**Dev server:** http://localhost:{task.workspace_port}\n\n"
 
-    msg += f"""## Deine Aufgabe
+    msg += f"""## Your Task
 
-Du bist der QA-Tester. PASS nur wenn alles funktioniert wenn man es BENUTZT.
+You are the QA tester. PASS only if everything works when you USE it.
 
-### Pflicht-Ablauf
+### Mandatory workflow
 
-**Schritt 1: Task ACKen**
+**Step 1: ACK the task**
 ```bash
 {ack_curl}
 ```
 
-**Schritt 2: Desktop-Test**
+**Step 2: Desktop test**
 ```bash
 dev-browser <<'EOF'
 const page = await browser.getPage("desktop");
@@ -511,19 +511,19 @@ const path = await saveScreenshot(buf, "test-desktop.png");
 console.log(path);
 EOF
 ```
-Pruefe: Laedt die Seite? Alle Elemente sichtbar? Layout korrekt? Farben/Schriften OK?
+Check: Does the page load? Are all elements visible? Is the layout correct? Colors/fonts OK?
 
-**Schritt 3: Interaktionen testen**
-- Formulare ausfuellen und submitten
-- Buttons und Links klicken
-- Navigation pruefen
+**Step 3: Test interactions**
+- Fill in and submit forms
+- Click buttons and links
+- Check navigation
 ```bash
 dev-browser <<'EOF'
 const page = await browser.getPage("desktop");
 const result = await page.snapshotForAI();
 console.log(result.full);
 EOF
-# Element klicken/fuellen basierend auf Snapshot:
+# Click/fill an element based on the snapshot:
 dev-browser <<'EOF'
 const page = await browser.getPage("desktop");
 await page.fill("#email", "test@example.com");
@@ -534,7 +534,7 @@ console.log(path);
 EOF
 ```
 
-**Schritt 4: Mobile-Test**
+**Step 4: Mobile test**
 ```bash
 dev-browser <<'EOF'
 const page = await browser.getPage("mobile");
@@ -547,43 +547,43 @@ console.log(path);
 EOF
 ```
 
-**Schritt 5: Ergebnis dokumentieren**
+**Step 5: Document the result**
 ```bash
 {comment_curl}
 ```
 
-Bei PASS:
+On PASS:
 ```
-**Ergebnis:** TEST_PASS
+**Result:** TEST_PASS
 **Desktop:** /tmp/test-desktop.png — OK
 **Mobile:** /tmp/test-mobile.png — OK
-**Interaktionen:** [was getestet] — OK
-**Zusammenfassung:** Alles funktioniert wie erwartet
+**Interactions:** [what was tested] — OK
+**Summary:** Everything works as expected
 ```
 
-Bei FAIL:
+On FAIL:
 ```
-**Ergebnis:** TEST_FAIL
-**Problem:** [welches Element] — erwartet: [X], tatsaechlich: [Y]
-**Screenshots:** [Pfade]
-**Empfehlung:** [Was der Builder fixen muss]
+**Result:** TEST_FAIL
+**Problem:** [which element] — expected: [X], actual: [Y]
+**Screenshots:** [paths]
+**Recommendation:** [what the builder needs to fix]
 ```
 
-**Schritt 6: Entscheidung**
+**Step 6: Decision**
 - TEST_PASS → done:
 ```bash
 {done_curl}
 ```
-- TEST_FAIL → zurueck an Builder (in_progress):
+- TEST_FAIL → back to the builder (in_progress):
 ```bash
 {reject_curl}
 ```
-Bei FAIL: Der Task geht automatisch zurueck an den Developer der ihn gebaut hat.
+On FAIL: the task automatically goes back to the developer who built it.
 
-### VERBOTEN
-- KEINEN Code aendern
-- KEINE Fixes selbst machen — das ist der Job des Builders
-- NUR testen und dokumentieren
+### FORBIDDEN
+- Do NOT change any code
+- Do NOT make fixes yourself — that's the builder's job
+- ONLY test and document
 """
 
     return msg
@@ -628,33 +628,33 @@ def build_planning_brief(task: Task) -> str | None:
     if not getattr(task, "intake_mode", None):
         return None
 
-    sections = [f"\n## Operator-Briefing ({task.intake_mode})"]
+    sections = [f"\n## Operator Briefing ({task.intake_mode})"]
 
     if task.request_kind:
-        sections.append(f"**Auftragstyp:** {task.request_kind}")
+        sections.append(f"**Request type:** {task.request_kind}")
     if getattr(task, "desired_output", None):
-        sections.append(f"**Gewuenschtes Ergebnis:** {task.desired_output}")
+        sections.append(f"**Desired output:** {task.desired_output}")
     if task.acceptance_criteria:
-        sections.append(f"**Akzeptanzkriterien:** {task.acceptance_criteria}")
+        sections.append(f"**Acceptance criteria:** {task.acceptance_criteria}")
     if getattr(task, "scope_out", None):
-        sections.append(f"**Nicht im Scope:** {task.scope_out}")
+        sections.append(f"**Out of scope:** {task.scope_out}")
     if getattr(task, "risk_notes", None):
-        sections.append(f"**Risiken / Nicht kaputtmachen:** {task.risk_notes}")
+        sections.append(f"**Risks / don't break:** {task.risk_notes}")
     if getattr(task, "needs_browser", None):
-        sections.append("**Browser noetig:** Ja")
+        sections.append("**Browser needed:** Yes")
     if task.requires_auth:
-        sections.append("**Credentials noetig:** Ja")
+        sections.append("**Credentials needed:** Yes")
     if getattr(task, "approval_policy", None):
-        sections.append(f"**Freigabe-Regel:** {task.approval_policy}")
+        sections.append(f"**Approval policy:** {task.approval_policy}")
     if getattr(task, "autonomy_level", None):
-        sections.append(f"**Autonomie:** {task.autonomy_level}")
+        sections.append(f"**Autonomy:** {task.autonomy_level}")
     ref_urls = getattr(task, "reference_urls", None)
     if ref_urls:
-        sections.append(f"**Referenzen:** {', '.join(ref_urls)}")
+        sections.append(f"**References:** {', '.join(ref_urls)}")
     if getattr(task, "reference_notes", None):
-        sections.append(f"**Notizen:** {task.reference_notes}")
+        sections.append(f"**Notes:** {task.reference_notes}")
     if getattr(task, "publish_allowed", None) is not None:
-        sections.append(f"**Veroeffentlichung:** {'Erlaubt' if task.publish_allowed else 'Nicht erlaubt'}")
+        sections.append(f"**Publishing:** {'Allowed' if task.publish_allowed else 'Not allowed'}")
 
     return "\n".join(sections) if len(sections) > 1 else None
 
@@ -685,38 +685,49 @@ def _format_dispatch_message(
 
     # Header (mandatory)
     _add("header", "\n".join([
-        f"# {'KORREKTUR NOETIG' if is_redispatch else 'Neue Aufgabe'}: {task.title}",
+        f"# {'CORRECTION NEEDED' if is_redispatch else 'New Task'}: {task.title}",
         f"**Priority:** {task.priority}",
-        f"**Task-ID:** {task.id}",
-        f"**Board-ID:** {task.board_id}",
+        f"**Task ID:** {task.id}",
+        f"**Board ID:** {task.board_id}",
     ]))
+
+    # Response language (mandatory). Templates/prompts are English; the
+    # per-agent `language` field steers how the agent talks to the operator.
+    # Injected at dispatch time so it covers every agent kind — template-
+    # created (no Jinja2 pass), specialized, and pre-existing fleets.
+    lang = (getattr(agent, "language", "en") or "en").lower()
+    if lang != "en":
+        _add("language", (
+            f"**Language:** Respond to your operator in `{lang}` "
+            "(comments, reports, questions). Code and commits stay English."
+        ))
 
     # On re-dispatch: show reviewer feedback prominently (mandatory)
     if ctx.feedback_context:
-        _add("feedback", f"\n## ⚠ Review-Feedback — das musst du korrigieren\n{ctx.feedback_context}")
+        _add("feedback", f"\n## ⚠ Review Feedback — you need to fix this\n{ctx.feedback_context}")
 
     if task.description:
-        _add("description", f"\n## Beschreibung\n{task.description}")
+        _add("description", f"\n## Description\n{task.description}")
 
     if task.target_url:
-        _add("target_url", f"**Ziel-URL:** {task.target_url}")
+        _add("target_url", f"**Target URL:** {task.target_url}")
 
     # Help request context (mandatory)
     if task.help_request_from:
-        requester_info = task.auto_reason or "ein anderer Agent"
+        requester_info = task.auto_reason or "another agent"
         _add("help_request", f"""
 ---
 ## ⚡ Help Request
-Dies ist ein Help Request von {requester_info}.
-Der anfragende Agent ist blockiert und wartet auf dein Ergebnis.
+This is a help request from {requester_info}.
+The requesting agent is blocked and waiting for your result.
 
-**Was du tun musst:**
-1. Aufgabe bearbeiten (siehe Beschreibung oben)
-2. Ergebnis als Deliverable registrieren (POST deliverables)
-3. Kurzen Kommentar mit Zusammenfassung schreiben (POST comments)
-4. Task auf done setzen (PATCH status: done)
+**What you need to do:**
+1. Work the task (see description above)
+2. Register the result as a deliverable (POST deliverables)
+3. Write a short summary comment (POST comments)
+4. Set the task to done (PATCH status: done)
 
-Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
+The requesting agent automatically resumes with your result.
 ---""")
 
     # Planning Brief (optional, priority=3) — Board Lead + Root-Task only,
@@ -741,22 +752,22 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
 
     if creds_text:
         # Credentials are mandatory — agent literally cannot do the task without them
-        _add("credentials", f"\n## Zugangsdaten\n{creds_text}")
+        _add("credentials", f"\n## Credentials\n{creds_text}")
 
     # Project context (optional priority=1 — agent can read project via API if needed)
     if ctx.project:
-        project_parts = ["\n## Projekt-Kontext", f"**Projekt:** {ctx.project.name}"]
+        project_parts = ["\n## Project Context", f"**Project:** {ctx.project.name}"]
         if ctx.project_tags:
             project_parts.append(f"**Tags:** {', '.join(ctx.project_tags)}")
         if ctx.project.description:
-            project_parts.append(f"**Beschreibung:** {ctx.project.description}")
+            project_parts.append(f"**Description:** {ctx.project.description}")
         _add("project_context", "\n".join(project_parts), priority=1)
 
     # Dependency context (optional priority=1 — re-queryable via mc context predecessors)
     if ctx.dependency_context:
         _add(
             "dependency_context",
-            f"\n## Ergebnisse der Vorgaenger-Tasks\n\nDiese Tasks wurden vor dir abgeschlossen. Nutze ihre Workspaces und Outputs als Ausgangspunkt:\n\n{ctx.dependency_context}",
+            f"\n## Results of Predecessor Tasks\n\nThese tasks were completed before you. Use their workspaces and outputs as a starting point:\n\n{ctx.dependency_context}",
             priority=1,
         )
 
@@ -766,9 +777,9 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         _mem = ctx.semantic_memory_context
         if len(_mem) > MEMORY_AUTO_MAX_CHARS:
             _mem = _mem[: MEMORY_AUTO_MAX_CHARS - 40].rstrip() + (
-                "\n\n(weitere Treffer via `mc memory search`)"
+                "\n\n(more hits via `mc memory search`)"
             )
-        _add("semantic_memory", f"\n## Relevantes Memory (Top-3 Vektor)\n{_mem}", priority=2)
+        _add("semantic_memory", f"\n## Relevant Memory (Top-3 Vector)\n{_mem}", priority=2)
 
     # Agent Lessons (Phase 1 Adoption): rendered as a DispatchSection so they
     # participate in _assemble_with_budget and can be dropped under pressure.
@@ -778,7 +789,7 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
 
     # Agent's process rules (mandatory — agent-specific extra rules from DB)
     if agent.rules_md:
-        _add("agent_rules", f"\n## Prozess-Regeln (PFLICHT)\n\n{agent.rules_md}")
+        _add("agent_rules", f"\n## Process Rules (MANDATORY)\n\n{agent.rules_md}")
 
     # Auth token from TOOLS.md for self-contained curl commands — Board-Lead /
     # Planner blocks below still render curl (their orchestration workflow
@@ -802,11 +813,11 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
     if task.status != "in_progress":
         _add(
             "ack_reminder",
-            "\n**ACK SOFORT** mit `mc ack` bevor du startest — ohne ACK wird "
-            "der Task nach 10 Min neu zugewiesen. "
-            "Fortschritt: `mc comment progress \"...\"`. "
-            "Bei Problemen: `mc blocked --question \"...\"`. "
-            "Vollstaendiger Lifecycle (finish/failed/help/question) siehe SOUL.md.",
+            "\n**ACK IMMEDIATELY** with `mc ack` before you start — without an ACK "
+            "the task gets re-assigned after 10 min. "
+            "Progress: `mc comment progress \"...\"`. "
+            "If you hit problems: `mc blocked --question \"...\"`. "
+            "Full lifecycle (finish/failed/help/question) — see SOUL.md.",
         )
 
     # ── Recovery-Kontext (mandatory — without it, the agent re-starts from scratch
@@ -828,7 +839,7 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         for ct in ctx.child_tasks:
             agent_label = agent_name_map.get(ct.assigned_agent_id, "?") if ct.assigned_agent_id else "unassigned"
             child_lines.append(f"- [{ct.status}] \"{ct.title}\" ({agent_label})")
-        _add("child_tasks", "\n## Aktive Subtasks\n" + "\n".join(child_lines), priority=2)
+        _add("child_tasks", "\n## Active Subtasks\n" + "\n".join(child_lines), priority=2)
 
     if agent.is_board_lead:
         # ── Board Lead: delegation instructions instead of implementation ──
@@ -847,23 +858,23 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
             elif r not in ("lead", "planner"):
                 developer_names.append(ta.name)
 
-        team_section = "\n".join(team_lines) if team_lines else "- (Keine Team-Agents gefunden — pruefe Board-Konfiguration)"
-        _dev_names_str = ", ".join(developer_names) if developer_names else "Developer-Agents"
-        _rev_names_str = ", ".join(reviewer_names) if reviewer_names else "Reviewer-Agents"
+        team_section = "\n".join(team_lines) if team_lines else "- (No team agents found — check board config)"
+        _dev_names_str = ", ".join(developer_names) if developer_names else "developer agents"
+        _rev_names_str = ", ".join(reviewer_names) if reviewer_names else "reviewer agents"
 
         subtask_body = (
-            '{"title": "Konkrete Aufgabe", '
-            '"description": "## Ziel\\nWas genau erreicht werden soll.\\n\\n'
-            '## Kontext\\n- Pfad: ~/Workspace/Projects/mission-control/\\n'
+            '{"title": "Concrete task", '
+            '"description": "## Goal\\nWhat exactly should be achieved.\\n\\n'
+            '## Context\\n- Path: ~/Workspace/Projects/mission-control/\\n'
             '- URL: http://localhost\\n- Stack: FastAPI + Next.js\\n\\n'
-            '## Guardrails\\n- Kein DB-Schema aendern\\n- Nur PR, nicht mergen\\n\\n'
-            '## Erwarteter Output\\n- PR mit Aenderungen\\n- Vorher/Nachher Screenshots\\n\\n'
-            '## Definition of Done\\n- Tests gruen\\n- Screenshots beigefuegt", '
-            '"credential_id": "CREDENTIAL-UUID-AUS-VAULT-ODER-WEGLASSEN", '
+            '## Guardrails\\n- Do not change the DB schema\\n- PR only, do not merge\\n\\n'
+            '## Expected Output\\n- PR with changes\\n- Before/after screenshots\\n\\n'
+            '## Definition of Done\\n- Tests green\\n- Screenshots attached", '
+            '"credential_id": "CREDENTIAL-UUID-FROM-VAULT-OR-OMIT", '
             f'"parent_task_id": "{task.id}", '
-            '"assigned_agent_id": "AGENT-UUID-HIER", '
+            '"assigned_agent_id": "AGENT-UUID-HERE", '
             '"priority": "medium", '
-            '"tags": ["relevanter-tag"]}'
+            '"tags": ["relevant-tag"]}'
         )
         delegate_curl = _curl("POST", create_task_path, token, subtask_body)
 
@@ -872,66 +883,66 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         _planner_instruction = ""  # empty — no longer rendered in the template string below
 
         _add("orchestrator_instructions", f"""
-## Orchestrator-Anweisungen
+## Orchestrator Instructions
 
-Du bist der Orchestrator. Implementiere NICHTS selbst — delegiere ALLES an dein Team.
+You are the orchestrator. Implement NOTHING yourself — delegate EVERYTHING to your team.
 
-### Dein Team
+### Your Team
 {team_section}
 
-### Schritt 1: Subtask erstellen und delegieren
+### Step 1: Create and delegate a subtask
 ```bash
 {delegate_curl}
 ```
-Ersetze "AGENT-UUID-HIER" mit der UUID des passenden Agents.
-WICHTIG: parent_task_id MUSS `{task.id}` sein (deine Task-ID).
+Replace "AGENT-UUID-HERE" with the UUID of the matching agent.
+IMPORTANT: parent_task_id MUST be `{task.id}` (your task ID).
 
-Erstelle pro Agent einen Subtask. Wenn ein Subtask auf einen anderen warten muss:
-Fuege `"depends_on": ["andere-subtask-id"]` hinzu.
+Create one subtask per agent. If a subtask needs to wait on another:
+add `"depends_on": ["other-subtask-id"]`.
 
-### PFLICHT: Delegations-Checkliste
-Jede Task-Beschreibung MUSS diese 5 Punkte enthalten:
-1. **Ziel** — Was genau soll erreicht werden?
-2. **Kontext** — Pfade, URLs, Dateien, Stack-Infos
-3. **Guardrails** — Was NICHT gemacht werden soll
-4. **Erwarteter Output** — Screenshots, PRs, Dateien
-5. **Definition of Done** — Messbare Fertig-Kriterien
+### MANDATORY: Delegation checklist
+Every task description MUST contain these 5 points:
+1. **Goal** — what exactly should be achieved?
+2. **Context** — paths, URLs, files, stack info
+3. **Guardrails** — what NOT to do
+4. **Expected output** — screenshots, PRs, files
+5. **Definition of Done** — measurable completion criteria
 
-**Credentials** (ADR-033) — Falls ein Task einen Login/Token braucht:
-- **Primaer:** `credential_id` (UUID aus dem Vault, Settings → Credentials). Agent holt sie zur Laufzeit per `GET /api/v1/agent/boards/{{board_id}}/credentials/{{credential_id}}`.
-- **Fallback (One-Shot):** Inline `credentials`-Feld `"credentials": "email: x@y.z / password: ..."`. Wird verschluesselt gespeichert, Agent bekommt sie entschluesselt.
-- **NIE** Login/Key in die Description schreiben. Wenn unbekannt: den Operator fragen, NICHT raten.
-- **NIE** System-Tokens (OpenAI, GitHub, Discord, OpenClaw) referenzieren — die liegen in `secrets` und Backend-Services holen sie selbst.
+**Credentials** (ADR-033) — if a task needs a login/token:
+- **Primary:** `credential_id` (UUID from the vault, Settings → Credentials). The agent fetches it at runtime via `GET /api/v1/agent/boards/{{board_id}}/credentials/{{credential_id}}`.
+- **Fallback (one-shot):** inline `credentials` field `"credentials": "email: x@y.z / password: ..."`. Stored encrypted, the agent gets it decrypted.
+- **NEVER** write a login/key into the description. If unknown: ask the operator, do NOT guess.
+- **NEVER** reference system tokens (OpenAI, GitHub, Discord, OpenClaw) — those live in `secrets` and backend services fetch them themselves.
 
-WICHTIG: Der Agent kennt KEINEN Chat-Kontext. Alles muss in der Beschreibung stehen.
+IMPORTANT: The agent has NO chat context. Everything must be in the description.
 
-### WICHTIG: Keine Review-Tasks erstellen
-Erstelle NUR Implementierungs-Tasks fuer Developer-Agents ({_dev_names_str}).
-KEINE separaten Review-Tasks fuer Reviewer-Agents ({_rev_names_str}).
-Das Review passiert AUTOMATISCH — wenn ein Developer seinen Task auf "review" setzt, wird
-automatisch ein Reviewer benachrichtigt und prueft den Code.
+### IMPORTANT: Don't create review tasks
+Create ONLY implementation tasks for developer agents ({_dev_names_str}).
+NO separate review tasks for reviewer agents ({_rev_names_str}).
+The review happens AUTOMATICALLY — when a developer sets their task to "review", a
+reviewer is notified automatically and checks the code.
 
-Wenn du manuell einen Review-Task erstellst, reviewed der Reviewer BEVOR der Developer fertig ist.
+If you manually create a review task, the reviewer reviews BEFORE the developer is done.
 
-### Schritt 2: Progress-Kommentar schreiben
+### Step 2: Write a progress comment
 ```bash
-mc comment progress "**Update** — Subtask X an {_dev_names_str.split(", ")[0] if developer_names else "Developer"} delegiert
-**Evidence** — Subtask-IDs: [IDs hier]
-**Next** — Warte auf Fertigstellung"
+mc comment progress "**Update** — delegated subtask X to {_dev_names_str.split(", ")[0] if developer_names else "the developer"}
+**Evidence** — subtask IDs: [IDs here]
+**Next** — waiting for completion"
 ```
 
-### Schritt 3: Warten
-Dein Parent-Task wird automatisch auf in_progress gesetzt wenn du den ersten Subtask erstellst.
-Wenn alle Subtasks fertig sind, setzt der Watchdog deinen Task automatisch auf review.
+### Step 3: Wait
+Your parent task gets automatically set to in_progress once you create the first subtask.
+When all subtasks are done, the watchdog automatically sets your task to review.
 
-WICHTIG: Erstelle NIEMALS Tasks ohne parent_task_id — sonst werden sie dir selbst zugewiesen.
+IMPORTANT: NEVER create tasks without parent_task_id — otherwise they get assigned to you.
 
-### Projekt-Workflow
-Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
-1. Projekt erstellen: POST {create_task_path.rsplit('/tasks', 1)[0]}/projects
-   Body: {{"name": "Projektname", "description": "...", "project_type": "feature"}}
-2. Subtasks mit parent_task_id + project_id erstellen
-3. Phasen laufen danach vollautomatisch — du musst NICHT auf den Operator warten""")
+### Project workflow
+For large tasks (website, app, feature with multiple steps):
+1. Create a project: POST {create_task_path.rsplit('/tasks', 1)[0]}/projects
+   Body: {{"name": "Project name", "description": "...", "project_type": "feature"}}
+2. Create subtasks with parent_task_id + project_id
+3. Phases then run fully automatically — you don't need to wait for the operator""")
         # End of _add("orchestrator_instructions", ...)
     # Planner branch removed (Migration 0086, ADR-022 review) — Boss
     # orchestrates directly. Any legacy task with `delegation_type="planning"`
@@ -954,65 +965,65 @@ Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
             _work_dir_host = getattr(task, "workspace_path", None) or project.workspace_path or f"{agent.workspace_path}/{_proj_slug}"
             _work_dir = workspace_path_for_runtime(agent, _work_dir_host) or _work_dir_host
             git_section = (
-                f"**Git-Workflow:**\n"
+                f"**Git workflow:**\n"
                 f"- Repository: `{project.github_repo_name}`\n"
-                f"- Dein Branch: `task/{_task_slug}`\n"
-                f"- Arbeitsverzeichnis: `{_work_dir}/`\n"
-                f"- Committe nach jedem groesseren Schritt mit sinnvoller Message\n"
-                f"- Vor Review: `git add . && git commit -m \"...\" && git push origin task/{_task_slug}`\n"
-                f"- NIEMALS auf main committen — nur auf deinem Task-Branch\n"
-                f"- Keine API-Keys, Tokens oder Passwoerter committen"
+                f"- Your branch: `task/{_task_slug}`\n"
+                f"- Working directory: `{_work_dir}/`\n"
+                f"- Commit after every major step with a meaningful message\n"
+                f"- Before review: `git add . && git commit -m \"...\" && git push origin task/{_task_slug}`\n"
+                f"- NEVER commit to main — only to your task branch\n"
+                f"- Don't commit API keys, tokens, or passwords"
             )
             if task.workspace_port:
                 git_section += (
-                    f"\n\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
-                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                    f"\n\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
+                    f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
         elif project and project.workspace_path:
             git_section = (
-                f"**Arbeitsverzeichnis:** `{project.workspace_path}/`\n"
-                f"**Git:** Committe nach jedem groesseren Schritt mit sinnvoller Message. Pushe auf GitHub.\n"
-                "Feature-Branch nutzen — nie direkt auf main."
+                f"**Working directory:** `{project.workspace_path}/`\n"
+                f"**Git:** commit after every major step with a meaningful message. Push to GitHub.\n"
+                "Use a feature branch — never directly on main."
             )
             if task.workspace_port:
                 git_section += (
-                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
-                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                    f"\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
+                    f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
         elif getattr(task, "workspace_path", None):
             # Task has its own workspace (worktree, Bundle 4) but no project repo
             _ws_host = task.workspace_path
             _ws_view = workspace_path_for_runtime(agent, _ws_host) or _ws_host
             git_section = (
-                f"**Arbeitsverzeichnis:** `{_ws_view}/`\n"
-                f"Wechsle ZUERST dorthin: `cd {_ws_view}`\n\n"
-                "**Git:** Feature-Branch erstellen, nie direkt auf main committen.\n"
-                "Committe nach jedem groesseren Schritt. Pushe auf GitHub."
+                f"**Working directory:** `{_ws_view}/`\n"
+                f"Change into it FIRST: `cd {_ws_view}`\n\n"
+                "**Git:** create a feature branch, never commit directly to main.\n"
+                "Commit after every major step. Push to GitHub."
             )
             if task.workspace_port:
                 git_section += (
-                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
-                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                    f"\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
+                    f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
         else:
             # Fallback: mc_repo_path config (applies only to tasks without a project and without a git repo)
             _mc_repo_path = getattr(settings, 'mc_repo_path', None)
             if _mc_repo_path:
                 git_section = (
-                    f"**Arbeitsverzeichnis (Fallback):** `{_mc_repo_path}/`\n"
-                    f"Wechsle ZUERST dorthin: `cd {_mc_repo_path}`\n\n"
-                    "**Git:** Feature-Branch erstellen, nie direkt auf main committen.\n"
-                    "Committe nach jedem groesseren Schritt. Pushe auf GitHub."
+                    f"**Working directory (fallback):** `{_mc_repo_path}/`\n"
+                    f"Change into it FIRST: `cd {_mc_repo_path}`\n\n"
+                    "**Git:** create a feature branch, never commit directly to main.\n"
+                    "Commit after every major step. Push to GitHub."
                 )
             else:
                 git_section = (
-                    "**Git:** Committe nach jedem groesseren Schritt mit sinnvoller Message. Pushe auf GitHub.\n"
-                    "Feature-Branch nutzen — nie direkt auf main."
+                    "**Git:** commit after every major step with a meaningful message. Push to GitHub.\n"
+                    "Use a feature branch — never directly on main."
                 )
             if task.workspace_port:
                 git_section += (
-                    f"\n**Dev-Server Port:** {task.workspace_port} (nutze diesen Port, NICHT den Default)\n"
-                    f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
+                    f"\n**Dev server port:** {task.workspace_port} (use this port, NOT the default)\n"
+                    f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
 
         # Worker-Contract content (Task-Status truth, 5-Min-Blocker, Fokus-Regel,
@@ -1021,21 +1032,21 @@ Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
         # reaches ALL non-lead worker roles persistently. Repeating it per-task
         # was redundant boilerplate that pushed messages over the HARD cap.
 
-        _add("worker_arbeitsweise", f"""
-## Arbeitsweise
+        _add("worker_approach", f"""
+## Approach
 
-Arbeite selbstaendig an diesem Task bis er fertig ist:
-1. `mc checklist add "..."` fuer jeden Schritt — Checkliste ist Single Source
-   of Truth fuer Fortschritt (Recovery liest sie)
-2. Jeden Punkt abarbeiten, nach Abschluss `mc checklist done <id>`
-3. Zwischendurch `mc comment progress "Update/Evidence/Next"` fuer Audit Trail
-4. Wenn alles fertig: `mc {'done' if _is_subtask else 'review'}`
+Work independently on this task until it's done:
+1. `mc checklist add "..."` for every step — the checklist is the single source
+   of truth for progress (recovery reads it)
+2. Work through each item, after completing it: `mc checklist done <id>`
+3. In between: `mc comment progress "Update/Evidence/Next"` for the audit trail
+4. When everything is done: `mc {'done' if _is_subtask else 'review'}`
 
-Deliverable registrieren: `mc deliverable --title "..." --path /deliverables/{task.id}/<datei>`  (absoluter Container-Pfad, ADR-022)
+Register a deliverable: `mc deliverable --title "..." --path /deliverables/{task.id}/<file>`  (absolute container path, ADR-022)
 
 {git_section}
 
-WICHTIG: Hoere NICHT auf bevor der Task auf "{'done' if _is_subtask else 'review'}" steht.""")
+IMPORTANT: Do NOT stop before the task is at "{'done' if _is_subtask else 'review'}".""")
 
     # Add agent lessons section if available
     if _lessons_section:

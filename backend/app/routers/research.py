@@ -35,25 +35,25 @@ router = APIRouter(prefix="/api/v1/research", tags=["research"])
 
 # ── System Prompt ───────────────────────────────────────────────────────────
 
-RESEARCH_SYSTEM_PROMPT = """Du bist jetzt im Research-Modus. Der User gibt dir ein Thema zur Recherche.
-Deine Aufgabe:
-1. Verstehe das Thema und den Kontext — stelle Rueckfragen wenn noetig
-2. Recherchiere gruendlich und strukturiert
-3. Liefere ein umfassendes Ergebnis im folgenden Format:
+RESEARCH_SYSTEM_PROMPT = """You are now in research mode. The user gives you a topic to research.
+Your task:
+1. Understand the topic and context — ask follow-up questions if needed
+2. Research thoroughly and in a structured way
+3. Deliver a comprehensive result in the following format:
 
-## Zusammenfassung
-[2-3 Saetze: Was wurde recherchiert und was ist das Kernergebnis]
+## Summary
+[2-3 sentences: what was researched and what the core finding is]
 
-## Ergebnisse
-[Strukturierte Darstellung der Recherche-Ergebnisse mit Unterpunkten]
+## Findings
+[Structured presentation of the research findings, with sub-points]
 
-## Empfehlung
-[Konkrete Handlungsempfehlung basierend auf den Ergebnissen]
+## Recommendation
+[Concrete action recommendation based on the findings]
 
-## Quellen & Referenzen
-[Wenn vorhanden: Links, Dokumentationen, Vergleiche]
+## Sources & References
+[If available: links, documentation, comparisons]
 
-Halte die Recherche objektiv und faktenbasiert. Markiere Unsicherheiten klar."""
+Keep the research objective and fact-based. Flag uncertainties clearly."""
 
 
 # ── Request Models ──────────────────────────────────────────────────────────

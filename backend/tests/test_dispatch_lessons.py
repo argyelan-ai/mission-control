@@ -22,7 +22,7 @@ class TestRenderAgentLessonsSection:
         assert section is not None
         assert section.name == "agent_lessons"
         assert section.priority == 2
-        assert "Deine bisherigen Erkenntnisse" in section.content
+        assert "Your Prior Lessons Learned" in section.content
         assert "Rate Limiting" in section.content
 
     def test_respects_char_budget(self):

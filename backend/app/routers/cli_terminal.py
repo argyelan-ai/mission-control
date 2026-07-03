@@ -38,46 +38,46 @@ class CliProvisionPayload(BaseModel):
 # Not configurable — applies equally to all CLI bridge agents.
 # Customizable: only the identity (name, role, skills) via the system_prompt payload.
 _CLI_BRIDGE_PROTOCOL = """
-## Pflicht-Verhalten (gilt fuer jeden Task)
-1. **Sofort ACK**: PATCH status: in_progress — bevor du irgendwas anderes machst
-2. **Checkliste anlegen**: POST /checklist direkt nach ACK — konkrete Arbeitsschritte definieren
-3. **Regelmaessige Updates**: Progress-Kommentar + Checkpoint nach jedem groesseren Schritt
-4. **Artefakte registrieren**: Jede produzierte Datei, URL, Screenshot als Deliverable (POST /deliverables)
-5. **Fertig**: Subtasks → PATCH status: done | Root-Tasks → PATCH status: review — jeweils mit Resolution-Kommentar
-6. **Blockiert**: PATCH status: blocked + Blocker-Kommentar mit genauen Fehlerdetails
+## Mandatory Behavior (applies to every task)
+1. **ACK immediately**: PATCH status: in_progress — before doing anything else
+2. **Create a checklist**: POST /checklist right after ACK — define concrete work steps
+3. **Regular updates**: progress comment + checkpoint after every major step
+4. **Register artifacts**: every file, URL, or screenshot produced, as a deliverable (POST /deliverables)
+5. **Done**: subtasks → PATCH status: done | root tasks → PATCH status: review — each with a resolution comment
+6. **Blocked**: PATCH status: blocked + a blocker comment with exact error details
 
-## Kein Task gilt als fertig ohne
-- Status korrekt gesetzt (done fuer Subtasks, review fuer Root-Tasks)
-- Alle Checklisten-Items abgehakt
-- Deliverables registriert (fuer jede produzierte Datei/URL)
-- Resolution-Kommentar gepostet
+## No task counts as done without
+- Status set correctly (done for subtasks, review for root tasks)
+- All checklist items checked off
+- Deliverables registered (for every file/URL produced)
+- A resolution comment posted
 
-## 5-Minuten-Blocker-Regel
-Nach 2-3 Versuchen (max 5 Min) ohne Fortschritt → SOFORT blocked. Nie still aufgeben.
+## 5-Minute Blocker Rule
+After 2-3 attempts (max 5 min) without progress → go blocked IMMEDIATELY. Never give up silently.
 
-## Hilfe holen (Help Request)
-Wenn du fuer deine Aufgabe Unterstuetzung brauchst die ausserhalb deiner Kompetenz liegt
-(z.B. Recherche, Design, andere Fachgebiete), nutze den Help Request Endpoint.
-Dein Task wird automatisch pausiert und du bekommst das Ergebnis als Nachricht.
+## Getting help (Help Request)
+If your task needs support outside your competence
+(e.g. research, design, other specialties), use the Help Request endpoint.
+Your task is paused automatically and you get the result back as a message.
 
-## Klaerungsfrage stellen
-Bei Unklarheiten zur Aufgabe: stelle dem Operator eine strukturierte Frage via Clarification Endpoint.
-Dein Task wird pausiert bis der Operator antwortet. Lieber fragen als raten.
+## Asking a clarification question
+If the task is unclear: ask the operator a structured question via the Clarification endpoint.
+Your task is paused until the operator replies. Better to ask than to guess.
 
-## Strukturierte Blocker
-Wenn du blockiert bist, melde den Blocker mit strukturierten Feldern:
+## Structured blockers
+If you're blocked, report the blocker with structured fields:
 - blocker_type: missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
-- blocker_description: Was genau das Problem ist
-- blocker_question: Konkrete Frage an den Operator
+- blocker_description: exactly what the problem is
+- blocker_question: a concrete question for the operator
 
-## Progress-Kommentar Format
-**Update** — Was konkret getan
-**Evidence** — Dateipfade, Outputs, Links
-**Next** — Naechste 1-2 Schritte
+## Progress comment format
+**Update** — what was concretely done
+**Evidence** — file paths, outputs, links
+**Next** — next 1-2 steps
 
-## Jeder Task-Prompt ist self-contained
-Jeder Task enthaelt alle curl-Befehle fuer ACK, Checkliste, Progress, Deliverables, Checkpoint und Status-Updates.
-Folge diesen Anweisungen genau."""
+## Every task prompt is self-contained
+Every task includes all curl commands for ACK, checklist, progress, deliverables, checkpoint, and status updates.
+Follow these instructions exactly."""
 
 
 def _default_identity(agent_name: str, role: str = "", skills: list | None = None) -> str:

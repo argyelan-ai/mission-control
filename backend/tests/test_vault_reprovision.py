@@ -16,9 +16,9 @@ from app.services.template_renderer import build_agent_context, render_agent_fil
 from app.services.tools_md_builder import generate_tools_md
 
 # ── Stable marker strings ────────────────────────────────────────────────────
-# Verified against tools_md_builder.py line 1018 and SOUL.md.j2 line 3001.
-TOOLS_VAULT_HEADER = "## Vault — Langzeit-Gedaechtnis (Karpathy Wiki)"
-SOUL_VAULT_HEADER  = "## Vault-Schreib-Disziplin"
+# Verified against tools_md_builder.py line 1027 and SOUL.md.j2 line 3154.
+TOOLS_VAULT_HEADER = "## Vault — long-term memory (Karpathy Wiki)"
+SOUL_VAULT_HEADER  = "## Vault Writing Discipline"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

@@ -47,7 +47,7 @@ class TestTargetUrlInDispatchMessage:
         ctx = DispatchContext()
         msg = _format_dispatch_message(task, agent, ctx)
         assert "http://localhost:4200/dashboard" in msg
-        assert "Ziel-URL" in msg
+        assert "Target URL" in msg
 
     def test_no_target_url_no_section(self):
         from app.services.dispatch import _format_dispatch_message, DispatchContext
@@ -55,7 +55,7 @@ class TestTargetUrlInDispatchMessage:
         agent = _make_agent()
         ctx = DispatchContext()
         msg = _format_dispatch_message(task, agent, ctx)
-        assert "Ziel-URL" not in msg
+        assert "Target URL" not in msg
 
     def test_target_url_with_workspace_port(self):
         from app.services.dispatch import _format_dispatch_message, DispatchContext
@@ -83,7 +83,7 @@ class TestTargetUrlInReviewMessage:
         task = _make_task(target_url=None)
         agent = _make_agent(name="Rex")
         msg = await _build_review_message(task, agent, session)
-        assert "Ziel-URL" not in msg
+        assert "Target URL" not in msg
 
 
 class TestTargetUrlInTestMessage:

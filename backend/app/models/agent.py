@@ -168,6 +168,9 @@ class Agent(SQLModel, table=True):
     operational_mode: str = Field(default="active")  # active | paused
     agent_runtime: str = Field(default="cli-bridge")  # cli-bridge | claude-code | manual | host (Phase 24 ADR-029)
     requires_git_workflow: bool = Field(default=True)
+    # Response language towards the operator (short code, e.g. "en", "de").
+    # Templates are English; this only steers how the agent replies.
+    language: str = Field(default="en", max_length=16)
 
     # Analytics snapshots
     context_tokens: int = 0

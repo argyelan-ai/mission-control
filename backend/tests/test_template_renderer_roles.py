@@ -80,7 +80,7 @@ def test_henry_soul_has_tags_rule():
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
-    assert "Tags setzen" in soul
+    assert "Setting tags" in soul
 
 
 def test_henry_soul_has_preview_url_rule():
@@ -96,7 +96,7 @@ def test_henry_soul_has_markdown_description_rule():
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
-    assert "Markdown" in soul and "VERBOTEN" in soul
+    assert "Markdown" in soul and "FORBIDDEN" in soul
 
 
 def test_freecode_soul_has_workspace_path():
@@ -121,7 +121,7 @@ def test_freecode_soul_has_git_workflow():
     agent = _make_agent("FreeCode", role="developer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
-    assert "Git-Workflow" in soul
+    assert "Git Workflow" in soul
     assert "task/" in soul
     assert "git push" in soul
 
@@ -139,7 +139,7 @@ def test_shakespeare_soul_has_marks_stil():
     agent = _make_agent("Shakespeare", role="writer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
-    assert "Corporate" in soul or "persoenlich" in soul or "direkt" in soul
+    assert "personal" in soul or "substantive" in soul or "tech-first" in soul
 
 
 def test_deployer_soul_has_deploy_url_deliverable():

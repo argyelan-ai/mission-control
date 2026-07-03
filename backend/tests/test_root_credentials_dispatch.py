@@ -34,5 +34,5 @@ async def test_dispatch_message_includes_parent_credentials_for_auth_child(
     with patch("app.services.encryption.safe_decrypt", return_value="test:pass123"):
         msg = await _build_dispatch_message(child, agent, session)
 
-    assert "## Zugangsdaten" in msg
+    assert "## Credentials" in msg
     assert "test:pass123" in msg

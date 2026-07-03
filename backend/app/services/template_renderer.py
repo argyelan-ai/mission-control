@@ -171,6 +171,10 @@ def build_agent_context(
         "reflection_required_fields": _reflection_fields(),
         "reflection_min_chars": _reflection_min_chars(),
         "reflection_charter": _reflection_charter(),
+        # Response language towards the operator (agents.language, default
+        # "en"). Templates are English; SOUL.md.j2 adds an explicit
+        # respond-in-<language> instruction when this is not "en".
+        "language": (getattr(agent, "language", "en") or "en").lower(),
         # Operator identity + GitHub owner — from settings/env, never hardcode
         # (repo is public). OPERATOR_NAME / TELEGRAM_CHAT_ID / GITHUB_OWNER in .env.
         "operator_name": settings.operator_name,

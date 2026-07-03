@@ -38,184 +38,184 @@ def generate_tools_md(
         parts = []
 
         if _has(Scope.TASKS_READ):
-            parts.append(f"""## Board-Snapshot lesen (alle Tasks + Memory)
+            parts.append(f"""## Read board snapshot (all tasks + memory)
 GET $MC_API_URL/api/v1/agent/boards/{board_id}
 Authorization: Bearer $MC_AGENT_TOKEN""")
 
-            parts.append(f"""## Naechsten Task holen (Pull-Dispatch)
+            parts.append(f"""## Get next task (pull dispatch)
 GET $MC_API_URL/api/v1/agent/boards/{board_id}/tasks/next
 Authorization: Bearer $MC_AGENT_TOKEN
 
-HTTP 200 → Task + Kontext zurueck (Task automatisch auf in_progress gesetzt)
-HTTP 204 → Kein Task verfuegbar (Agent idle oder alle Dependencies blockiert)""")
+HTTP 200 → task + context returned (task automatically set to in_progress)
+HTTP 204 → no task available (agent idle or all dependencies blocked)""")
 
             # Read deliverables
-            parts.append(f"""## Deliverables eines Tasks lesen
+            parts.append(f"""## Read a task's deliverables
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{task_id}}/deliverables" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```""")
 
         if _has(Scope.TASKS_READ):
-            parts.append(f"""## Board-Agents auflisten (fuer assigned_agent_id)
+            parts.append(f"""## List board agents (for assigned_agent_id)
 
-Wenn du Subtasks mit assigned_agent_id erstellen willst, hole die Agent-UUIDs via API:
+If you want to create subtasks with assigned_agent_id, fetch the agent UUIDs via API:
 
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/agents" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Antwort: Liste mit id, name, role, is_board_lead pro Agent.""")
+Response: list with id, name, role, is_board_lead per agent.""")
 
         if _has(Scope.TASKS_CREATE):
             if is_board_lead:
                 # Board Lead gets project management + orchestrator section
-                parts.append(f"""## Projekte auflisten
+                parts.append(f"""## List projects
 
-BEVOR du ein neues Projekt erstellst, pruefe ob es schon existiert.
-Projekte sind auch in der Board-Read Response enthalten (GET /agent/boards/{{board_id}} → "projects" Array).
+BEFORE creating a new project, check whether it already exists.
+Projects are also included in the board-read response (GET /agent/boards/{{board_id}} → "projects" array).
 
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/projects" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Antwort: Liste aller Projekte mit id, name, status, project_type, progress_pct, etc.
+Response: list of all projects with id, name, status, project_type, progress_pct, etc.
 
-## Projekt erstellen (wenn der Task ein ganzes Projekt beschreibt)
+## Create a project (when the task describes an entire project)
 
-Wenn der Task ein eigenstaendiges Projekt beschreibt (Website, App, Feature mit mehreren Teilen),
-erstelle ZUERST ein Projekt und nutze dann dessen project_id bei den Subtasks.
+If the task describes a self-contained project (website, app, feature with multiple parts),
+create a project FIRST and use its project_id on the subtasks.
 
-Erkennungsmerkmale fuer Projekte:
-- "Baue mir eine Website/App/Tool"
-- Mehrere Komponenten (Frontend + Backend, Design + Implementierung)
-- Eigenes Deployment oder eigenes Repository noetig
+Signs a task is a project:
+- "Build me a website/app/tool"
+- Multiple components (frontend + backend, design + implementation)
+- Needs its own deployment or its own repository
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/projects" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{
-    "name": "Projektname",
-    "description": "Was gebaut werden soll",
+    "name": "Project name",
+    "description": "What is to be built",
     "project_type": "website",
     "priority": "medium"
   }}'
 ```
 
 project_type: feature | website | content | research | automation | design | free
-Antwort enthaelt die project_id — nutze sie in allen Subtasks.
+The response contains the project_id — use it on all subtasks.
 
-## Subtask erstellen und delegieren (Orchestrator)
+## Create and delegate a subtask (orchestrator)
 
-WICHTIG: Du bist Orchestrator. Erstelle IMMER Subtasks mit parent_task_id und assigned_agent_id.
-Erstelle NIEMALS Tasks ohne diese Felder — sonst wird der Task dir selbst zugewiesen.
+IMPORTANT: You are the orchestrator. ALWAYS create subtasks with parent_task_id and assigned_agent_id.
+NEVER create tasks without these fields — otherwise the task gets assigned to yourself.
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{
-    "title": "Konkrete Aufgabe fuer den Agent",
-    "description": "## Ziel\\nKonkret was erreicht werden soll.\\n\\n## Kontext\\n- Pfad: ~/Workspace/Projects/mission-control/\\n- URL: http://localhost\\n\\n## Guardrails\\n- Kein DB-Schema aendern\\n\\n## Erwarteter Output\\n- PR mit Aenderungen\\n\\n## Definition of Done\\n- Tests gruen",
+    "title": "Concrete task for the agent",
+    "description": "## Goal\\nConcretely what should be achieved.\\n\\n## Context\\n- Path: ~/Workspace/Projects/mission-control/\\n- URL: http://localhost\\n\\n## Guardrails\\n- Do not change the DB schema\\n\\n## Expected output\\n- PR with changes\\n\\n## Definition of Done\\n- Tests green",
     "credentials": "email: admin@mc.local / password: xxx",
-    "parent_task_id": "DEINE-TASK-ID-HIER",
-    "assigned_agent_id": "AGENT-UUID-HIER",
-    "project_id": "PROJEKT-UUID-HIER-FALLS-VORHANDEN",
+    "parent_task_id": "YOUR-TASK-ID-HERE",
+    "assigned_agent_id": "AGENT-UUID-HERE",
+    "project_id": "PROJECT-UUID-HERE-IF-ANY",
     "priority": "medium",
     "tags": ["backend", "api"]
   }}'
 ```
 
-PFLICHT-Felder in der description (Agent kennt KEINEN Chat-Kontext!):
-1. **Ziel** — Was genau soll erreicht werden?
-2. **Kontext** — Pfade, URLs, Stack-Infos
-3. **Guardrails** — Was NICHT gemacht werden soll
-4. **Erwarteter Output** — Screenshots, PRs, Dateien
-5. **Definition of Done** — Messbare Fertig-Kriterien
+REQUIRED fields in the description (the agent has NO chat context!):
+1. **Goal** — What exactly should be achieved?
+2. **Context** — Paths, URLs, stack info
+3. **Guardrails** — What NOT to do
+4. **Expected output** — Screenshots, PRs, files
+5. **Definition of Done** — Measurable completion criteria
 
-**Credentials** — Falls Login/API-Keys noetig: ins `credentials` Feld (NICHT in description!). Wenn unbekannt: den Operator fragen.
+**Credentials** — If a login/API key is needed: put it in the `credentials` field (NOT in the description!). If unknown: ask the operator.
 
-Felder:
-- parent_task_id: Die Task-ID die DU erhalten hast (dein Haupt-Task)
-- assigned_agent_id: UUID des Agents der den Subtask ausfuehren soll
-- project_id: UUID des Projekts (falls du eins erstellt hast). Wird automatisch vom Parent geerbt wenn nicht gesetzt.
-- depends_on: ["task-uuid", ...] — optionale Abhaengigkeiten (Subtask wartet auf diese Tasks)
-- tags: Liste von Tag-Namen (optional). Werden in der Pipeline als farbige Labels angezeigt.
+Fields:
+- parent_task_id: The task ID YOU received (your main task)
+- assigned_agent_id: UUID of the agent that should execute the subtask
+- project_id: UUID of the project (if you created one). Automatically inherited from the parent if not set.
+- depends_on: ["task-uuid", ...] — optional dependencies (subtask waits on these tasks)
+- tags: list of tag names (optional). Shown as colored labels in the pipeline.
 
-**delegation_type** (optional — aktiviert Contract-Check, 422 bei falschem Wert):
-| Wert | Wann | Pflichtfelder |
+**delegation_type** (optional — enables contract check, 422 on a wrong value):
+| Value | When | Required fields |
 |------|------|---------------|
-| `code_change` | Agent soll Code aendern | `branch_name`, `acceptance_criteria` |
-| `visual_proof` | Screenshots/visuelle Verifikation | `target_url`, `acceptance_criteria`, `expected_content` |
-| `credential_bound` | Braucht Login/API-Key | `credentials`, `target_url`, `acceptance_criteria` |
-| `review` | Agent reviewt einen anderen Task | `source_task_id` |
-| `planning` | Planungs-Subtask | — |
-Fuer Recherche-Tasks: delegation_type WEGLASSEN (kein Contract-Check). Ungueltige Werte (z.B. "research") fuehren zu 422.
+| `code_change` | Agent should change code | `branch_name`, `acceptance_criteria` |
+| `visual_proof` | Screenshots/visual verification | `target_url`, `acceptance_criteria`, `expected_content` |
+| `credential_bound` | Needs a login/API key | `credentials`, `target_url`, `acceptance_criteria` |
+| `review` | Agent reviews another task | `source_task_id` |
+| `planning` | Planning subtask | — |
+For research tasks: OMIT delegation_type (no contract check). Invalid values (e.g. "research") result in 422.
 
-**autonomy_level** (optional — steuert ob Operator-Freigabe noetig ist):
-- `execute_low_risk` — sofort ausfuehren (Sandbox, kein Browser, keine Credentials, kein DB)
-- Weglassen → konservativer Default → Operator-Freigabe noetig
+**autonomy_level** (optional — controls whether operator approval is needed):
+- `execute_low_risk` — execute immediately (sandbox, no browser, no credentials, no DB)
+- Omit → conservative default → operator approval needed
 
-WICHTIG: Wenn du einen Subtask mit parent_task_id erstellst, wird dein Parent-Task
-automatisch auf in_progress gesetzt (= ACK). Du musst den Parent NICHT manuell bestaetigen.
+IMPORTANT: When you create a subtask with parent_task_id, your parent task
+is automatically set to in_progress (= ACK). You do NOT need to confirm the parent manually.
 
 Status: inbox | in_progress | review | done | blocked
-Prioritaet: low | medium | high | critical""")
+Priority: low | medium | high | critical""")
             else:
-                parts.append(f"""## Task erstellen
+                parts.append(f"""## Create task
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/tasks
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "title": "Task-Titel",
-  "description": "MUSS Markdown sein. Mindest-Struktur:\n## Ziel\n...\n## Kontext\n...\n## Definition of Done\n...",
+  "title": "Task title",
+  "description": "MUST be Markdown. Minimum structure:\n## Goal\n...\n## Context\n...\n## Definition of Done\n...",
   "status": "inbox",
   "priority": "medium",
   "tags": ["bugfix"],
-  "assigned_agent_id": "UUID-DES-ZIELAGENTS",
-  "parent_task_id": "DEINE-TASK-ID-HIER"
+  "assigned_agent_id": "UUID-OF-TARGET-AGENT",
+  "parent_task_id": "YOUR-TASK-ID-HERE"
 }}
 
-Felder:
-- assigned_agent_id: UUID des Agents der den Task ausfuehren soll (PFLICHT beim Delegieren!)
-- parent_task_id: Deine eigene Task-ID (PFLICHT beim Erstellen von Subtasks!)
-- tags: Liste von Tag-Namen (optional). Beispiele: "backend", "frontend", "bugfix", "refactor"
-- depends_on: ["task-uuid", ...] — optionale Abhaengigkeiten
+Fields:
+- assigned_agent_id: UUID of the agent that should execute the task (REQUIRED when delegating!)
+- parent_task_id: your own task ID (REQUIRED when creating subtasks!)
+- tags: list of tag names (optional). Examples: "backend", "frontend", "bugfix", "refactor"
+- depends_on: ["task-uuid", ...] — optional dependencies
 
-**delegation_type** (optional — aktiviert Contract-Check, 422 bei falschem Wert):
-| Wert | Wann | Pflichtfelder |
+**delegation_type** (optional — enables contract check, 422 on a wrong value):
+| Value | When | Required fields |
 |------|------|---------------|
-| `code_change` | Agent soll Code aendern | `branch_name`, `acceptance_criteria` |
-| `visual_proof` | Screenshots/visuelle Verifikation | `target_url`, `acceptance_criteria`, `expected_content` |
-| `credential_bound` | Braucht Login/API-Key | `credentials`, `target_url`, `acceptance_criteria` |
-| `review` | Agent reviewt einen anderen Task | `source_task_id` |
-| `planning` | Planungs-Subtask | — |
-Fuer Recherche-Tasks: delegation_type WEGLASSEN. Ungueltige Werte (z.B. "research") fuehren zu 422!
+| `code_change` | Agent should change code | `branch_name`, `acceptance_criteria` |
+| `visual_proof` | Screenshots/visual verification | `target_url`, `acceptance_criteria`, `expected_content` |
+| `credential_bound` | Needs a login/API key | `credentials`, `target_url`, `acceptance_criteria` |
+| `review` | Agent reviews another task | `source_task_id` |
+| `planning` | Planning subtask | — |
+For research tasks: OMIT delegation_type. Invalid values (e.g. "research") result in 422!
 
 **autonomy_level** (optional):
-- `execute_low_risk` — sofort ausfuehren (Sandbox, kein Browser, keine Credentials, kein DB)
-- Weglassen → Operator-Freigabe noetig
+- `execute_low_risk` — execute immediately (sandbox, no browser, no credentials, no DB)
+- Omit → operator approval needed
 
-WICHTIG: Wenn du einen Subtask mit parent_task_id erstellst, wird dein Parent-Task
-automatisch auf in_progress gesetzt (= ACK). Du musst den Parent NICHT manuell bestaetigen.
+IMPORTANT: When you create a subtask with parent_task_id, your parent task
+is automatically set to in_progress (= ACK). You do NOT need to confirm the parent manually.
 
-SKILLS/TOOLS PASSTHROUGH: Wenn der Haupt-Task auf ein bestimmtes Skill oder Tool verweist
-(z.B. "nutze Stitch", "verwende /website", "nutze den FreeCode-Researcher"), dann MUSS
-dieser Hinweis explizit in der description des Subtasks enthalten sein.
-Der Ziel-Agent kennt keinen Chat-Kontext — nur was in der description steht.
+SKILLS/TOOLS PASSTHROUGH: If the main task references a specific skill or tool
+(e.g. "use Stitch", "use /website", "use the FreeCode researcher"), then
+this reference MUST be explicitly included in the subtask's description.
+The target agent has no chat context — only what's in the description.
 
 Status: inbox | in_progress | review | done | blocked
-Prioritaet: low | medium | high | critical""")
+Priority: low | medium | high | critical""")
 
         if _has(Scope.TASKS_WRITE):
-            parts.append(f"""## Task aktualisieren
-**WICHTIG: Fuer Status-Aenderungen (ack/review/done/blocked/failed) IMMER die `mc`-CLI nutzen — nie raw PATCH.**
-Der raw PATCH erfordert den `X-Dispatch-Attempt-Id` Header (Wert aus $X_DISPATCH_ATTEMPT_ID) — fehlt er, gibt der Server 409.
-Die mc-CLI liest den Header automatisch aus /tmp/mc-context.env. Raw PATCH nur fuer Felder wie priority/title/project_id.
+            parts.append(f"""## Update task
+**IMPORTANT: For status changes (ack/review/done/blocked/failed) ALWAYS use the `mc` CLI — never raw PATCH.**
+The raw PATCH requires the `X-Dispatch-Attempt-Id` header (value from $X_DISPATCH_ATTEMPT_ID) — missing it makes the server return 409.
+The mc CLI reads the header automatically from /tmp/mc-context.env. Use raw PATCH only for fields like priority/title/project_id.
 
 PATCH $MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{task_id}}
 Authorization: Bearer $MC_AGENT_TOKEN
@@ -224,63 +224,63 @@ Content-Type: application/json
 
 {{
   "priority": "high",
-  "project_id": "PROJEKT-UUID-ODER-NULL"
+  "project_id": "PROJECT-UUID-OR-NULL"
 }}
 
-Aenderbare Felder via raw PATCH: priority, title, description, project_id.
-Status-Aenderungen: `mc ack` / `mc review` / `mc done` / `mc blocked` / `mc failed` nutzen.
+Fields changeable via raw PATCH: priority, title, description, project_id.
+Status changes: use `mc ack` / `mc review` / `mc done` / `mc blocked` / `mc failed`.
 
-Wenn du blockiert bist, nutze `mc blocked` (nicht raw PATCH):
-`mc blocked --type missing_info "Was genau fehlt"`
-`mc blocked --type technical_problem "Beschreibung"`
+If you're blocked, use `mc blocked` (not raw PATCH):
+`mc blocked --type missing_info "What exactly is missing"`
+`mc blocked --type technical_problem "Description"`
 
 blocker_type: missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
 
-## Kommentar zu Task hinzufuegen
+## Add comment to task
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{task_id}}/comments
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "content": "Fortschrittsbericht oder Notiz zum Task",
+  "content": "Progress report or note about the task",
   "comment_type": "message"
 }}
 
-comment_type: message | handoff | blocker | progress | resolution [terminal — auto-promotes Task zu review/done] | feedback""")
+comment_type: message | handoff | blocker | progress | resolution [terminal — auto-promotes task to review/done] | feedback""")
 
             # Register deliverable
-            parts.append(f"""## Deliverable registrieren (Ergebnis-Artefakt)
-Registriere Ergebnisse als Deliverable — sichtbar im MC UI.
+            parts.append(f"""## Register deliverable (result artifact)
+Register results as a deliverable — visible in the MC UI.
 
-> **Hinweis:** `mc deliverable`, `mc pdf` und `mc telegram` loesen deine aktuelle Task automatisch auf.
-> Du musst keine Task-ID angeben — das Backend findet sie via spawn_session_key.
+> **Note:** `mc deliverable`, `mc pdf`, and `mc telegram` resolve your current task automatically.
+> You don't need to provide a task ID — the backend finds it via spawn_session_key.
 
 ```bash
-# Einfachster Weg (bevorzugt):
-mc deliverable --type document --title "Research-Ergebnis" --path /deliverables/$TASK_ID/report.md
+# Simplest way (preferred):
+mc deliverable --type document --title "Research result" --path /deliverables/$TASK_ID/report.md
 
-# Oder via curl (Task-ID wird automatisch aufgeloest — kein board_id/task_id in der URL):
+# Or via curl (task ID is resolved automatically — no board_id/task_id in the URL):
 curl -s -X POST "$MC_API_URL/api/v1/agent/me/deliverable" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{{"deliverable_type": "document", "title": "Research-Ergebnis", "content": "# Titel\\n\\nVollstaendiger Markdown-Inhalt hier...", "path": "/deliverables/$TASK_ID/report.md"}}'
+  -d '{{"deliverable_type": "document", "title": "Research result", "content": "# Title\\n\\nFull Markdown content here...", "path": "/deliverables/$TASK_ID/report.md"}}'
 ```
 
 deliverable_type: `screenshot` | `file` | `url` | `artifact` | `document` | `data`
-Pflichtfelder: `deliverable_type`, `title`.
-**WICHTIG: `content` IMMER mitschicken** bei document/artifact/file — der `path` zeigt ins Container-Filesystem und ist vom Frontend nicht lesbar. Ohne `content` ist das Deliverable im UI leer.""")
+Required fields: `deliverable_type`, `title`.
+**IMPORTANT: ALWAYS include `content`** for document/artifact/file — the `path` points into the container filesystem and isn't readable by the frontend. Without `content`, the deliverable is empty in the UI.""")
 
-            parts.append(f"""## Checkliste verwalten (Task-Fortschritt)
+            parts.append(f"""## Manage checklist (task progress)
 
-### Checkliste erstellen (als ALLERERSTES!)
+### Create checklist (as the VERY FIRST step!)
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{{"items": [{{"title": "Analyse", "sort_order": 0}}, {{"title": "Implementieren", "sort_order": 1}}, {{"title": "Tests", "sort_order": 2}}]}}'
+  -d '{{"items": [{{"title": "Analysis", "sort_order": 0}}, {{"title": "Implement", "sort_order": 1}}, {{"title": "Tests", "sort_order": 2}}]}}'
 ```
 
-### Item als done markieren
+### Mark item as done
 ```
 curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist/{{{{item_id}}}}" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
@@ -288,49 +288,49 @@ curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}
   -d '{{"status": "done"}}'
 ```
 
-### Checkliste lesen (bei Recovery)
+### Read checklist (during recovery)
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-status-Werte: `pending` | `in_progress` | `done` | `blocked` | `skipped`""")
+status values: `pending` | `in_progress` | `done` | `blocked` | `skipped`""")
 
             # Crash-recovery / progress-tracking is now TaskChecklistItem
             # (Workstream A4, ADR-020). POST /checkpoint returns HTTP 410
             # and the TaskCheckpoint table is a read-only archive being
             # dropped in a follow-up migration. Agents use `mc checklist`
             # for progress and the reflection comment for lessons.
-            parts.append(f"""## Fortschritt tracken (statt altem /checkpoint)
-Checkliste + Progress-Kommentare ersetzen das alte /checkpoint Endpoint:
+            parts.append(f"""## Track progress (replaces the old /checkpoint)
+Checklist + progress comments replace the old /checkpoint endpoint:
 
 ```bash
-# Item hinzufuegen
-mc checklist add "Schritt 1 — Models schreiben"
-# Item als fertig markieren
+# Add item
+mc checklist add "Step 1 — write models"
+# Mark item as done
 mc checklist done <item_id>
-# Liste zeigen
+# Show list
 mc checklist list
-# Progress-Kommentar (Update/Evidence/Next)
-mc comment progress "Update — Models erstellt
-Evidence — backend/app/models/foo.py:1-40, Tests gruen
-Next — Endpoints verdrahten"
+# Progress comment (Update/Evidence/Next)
+mc comment progress "Update — models created
+Evidence — backend/app/models/foo.py:1-40, tests green
+Next — wire up endpoints"
 ```
 
-Bei Crash/Timeout/Re-Dispatch rendert der Recovery-Kontext deine Checkliste
-mit `← HIER WEITERMACHEN` Marker am ersten offenen Item. Keine manuellen
-Checkpoints mehr noetig.""")
+On crash/timeout/re-dispatch, the recovery context renders your checklist
+with a `← RESUME HERE` marker on the first open item. No manual
+checkpoints needed anymore.""")
 
         if _has(Scope.MEMORY_READ):
-            parts.append("""## Memory-Suche (eigene + Team-Lessons retrievable)
-Du kannst eigene frueheren Lessons und Team-Memory via CLI durchsuchen —
-automatische Embeddings via Qdrant, Retrieval per Semantic-Search.
+            parts.append("""## Memory search (own + team lessons retrievable)
+You can search your own earlier lessons and team memory via CLI —
+automatic embeddings via Qdrant, retrieval via semantic search.
 
 ```bash
 mc memory search "<query phrase>" --limit 5
 ```
 
-Oder per HTTP direkt:
+Or directly via HTTP:
 ```
 POST $MC_API_URL/api/v1/agent/memory/query
 Authorization: Bearer $MC_AGENT_TOKEN
@@ -339,32 +339,32 @@ Content-Type: application/json
 {"query": "<search text>", "layers": ["semantic", "agent"], "top_k": 5}
 ```
 
-Nutzt du das konsequent, findest du eigene Lessons wieder, lernst aus Team-
-Erfahrungen, und vermeidest doppelte Arbeit.""")
+Using this consistently lets you find your own lessons again, learn from
+team experience, and avoid duplicate work.""")
 
         if _has(Scope.MEMORY_WRITE):
-            parts.append(f"""## Board-Memory schreiben (board-scoped, sehen alle Agents auf dem Board)
+            parts.append(f"""## Write board memory (board-scoped, visible to all agents on the board)
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/memory
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "content": "Wichtige Erkenntnis oder Entscheidung",
-  "title": "Optionaler Titel",
+  "content": "Important finding or decision",
+  "title": "Optional title",
   "memory_type": "knowledge",
   "tags": ["tag1", "tag2"],
   "is_pinned": false
 }}""")
 
         if _has(Scope.APPROVALS_CREATE):
-            parts.append(f"""## Approval anfragen (Human-in-the-Loop — blockierende Aktion)
+            parts.append(f"""## Request approval (human-in-the-loop — blocking action)
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/approvals
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
   "action_type": "deployment",
-  "description": "Was genau genehmigt werden soll",
+  "description": "What exactly needs approval",
   "confidence": 0.85
 }}""")
 
@@ -373,60 +373,60 @@ Content-Type: application/json
             if is_board_lead:
                 chat_hint = """
 
-HINWEIS: Board-Chat ist fuer direkte Konversation mit dem Operator.
-NICHT fuer Task-bezogene Kommunikation. Dafuer → Task-Kommentare nutzen."""
+NOTE: Board chat is for direct conversation with the operator.
+NOT for task-related communication. Use task comments for that instead."""
             else:
                 chat_hint = """
 
-HINWEIS: Board-Chat ist fuer dringende Hilfe-Anfragen an Henry (Board Lead).
-Nutze Board-Chat wenn du BLOCKIERT bist und schnelle Hilfe brauchst.
-Fuer normale Task-Updates → Task-Kommentare nutzen."""
-            parts.append(f"""## Chat-Nachricht an Board senden
+NOTE: Board chat is for urgent help requests to Henry (board lead).
+Use board chat when you are BLOCKED and need quick help.
+For normal task updates → use task comments instead."""
+            parts.append(f"""## Send chat message to board
 POST $MC_API_URL/api/v1/agent/boards/{board_id}/chat
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "content": "Nachricht an den Board-Channel"
+  "content": "Message to the board channel"
 }}{chat_hint}""")
 
         # ── Project section ────────────────────────────────────────────
         if _has(Scope.PROJECT_READ):
-            parts.append(f"""## Projekt-Kontext abrufen
+            parts.append(f"""## Fetch project context
 
-WENN du einen Task mit project_id erhältst, lies zuerst das Projekt-Briefing:
+IF you receive a task with project_id, read the project briefing first:
 
 ```
 curl -s "$MC_API_URL/api/v1/agent/projects/{{project_id}}" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Antwort enthält:
-- briefing_doc (Markdown — immer zuerst lesen!)
-- phases (Liste aller Phasen mit Status)
-- last_active_phase_id (aktuelle Phase)
+Response contains:
+- briefing_doc (Markdown — always read first!)
+- phases (list of all phases with status)
+- last_active_phase_id (current phase)
 
-## Deliverables eines Projekts suchen
+## Search a project's deliverables
 
 ```
 curl -s "$MC_API_URL/api/v1/agent/projects/{{project_id}}/deliverables?scope=phase&is_pinned=true" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Query-Parameter: scope=task|phase|project  is_pinned=true  tags=research,design""")
+Query parameters: scope=task|phase|project  is_pinned=true  tags=research,design""")
 
         if _has(Scope.PROJECT_WRITE):
-            parts.append(f"""## Deliverable mit Projekt-Kontext registrieren (V2)
+            parts.append(f"""## Register deliverable with project context (V2)
 
 ```bash
-# Task-ID wird automatisch aufgeloest (kein board_id/task_id in der URL):
+# Task ID is resolved automatically (no board_id/task_id in the URL):
 curl -s -X POST "$MC_API_URL/api/v1/agent/me/deliverable" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{{{
     "deliverable_type": "artifact",
     "title": "Competitor Analysis",
-    "content": "Vollständiger Markdown-Inhalt des Deliverables",
+    "content": "Full Markdown content of the deliverable",
     "scope": "phase",
     "tags": ["research", "analysis"],
     "is_pinned": false,
@@ -436,19 +436,19 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/me/deliverable" \\
 ```
 
 scope: task | phase | project
-is_pinned: true = in Agent-Kontext injiziert (sparsam!)
-git_commit: true = in Phase-Branch committed (empfohlen bei scope=phase/project)
+is_pinned: true = injected into agent context (use sparingly!)
+git_commit: true = committed to the phase branch (recommended for scope=phase/project)
 deliverable_type: `screenshot` | `file` | `url` | `artifact` | `document` | `data`
 
-## Sub-Task erstellen
+## Create sub-task
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{{{
-    "title": "Recherche: OKLCH Color Spaces",
-    "description": "## Ziel\\n...\\n## Kontext\\n...\\n## Definition of Done\\n...",
+    "title": "Research: OKLCH Color Spaces",
+    "description": "## Goal\\n...\\n## Context\\n...\\n## Definition of Done\\n...",
     "project_id": "{{project_id}}",
     "phase_id": "{{phase_id}}",
     "triggered_by_deliverable_id": "{{deliverable_id}}",
@@ -456,16 +456,16 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks" \\
   }}}}'
 ```
 
-triggered_by_deliverable_id: IMMER setzen wenn aus Deliverable entstanden (Provenance!)
+triggered_by_deliverable_id: ALWAYS set when created from a deliverable (provenance!)
 
-## Phase abschliessen
+## Complete phase
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/phases/{{phase_id}}/complete" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Erst aufrufen wenn ALLE Tasks der Phase `done` sind.""")
+Only call this once ALL tasks of the phase are `done`.""")
 
         if parts:
             board_section = "\n\n".join(parts) + "\n"
@@ -477,15 +477,15 @@ Erst aufrufen wenn ALLE Tasks der Phase `done` sind.""")
         board_lead_section = f"""
 ---
 
-## Neuen Agent erstellen (nur du als Board Lead)
+## Create a new agent (only you as board lead)
 
-Vorgehen:
-1. Operator fragen: Template verwenden oder Agent von Grund auf einrichten?
+Procedure:
+1. Ask the operator: use a template or set up the agent from scratch?
 
-2a. Template-Weg:
+2a. Template route:
     GET $MC_API_URL/api/v1/agent/templates
     Authorization: Bearer $MC_AGENT_TOKEN
-    → Template aus der Liste auswaehlen
+    → pick a template from the list
 
     POST $MC_API_URL/api/v1/agent/templates/{{template_id}}/instantiate
     Authorization: Bearer $MC_AGENT_TOKEN
@@ -493,50 +493,50 @@ Vorgehen:
 
     {{
       "board_id": "{board_id_placeholder}",
-      "name": "Optionaler Name"
+      "name": "Optional name"
     }}
 
-2b. Custom-Weg (ohne Template):
+2b. Custom route (without a template):
     POST $MC_API_URL/api/v1/agent/agents
     Authorization: Bearer $MC_AGENT_TOKEN
     Content-Type: application/json
 
     {{
-      "name": "Agent-Name",
+      "name": "Agent name",
       "emoji": "🤖",
-      "role": "Beschreibung der Rolle",
+      "role": "Description of the role",
       "model": null,
       "skills": [],
       "board_id": "{board_id_placeholder}"
     }}
 
-Antwort beider Endpoints: {{ "agent": {{...}}, "token": "..." }}
-→ Agent wird automatisch provisioniert (einsatzbereit in ~10 Sekunden)
-→ Token NUR EINMAL sichtbar — sofort an den Operator weitergeben!
+Response of both endpoints: {{ "agent": {{...}}, "token": "..." }}
+→ the agent is provisioned automatically (ready to use in ~10 seconds)
+→ the token is shown ONLY ONCE — hand it to the operator immediately!
 
-Fortschritt erscheint im Activity-Feed.
+Progress appears in the activity feed.
 
-## Eigenes SOUL.md lesen und aendern
+## Read and change your own SOUL.md
 
-Lesen:
+Read:
 ```
 curl -s "$MC_API_URL/api/v1/agent/config/soul_md" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Aendern (VORSICHT — aendert dein eigenes Verhalten!):
+Change (CAUTION — changes your own behavior!):
 ```
 curl -s -X PUT "$MC_API_URL/api/v1/agent/config/soul_md" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
-  -d '{{"content": "Neuer SOUL.md Inhalt...", "reason": "Kurze Begruendung der Aenderung"}}'
+  -d '{{"content": "New SOUL.md content...", "reason": "Short justification for the change"}}'
 ```
 
-**Regeln:**
-- `reason` IMMER angeben — der Operator sieht die Aenderung im Activity-Feed
-- Nur Fehler korrigieren oder fehlende Regeln ergaenzen — keine Grundstruktur aendern
-- Im Zweifel den Operator fragen bevor du dein SOUL aenderst
-- Aenderung wird automatisch zum Gateway/Disk synchronisiert
+**Rules:**
+- ALWAYS provide `reason` — the operator sees the change in the activity feed
+- Only fix errors or add missing rules — do not change the basic structure
+- When in doubt, ask the operator before changing your SOUL
+- The change syncs to the gateway/disk automatically
 """
 
     # ── Vertical sections (e.g. News Studio content pipeline) ────────────
@@ -555,46 +555,46 @@ curl -s -X PUT "$MC_API_URL/api/v1/agent/config/soul_md" \\
         credentials_section = f"""
 ---
 
-## Credentials Vault (vs. System-Secrets) — ADR-033
+## Credentials Vault (vs. system secrets) — ADR-033
 
-MC hat **zwei** getrennte Geheimnis-Stores. Du nutzt nur einen davon direkt.
+MC has **two** separate secret stores. You use only one of them directly.
 
-|  | `secrets` (System Token Wallet) | `credentials` (Task Vault) — **dein Store** |
+|  | `secrets` (system token wallet) | `credentials` (task vault) — **your store** |
 |---|---|---|
-| **Was** | 1 Eintrag pro Provider/Dienst | N Eintraege pro Use-Case, typed login/token/custom |
-| **Beispiele** | openai_api_key, anthropic_api_key, github_token, discord_bot_token, xai_api_key, livekit_api_key | client-login, twitter-bearer, externer-API-Token, Trading-Account |
-| **Wer schreibt** | Nur der Operator (Admin) | Jeder eingeloggte User |
-| **Agent-Zugriff** | **Keiner** — Backend-Services nutzen sie im Namen des Operators | Lesen via API (siehe unten) |
+| **What** | 1 entry per provider/service | N entries per use case, typed login/token/custom |
+| **Examples** | openai_api_key, anthropic_api_key, github_token, discord_bot_token, xai_api_key, livekit_api_key | client-login, twitter-bearer, external API token, trading account |
+| **Who writes** | Only the operator (admin) | Any logged-in user |
+| **Agent access** | **None** — backend services use them on the operator's behalf | Read via API (see below) |
 
-**Faustregel:**
-- LLM-Provider / GitHub / Discord / OpenClaw-Token → `secrets`. Backend nutzt sie. Frag nie danach, suche sie nie.
-- Login/Token fuer eine task-spezifische Aktion (Website, externe API, Trading) → `credentials`. Du holst sie selbst aus dem Vault.
+**Rule of thumb:**
+- LLM provider / GitHub / Discord / OpenClaw token → `secrets`. The backend uses them. Never ask for them, never search for them.
+- Login/token for a task-specific action (website, external API, trading) → `credentials`. You fetch these yourself from the vault.
 
-Wenn ein Dispatch-Brief eine `credential_id` (UUID) referenziert: hol sie via Vault-API (unten). Wenn du in einem Brief plotzlich `openai_api_key` o.ae. siehst: das ist ein System-Secret — den Operator gegenfragen statt selber nach API zu suchen.
+If a dispatch brief references a `credential_id` (UUID): fetch it via the vault API (below). If a brief suddenly shows `openai_api_key` or similar: that's a system secret — ask the operator back instead of searching for an API yourself.
 
-### Alle Credentials auflisten (maskiert)
+### List all credentials (masked)
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/credentials" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Antwort: Liste mit id, name, credential_type, url, notes, data_masked (Passwort/Token teilweise verdeckt).
-Nutze diesen Endpoint um die richtige Credential-ID zu finden.
+Response: list with id, name, credential_type, url, notes, data_masked (password/token partially hidden).
+Use this endpoint to find the correct credential ID.
 
-### Einzelne Credential holen (vollstaendig entschluesselt)
+### Fetch a single credential (fully decrypted)
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/credentials/{{credential_id}}" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Antwort: id, name, credential_type, url, notes, data (vollstaendiges entschluesseltes Dict).
+Response: id, name, credential_type, url, notes, data (fully decrypted dict).
 
-**Wann nutzen:**
-- Dispatch-Brief referenziert eine `credential_id` (UUID) — primaerer Weg
-- Task erwaehnt eine externe Seite/Service bei der du dich einloggen musst
-- Dispatch-Kontext hat kein Inline-`credentials`-Feld aber du brauchst einen Login
+**When to use:**
+- Dispatch brief references a `credential_id` (UUID) — primary route
+- Task mentions an external site/service you need to log into
+- Dispatch context has no inline `credentials` field but you need a login
 
-**Sicherheitshinweis:** Credentials nie in Kommentaren, Commits oder Logs speichern.
+**Security note:** Never store credentials in comments, commits, or logs.
 """
 
     # ── Deploy section ────────────────────────────────────────────────────
@@ -603,41 +603,41 @@ Antwort: id, name, credential_type, url, notes, data (vollstaendiges entschluess
         deploy_section = f"""
 ---
 
-## Docker-Umgebung deployen
+## Deploy the Docker environment
 
-Du fuehrst Docker-Befehle DIREKT im Terminal aus (nicht via API).
-Erlaubte Services: backend, frontend, caddy.
-NIEMALS: db, redis.
+You run Docker commands DIRECTLY in the terminal (not via API).
+Allowed services: backend, frontend, caddy.
+NEVER: db, redis.
 
-### Shell-Befehle (direkt ausfuehren)
+### Shell commands (run directly)
 
-Restart (schnell, kein Rebuild):
+Restart (fast, no rebuild):
   cd ~/Workspace/Projects/mission-control && docker compose restart backend
 
-Rebuild (nach Code-Aenderungen):
+Rebuild (after code changes):
   cd ~/Workspace/Projects/mission-control && docker compose up --build -d backend
 
-Backup vor groesseren Deployments:
+Backup before larger deployments:
   cd ~/Workspace/Projects/mission-control && ./backup.sh
 
-Logs pruefen:
+Check logs:
   docker compose logs backend --tail=50
 
-### Monitoring-API (MC Backend)
+### Monitoring API (MC backend)
 
-Health-Check aller Services:
+Health check of all services:
 GET $MC_API_URL/api/v1/agent/deploy/services
 Authorization: Bearer $MC_AGENT_TOKEN
 
-Health-Check einzelner Service:
+Health check of a single service:
 GET $MC_API_URL/api/v1/agent/deploy/services/{{service_name}}/health
 Authorization: Bearer $MC_AGENT_TOKEN
 
-Deploy-History abrufen:
+Fetch deploy history:
 GET $MC_API_URL/api/v1/agent/deploy/history
 Authorization: Bearer $MC_AGENT_TOKEN
 
-### Deploy aufzeichnen (NACH jedem Deploy)
+### Record deploy (AFTER every deploy)
 POST $MC_API_URL/api/v1/agent/deploy/record
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
@@ -654,84 +654,84 @@ action: rebuild | restart | rollback | backup
 service: backend | frontend | caddy
 
 ### Workflow
-1. Backup erstellen (bei Rebuild)
-2. Docker-Befehl ausfuehren
-3. 30 Sekunden warten
-4. Health-Check via API
-5. Deploy aufzeichnen via API
-6. Bei Fehler: Rollback (docker compose restart) + aufzeichnen mit rolled_back=true
+1. Create backup (on rebuild)
+2. Run Docker command
+3. Wait 30 seconds
+4. Health check via API
+5. Record deploy via API
+6. On failure: rollback (docker compose restart) + record with rolled_back=true
 
-### ABSOLUTE GRENZEN
-- KEIN docker compose down ohne Approval des Operators
-- KEINE Aenderungen an .env
-- db und redis NIEMALS anfassen
+### ABSOLUTE LIMITS
+- NO docker compose down without operator approval
+- NO changes to .env
+- NEVER touch db and redis
 
 ---
 
-## Externe App-Deployments
+## External app deployments
 
-### Schritt 0: Credentials holen
+### Step 0: Fetch credentials
 GET $MC_API_URL/api/v1/agent/deploy/credentials
 Authorization: Bearer $MC_AGENT_TOKEN
 
-Speichere die Werte als Variablen: VERCEL_TOKEN, CF_TOKEN, CF_ZONE_ID, SB_TOKEN
+Store the values as variables: VERCEL_TOKEN, CF_TOKEN, CF_ZONE_ID, SB_TOKEN
 
-### Schritt 1: Vercel CLI installieren (einmalig)
+### Step 1: Install Vercel CLI (one-time)
 ```bash
 npm install -g vercel
 ```
 
-### Schritt 2: Frontend zu Vercel deployen
+### Step 2: Deploy frontend to Vercel
 ```bash
-cd /pfad/zum/projekt
+cd /path/to/project
 vercel deploy --prod --token=$VERCEL_TOKEN --yes
 ```
-Rueckgabe enthaelt die Deployment-URL (z.B. https://projekt-abc.vercel.app)
+The return value contains the deployment URL (e.g. https://project-abc.vercel.app)
 
-### Schritt 3: Cloudflare-Subdomain erstellen
+### Step 3: Create Cloudflare subdomain
 ```bash
 curl -s -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE_ID/dns_records" \\
   -H "Authorization: Bearer $CF_TOKEN" \\
   -H "Content-Type: application/json" \\
   --data '{{"type":"CNAME","name":"APP_NAME","content":"cname.vercel-dns.com","proxied":true}}'
 ```
-Ersetze APP_NAME mit dem gewuenschten Subdomain-Namen (z.B. "shop" → shop.your-domain.com)
+Replace APP_NAME with the desired subdomain name (e.g. "shop" → shop.your-domain.com)
 
-### Schritt 4: Domain ins Vercel-Projekt eintragen
+### Step 4: Add the domain to the Vercel project
 ```bash
 vercel domains add APP_NAME.your-domain.com --token=$VERCEL_TOKEN
 ```
 
-### Schritt 5: Supabase-Projekt erstellen (optional, wenn App DB braucht)
+### Step 5: Create Supabase project (optional, if the app needs a DB)
 ```bash
 npx supabase projects create APP_NAME --org-id ORG_ID --db-password PASS --token $SB_TOKEN
 ```
 
-### Schritt 6: Security-Check
-Nach JEDEM externen Deploy diese Checks ausfuehren:
+### Step 6: Security check
+Run these checks after EVERY external deploy:
 
 ```bash
-# HTTPS-Redirect pruefen
+# Check HTTPS redirect
 curl -sI http://APP_NAME.your-domain.com | grep -i "location"
 
-# Security-Headers pruefen
+# Check security headers
 curl -sI https://APP_NAME.your-domain.com
 
-# Sensitive Pfade testen (muessen 404 sein)
+# Test sensitive paths (must be 404)
 curl -s -o /dev/null -w "%{{http_code}}" https://APP_NAME.your-domain.com/.env
 curl -s -o /dev/null -w "%{{http_code}}" https://APP_NAME.your-domain.com/.git/config
 ```
 
 Checklist:
-- strict-transport-security (HSTS) — MUSS vorhanden sein
-- x-content-type-options: nosniff — SOLL vorhanden sein
-- x-frame-options — SOLL vorhanden sein
-- .env und .git NICHT erreichbar (404)
-- Keine Secrets im HTML (curl -s URL | grep -iE "api.key|token|secret")
+- strict-transport-security (HSTS) — MUST be present
+- x-content-type-options: nosniff — SHOULD be present
+- x-frame-options — SHOULD be present
+- .env and .git NOT reachable (404)
+- No secrets in the HTML (curl -s URL | grep -iE "api.key|token|secret")
 
-### Schritt 7: Optische Pruefung + Screenshot an den Operator
+### Step 7: Visual check + screenshot to the operator
 ```bash
-# Browser oeffnen und Screenshot machen (dev-browser)
+# Open browser and take a screenshot (dev-browser)
 dev-browser <<'EOF'
 const page = await browser.getPage("deploy");
 await page.goto("https://APP_NAME.your-domain.com");
@@ -740,27 +740,27 @@ const buf = await page.screenshot({{ fullPage: true }});
 const path = await saveScreenshot(buf, "deploy-check.png");
 console.log(path);
 EOF
-# Pfad aus Output ablesen (~/.dev-browser/tmp/deploy-check.png)
+# Read the path from the output (~/.dev-browser/tmp/deploy-check.png)
 
-# Screenshot an den Operator via Telegram senden (via mc verify fuer URLs oder mc deliverable+telegram)
-# Fuer Live-URLs: Visual Verification-Service macht Screenshot + Metriken + postet
-mc verify https://APP_NAME.your-domain.com --caption "Deploy-Check: APP_NAME.your-domain.com — [OK/Probleme]"
+# Send the screenshot to the operator via Telegram (via mc verify for URLs, or mc deliverable+telegram)
+# For live URLs: the visual verification service takes a screenshot + metrics + posts automatically
+mc verify https://APP_NAME.your-domain.com --caption "Deploy check: APP_NAME.your-domain.com — [OK/issues]"
 
-# Oder fuer lokalen Screenshot: erst als Deliverable (type=screenshot) registrieren,
-# dann mit --photo an Telegram anhaengen
-mc deliverable --type screenshot --title "Deploy-Check" --path "~/.dev-browser/tmp/deploy-check.png"
-mc telegram "Deploy-Check: APP_NAME.your-domain.com — [OK/Probleme]" --photo <deliverable-id>
+# Or for a local screenshot: register as a deliverable (type=screenshot) first,
+# then attach to Telegram with --photo
+mc deliverable --type screenshot --title "Deploy check" --path "~/.dev-browser/tmp/deploy-check.png"
+mc telegram "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <deliverable-id>
 ```
 
-### Workflow-Zusammenfassung
-1. Credentials holen (GET /api/v1/agent/deploy/credentials)
-2. vercel deploy → Deployment-URL
-3. Cloudflare DNS → Subdomain erstellen
-4. vercel domains add → Domain verknuepfen
-5. Security-Check (HTTPS, Headers, Sensitive Pfade)
-6. Optische Pruefung (Screenshot + Vision-Analyse)
-7. Screenshot + Bericht an den Operator via Telegram
-8. Deploy aufzeichnen (POST /api/v1/agent/deploy/record)
+### Workflow summary
+1. Fetch credentials (GET /api/v1/agent/deploy/credentials)
+2. vercel deploy → deployment URL
+3. Cloudflare DNS → create subdomain
+4. vercel domains add → link domain
+5. Security check (HTTPS, headers, sensitive paths)
+6. Visual check (screenshot + vision analysis)
+7. Screenshot + report to the operator via Telegram
+8. Record deploy (POST /api/v1/agent/deploy/record)
 """
 
     # ── Install request section ───────────────────────────────────────────
@@ -769,55 +769,55 @@ mc telegram "Deploy-Check: APP_NAME.your-domain.com — [OK/Probleme]" --photo <
         install_request_section = f"""
 ---
 
-## Plugin-Management für Worker
+## Plugin management for workers
 
-Du darfst bereits installierte CLI-Plugins an Worker-Agents (deselben Boards)
-zuweisen oder entfernen — ohne Operator-Approval. Use-Case: Davinci braucht
-`higgsfield-mcp`, Sparky soll nur `superpowers` bekommen, Tester braucht
-kein Plugin-Overhead etc.
+You may assign or remove already-installed CLI plugins on worker agents (same board)
+without operator approval. Use case: Davinci needs
+`higgsfield-mcp`, Sparky should only get `superpowers`, Tester needs
+no plugin overhead, etc.
 
-**Vorgehen:**
-1. Liste zeigen was verfügbar ist (`mc plugin-list` / `GET /plugins`)
-2. Optional: pruefen was der Worker heute hat (`mc plugin-show <agent>`)
-3. Neue Allowlist setzen (`mc plugin-assign <agent> [...]`)
-4. Optional: Worker-Restart damit Plugins sofort aktiv (`--restart` oder `mc worker-restart <agent>`)
+**Procedure:**
+1. Show what's available (`mc plugin-list` / `GET /plugins`)
+2. Optional: check what the worker currently has (`mc plugin-show <agent>`)
+3. Set the new allowlist (`mc plugin-assign <agent> [...]`)
+4. Optional: restart the worker so plugins take effect immediately (`--restart` or `mc worker-restart <agent>`)
 
-Wenn das gewünschte Plugin NICHT im shared cache ist → neue Installation
-via `Installation Requests` (Sektion unten) anfordern. Operator-Approval
-pflicht für Supply-Chain-Schutz.
+If the desired plugin is NOT in the shared cache → request a new installation
+via `Installation Requests` (section below). Operator approval is
+mandatory for supply-chain protection.
 
-### Quick-Form via mc CLI (empfohlen)
+### Quick form via mc CLI (recommended)
 
     mc plugin-list                                                  # shared cache
-    mc plugin-show Davinci                                          # Davincis Allowlist
+    mc plugin-show Davinci                                          # Davinci's allowlist
     mc plugin-assign Davinci higgsfield-mcp@anthropic-agent-skills --restart
     mc plugin-unassign Davinci superpowers@claude-plugins-official
-    mc worker-restart Davinci                                       # falls ohne --restart gesetzt
+    mc worker-restart Davinci                                       # if set without --restart
 
-Agent-Name ist case-insensitive und wird im aktuellen Board resolved.
-Fuer alle Befehle gibt es auch die raw-curl-Form unten.
+Agent name is case-insensitive and resolved within the current board.
+There's also a raw-curl form below for every command.
 
-### Verfügbare Plugins auflisten
+### List available plugins
 
     curl http://mc-backend:8000/api/v1/agent/plugins \\
       -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
 Response: `{{"plugins": [{{"key": "...", "name": "...", "source": "...", "version": "..."}}, ...], "total": N}}`
 
-Der `key` (z.B. `frontend-design@claude-plugins-official`) ist was du für
-Zuweisung brauchst.
+The `key` (e.g. `frontend-design@claude-plugins-official`) is what you need for
+assignment.
 
-### Aktuelle Plugin-Zuweisung eines Workers lesen
+### Read a worker's current plugin assignment
 
     curl http://mc-backend:8000/api/v1/agent/agents/<target-agent-id>/plugins \\
       -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
-Response: `{{"agent_id": "...", "agent_name": "Davinci", "cli_plugins": [...] oder null}}`
-- `null` = alle installierten Plugins (default)
-- `[]` = keine Plugins
-- `[...]` = explizite Allowlist
+Response: `{{"agent_id": "...", "agent_name": "Davinci", "cli_plugins": [...] or null}}`
+- `null` = all installed plugins (default)
+- `[]` = no plugins
+- `[...]` = explicit allowlist
 
-### Plugin-Zuweisung setzen
+### Set plugin assignment
 
     curl -X PATCH http://mc-backend:8000/api/v1/agent/agents/<target-agent-id>/plugins \\
       -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
@@ -827,90 +827,90 @@ Response: `{{"agent_id": "...", "agent_name": "Davinci", "cli_plugins": [...] od
         "restart_worker": true
       }}'
 
-**cli_plugins semantik**:
-- `null` (JSON: `null`) → Worker bekommt alle installierten Plugins
-- `[]` (leere Liste) → Worker bekommt NICHTS
-- `["a", "b"]` → nur diese (Allowlist)
+**cli_plugins semantics**:
+- `null` (JSON: `null`) → the worker gets all installed plugins
+- `[]` (empty list) → the worker gets NOTHING
+- `["a", "b"]` → only these (allowlist)
 
-**Additive Zuweisung**: Backend setzt das Feld komplett neu, keine Merge-Logik.
-Wenn du EIN Plugin ergaenzen willst, erst GET → Liste kopieren → ergaenzen → PATCH.
+**Additive assignment**: the backend sets the field completely fresh, no merge logic.
+If you want to add ONE plugin, first GET → copy the list → append → PATCH.
 
 **restart_worker** (default false):
-- `false` → neue Plugins sind erst nach manuellem Worker-Restart oder naechstem
-  Container-Restart aktiv. Laufender Task-Kontext bleibt erhalten.
-- `true` → Worker-Session (claude in tmux Window 0) wird gekillt + neu gestartet.
-  Neue Plugins sofort aktiv, aber laufender Task-Kontext ist WEG.
-  Nur fuer CLI-Bridge-Agents — host-Runtime (Boss selbst) hat keinen Worker.
+- `false` → new plugins only take effect after a manual worker restart or the next
+  container restart. The running task context is preserved.
+- `true` → the worker session (claude in tmux window 0) is killed and restarted.
+  New plugins are active immediately, but the running task context is GONE.
+  Only for CLI-bridge agents — host runtime (Boss itself) has no worker.
 
-**Faustregel:** Wenn du einen Worker neu konfigurierst der gerade NICHTS tut
-(current_task_id=null, idle) → `restart_worker: true` damit Plugins sofort live sind.
-Wenn der Worker an einem Task arbeitet → `false`, restarten sobald der Task fertig ist.
+**Rule of thumb:** When reconfiguring a worker that is currently idle
+(current_task_id=null, idle) → `restart_worker: true` so plugins are live immediately.
+If the worker is working on a task → `false`, restart once the task is done.
 
-### Worker-Session manuell neu starten
+### Manually restart a worker session
 
-Wenn du Plugins ohne `restart_worker` gesetzt hast, oder der Worker aus anderen
-Gruenden neu laden soll:
+If you set plugins without `restart_worker`, or the worker needs to reload for
+other reasons:
 
     curl -X POST http://mc-backend:8000/api/v1/agent/agents/<target-agent-id>/worker/restart \\
       -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
-WARNUNG: laufender Task-Kontext geht verloren. Pruefe vorher via
-`GET /agent/agents/<id>/detail` dass `current_task_id` null ist.
+WARNING: running task context is lost. Check beforehand via
+`GET /agent/agents/<id>/detail` that `current_task_id` is null.
 
 ### Guards
-- Nur Board Leads dürfen Plugins zuweisen + Worker restarten (du bist einer)
-- Target muss zum selben Board gehoeren
-- Board-Leads koennen einander keine Plugins/Restarts setzen (nur self)
-- DB ist Source of Truth, Disk-Sync läuft automatisch (settings.json + plugins/cache)
-- Worker-Restart nur fuer `agent_runtime=cli-bridge` — Boss (host-runtime) nicht betroffen
+- Only board leads may assign plugins + restart workers (you are one)
+- Target must belong to the same board
+- Board leads cannot set plugins/restarts on each other (self only)
+- DB is source of truth, disk sync runs automatically (settings.json + plugins/cache)
+- Worker restart only for `agent_runtime=cli-bridge` — Boss (host runtime) is not affected
 
 ---
 
 ## Installation Requests
 
-Stelle Install- oder Uninstall-Requests für **Skills, Plugins und MCP-Server**
-die NOCH NICHT im shared cache sind. Der Operator approved oder rejected in
-seiner Inbox. Erfolgreicher Approval triggert automatische Installation via
-InstallExecutor (inkl. Rollback bei Smoke-Test-Fehler bei MCP).
+File install or uninstall requests for **skills, plugins, and MCP servers**
+that are NOT YET in the shared cache. The operator approves or rejects them in
+their inbox. A successful approval triggers automatic installation via the
+InstallExecutor (including rollback on smoke-test failure for MCP).
 
-**Wichtig:** Für MCP-Installationen bei anderen Agents NICHT manuell pip install /
-Container-Edits vornehmen — immer dieses System verwenden.
+**Important:** For MCP installations on other agents, do NOT manually pip install /
+edit containers — always use this system.
 
 Endpoint: POST /api/v1/agent/install-requests
 
-### Callback-Koppelung (wichtig)
+### Callback coupling (important)
 
-Stelle den Request mit `"task_id": "<dein-aktueller-task-uuid>"` — nach
-erfolgreichem Install postet Backend automatisch einen `install_completed`
-Comment auf diese Task. Mirror zum `subtask_completed` Pattern:
-naechster Poll-Cycle → du siehst den Callback im Task-Kontext, weisst
-dass das Item live ist und kannst mit der naechsten Aktion fortfahren.
+File the request with `"task_id": "<your-current-task-uuid>"` — after
+a successful install, the backend automatically posts an `install_completed`
+comment on that task. Mirrors the `subtask_completed` pattern:
+next poll cycle → you see the callback in the task context, know
+the item is live, and can continue with the next action.
 
-Ohne `task_id` → nur ein `install.*` activity_event, kein Auto-Comment.
-Du muesstest aktiv `GET /approvals` pollen oder im Agent-Feed nachschauen.
+Without `task_id` → only an `install.*` activity_event, no auto-comment.
+You would have to actively poll `GET /approvals` or check the agent feed.
 
-**Wichtig — waehrend du wartest**: bleib `in_progress`, NICHT `blocked`. Der
-Callback kommt automatisch per Poll; kein Mensch muss eingreifen. `blocked`
-waere falsch und der Operator koennte den Blocker ohnehin nicht resolven
-(niemand weiss was zu tun ist, der Callback regelt es ja selbst).
+**Important — while you wait**: stay `in_progress`, NOT `blocked`. The
+callback arrives automatically via poll; no human needs to intervene. `blocked`
+would be wrong, and the operator couldn't resolve the blocker anyway
+(nobody knows what to do — the callback handles it itself).
 
-### Was nach success passiert — kein zusaetzlicher assign-Call noetig
+### What happens after success — no additional assign call needed
 
-Der InstallExecutor traegt das installierte Item nach Erfolg AUTOMATISCH in
-das passende Agent-Feld ein:
+After success, the InstallExecutor AUTOMATICALLY records the installed item in
+the matching agent field:
 
-- **install_skill** → Name wird in `target_agent.cli_skills` appended
-- **install_plugin** → Name wird in `target_agent.cli_plugins` appended
-- **install_mcp** → Name wird in `target_agent.mcp_servers` appended + MCP-Smoke-Test
+- **install_skill** → the name is appended to `target_agent.cli_skills`
+- **install_plugin** → the name is appended to `target_agent.cli_plugins`
+- **install_mcp** → the name is appended to `target_agent.mcp_servers` + MCP smoke test
 
-Danach triggert der Executor `sync_config` damit die Aenderung bei CLI-Bridge
-Agents in claude-config landet. Du musst NICHT zusaetzlich `mc plugin-assign`
-oder `mc worker-restart` aufrufen — der Install-Flow ist komplett autonom.
+The executor then triggers `sync_config` so the change lands in claude-config
+for CLI-bridge agents. You do NOT need to additionally call `mc plugin-assign`
+or `mc worker-restart` — the install flow is fully autonomous.
 
-`mc plugin-assign` ist NUR fuer das Zuweisen von BEREITS-installierten
-Plugins an andere Worker gedacht (wenn der Shared Cache das Plugin schon
-hat und du es einem zweiten Worker geben willst). Skills haben keinen
-separaten CLI-Command — sie sind nach Install-Success automatisch zugewiesen.
+`mc plugin-assign` is ONLY meant for assigning ALREADY-installed
+plugins to another worker (when the shared cache already
+has the plugin and you want to give it to a second worker). Skills have no
+separate CLI command — they're automatically assigned after install success.
 
 ### Skill install
 
@@ -923,7 +923,7 @@ separaten CLI-Command — sie sind nach Install-Success automatisch zugewiesen.
         "source": "github:anthropic/skill-web-performance",
         "name": "web-performance",
         "target_agent_id": "<target-uuid>",
-        "reason": "Agent failed 3 perf-debug tasks — dieser Skill hat Checklisten dafür",
+        "reason": "Agent failed 3 perf-debug tasks — this skill has checklists for that",
         "autonomy_level": "L2",
         "task_id": "'"$TASK_ID"'"
       }}'
@@ -939,15 +939,15 @@ separaten CLI-Command — sie sind nach Install-Success automatisch zugewiesen.
         "source": "github:geopopos/higgsfield_ai_mcp",
         "name": "higgsfield-ai",
         "target_agent_id": "<davinci-uuid>",
-        "reason": "Davinci braucht MCP-Tools fuer Higgsfield Image/Video-Generierung im Marketing-Projekt",
+        "reason": "Davinci needs MCP tools for Higgsfield image/video generation in the marketing project",
         "autonomy_level": "L2"
       }}'
 
-Nach Approval installiert der InstallExecutor das Paket, legt das Manifest
-unter ~/.mc/mcp-servers/<name>/ an und synct Davincis .mcp.json.
-Smoke-Test scheitert → automatischer Rollback.
+After approval, the InstallExecutor installs the package, creates the manifest
+under ~/.mc/mcp-servers/<name>/, and syncs Davinci's .mcp.json.
+If the smoke test fails → automatic rollback.
 
-Response: 201 mit approval_id + existing=false (oder 200 + existing=true bei Duplikat).
+Response: 201 with approval_id + existing=false (or 200 + existing=true on duplicate).
 
 ### Uninstall
 
@@ -959,54 +959,54 @@ Response: 201 mit approval_id + existing=false (oder 200 + existing=true bei Dup
         "operation": "uninstall",
         "name": "higgsfield-ai",
         "target_agent_id": "<target-uuid>",
-        "reason": "nicht mehr benötigt"
+        "reason": "no longer needed"
       }}'
 
-### Allowlist-Quellen
+### Allowlist sources
 - **skill**: github:anthropic/*, github:obra/*, github:getcursor/*, ~/.mc/skills/*
 - **plugin**: claude-plugins-official, github:claude-plugins/*, github:anthropic/*
 - **mcp**:
   - npm:@modelcontextprotocol/server-*
   - npm:@supabase/*, npm:@vercel/*, npm:@cloudflare/mcp-*
-  - github:<any-org>/<repo-mit-mcp-im-namen> (z.B. `geopopos/higgsfield_ai_mcp`)
+  - github:<any-org>/<repo-with-mcp-in-the-name> (e.g. `geopopos/higgsfield_ai_mcp`)
 
-### Wichtig
-- Schreibe einen **konkreten Grund**: welche Task scheiterte, warum DIESER Skill/Plugin/MCP,
-  gibt es eine Alternative? Der Operator approved schneller wenn Kontext klar ist.
-- Duplikate werden automatisch erkannt — gleicher Request 2× → selbe approval_id.
-- Bereits-installiert-Check: HTTP 409 wenn Agent das Item schon hat.
-- Requests expiren nach 7 Tagen.
+### Important
+- Write a **concrete reason**: which task failed, why THIS skill/plugin/MCP,
+  is there an alternative? The operator approves faster when context is clear.
+- Duplicates are detected automatically — same request 2× → same approval_id.
+- Already-installed check: HTTP 409 if the agent already has the item.
+- Requests expire after 7 days.
 """
 
     # ── Knowledge sections ────────────────────────────────────────────────
     knowledge_parts = []
     if _has(Scope.KNOWLEDGE_READ):
-        knowledge_parts.append(f"""## Knowledge Base lesen
+        knowledge_parts.append(f"""## Read knowledge base
 GET $MC_API_URL/api/v1/agent/knowledge
 Authorization: Bearer $MC_AGENT_TOKEN
 
-Optionale Parameter:
+Optional parameters:
   ?memory_type=knowledge|lesson|reference|research|journal|weekly_review|insight
-  ?search=suchbegriff
+  ?search=search term
   ?limit=50
 
-Gibt alle relevanten Eintraege zurueck: eigene Knowledge, Board-Memory, globale Knowledge.""")
+Returns all relevant entries: own knowledge, board memory, global knowledge.""")
 
     if _has(Scope.KNOWLEDGE_WRITE):
-        knowledge_parts.append(f"""## Eigenen Knowledge-Eintrag schreiben
+        knowledge_parts.append(f"""## Write your own knowledge entry
 POST $MC_API_URL/api/v1/agent/knowledge
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "content": "Inhalt des Eintrags",
-  "title": "Optionaler Titel",
+  "content": "Entry content",
+  "title": "Optional title",
   "memory_type": "knowledge",
   "tags": ["tag1"],
   "scope": "agent"
 }}
 
-scope: "agent" (nur ich sehe es) | "board" (alle Board-Agents) | "global" (alle)
+scope: "agent" (only I see it) | "board" (all board agents) | "global" (everyone)
 memory_type: knowledge | lesson | reference | research | journal | weekly_review | insight""")
 
     knowledge_section = "\n\n".join(knowledge_parts)
@@ -1016,23 +1016,23 @@ memory_type: knowledge | lesson | reference | research | journal | weekly_review
     if _has(Scope.VAULT_WRITE):
         if runtime == "host":
             _vault_location = (
-                f"**Dein Ordner:** `$AGENT_VAULT_PATH` "
-                f"(host-Pfad `~/.mc/vault/agents/{name.lower()}/`)"
+                f"**Your folder:** `$AGENT_VAULT_PATH` "
+                f"(host path `~/.mc/vault/agents/{name.lower()}/`)"
             )
         else:
             _vault_location = (
-                f"**Dein Ordner:** `$AGENT_VAULT_PATH` "
-                f"(gemappt auf `/vault/agents/{name.lower()}/` im Container)"
+                f"**Your folder:** `$AGENT_VAULT_PATH` "
+                f"(mapped to `/vault/agents/{name.lower()}/` in the container)"
             )
-        vault_section = f"""## Vault — Langzeit-Gedaechtnis (Karpathy Wiki)
+        vault_section = f"""## Vault — long-term memory (Karpathy Wiki)
 
-Mission Controls kollektives Gedaechtnis lebt in einem Markdown-Vault unter `~/.mc/vault/`.
-Du kannst direkt ins Filesystem schreiben UND via Backend-API.
+Mission Control's collective memory lives in a Markdown vault under `~/.mc/vault/`.
+You can write directly to the filesystem AND via the backend API.
 
 {_vault_location}
-**Shared Inbox:** `$AGENT_VAULT_INBOX` (fuer agentenuebergreifende Schreibvorgaenge)
+**Shared inbox:** `$AGENT_VAULT_INBOX` (for cross-agent writes)
 
-### Eigene Lessons schreiben (direktes Filesystem)
+### Write your own lessons (direct filesystem)
 
 ```bash
 cat > $AGENT_VAULT_PATH/lessons/$(date +%Y-%m-%d)-rate-limit-xai.md <<'EOF'
@@ -1051,20 +1051,20 @@ tags: [api, rate-limiting]
 EOF
 ```
 
-**Wichtig:** Jede Datei MUSS `id`, `type`, `agent`, `date` im Frontmatter haben.
-Der Watcher verschiebt ungueltige Dateien nach `_rejected/`.
+**Important:** Every file MUST have `id`, `type`, `agent`, `date` in the frontmatter.
+The watcher moves invalid files to `_rejected/`.
 
-### Agentenuebergreifende Entscheidungen (via Backend-API)
+### Cross-agent decisions (via backend API)
 
-Fuer Dateien die andere Agents betreffen (z.B. `global/decisions/...`), nutze die Inbox-API.
-Das Backend-Compactor mergt dein Envelope in den kanonischen Pfad.
+For files that affect other agents (e.g. `global/decisions/...`), use the inbox API.
+The backend compactor merges your envelope into the canonical path.
 
-**write_note Schema (PFLICHT-FELDER):**
+**write_note schema (REQUIRED FIELDS):**
 
 ```json
 {{
-  "title": "5-7 Wort lesbarer Titel",
-  "content": "Markdown body mit [[wikilink]]s inline",
+  "title": "5-7 word readable title",
+  "content": "Markdown body with [[wikilink]]s inline",
   "type": "knowledge | lesson | reference | journal | note",
   "tags": ["tag1", "tag2"],
   "related_notes": ["[[note-slug-1]]", "[[note-slug-2]]"],
@@ -1072,24 +1072,24 @@ Das Backend-Compactor mergt dein Envelope in den kanonischen Pfad.
 }}
 ```
 
-`related_notes` ist optional, aber **empfohlen**: erst `search_notes()`, dann
-2-4 thematisch passende Treffer verlinken (auch inline in `content`). Leere
-Liste ist erlaubt — der nächtliche Wikilink-Backfill verknüpft orphan-Notes
-nachträglich automatisch über Qdrant-Ähnlichkeit + Spark-LLM.
-Erlaubte Relation-Types: `supersedes | contradicts | refines | example-of | depends-on | related-to`
+`related_notes` is optional but **recommended**: first `search_notes()`, then
+link 2-4 thematically relevant hits (also inline in `content`). An empty
+list is allowed — the nightly wikilink backfill links orphan notes
+automatically later via Qdrant similarity + Spark LLM.
+Allowed relation types: `supersedes | contradicts | refines | example-of | depends-on | related-to`
 
 ```bash
-# Zuerst suchen, dann verlinken
+# Search first, then link
 curl "$MC_API_URL/api/v1/agent/vault/search?q=auth+migration" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
-# Dann Note schreiben (related_notes optional aber empfohlen)
+# Then write the note (related_notes optional but recommended)
 curl -X POST "$MC_API_URL/api/v1/agent/vault/note" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{
     "title": "Auth Migration Learnings",
-    "content": "Bei OAuth2-Migration: Refresh-Tokens NICHT in localStorage. Siehe auch [[jwt-auth-overview]] und [[security-baseline]].",
+    "content": "During OAuth2 migration: refresh tokens must NOT go in localStorage. See also [[jwt-auth-overview]] and [[security-baseline]].",
     "type": "lesson",
     "target": "global/lessons/auth-migration.md",
     "tags": ["auth", "security"],
@@ -1100,110 +1100,110 @@ curl -X POST "$MC_API_URL/api/v1/agent/vault/note" \\
   }}'
 ```
 
-`idempotency_key` verhindert Duplikate bei Timeout + Retry. `task_id`
-ist optional aber **empfohlen wenn du gerade an einem Task arbeitest** —
-es verlinkt deine Note mit allen anderen Notes + Deliverable-Wrappers
-desselben Tasks (siehe "Task-Klammer" unten).
+`idempotency_key` prevents duplicates on timeout + retry. `task_id`
+is optional but **recommended when you're currently working on a task** —
+it links your note with all other notes + deliverable wrappers
+of the same task (see "task bracket" below).
 
-### Vault durchsuchen
+### Search the vault
 
 ```bash
-# Volltext-Suche ueber alle Notes + Deliverable-Wrappers + extrahierte PDF-Texte
+# Full-text search across all notes + deliverable wrappers + extracted PDF text
 curl "$MC_API_URL/api/v1/agent/vault/search?q=rate+limit" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
-# Filter nach type=deliverable (nur Wrappers fuer Files/Screenshots/Docs)
-curl "$MC_API_URL/api/v1/agent/vault/search?q=wetter&type=deliverable" \\
+# Filter by type=deliverable (only wrappers for files/screenshots/docs)
+curl "$MC_API_URL/api/v1/agent/vault/search?q=weather&type=deliverable" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 
-# Einzelne Note lesen
+# Read a single note
 curl "$MC_API_URL/api/v1/agent/vault/note/agents/{name.lower()}/lessons/2026-05-14-rate-limit-xai.md" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-### Vault Files — Deliverables als Wrapper + Anhang
+### Vault files — deliverables as wrapper + attachment
 
-Jedes Task-Deliverable hat im Vault einen Markdown-Wrapper unter
-`/vault/agents/<slug>/deliverables/*.md`. Der Wrapper enthaelt
-Frontmatter (`task`, `deliverable_id`, `attachment_path`, `attachment_mime`)
-und embedded den echten File aus `/vault/attachments/`. Such-Hits mit
-`type:"deliverable"` zeigen genau auf diese Wrappers.
+Every task deliverable has a Markdown wrapper in the vault under
+`/vault/agents/<slug>/deliverables/*.md`. The wrapper contains
+frontmatter (`task`, `deliverable_id`, `attachment_path`, `attachment_mime`)
+and embeds the actual file from `/vault/attachments/`. Search hits with
+`type:"deliverable"` point exactly to these wrappers.
 
 ```bash
-# Wrapper-Markdown lesen (z.B. nach Vault-Search hit)
-Read /vault/agents/researcher/deliverables/wetter-staufen-2026-05-15.md
+# Read the wrapper Markdown (e.g. after a vault-search hit)
+Read /vault/agents/researcher/deliverables/weather-staufen-2026-05-15.md
 
-# PDF nativ lesen (mit pages-Parameter fuer lange Dokumente)
+# Read a PDF natively (with a pages parameter for long documents)
 Read /vault/attachments/files/<deliverable-id>.pdf  (pages: "1-5")
 
-# Bild nativ lesen — wird als Vision-Input interpretiert, du SIEHST das Bild
+# Read an image natively — interpreted as vision input, you SEE the image
 Read /vault/attachments/images/<deliverable-id>.png
 ```
 
-**Bei PDF-Wrappers steht extrahierter Text unter `## Auto-extracted`** —
-oft reicht das Wrapper-Markdown, ohne dass du das PDF selbst oeffnen musst.
+**For PDF wrappers, extracted text is under `## Auto-extracted`** —
+often the wrapper Markdown is enough without opening the PDF yourself.
 
-**Binary-Files in `/vault/attachments/` NIE in-place editieren.** Wenn du
-eine neue Version eines PDF/Bilds brauchst:
-1. Neuen Wrapper anlegen (`<topic>-v2.md`) — der bestehende Deliverable-Flow
-   (`mc deliverable --type ...` oder PATCH /api/v1/agent/me/deliverable)
-   erzeugt den Wrapper automatisch
-2. Im Frontmatter `supersedes: [[<alter-wrapper-id>]]`
-3. Body-Sektion `## Vorgaenger` mit Wikilink zur alten Version
+**NEVER edit binary files in `/vault/attachments/` in place.** If you
+need a new version of a PDF/image:
+1. Create a new wrapper (`<topic>-v2.md`) — the existing deliverable flow
+   (`mc deliverable --type ...` or PATCH /api/v1/agent/me/deliverable)
+   creates the wrapper automatically
+2. In the frontmatter, `supersedes: [[<old-wrapper-id>]]`
+3. Body section `## Predecessor` with a wikilink to the old version
 
-### Task-Klammer — verwandte Notes + Files
+### Task bracket — related notes + files
 
-Wenn du Wrapper, Lessons und Memorys mit derselben `task_id` schreibst,
-kannst du sie spaeter alle gemeinsam finden:
+If you write wrappers, lessons, and memories with the same `task_id`,
+you can find them all together later:
 
 ```bash
-# Alle Notes + Wrappers + Lessons eines Tasks
+# All notes + wrappers + lessons of a task
 curl "$MC_API_URL/api/v1/agent/vault/related/$TASK_ID" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN"
 ```
 
-Use-Case: Du oeffnest einen alten Wetter-Report-Wrapper via Search —
-mit related findest du sofort die Recherche-Lessons und Memorys, die
-der vorherige Agent waehrend dieses Tasks geschrieben hat.
+Use case: you open an old weather-report wrapper via search —
+with `related` you immediately find the research lessons and memories
+the previous agent wrote during that task.
 
-### Ordner-Disziplin
+### Folder discipline
 
-- Eigene Lessons/Notes → `$AGENT_VAULT_PATH/lessons/` oder `notes/`
-- NIEMALS direkt in den Ordner eines anderen Agents schreiben — der Watcher lehnt Pfad-Eigentuemerschafts-Verletzungen ab
-- Shared Knowledge (Entscheidungen, Projekt-Notes) → immer Inbox-API mit explizitem `target`"""
+- Own lessons/notes → `$AGENT_VAULT_PATH/lessons/` or `notes/`
+- NEVER write directly into another agent's folder — the watcher rejects path-ownership violations
+- Shared knowledge (decisions, project notes) → always use the inbox API with an explicit `target`"""
 
     # ── Memory section ─────────────────────────────────────────────────────
     memory_section = ""
     if _has(Scope.MEMORY_WRITE):
-        memory_section = f"""## Eigene Memory aktualisieren (persistiert zwischen Sessions)
+        memory_section = f"""## Update your own memory (persists between sessions)
 PATCH $MC_API_URL/api/v1/agent/me/memory
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
 
 {{
-  "content": "# {name} Memory\\n\\n## Gelerntes\\n- ...\\n\\n## Konventionen\\n- ..."
+  "content": "# {name} Memory\\n\\n## Learned\\n- ...\\n\\n## Conventions\\n- ..."
 }}
 
-Achtung: Vollstaendiger Inhalt — nicht append. GET /api/v1/agent/me/memory zum Lesen."""
+Note: full content — not an append. GET /api/v1/agent/me/memory to read."""
 
     # ── mc remember (vault shortcut) ────────────────────────────────────
     vault_remember_section = ""
     if _has("vault:write"):
-        vault_remember_section = """## mc remember — Schnell etwas merken
+        vault_remember_section = """## mc remember — quickly note something
 
 ```bash
-mc remember "Was du gelernt hast"
-mc remember "Titel" --content "Body" --type knowledge
+mc remember "What you learned"
+mc remember "Title" --content "Body" --type knowledge
 mc remember "Lesson" --tags "docker,restart" --type lesson
 ```
 
-Shortcut fuer `mc vault-write`. Defaults: type=lesson,
-auto-Title aus Text, auto-Idempotency-Key, $TASK_ID aus env."""
+Shortcut for `mc vault-write`. Defaults: type=lesson,
+auto-title from text, auto idempotency key, $TASK_ID from env."""
 
     # ── Heartbeat section ───────────────────────────────────────────────────
     heartbeat_section = ""
     if _has(Scope.HEARTBEAT):
-        heartbeat_section = f"""## Eigenen Status melden
+        heartbeat_section = f"""## Report your own status
 POST $MC_API_URL/api/v1/agent/heartbeat
 Authorization: Bearer $MC_AGENT_TOKEN
 Content-Type: application/json
@@ -1218,11 +1218,11 @@ Status: online | busy | idle | offline"""
     # ── Help request section ──────────────────────────────────────────────
     help_request_section = ""
     if _has(Scope.TASKS_HELP):
-        help_request_section = f"""## Help Request — Andere Agents um Hilfe bitten
+        help_request_section = f"""## Help request — ask other agents for help
 
-Wenn du fuer deine Aufgabe Unterstuetzung brauchst die ausserhalb deiner
-Kompetenz liegt, kannst du einen Help Request stellen. Dein Task wird
-automatisch pausiert bis das Ergebnis da ist.
+If you need support for your task that's outside your
+competence, you can file a help request. Your task
+is paused automatically until the result comes back.
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/help-request" \\
@@ -1230,70 +1230,70 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/help-request" \\
   -H "Content-Type: application/json" \\
   -d '{{
     "needed_role": "researcher",
-    "title": "Kurze Beschreibung was du brauchst",
-    "context": "Detaillierter Kontext: was genau, wofuer, welches Format"
+    "title": "Short description of what you need",
+    "context": "Detailed context: exactly what, for what purpose, which format"
   }}'
 ```
 
-Verfuegbare Rollen: researcher, developer, writer, reviewer, deployer, planner, tester.
-Du bekommst das Ergebnis als Nachricht und machst dann weiter.
-WICHTIG: Nutze Help Requests nur wenn du wirklich nicht weiterkommst.
-Versuche zuerst selbst, bevor du andere Agents einbeziehst.
+Available roles: researcher, developer, writer, reviewer, deployer, planner, tester.
+You get the result as a message and then continue.
+IMPORTANT: Only use help requests when you're truly stuck.
+Try yourself first before involving other agents.
 
-## Klaerungsfrage stellen — den Operator direkt fragen
+## Ask a clarification question — ask the operator directly
 
-Wenn du eine Entscheidung oder Klaerung vom Operator brauchst, stelle eine
-strukturierte Frage. Dein Task wird pausiert bis der Operator antwortet.
+If you need a decision or clarification from the operator, ask a
+structured question. Your task is paused until the operator answers.
 
 ```
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/clarification" \\
   -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
   -H "Content-Type: application/json" \\
   -d '{{
-    "question": "Deine konkrete Frage an den Operator",
+    "question": "Your concrete question for the operator",
     "options": ["Option A", "Option B"]
   }}'
 ```
 
-Das `options`-Feld ist optional. Nutze es wenn du Antwort-Vorschlaege hast.
-Du bekommst die Antwort des Operators als Nachricht und machst dann weiter."""
+The `options` field is optional. Use it if you have suggested answers.
+You get the operator's answer as a message and then continue."""
 
     # ── Browser reference (for all agents) ───────────────────────────────
     browser_section = """
 ---
 
-## Browser-Referenz
+## Browser reference
 
-### dev-browser (Primary — Playwright-basiert, sandboxed)
+### dev-browser (primary — Playwright-based, sandboxed)
 
 ```bash
-# URL oeffnen + Status pruefen
+# Open a URL + check status
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 await page.goto("URL");
 console.log(JSON.stringify({ url: page.url(), title: await page.title() }));
 EOF
 
-# Seite analysieren (Element-Discovery)
+# Analyze the page (element discovery)
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 const result = await page.snapshotForAI();
 console.log(result.full);
 EOF
 
-# Element klicken
+# Click an element
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 await page.getByRole("button", { name: "Submit" }).click();
 EOF
 
-# Feld ausfuellen
+# Fill a field
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 await page.fill("#email", "user@example.com");
 EOF
 
-# Viewport-Screenshot
+# Viewport screenshot
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 const buf = await page.screenshot();
@@ -1301,7 +1301,7 @@ const path = await saveScreenshot(buf, "screenshot.png");
 console.log(path);
 EOF
 
-# Ganzseitiger Screenshot
+# Full-page screenshot
 dev-browser <<'EOF'
 const page = await browser.getPage("main");
 const buf = await page.screenshot({{ fullPage: true }});
@@ -1310,11 +1310,11 @@ console.log(path);
 EOF
 ```
 
-Screenshots werden nach `~/.dev-browser/tmp/` gespeichert. Pfad kommt aus `console.log(path)`.
+Screenshots are saved to `~/.dev-browser/tmp/`. Path comes from `console.log(path)`.
 
-### Persistenter Browser fuer externe Seiten (Login-Sessions)
+### Persistent browser for external sites (login sessions)
 
-Fuer Seiten die Login brauchen (X/Twitter, GitHub, etc.) den Chrome auf Port 18800 nutzen:
+For sites that require login (X/Twitter, GitHub, etc.) use the Chrome instance on port 18800:
 ```bash
 dev-browser --connect http://localhost:18800 <<'EOF'
 const page = await browser.getPage("x");
@@ -1323,15 +1323,15 @@ console.log(JSON.stringify({ url: page.url(), title: await page.title() }));
 EOF
 ```
 
-Dieser Browser laeuft permanent (LaunchAgent) und speichert Sessions zwischen Runs.
-Einmalig manuell einloggen → danach nutzt Henry die gespeicherte Session.
+This browser runs permanently (LaunchAgent) and keeps sessions between runs.
+Log in manually once → Henry then uses the saved session.
 
-Regeln:
-- KEIN `openclaw browser` (Pairing-Problem)
-- Externe Seiten mit Login → `--connect http://localhost:18800`
-- Lokale Tools / oeffentliche Seiten → normales `dev-browser` (eigene Session)
-- Bei 2x Timeout: `dev-browser stop` → retry → dann BLOCKED
-- Named pages (`browser.getPage("name")`) bleiben zwischen Script-Runs erhalten
+Rules:
+- NO `openclaw browser` (pairing problem)
+- External sites with login → `--connect http://localhost:18800`
+- Local tools / public sites → regular `dev-browser` (own session)
+- On 2x timeout: `dev-browser stop` → retry → then BLOCKED
+- Named pages (`browser.getPage("name")`) persist between script runs
 """
 
     # ── Typical flows (role-aware worked examples) ───────────────────────
@@ -1346,85 +1346,85 @@ Regeln:
 
     # Universal: task lifecycle with concrete examples
     flow_blocks.append(
-        "### Ablauf 1 — Task empfangen und abschliessen (jede Rolle)\n\n"
+        "### Flow 1 — receive and complete a task (every role)\n\n"
         "```bash\n"
-        "# 1. Orientieren: wer bin ich, was ist meine aktive Task\n"
+        "# 1. Get oriented: who am I, what is my active task\n"
         "mc me\n"
         "# → {\"id\": \"bc81...\", \"name\": \"...\", \"current_task\": {\"id\": \"c5e2...\", \"status\": \"inbox\"}, \"cli_skills\": [...]}\n"
         "\n"
-        "# 2. ACK senden (Task → in_progress). Falls Response 409 \"In Progress → In Progress\":\n"
-        "#    Du warst schon ACKed (via poll.sh direct-dispatch) — einfach weitermachen.\n"
+        "# 2. Send ACK (task → in_progress). If the response is 409 \"In Progress → In Progress\":\n"
+        "#    you were already ACKed (via poll.sh direct-dispatch) — just continue.\n"
         "mc ack\n"
         "\n"
-        "# 3. Arbeit erledigen (siehe rollen-spezifische Abläufe unten)\n"
+        "# 3. Do the work (see role-specific flows below)\n"
         "\n"
-        "# 4. Zwischenstand dokumentieren (optional, bei mehrstufigen Tasks)\n"
-        "mc comment \"Update — Phase 1 fertig. Starte Phase 2.\"\n"
+        "# 4. Document progress (optional, for multi-step tasks)\n"
+        "mc comment \"Update — phase 1 done. Starting phase 2.\"\n"
         "\n"
-        "# 5. Abschluss-Reflection + done\n"
-        "mc comment --type reflection \"Was gemacht: ... / Was funktionierte: ... / Was unklar: ...\"\n"
+        "# 5. Final reflection + done\n"
+        "mc comment --type reflection \"What was done: ... / What worked: ... / What's unclear: ...\"\n"
         "mc done\n"
         "```\n"
         "\n"
-        "**Wenn du unsicher bist** → `mc blocked --type <type> \"Was brauchst du?\"`:\n"
+        "**If you're unsure** → `mc blocked --type <type> \"What do you need?\"`:\n"
         "```bash\n"
-        "mc blocked --type missing_info \"Welcher Tone-of-Voice? formal oder casual?\"\n"
-        "# Task-Status → blocked, der Operator bekommt Telegram-Frage, du wartest auf Antwort\n"
+        "mc blocked --type missing_info \"Which tone of voice? formal or casual?\"\n"
+        "# Task status → blocked, the operator gets a Telegram question, you wait for an answer\n"
         "```\n"
-        "Valide blocker_type: `missing_info` | `technical_problem` | `decision_needed` | "
+        "Valid blocker_type: `missing_info` | `technical_problem` | `decision_needed` | "
         "`permission_needed` | `dependency_blocked` | `other`."
     )
 
     # Chat-write: reporting flow with concrete file examples
     if _has(Scope.CHAT_WRITE):
         flow_blocks.append(
-            "### Ablauf 2 — Report an den Operator über Telegram\n\n"
+            "### Flow 2 — report to the operator via Telegram\n\n"
             "```bash\n"
-            "# Einfacher Text-Report (Markdown unterstützt)\n"
-            "mc telegram \"**Status** — Wetter-Recherche fertig. 3 Quellen kreuzvalidiert, Details im Deliverable.\"\n"
+            "# Simple text report (Markdown supported)\n"
+            "mc telegram \"**Status** — weather research done. 3 sources cross-validated, details in the deliverable.\"\n"
             "\n"
-            "# Mit Bild (z.B. Screenshot, Chart, Mockup) — max 10 MB\n"
-            "mc telegram \"Frontend-Mockup v2\" --photo /deliverables/$TASK_ID/mockup-v2.png\n"
+            "# With an image (e.g. screenshot, chart, mockup) — max 10 MB\n"
+            "mc telegram \"Frontend mockup v2\" --photo /deliverables/$TASK_ID/mockup-v2.png\n"
             "\n"
-            "# Mit Dokument (PDF, Word, Excel, ZIP) — max 50 MB\n"
-            "mc telegram \"Wetter-Report KW17\" --file /shared-deliverables/$TASK_ID/report.pdf\n"
+            "# With a document (PDF, Word, Excel, ZIP) — max 50 MB\n"
+            "mc telegram \"Weather report week 17\" --file /shared-deliverables/$TASK_ID/report.pdf\n"
             "\n"
-            "# Visual Verification (Screenshot + Metriken einer Live-URL)\n"
-            "mc verify https://example.your-domain.com --caption \"Landingpage-Deploy verifiziert\"\n"
-            "# → Sidecar macht Playwright-Screenshot + LCP/CLS + postet automatisch zu Telegram\n"
+            "# Visual verification (screenshot + metrics of a live URL)\n"
+            "mc verify https://example.your-domain.com --caption \"Landing page deploy verified\"\n"
+            "# → sidecar takes a Playwright screenshot + LCP/CLS and posts to Telegram automatically\n"
             "```"
         )
 
     # Tasks-write: deliverable + PDF flow with a real example
     if _has(Scope.TASKS_WRITE):
         flow_blocks.append(
-            "### Ablauf 3 — Ergebnis als Deliverable registrieren + PDF generieren\n\n"
+            "### Flow 3 — register a result as a deliverable + generate a PDF\n\n"
             "```bash\n"
-            "# Markdown-Report schreiben (Beispiel: Research-Deliverable)\n"
+            "# Write a Markdown report (example: research deliverable)\n"
             "mkdir -p /deliverables/$TASK_ID\n"
             "cat > /deliverables/$TASK_ID/report.md <<'EOF'\n"
-            "# Wetter-Report KW17 Zürich\n"
+            "# Weather Report Week 17 Zurich\n"
             "\n"
-            "## Zusammenfassung\n"
-            "Diese Woche regnet es am Mittwoch, sonst trocken.\n"
+            "## Summary\n"
+            "It rains on Wednesday this week, dry otherwise.\n"
             "\n"
-            "## Quellen\n"
-            "- wetter.com (gefetcht 2026-04-24)\n"
+            "## Sources\n"
+            "- wetter.com (fetched 2026-04-24)\n"
             "- meteoblue.com\n"
             "EOF\n"
             "\n"
-            "# Deliverable in DB registrieren (der Operator + andere Agents sehen es im UI)\n"
-            "mc deliverable --type document --title \"Wetter-Report KW17\" --path /deliverables/$TASK_ID/report.md\n"
+            "# Register the deliverable in the DB (the operator + other agents see it in the UI)\n"
+            "mc deliverable --type document --title \"Weather Report Week 17\" --path /deliverables/$TASK_ID/report.md\n"
             "\n"
-            "# Wenn der Operator ein PDF statt Markdown will: via mc-playwright Sidecar rendern\n"
-            "mc pdf /deliverables/$TASK_ID/report.md --title \"Wetter-Report KW17\"\n"
-            "# → /shared-deliverables/$TASK_ID/wetter-report-kw17.pdf (fuer Telegram-Anhang)\n"
+            "# If the operator wants a PDF instead of Markdown: render it via the mc-playwright sidecar\n"
+            "mc pdf /deliverables/$TASK_ID/report.md --title \"Weather Report Week 17\"\n"
+            "# → /shared-deliverables/$TASK_ID/weather-report-week-17.pdf (for the Telegram attachment)\n"
             "\n"
-            "# Zwischenstand speichern (falls Container-Restart → Task-Recovery hat Kontext)\n"
-            "mc checkpoint \"Research fertig, PDF generiert, starte Telegram-Versand\"\n"
+            "# Save intermediate progress (so a container restart → task recovery has context)\n"
+            "mc checkpoint \"Research done, PDF generated, starting Telegram send\"\n"
             "\n"
-            "# Checkliste pflegen fuer Multi-Step-Tasks\n"
-            "mc checklist add \"Research abgeschlossen\"\n"
+            "# Maintain the checklist for multi-step tasks\n"
+            "mc checklist add \"Research complete\"\n"
             "mc checklist done <item-id>\n"
             "```"
         )
@@ -1432,30 +1432,30 @@ Regeln:
     # Tasks-create (orchestrator): delegation flow with parent/subtask
     if _has(Scope.TASKS_CREATE):
         flow_blocks.append(
-            "### Ablauf 4 — Multi-Phase Task orchestrieren (Delegate + Callback warten)\n\n"
+            "### Flow 4 — orchestrate a multi-phase task (delegate + wait for callback)\n\n"
             "```bash\n"
-            "# Parent-Task ist \"Erstelle Wetter-Report mit Telegram-Versand\" → drei Phasen:\n"
-            "#   1. Recherche (Researcher)\n"
-            "#   2. Content-Writing + Brand-Skill (Shakespeare)\n"
+            "# Parent task is \"Create a weather report with Telegram delivery\" → three phases:\n"
+            "#   1. Research (Researcher)\n"
+            "#   2. Content writing + brand skill (Shakespeare)\n"
             "#   3. PDF + Telegram (FreeCode)\n"
             "\n"
-            "# Phase 1 delegieren — atomic: erstellt Subtask + blockt Parent nicht mehr\n"
-            "mc delegate \"Research: 7-Tage Wetter Zürich\" \\\n"
+            "# Delegate phase 1 — atomic: creates a subtask + no longer blocks the parent\n"
+            "mc delegate \"Research: 7-day weather Zurich\" \\\n"
             "  --to Researcher \\\n"
-            "  --description \"Kreuzvalidiere mind. 3 Quellen. Registriere Markdown-Deliverable mit Temperatur min/max + Niederschlag pro Tag.\"\n"
-            "# → Subtask mit callback_agent_id=du erstellt\n"
+            "  --description \"Cross-validate at least 3 sources. Register a Markdown deliverable with min/max temperature + precipitation per day.\"\n"
+            "# → subtask created with callback_agent_id=you\n"
             "\n"
-            "# WARTEN: Du bleibst 'in_progress' (NICHT blocked!). subtask_completed Comment kommt im naechsten Poll.\n"
-            "# Wenn du blocked setzt: der Operator kann den Blocker nicht sinnvoll resolven (nichts fuer ihn zu tun),\n"
-            "# Task haengt bis manueller Unblock. Callback-Waits sind immer in_progress.\n"
+            "# WAIT: you stay 'in_progress' (NOT blocked!). The subtask_completed comment arrives on the next poll.\n"
+            "# If you set blocked: the operator can't meaningfully resolve the blocker (nothing for them to do),\n"
+            "# the task hangs until manually unblocked. Callback waits are always in_progress.\n"
             "\n"
-            "# Nach subtask_completed Comment: Phase 2 delegieren mit Deliverable-Verweis aus Phase 1\n"
-            "mc delegate \"Content: Formatierter Wetter-Bericht mit Brand-Voice\" \\\n"
+            "# After the subtask_completed comment: delegate phase 2 with a reference to the phase-1 deliverable\n"
+            "mc delegate \"Content: formatted weather report with brand voice\" \\\n"
             "  --to Shakespeare \\\n"
-            "  --description \"Nutze Research-Deliverable <uuid> aus Phase 1. Skill: client-brand-skill. Formal 'Sie', Primary-Color #005850.\"\n"
+            "  --description \"Use research deliverable <uuid> from phase 1. Skill: client-brand-skill. Formal address, primary color #005850.\"\n"
             "\n"
-            "# Wenn alle Phasen fertig: status → review, Final-Report an den Operator\n"
-            "mc telegram \"Multi-Phase Wetter-Report komplett. Siehe Deliverables.\" --file /shared-deliverables/$TASK_ID/final.pdf\n"
+            "# Once all phases are done: status → review, final report to the operator\n"
+            "mc telegram \"Multi-phase weather report complete. See deliverables.\" --file /shared-deliverables/$TASK_ID/final.pdf\n"
             "mc done\n"
             "```"
         )
@@ -1463,23 +1463,23 @@ Regeln:
     # Plugin management (Board Lead): complete discovery + install + assign flow
     if is_board_lead and _has(Scope.AGENTS_MANAGE):
         flow_blocks.append(
-            "### Ablauf 5 — Worker mit neuem Tool/Skill ausstatten (Board Lead)\n\n"
+            "### Flow 5 — equip a worker with a new tool/skill (board lead)\n\n"
             "```bash\n"
-            "# Szenario: Davinci scheitert 2× an einem Video-Task — vermutlich fehlendes Tool.\n"
+            "# Scenario: Davinci fails a video task twice — likely a missing tool.\n"
             "\n"
-            "# 1. Check: was hat Davinci heute?\n"
+            "# 1. Check: what does Davinci have today?\n"
             "mc plugin-show Davinci\n"
-            "# → {\"agent_name\": \"Davinci\", \"cli_plugins\": null}  (null = alle installierten)\n"
+            "# → {\"agent_name\": \"Davinci\", \"cli_plugins\": null}  (null = all installed)\n"
             "\n"
-            "# 2. Check: welche Plugins existieren im Shared Cache?\n"
+            "# 2. Check: which plugins exist in the shared cache?\n"
             "mc plugin-list\n"
             "# → {\"plugins\": [{\"key\": \"higgsfield-mcp@anthropic-agent-skills\", ...}, ...]}\n"
             "\n"
-            "# Wenn das gewuenschte Plugin schon da ist: direkt zuweisen\n"
+            "# If the desired plugin is already there: assign it directly\n"
             "mc plugin-assign Davinci higgsfield-mcp@anthropic-agent-skills --restart\n"
-            "# → Plugin in Davinci's cli_plugins gesetzt, claude-Session in tmux reload\n"
+            "# → plugin set in Davinci's cli_plugins, claude session reloaded in tmux\n"
             "\n"
-            "# Wenn NICHT da: Install-Request mit Operator-Approval stellen\n"
+            "# If NOT there: file an install request with operator approval\n"
             "curl -sf -X POST \"$MC_API_URL/api/v1/agent/install-requests\" \\\n"
             "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
             "  -H \"Content-Type: application/json\" \\\n"
@@ -1489,13 +1489,13 @@ Regeln:
             "    \"source\": \"github:geopopos/higgsfield_ai_mcp\",\n"
             "    \"name\": \"higgsfield-ai\",\n"
             "    \"target_agent_id\": \"<davinci-uuid>\",\n"
-            "    \"reason\": \"Davinci failed 2 video-tasks — braucht Higgsfield-MCP\",\n"
+            "    \"reason\": \"Davinci failed 2 video-tasks — needs Higgsfield MCP\",\n"
             "    \"task_id\": \"'\"$TASK_ID\"'\"\n"
             "  }}'\n"
-            "# task_id-Koppelung → bei Approval postet Backend install_completed Comment auf DEINE Task.\n"
-            "# Du wartest in_progress bis Comment kommt. InstallExecutor setzt cli_plugins automatisch.\n"
+            "# task_id coupling → on approval, the backend posts an install_completed comment on YOUR task.\n"
+            "# You wait in_progress until the comment arrives. The InstallExecutor sets cli_plugins automatically.\n"
             "\n"
-            "# Worker manuell reloaden (wenn Plugin ohne --restart zugewiesen)\n"
+            "# Manually reload the worker (if the plugin was assigned without --restart)\n"
             "mc worker-restart Davinci\n"
             "```"
         )
@@ -1503,22 +1503,22 @@ Regeln:
     # Knowledge/Memory: Semantic Search + Write Flow
     if _has(Scope.KNOWLEDGE_READ):
         flow_blocks.append(
-            "### Ablauf 6 — Kontext aus frueheren Tasks finden (Knowledge-Base)\n\n"
+            "### Flow 6 — find context from earlier tasks (knowledge base)\n\n"
             "```bash\n"
-            "# Semantische Suche ueber Qdrant + Board-Memory\n"
+            "# Semantic search across Qdrant + board memory\n"
             "mc memory \"client brand guidelines primary color\"\n"
-            "# → Top-K ähnliche Eintraege mit content + score + memory_type\n"
+            "# → top-K similar entries with content + score + memory_type\n"
             "\n"
-            "# Wenn du etwas wichtiges gelernt hast: zurueckschreiben\n"
+            "# If you learned something important: write it back\n"
             "curl -sf -X POST \"$MC_API_URL/api/v1/agent/knowledge\" \\\n"
             "  -H \"Authorization: Bearer $MC_AGENT_TOKEN\" \\\n"
             "  -H \"Content-Type: application/json\" \\\n"
             "  -d '{{\n"
-            "    \"content\": \"Dispatch-Messages >8000 chars sind kontraproduktiv (lost-in-middle)\",\n"
+            "    \"content\": \"Dispatch messages >8000 chars are counterproductive (lost-in-middle)\",\n"
             "    \"memory_type\": \"lesson\",\n"
             "    \"scope\": \"board\"\n"
             "  }}'\n"
-            "# scope: \"agent\" = nur ich | \"board\" = alle im Board | \"global\" = alle Agents\n"
+            "# scope: \"agent\" = only me | \"board\" = everyone on the board | \"global\" = all agents\n"
             "```"
         )
 
@@ -1530,21 +1530,21 @@ Regeln:
 
     return f"""# {emoji} {name} — Mission Control Tools
 
-## Authentifizierung
+## Authentication
 
-Alle Requests brauchen den Authorization-Header:
+All requests need the Authorization header:
   Authorization: Bearer $MC_AGENT_TOKEN
 
-API Base: http://localhost
+API base: http://localhost
 
 ---
 
-## Typische Abläufe — copy-paste-fähige Tool-Call-Beispiele
+## Typical flows — copy-paste-ready tool call examples
 
-Konkrete Szenarien mit realen Inputs. Jeder Flow ist ein End-to-End-Ablauf:
-welche Commands in welcher Reihenfolge für welche Situation. Die raw-curl-
-Form jedes Endpoints findest du weiter unten in den Detail-Sektionen.
-Übersicht aller `mc`-Commands: `mc --help` bzw `mc <cmd> --help`.
+Concrete scenarios with real inputs. Each flow is an end-to-end sequence:
+which commands in which order for which situation. The raw-curl
+form of every endpoint is further below in the detail sections.
+Overview of all `mc` commands: `mc --help` or `mc <cmd> --help`.
 
 {quick_ref}
 
@@ -1553,5 +1553,5 @@ Form jedes Endpoints findest du weiter unten in den Detail-Sektionen.
 {main_body}
 {board_section}{content_section}{board_lead_section}{browser_section}
 ---
-Generiert automatisch beim Erstellen des Agents.
+Generated automatically when the agent is created.
 """

@@ -23,7 +23,7 @@ def test_project_section_present_when_project_read_scope():
         name="FreeCode", emoji="💻", raw_token="tok123",
         board_id="board-1", scopes=PROJECT_SCOPES,
     )
-    assert "## Projekt-Kontext abrufen" in result
+    assert "## Fetch project context" in result
     assert "project_id" in result
 
 
@@ -59,7 +59,7 @@ def test_project_section_absent_without_project_scopes():
         name="Tester", emoji="🧪", raw_token="tok456",
         board_id="board-1", scopes=NO_PROJECT_SCOPES,
     )
-    assert "## Projekt-Kontext abrufen" not in result
+    assert "## Fetch project context" not in result
 
 
 def test_project_read_only_no_complete_phase():
@@ -67,7 +67,7 @@ def test_project_read_only_no_complete_phase():
         name="Reader", emoji="📖", raw_token="tok789",
         board_id="board-1", scopes=READ_ONLY_SCOPES,
     )
-    assert "## Projekt-Kontext abrufen" in result
+    assert "## Fetch project context" in result
     # complete endpoint requires project:write
     assert "/complete" not in result
 
@@ -77,4 +77,4 @@ def test_project_section_absent_without_board_id():
         name="FreeCode", emoji="💻", raw_token="tok123",
         board_id=None, scopes=PROJECT_SCOPES,
     )
-    assert "## Projekt-Kontext abrufen" not in result
+    assert "## Fetch project context" not in result

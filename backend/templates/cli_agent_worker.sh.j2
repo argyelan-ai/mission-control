@@ -1,6 +1,6 @@
 #!/bin/bash
 # Mission Control — Persistent Worker for {{ agent_name }}
-# Laeuft permanent in tmux session "{{ agent_slug }}", verarbeitet Tasks aus der Queue.
+# Runs permanently in tmux session "{{ agent_slug }}", processes tasks from the queue.
 
 AGENT_NAME="{{ agent_slug }}"
 AGENT_DIR="$HOME/.mc/agents/$AGENT_NAME"
@@ -14,22 +14,22 @@ AGENT_ENV="$AGENT_DIR/agent.env"
 mkdir -p "$QUEUE_DIR/pending" "$QUEUE_DIR/running" "$QUEUE_DIR/done" "$QUEUE_DIR/failed"
 LOCK_FILE="$AGENT_DIR/queue.lock"
 
-# Startup-Cleanup: Stale Lock freigeben (Worker startet frisch, kein Task laeuft gerade)
+# Startup cleanup: release stale lock (worker is starting fresh, no task is currently running)
 if [ -d "$LOCK_FILE.d" ]; then
   rmdir "$LOCK_FILE.d" 2>/dev/null
-  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [STARTUP] Stale Queue-Lock freigegeben"
+  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [STARTUP] Stale queue lock released"
 fi
 
-# Orphan-Recovery: running/*.json immer zurueck nach pending/ beim Start
-# (Worker startet neu = kein Task wird gerade verarbeitet, egal ob Session noch existiert)
+# Orphan recovery: always move running/*.json back to pending/ on start
+# (worker restarting = no task is currently being processed, regardless of whether the session still exists)
 for _orphan in "$QUEUE_DIR/running"/*.json; do
   [ -f "$_orphan" ] || continue
   mv "$_orphan" "$QUEUE_DIR/pending/"
-  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [RECOVERY] Orphan zurueckgesetzt: $(basename "$_orphan")"
+  echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [RECOVERY] Orphan reset: $(basename "$_orphan")"
 done
 
 {% if not is_claude_bin %}
-# Shared Env laden (Modell-URLs, Flags) — nur fuer openclaude-Agents
+# Load shared env (model URLs, flags) — openclaude agents only
 if [ -f "$SHARED_ENV" ]; then
   set -a
   source "$SHARED_ENV"
@@ -37,7 +37,7 @@ if [ -f "$SHARED_ENV" ]; then
 fi
 {% endif %}
 
-# Agent-spezifische Env laden (MC_AGENT_TOKEN, CLAUDE_CONFIG_DIR) — ueberschreibt shared
+# Load agent-specific env (MC_AGENT_TOKEN, CLAUDE_CONFIG_DIR) — overrides shared
 if [ -f "$AGENT_ENV" ]; then
   set -a
   source "$AGENT_ENV"
@@ -47,7 +47,7 @@ fi
 export FREE_CODE_MODEL_PROFILES_FILE="$MODEL_PROFILES"
 export HOME="{{ home_dir }}"
 
-echo "[$(date '+%Y-%m-%dT%H:%M:%S')] {{ agent_name }} Worker gestartet. Warte auf Tasks in $QUEUE_DIR/pending/ ..."
+echo "[$(date '+%Y-%m-%dT%H:%M:%S')] {{ agent_name }} worker started. Waiting for tasks in $QUEUE_DIR/pending/ ..."
 
 while true; do
   for task_file in "$QUEUE_DIR/pending"/*.json; do
@@ -58,16 +58,16 @@ while true; do
     prompt_b64=$(python3 -c "import json; d=json.load(open('$task_file')); print(d['prompt_b64'])")
 
     running_file="$QUEUE_DIR/running/$(basename "$task_file")"
-    # mkdir-basiertes Lock (atomar auf macOS + Linux, kein flock noetig)
+    # mkdir-based lock (atomic on macOS + Linux, no flock needed)
     if ! mkdir "$LOCK_FILE.d" 2>/dev/null; then
-      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [WARN] Queue-Lock belegt, ueberspringe $task_id"
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [WARN] Queue lock busy, skipping $task_id"
       continue
     fi
     mv "$task_file" "$running_file"
 
     echo ""
     echo "══════════════════════════════════════════════"
-    echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task gestartet: $task_id"
+    echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task started: $task_id"
     echo "Workspace: $workspace"
     echo "══════════════════════════════════════════════"
     echo ""
@@ -136,15 +136,15 @@ for line in sys.stdin:
     echo ""
     if [ "$EXIT_CODE" -eq 0 ]; then
       mv "$running_file" "$QUEUE_DIR/done/"
-      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task erledigt: $task_id (exit=0)"
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task completed: $task_id (exit=0)"
     else
       mv "$running_file" "$QUEUE_DIR/failed/"
-      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task fehlgeschlagen: $task_id (exit=$EXIT_CODE)"
+      echo "[$(date '+%Y-%m-%dT%H:%M:%S')] Task failed: $task_id (exit=$EXIT_CODE)"
     fi
     rmdir "$LOCK_FILE.d" 2>/dev/null
 
     echo ""
-    echo "Warte auf naechsten Task ..."
+    echo "Waiting for next task ..."
   done
 
   sleep 1

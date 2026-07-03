@@ -42,9 +42,9 @@ async def test_cody_rules_contain_error_recovery():
     cody_config = AGENT_CONFIGS["cody"]
     rules = cody_config["rules_md"]
 
-    assert "Wenn du nicht weiterkommst" in rules
+    assert "When you are stuck" in rules
     assert "blocked" in rules
-    assert "NIEMALS" in rules
+    assert "NEVER" in rules
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_rex_rules_contain_error_recovery():
     rex_config = AGENT_CONFIGS["rex"]
     rules = rex_config["rules_md"]
 
-    assert "Wenn du nicht weiterkommst" in rules
+    assert "When you are stuck" in rules
     assert "blocked" in rules
 
 
@@ -67,9 +67,9 @@ async def test_henry_rules_contain_error_recovery():
     henry_config = AGENT_CONFIGS["henry"]
     rules = henry_config["rules_md"]
 
-    assert "Wenn du nicht weiterkommst" in rules
+    assert "When you are stuck" in rules
     assert "blocked" in rules
-    assert "NIEMALS" in rules
+    assert "NEVER" in rules
 
 
 @pytest.mark.asyncio
@@ -80,7 +80,7 @@ async def test_all_specialized_agents_have_error_recovery():
     for spec in SPECIALIZED_AGENTS_SPECS:
         rules = spec.get("rules_md")
         assert rules is not None, f"{spec['name']} hat kein rules_md"
-        assert "Wenn du nicht weiterkommst" in rules, f"{spec['name']} fehlt Error-Recovery"
+        assert "When you are stuck" in rules, f"{spec['name']} fehlt Error-Recovery"
         assert "blocked" in rules, f"{spec['name']} fehlt 'blocked' in Error-Recovery"
 
 

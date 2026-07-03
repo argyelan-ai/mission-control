@@ -85,17 +85,17 @@ def _build_claude_code_prompt(task: Task, agent: Agent, dispatch_message: str) -
 
     return f"""# Task: {task.title}
 
-## Beschreibung
-{task.description or "Keine Beschreibung"}
+## Description
+{task.description or "No description"}
 
-## Kontext aus Mission Control
+## Context from Mission Control
 {dispatch_message}
 
-## Status-Updates (PFLICHT)
+## Status Updates (MANDATORY)
 
-Melde deinen Fortschritt an Mission Control zurueck:
+Report your progress back to Mission Control:
 
-### Task ACK (sofort am Anfang):
+### Task ACK (immediately at the start):
 ```bash
 curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}" \\
   -H "Authorization: Bearer {api_token}" \\
@@ -103,34 +103,34 @@ curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}" \\
   -d '{{"status": "in_progress"}}'
 ```
 
-### Progress-Kommentar (regelmaessig):
+### Progress comment (regularly):
 ```bash
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments" \\
   -H "Authorization: Bearer {api_token}" \\
   -H "Content-Type: application/json" \\
-  -d '{{"content": "**Update** — Was getan\\n**Evidence** — Dateipfade, Outputs\\n**Next** — Naechste Schritte", "comment_type": "progress"}}'
+  -d '{{"content": "**Update** — what was done\\n**Evidence** — file paths, outputs\\n**Next** — next steps", "comment_type": "progress"}}'
 ```
 
-### Fertig — Resolution:
+### Done — Resolution:
 ```bash
 curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}" \\
   -H "Authorization: Bearer {api_token}" \\
   -H "Content-Type: application/json" \\
   -d '{{"status": "review"}}'
 ```
-Danach Resolution-Kommentar:
+Then a resolution comment:
 ```bash
 curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments" \\
   -H "Authorization: Bearer {api_token}" \\
   -H "Content-Type: application/json" \\
-  -d '{{"content": "**Update** — Fertig: Was umgesetzt\\n**Evidence** — Dateipfade, Tests", "comment_type": "resolution"}}'
+  -d '{{"content": "**Update** — Done: what was implemented\\n**Evidence** — file paths, tests", "comment_type": "resolution"}}'
 ```
 
-## Regeln
-- Arbeite im Workspace: {agent.workspace_path or str(Path(settings.home_host) / "Workspace")}
-- Git: Feature-Branches, nie direkt auf main
-- Melde dich SOFORT mit ACK, dann arbeite selbststaendig
-- Bei Blockierung: Status auf "blocked" setzen + Blocker-Kommentar
+## Rules
+- Work in the workspace: {agent.workspace_path or str(Path(settings.home_host) / "Workspace")}
+- Git: feature branches, never directly on main
+- Report ACK IMMEDIATELY, then work autonomously
+- If blocked: set status to "blocked" + a blocker comment
 """
 
 
@@ -138,7 +138,7 @@ def _extract_token_from_tools_md(tools_md: str) -> str:
     """Extracts the Bearer token from TOOLS.md."""
     import re
     match = re.search(r'Bearer\s+([A-Za-z0-9_-]+)', tools_md)
-    return match.group(1) if match else "TOKEN-NICHT-GEFUNDEN"
+    return match.group(1) if match else "TOKEN-NOT-FOUND"
 
 
 async def _monitor_claude_code(

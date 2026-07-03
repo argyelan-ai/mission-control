@@ -149,7 +149,7 @@ class TestCredentialReDispatch:
         with patch("app.services.encryption.safe_decrypt", return_value="user:geheim123"):
             msg = await _build_dispatch_message(child, agent, session)
 
-        assert "## Zugangsdaten" in msg
+        assert "## Credentials" in msg
         assert "user:geheim123" in msg
 
     @pytest.mark.asyncio
@@ -196,7 +196,7 @@ class TestCredentialReDispatch:
         with patch("app.services.encryption.safe_decrypt", return_value="user:geheim456"):
             msg = await _build_dispatch_message(child, agent, session)
 
-        assert "## Zugangsdaten" in msg
+        assert "## Credentials" in msg
         assert "user:geheim456" in msg
 
     @pytest.mark.asyncio
@@ -229,7 +229,7 @@ class TestCredentialReDispatch:
         with patch("app.services.encryption.safe_decrypt", return_value="child-only:pw"):
             msg = await _build_dispatch_message(child, agent, session)
 
-        assert "## Zugangsdaten" in msg
+        assert "## Credentials" in msg
         assert "child-only:pw" in msg
 
 
@@ -286,7 +286,7 @@ class TestVaultCredentialInheritance:
         msg = await _build_dispatch_message(child, agent, session)
 
         # Username + password from the vault reference must land in the dispatch
-        assert "## Zugangsdaten" in msg
+        assert "## Credentials" in msg
         assert "marius" in msg
         assert "geheim42" in msg
 
@@ -378,4 +378,4 @@ class TestVaultCredentialInheritance:
         # gets loaded from the parent vault → wins over inline
         assert "parent_v" in msg or "inline-only-secret" in msg
         # At least something in the credentials block
-        assert "## Zugangsdaten" in msg
+        assert "## Credentials" in msg

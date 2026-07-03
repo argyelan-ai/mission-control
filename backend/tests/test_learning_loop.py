@@ -261,7 +261,7 @@ async def test_dispatch_message_includes_agent_lessons(session):
 
         message = await _build_dispatch_message(task, agent, s)
 
-        assert "Deine bisherigen Erkenntnisse" in message
+        assert "Your Prior Lessons Learned" in message
         assert "N+1 Query" in message
 
 

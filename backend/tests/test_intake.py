@@ -34,7 +34,7 @@ def test_planning_brief_structured():
     task = _root_task()
     brief = build_planning_brief(task)
     assert brief is not None
-    assert "Operator-Briefing (structured)" in brief
+    assert "Operator Briefing (structured)" in brief
     assert "code_change" in brief
     assert "Feature X" in brief
     assert "Keine Doku" in brief
@@ -42,7 +42,7 @@ def test_planning_brief_structured():
     assert "on_plan" in brief
     assert "execute_low_risk" in brief
     assert "example.com" in brief
-    assert "Nicht erlaubt" in brief
+    assert "Not allowed" in brief
 
 
 def test_planning_brief_quick():
@@ -60,7 +60,7 @@ def test_planning_brief_quick():
     )
     brief = build_planning_brief(task)
     assert brief is not None
-    assert "Operator-Briefing (quick)" in brief
+    assert "Operator Briefing (quick)" in brief
     assert "code_change" in brief
 
 
@@ -120,24 +120,24 @@ def test_browser_without_credentials():
     """needs_browser=True, requires_auth=False → only browser in brief."""
     task = _root_task(needs_browser=True, requires_auth=False)
     brief = build_planning_brief(task)
-    assert "Browser noetig:** Ja" in brief
-    assert "Credentials noetig" not in brief  # requires_auth=False
+    assert "Browser needed:** Yes" in brief
+    assert "Credentials needed" not in brief  # requires_auth=False
 
 
 def test_credentials_without_browser():
     """needs_browser=False, requires_auth=True → only credentials in brief."""
     task = _root_task(needs_browser=False, requires_auth=True)
     brief = build_planning_brief(task)
-    assert "Credentials noetig:** Ja" in brief
-    assert "Browser noetig" not in brief  # needs_browser=False
+    assert "Credentials needed:** Yes" in brief
+    assert "Browser needed" not in brief  # needs_browser=False
 
 
 def test_both_browser_and_credentials():
     """Both set → both in brief."""
     task = _root_task(needs_browser=True, requires_auth=True)
     brief = build_planning_brief(task)
-    assert "Browser noetig:** Ja" in brief
-    assert "Credentials noetig:** Ja" in brief
+    assert "Browser needed:** Yes" in brief
+    assert "Credentials needed:** Yes" in brief
 
 
 # ── Reference URLs as a list ────────────────────────────
@@ -154,7 +154,7 @@ def test_reference_urls_empty_list():
     """Empty list → no reference section."""
     task = _root_task(reference_urls=[])
     brief = build_planning_brief(task)
-    assert "Referenzen" not in brief
+    assert "References" not in brief
 
 
 # ── Enum validation (Pydantic) ─────────────────────────

@@ -101,14 +101,14 @@ def test_vault_section_omitted_without_scope():
 
 def test_soul_vault_files_section_present_for_vault_write_agent():
     soul = _soul([Scope.VAULT_READ.value, Scope.VAULT_WRITE.value, Scope.HEARTBEAT.value])
-    assert "### Vault Files (Deliverable-Wrappers)" in soul
+    assert "### Vault Files (Deliverable Wrappers)" in soul
     assert "/vault/attachments/files/" in soul
     assert "/vault/attachments/images/" in soul
 
 
 def test_soul_task_klammer_section_present_for_vault_write_agent():
     soul = _soul([Scope.VAULT_READ.value, Scope.VAULT_WRITE.value, Scope.HEARTBEAT.value])
-    assert "### Task-Bezug" in soul
+    assert "### Task Reference" in soul
     assert "/agent/vault/related/" in soul
     assert '"task_id"' in soul
 
@@ -117,11 +117,11 @@ def test_soul_vault_files_section_omitted_for_reader_only_agent():
     """vault:read only (no write) → Vault Files block is part of the existing
     vault:write gate, so it should not appear without vault:write."""
     soul = _soul([Scope.VAULT_READ.value, Scope.HEARTBEAT.value])
-    assert "### Vault Files (Deliverable-Wrappers)" not in soul
-    assert "### Task-Bezug" not in soul
+    assert "### Vault Files (Deliverable Wrappers)" not in soul
+    assert "### Task Reference" not in soul
 
 
 def test_soul_vault_files_section_omitted_for_agent_without_vault_scopes():
     soul = _soul([Scope.CHAT_WRITE.value, Scope.TASKS_READ.value, Scope.HEARTBEAT.value])
     assert "Vault Files" not in soul
-    assert "Task-Bezug" not in soul
+    assert "Task Reference" not in soul
