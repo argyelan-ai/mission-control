@@ -7,6 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  leak-gate:
+    name: Leak gate (gitleaks + forbidden files)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: No secret-bearing files in the tree
+        run: |
+          FOUND=$(find . \( -name ".env" -o -name ".env.local" -o -name ".env.production" -o -name "*.pem" -o -name "id_rsa*" -o -name "*.p12" \) -not -path "./.git/*")
+          if [ -n "$FOUND" ]; then echo "Forbidden files:"; echo "$FOUND"; exit 1; fi
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   backend:
     name: Backend Tests
     runs-on: ubuntu-latest

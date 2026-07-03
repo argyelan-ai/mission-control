@@ -65,3 +65,23 @@ caddy/certs/
 
 # Host-specific Caddy config (TLS variant, see caddy/Caddyfile.tls.example)
 caddy/Caddyfile.local
+
+# ── Private dev overlay (scripts/dev-overlay.sh) ─────────────────────────
+# Maintainer-private verticals & config live in a separate private repo and
+# are synced into these paths locally. Never committed here.
+backend/app/verticals/*
+!backend/app/verticals/__init__.py
+!backend/app/verticals/hooks.py
+frontend-v2/src/verticals/
+frontend-v2/src/app/content/
+frontend-v2/src/app/news/
+CLAUDE.local.md
+.mcp.json
+journal.md
+docs/plans/
+docs/runbooks/
+docs/news-*.md
+docs/omp-bridge-REPORT.md
+# generated locally by tools/generate-*.py
+docs/code-map.md
+docs/agent-state.md

@@ -39,3 +39,21 @@ Thanks for your interest! A few ground rules keep this codebase healthy.
 Open an issue with: what you did, what you expected, what happened, relevant
 logs (`docker compose logs backend --tail=100`). For security issues see
 [SECURITY.md](SECURITY.md) — do not open public issues for vulnerabilities.
+
+## How development works here
+
+**This repository is the upstream.** Development happens directly on
+`main` via feature branches and pull requests — what you see is what the
+maintainers run. (Early releases were published as squashed snapshots from a
+private repo; since 2026-07-03 this repo is the single source of truth. The
+pre-launch history remains private because it contained credentials.)
+
+- New code comments and docs are written in **English** (existing German
+  comments are being migrated gradually — PRs welcome, see the language note
+  in the README).
+- CI runs a **leak gate** (gitleaks + forbidden-file check) on every push and
+  PR in addition to tests.
+- Maintainer-private modules (e.g. a personal news pipeline) live in private
+  overlay repositories synced via `scripts/dev-overlay.sh` — their paths are
+  gitignored here. You can use the same mechanism for your own private
+  verticals.
