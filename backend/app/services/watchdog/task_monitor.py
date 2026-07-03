@@ -860,10 +860,16 @@ class TaskMonitorMixin:
         Reviewer hat kommentiert aber keine Entscheidung getroffen → nach 15 Min nudgen.
         """
         from app.models.task import TaskComment
+        from app.models.board import Board
         from sqlalchemy import func
 
+        # Archivierte Boards sind weggeraeumt — ihre Tasks duerfen nie eskalieren.
+        # Sonst haengt z.B. ein Demo-Seed-Review-Task (kein Reviewer, Board danach
+        # archiviert) fuer immer >180min und feuert alle 2h eine Discord-Warnung.
         result = await session.exec(
-            select(Task).where(Task.status == "review")
+            select(Task)
+            .join(Board, Board.id == Task.board_id)
+            .where(Task.status == "review", Board.is_archived == False)  # noqa: E712
         )
         review_tasks = result.all()
 
