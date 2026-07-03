@@ -1,12 +1,12 @@
-"""Token Harvester — liest JSONL-Transkripte und schreibt model_usage_events.
+"""Token Harvester — reads JSONL transcripts and writes model_usage_events.
 
-Datenquellen:
+Data sources:
   - ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl (cli-bridge + sparky + hermes)
-  - ~/.claude/projects/**/*.jsonl (boss-host + private Sessions des Operators → Boss-Attribution-Heuristik!)
+  - ~/.claude/projects/**/*.jsonl (boss-host + operator's private sessions → boss attribution heuristic!)
 
-Dedup-Key: top-level `uuid` (UNIQUE). message.id hat 1042+ Kollisionen — NIEMALS dedupen!
-Idempotent: beliebig oft ueber dieselben Dateien laufen.
-Offset-Resume: harvest_state speichert processed_lines → nur neue Zeilen lesen.
+Dedup key: top-level `uuid` (UNIQUE). message.id has 1042+ collisions — NEVER dedupe on that!
+Idempotent: can run over the same files any number of times.
+Offset resume: harvest_state stores processed_lines → only reads new lines.
 """
 from __future__ import annotations
 
@@ -28,28 +28,28 @@ from app.models.model_usage import ModelPrice, ModelUsageEvent, ModelUsageHarves
 
 logger = logging.getLogger("mc.token_harvester")
 
-# ── MC-Workspace-Indikatoren fuer Boss-Attribution ────────────────────────
-# Pfade/Branches die auf MC-Kontext hinweisen → Boss zuschreiben
+# ── MC workspace indicators for boss attribution ──────────────────────────
+# Paths/branches that point to an MC context → attribute to boss
 _MC_CWD_MARKERS = [
-    "mission-control",  # Haupt-Repo
-    "/.mc/",            # Agent-Workspaces unter ~/.mc/
+    "mission-control",  # main repo
+    "/.mc/",            # agent workspaces under ~/.mc/
 ]
 _MC_BRANCH_PREFIX = "task/"
 
 
-# ── Pure Helper-Funktionen (testbar ohne DB) ──────────────────────────────
+# ── Pure helper functions (testable without a DB) ─────────────────────────
 
 
 def parse_transcript_line(line: str) -> dict[str, Any] | None:
-    """Parst eine JSONL-Zeile aus einem Claude-Code-Transkript.
+    """Parses a JSONL line from a Claude Code transcript.
 
-    Filtert:
-    - Nur type=assistant
-    - Nur wenn message.usage vorhanden
-    - Nur wenn message.model vorhanden und NICHT '<synthetic>'
-    - Nur wenn top-level uuid vorhanden
+    Filters:
+    - Only type=assistant
+    - Only when message.usage is present
+    - Only when message.model is present and NOT '<synthetic>'
+    - Only when a top-level uuid is present
 
-    Gibt ein normalisiertes Dict zurueck oder None wenn die Zeile gefiltert wird.
+    Returns a normalized dict, or None if the line is filtered out.
     """
     try:
         d = json.loads(line)
@@ -77,14 +77,14 @@ def parse_transcript_line(line: str) -> dict[str, Any] | None:
     if "<synthetic>" in model:
         return None
 
-    # Cache-Tokens (optional, default 0)
+    # Cache tokens (optional, default 0)
     cache_read = usage.get("cache_read_input_tokens", 0) or 0
-    # cache_creation summiert ephemeral_5m + ephemeral_1h wenn vorhanden
+    # cache_creation sums ephemeral_5m + ephemeral_1h if present
     cache_write = usage.get("cache_creation_input_tokens", 0) or 0
 
     return {
         "uuid": msg_uuid,
-        "msg_id": message.get("id"),  # Nur fuer Debug — NICHT fuer Dedup!
+        "msg_id": message.get("id"),  # For debug only — NOT for dedup!
         "session_id": d.get("sessionId", ""),
         "timestamp": d.get("timestamp", ""),
         "cwd": d.get("cwd", ""),
@@ -98,18 +98,18 @@ def parse_transcript_line(line: str) -> dict[str, Any] | None:
 
 
 def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
-    """Liest eine JSONL-Datei ab `processed_lines` und gibt geparste Records zurueck.
+    """Reads a JSONL file from `processed_lines` onward and returns parsed records.
 
-    Zeilen die parse_transcript_line filtert (user, synthetic, etc.) werden
-    uebersprungen. Die Dedup-Logik (gleiche uuid) liegt beim DB-Insert — harvest_file
-    gibt alle geparsten Records ungefiltert zurueck.
+    Lines filtered out by parse_transcript_line (user, synthetic, etc.) are
+    skipped. The dedup logic (same uuid) lives at the DB insert — harvest_file
+    returns all parsed records unfiltered.
 
     Args:
-        path: Absoluter Pfad zur JSONL-Datei.
-        processed_lines: Anzahl bereits gelesener Zeilen (Offset-Resume).
+        path: Absolute path to the JSONL file.
+        processed_lines: Number of lines already read (offset resume).
 
     Returns:
-        Liste geparster Records (koennen gleiche uuid enthalten → DB macht Dedup).
+        List of parsed records (may contain duplicate uuids → DB does the dedup).
     """
     records: list[dict[str, Any]] = []
     try:
@@ -133,32 +133,32 @@ def match_price(
     ts: datetime,
     prices: list[ModelPrice],
 ) -> dict[str, float] | None:
-    """Findet den besten Preis fuer ein Modell zum Zeitpunkt ts.
+    """Finds the best price for a model at time ts.
 
-    Matching-Logik:
-    1. Nur Preise mit valid_from <= ts
-    2. fnmatch-Glob auf model_pattern
-    3. Hoehere priority gewinnt; bei gleicher priority: neuerer valid_from gewinnt
+    Matching logic:
+    1. Only prices with valid_from <= ts
+    2. fnmatch glob on model_pattern
+    3. Higher priority wins; on equal priority: newer valid_from wins
 
-    Gibt ein Dict mit den Preisfeldern zurueck oder None wenn kein Match.
+    Returns a dict with the price fields, or None if there's no match.
     """
     candidates: list[ModelPrice] = []
     for price in prices:
-        # Zeitfilter: nur Preise die zum Zeitpunkt ts galten
+        # Time filter: only prices that were valid at time ts
         valid_from = price.valid_from
         if valid_from.tzinfo is None:
             valid_from = valid_from.replace(tzinfo=timezone.utc)
         ts_aware = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
         if valid_from > ts_aware:
             continue
-        # Glob-Match
+        # Glob match
         if fnmatch.fnmatch(model, price.model_pattern):
             candidates.append(price)
 
     if not candidates:
         return None
 
-    # Sortierung: priority DESC, valid_from DESC (neuester zuerst)
+    # Sort: priority DESC, valid_from DESC (newest first)
     candidates.sort(key=lambda p: (p.priority, p.valid_from), reverse=True)
     best = candidates[0]
 
@@ -177,7 +177,7 @@ def _compute_cost_usd(
     cache_read_tokens: int,
     cache_write_tokens: int,
 ) -> float:
-    """Berechnet cost_usd aus Preisinformationen und Token-Counts."""
+    """Computes cost_usd from price info and token counts."""
     return (
         input_tokens * price_info["input_per_mtok"]
         + output_tokens * price_info["output_per_mtok"]
@@ -187,13 +187,13 @@ def _compute_cost_usd(
 
 
 def _should_attribute_boss_path(cwd: str, git_branch: str | None) -> bool:
-    """Entscheidet ob eine ~/.claude-Zeile dem Boss zugeschrieben werden soll.
+    """Decides whether a ~/.claude line should be attributed to the boss.
 
-    Boss-Kriterien (OR):
-    1. cwd enthaelt einen MC-Workspace-Marker (mission-control, /.mc/)
-    2. gitBranch beginnt mit 'task/'
+    Boss criteria (OR):
+    1. cwd contains an MC workspace marker (mission-control, /.mc/)
+    2. gitBranch starts with 'task/'
 
-    ALLES ANDERE → private Session → SKIP.
+    ANYTHING ELSE → private session → SKIP.
     """
     if git_branch and git_branch.startswith(_MC_BRANCH_PREFIX):
         return True
@@ -204,17 +204,17 @@ def _should_attribute_boss_path(cwd: str, git_branch: str | None) -> bool:
 
 
 def _harness_from_slug(slug: str) -> str:
-    """Leitet den Harness-Typ vom Agent-Slug ab."""
+    """Derives the harness type from the agent slug."""
     if slug == "sparky":
         return "sparky"
-    # Host-Agents
+    # Host agents
     if slug in ("hermes", "boss-host", "boss", "jarvis"):
         return "host"
     return "cli-bridge"
 
 
 def _provider_from_model(model: str) -> str:
-    """Leitet den Provider-Namen vom Modell-String ab (heuristisch)."""
+    """Derives the provider name from the model string (heuristic)."""
     m = model.lower()
     if "claude" in m:
         return "anthropic"
@@ -228,9 +228,9 @@ def _provider_from_model(model: str) -> str:
 
 
 def _parse_ts(ts_str: str) -> datetime:
-    """Parst ISO-8601 Timestamp zu aware datetime."""
+    """Parses an ISO-8601 timestamp into an aware datetime."""
     try:
-        # Python 3.11+ fromisoformat versteht 'Z' als UTC
+        # Python 3.11+ fromisoformat understands 'Z' as UTC
         if ts_str.endswith("Z"):
             ts_str = ts_str[:-1] + "+00:00"
         dt = datetime.fromisoformat(ts_str)
@@ -241,14 +241,14 @@ def _parse_ts(ts_str: str) -> datetime:
         return datetime.now(timezone.utc)
 
 
-# ── Haupt-Harvest-Logik ────────────────────────────────────────────────────
+# ── Main harvest logic ─────────────────────────────────────────────────────
 
 
 def _host_home() -> Path:
-    """Host-HOME — im Container via HOME_HOST (PR #137-Muster), sonst expanduser.
+    """Host HOME — in the container via HOME_HOST (PR #137 pattern), else expanduser.
 
-    Die Transkript-Mounts liegen unter dem absoluten HOST-Pfad
-    (/Users/.../.mc, /Users/.../.claude); ~ im Container zeigt auf /home/mcuser.
+    The transcript mounts live under the absolute HOST path
+    (/Users/.../.mc, /Users/.../.claude); ~ in the container points to /home/mcuser.
     """
     return Path(os.environ.get("HOME_HOST") or Path.home())
 
@@ -260,12 +260,12 @@ def _expand_harvest_path(p: str) -> str:
 
 
 def _slugify_agent_name(name: str) -> str:
-    """Gleiche Slug-Konvention wie docker_agent_sync._agent_slug."""
+    """Same slug convention as docker_agent_sync._agent_slug."""
     return name.lower().replace(" ", "-")
 
 
 async def _build_agent_slug_map(session: AsyncSession) -> dict[str, Any]:
-    """{slug: agent_id} aus der agents-Tabelle — Default-Attribution."""
+    """{slug: agent_id} from the agents table — default attribution."""
     from app.models import Agent
 
     result = await session.exec(select(Agent))
@@ -279,20 +279,20 @@ async def run_harvest(
     boss_base_paths: list[str] | None = None,
     agent_slug_map: dict[str, Any] | None = None,
 ) -> dict[str, int]:
-    """Scannt alle JSONL-Dateien, parst Assistant-Zeilen und insertiert Events.
+    """Scans all JSONL files, parses assistant lines, and inserts events.
 
-    Konfigurierbar ueber:
-    - agent_base_paths: Pfade zu ~/.mc/agents-aehnlichen Verzeichnissen
-                        (Standard: settings.token_harvest_paths, expanduser)
-    - boss_base_paths: Pfade zu ~/.claude/projects-aehnlichen Verzeichnissen
-    - agent_slug_map: {slug: agent_id} zum Agent-Lookup (optional)
+    Configurable via:
+    - agent_base_paths: paths to ~/.mc/agents-like directories
+                        (default: settings.token_harvest_paths, expanduser)
+    - boss_base_paths: paths to ~/.claude/projects-like directories
+    - agent_slug_map: {slug: agent_id} for agent lookup (optional)
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K}
     """
     from app.config import settings as app_settings
 
-    # Default-Pfade aus Settings (expanduser)
+    # Default paths from settings (expanduser)
     if agent_base_paths is None:
         harvest_paths = getattr(app_settings, "token_harvest_paths", [
             "~/.mc/agents",
@@ -303,20 +303,20 @@ async def run_harvest(
         boss_base_paths = [str(_host_home() / ".claude/projects")]
 
     if agent_slug_map is None:
-        # Default: Attribution aus der agents-Tabelle (slug = name-basiert)
+        # Default: attribution from the agents table (slug = name-based)
         agent_slug_map = await _build_agent_slug_map(session)
 
-    # Boss-Agent fuer ~/.claude-Attribution (Host-Agent, Slug beginnt mit "boss")
+    # Boss agent for ~/.claude attribution (host agent, slug starts with "boss")
     boss_agent_id = next(
         (aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")),
         None,
     )
 
-    # Preise einmal laden (fuer Kosten-Berechnung)
+    # Load prices once (for cost calculation)
     prices_result = await session.exec(select(ModelPrice))
     all_prices: list[ModelPrice] = list(prices_result.all())
 
-    # Harvest-State laden (alle bekannten Dateien)
+    # Load harvest state (all known files)
     state_result = await session.exec(select(ModelUsageHarvestState))
     state_map: dict[str, ModelUsageHarvestState] = {
         s.file_path: s for s in state_result.all()
@@ -324,14 +324,14 @@ async def run_harvest(
 
     stats = {"files_scanned": 0, "new_events": 0, "skipped_private": 0}
 
-    # ── Agenten-Pfade: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl ──
+    # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl ────
     for base_str in agent_base_paths:
         base = Path(base_str)
         if not base.exists():
             continue
-        # Glob: {slug}/claude-config/projects/**/*.jsonl UND subagents/*.jsonl
+        # Glob: {slug}/claude-config/projects/**/*.jsonl AND subagents/*.jsonl
         for jsonl_path in sorted(base.glob("*/claude-config/projects/**/*.jsonl")):
-            # Slug aus dem Pfad-Segment direkt unter base
+            # Slug from the path segment directly under base
             try:
                 rel = jsonl_path.relative_to(base)
                 slug = rel.parts[0]
@@ -352,7 +352,7 @@ async def run_harvest(
                 stats=stats,
             )
 
-    # ── Boss-Pfade: ~/.claude/projects/**/*.jsonl ──────────────────────────
+    # ── Boss paths: ~/.claude/projects/**/*.jsonl ───────────────────────────
     for base_str in boss_base_paths:
         base = Path(base_str)
         if not base.exists():
@@ -361,16 +361,16 @@ async def run_harvest(
             await _process_jsonl_file(
                 session=session,
                 path=str(jsonl_path),
-                agent_id=boss_agent_id,  # greift nur fuer MC-attribuierte Zeilen
+                agent_id=boss_agent_id,  # only applies to MC-attributed lines
                 harness="host",
                 is_boss_path=True,
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
-                # Boss-agent_id wird spaeter nachgeladen wenn noetig
+                # boss_agent_id gets reloaded later if needed
             )
 
-    # Commit am Ende
+    # Commit at the end
     try:
         await session.commit()
     except Exception as e:
@@ -396,7 +396,7 @@ async def _process_jsonl_file(
     state_map: dict[str, ModelUsageHarvestState],
     stats: dict[str, int],
 ) -> None:
-    """Verarbeitet eine einzelne JSONL-Datei (Offset-Resume, Batch-Insert)."""
+    """Processes a single JSONL file (offset resume, batch insert)."""
     stats["files_scanned"] += 1
 
     try:
@@ -404,22 +404,22 @@ async def _process_jsonl_file(
     except OSError:
         return
 
-    # mtime-Skip: Datei unveraendert → ueberspringen
+    # mtime skip: file unchanged → skip
     state = state_map.get(path)
     if state and state.mtime == current_mtime:
-        return  # Nichts neues in dieser Datei
+        return  # nothing new in this file
 
     processed_lines = state.processed_lines if state else 0
 
-    # Zeilen lesen (ab Offset)
+    # Read lines (from offset)
     records = harvest_file(path, processed_lines)
     if not records:
-        # Datei wurde veraendert aber keine neuen validen Zeilen → State updaten
+        # File changed but no new valid lines → update state
         total_lines = _count_lines(path)
         await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
         return
 
-    # Batch-Dedup: Welche uuids sind schon in der DB?
+    # Batch dedup: which uuids are already in the DB?
     candidate_uuids = [r["uuid"] for r in records]
     existing_result = await session.exec(
         select(ModelUsageEvent.message_uuid).where(
@@ -430,7 +430,7 @@ async def _process_jsonl_file(
 
     new_records = [r for r in records if r["uuid"] not in existing_uuids]
 
-    # Fuer Boss-Pfade: Attribution pro Zeile entscheiden
+    # For boss paths: decide attribution per line
     new_events_count = 0
     for rec in new_records:
         if is_boss_path:
@@ -439,12 +439,12 @@ async def _process_jsonl_file(
             if not _should_attribute_boss_path(cwd, git_branch):
                 stats["skipped_private"] += 1
                 continue
-            # Boss: durchgereichte boss_agent_id (None wenn kein Boss-Agent existiert)
+            # Boss: passed-through boss_agent_id (None if no boss agent exists)
             eff_agent_id = agent_id
         else:
             eff_agent_id = agent_id
 
-        # Preis-Matching
+        # Price matching
         ts = _parse_ts(rec["timestamp"])
         model = rec["model"]
         price_info = match_price(model, ts, all_prices)
@@ -478,10 +478,10 @@ async def _process_jsonl_file(
             source_file=path,
         )
 
-        # Idempotenter Insert: UNIQUE-Constraint als Backstop (Race condition
-        # wenn zwei Harvester-Laeufe parallel laufen).
-        # Nutze Nested Transaction (SAVEPOINT) um bei IntegrityError nur diesen
-        # einen Row zurueckzurollen ohne den ganzen Batch zu verlieren.
+        # Idempotent insert: UNIQUE constraint as backstop (race condition
+        # when two harvester runs execute in parallel).
+        # Use a nested transaction (SAVEPOINT) so an IntegrityError only rolls
+        # back this one row instead of losing the whole batch.
         try:
             async with session.begin_nested():
                 session.add(event)
@@ -491,7 +491,7 @@ async def _process_jsonl_file(
 
     stats["new_events"] += new_events_count
 
-    # Harvest-State updaten
+    # Update harvest state
     total_lines = _count_lines(path)
     await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
 
@@ -503,7 +503,7 @@ async def _update_harvest_state(
     mtime: float,
     total_lines: int,
 ) -> None:
-    """Aktualisiert den Harvest-State fuer eine Datei (upsert)."""
+    """Updates the harvest state for a file (upsert)."""
     from app.utils import utcnow
 
     state = state_map.get(path)
@@ -524,7 +524,7 @@ async def _update_harvest_state(
 
 
 def _count_lines(path: str) -> int:
-    """Zaehlt Zeilen in einer Datei (fuer Offset-State)."""
+    """Counts lines in a file (for offset state)."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             return sum(1 for _ in f)

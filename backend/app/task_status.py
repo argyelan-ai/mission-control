@@ -1,7 +1,7 @@
-"""TaskStatus — Single Source of Truth fuer Task-Status und erlaubte Uebergaenge.
+"""TaskStatus — single source of truth for task status and allowed transitions.
 
-Importiert von tasks.py, agent_scoped.py, watchdog, task_lifecycle.py.
-Kein anderer Ort darf eigene Status-Maps definieren.
+Imported by tasks.py, agent_scoped.py, watchdog, task_lifecycle.py.
+No other location may define its own status maps.
 """
 
 from enum import StrEnum
@@ -18,7 +18,7 @@ class TaskStatus(StrEnum):
     ABORTED = "aborted"
 
 
-# Gueltige Status-Uebergaenge (von → erlaubte Ziele)
+# Valid status transitions (from → allowed targets)
 VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.INBOX:       {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
     TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.INBOX, TaskStatus.FAILED},
@@ -30,7 +30,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.ABORTED:     {TaskStatus.IN_PROGRESS, TaskStatus.INBOX},
 }
 
-# Status-Labels fuer Fehlermeldungen
+# Status labels for error messages
 STATUS_LABELS: dict[str, str] = {
     TaskStatus.INBOX: "Inbox",
     TaskStatus.IN_PROGRESS: "In Progress",
@@ -46,21 +46,21 @@ ALL_STATUSES = set(TaskStatus)
 
 
 def is_valid_transition(from_status: str, to_status: str) -> bool:
-    """Pruefen ob ein Status-Uebergang erlaubt ist."""
+    """Check whether a status transition is allowed."""
     allowed = VALID_TRANSITIONS.get(from_status, set())
     return to_status in allowed
 
 
-# Terminal-Status: Wenn ein Task hierhin wechselt, ist er "fertig"
+# Terminal status: when a task moves here, it is "done"
 TERMINAL_STATUSES = {TaskStatus.DONE}
 
 
 async def check_children_complete(task_id, session) -> tuple[bool, str]:
-    """Pruefen ob alle Children eines Tasks abgeschlossen sind.
+    """Check whether all children of a task are complete.
 
     Returns:
-        (True, "") wenn keine Children existieren oder alle done sind.
-        (False, detail_message) wenn offene Children existieren.
+        (True, "") if no children exist or all are done.
+        (False, detail_message) if open children exist.
     """
     from app.models.task import Task  # Lazy import to avoid circular
     from sqlmodel import select

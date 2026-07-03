@@ -1,18 +1,18 @@
-"""Memory-Query Helper — gemeinsamer Core fuer user- und agent-scoped Endpoints.
+"""Memory Query Helper — shared core for user- and agent-scoped endpoints.
 
-Extrahiert aus `routers/memory.py` und `routers/agent_scoped.py` (Phase 3),
-damit Query-Flow (Embed → Qdrant → Hybrid-Fallback) an einer Stelle gepflegt
-wird (I3 aus Code-Review 2026-04-11).
+Extracted from `routers/memory.py` and `routers/agent_scoped.py` (Phase 3),
+so the query flow (embed → Qdrant → hybrid fallback) is maintained in one
+place (I3 from code review 2026-04-11).
 
-Beide Router bleiben duenn:
+Both routers stay thin:
     results = await run_memory_query(session, query, layers, top_k, agent_id, board_id)
 
-Semantik:
-- layers: Liste aus {"semantic","agent","episodic"}, andere Werte werden ignoriert.
-- agent layer wird nur abgefragt wenn agent_id gesetzt (sonst []).
-- Embedding-Fail → Keyword-Fallback via ILIKE, nur auf memory_types die zum
-  Layer passen (layer_for).
-- Output ist idempotent: gleicher Query + gleicher Index → gleiche Reihenfolge.
+Semantics:
+- layers: list from {"semantic","agent","episodic"}, other values are ignored.
+- agent layer is only queried if agent_id is set (otherwise []).
+- Embedding fail → keyword fallback via ILIKE, only on memory_types matching
+  the layer (layer_for).
+- Output is idempotent: same query + same index → same order.
 """
 import logging
 from typing import Optional
@@ -39,14 +39,14 @@ async def run_memory_query(
     agent_id: Optional[str] = None,
     board_id: Optional[str] = None,
 ) -> dict:
-    """Hybrid Vektor-/Keyword-Suche ueber die 3 Memory-Layer.
+    """Hybrid vector/keyword search across the 3 memory layers.
 
     Returns:
         {
             "query": str,
             "agent_id": str | None,
             "board_id": str | None,
-            "fallback": bool,          # True bei Keyword-Fallback
+            "fallback": bool,          # True on keyword fallback
             "results": {
                 "semantic": [hit, ...],
                 "agent":    [hit, ...],
@@ -55,8 +55,8 @@ async def run_memory_query(
         }
 
     Raises:
-        InvalidQueryError: wenn query leer oder top_k ungueltig oder
-                           keine layers matchen.
+        InvalidQueryError: if query is empty or top_k is invalid or no
+                           layers match.
     """
     if not query or not query.strip():
         raise InvalidQueryError("Leere query")
@@ -67,9 +67,9 @@ async def run_memory_query(
     if not requested:
         raise InvalidQueryError("Keine gueltigen layers (erlaubt: semantic/agent/episodic)")
 
-    # Lazy-Import: embedding_service zuerst (hat keine harten Deps).
-    # qdrant_service erst NACH dem erfolgreichen embed — so kann der
-    # Keyword-Fallback auch ohne qdrant-client package laufen (Tests).
+    # Lazy import: embedding_service first (has no hard deps).
+    # qdrant_service only AFTER the successful embed — so the keyword
+    # fallback can also run without the qdrant-client package (tests).
     from app.services.embedding_service import embedding_service
 
     try:
@@ -131,7 +131,7 @@ async def _keyword_fallback(
     requested: list[str],
     top_k: int,
 ) -> dict:
-    """ILIKE-Fallback wenn Embedding-Service nicht erreichbar."""
+    """ILIKE fallback when the embedding service is unreachable."""
     from app.services.memory_indexing import layer_for
 
     results_by_layer: dict[str, list[dict]] = {l: [] for l in requested}

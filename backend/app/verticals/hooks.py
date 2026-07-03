@@ -1,28 +1,28 @@
-"""Hook-Registry — die EINZIGE Kopplungsrichtung Vertical → Core.
+"""Hook registry — the ONLY coupling direction Vertical → Core.
 
-Core-Code ruft die Hook-Listen auf, ohne zu wissen, ob ein Vertical sie
-befüllt hat. Verticals registrieren ihre Callables in ``register(app)``.
-Leere Listen = No-op (gestrippter Public-Release).
+Core code calls the hook lists without knowing whether a vertical has
+populated them. Verticals register their callables in ``register(app)``.
+Empty lists = no-op (stripped public release).
 
-Dieses Modul lebt bewusst im Core (wird nie gestrippt) und importiert
-selbst NICHTS aus Vertical-Paketen.
+This module deliberately lives in core (never stripped) and imports
+NOTHING from vertical packages itself.
 """
 from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-# Async-Hooks, gerufen nachdem ein Task auf status=done gewechselt ist.
-# Signatur: async (session, task) -> None. Fehler werden vom Aufrufer
-# geloggt und geschluckt (Vertical-Sync darf den Task-Flow nie brechen).
+# Async hooks, called after a task transitions to status=done.
+# Signature: async (session, task) -> None. Errors are logged and
+# swallowed by the caller (vertical sync must never break the task flow).
 task_done_hooks: list[Callable[..., Awaitable[None]]] = []
 
-# TOOLS.md-Zusatzsektionen: (scope_string, builder) — builder(ctx) -> str.
-# tools_md_builder rendert die Sektion nur, wenn der Agent den Scope hat.
+# TOOLS.md extra sections: (scope_string, builder) — builder(ctx) -> str.
+# tools_md_builder only renders the section if the agent has the scope.
 tools_md_sections: list[tuple[str, Callable[[dict], str]]] = []
 
 
 async def run_task_done_hooks(session: Any, task: Any) -> None:
-    """Alle task_done_hooks ausführen; Fehler loggen, nie propagieren."""
+    """Run all task_done_hooks; log errors, never propagate."""
     import logging
 
     logger = logging.getLogger("mc.verticals.hooks")

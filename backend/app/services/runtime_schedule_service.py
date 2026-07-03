@@ -1,8 +1,8 @@
 """
-RuntimeScheduleService — Verwaltet Zeitpläne für lokale Modell-Runtimes.
+RuntimeScheduleService — manages schedules for local model runtimes.
 
-Führt Start/Stop-Aktionen via SSH auf dem DGX Spark aus.
-Läuft als asyncio Background-Loop (unabhängig vom APScheduler).
+Runs start/stop actions via SSH on the DGX Spark.
+Runs as an asyncio background loop (independent of APScheduler).
 """
 import asyncio
 import logging
@@ -24,9 +24,9 @@ _running_tasks: set[asyncio.Task] = set()
 
 
 def _day_matches(days: str, weekday: int) -> bool:
-    """Prüft ob der aktuelle Wochentag dem Schedule entspricht.
+    """Checks whether the current weekday matches the schedule.
 
-    weekday: 0=Montag, 6=Sonntag (Python datetime.weekday())
+    weekday: 0=Monday, 6=Sunday (Python datetime.weekday())
     """
     if days == "daily":
         return True
@@ -38,7 +38,7 @@ def _day_matches(days: str, weekday: int) -> bool:
 
 
 async def get_schedules(runtime_id: str) -> list[dict]:
-    """Alle Schedules für eine Runtime, inkl. letztem Run."""
+    """All schedules for a runtime, including the last run."""
     async with AsyncSession(engine, expire_on_commit=False) as session:
         schedules = (
             await session.exec(
@@ -63,7 +63,7 @@ async def get_schedules(runtime_id: str) -> list[dict]:
 
 
 async def create_schedule(runtime_id: str, data: dict) -> dict:
-    """Neuen Schedule anlegen."""
+    """Create a new schedule."""
     schedule = RuntimeSchedule(
         runtime_id=runtime_id,
         name=data["name"],
@@ -81,7 +81,7 @@ async def create_schedule(runtime_id: str, data: dict) -> dict:
 
 
 async def update_schedule(schedule_id: uuid.UUID, data: dict) -> dict | None:
-    """Schedule aktualisieren (Patch-Semantik — nur gelieferte Felder)."""
+    """Update a schedule (patch semantics — only supplied fields)."""
     async with AsyncSession(engine, expire_on_commit=False) as session:
         schedule = await session.get(RuntimeSchedule, schedule_id)
         if not schedule:
@@ -96,7 +96,7 @@ async def update_schedule(schedule_id: uuid.UUID, data: dict) -> dict | None:
 
 
 async def delete_schedule(schedule_id: uuid.UUID) -> bool:
-    """Schedule löschen. Gibt False zurück wenn nicht gefunden."""
+    """Delete a schedule. Returns False if not found."""
     async with AsyncSession(engine, expire_on_commit=False) as session:
         schedule = await session.get(RuntimeSchedule, schedule_id)
         if not schedule:
@@ -107,7 +107,7 @@ async def delete_schedule(schedule_id: uuid.UUID) -> bool:
 
 
 async def get_runs(schedule_id: uuid.UUID, limit: int = 5) -> list[dict]:
-    """Letzte N Ausführungen eines Schedules."""
+    """Last N executions of a schedule."""
     async with AsyncSession(engine, expire_on_commit=False) as session:
         runs = (
             await session.exec(
@@ -129,12 +129,12 @@ async def get_runs(schedule_id: uuid.UUID, limit: int = 5) -> list[dict]:
 
 
 async def _execute_schedule(schedule: RuntimeSchedule) -> None:
-    """Führt einen Schedule aus und speichert das Ergebnis."""
+    """Executes a schedule and stores the result."""
     success = True
     message = None
     try:
         if schedule.action == "kv_reset":
-            # KV Reset: aktuellen Zustand merken → alles entladen → neu laden
+            # KV reset: remember current state → unload everything → reload
             loaded_models = await runtime_manager.lms_get_loaded_models()
             if not loaded_models:
                 message = "Keine Modelle geladen — KV Reset übersprungen."
@@ -205,7 +205,7 @@ async def _execute_schedule(schedule: RuntimeSchedule) -> None:
 
 
 async def _scheduler_loop() -> None:
-    """Läuft jede Minute — prüft welche Schedules jetzt ausgeführt werden sollen."""
+    """Runs every minute — checks which schedules should execute now."""
     while True:
         await asyncio.sleep(60)
         try:

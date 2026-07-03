@@ -1,9 +1,9 @@
-"""Update-Check gegen die GitHub-Releases des Public-Repos.
+"""Update check against the public repo's GitHub releases.
 
-Ein Self-Hosted-Produkt braucht eine Update-Story: MC prueft (taeglich
-gecacht, nie im Request-Hotpath ohne Cache-TTL) das neueste Release und
-zeigt in der UI einen Hinweis. Kein Auto-Update — der Operator
-entscheidet (install.sh --update / docs/setup/updating.md).
+A self-hosted product needs an update story: MC checks (cached daily,
+never in the request hot path without a cache TTL) the latest release and
+shows a hint in the UI. No auto-update — the operator
+decides (install.sh --update / docs/setup/updating.md).
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ RELEASES_URL = (
     "https://api.github.com/repos/argyelan-ai/mission-control/releases/latest"
 )
 CACHE_KEY = "mc:update-check:latest"
-CACHE_TTL = 86400  # 1x taeglich reicht; schont das GitHub-Rate-Limit (60/h anon)
+CACHE_TTL = 86400  # once daily is enough; protects the GitHub rate limit (60/h anon)
 
 _VER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
 
@@ -35,10 +35,10 @@ def _parse(tag: Optional[str]) -> Optional[tuple[int, int, int]]:
 
 
 def is_newer(candidate: Optional[str], current: Optional[str]) -> bool:
-    """True wenn candidate eine hoehere SemVer als current ist.
+    """True if candidate has a higher SemVer than current.
 
-    Unparsebare/fehlende Versionen sind nie "neuer" — ein kaputter
-    GitHub-Response darf keinen falschen Update-Banner ausloesen.
+    Unparseable/missing versions are never "newer" — a broken
+    GitHub response must never trigger a false update banner.
     """
     c, cur = _parse(candidate), _parse(current)
     if c is None or cur is None:
@@ -49,7 +49,7 @@ def is_newer(candidate: Optional[str], current: Optional[str]) -> bool:
 async def get_latest_release(
     _fetch: Optional[Callable[[], Awaitable[dict]]] = None,
 ) -> dict:
-    """Neueste Release-Info, 24h-gecacht. Fehler → {tag: None} (still)."""
+    """Latest release info, cached for 24h. Error → {tag: None} (silent)."""
     redis = await get_redis()
     cached = await redis.get(CACHE_KEY)
     if cached:
@@ -71,7 +71,7 @@ async def get_latest_release(
                 r.raise_for_status()
                 data = r.json()
         info = {"tag": data.get("tag_name"), "url": data.get("html_url")}
-    except Exception as e:  # noqa: BLE001 — offline/ratelimited ist normal
+    except Exception as e:  # noqa: BLE001 — offline/ratelimited is normal
         logger.debug("update check failed (harmless): %s", e)
 
     await redis.set(CACHE_KEY, json.dumps(info), ex=CACHE_TTL)

@@ -1,10 +1,10 @@
 """
-Task Queue Service — Redis-basierte FIFO-Queue pro Agent.
+Task Queue Service — Redis-based FIFO queue per agent.
 
-Wenn ein Agent bereits eine aktive Task bearbeitet, werden neue Tasks
-in die Queue eingereiht. Der Watchdog verarbeitet die Queue periodisch.
+If an agent is already working on an active task, new tasks are
+enqueued. The watchdog processes the queue periodically.
 
-Key-Schema: mc:agent:{agent_id}:task_queue  (Redis List, RPUSH/LPOP)
+Key schema: mc:agent:{agent_id}:task_queue  (Redis List, RPUSH/LPOP)
 """
 
 import logging
@@ -17,14 +17,14 @@ def _queue_key(agent_id: str) -> str:
 
 
 async def enqueue_task(agent_id: str, task_id: str) -> None:
-    """Task ans Ende der Agent-Queue haengen."""
+    """Append a task to the end of the agent's queue."""
     redis = await get_redis()
     await redis.rpush(_queue_key(agent_id), task_id)
     logger.info("Enqueued task %s for agent %s", task_id, agent_id)
 
 
 async def dequeue_task(agent_id: str) -> str | None:
-    """Naechste Task vom Anfang der Agent-Queue holen (FIFO)."""
+    """Get the next task from the front of the agent's queue (FIFO)."""
     redis = await get_redis()
     result = await redis.lpop(_queue_key(agent_id))
     if result:
@@ -35,35 +35,35 @@ async def dequeue_task(agent_id: str) -> str | None:
 
 
 async def queue_length(agent_id: str) -> int:
-    """Anzahl wartender Tasks fuer diesen Agent."""
+    """Number of tasks waiting for this agent."""
     redis = await get_redis()
     return await redis.llen(_queue_key(agent_id))
 
 
 async def peek_queue(agent_id: str) -> list[str]:
-    """Alle Tasks in der Queue anzeigen (ohne entfernen)."""
+    """Show all tasks in the queue (without removing them)."""
     redis = await get_redis()
     items = await redis.lrange(_queue_key(agent_id), 0, -1)
     return [i.decode() if isinstance(i, bytes) else i for i in items]
 
 
 # ── Pending Dispatch Queue ──────────────────────────────────────────────
-# Tasks die wegen fehlender Agent-Session nicht gepusht werden konnten.
-# Watchdog liefert nach, sobald Agent online ist.
+# Tasks that couldn't be pushed because the agent had no active session.
+# The watchdog delivers them once the agent is online.
 
 def _pending_key(agent_id: str) -> str:
     return RedisKeys.agent_pending_dispatch(agent_id)
 
 
 async def enqueue_pending_dispatch(agent_id: str, task_id: str) -> None:
-    """Task in Pending-Dispatch-Queue legen (Agent hat keine aktive Session)."""
+    """Put a task in the pending-dispatch queue (agent has no active session)."""
     redis = await get_redis()
     await redis.rpush(_pending_key(agent_id), task_id)
     logger.info("Pending dispatch queued: task %s for agent %s", task_id, agent_id)
 
 
 async def dequeue_pending_dispatch(agent_id: str) -> str | None:
-    """Naechste pending Task holen (FIFO)."""
+    """Get the next pending task (FIFO)."""
     redis = await get_redis()
     result = await redis.lpop(_pending_key(agent_id))
     if result:
@@ -74,33 +74,33 @@ async def dequeue_pending_dispatch(agent_id: str) -> str | None:
 
 
 async def pending_dispatch_length(agent_id: str) -> int:
-    """Anzahl wartender Pending-Dispatch Tasks."""
+    """Number of waiting pending-dispatch tasks."""
     redis = await get_redis()
     return await redis.llen(_pending_key(agent_id))
 
 
 # ── Dispatch Lock ───────────────────────────────────────────────────────
-# Verhindert Race-Conditions: Nur ein Dispatch-Prozess pro Agent gleichzeitig.
+# Prevents race conditions: only one dispatch process per agent at a time.
 
 def _lock_key(agent_id: str) -> str:
     return RedisKeys.agent_dispatch_lock(agent_id)
 
 
 async def acquire_dispatch_lock(agent_id: str, ttl: int = 30) -> bool:
-    """Dispatch-Lock fuer einen Agent setzen (SET NX EX). True = Lock erhalten.
+    """Set a dispatch lock for an agent (SET NX EX). True = lock acquired.
 
-    Fail-open: Bei Redis-Fehler wird True zurueckgegeben (Lock durchlassen).
+    Fail-open: on a Redis error, True is returned (let the lock pass through).
     """
     try:
         redis = await get_redis()
         result = await redis.set(_lock_key(agent_id), "1", nx=True, ex=ttl)
         return result is not None and result is not False
     except Exception:
-        return True  # Fail-open: besser doppelt dispatchen als gar nicht
+        return True  # Fail-open: better to double-dispatch than not at all
 
 
 async def release_dispatch_lock(agent_id: str) -> None:
-    """Dispatch-Lock freigeben."""
+    """Release the dispatch lock."""
     try:
         redis = await get_redis()
         await redis.delete(_lock_key(agent_id))
@@ -109,7 +109,7 @@ async def release_dispatch_lock(agent_id: str) -> None:
 
 
 # ── Review Rejection Counter ────────────────────────────────────────────
-# Zaehlt wie oft ein Task vom Review abgelehnt wurde.
+# Counts how often a task was rejected by review.
 
 MAX_REJECTIONS = 10
 
@@ -119,16 +119,16 @@ def _rejection_key(task_id: str) -> str:
 
 
 async def increment_rejection_count(task_id: str) -> int:
-    """Rejection-Counter erhoehen. Returns neuer Zaehlerstand."""
+    """Increment the rejection counter. Returns the new count."""
     redis = await get_redis()
     key = _rejection_key(task_id)
     count = await redis.incr(key)
-    await redis.expire(key, 7 * 24 * 3600)  # 7 Tage TTL
+    await redis.expire(key, 7 * 24 * 3600)  # 7-day TTL
     return count
 
 
 async def get_rejection_count(task_id: str) -> int:
-    """Aktuellen Rejection-Counter lesen."""
+    """Read the current rejection counter."""
     redis = await get_redis()
     result = await redis.get(_rejection_key(task_id))
     return int(result) if result else 0

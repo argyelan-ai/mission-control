@@ -3,10 +3,10 @@ Task Context Builder — Dispatch-Context Assembly extracted from dispatch.py (R
 
 All functions are side-effect free reads against AsyncSession.
 asyncio.gather() pattern preserved verbatim from the original location.
-Phase-4 Boundary: keine Routes, keine RPC, keine writes — pure read service.
+Phase-4 Boundary: no routes, no RPC, no writes — pure read service.
 
-Quelle: backend/app/services/dispatch.py (Phase 4 REF-01 Bottom-Up Extraction).
-Re-Exports in dispatch.py erhalten alle bestehenden Importer.
+Source: backend/app/services/dispatch.py (Phase 4 REF-01 Bottom-Up Extraction).
+Re-exports in dispatch.py keep all existing importers working.
 """
 from __future__ import annotations
 
@@ -71,10 +71,10 @@ async def setup_git_workspace_for_dispatch(
             from app.services.git_service import git_service, slugify_project
             project = await session.get(Project, task.project_id)
             if project and project.github_repo_url and agent.workspace_path:
-                # Pre-Check: workspace_path muss in einem Backend-gemounteten
-                # Volume liegen. Ohne Check wirft mkdir/clone einen kryptischen
-                # PermissionError und der Operator bekommt eine vage Blocker-Nachricht.
-                # Siehe Incident 2026-04-23 (Boss DNA-Task).
+                # Pre-check: workspace_path must live inside a backend-mounted
+                # volume. Without this check, mkdir/clone throws a cryptic
+                # PermissionError and the operator gets a vague blocker message.
+                # See incident 2026-04-23 (Boss DNA task).
                 if not is_backend_writable_path(agent.workspace_path):
                     raise RuntimeError(
                         f"Agent '{agent.name}' hat workspace_path="
@@ -92,7 +92,7 @@ async def setup_git_workspace_for_dispatch(
                     project_slug,
                 )
                 task_slug = slugify_project(task.title)
-                # Worktree-Versuch: isolierter Pfad pro Task
+                # Worktree attempt: isolated path per task
                 try:
                     worktree_path = await git_service.create_task_worktree(
                         main_repo, task_slug,
@@ -102,7 +102,7 @@ async def setup_git_workspace_for_dispatch(
                     task.workspace_path = worktree_path
                     logger.info("Task %s: Worktree erstellt: %s", task.id, worktree_path)
                 except Exception as wt_err:
-                    # Fallback: Branch im Hauptrepo (wie bisher)
+                    # Fallback: branch in the main repo (as before)
                     logger.warning("Worktree fehlgeschlagen, Fallback auf Branch: %s", wt_err)
                     git_project_dir = main_repo
                     git_branch = await git_service.create_task_branch(
@@ -115,16 +115,16 @@ async def setup_git_workspace_for_dispatch(
                 session.add(task)
                 await session.commit()
         except Exception as e:
-            # Bei Project mit github_repo_url: Git-Setup MUSS erfolgreich sein.
-            # Silent-Fallback (dispatch ohne workspace) hat am 2026-04-19
-            # dazu gefuehrt, dass FreeCode auf einem fremden Repo committet
-            # hat. Jetzt: Task auf blocked, kein Dispatch.
+            # For a project with github_repo_url: git setup MUST succeed.
+            # A silent fallback (dispatch without workspace) led on 2026-04-19
+            # to FreeCode committing to a foreign repo. Now: task goes to
+            # blocked, no dispatch.
             logger.error(
                 "Git workspace setup failed for task %s: %s",
                 task.id, e,
             )
-            # Konkrete Error-Klassifikation fuer saubere Operator-Eskalation.
-            # Unterscheiden: workspace_path mount-Problem vs. echte Git-Errors.
+            # Concrete error classification for a clean operator escalation.
+            # Distinguish: workspace_path mount problem vs. real git errors.
             _err_name = type(e).__name__
             _err_msg = str(e)
             if _err_name == "RuntimeError" and "Backend-Container-Mounts" in _err_msg:
@@ -165,8 +165,8 @@ async def setup_git_workspace_for_dispatch(
                 content=blocker_text,
             )
             task.status = "blocked"
-            # Auto-Unassign: Workspace-Setup-Fehler ist Operator-Approval-Wait,
-            # kein Callback-Wait. Verhindert Cancel-Schleife.
+            # Auto-unassign: a workspace-setup failure is an operator-approval
+            # wait, not a callback wait. Prevents the cancel loop.
             from app.services.task_lifecycle import apply_terminal_unassign
             await apply_terminal_unassign(session, task, "blocked")
             session.add(task)
@@ -174,7 +174,7 @@ async def setup_git_workspace_for_dispatch(
             await session.commit()
             return False
     elif agent.workspace_path:
-        # Ad-hoc Task ohne Projekt → eigenes Repo oder mc-workspace
+        # Ad-hoc task without a project → own repo or mc-workspace
         try:
             from app.services.git_service import (
                 ADHOC_REPO,
@@ -185,12 +185,12 @@ async def setup_git_workspace_for_dispatch(
             )
 
             if task.use_separate_repo:
-                # Dediziertes Repo für diesen Task
+                # Dedicated repo for this task
                 repo_url = await git_service.ensure_task_repo(task.title, str(task.id))
                 repo_slug = repo_url.rstrip(".git").split("/")[-1]
             else:
-                # Geteiltes mc-workspace Repo (bisheriges Verhalten).
-                # Fail loud statt stiller Warning-Fallback bei fehlendem Owner.
+                # Shared mc-workspace repo (previous behavior).
+                # Fail loud instead of a silent warning fallback for a missing owner.
                 require_github_owner()
                 repo_url = f"https://github.com/{GITHUB_OWNER}/{ADHOC_REPO}.git"
                 repo_slug = ADHOC_REPO
@@ -230,21 +230,21 @@ async def _ensure_task_workspace(
     project: "Project | None",
     agent_workspace: str | None,
 ) -> str | None:
-    """Stellt sicher dass ein Task ein eigenes Arbeitsverzeichnis hat.
+    """Ensures a task has its own working directory.
 
-    Wird fuer Non-Code-Tasks aufgerufen (kein GitHub-Repo).
-    Git-Worktrees werden vom GitService separat behandelt.
+    Called for non-code tasks (no GitHub repo).
+    Git worktrees are handled separately by GitService.
 
     Returns:
-        Pfad zum Workspace-Verzeichnis, oder None wenn kein agent_workspace bekannt
-        oder das Verzeichnis nicht erstellt werden konnte (PermissionError, OSError).
-        Im Fehlerfall darf Auto-Dispatch nicht crashen — Workspace ist Nice-to-Have.
+        Path to the workspace directory, or None if no agent_workspace is known
+        or the directory couldn't be created (PermissionError, OSError).
+        On error, auto-dispatch must not crash — the workspace is nice-to-have.
     """
-    # Kein extra Workspace noetig wenn Git-Repo vorhanden (GitService erstellt Worktree)
+    # No extra workspace needed if a git repo exists (GitService creates the worktree)
     if project and project.github_repo_url:
         return None
 
-    # Basis-Verzeichnis bestimmen
+    # Determine base directory
     if agent_workspace:
         base = os.path.join(agent_workspace, "_tasks", str(task_id))
     else:
@@ -266,16 +266,16 @@ async def _ensure_task_workspace(
 # ── DispatchContext ─────────────────────────────────────────────────────
 @dataclass
 class DispatchContext:
-    """Buendelt alle vorgeladenen Daten fuer eine Dispatch-Message.
+    """Bundles all preloaded data for a dispatch message.
 
-    Wird von _load_dispatch_context() via asyncio.gather() befuellt,
-    sodass die 6+ DB-Queries parallel laufen statt sequentiell (N+1 Fix).
+    Populated by _load_dispatch_context() via asyncio.gather(), so the
+    6+ DB queries run in parallel instead of sequentially (N+1 fix).
     """
     memory_context: str = ""
     lessons_context: str = ""
     agent_lessons_context: str = ""
     relevant_lessons_context: str = ""
-    semantic_memory_context: str = ""  # Phase A (2026-04-11): Qdrant Vektor-Treffer
+    semantic_memory_context: str = ""  # Phase A (2026-04-11): Qdrant vector hits
     intelligence_context: str = ""
     feedback_context: str = ""
     meeting_context: str = ""
@@ -292,9 +292,9 @@ async def _load_dispatch_context(
     agent: Agent,
     session: AsyncSession,
 ) -> DispatchContext:
-    """Laedt alle Kontext-Daten parallel via asyncio.gather().
+    """Loads all context data in parallel via asyncio.gather().
 
-    Jede Query ist best-effort — bei Fehler wird der Wert leer gelassen.
+    Every query is best-effort — on error the value is left empty.
     """
     ctx = DispatchContext()
 
@@ -376,12 +376,12 @@ async def _load_dispatch_context(
         return ""
 
     async def _load_semantic_memory() -> str:
-        """Laedt via Qdrant-Vektorsuche die relevantesten Semantic + Agent Memories
-        fuer den aktuellen Task (Phase A, 2026-04-11).
+        """Loads the most relevant semantic + agent memories via Qdrant vector
+        search for the current task (Phase A, 2026-04-11).
 
-        Kombiniert Task-Titel + Description als Query, holt Top-3 aus semantic
-        (board-scoped) und Top-3 aus agent (privat fuer den Ziel-Agent).
-        Fail-soft: leere Rueckgabe bei Spark/Qdrant-Problemen.
+        Combines task title + description as the query, fetches top-3 from
+        semantic (board-scoped) and top-3 from agent (private to the target agent).
+        Fail-soft: returns empty on Spark/Qdrant problems.
         """
         try:
             query_text = (task.title or "") + "\n" + (task.description or "")
@@ -392,7 +392,7 @@ async def _load_dispatch_context(
 
             result = await run_memory_query(
                 session=session,
-                query=query_text[:1500],  # Top-1500 Chars reichen fuer Query
+                query=query_text[:1500],  # first 1500 chars are enough for the query
                 layers=["semantic", "agent"],
                 top_k=3,
                 agent_id=str(agent.id) if agent else None,
@@ -498,7 +498,7 @@ async def _load_dispatch_context(
             return []
 
     async def _load_child_tasks() -> list[Task]:
-        """Aktive Child-Tasks dieses Tasks laden (fuer Board Lead Subtask-Uebersicht)."""
+        """Loads active child tasks of this task (for Board Lead subtask overview)."""
         if not agent.is_board_lead:
             return []
         try:
@@ -510,7 +510,7 @@ async def _load_dispatch_context(
             return []
 
     async def _load_meeting_insights() -> str:
-        """Letzte 2 Meeting-Summaries als Kontext laden."""
+        """Loads the last 2 meeting summaries as context."""
         try:
             result = await session.exec(
                 select(AgentMeeting)
@@ -529,7 +529,7 @@ async def _load_dispatch_context(
                 date_str = m.completed_at.strftime("%d.%m.%Y") if m.completed_at else "?"
                 parts.append(f"**{m.title}** ({date_str})")
                 if m.summary:
-                    # Maximal 300 Zeichen pro Meeting-Summary
+                    # Max 300 chars per meeting summary
                     parts.append(m.summary[:300])
                 if m.decisions:
                     for d in m.decisions[:3]:
@@ -541,7 +541,7 @@ async def _load_dispatch_context(
             return ""
 
     async def _load_dependencies() -> str:
-        """Workspace-Pfade und Outputs der Vorgaenger-Tasks laden."""
+        """Loads workspace paths and outputs of predecessor tasks."""
         try:
             dep_result = await session.exec(
                 select(TaskDependency).where(TaskDependency.task_id == task.id)
@@ -557,7 +557,7 @@ async def _load_dispatch_context(
                 section = [f"**{dep_task.title}** (status: {dep_task.status})"]
                 if dep_task.workspace_path:
                     section.append(f"- Workspace: `{dep_task.workspace_path}`")
-                # Deliverables des Vorgaengers
+                # Predecessor's deliverables
                 deliv_result = await session.exec(
                     select(TaskDeliverable).where(TaskDeliverable.task_id == dep_task.id)
                 )
@@ -565,7 +565,7 @@ async def _load_dispatch_context(
                 for d in deliverables:
                     path_hint = f" → `{d.path}`" if d.path else ""
                     section.append(f"- Deliverable: {d.title}{path_hint}")
-                # Letzter Progress-Kommentar als Evidence
+                # Last progress comment as evidence
                 last_comment_result = await session.exec(
                     select(TaskComment)
                     .where(
@@ -583,7 +583,7 @@ async def _load_dispatch_context(
         except Exception:
             return ""
 
-    # Alle Queries parallel ausfuehren
+    # Run all queries in parallel
     results = await asyncio.gather(
         _load_memory(),
         _load_lessons(),
@@ -600,7 +600,7 @@ async def _load_dispatch_context(
         return_exceptions=True,
     )
 
-    # Ergebnisse zuweisen (Fehler werden als leere Werte behandelt)
+    # Assign results (errors are treated as empty values)
     ctx.memory_context = results[0] if isinstance(results[0], str) else ""
     ctx.lessons_context = results[1] if isinstance(results[1], str) else ""
     ctx.agent_lessons_context = results[2] if isinstance(results[2], str) else ""
@@ -618,9 +618,9 @@ async def _load_dispatch_context(
         ctx.child_tasks = results[10]
     ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
 
-    # Vault-Credential aufloesen (sequentiell, da credential_id selten gesetzt ist).
-    # _inherited_credential_id wird vom _build_dispatch_message Inheritance-Block
-    # gesetzt, falls Parent ein credential_id hat und der Subtask keins.
+    # Resolve vault credential (sequential, since credential_id is rarely set).
+    # _inherited_credential_id is set by the _build_dispatch_message inheritance
+    # block if the parent has a credential_id and the subtask doesn't.
     effective_credential_id = task.credential_id or getattr(task, "_inherited_credential_id", None)
     if effective_credential_id:
         try:
@@ -650,7 +650,7 @@ async def _load_dispatch_context(
 
 
 async def get_last_checkpoint(session: AsyncSession, task_id: uuid.UUID) -> str | None:
-    """Letzten Checkpoint-Kommentar eines Tasks laden (fuer Recovery-Kontext)."""
+    """Loads a task's last checkpoint comment (for recovery context)."""
     result = await session.exec(
         select(TaskComment)
         .where(

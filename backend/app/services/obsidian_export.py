@@ -1,37 +1,37 @@
-"""Obsidian View-Only Export — Background-Singleton fuer OBS-01/02/03 (Phase 7).
+"""Obsidian View-Only Export — background singleton for OBS-01/02/03 (Phase 7).
 
-Periodisch (Default 300s) walks ``board_memory`` + Task-Anhaenge und rendert
-Markdown-Dateien in ``${HOME_HOST}/.mc/vault/`` so dass der Operator seinen
-Memory-Bestand in Obsidian (oder einer beliebigen Markdown-fokussierten App)
-lesen kann — strikt READ-only Mirror, MC bleibt Single Source of Truth (kein
-Reverse-Sync).
+Periodically (default 300s) walks ``board_memory`` + task attachments and
+renders Markdown files into ``${HOME_HOST}/.mc/vault/`` so the operator can
+read their memory store in Obsidian (or any Markdown-focused app) — a strictly
+READ-only mirror, MC stays the single source of truth (no reverse sync).
 
-Mirror der Singleton-Pattern aus ``intelligence.py`` / ``embedding_retry.py``
-(in beiden Faellen: Lifespan-Registrierung in ``main.py`` analog
+Mirrors the singleton pattern from ``intelligence.py`` / ``embedding_retry.py``
+(in both cases: lifespan registration in ``main.py`` analogous to
 ``embedding_retry.start()`` / ``embedding_retry.stop()``).
 
 Acceptance contracts (Plan 07-01 — Wave 1 skeleton):
-- OBS-01: Vault-Verzeichnis-Layout (memory/{agents,projects,global} +
-  attachments/{tasks,deliverables}) wird beim ersten ``.start()`` angelegt.
-- OBS-02: ``settings.obsidian_export_enabled`` Kill-Switch + ``_run_loop`` mit
-  Grace Period (20s) und Redis-Lock-Dedup ueber Multi-Worker.
-- OBS-03: ``_vault_attachment_path`` Helper fuer Attachment-Mirror (Plan
-  07-03 fuellt den Body).
+- OBS-01: vault directory layout (memory/{agents,projects,global} +
+  attachments/{tasks,deliverables}) is created on the first ``.start()``.
+- OBS-02: ``settings.obsidian_export_enabled`` kill switch + ``_run_loop``
+  with grace period (20s) and Redis lock dedup across multi-worker.
+- OBS-03: ``_vault_attachment_path`` helper for attachment mirroring (Plan
+  07-03 fills the body).
 
-Plan 07-01 liefert NUR die Infrastruktur — ``trigger_cycle()`` ist hier ein
-``pass``-Stub. Die Pipeline-Implementation landet in Plan 07-02 (Cycle-Body)
-und Plan 07-03 (Attachments).
+Plan 07-01 delivers ONLY the infrastructure — ``trigger_cycle()`` is a
+``pass`` stub here. The pipeline implementation lands in Plan 07-02
+(cycle body) and Plan 07-03 (attachments).
 
-Pitfalls (siehe ``.planning/phases/07-obsidian-view-only-export/07-RESEARCH.md``):
-- ``_vault_root()`` MUSS via HOME_HOST → HOME → expanduser('~') resolven.
-  ``feedback_home_host_pattern.md`` — ``expanduser('~')`` standalone ist
-  verboten weil ``$HOME`` im Container auf ``/home/mcuser`` zeigt waehrend der
-  Mount auf dem Host-HOME (``HOME_HOST``, z.B. ``/Users/<login>``) leben muss.
-- Path-Traversal-Guard auf jedem berechneten Pfad: realpath + startswith
-  unter ``_vault_root()``. Pattern verbatim aus
+Pitfalls (see ``.planning/phases/07-obsidian-view-only-export/07-RESEARCH.md``):
+- ``_vault_root()`` MUST resolve via HOME_HOST → HOME → expanduser('~').
+  ``feedback_home_host_pattern.md`` — standalone ``expanduser('~')`` is
+  forbidden because ``$HOME`` in the container points at ``/home/mcuser``
+  while the mount has to live at the host HOME (``HOME_HOST``, e.g.
+  ``/Users/<login>``).
+- Path-traversal guard on every computed path: realpath + startswith
+  under ``_vault_root()``. Pattern verbatim from
   ``routers/memory.py:530-545``.
-- Lifespan ruft ``.start()`` / ``.stop()`` — kein Auto-Start hier (Pitfall 4
-  aus EmbeddingRetryLoop).
+- Lifespan calls ``.start()`` / ``.stop()`` — no auto-start here (Pitfall 4
+  from EmbeddingRetryLoop).
 """
 from __future__ import annotations
 
@@ -61,31 +61,31 @@ logger = logging.getLogger("mc.obsidian_export")
 
 
 def _vault_root() -> str:
-    """Phase 7 OBS-01: HOME_HOST resolver fuer das Vault-Verzeichnis.
+    """Phase 7 OBS-01: HOME_HOST resolver for the vault directory.
 
-    NIEMALS ``expanduser('~')`` standalone — Memory-Feedback-Regel
-    ``feedback_home_host_pattern.md``. Die Kette ist:
-    ``HOME_HOST`` env-var (auf Docker-Containern via host-side
-    docker-compose Mount gesetzt) → ``HOME`` env-var → ``expanduser('~')``
+    NEVER standalone ``expanduser('~')`` — memory feedback rule
+    ``feedback_home_host_pattern.md``. The chain is:
+    ``HOME_HOST`` env var (set on Docker containers via host-side
+    docker-compose mount) → ``HOME`` env var → ``expanduser('~')``
     last resort. Returns ``${HOME_HOST}/.mc/vault``.
 
-    Mirror von ``_attachments_root()`` (routers/memory.py:42-52) — gleiche
-    Resolver-Kette, anderer Sub-Pfad.
+    Mirrors ``_attachments_root()`` (routers/memory.py:42-52) — same
+    resolver chain, different sub-path.
     """
     home_host = os.environ.get("HOME_HOST") or os.environ.get("HOME") or os.path.expanduser("~")
     return f"{home_host}/.mc/vault"
 
 
 def _ensure_vault_layout(vault_root: str) -> None:
-    """Phase 7 OBS-01: Vault-Verzeichnis-Tree anlegen.
+    """Phase 7 OBS-01: create the vault directory tree.
 
-    Idempotent — ``exist_ok=True`` auf jedem ``makedirs``-Call. Wird beim
-    ersten ``ObsidianExportService.start()`` aufgerufen + von Plan 07-02 /
-    07-03 Tests fuer Layout-Assertions importiert.
+    Idempotent — ``exist_ok=True`` on every ``makedirs`` call. Called on the
+    first ``ObsidianExportService.start()`` + imported by Plan 07-02 /
+    07-03 tests for layout assertions.
 
-    Subdir-Liste ist die Single Source of Truth fuer Plan 07-02
-    (``_vault_memory_path`` Routing) und Plan 07-03 (``_vault_attachment_path``
-    Routing).
+    The subdir list is the single source of truth for Plan 07-02
+    (``_vault_memory_path`` routing) and Plan 07-03 (``_vault_attachment_path``
+    routing).
     """
     subdirs = (
         "memory/agents",
@@ -99,11 +99,11 @@ def _ensure_vault_layout(vault_root: str) -> None:
 
 
 def _safe_join(vault_root: str, *parts: str) -> str:
-    """Path-Traversal-Guard wrapper — Pattern verbatim aus
+    """Path-traversal guard wrapper — pattern verbatim from
     ``routers/memory.py:530-545``.
 
-    Service-Context: ``RuntimeError`` statt ``HTTPException``. Caller in
-    Plan 07-02 / 07-03 wraps gegebenenfalls in ``logger.error`` + skip.
+    Service context: ``RuntimeError`` instead of ``HTTPException``. Callers
+    in Plan 07-02 / 07-03 wrap it as needed in ``logger.error`` + skip.
     """
     target = os.path.join(vault_root, *parts)
     real_root = os.path.realpath(vault_root)
@@ -118,19 +118,19 @@ def _vault_memory_path(
     agent_slug: str | None = None,
     project_slug: str | None = None,
 ) -> str:
-    """Phase 7 OBS-01: Routing fuer ``BoardMemory``-Eintraege.
+    """Phase 7 OBS-01: routing for ``BoardMemory`` entries.
 
-    Routing-Tabelle (RESEARCH.md "Vault Layout"):
+    Routing table (RESEARCH.md "Vault Layout"):
     - ``entry.agent_id is not None`` → ``memory/agents/{agent_slug}/``
     - ``entry.board_id is not None`` + ``project_slug`` →
       ``memory/projects/{project_slug}/``
-    - ``entry.board_id is not None`` + kein ``project_slug`` →
+    - ``entry.board_id is not None`` + no ``project_slug`` →
       ``memory/projects/_unprojected/{board_id-short}/``
-    - sonst → ``memory/global/``
+    - otherwise → ``memory/global/``
 
     Filename: ``{slugify(title|content[:60]|id-short)}_{id-short}.md``.
-    Plan 07-02 fuellt den Cycle-Body der diese Funktion aufruft + die
-    Markdown-Datei schreibt.
+    Plan 07-02 fills the cycle body that calls this function + writes the
+    Markdown file.
     """
     vault_root = _vault_root()
     entry_id_short = str(entry.id)[:8]
@@ -350,11 +350,11 @@ async def _resolve_project_slug(
 
 
 def _vault_attachment_path(entry, filename: str, category: str = "tasks") -> str:
-    """Phase 7 OBS-03: Routing fuer Attachment-Mirror.
+    """Phase 7 OBS-03: routing for attachment mirroring.
 
-    ``category`` MUSS ``"tasks"`` oder ``"deliverables"`` sein (A2 default in
-    RESEARCH.md = "everything to tasks/"). Plan 07-03 fuellt den Mirror-Body
-    der diese Funktion aufruft und die Datei kopiert / verlinkt.
+    ``category`` MUST be ``"tasks"`` or ``"deliverables"`` (A2 default in
+    RESEARCH.md = "everything to tasks/"). Plan 07-03 fills the mirror body
+    that calls this function and copies / links the file.
     """
     if category not in ("tasks", "deliverables"):
         raise ValueError(f"category must be 'tasks' or 'deliverables', got {category!r}")
@@ -523,7 +523,7 @@ def _rewrite_wikilinks(
 
 
 class ObsidianExportService:
-    """Singleton Background-Loop. Mirror von ``EmbeddingRetryLoop`` /
+    """Singleton background loop. Mirrors ``EmbeddingRetryLoop`` /
     ``IntelligenceService``.
 
     Lifecycle::
@@ -548,9 +548,9 @@ class ObsidianExportService:
         if self._running:
             return
         self._running = True
-        # OBS-01: Layout MUSS spaetestens beim ersten ``.start()`` existieren.
-        # Idempotent — wenn Plan 07-02 Tests den Layout vorher anlegen, ist
-        # das ein no-op.
+        # OBS-01: layout MUST exist by the first ``.start()`` at the latest.
+        # Idempotent — if Plan 07-02 tests create the layout beforehand,
+        # this is a no-op.
         _ensure_vault_layout(_vault_root())
         self._task = asyncio.create_task(self._run_loop())
         logger.info("ObsidianExport started (interval=%ds)", self._interval)
@@ -567,8 +567,8 @@ class ObsidianExportService:
         logger.info("ObsidianExport stopped")
 
     async def _run_loop(self) -> None:
-        # Grace Period — Lifespan haengt sich noch an Qdrant + DB
-        # (Mirror intelligence.py:100 / embedding_retry.py:144 — same 20s
+        # Grace period — lifespan is still hooking into Qdrant + DB
+        # (mirrors intelligence.py:100 / embedding_retry.py:144 — same 20s
         # window).
         await asyncio.sleep(20)
         while self._running:
@@ -578,9 +578,9 @@ class ObsidianExportService:
                 elif await self._acquire_lock():
                     await self.trigger_cycle()
                 else:
-                    # Multi-Worker-Dedup — mirror intelligence.py:117 WARN
-                    # Pattern damit Lock-Contention im Default-Log sichtbar
-                    # ist.
+                    # Multi-worker dedup — mirrors intelligence.py:117 WARN
+                    # pattern so lock contention is visible at the default
+                    # log level.
                     logger.warning("obsidian_export: lock contention, skipping cycle")
             except asyncio.CancelledError:
                 return
@@ -589,11 +589,10 @@ class ObsidianExportService:
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
-        """Redis-Lock damit nur ein Worker pro Zyklus exportiert.
+        """Redis lock so only one worker exports per cycle.
 
-        Mirror von ``intelligence.py:125-134`` — fail-safe to ``True`` wenn
-        Redis nicht erreichbar ist (besser einmal doppelt schreiben als
-        komplett blockieren).
+        Mirrors ``intelligence.py:125-134`` — fail-safe to ``True`` if Redis
+        is unreachable (better to write twice once than block entirely).
         """
         try:
             redis = await get_redis()
@@ -693,6 +692,6 @@ class ObsidianExportService:
         logger.info("ObsidianExport cycle: wrote %d, skipped %d", written, skipped)
 
 
-# Modul-level Singleton — analog zu intelligence.py:720 / embedding_retry.py:293.
-# Lifespan in main.py ruft .start() / .stop() — kein auto-start hier (Pitfall 4).
+# Module-level singleton — analogous to intelligence.py:720 / embedding_retry.py:293.
+# Lifespan in main.py calls .start() / .stop() — no auto-start here (Pitfall 4).
 obsidian_export = ObsidianExportService()

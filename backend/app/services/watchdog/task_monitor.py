@@ -1,11 +1,11 @@
-"""Task Monitor Mixin — Phasen-Completion, Review-/Blocked-/Zombie-Checks, Recovery.
+"""Task Monitor Mixin — phase completion, review/blocked/zombie checks, recovery.
 
-Phase 29 (Gateway-Sunset): alle Gateway-RPC-Notifies durch TaskComment-Writes
-ersetzt (Pattern A aus 29-PATTERNS.md). poll.sh / launchd-host liefern die
-Kommentare via /agent/me/comments aus. Legacy-Queue-Pfade (_recover_aborted_tasks,
-_process_task_queues, _process_pending_dispatches, _check_spawn_timeouts) sind
-entfallen — sie operierten alle auf Gateway-Konzepten (spawn-session-key,
-sessions-list). Stale-task ownership liegt bei task_runner._check_dispatch_ack.
+Phase 29 (Gateway sunset): all Gateway RPC notifies replaced by TaskComment
+writes (Pattern A from 29-PATTERNS.md). poll.sh / launchd-host deliver the
+comments via /agent/me/comments. Legacy queue paths (_recover_aborted_tasks,
+_process_task_queues, _process_pending_dispatches, _check_spawn_timeouts) were
+removed — they all operated on Gateway concepts (spawn-session-key,
+sessions-list). Stale-task ownership lies with task_runner._check_dispatch_ack.
 """
 
 import logging
@@ -26,10 +26,10 @@ logger = logging.getLogger("mc.watchdog")
 
 
 class TaskMonitorMixin:
-    """Task-bezogene Watchdog-Checks."""
+    """Task-related watchdog checks."""
 
     async def _check_phase_completions(self, session: AsyncSession) -> None:
-        """Pruefen ob alle Subtasks einer Phase abgeschlossen sind."""
+        """Check whether all subtasks of a phase are completed."""
         result = await session.exec(
             select(Task).where(
                 Task.status == "in_progress",
@@ -43,7 +43,7 @@ class TaskMonitorMixin:
                 select(Task).where(Task.parent_task_id == parent.id)
             )
             all_subtasks = subtask_result.all()
-            # Phase-Approval-Tasks sind intern und zaehlen nicht als regulaere Phase-Subtasks
+            # Phase-approval tasks are internal and don't count as regular phase subtasks
             subtasks = [s for s in all_subtasks if s.delegation_type != "phase_approval"]
 
             if not subtasks:
@@ -53,8 +53,8 @@ class TaskMonitorMixin:
             if not all_done:
                 continue
 
-            # Idempotenz: Content-Hash des Child-Sets + Status.
-            # Feuert erneut wenn sich der Status aendert (z.B. nach Rejection + Rework).
+            # Idempotency: content hash of the child set + status.
+            # Fires again when status changes (e.g. after rejection + rework).
             import hashlib
             child_fingerprint = hashlib.md5(
                 ",".join(sorted(f"{s.id}:{s.status}" for s in subtasks)).encode()
@@ -63,10 +63,10 @@ class TaskMonitorMixin:
             dedup_key = f"mc:watchdog:phase_done:{parent.id}"
             stored = await redis.get(dedup_key)
             if stored and stored == child_fingerprint:
-                continue  # Gleiches Child-Set, bereits gefeuert (Redis-Cache)
+                continue  # Same child set, already fired (Redis cache)
 
-            # DB-Level Dedup: Redis-restart-proof.
-            # Pruefen ob ein phase_completed Event mit demselben Fingerprint bereits existiert.
+            # DB-level dedup: Redis-restart-proof.
+            # Check whether a phase_completed event with the same fingerprint already exists.
             from app.models.activity import ActivityEvent
             from datetime import timedelta
             recent_cutoff = utcnow() - timedelta(hours=24)
@@ -78,7 +78,7 @@ class TaskMonitorMixin:
                 )
             )
             if existing_evt.first():
-                # Phase-Completion bereits gefeuert (DB-Fallback) — Redis-Key wiederherstellen
+                # Phase completion already fired (DB fallback) — restore Redis key
                 await redis.set(dedup_key, child_fingerprint)
                 continue
 
@@ -103,7 +103,7 @@ class TaskMonitorMixin:
             from app.services.watchdog.core import _create_background_task
             _create_background_task(record_phase_completion(parent.id, [s.id for s in subtasks]))
 
-            # Screenshots aus Children an Telegram senden
+            # Send screenshots from children to Telegram
             requirements = (parent.report_back_requirements or "").lower()
             if "screenshot" in requirements or "visual" in requirements or "before_after" in requirements:
                 _parent_id = parent.id
@@ -112,23 +112,23 @@ class TaskMonitorMixin:
                     self._send_phase_screenshots_bg(_parent_id, _child_ids)
                 )
 
-            # Phase-Approval: statt direkt review + Rex-Handoff wird ein Phase-Approval-Task
-            # fuer den Board Lead (Boss) angelegt. Boss entscheidet: approved (→ Parent review
-            # → Operator) oder rewrite (→ Subtasks re-open). Fallback auf Rex-Handoff wenn kein
-            # Board Lead existiert.
+            # Phase approval: instead of going straight to review + Rex handoff, a phase-approval
+            # task is created for the Board Lead (Boss). Boss decides: approved (→ parent review
+            # → operator) or rewrite (→ subtasks re-open). Falls back to Rex handoff if no
+            # Board Lead exists.
             if parent.status == "in_progress":
-                # Idempotenz-Schutz: Phase wurde bereits approved UND das aktuelle
-                # Child-Set ist genau das was approved wurde. Skip Re-Creation —
-                # der stuck_orchestrator_close-Pfad nudged stattdessen Boss zum Close.
+                # Idempotency guard: phase was already approved AND the current
+                # child set is exactly what was approved. Skip re-creation —
+                # the stuck_orchestrator_close path nudges Boss to close instead.
                 #
-                # Wichtig fuer Rewrite-Pfad-Korrektheit:
-                # Wenn Boss `phase_rewrite_request` gemacht hat und Worker die
-                # Subtasks neu bearbeitet haben, ist das aktuelle Child-Set NICHT
-                # mehr das was approved wurde. Dann muss ein neuer Approval
-                # erstellt werden (Fingerprint-unverändert heisst: subtasks-IDs
-                # + status unverändert seit approval; wenn rewrite passiert hat
-                # sich der status zwischendurch auf inbox gedreht + wieder done
-                # → letzter subtask.updated_at > approval.completed_at).
+                # Important for rewrite-path correctness:
+                # If Boss issued a `phase_rewrite_request` and workers
+                # reworked the subtasks, the current child set is NOT
+                # what was approved anymore. In that case a new approval
+                # must be created (fingerprint-unchanged means: subtask IDs
+                # + status unchanged since approval; if a rewrite happened,
+                # the status flipped to inbox in between and back to done
+                # → latest subtask.updated_at > approval.completed_at).
                 latest_done_approval = (await session.exec(
                     select(Task)
                     .where(
@@ -148,7 +148,7 @@ class TaskMonitorMixin:
                 )).first()
 
                 if latest_done_approval is not None and open_approval_exists is None:
-                    # Prüfe: wurde EIN subtask NACH dem approval modifiziert?
+                    # Check: was ANY subtask modified AFTER the approval?
                     approval_done_at = latest_done_approval.completed_at or latest_done_approval.updated_at
                     latest_subtask_mod = max(
                         (s.updated_at for s in subtasks if s.updated_at is not None),
@@ -166,10 +166,10 @@ class TaskMonitorMixin:
                         )
                         await redis.set(dedup_key, child_fingerprint)
                         continue
-                    # else: child-set changed (z.B. rewrite) → lass durchlaufen,
-                    # `_existing_phase_approval_for_parent` im create-call regelt Idempotenz
+                    # else: child set changed (e.g. rewrite) → let it fall through,
+                    # `_existing_phase_approval_for_parent` in the create call handles idempotency
 
-                # Board Lead finden
+                # Find Board Lead
                 bl_result = await session.exec(
                     select(Agent).where(
                         Agent.board_id == parent.board_id,
@@ -193,7 +193,7 @@ class TaskMonitorMixin:
                         )
                         await self._redispatch_parent_to_lead(session, parent, subtasks)
                 else:
-                    # Kein Board Lead → legacy Rex-Handoff
+                    # No Board Lead → legacy Rex handoff
                     logger.warning(
                         "Phase complete but no Board Lead on board %s — fallback to Rex handoff",
                         parent.board_id,
@@ -209,12 +209,12 @@ class TaskMonitorMixin:
                         logger.warning("Fallback review handoff failed: %s", e)
                         await self._redispatch_parent_to_lead(session, parent, subtasks)
 
-            # Dedup mit Fingerprint — bleibt permanent bis Child-Set sich aendert
+            # Dedup with fingerprint — stays permanent until child set changes
             await redis.set(dedup_key, child_fingerprint)
 
-            # Auto-Advance: naechste Phase NUR starten wenn aktuelle Phase WIRKLICH
-            # abgeschlossen ist (done). Nicht bei review/user_test — dort laeuft
-            # noch das Review-/Test-Gate.
+            # Auto-advance: only start the next phase if the current phase is REALLY
+            # complete (done). Not for review/user_test — the review/test gate
+            # is still running there.
             if parent.status == "done":
                 await self._auto_advance_next_phase(session, parent)
 
@@ -224,10 +224,10 @@ class TaskMonitorMixin:
     async def _send_phase_screenshots_bg(
         self, parent_id: "uuid.UUID", child_ids: list["uuid.UUID"]
     ) -> None:
-        """Screenshot-Artefakte aus Children an Telegram senden.
+        """Send screenshot artifacts from children to Telegram.
 
-        Laeuft als Background-Task mit eigener DB-Session (Watchdog-Session
-        ist zu diesem Zeitpunkt moeglicherweise schon geschlossen).
+        Runs as a background task with its own DB session (the watchdog
+        session may already be closed by this point).
         """
         import re
         import uuid
@@ -247,7 +247,7 @@ class TaskMonitorMixin:
                 parent_title = parent.title[:60]
 
                 sent = 0
-                seen_paths: set[str] = set()  # Deduplizieren: gleicher Pfad nur 1x senden
+                seen_paths: set[str] = set()  # Deduplicate: send the same path only once
                 for child_id in child_ids:
                     child = await session.get(Task, child_id)
                     if not child:
@@ -288,35 +288,35 @@ class TaskMonitorMixin:
             logger.warning("Phase screenshots failed: %s", e)
 
     async def _check_stuck_orchestrator_close(self, session: AsyncSession) -> None:
-        """Safety-Net + Auto-Close fuer stuck Parents nach phase_approved.
+        """Safety net + auto-close for stuck parents after phase_approved.
 
-        Problem (2026-04-22 Live-Tests x3): Auf Trust-by-Default-Boards bleibt
-        der Parent nach `phase_approved` auf `in_progress` bis der Orchestrator
-        `mc done` ruft. Wenn er das vergisst oder verwechselt Task-IDs (PATCH
-        auf Subtask statt Parent), haengt der Task dauerhaft.
+        Problem (2026-04-22 live tests x3): On trust-by-default boards, the
+        parent stays `in_progress` after `phase_approved` until the orchestrator
+        calls `mc done`. If it forgets or confuses task IDs (PATCH
+        on subtask instead of parent), the task hangs permanently.
 
-        Zweistufiger Safety-Net:
-        1. **Nudge-Phase** (ab 3 min nach updated_at): Active re-reminder via
-           System-Comment (poll.sh) ODER RPC. Max 2 Nudges im Abstand von 3 min.
-        2. **Auto-Close-Phase** (nach 2 ergebnislosen Nudges ~= 6 min): Backend
-           setzt Parent direkt auf `review`. Event + Operator-Notification. Danach
-           kann der Operator manuell `done` setzen wenn Output ok ist.
+        Two-stage safety net:
+        1. **Nudge phase** (starting 3 min after updated_at): active re-reminder via
+           system comment (poll.sh) OR RPC. Max 2 nudges, 3 min apart.
+        2. **Auto-close phase** (after 2 unresolved nudges ~= 6 min): backend
+           sets the parent directly to `review`. Event + operator notification. After
+           that, the operator can manually set `done` if the output is ok.
 
-        Bedingungen (jetzt liberaler als PR #59):
-        - Root-Task (parent_task_id IS NULL), status=in_progress
-        - Mindestens 1 Subtask mit delegation_type=phase_approval + status=done
-        - Alle non-approval Subtasks done, kein OPEN approval (keine Race mit
-          laufender nochmaliger Phase-Approval)
+        Conditions (now more liberal than PR #59):
+        - Root task (parent_task_id IS NULL), status=in_progress
+        - At least 1 subtask with delegation_type=phase_approval + status=done
+        - All non-approval subtasks done, no OPEN approval (no race with
+          a currently running repeat phase approval)
         - updated_at > 3 min ago
 
-        Entfernte Filter (waren zu eng):
-        - `report_back_required=True` — vorher wurden normale Tasks ohne
-          Telegram-Hard-Gate ignoriert. Jetzt: alle stuck Parents.
-        - Lead-Runtime-Filter (Phase 29-30, Gateway-Sunset) — vorher wurden
-          Host-Runtime-Leads (Boss) geskipped. Jetzt: alle Lead-Typen werden
-          ge-nudged (System-Comment-basiert, runtime-agnostisch).
+        Removed filters (were too narrow):
+        - `report_back_required=True` — previously, normal tasks without
+          a Telegram hard gate were ignored. Now: all stuck parents.
+        - Lead runtime filter (Phase 29-30, Gateway sunset) — previously
+          host-runtime leads (Boss) were skipped. Now: all lead types get
+          nudged (system-comment-based, runtime-agnostic).
 
-        Idempotenz: Redis-Counter mc:watchdog:stuck_orch_close_count:{id} (TTL 1h).
+        Idempotency: Redis counter mc:watchdog:stuck_orch_close_count:{id} (TTL 1h).
         """
         cutoff = utcnow() - timedelta(minutes=3)
         result = await session.exec(
@@ -347,9 +347,9 @@ class TaskMonitorMixin:
             if not approval_done:
                 continue
 
-            # Wenn NEBEN dem done-Approval ein OFFENER Approval existiert
-            # (inbox/in_progress/review), ist Boss in einer neuen Phase — skip
-            # damit wir nicht parallel zu einem laufenden Approval nudgen.
+            # If there's an OPEN approval ALONGSIDE the done approval
+            # (inbox/in_progress/review), Boss is in a new phase — skip
+            # so we don't nudge in parallel to a running approval.
             open_approval = [
                 s for s in subtasks
                 if s.delegation_type == "phase_approval"
@@ -362,19 +362,19 @@ class TaskMonitorMixin:
             if non_approval and not all(s.status == "done" for s in non_approval):
                 continue
 
-            # Nudge-Counter: wie oft haben wir diesen Parent schon angestupst?
+            # Nudge counter: how many times have we already nudged this parent?
             count_key = f"mc:watchdog:stuck_orch_close_count:{parent.id}"
             try:
                 nudge_count = int(await redis.get(count_key) or 0)
             except Exception:
                 nudge_count = 0
 
-            # Dedup-Key pro Nudge-Iteration (verhindert 2 Nudges im selben Watchdog-Loop)
+            # Dedup key per nudge iteration (prevents 2 nudges in the same watchdog loop)
             dedup_key = f"mc:watchdog:stuck_orch_close:{parent.id}"
             if await redis.get(dedup_key):
                 continue
 
-            # Board Lead (Orchestrator) finden
+            # Find Board Lead (orchestrator)
             bl_result = await session.exec(
                 select(Agent).where(
                     Agent.board_id == parent.board_id,
@@ -385,10 +385,10 @@ class TaskMonitorMixin:
             if not lead:
                 continue
 
-            # ── Auto-Close nach 2 ergebnislosen Nudges ──
-            # Logik: 1. Nudge bei iter 1 (t=3min), 2. Nudge bei iter 2 (t=6min).
-            # Wenn wir jetzt bei count=2 sind und der Parent IMMER NOCH stuck ist,
-            # schliessen wir automatisch ab (review). Der Operator entscheidet final (done).
+            # ── Auto-close after 2 unresolved nudges ──
+            # Logic: 1st nudge at iter 1 (t=3min), 2nd nudge at iter 2 (t=6min).
+            # If we're now at count=2 and the parent is STILL stuck,
+            # we auto-close (review). The operator makes the final decision (done).
             if nudge_count >= 2:
                 logger.warning(
                     "Auto-close stuck parent '%s' (id=%s): %d nudges ohne Reaktion",
@@ -413,21 +413,21 @@ class TaskMonitorMixin:
                 except Exception as e:
                     logger.debug("auto_closed_stuck event emit failed: %s", e)
 
-                # Operator via Reports-Bot informieren (idempotent via escalation key)
+                # Notify operator via reports bot (idempotent via escalation key)
                 try:
                     from app.services.task_lifecycle import _escalate_orch_close_to_mark
                     await _escalate_orch_close_to_mark(parent, lead, nudge_count)
                 except Exception as e:
                     logger.warning("Auto-close mark notification failed: %s", e)
 
-                # Counter resetten — auto-close hat den Zyklus beendet.
+                # Reset counter — auto-close ended the cycle.
                 try:
                     await redis.delete(count_key)
                 except Exception:
                     pass
                 continue
 
-            # ── Sonst: normaler Nudge ──
+            # ── Otherwise: normal nudge ──
             try:
                 from app.services.task_lifecycle import send_orchestrator_close_nudge
                 nudged = await send_orchestrator_close_nudge(
@@ -443,7 +443,7 @@ class TaskMonitorMixin:
             if not nudged:
                 continue
 
-            # Counter increment (TTL 1h — Parent sollte lange vorher abgeschlossen sein)
+            # Counter increment (TTL 1h — parent should be completed long before that)
             try:
                 new_count = int(await redis.incr(count_key))
                 if new_count == 1:
@@ -451,7 +451,7 @@ class TaskMonitorMixin:
             except Exception:
                 new_count = nudge_count + 1
 
-            await redis.set(dedup_key, "1", ex=180)  # 3 min — passt zu Watchdog-Interval
+            await redis.set(dedup_key, "1", ex=180)  # 3 min — matches watchdog interval
             try:
                 await emit_event(
                     session,
@@ -469,15 +469,15 @@ class TaskMonitorMixin:
     async def _redispatch_parent_to_lead(
         self, session: AsyncSession, parent_task: Task, subtasks: list[Task]
     ) -> None:
-        """Board Lead strukturiert benachrichtigen: alle Subtasks done, Entscheidung noetig.
+        """Notify Board Lead in a structured way: all subtasks done, decision needed.
 
-        Phase 29: gateway-agent-id gate entfaellt. Lead per is_board_lead flag
-        suchen; Notify per TaskComment (poll.sh / launchd-host liefern aus).
+        Phase 29: gateway-agent-id gate removed. Find lead via is_board_lead flag;
+        notify via TaskComment (poll.sh / launchd-host deliver it).
         """
         if not parent_task.board_id:
             return
 
-        # Lead finden (assigned Agent oder Board Lead)
+        # Find lead (assigned agent or Board Lead)
         lead = None
         if parent_task.assigned_agent_id:
             lead = await session.get(Agent, parent_task.assigned_agent_id)
@@ -493,14 +493,14 @@ class TaskMonitorMixin:
         if not lead:
             return
 
-        # Subtask-Zusammenfassung + Evidence bauen
+        # Build subtask summary + evidence
         subtask_lines = []
         evidence_lines = []
         for s in subtasks:
             agent = await session.get(Agent, s.assigned_agent_id) if s.assigned_agent_id else None
             agent_name = agent.name if agent else "unbekannt"
             subtask_lines.append(f"  - {s.title} ({agent_name}, {s.status})")
-            # Evidence aus Resolution/Review-Kommentaren sammeln
+            # Collect evidence from resolution/review comments
             last_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
@@ -516,9 +516,9 @@ class TaskMonitorMixin:
         subtask_summary = "\n".join(subtask_lines)
         evidence_text = "\n\n".join(evidence_lines) if evidence_lines else "(Keine Evidence)"
 
-        # Report-Back wird NICHT mehr vom Lead erledigt — der ausfuehrende Agent
-        # muss `mc telegram` vor `mc done` selbst senden (Hard-Gate in agent_scoped.py).
-        # Lead bekommt nur die Completion-Info.
+        # Report-back is NO LONGER handled by the lead — the executing agent
+        # must send `mc telegram` before `mc done` itself (hard gate in agent_scoped.py).
+        # Lead only gets the completion info.
         report_back_hint = ""
         if parent_task.report_back_required:
             report_back_hint = (
@@ -539,17 +539,17 @@ class TaskMonitorMixin:
             f"2. **Weitere Subtasks erstellen**\n"
         )
 
-        # TaskComment als runtime-agnostische Delivery (Pattern A 29-PATTERNS.md)
+        # TaskComment as runtime-agnostic delivery (Pattern A 29-PATTERNS.md)
         session.add(TaskComment(
             task_id=parent_task.id,
             author_type="system",
             content=message,
             comment_type="watchdog_notify",
         ))
-        # dispatched_at setzen damit _check_undispatched_tasks den Root
-        # nicht nochmal dispatched (Race-Prevention).
-        # dispatch_attempt_id zuruecksetzen: Board Lead arbeitet in der
-        # Haupt-Session ohne Attempt-Header.
+        # Set dispatched_at so _check_undispatched_tasks doesn't dispatch
+        # the root again (race prevention).
+        # Reset dispatch_attempt_id: Board Lead works in the
+        # main session without an attempt header.
         parent_task.dispatched_at = utcnow()
         session.add(parent_task)
         await session.commit()
@@ -561,12 +561,12 @@ class TaskMonitorMixin:
             reason="parent_redispatched_to_board_lead",
         )
 
-        # Fallback-Timer entfernt (2026-04-22): der ausfuehrende Agent sendet jetzt
-        # direkt via `mc telegram` vor `mc done` (Hard-Gate erzwingt das).
-        # Auto-Draft bei failed uebernimmt Failure-Case.
+        # Fallback timer removed (2026-04-22): the executing agent now sends
+        # directly via `mc telegram` before `mc done` (hard gate enforces this).
+        # Auto-draft on failed handles the failure case.
 
     async def _update_project_progress(self, session: AsyncSession, project_id: uuid.UUID) -> None:
-        """progress_pct aktualisieren basierend auf erledigten Subtasks."""
+        """Update progress_pct based on completed subtasks."""
         from app.models.board import Project
         project = await session.get(Project, project_id)
         if not project:
@@ -591,7 +591,7 @@ class TaskMonitorMixin:
         await self._check_project_completion(session, project)
 
     async def _check_project_completion(self, session: AsyncSession, project) -> None:
-        """Pruefen ob alle Phasen eines Projekts abgeschlossen sind → Status review."""
+        """Check whether all phases of a project are complete → status review."""
         if project.status not in ("active", "planning"):
             return
 
@@ -620,7 +620,7 @@ class TaskMonitorMixin:
             logger.info("Project '%s' moved to review (all phases done)", project.name)
 
     async def _auto_advance_next_phase(self, session: AsyncSession, completed_parent: Task) -> None:
-        """Naechste Phase automatisch starten wenn vorherige done ist."""
+        """Automatically start the next phase when the previous one is done."""
         if not completed_parent.project_id:
             return
 
@@ -656,7 +656,7 @@ class TaskMonitorMixin:
             board_id=next_phase.board_id, task_id=next_phase.id,
         )
 
-        # Subtasks der neuen Phase dispatchen (immer bei Auto-Advance)
+        # Dispatch subtasks of the new phase (always on auto-advance)
         subtask_result = await session.exec(
             select(Task).where(
                 Task.parent_task_id == next_phase.id,
@@ -671,18 +671,18 @@ class TaskMonitorMixin:
                 if await dependencies_met(session, subtask):
                     _create_background_task(auto_dispatch_task(subtask.id, next_phase.board_id))
 
-    # Phase 29: _recover_aborted_tasks entfernt — operierte auf
-    # has_session-Check (Gateway sessions-list) und Gateway-RPC chat-send.
-    # Stale/aborted Tasks werden jetzt ueber task_runner._check_dispatch_ack
-    # und _recover_orphaned_tasks (heartbeat-basiert) abgefangen.
+    # Phase 29: _recover_aborted_tasks removed — operated on
+    # has_session check (Gateway sessions-list) and Gateway RPC chat-send.
+    # Stale/aborted tasks are now caught via task_runner._check_dispatch_ack
+    # and _recover_orphaned_tasks (heartbeat-based).
 
-    # Phase 29: _process_task_queues + _process_pending_dispatches entfernt —
-    # beide waren gateway-only (queue_length, sessions-list, Gateway-RPC).
-    # CLI-bridge agents haben ihre eigene poll.sh-Queue; Re-dispatch laeuft
-    # ueber dispatch.auto_dispatch_task (runtime-aware).
+    # Phase 29: _process_task_queues + _process_pending_dispatches removed —
+    # both were gateway-only (queue_length, sessions-list, Gateway RPC).
+    # CLI-bridge agents have their own poll.sh queue; re-dispatch runs
+    # via dispatch.auto_dispatch_task (runtime-aware).
 
     async def _check_blocked_tasks(self, session: AsyncSession) -> None:
-        """Safety-Net: Blocked-Tasks pruefen. Wenn Approval existiert → Operator erinnern, sonst Lead."""
+        """Safety net: check blocked tasks. If an approval exists → remind operator, otherwise lead."""
         from app.models.approval import Approval
 
         result = await session.exec(
@@ -700,24 +700,24 @@ class TaskMonitorMixin:
             if not task.board_id or not task.updated_at:
                 continue
 
-            # Grace Period: 30 Minuten
+            # Grace period: 30 minutes
             age_minutes = (now - task.updated_at).total_seconds() / 60
             if age_minutes < 30:
                 continue
 
-            # Redis-Dedup: nur alle 2h erinnern
+            # Redis dedup: only remind every 2h
             dedup_key = f"mc:watchdog:blocked_remind:{task.id}"
             if await redis.get(dedup_key):
                 continue
 
-            # Agent-Name holen
+            # Get agent name
             assigned_name = "unbekannt"
             if task.assigned_agent_id:
                 assigned_agent = await session.get(Agent, task.assigned_agent_id)
                 if assigned_agent:
                     assigned_name = assigned_agent.name
 
-            # Pruefen ob blocker_decision Approval existiert
+            # Check whether a blocker_decision approval exists
             pending_approval = (await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
@@ -727,7 +727,7 @@ class TaskMonitorMixin:
             )).first()
 
             if pending_approval:
-                # Approval existiert → Operator sieht es im Inbox, nur loggen
+                # Approval exists → operator sees it in the inbox, just log
                 await redis.set(dedup_key, "1", ex=7200)  # 2h TTL
                 await emit_event(
                     session, "task.blocked_reminder",
@@ -736,7 +736,7 @@ class TaskMonitorMixin:
                 )
                 logger.info("Blocked reminder (approval pending) for '%s' (%dmin)", task.title, int(age_minutes))
             else:
-                # Kein Approval (Altlast?) → Lead via TaskComment erinnern
+                # No approval (legacy?) → remind lead via TaskComment
                 lead_result = await session.exec(
                     select(Agent).where(
                         Agent.board_id == task.board_id,
@@ -753,7 +753,7 @@ class TaskMonitorMixin:
                     f"Task-ID: {task.id}\n"
                     f"Bitte pruefen und Blocker loesen."
                 )
-                # Pattern A (29-PATTERNS.md): TaskComment-Notify ersetzt Gateway-RPC.
+                # Pattern A (29-PATTERNS.md): TaskComment notify replaces Gateway RPC.
                 session.add(TaskComment(
                     task_id=task.id,
                     author_type="system",
@@ -771,13 +771,13 @@ class TaskMonitorMixin:
                 logger.info("Blocked reminder posted for '%s' (%dmin)", task.title, int(age_minutes))
 
     async def _check_dependency_zombies(self, session: AsyncSession) -> None:
-        """Tasks finden die auf impossible Dependencies warten (Zombie-Praevention).
+        """Find tasks waiting on impossible dependencies (zombie prevention).
 
-        Ein Task ist ein Zombie wenn er inbox/in_progress ist und eine Dependency
-        in einem terminalen Fehl-Status steht (failed, blocked). Diese Dependency
-        wird nie done → Task wartet ewig.
+        A task is a zombie if it is inbox/in_progress and a dependency
+        is in a terminal failure status (failed, blocked). That dependency
+        will never become done → the task waits forever.
 
-        Aktion: Approval erstellen damit der Operator die Dependency aufloesen kann.
+        Action: create an approval so the operator can resolve the dependency.
         """
         from app.models.approval import Approval
         from app.models.task import TaskDependency
@@ -792,26 +792,26 @@ class TaskMonitorMixin:
         redis = await get_redis()
 
         for dep in all_deps:
-            # Nur pruefen wenn der abhaengige Task noch aktiv wartet
+            # Only check if the dependent task is still actively waiting
             task = await session.get(Task, dep.task_id)
             if not task or task.status not in ("inbox", "in_progress"):
                 continue
 
-            # Dependency-Task pruefen
+            # Check dependency task
             dep_task = await session.get(Task, dep.depends_on_task_id)
             if not dep_task or dep_task.status not in ("failed", "blocked"):
                 continue
 
-            # Approval braucht agent_id — skip wenn Task keinem Agent zugewiesen
+            # Approval needs agent_id — skip if task isn't assigned to an agent
             if not task.assigned_agent_id:
                 continue
 
-            # Dedup: nur einmal pro Dependency-Paar
+            # Dedup: only once per dependency pair
             dedup_key = RedisKeys.recovery_attempt(str(task.id), "dependency_zombie")
             if await redis.get(dedup_key):
                 continue
 
-            # Pruefen ob schon ein Approval existiert
+            # Check whether an approval already exists
             existing = (await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
@@ -849,23 +849,23 @@ class TaskMonitorMixin:
             )
 
     async def _check_review_tasks(self, session: AsyncSession) -> None:
-        """Review-Tasks ueberwachen: Timeout-Eskalation + Decision-Missing-Nudge.
+        """Monitor review tasks: timeout escalation + decision-missing nudge.
 
-        Timeout-Eskalation (bestehend, mit HOLD-Ausnahme):
-        1. 60 Min ohne Update → Reviewer nudgen (RPC Push)
-        2. 120 Min → Lead informieren
-        3. 180 Min → Approval erstellen fuer den Operator
+        Timeout escalation (existing, with HOLD exception):
+        1. 60 min without update → nudge reviewer (RPC push)
+        2. 120 min → notify lead
+        3. 180 min → create approval for the operator
 
-        Decision-Missing (neu):
-        Reviewer hat kommentiert aber keine Entscheidung getroffen → nach 15 Min nudgen.
+        Decision-missing (new):
+        Reviewer commented but made no decision → nudge after 15 min.
         """
         from app.models.task import TaskComment
         from app.models.board import Board
         from sqlalchemy import func
 
-        # Archivierte Boards sind weggeraeumt — ihre Tasks duerfen nie eskalieren.
-        # Sonst haengt z.B. ein Demo-Seed-Review-Task (kein Reviewer, Board danach
-        # archiviert) fuer immer >180min und feuert alle 2h eine Discord-Warnung.
+        # Archived boards are cleaned up — their tasks must never escalate.
+        # Otherwise e.g. a demo-seed review task (no reviewer, board later
+        # archived) would hang forever at >180min and fire a Discord warning every 2h.
         result = await session.exec(
             select(Task)
             .join(Board, Board.id == Task.board_id)
@@ -883,24 +883,24 @@ class TaskMonitorMixin:
             if not task.board_id or not task.updated_at:
                 continue
 
-            # ── HOLD-Ausnahme: bewusst angehalten → komplette Eskalation ueberspringen ──
+            # ── HOLD exception: deliberately paused → skip escalation entirely ──
             if task.review_decision == "hold":
                 continue
 
-            # ── Operativ gestoppte Tasks nicht eskalieren ──
+            # ── Don't escalate operationally stopped tasks ──
             if task.run_control in ("stopped", "manual_hold"):
                 continue
 
-            # ── Decision-Missing Check ──────────────────────────────────────
-            # Wenn Entscheidung fehlt und Reviewer schon kommentiert hat
+            # ── Decision-missing check ──────────────────────────────────────
+            # If decision is missing and reviewer has already commented
             if task.review_decision is None and task.assigned_agent_id:
                 await self._check_review_decision_missing(
                     session, task, now, redis,
                 )
 
-            # ── Bestehende Timeout-Eskalation ──────────────────────────────
-            # Nur wenn noch keine Entscheidung getroffen (approved/changes_requested
-            # bedeutet Task sollte nicht mehr in review sein → Inkonsistenz, ignorieren)
+            # ── Existing timeout escalation ──────────────────────────────
+            # Only if no decision has been made yet (approved/changes_requested
+            # means the task shouldn't be in review anymore → inconsistency, ignore)
             if task.review_decision in ("approved", "changes_requested"):
                 continue
 
@@ -908,7 +908,7 @@ class TaskMonitorMixin:
             if age_minutes < 60:
                 continue
 
-            # Dedup Key pro Eskalationsstufe
+            # Dedup key per escalation level
             if age_minutes >= 180:
                 escalation_level = "approval"
             elif age_minutes >= 120:
@@ -920,7 +920,7 @@ class TaskMonitorMixin:
             if await redis.get(dedup_key):
                 continue
 
-            # Reviewer-Agent holen
+            # Get reviewer agent
             reviewer_name = "unbekannt"
             reviewer_agent = None
             if task.assigned_agent_id:
@@ -929,7 +929,7 @@ class TaskMonitorMixin:
                     reviewer_name = reviewer_agent.name
 
             if escalation_level == "nudge":
-                # Stufe 1: Reviewer nudgen via TaskComment (Pattern A 29-PATTERNS.md)
+                # Level 1: nudge reviewer via TaskComment (Pattern A 29-PATTERNS.md)
                 if reviewer_agent:
                     msg = (
                         f"REVIEW-REMINDER: Task \"{task.title}\" wartet seit "
@@ -957,7 +957,7 @@ class TaskMonitorMixin:
                 logger.info("Review nudge posted for '%s' (%dmin)", task.title, int(age_minutes))
 
             elif escalation_level == "lead":
-                # Stufe 2: Lead informieren via TaskComment
+                # Level 2: notify lead via TaskComment
                 lead_result = await session.exec(
                     select(Agent).where(
                         Agent.board_id == task.board_id,
@@ -990,7 +990,7 @@ class TaskMonitorMixin:
                 logger.info("Review escalation to lead posted for '%s' (%dmin)", task.title, int(age_minutes))
 
             elif escalation_level == "approval":
-                # Stufe 3: Approval fuer den Operator erstellen
+                # Level 3: create approval for the operator
                 from app.models.approval import Approval
                 from datetime import timedelta
 
@@ -1033,20 +1033,20 @@ class TaskMonitorMixin:
         now,
         redis,
     ) -> None:
-        """Reviewer hat kommentiert aber keine Entscheidung getroffen → Nudge nach 15 Min.
+        """Reviewer commented but made no decision → nudge after 15 min.
 
-        6 Bedingungen gegen False Positives:
-        1. Task ist in review (Caller prueft)
-        2. review_decision is None (Caller prueft)
-        3. run_control nicht stopped/manual_hold (Caller prueft)
-        4. Reviewer hat kommentiert
-        5. Kommentar > 15 Min alt
-        6. Kein Operator-Kommentar danach
+        6 conditions to guard against false positives:
+        1. Task is in review (caller checks)
+        2. review_decision is None (caller checks)
+        3. run_control not stopped/manual_hold (caller checks)
+        4. Reviewer has commented
+        5. Comment > 15 min old
+        6. No operator comment afterward
         """
         from app.models.task import TaskComment
         from sqlalchemy import func
 
-        # 4. Reviewer hat kommentiert?
+        # 4. Has the reviewer commented?
         reviewer_comments = await session.exec(
             select(TaskComment)
             .where(
@@ -1058,14 +1058,14 @@ class TaskMonitorMixin:
         )
         last_reviewer_comment = reviewer_comments.first()
         if not last_reviewer_comment:
-            return  # Reviewer hat noch nicht kommentiert → normaler Timeout greift
+            return  # Reviewer hasn't commented yet → normal timeout applies
 
-        # 5. Letzter Reviewer-Kommentar > 15 Min alt?
+        # 5. Is the last reviewer comment > 15 min old?
         comment_age_min = (now - last_reviewer_comment.created_at).total_seconds() / 60
         if comment_age_min < 15:
-            return  # Reviewer war gerade erst aktiv
+            return  # Reviewer was just active
 
-        # 6. Nach dem Reviewer-Kommentar gab es KEINEN Operator-Kommentar?
+        # 6. Was there NO operator comment after the reviewer comment?
         operator_after = await session.exec(
             select(func.count()).select_from(TaskComment).where(
                 TaskComment.task_id == task.id,
@@ -1074,14 +1074,14 @@ class TaskMonitorMixin:
             )
         )
         if operator_after.one() > 0:
-            return  # Operator ist aktiv involviert
+            return  # Operator is actively involved
 
-        # ── Alle Bedingungen erfuellt → Nudge ──────────────
+        # ── All conditions met → nudge ──────────────
         dedup_key = f"mc:watchdog:review_decision_missing:{task.id}"
         if await redis.get(dedup_key):
-            return  # Bereits genudged, Cooldown laeuft
+            return  # Already nudged, cooldown running
 
-        # Reviewer via TaskComment nudgen (Pattern A 29-PATTERNS.md)
+        # Nudge reviewer via TaskComment (Pattern A 29-PATTERNS.md)
         reviewer_agent = await session.get(Agent, task.assigned_agent_id)
         if reviewer_agent:
             review_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}/review"
@@ -1101,7 +1101,7 @@ class TaskMonitorMixin:
             ))
             await session.commit()
 
-        await redis.set(dedup_key, "1", ex=1800)  # 30 Min Cooldown
+        await redis.set(dedup_key, "1", ex=1800)  # 30 min cooldown
 
         await emit_event(
             session, "task.review_decision_missing",
@@ -1115,18 +1115,18 @@ class TaskMonitorMixin:
         )
 
     async def _check_undispatched_tasks(self, session: AsyncSession) -> None:
-        """Tasks finden die assigned aber nie dispatcht wurden und nachdispatchen.
+        """Find tasks that are assigned but were never dispatched, and re-dispatch them.
 
-        WICHTIG: Respektiert dispatch_phase Gate — Tasks in "planning" werden
-        NICHT hier dispatcht, sondern nur via Promote-Orchestrator oder manuelles Promote.
+        IMPORTANT: Respects the dispatch_phase gate — tasks in "planning" are
+        NOT dispatched here, only via the promote orchestrator or manual promote.
 
-        Phase 29: Gateway-Branch entfernt. CLI-bridge Pfad bleibt; andere Runtimes
-        (host) werden ueber dispatch.auto_dispatch_task abgewickelt (siehe TODO unten).
+        Phase 29: Gateway branch removed. CLI-bridge path remains; other runtimes
+        (host) are handled via dispatch.auto_dispatch_task (see TODO below).
         """
         from app.services.dispatch import _build_dispatch_message
 
-        # Grace: Tasks die in den letzten 5s erstellt/promoted wurden nicht anfassen.
-        # Verhindert Race mit auto_dispatch_task (Background-Task nach Promote).
+        # Grace: don't touch tasks created/promoted in the last 5s.
+        # Prevents a race with auto_dispatch_task (background task after promote).
         grace_cutoff = utcnow() - timedelta(seconds=5)
         result = await session.exec(
             select(Task).where(
@@ -1134,7 +1134,7 @@ class TaskMonitorMixin:
                 Task.dispatched_at.is_(None),  # type: ignore[arg-type]
                 Task.status.in_(["inbox", "in_progress"]),  # type: ignore[arg-type]
                 Task.updated_at < grace_cutoff,  # type: ignore[operator]
-                # Planning-Gate: Tasks in planning-Phase NICHT hier dispatchen
+                # Planning gate: do NOT dispatch tasks in the planning phase here
                 or_(
                     Task.dispatch_phase.is_(None),  # type: ignore[union-attr]
                     Task.dispatch_phase == "ready",
@@ -1160,13 +1160,13 @@ class TaskMonitorMixin:
 
             agent_runtime = getattr(agent, "agent_runtime", "openclaw")
 
-            # CLI-Bridge Agents: eigener Dispatch-Pfad via Bridge
+            # CLI-bridge agents: own dispatch path via bridge
             if agent_runtime in ("free-code-bridge", "cli-bridge"):
-                # Busy-Check analog zu auto_dispatch_task: cli-bridge/host haben
-                # keine isolierten Sessions — wenn Agent schon einen Task dispatched
-                # oder in_progress hat, NICHT ueberschreiben. Sonst /clear → Context-Loss.
-                # (Bug 8 vom 2026-04-22: Undispatched-Recovery umging den Push-Dispatch
-                # Busy-Check und lieferte Task B aus obwohl Task A noch nicht ack'd war.)
+                # Busy check analogous to auto_dispatch_task: cli-bridge/host have
+                # no isolated sessions — if the agent already has a task dispatched
+                # or in_progress, DO NOT overwrite. Otherwise /clear → context loss.
+                # (Bug 8 from 2026-04-22: undispatched recovery bypassed the push-dispatch
+                # busy check and delivered task B even though task A wasn't acked yet.)
                 existing_busy = await session.exec(
                     select(Task).where(
                         Task.assigned_agent_id == agent.id,
@@ -1182,7 +1182,7 @@ class TaskMonitorMixin:
                         "Undispatched recovery skipped (CLI bridge busy): '%s' -> %s",
                         task.title, agent.name,
                     )
-                    dispatched_agents.add(agent.id)  # Einmal pro Agent pro Tick
+                    dispatched_agents.add(agent.id)  # Once per agent per tick
                     continue
 
                 try:
@@ -1203,8 +1203,8 @@ class TaskMonitorMixin:
                 continue
 
             # Phase 29: host/manual/claude-code etc. — delegate to auto_dispatch_task
-            # (runtime-aware path). Gateway-Branch (chat-send / chat-send-isolated /
-            # spawn-session-key) wurde entfernt. Tests vorhanden in dispatch suite.
+            # (runtime-aware path). Gateway branch (chat-send / chat-send-isolated /
+            # spawn-session-key) was removed. Tests exist in dispatch suite.
             busy_result = await session.exec(
                 select(Task).where(
                     Task.assigned_agent_id == agent.id,
@@ -1235,19 +1235,19 @@ class TaskMonitorMixin:
             except Exception as e:
                 logger.warning("Undispatched recovery failed for '%s' -> %s: %s", task.title, agent.name, e)
 
-    # Phase 29: _check_spawn_timeouts entfernt — operierte auf task.spawn-session-key
-    # (gateway-only) und sessions-list (Gateway-API). Cli-bridge agents haben kein
-    # spawn-session-key Konzept. TODO Phase 31: cli-bridge task-queue timeouts.
+    # Phase 29: _check_spawn_timeouts removed — operated on task.spawn-session-key
+    # (gateway-only) and sessions-list (Gateway API). CLI-bridge agents have no
+    # spawn-session-key concept. TODO Phase 31: cli-bridge task-queue timeouts.
 
     async def _recover_orphaned_tasks(self, session: AsyncSession) -> int:
-        """Tasks die in 'in_progress' feststecken ohne Agent-Heartbeat zurueck auf 'inbox' setzen.
+        """Reset tasks stuck in 'in_progress' without an agent heartbeat back to 'inbox'.
 
-        Bedingungen:
+        Conditions:
         - Task.status == "in_progress"
-        - Task.updated_at > 30 Minuten her
-        - Zugewiesener Agent hat keinen Heartbeat in den letzten 30 Minuten gesendet
+        - Task.updated_at > 30 minutes ago
+        - Assigned agent hasn't sent a heartbeat in the last 30 minutes
 
-        Gibt die Anzahl zurueckgesetzter Tasks zurueck.
+        Returns the number of reset tasks.
         """
         from app.utils import ensure_aware
 
@@ -1275,18 +1275,18 @@ class TaskMonitorMixin:
             agent = await session.get(Agent, task.assigned_agent_id)
             if agent and agent.last_seen_at:
                 last_seen = ensure_aware(agent.last_seen_at)
-                # Agent hat in den letzten 30 Minuten einen Heartbeat gesendet → ueberspringen
+                # Agent sent a heartbeat in the last 30 minutes → skip
                 if (now - last_seen).total_seconds() < 1800:
                     continue
 
-            # Task zurueck auf inbox setzen
+            # Reset task back to inbox
             old_status = task.status
             task.status = "inbox"
             task.updated_at = now
             session.add(task)
             recovered += 1
 
-            # Task-Event loggen
+            # Log task event
             try:
                 from app.services.task_lifecycle import record_task_event
                 await record_task_event(

@@ -1,7 +1,7 @@
 """
-Builtin Agent Templates seeden.
-Wird beim Startup aufgerufen — idempotent (prüft ob Template bereits existiert).
-Für bestehende builtin Templates wird default_model immer auf den aktuellen Wert gesetzt.
+Seeds builtin agent templates.
+Called on startup — idempotent (checks whether the template already exists).
+For existing builtin templates, default_model is always set to the current value.
 """
 import logging
 from datetime import datetime
@@ -17,9 +17,9 @@ from app.utils import utcnow
 logger = logging.getLogger("mc.seeder")
 
 BUILTIN_TEMPLATES = [
-    # Planner-Template entfernt 2026-04-11 (Phase 6, Boss-Autonomy-Overhaul).
-    # Boss plant selbst via openclaude-Subagents. Bestehende Planner-Agent-Rows in
-    # der DB werden beim Upgrade-Path via soul_md='DEPRECATED' markiert.
+    # Planner template removed 2026-04-11 (Phase 6, Boss-Autonomy-Overhaul).
+    # Boss plans on its own via openclaude subagents. Existing planner agent rows in
+    # the DB get marked via soul_md='DEPRECATED' during the upgrade path.
     {
         "name": "Researcher",
         "emoji": "🔍",
@@ -522,7 +522,7 @@ Nicht eingreifen — das System regelt das.
 
 
 async def seed_builtin_templates(session: AsyncSession) -> None:
-    """Builtin Templates seeden und bestehende Modelle aktualisieren."""
+    """Seeds builtin templates and updates existing models."""
     result = await session.exec(
         select(AgentTemplate).where(AgentTemplate.is_builtin == True)  # noqa: E712
     )
@@ -588,7 +588,7 @@ async def seed_builtin_templates(session: AsyncSession) -> None:
 
 
 async def _fix_agent_scopes_from_templates(session: AsyncSession) -> None:
-    """Agents mit template_id aber scopes=[] bekommen die Template-Scopes."""
+    """Agents with template_id but scopes=[] get the template's scopes."""
     result = await session.exec(
         select(Agent).where(Agent.template_id.isnot(None))  # type: ignore[arg-type]
     )

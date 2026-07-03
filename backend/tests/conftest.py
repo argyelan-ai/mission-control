@@ -1,10 +1,10 @@
 """
-Zentrale Test-Fixtures fuer Mission Control Backend.
+Central test fixtures for Mission Control Backend.
 
-- In-Memory SQLite DB (kein PostgreSQL noetig)
-- fakeredis (kein Redis-Server noetig)
-- FastAPI TestClient mit Auth
-- Factory-Funktionen fuer Test-Daten
+- In-memory SQLite DB (no PostgreSQL needed)
+- fakeredis (no Redis server needed)
+- FastAPI TestClient with auth
+- Factory functions for test data
 """
 
 import os
@@ -22,9 +22,9 @@ from sqlalchemy.pool import StaticPool
 from sqlmodel import SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-# ── Settings patchen BEVOR app importiert wird ───────────────────────────
-# database_url bleibt PostgreSQL (damit app.database.engine ohne Fehler erstellt wird).
-# Der Engine wird nie benutzt — wir overriden get_session mit unserem SQLite-Engine.
+# ── Patch settings BEFORE the app is imported ────────────────────────────
+# database_url stays PostgreSQL (so app.database.engine is created without error).
+# The engine is never used — we override get_session with our SQLite engine.
 
 import app.config
 
@@ -47,20 +47,20 @@ app.config.settings = app.config.Settings(
     obsidian_export_interval=99999,  # Phase 7 OBS-02 Pitfall 4: never auto-fire in tests
     vault_lint_interval_hours=99999,  # M.3 T4 Pitfall 4 mirror: vault_lint loop must not auto-fire in tests
     ollama_url="http://localhost:99999",
-    use_subagent_dispatch=False,  # Tests laufen im Legacy-Modus; neue Tests aktivieren Flag explizit
+    use_subagent_dispatch=False,  # Tests run in legacy mode; new tests enable the flag explicitly
     secrets_encryption_key="bkMM-h80JH3_PRkNc6_-T0YrLMOShvZeoDkKnGrI7JM=",
     vault_path=_TEST_VAULT_ROOT,
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.
 )
 
-# Jetzt App-Module importieren
+# Now import app modules
 from app.database import get_session
 from app.redis_client import get_redis
 
-# Alle Models importieren damit create_all alle Tabellen kennt
+# Import all models so create_all knows about all tables
 import app.models  # noqa: F401
-import app.models.agent_template  # noqa: F401 — nicht in __init__.py, aber FK-Referenz von Agent
+import app.models.agent_template  # noqa: F401 — not in __init__.py, but FK reference from Agent
 import app.models.content  # noqa: F401
 import app.models.checkpoint  # noqa: F401
 import app.models.deliverable  # noqa: F401
@@ -72,7 +72,7 @@ import app.models.scheduled_job  # noqa: F401
 import app.models.checklist  # noqa: F401
 import app.models.agent_task_comment_cursor  # noqa: F401
 
-# ── Test-Engine (SQLite in-memory, StaticPool = alle Connections teilen eine DB) ──
+# ── Test engine (SQLite in-memory, StaticPool = all connections share one DB) ──
 
 test_engine = create_async_engine(
     "sqlite+aiosqlite://",
@@ -81,17 +81,17 @@ test_engine = create_async_engine(
     poolclass=StaticPool,
 )
 
-# SQLite: Foreign Keys NICHT aktivieren.
-# Begruendung: SQLAlchemy ORM ordnet INSERTs nur ueber relationship()-Definitionen,
-# nicht ueber FK-Constraints. Da die Models keine relationship()s haben, wuerde
-# PRAGMA foreign_keys=ON alle Tests brechen die Board+Agent+Task in einer Session
-# erstellen. FK-Enforcement laeuft in Production via PostgreSQL + Alembic-Migrations.
+# SQLite: do NOT enable foreign keys.
+# Reason: SQLAlchemy ORM only orders INSERTs via relationship() definitions,
+# not via FK constraints. Since the models have no relationship()s,
+# PRAGMA foreign_keys=ON would break every test that creates Board+Agent+Task
+# in one session. FK enforcement runs in production via PostgreSQL + Alembic migrations.
 
-# ── Database Fixtures ─────────────────────────────────────────────────────
+# ── Database fixtures ─────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
 async def setup_db():
-    """Vor jedem Test: Tabellen erstellen. Danach: alles droppen."""
+    """Before each test: create tables. Afterward: drop everything."""
     async with test_engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
     yield
@@ -101,21 +101,21 @@ async def setup_db():
 
 @pytest.fixture
 async def session() -> AsyncGenerator[AsyncSession, None]:
-    """DB-Session fuer Tests die direkt auf die DB zugreifen."""
+    """DB session for tests that access the DB directly."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         yield s
 
 
 @pytest.fixture
 async def async_session() -> AsyncGenerator[AsyncSession, None]:
-    """Alias-Fixture fuer Tests die 'async_session' statt 'session' nutzen."""
+    """Alias fixture for tests that use 'async_session' instead of 'session'."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         yield s
 
 
 @pytest.fixture
 async def board_with_agents(async_session: AsyncSession):
-    """Fixture: Board mit Boss (board_lead) + developer agent."""
+    """Fixture: board with Boss (board_lead) + developer agent."""
     from app.models.board import Board
     from app.models.agent import Agent
     board = Board(name="Test Board", slug="test-board")
@@ -150,7 +150,7 @@ async def board_with_agents(async_session: AsyncSession):
 
 @pytest.fixture
 async def fake_redis():
-    """In-Memory Redis-Ersatz."""
+    """In-memory Redis replacement."""
     server = fakeredis.aioredis.FakeServer()
     redis = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
     yield redis
@@ -161,7 +161,7 @@ async def fake_redis():
 
 @pytest.fixture
 async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
-    """Async HTTP-Client gegen die FastAPI-App (ohne Auth)."""
+    """Async HTTP client against the FastAPI app (without auth)."""
     from app.main import app as fastapi_app
     import app.redis_client
 
@@ -175,14 +175,14 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     fastapi_app.dependency_overrides[get_session] = override_get_session
     fastapi_app.dependency_overrides[get_redis] = override_get_redis
 
-    # get_redis() wird auch direkt (nicht via Depends) aufgerufen.
-    # Muss in jedem Modul gepatcht werden das es importiert hat.
+    # get_redis() is also called directly (not via Depends).
+    # Must be patched in every module that imported it.
     import app.routers.system as system_mod
     import app.services.sse as sse_mod
     original_system_get_redis = system_mod.get_redis
     original_sse_get_redis = sse_mod.get_redis
     system_mod.get_redis = override_get_redis
-    sse_mod.get_redis = override_get_redis  # broadcast() ruft get_redis() direkt auf
+    sse_mod.get_redis = override_get_redis  # broadcast() calls get_redis() directly
 
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -195,7 +195,7 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
 
 @pytest.fixture
 async def auth_client(client: AsyncClient) -> AsyncClient:
-    """Client mit gueltigem JWT-Token (Admin-User)."""
+    """Client with a valid JWT token (admin user)."""
     from app.auth import create_access_token
     from app.models.user import User
 
@@ -216,11 +216,11 @@ async def auth_client(client: AsyncClient) -> AsyncClient:
     return client
 
 
-# ── Test-Daten Factories ──────────────────────────────────────────────────
+# ── Test data factories ──────────────────────────────────────────────────
 
 @pytest.fixture
 def make_board():
-    """Factory: Board erstellen."""
+    """Factory: create a board."""
     async def _make(name: str = "Test Board", slug: str = "test-board", **kwargs):
         from app.models.board import Board
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -234,7 +234,7 @@ def make_board():
 
 @pytest.fixture
 def make_agent():
-    """Factory: Agent erstellen.
+    """Factory: create an agent.
 
     Phase 30: agent_runtime defaults to 'cli-bridge' (the post-sunset
     mainstream). Production migration 0123 will replace the legacy
@@ -255,7 +255,7 @@ def make_agent():
 
 @pytest.fixture
 def make_task():
-    """Factory: Task erstellen."""
+    """Factory: create a task."""
     async def _make(board_id: uuid.UUID, title: str = "Test Task", **kwargs):
         from app.models.task import Task
         async with AsyncSession(test_engine, expire_on_commit=False) as s:

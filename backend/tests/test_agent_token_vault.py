@@ -1,14 +1,14 @@
-"""MC_AGENT_TOKEN → Vault-Write bei jeder Token-Generierung (Fresh-Install-Fix).
+"""MC_AGENT_TOKEN → vault write on every token generation (fresh-install fix).
 
-Fund 2026-07-02 (critical): der Vault-Key mc_token_{slug} wurde nur GELESEN
-(routers/internal.py::agent_bootstrap), aber ausser vom einmaligen Migrations-
-Skript nie geschrieben. Folge: frisch erstellte Agents bekamen via
-/internal/bootstrap kein MC_TOKEN → poll.sh crash-loopte, One-Click-Deploy
-war auf Fresh-Installs tot.
+Found 2026-07-02 (critical): the vault key mc_token_{slug} was only READ
+(routers/internal.py::agent_bootstrap), but never written except by the
+one-off migration script. Consequence: freshly created agents got no
+MC_TOKEN via /internal/bootstrap → poll.sh crash-looped, one-click deploy
+was dead on fresh installs.
 
-Deckt die drei User-erreichbaren Pfade ab: create_agent, Template-Instantiate
-(_do_instantiate) und reset-token — inkl. End-to-End über den Bootstrap-
-Endpoint selbst.
+Covers the three user-reachable paths: create_agent, template instantiate
+(_do_instantiate), and reset-token — including end-to-end via the bootstrap
+endpoint itself.
 """
 import pytest
 from sqlmodel import select
@@ -34,13 +34,13 @@ async def test_create_agent_writes_token_to_vault(auth_client, async_session):
     assert resp.status_code == 201, resp.text
     raw_token = resp.json()["token"]
 
-    # Vault-Key-Schema muss dem Bootstrap-Lookup entsprechen (agent.name.lower())
+    # Vault key schema must match the bootstrap lookup (agent.name.lower())
     assert await _vault_token(async_session, "vaultbot") == raw_token
 
 
 @pytest.mark.asyncio
 async def test_bootstrap_delivers_token_after_create(auth_client, async_session):
-    """End-to-End: der Container-Bootstrap-Pfad findet den frischen Token."""
+    """End-to-end: the container bootstrap path finds the fresh token."""
     resp = await auth_client.post(
         "/api/v1/agents",
         json={"name": "BootBot", "agent_runtime": "cli-bridge"},
@@ -67,15 +67,15 @@ async def test_reset_token_rotates_vault_secret(auth_client, async_session):
     new_token = reset.json()["token"]
 
     assert new_token != old_token
-    # Vault liefert den NEUEN Token — sonst startet der Container mit dem alten
+    # Vault must return the NEW token — otherwise the container starts with the old one
     assert await _vault_token(async_session, "rotatebot") == new_token
 
 
 @pytest.mark.asyncio
 async def test_template_instantiate_writes_token_to_vault(async_session):
-    """_do_instantiate (Template-Pfad, auch von Approvals/agent-scoped genutzt)
-    schreibt den Token in den Vault. Direkt getestet statt über den HTTP-
-    Endpoint, damit kein Provisioning-BackgroundTask im Test-Env anläuft."""
+    """_do_instantiate (template path, also used by approvals/agent-scoped)
+    writes the token to the vault. Tested directly instead of via the HTTP
+    endpoint, so no provisioning background task runs in the test env."""
     from app.models.agent_template import AgentTemplate
     from app.routers.agent_templates import _do_instantiate
 

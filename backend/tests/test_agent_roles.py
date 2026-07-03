@@ -1,4 +1,4 @@
-"""Tests fuer AgentRole Enum, get_default_scopes(), Agent.role Validator, find_agent_by_role()."""
+"""Tests for AgentRole enum, get_default_scopes(), Agent.role validator, find_agent_by_role()."""
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -11,7 +11,7 @@ from app.scopes import AgentRole, DEFAULT_SCOPES, get_default_scopes, ALL_SCOPES
 
 
 def test_agent_role_values():
-    """Alle 10 Rollen sind definiert."""
+    """All 10 roles are defined."""
     assert set(AgentRole) == {
         AgentRole.LEAD, AgentRole.DEVELOPER, AgentRole.REVIEWER,
         AgentRole.TESTER, AgentRole.PLANNER, AgentRole.RESEARCHER,
@@ -21,7 +21,7 @@ def test_agent_role_values():
 
 
 def test_agent_role_matches_default_scopes_keys():
-    """Jede AgentRole hat einen Eintrag in DEFAULT_SCOPES."""
+    """Every AgentRole has an entry in DEFAULT_SCOPES."""
     for role in AgentRole:
         assert role in DEFAULT_SCOPES, f"AgentRole.{role.name} fehlt in DEFAULT_SCOPES"
 
@@ -38,32 +38,32 @@ def test_non_worker_roles():
 
 
 def test_get_default_scopes_with_enum():
-    """Lookup mit AgentRole Enum funktioniert."""
+    """Lookup with AgentRole enum works."""
     scopes = get_default_scopes(AgentRole.DEVELOPER)
     assert "tasks:read" in scopes
     assert "tasks:write" in scopes
 
 
 def test_get_default_scopes_with_string():
-    """Legacy: Lookup mit String funktioniert weiterhin."""
+    """Legacy: lookup with string still works."""
     scopes = get_default_scopes("developer")
     assert "tasks:read" in scopes
 
 
 def test_get_default_scopes_with_uppercase_string():
-    """Legacy: Case-insensitive String-Lookup."""
+    """Legacy: case-insensitive string lookup."""
     scopes = get_default_scopes("REVIEWER")
     assert "tasks:read" in scopes
 
 
 def test_get_default_scopes_unknown_returns_all():
-    """Unbekannter Template-Name → ALL_SCOPES."""
+    """Unknown template name → ALL_SCOPES."""
     scopes = get_default_scopes("unknown_role")
     assert scopes == list(ALL_SCOPES)
 
 
 def test_get_default_scopes_lead_has_all():
-    """Lead hat alle Scopes."""
+    """Lead has all scopes."""
     scopes = get_default_scopes(AgentRole.LEAD)
     assert scopes == list(ALL_SCOPES)
 
@@ -85,7 +85,7 @@ def test_agent_role_validator_none():
 
 def test_agent_role_validator_invalid():
     from app.models.agent import Agent
-    # SQLModel table=True nutzt model_validate fuer Pydantic-Validierung
+    # SQLModel table=True uses model_validate for Pydantic validation
     with pytest.raises(Exception):
         Agent.model_validate({"name": "TestAgent", "role": "hacker"})
 
@@ -102,7 +102,7 @@ def test_agent_role_validator_all_roles():
 
 @pytest.mark.asyncio
 async def test_find_agent_by_role_finds_correct_role(session, make_board, make_agent):
-    """Findet Agent mit passender Rolle."""
+    """Finds agent with matching role."""
     board = await make_board()
     reviewer = await make_agent(
         name="Rex", role="reviewer", board_id=board.id,     )
@@ -117,7 +117,7 @@ async def test_find_agent_by_role_finds_correct_role(session, make_board, make_a
 
 @pytest.mark.asyncio
 async def test_find_agent_by_role_fallback_to_lead(session, make_board, make_agent):
-    """Fallback auf Board Lead wenn keine Rolle gefunden."""
+    """Falls back to board lead when no role is found."""
     board = await make_board()
     lead = await make_agent(
         name="Henry", role="lead", board_id=board.id,
@@ -131,7 +131,7 @@ async def test_find_agent_by_role_fallback_to_lead(session, make_board, make_age
 
 @pytest.mark.asyncio
 async def test_find_agent_by_role_exclude(session, make_board, make_agent):
-    """Exclude-Filter funktioniert."""
+    """Exclude filter works."""
     board = await make_board()
     reviewer = await make_agent(
         name="Rex", role="reviewer", board_id=board.id,     )
@@ -140,20 +140,20 @@ async def test_find_agent_by_role_exclude(session, make_board, make_agent):
     result = await find_agent_by_role(
         session, board.id, AgentRole.REVIEWER, exclude_agent_id=reviewer.id,
     )
-    # Kein anderer Reviewer, kein Board Lead → None
+    # No other reviewer, no board lead → None
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_find_agent_by_role_least_busy(session, make_board, make_agent, make_task):
-    """Bei mehreren Kandidaten: Agent mit weniger aktiven Tasks bevorzugt."""
+    """With multiple candidates: agent with fewer active tasks is preferred."""
     board = await make_board()
     dev1 = await make_agent(
         name="Dev1", role="developer", board_id=board.id,     )
     dev2 = await make_agent(
         name="Dev2", role="developer", board_id=board.id,     )
 
-    # dev1 hat 2 aktive Tasks, dev2 hat 0
+    # dev1 has 2 active tasks, dev2 has 0
     await make_task(board_id=board.id, status="in_progress", assigned_agent_id=dev1.id)
     await make_task(board_id=board.id, status="in_progress", assigned_agent_id=dev1.id)
 
@@ -168,7 +168,7 @@ async def test_find_agent_by_role_least_busy(session, make_board, make_agent, ma
 
 @pytest.mark.asyncio
 async def test_find_reviewer_by_role(session, make_board, make_agent):
-    """Reviewer wird nach role='reviewer' gefunden, nicht nach Name."""
+    """Reviewer is found by role='reviewer', not by name."""
     board = await make_board()
     reviewer = await make_agent(
         name="Agent007", role="reviewer", board_id=board.id,     )
@@ -181,7 +181,7 @@ async def test_find_reviewer_by_role(session, make_board, make_agent):
 
 @pytest.mark.asyncio
 async def test_find_reviewer_legacy_fallback(session, make_board, make_agent):
-    """Legacy: Agent mit 'rex' im Namen wird gefunden wenn role=None."""
+    """Legacy: agent with 'rex' in its name is found when role=None."""
     board = await make_board()
     rex = await make_agent(
         name="Rex", role=None, board_id=board.id,     )

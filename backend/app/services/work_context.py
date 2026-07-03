@@ -1,21 +1,21 @@
 """
-Work Context Service — Projekt-Auto-Detection + Config-Resolution + Shared Validators.
+Work Context Service — project auto-detection + config resolution + shared validators.
 
-Analysiert das Filesystem eines Workspaces und leitet Stack/Framework/Befehle ab.
-Wird von dispatch.py aufgerufen wenn ein Task eine Dispatch-Message bekommt.
+Analyzes a workspace's filesystem and infers stack/framework/commands.
+Called by dispatch.py when a task receives a dispatch message.
 
-Phase 4 Plan 04-04 (REF-02 step 1): Erweitert um Shared-Validatoren die
-zuvor in routers/agent_scoped.py wohnten:
-  - enforce_board_rules_agent  (war _enforce_board_rules_agent, 137 Zeilen)
-  - enforce_reflection         (extrahiert aus Inline-Block der Board-Rules)
-  - find_reviewer              (war _find_reviewer)
-  - find_last_developer        (war _find_last_developer)
-  - VALID_BLOCKER_TYPES        (frozenset Konstante)
+Phase 4 Plan 04-04 (REF-02 step 1): Extended with shared validators that
+previously lived in routers/agent_scoped.py:
+  - enforce_board_rules_agent  (was _enforce_board_rules_agent, 137 lines)
+  - enforce_reflection         (extracted from the board-rules inline block)
+  - find_reviewer              (was _find_reviewer)
+  - find_last_developer        (was _find_last_developer)
+  - VALID_BLOCKER_TYPES        (frozenset constant)
 
-agent_scoped.py haelt einen Re-Export-Shim (Pattern S1) der die unterstrich-
-prefixierten Aliase bereitstellt — task_lifecycle.py:707/:878 und mehrere
-Test-Dateien importieren `_find_reviewer` / `_find_last_developer` /
-`_enforce_board_rules_agent` aus agent_scoped.
+agent_scoped.py holds a re-export shim (Pattern S1) that provides the
+underscore-prefixed aliases — task_lifecycle.py:707/:878 and several
+test files import `_find_reviewer` / `_find_last_developer` /
+`_enforce_board_rules_agent` from agent_scoped.
 """
 
 import json
@@ -35,9 +35,9 @@ logger = logging.getLogger("mc.work_context")
 
 
 # Moved from agent_scoped.py:661 (Phase 4 REF-02 Plan 04-04).
-# Endpoint-Validierung fuer blocker_type — frozenset damit der Inhalt
-# nicht versehentlich mutiert wird. Aenderungen hier wirken auf die
-# PATCH /agent/boards/{board_id}/tasks/{task_id} Validierung.
+# Endpoint validation for blocker_type — frozenset so the content
+# isn't accidentally mutated. Changes here affect the
+# PATCH /agent/boards/{board_id}/tasks/{task_id} validation.
 VALID_BLOCKER_TYPES: frozenset[str] = frozenset({
     "missing_info", "technical_problem", "decision_needed",
     "permission_needed", "dependency_blocked", "other",
@@ -45,10 +45,10 @@ VALID_BLOCKER_TYPES: frozenset[str] = frozenset({
 
 
 async def detect_project_config(workspace_path: str) -> dict:
-    """Leitet Projekt-Konfiguration aus dem Filesystem ab.
+    """Infers project configuration from the filesystem.
 
-    Liest package.json, pyproject.toml, docker-compose.yml.
-    Gibt leeres dict zurück wenn kein bekannter Stack erkannt wird.
+    Reads package.json, pyproject.toml, docker-compose.yml.
+    Returns an empty dict if no known stack is detected.
     """
     config: dict = {}
 
@@ -81,7 +81,7 @@ async def detect_project_config(workspace_path: str) -> dict:
     if os.path.exists(os.path.join(workspace_path, "docker-compose.yml")):
         config["has_docker"] = True
 
-    # Source-Verzeichnisse ermitteln
+    # Determine source directories
     for d in ["frontend-v2", "frontend", "src", "app", "backend"]:
         if os.path.isdir(os.path.join(workspace_path, d)):
             config.setdefault("source_dirs", []).append(d)
@@ -93,16 +93,16 @@ def resolve_project_config(
     auto_config: dict | None,
     manual_config: dict | None,
 ) -> dict:
-    """Merged Auto-Detection und manuelle Config.
+    """Merges auto-detection and manual config.
 
-    Cascade: Manual > Auto > System-Default.
-    Manuelle Werte überschreiben Auto-Werte bei Schlüssel-Konflikten.
+    Cascade: Manual > Auto > System default.
+    Manual values override auto values on key conflicts.
     """
     result: dict = {}
     if auto_config:
         result.update(auto_config)
     if manual_config:
-        result.update(manual_config)  # Manual überschreibt Auto
+        result.update(manual_config)  # Manual overrides auto
     return result
 
 
@@ -111,7 +111,7 @@ def build_config_dispatch_section(
     config: dict,
     port: int | None = None,
 ) -> str:
-    """Baut die Projekt-Kontext-Sektion für die Dispatch-Message."""
+    """Builds the project-context section for the dispatch message."""
     lines = [f"## Projekt-Kontext ({project_name})"]
 
     if config.get("stack"):
@@ -145,10 +145,10 @@ def build_config_dispatch_section(
 
 
 async def validate_task_completion(session, task) -> tuple[bool, list[str]]:
-    """Prüft ob ein Task die Abschlussbedingungen erfüllt.
+    """Checks whether a task meets its completion conditions.
 
-    Gibt (ok, fehler_liste) zurück.
-    Checks: checklist vollständigkeit, Git-Commits (wenn Code-Task mit Repo), Deliverables (wenn visual_proof).
+    Returns (ok, error_list).
+    Checks: checklist completeness, git commits (if code task with repo), deliverables (if visual_proof).
     """
     from sqlmodel import select
     from app.models.board import Project
@@ -156,7 +156,7 @@ async def validate_task_completion(session, task) -> tuple[bool, list[str]]:
 
     errors: list[str] = []
 
-    # 1. Checklist-Vollständigkeit — direkt aus DB (nicht aus denormalisiertem Counter)
+    # 1. Checklist completeness — directly from DB (not from a denormalized counter)
     from app.models.checklist import TaskChecklistItem
     checklist_result = await session.exec(
         select(TaskChecklistItem).where(TaskChecklistItem.task_id == task.id)
@@ -167,13 +167,13 @@ async def validate_task_completion(session, task) -> tuple[bool, list[str]]:
         if pending_items:
             errors.append(f"{len(pending_items)} Checklist-Item(s) noch offen")
 
-    # 2. Git-Verification — nur wenn:
-    #    a) Code-Task mit workspace_path + Projekt-Repo
-    #    b) Assigned Agent hat requires_git_workflow=True (Default)
-    # Designer/Writer/Researcher/Orchestrator produzieren Files/Deliverables, kein Code
-    # → Git-Commit-Pflicht wuerde sie permanent blocken.
+    # 2. Git verification — only if:
+    #    a) code task with workspace_path + project repo
+    #    b) assigned agent has requires_git_workflow=True (default)
+    # Designer/Writer/Researcher/Orchestrator produce files/deliverables, not code
+    # → the git-commit requirement would block them permanently.
     if task.workspace_path and task.project_id:
-        # Agent-Flag pruefen (nur wenn assigned)
+        # Check agent flag (only if assigned)
         _git_required = True
         if task.assigned_agent_id:
             from app.models.agent import Agent
@@ -208,9 +208,9 @@ async def validate_task_completion(session, task) -> tuple[bool, list[str]]:
                         if not has_commits:
                             errors.append("Keine Git-Commits im Workspace gefunden")
                     except Exception:
-                        pass  # Git-Check best-effort — kein Block bei Fehler
+                        pass  # Git check is best-effort — don't block on error
 
-    # 3. Deliverable-Check (wenn needs_browser oder visual_proof)
+    # 3. Deliverable check (if needs_browser or visual_proof)
     if task.needs_browser or task.delegation_type == "visual_proof":
         result = await session.exec(
             select(TaskDeliverable).where(TaskDeliverable.task_id == task.id).limit(1)
@@ -238,27 +238,27 @@ async def enforce_reflection(
     agent: Agent,
     new_status: str,
 ) -> None:
-    """Pflicht-Reflexion enforcen — Pattern S4 + ADR-A1.
+    """Enforce mandatory reflection — Pattern S4 + ADR-A1.
 
-    Raises HTTPException(400) wenn ein Reflection-Kommentar fehlt oder zu kurz
-    ist und der Status-Uebergang als "Closing" gilt (in_progress/inbox →
-    review/done). Board-Lead-Agents sind ausgenommen.
+    Raises HTTPException(400) if a reflection comment is missing or too short
+    and the status transition counts as "closing" (in_progress/inbox →
+    review/done). Board-lead agents are exempt.
 
-    Status-Code = 400 (Production-Verhalten per A1 — NICHT 422). Die deutschen
-    Fehlermeldungen werden von TST-04 (Plan 04-11) verbatim assertet — bitte
-    nicht stilistisch anpassen.
+    Status code = 400 (production behavior per A1 — NOT 422). The German
+    error messages are asserted verbatim by TST-04 (Plan 04-11) — please
+    do not adjust them stylistically.
 
-    Pre-conditions (skip wenn eines false):
+    Pre-conditions (skip if any is false):
       - settings.enforce_reflection (global toggle)
       - new_status in {"review", "done"}
-      - task.status NICHT bereits "review" oder "user_test"
+      - task.status NOT already "review" or "user_test"
       - agent.is_board_lead == False
 
-    Logik extrahiert aus dem Inline-Block in agent_scoped.py:86-122
+    Logic extracted from the inline block in agent_scoped.py:86-122
     (Phase 4 REF-02 Plan 04-04).
     """
-    # Lazy imports — Konstanten leben in app.constants, settings in app.config.
-    # Das verhindert Circular-Imports beim Modul-Load.
+    # Lazy imports — constants live in app.constants, settings in app.config.
+    # This avoids circular imports at module load time.
     from app.config import settings as _cfg
     from app.constants import REFLECTION_REQUIRED_FIELDS, REFLECTION_MIN_CHARS
 
@@ -312,23 +312,23 @@ async def enforce_board_rules_agent(
     new_status: str,
     agent: Agent,
 ) -> None:
-    """Board Workflow Rules pruefen fuer Agent-Status-Aenderungen.
+    """Check board workflow rules for agent status changes.
 
     Verbatim moved from backend/app/routers/agent_scoped.py:36-172
-    (Phase 4 REF-02 Plan 04-04). Der Inline-Reflection-Block wurde in
-    `enforce_reflection` (siehe oben) extrahiert; das Verhalten bleibt
-    identisch (gleiche Pre-Conditions, gleiche HTTP-Codes, gleicher Wortlaut).
+    (Phase 4 REF-02 Plan 04-04). The inline reflection block was extracted
+    into `enforce_reflection` (see above); behavior stays
+    identical (same pre-conditions, same HTTP codes, same wording).
 
-    agent_scoped.py haelt einen Re-Export-Shim
-    `_enforce_board_rules_agent = enforce_board_rules_agent` fuer Test-Imports.
+    agent_scoped.py holds a re-export shim
+    `_enforce_board_rules_agent = enforce_board_rules_agent` for test imports.
     """
     from app.routers.tasks import VALID_TRANSITIONS, STATUS_LABELS
     from app.task_status import check_children_complete
 
-    # Rule 0: Gueltige Status-Uebergaenge pruefen
+    # Rule 0: check valid status transitions
     current = task.status
 
-    # Guard: done ist terminal fuer Agents — Re-Open nur via UI (User-Aktion)
+    # Guard: done is terminal for agents — re-open only via UI (user action)
     if current == "done" and new_status == "in_progress":
         raise HTTPException(
             status_code=400,
@@ -344,13 +344,13 @@ async def enforce_board_rules_agent(
             detail=f"Ungültiger Status-Übergang: {from_label} → {to_label}",
         )
 
-    # Rule 1: Parent/Child Integritaet — Parent darf nicht abgeschlossen werden wenn Children offen
+    # Rule 1: parent/child integrity — parent must not be closed while children are open
     if new_status in ("done", "review"):
         children_ok, children_detail = await check_children_complete(task.id, session)
         if not children_ok:
             raise HTTPException(status_code=400, detail=children_detail)
 
-    # Rule T-1: Pre-Done Validation (Checklist + Git + Deliverable)
+    # Rule T-1: pre-done validation (checklist + git + deliverable)
     if new_status in ("done", "review"):
         ok, errors = await validate_task_completion(session, task)
         if not ok:
@@ -359,43 +359,43 @@ async def enforce_board_rules_agent(
                 detail=f"Task kann nicht abgeschlossen werden: {'; '.join(errors)}",
             )
 
-    # ADR-023: Reflexion ist ein unabhaengiger Hebel — unabhaengig von jeder
-    # Review-Policy (board-flag, project.review_policy, task.skip_review).
-    # Deshalb ZUERST pruefen, BEVOR irgendein early-return den Rest ueberspringt.
+    # ADR-023: reflection is an independent lever — independent of any
+    # review policy (board flag, project.review_policy, task.skip_review).
+    # So check FIRST, BEFORE any early return skips the rest.
     await enforce_reflection(session, task, agent, new_status)
 
-    # T-1: Projekt-spezifische Review-Policy (überschreibt Board-Default)
+    # T-1: project-specific review policy (overrides board default)
     _project_review_policy = None
     if task.project_id:
         _project = await session.get(Project, task.project_id)
         if _project and _project.project_config:
             _project_review_policy = _project.project_config.get("review_policy")
 
-    # Policy "never" → Review-Gate vollständig überspringen (Reflection lief schon oben)
+    # Policy "never" → skip the review gate entirely (reflection already ran above)
     if _project_review_policy == "never" and new_status == "done":
         return
 
-    # skip_review Flag auf dem Task (z.B. von Scheduler gesetzt) → Review-Gate überspringen
+    # skip_review flag on the task (e.g. set by scheduler) → skip the review gate
     if getattr(task, "skip_review", False) and new_status == "done":
-        return  # Automation-Tasks brauchen kein Review
+        return  # Automation tasks don't need review
 
     board = await session.get(Board, board_id)
     if not board:
         return
 
-    # Rule 2: Task muss durch Review bevor es auf Done gesetzt werden kann.
+    # Rule 2: task must go through review before it can be set to done.
     # Board-flag is a HARD GATE — keep it for projects that need it. On
     # mc-dev we set it to `false` (ADR-023) so the Dev decides per task
     # whether to call `mc review` first; Rex becomes opt-in. The SOUL of
     # each developer agent has the explicit rules for WHEN to review.
     if board.require_review_before_done:
         if new_status == "done" and task.status not in ("review", "user_test"):
-            # Subtasks (mit parent_task_id) duerfen direkt done — Review
-            # laeuft auf Phase-Ebene (Parent wird auto auf review gesetzt
-            # wenn alle Subtasks done).
+            # Subtasks (with parent_task_id) may go directly to done — review
+            # runs at the phase level (parent gets auto-set to review
+            # when all subtasks are done).
             is_subtask = task.parent_task_id is not None
 
-            # Pruefen ob Parent-Task mit allen Subtasks done
+            # Check whether the parent task has all subtasks done
             subtask_result = await session.exec(
                 select(Task).where(Task.parent_task_id == task.id)
             )
@@ -407,7 +407,7 @@ async def enforce_board_rules_agent(
                     detail="Task muss zuerst durch Review bevor es auf Done gesetzt werden kann",
                 )
 
-    # Rule 3: Nur der Board Lead darf den Status aendern
+    # Rule 3: only the Board Lead may change the status
     if board.only_lead_can_change_status and not agent.is_board_lead:
         raise HTTPException(
             status_code=403,
@@ -419,24 +419,24 @@ async def find_reviewer(
     session: AsyncSession,
     board_id: uuid.UUID,
 ) -> Agent | None:
-    """Reviewer-Agent im Board finden — primaer nach Rolle, Legacy-Fallback nach Name.
+    """Find the reviewer agent on the board — primarily by role, legacy fallback by name.
 
     Verbatim moved from backend/app/routers/agent_scoped.py:3533-3560
     (Phase 4 REF-02 Plan 04-04).
 
-    Pattern S2: `find_agent_by_role` ist ein lazy local import — work_context
-    und dispatch duerfen sich nicht beim Modul-Load gegenseitig importieren.
+    Pattern S2: `find_agent_by_role` is a lazy local import — work_context
+    and dispatch must not import each other at module load time.
     """
     from app.scopes import AgentRole
     # CRITICAL (Pattern S2): keep lazy local import to break the cycle
     from app.services.dispatch import find_agent_by_role
 
-    # Primaer: Rolle-basierte Suche
+    # Primary: role-based search
     reviewer = await find_agent_by_role(session, board_id, AgentRole.REVIEWER)
     if reviewer:
         return reviewer
 
-    # Legacy-Fallback: Name-basiert fuer Agents ohne role.
+    # Legacy fallback: name-based for agents without a role.
     # Phase 30: gateway_agent_id filter dropped — runtime is the new check.
     result = await session.exec(
         select(Agent).where(
@@ -449,7 +449,7 @@ async def find_reviewer(
         name_lower = a.name.lower()
         if "rex" in name_lower or "review" in name_lower:
             return a
-    # Letzter Fallback: Board Lead
+    # Last fallback: Board Lead
     for a in agents:
         if a.is_board_lead:
             return a
@@ -460,30 +460,30 @@ async def find_last_developer(
     session: AsyncSession,
     task: Task,
 ) -> Agent | None:
-    """Developer finden der den Task zuletzt fuer Review eingereicht hat.
+    """Find the developer who last submitted the task for review.
 
-    Sucht den Agent der in_progress → review gesetzt hat (= Code eingereicht)
-    und NICHT der Reviewer ist. Das ist zuverlaessiger als nach in_progress-Events
-    zu suchen, weil Reviewer-ACKs und mehrfache Dispatch-Zyklen ebenfalls
-    in_progress-Events erzeugen.
+    Looks for the agent who set in_progress → review (= submitted code)
+    and is NOT the reviewer. This is more reliable than searching for
+    in_progress events, because reviewer ACKs and multiple dispatch cycles
+    also produce in_progress events.
 
-    Fallback: Agent der progress/resolution-Kommentare geschrieben hat.
+    Fallback: agent who wrote progress/resolution comments.
 
     Verbatim moved from backend/app/routers/agent_scoped.py:3563-3608
     (Phase 4 REF-02 Plan 04-04).
     """
     from app.models.activity import ActivityEvent
 
-    # Reviewer ermitteln (damit wir ihn ausschliessen koennen).
-    # Hinweis: ruft die work_context-lokale `find_reviewer` (gleicher Modul-
-    # namespace). Tests die `app.routers.agent_scoped._find_reviewer` patchen
-    # ueberbruecken diesen internen Aufruf NICHT — was bisher auch so war,
-    # weil der Aufruf intern in agent_scoped.py via lokalem Namen lief und
-    # dadurch ebenfalls nicht ueber den Modul-Lookup ging. Verhalten unveraendert.
+    # Determine the reviewer (so we can exclude them).
+    # Note: calls the work_context-local `find_reviewer` (same module
+    # namespace). Tests that patch `app.routers.agent_scoped._find_reviewer`
+    # do NOT intercept this internal call — which was already the case
+    # before, because the call ran internally in agent_scoped.py via a
+    # local name and therefore also didn't go through module lookup. Behavior unchanged.
     reviewer = await find_reviewer(session, task.board_id)
     reviewer_id = reviewer.id if reviewer else None
 
-    # Primaer: Agent der in_progress → review gesetzt hat (nicht Reviewer)
+    # Primary: agent who set in_progress → review (not the reviewer)
     result = await session.exec(
         select(ActivityEvent).where(
             ActivityEvent.task_id == task.id,
@@ -499,7 +499,7 @@ async def find_last_developer(
                 and ev.agent_id != reviewer_id):
             return await session.get(Agent, ev.agent_id)
 
-    # Fallback: Agent mit progress/resolution-Kommentaren (nicht Reviewer)
+    # Fallback: agent with progress/resolution comments (not the reviewer)
     comment_result = await session.exec(
         select(TaskComment).where(
             TaskComment.task_id == task.id,

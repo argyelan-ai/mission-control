@@ -24,7 +24,7 @@ class HealthChecksMixin:
     """Agent-Health, System-Health, Approval-Expiry, Weekly Digest."""
 
     async def _check_agent_health(self, session: AsyncSession) -> None:
-        """Agents im 'restarting' Status pruefen — Timeout nach AGENT_RESTART_TIMEOUT_MINUTES."""
+        """Check agents in 'restarting' status — timeout after AGENT_RESTART_TIMEOUT_MINUTES."""
         result = await session.exec(
             select(Agent).where(Agent.status == "restarting")
         )
@@ -53,7 +53,7 @@ class HealthChecksMixin:
                 logger.warning("Agent %s restart failed (no session for %dmin)", agent.name, int(minutes_ago))
 
     async def _check_expired_approvals(self, session: AsyncSession) -> None:
-        """Abgelaufene Approvals automatisch auf 'expired' setzen."""
+        """Automatically set expired approvals to 'expired'."""
         from app.models.approval import Approval
 
         now = utcnow()
@@ -84,7 +84,7 @@ class HealthChecksMixin:
             await session.commit()
             logger.info("Auto-expired %d approval(s)", len(expired_approvals))
 
-        # Reconciliation: Stale pending Approvals deren Task den Approval-Grund verlassen hat
+        # Reconciliation: stale pending approvals whose task has left the approval reason
         from app.services.approval_cleanup import reconcile_stale_approvals
         await reconcile_stale_approvals(session)
 
@@ -94,7 +94,7 @@ class HealthChecksMixin:
         # task-queue sweep if cli-bridge accumulates abandoned queues.
 
     async def _check_system_health(self, session: AsyncSession) -> tuple[float | None, float | None]:
-        """DB und Redis Latenz pruefen. Gibt (db_latency_ms, redis_latency_ms) zurueck."""
+        """Check DB and Redis latency. Returns (db_latency_ms, redis_latency_ms)."""
         db_latency_ms: float | None = None
         redis_latency_ms: float | None = None
 
@@ -144,7 +144,7 @@ class HealthChecksMixin:
         return db_latency_ms, redis_latency_ms
 
     async def _collect_system_metrics(self, db_latency_ms: float | None, redis_latency_ms: float | None) -> None:
-        """System-Metriken (CPU/RAM/Disk) sammeln und in Redis speichern."""
+        """Collect system metrics (CPU/RAM/disk) and store them in Redis."""
         try:
             cpu_pct = psutil.cpu_percent(interval=None)
             mem = psutil.virtual_memory()
@@ -181,8 +181,8 @@ class HealthChecksMixin:
             logger.error("Failed to collect system metrics: %s", e)
 
     async def _check_weekly_digest(self) -> None:
-        """Sonntags einen woechentlichen Digest generieren."""
-        if utcnow().weekday() != 6:  # 0=Mo, 6=So
+        """Generate a weekly digest on Sundays."""
+        if utcnow().weekday() != 6:  # 0=Mon, 6=Sun
             return
         from app.services.auto_memory import generate_weekly_digest
         from app.services.watchdog.core import _create_background_task

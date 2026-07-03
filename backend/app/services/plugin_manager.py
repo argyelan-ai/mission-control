@@ -1,7 +1,7 @@
-"""Plugin Manager — Shared Cache lesen, Agent-Settings rendern.
+"""Plugin Manager — read shared cache, render agent settings.
 
-Verwaltet den zentralen Plugin-Store (~/.mc/plugins/) und rendert
-pro Agent die settings.json + installed_plugins.json basierend auf cli_plugins in DB.
+Manages the central plugin store (~/.mc/plugins/) and renders
+settings.json + installed_plugins.json per agent, based on cli_plugins in the DB.
 """
 
 import json
@@ -15,30 +15,30 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-# Container-Pfad fuer Plugin-Dateien (Docker-Mount: claude-config → /home/agent/.claude)
+# Container path for plugin files (Docker mount: claude-config → /home/agent/.claude)
 CONTAINER_PLUGINS_PATH = "/home/agent/.claude/plugins"
 
 
 def _plugins_dir() -> Path:
-    """Pfad zum shared Plugin-Verzeichnis."""
+    """Path to the shared plugin directory."""
     home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
     return Path(home) / ".mc" / "plugins"
 
 
 def _agents_dir() -> Path:
-    """Pfad zum Agents-Verzeichnis."""
+    """Path to the agents directory."""
     home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
     return Path(home) / ".mc" / "agents"
 
 
 def _github_skills_dir() -> Path:
-    """Pfad zum GitHub Skills-Verzeichnis (fuer CLI-Bridge Agents)."""
+    """Path to the GitHub skills directory (for CLI-bridge agents)."""
     home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
     return Path(home) / ".agents" / "skills"
 
 
 def _templates_dir() -> Path:
-    """Pfad zu Jinja2-Templates (Backend)."""
+    """Path to Jinja2 templates (backend)."""
     return Path(__file__).parent.parent.parent / "templates"
 
 
@@ -51,7 +51,7 @@ class CliPlugin(BaseModel):
 
 
 def list_available_plugins() -> list[CliPlugin]:
-    """Liest Master installed_plugins.json aus shared cache."""
+    """Reads the master installed_plugins.json from the shared cache."""
     master_file = _plugins_dir() / "installed_plugins.json"
     if not master_file.exists():
         logger.warning("Shared installed_plugins.json nicht gefunden: %s", master_file)
@@ -78,7 +78,7 @@ def list_available_plugins() -> list[CliPlugin]:
 
 
 def get_known_marketplaces() -> dict[str, Any]:
-    """Liest known_marketplaces.json aus shared Plugin-Verzeichnis."""
+    """Reads known_marketplaces.json from the shared plugin directory."""
     km_file = _plugins_dir() / "known_marketplaces.json"
     if not km_file.exists():
         return {}
@@ -90,9 +90,9 @@ def get_known_marketplaces() -> dict[str, Any]:
 
 
 def _needed_marketplace_sources(cli_plugins: list[str] | None) -> set[str] | None:
-    """Extrahiert benoetigte Marketplace-Sources aus Plugin-Keys.
+    """Extracts needed marketplace sources from plugin keys.
 
-    Returns None wenn alle benoetigt (cli_plugins is None).
+    Returns None if all are needed (cli_plugins is None).
     """
     if cli_plugins is None:
         return None
@@ -105,7 +105,7 @@ def _needed_marketplace_sources(cli_plugins: list[str] | None) -> set[str] | Non
 
 
 def _rewrite_marketplace_paths(km_data: dict[str, Any]) -> dict[str, Any]:
-    """Schreibt installLocation Pfade auf Container-Pfade um.
+    """Rewrites installLocation paths to container paths.
 
     Host: ${HOME_HOST}/.mc/plugins/marketplaces/claude-plugins-official
     Container: /home/agent/.claude/plugins/marketplaces/claude-plugins-official
@@ -124,14 +124,14 @@ def render_agent_settings(
     model: str,
     cli_plugins: list[str] | None,
 ) -> str:
-    """Rendert settings.json fuer einen CLI-Bridge Agent.
+    """Renders settings.json for a CLI-bridge agent.
 
-    cli_plugins: None = alle verfuegbaren Plugins, [] = keine, ["x"] = nur diese.
+    cli_plugins: None = all available plugins, [] = none, ["x"] = only these.
     """
     available = {p.key for p in list_available_plugins()}
 
-    # Batcode behandelt nicht-gelistete Plugins als enabled.
-    # Deshalb: ALLE Plugins auflisten, gewuenschte als true, Rest als false.
+    # Batcode treats non-listed plugins as enabled.
+    # So: list ALL plugins, wanted ones as true, the rest as false.
     if cli_plugins is None:
         enabled_plugins = {k: True for k in sorted(available)}
     else:
@@ -164,7 +164,7 @@ def render_agent_settings(
 
 
 def render_agent_installed_plugins(cli_plugins: list[str] | None) -> str:
-    """Rendert agent-spezifische installed_plugins.json (nur seine Plugins)."""
+    """Renders agent-specific installed_plugins.json (only its plugins)."""
     master_file = _plugins_dir() / "installed_plugins.json"
     if not master_file.exists():
         return json.dumps({"version": 2, "plugins": {}}, indent=2)
@@ -190,7 +190,7 @@ def sync_agent_plugins_to_disk(
     model: str,
     cli_plugins: list[str] | None,
 ) -> dict[str, bool]:
-    """Schreibt settings.json + installed_plugins.json fuer einen Agent auf Disk."""
+    """Writes settings.json + installed_plugins.json for an agent to disk."""
     agent_dir = _agents_dir() / agent_slug
     written = {}
 
@@ -214,7 +214,7 @@ def sync_agent_plugins_to_disk(
         logger.error("Fehler beim Schreiben von settings.json fuer %s: %s", agent_slug, e)
         written["settings.json"] = False
 
-    # Agent-spezifische installed_plugins.json
+    # Agent-specific installed_plugins.json
     ipj_file = agent_dir / "claude-config" / "plugins" / "installed_plugins.json"
     try:
         content = render_agent_installed_plugins(cli_plugins)
@@ -224,12 +224,12 @@ def sync_agent_plugins_to_disk(
         logger.error("Fehler beim Schreiben von installed_plugins.json fuer %s: %s", agent_slug, e)
         written["installed_plugins.json"] = False
 
-    # known_marketplaces.json — Kopie mit Container-Pfaden
+    # known_marketplaces.json — copy with container paths
     km_out = agent_dir / "claude-config" / "plugins" / "known_marketplaces.json"
     try:
         shared_km = get_known_marketplaces()
         rewritten = _rewrite_marketplace_paths(shared_km)
-        # Symlink ersetzen falls vorhanden
+        # Replace symlink if present
         if km_out.is_symlink():
             km_out.unlink()
         km_out.write_text(json.dumps(rewritten, indent=2))
@@ -238,7 +238,7 @@ def sync_agent_plugins_to_disk(
         logger.error("Fehler beim Schreiben von known_marketplaces.json fuer %s: %s", agent_slug, e)
         written["known_marketplaces.json"] = False
 
-    # cache/ und marketplaces/ — nur benoetigte Marketplace-Dirs kopieren
+    # cache/ and marketplaces/ — only copy needed marketplace dirs
     needed = _needed_marketplace_sources(cli_plugins)
     plugin_out = agent_dir / "claude-config" / "plugins"
 
@@ -246,7 +246,7 @@ def sync_agent_plugins_to_disk(
         shared_dir = _plugins_dir() / dirname
         out_dir = plugin_out / dirname
         try:
-            # Symlink ersetzen falls vorhanden
+            # Replace symlink if present
             if out_dir.is_symlink():
                 out_dir.unlink()
 
@@ -257,19 +257,19 @@ def sync_agent_plugins_to_disk(
 
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            # Bestimmen welche Subdirs kopiert werden
+            # Determine which subdirs to copy
             if needed is None:
                 dirs_to_copy = [d for d in shared_dir.iterdir() if d.is_dir()]
             else:
                 dirs_to_copy = [d for d in shared_dir.iterdir() if d.is_dir() and d.name in needed]
 
-            # Nicht-benoetigte Dirs im Ziel aufraeumen
+            # Clean up not-needed dirs in the target
             wanted_names = {d.name for d in dirs_to_copy}
             for existing in out_dir.iterdir():
                 if existing.is_dir() and existing.name not in wanted_names:
                     shutil.rmtree(existing)
 
-            # Kopieren
+            # Copy
             for src in dirs_to_copy:
                 dst = out_dir / src.name
                 if dst.exists():
@@ -299,7 +299,7 @@ class GithubSkillRepo(BaseModel):
 
 
 def list_github_skill_repos() -> list[GithubSkillRepo]:
-    """Liest skills-lock.json und listet installierte GitHub Skill-Repos."""
+    """Reads skills-lock.json and lists installed GitHub skill repos."""
     skills_dir = _github_skills_dir()
     lock_file = skills_dir / "skills-lock.json"
 
@@ -319,7 +319,7 @@ def list_github_skill_repos() -> list[GithubSkillRepo]:
         version = info.get("computedHash", "unknown")[:8]
         repo_dir = skills_dir / repo_name
 
-        # SKILL.md Dateien im Repo finden
+        # Find SKILL.md files in the repo
         skill_names: list[str] = []
         if repo_dir.exists():
             for skill_md in sorted(repo_dir.rglob("SKILL.md")):
@@ -340,19 +340,19 @@ def list_github_skill_repos() -> list[GithubSkillRepo]:
 
 
 def _custom_skills_dir() -> Path:
-    """Pfad zur zentralen Custom-Skills-Bibliothek."""
+    """Path to the central custom-skills library."""
     home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
     return Path(home) / ".mc" / "skills"
 
 
 class CustomSkill(BaseModel):
     name: str           # "mc-debug"
-    description: str    # aus SKILL.md frontmatter (erste Zeile nach name:)
+    description: str    # from SKILL.md frontmatter (first line after name:)
     path: str           # absoluter Pfad
 
 
 def list_custom_skills() -> list[CustomSkill]:
-    """Alle Custom Skills aus ~/.mc/skills/ auflisten."""
+    """Lists all custom skills from ~/.mc/skills/."""
     skills_dir = _custom_skills_dir()
     if not skills_dir.exists():
         return []
@@ -365,7 +365,7 @@ def list_custom_skills() -> list[CustomSkill]:
         if not skill_md.exists():
             continue
 
-        # Beschreibung aus SKILL.md extrahieren (description: Zeile im frontmatter)
+        # Extract description from SKILL.md (description: line in frontmatter)
         description = ""
         try:
             content = skill_md.read_text(encoding="utf-8")
@@ -386,39 +386,38 @@ def list_custom_skills() -> list[CustomSkill]:
 
 
 def sync_agent_skills_to_disk(agent_slug: str, cli_skills: list[str] | None) -> dict[str, bool]:
-    """Synchronisiert Custom Skills in Agent claude-config/skills/.
+    """Synchronizes custom skills into the agent's claude-config/skills/.
 
-    Loescht alte Skills und kopiert nur erlaubte als echte Verzeichnisse.
-    Symlinks werden aufgeloest (via .resolve() + symlinks=False in copytree) —
-    ein Skill im shared dir kann auf ein Deliverable ausserhalb des Mounts
-    zeigen, im Ziel brauchen wir echte Files weil der Docker-Mount-Boundary
-    Symlinks bricht. Beispiel: client-brand-skill → Sparky-Deliverable-ZIP.
+    Deletes old skills and copies only allowed ones as real directories.
+    Symlinks are resolved (via .resolve() + symlinks=False in copytree) —
+    a skill in the shared dir can point to a deliverable outside the mount;
+    in the target we need real files because the Docker mount boundary
+    breaks symlinks. Example: client-brand-skill → Sparky deliverable ZIP.
 
-    Call-Site: `sync_docker_agent_files` ruft das bei jedem sync-config auf,
-    damit der Container die aktuelle cli_skills-Allowlist als echte Dateien
-    im claude-config/skills/ Dir sieht. Vor dem Fix 2026-04-24 wurde diese
-    Funktion zwar gebaut, aber nirgends aufgerufen — siehe Boss-Reflection zu
-    einer Content-Task wo Shakespeare den Skill via WebFetch rekonstruieren
-    musste.
+    Call site: `sync_docker_agent_files` calls this on every sync-config so
+    the container sees the current cli_skills allowlist as real files in the
+    claude-config/skills/ dir. Before the fix on 2026-04-24, this function
+    was built but never called anywhere — see the Boss reflection on a
+    content task where Shakespeare had to reconstruct the skill via WebFetch.
 
     Args:
-        agent_slug: Agent-Verzeichnisname (z.B. "shakespeare")
-        cli_skills: Allowlist (None=alle, []=keine, ["mc-debug"]=nur diese)
+        agent_slug: Agent directory name (e.g. "shakespeare")
+        cli_skills: Allowlist (None=all, []=none, ["mc-debug"]=only these)
 
     Returns:
-        Dict mit Skill-Name → True/False (kopiert/fehlgeschlagen)
+        Dict with skill name → True/False (copied/failed)
     """
     central = _custom_skills_dir()
     target = _agents_dir() / agent_slug / "claude-config" / "skills"
 
-    # Alte Skills loeschen (sauberer Zustand)
+    # Delete old skills (clean state)
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
 
-    # Zentrale Skills auflisten. Sowohl echte Directories als auch Symlinks
-    # akzeptieren, solange die resolvte Zielseite eine SKILL.md hat —
-    # medewo-gruppe-brand liegt z.B. als Symlink auf ein Sparky-Deliverable.
+    # List central skills. Accept both real directories and symlinks,
+    # as long as the resolved target has a SKILL.md —
+    # medewo-gruppe-brand, for example, is a symlink to a Sparky deliverable.
     available: list[str] = []
     if central.exists():
         for d in central.iterdir():
@@ -429,22 +428,22 @@ def sync_agent_skills_to_disk(agent_slug: str, cli_skills: list[str] | None) -> 
             except OSError:
                 continue
 
-    # Filtern
+    # Filter
     if cli_skills is None:
-        allowed = available  # null = alle
+        allowed = available  # null = all
     elif len(cli_skills) == 0:
-        allowed = []  # leere Liste = keine
+        allowed = []  # empty list = none
     else:
         allowed = [s for s in cli_skills if s in available]
 
-    # Kopieren (132 KB total — billig). symlinks=False + src.resolve() löst
-    # Symlink-Ketten auf, damit im Container echte Files liegen.
+    # Copy (132 KB total — cheap). symlinks=False + src.resolve() resolves
+    # symlink chains so the container ends up with real files.
     result: dict[str, bool] = {}
-    # Build-Artefakte und VCS-State NIEMALS pro-Agent duplizieren — die
-    # blowen den Sync auf hunderte MB pro Skill und enthalten platform-
-    # spezifische native Binaries (z.B. macOS-arm64 node_modules, useless
-    # in Linux-Containern). Working-Copy-Pattern: Agent kopiert Skill in
-    # sein /workspace und ruft dort npm install auf. Siehe Skill
+    # NEVER duplicate build artifacts and VCS state per agent — that
+    # blows the sync up to hundreds of MB per skill and includes platform-
+    # specific native binaries (e.g. macOS-arm64 node_modules, useless
+    # in Linux containers). Working-copy pattern: agent copies the skill into
+    # its /workspace and runs npm install there. See skill
     # viral-shorts/sub-skills/compose-segments.md.
     skill_ignore = shutil.ignore_patterns(
         "node_modules", "out", "dist", ".turbo", ".next",

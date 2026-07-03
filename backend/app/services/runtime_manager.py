@@ -1,22 +1,22 @@
 """
-RuntimeManager — verwaltet lokale Modell-Runtimes via SSH + Docker / LM Studio CLI.
+RuntimeManager — manages local model runtimes via SSH + Docker / LM Studio CLI.
 
-Unterstützte runtime_type:
-- vllm_docker: Docker-Container auf DGX Spark, steuerbar via SSH docker-Befehlen
-- lmstudio: Einzelnes Modell in LM Studio, steuerbar via SSH lms load/unload
-- unsloth: Unsloth Studio (FastAPI web UI) in einer tmux-Session auf dem Host,
-  steuerbar via SSH tmux new-/kill-session. Kein Docker weil kein ARM64-Image.
+Supported runtime_type:
+- vllm_docker: Docker container on DGX Spark, controllable via SSH docker commands
+- lmstudio: single model in LM Studio, controllable via SSH lms load/unload
+- unsloth: Unsloth Studio (FastAPI web UI) in a tmux session on the host,
+  controllable via SSH tmux new-/kill-session. No Docker because no ARM64 image.
 
-State-Ermittlung für vllm_docker:
+State detection for vllm_docker:
 1. SSH: docker inspect --format='{{.State.Status}}' <container>
-2. Wenn running: HTTP-Probe → 200 = "ready", sonst = "warming"
+2. If running: HTTP probe → 200 = "ready", otherwise = "warming"
 
-State-Ermittlung für lmstudio:
-1. SSH: lms ps | grep <lms_identifier> → geladen = "ready", sonst = "stopped"
+State detection for lmstudio:
+1. SSH: lms ps | grep <lms_identifier> → loaded = "ready", otherwise = "stopped"
 
-State-Ermittlung für unsloth:
-1. SSH: tmux has-session -t unsloth-studio → läuft
-2. Wenn tmux-Session existiert: HTTP-Probe auf endpoint → ready|warming
+State detection for unsloth:
+1. SSH: tmux has-session -t unsloth-studio → running
+2. If tmux session exists: HTTP probe on endpoint → ready|warming
 """
 
 import json
@@ -40,15 +40,15 @@ from app.services.host_resolver import (
 
 logger = logging.getLogger("mc.runtime_manager")
 
-# Pfad zur Registry-Datei (relativ zum Backend-Root)
+# Path to the registry file (relative to the backend root)
 _REGISTRY_PATH = Path(__file__).parent.parent.parent / "config" / "runtimes.json"
 
-# Gültige Runtime-States
+# Valid runtime states
 RuntimeState = str  # "stopped" | "starting" | "warming" | "ready" | "failed" | "unknown"
 
 
 def load_registry() -> list[dict]:
-    """Lädt die Runtime-Definitionen aus der JSON-Datei."""
+    """Loads the runtime definitions from the JSON file."""
     if not _REGISTRY_PATH.exists():
         logger.warning("runtimes.json nicht gefunden: %s", _REGISTRY_PATH)
         return []
@@ -57,7 +57,7 @@ def load_registry() -> list[dict]:
 
 
 def get_runtime(runtime_id: str) -> dict | None:
-    """Gibt eine einzelne Runtime-Definition zurück, oder None wenn nicht gefunden."""
+    """Returns a single runtime definition, or None if not found."""
     for rt in load_registry():
         if rt["id"] == runtime_id:
             return rt
@@ -65,22 +65,22 @@ def get_runtime(runtime_id: str) -> dict | None:
 
 
 def save_registry(runtimes: list[dict]) -> None:
-    """Schreibt die Runtime-Liste zurück in runtimes.json."""
+    """Writes the runtime list back to runtimes.json."""
     with open(_REGISTRY_PATH, "w") as f:
         json.dump(runtimes, f, indent=2, ensure_ascii=False)
         f.write("\n")
 
 
 def add_lmstudio_runtime(lms_identifier: str, display_name: str, endpoint: str) -> dict:
-    """Fügt eine neue LM Studio Runtime zu runtimes.json hinzu."""
+    """Adds a new LM Studio runtime to runtimes.json."""
     registry = load_registry()
-    # Prüfen ob lms_identifier schon existiert
+    # Check whether lms_identifier already exists
     for rt in registry:
         if rt.get("lms_identifier") == lms_identifier:
-            return rt  # bereits vorhanden — zurückgeben ohne Duplikat
-    # ID aus lms_identifier ableiten (z.B. "qwen/qwen3-coder-next" → "qwen3-coder-next")
+            return rt  # already present — return without duplicating
+    # Derive ID from lms_identifier (e.g. "qwen/qwen3-coder-next" → "qwen3-coder-next")
     safe_id = lms_identifier.split("/")[-1].lower().replace(".", "-").replace("_", "-")
-    # Sicherstellen dass die ID unique ist
+    # Ensure the ID is unique
     existing_ids = {rt["id"] for rt in registry}
     unique_id = safe_id
     counter = 2
@@ -121,7 +121,7 @@ def add_vllm_runtime(
     endpoint: str,
     role_tags: list[str] | None = None,
 ) -> dict:
-    """Fügt eine neue vLLM Docker Runtime zu runtimes.json hinzu. Idempotent."""
+    """Adds a new vLLM Docker runtime to runtimes.json. Idempotent."""
     registry = load_registry()
     for rt in registry:
         if rt.get("container_name") == container_name:
@@ -163,18 +163,18 @@ def add_vllm_runtime(
 
 
 def _host_ip(host: ResolvedHost | None) -> str:
-    """IP/Hostname für Endpoint-Konstruktion — Host der Runtime oder der
-    klassische Settings-Fallback (ADR-048)."""
+    """IP/hostname for endpoint construction — the runtime's host or the
+    classic settings fallback (ADR-048)."""
     if host is not None and host.ssh_host:
         return host.ssh_host
     return settings.dgx_ssh_host
 
 
 def _derive_vllm_endpoint(ports_field: str, *, host: ResolvedHost | None = None) -> str:
-    """Aus Docker 'Ports'-Feld den ersten Endpoint mit internem Port 8000 extrahieren.
+    """Extract the first endpoint with internal port 8000 from Docker's 'Ports' field.
 
-    Beispiel: '0.0.0.0:8003->8000/tcp, [::]:8003->8000/tcp'
-    Returns: 'http://{host_ip}:8003/v1' oder '' wenn kein Match.
+    Example: '0.0.0.0:8003->8000/tcp, [::]:8003->8000/tcp'
+    Returns: 'http://{host_ip}:8003/v1' or '' if no match.
     """
     if not ports_field:
         return ""
@@ -224,14 +224,14 @@ async def _container_runs_vllm_server(
 
 
 async def list_vllm_containers(host: ResolvedHost | None = None) -> list[dict]:
-    """Listet laufende vLLM-Container auf einem Host (heuristisch via Image-Name).
+    """Lists running vLLM containers on a host (heuristic via image name).
 
-    Filter-Reihenfolge pro Container:
-      1. Image enthält ``vllm`` (Vorfilter, billig).
-      2. Port-Binding ``…->8000/tcp`` → schneller Endpoint-Pfad.
-      3. Fallback: ``docker top`` zeigt einen ``vllm serve …`` Prozess →
-         endpoint aus ``--port`` Argument abgeleitet.
-      4. Sonst (CUDA-Wrapper wie sparkrun, build-only images) → ausgeblendet.
+    Filter order per container:
+      1. Image contains ``vllm`` (cheap pre-filter).
+      2. Port binding ``…->8000/tcp`` → fast endpoint path.
+      3. Fallback: ``docker top`` shows a ``vllm serve …`` process →
+         endpoint derived from the ``--port`` argument.
+      4. Otherwise (CUDA wrappers like sparkrun, build-only images) → hidden.
 
     Returns: list of {container_name, image, endpoint, state, is_registered, registered_id}
     """
@@ -292,22 +292,22 @@ async def _ssh_run(
     host: ResolvedHost | None = None,
     timeout: float | None = None,
 ) -> tuple[str, str, int]:
-    """Führt einen SSH-Befehl auf einem Host aus (ADR-048: host-aware).
+    """Runs an SSH command on a host (ADR-048: host-aware).
 
     Args:
         command: remote shell command.
-        host: aufgelöster Host der jeweiligen Runtime (host_resolver-Kette).
-            None → Settings-Fallback (settings.dgx_ssh_*, das klassische
-            Ein-Box-Verhalten). Ohne jeden konfigurierten Host → klarer Fehler
-            statt eines kryptischen Connect-Fehlers gegen "".
+        host: resolved host of the respective runtime (host_resolver chain).
+            None → settings fallback (settings.dgx_ssh_*, the classic
+            single-box behavior). Without any configured host → a clear
+            error instead of a cryptic connect failure against "".
         timeout: command-level timeout in seconds. Defaults to
             ``_SSH_COMMAND_TIMEOUT`` so a hanging remote process raises instead
             of blocking forever. Pass an explicit value for long-running calls.
 
     Returns: (stdout, stderr, exit_code)
-    Raises: asyncssh.Error bei Verbindungsproblemen, asyncssh.TimeoutError bei
-        Überschreitung des Command-Timeouts, RuntimeError wenn kein Host
-        aufgelöst werden konnte.
+    Raises: asyncssh.Error on connection problems, asyncssh.TimeoutError when
+        the command timeout is exceeded, RuntimeError if no host could be
+        resolved.
     """
     target = host or settings_fallback_host()
     if target is None or not target.ssh_host:
@@ -318,11 +318,11 @@ async def _ssh_run(
         )
     async with asyncssh.connect(
         host=target.ssh_host,
-        # Registry-Hosts ohne eigenen User/Key erben die Settings-Werte —
-        # gleiche Semantik wie der Seeder (host_seeder.py).
+        # Registry hosts without their own user/key inherit the settings values —
+        # same semantics as the seeder (host_seeder.py).
         username=target.ssh_user or settings.dgx_ssh_user,
         client_keys=[target.ssh_key_path or settings.dgx_ssh_key_path],
-        known_hosts=None,  # Kein known_hosts-Check im lokalen Netz
+        known_hosts=None,  # No known_hosts check on the local network
         connect_timeout=10,
     ) as conn:
         result = await conn.run(
@@ -338,7 +338,7 @@ async def _ssh_run(
 
 
 async def _probe_http(endpoint: str, healthcheck_path: str) -> bool:
-    """Prüft ob der HTTP-Endpunkt der Runtime antwortet."""
+    """Checks whether the runtime's HTTP endpoint responds."""
     url = endpoint.rstrip("/") + healthcheck_path
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
@@ -599,13 +599,13 @@ def _porsche_default_stop_command(endpoint: str) -> str:
 
 
 async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Ermittelt den aktuellen State einer Runtime.
+    """Determines the current state of a runtime.
 
-    host: aufgelöster Host (host_resolver-Kette, ADR-048). None → Legacy-Kette
-    aus den Runtime-Feldern (host-Feld → settings.dgx_ssh_*). HTTP-only-Typen
-    (cloud/openai_compatible) brauchen keinen Host.
+    host: resolved host (host_resolver chain, ADR-048). None → legacy chain
+    from the runtime fields (host field → settings.dgx_ssh_*). HTTP-only
+    types (cloud/openai_compatible) don't need a host.
 
-    Returns dict mit: state, container_status (optional), http_reachable (optional)
+    Returns dict with: state, container_status (optional), http_reachable (optional)
     """
     runtime_type = runtime.get("runtime_type", "")
     endpoint = runtime.get("endpoint", "")
@@ -696,7 +696,7 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
         # The model-load window (1-3 min after Start) briefly reads as
         # booted_no_model until /v1/models answers — acceptable for v1; the
         # start_runtime message tells the operator to expect the warmup.
-        # Host-Registry (ADR-048) zuerst, dann Legacy-Runtime-Feld, dann Settings.
+        # Host registry (ADR-048) first, then legacy runtime field, then settings.
         control_url = (
             (host.control_url if host else None)
             or runtime.get("control_url")
@@ -730,11 +730,11 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
 
 
 async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Startet eine Runtime.
+    """Starts a runtime.
 
     vllm_docker: docker start via SSH
     lmstudio: lms load via SSH
-    host: aufgelöster Host der Runtime (ADR-048); None → Legacy-Kette.
+    host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
     """
     runtime_type = runtime["runtime_type"]
@@ -917,11 +917,11 @@ async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> d
 
 
 async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Stoppt eine Runtime.
+    """Stops a runtime.
 
     vllm_docker: docker stop via SSH
     lmstudio: lms unload via SSH
-    host: aufgelöster Host der Runtime (ADR-048); None → Legacy-Kette.
+    host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
     """
     runtime_type = runtime["runtime_type"]
@@ -1012,11 +1012,11 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
 
 
 async def restart_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
-    """Startet eine Runtime neu.
+    """Restarts a runtime.
 
     vllm_docker: docker restart via SSH
     lmstudio: lms unload + lms load via SSH
-    host: aufgelöster Host der Runtime (ADR-048); None → Legacy-Kette.
+    host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
     """
     runtime_type = runtime["runtime_type"]
@@ -1119,8 +1119,8 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     bind-mount). A launchd watcher on the Mac host picks it up and runs the wake
     script (skills/wake-porsche/wake_porsche.py). See the WoL host-helper docs.
 
-    host: aufgelöster Host (ADR-048) — Registry-Werte (power_managed, MAC, IP)
-    haben Vorrang, Legacy-Runtime-Felder + Settings bleiben als Fallback.
+    host: resolved host (ADR-048) — registry values (power_managed, MAC, IP)
+    take precedence, legacy runtime fields + settings remain as fallback.
 
     Returns {"ok": bool, "message": str}.
     """
@@ -1141,9 +1141,9 @@ async def wake_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     payload = {
         "slug": slug,
         "mac": mac,
-        # Registry-first wie mac oben — das Legacy-Feld runtime.host ist bei
-        # gebundenen Runtimes immer noch gesetzt und darf einen Host-Row-Edit
-        # (Box umgezogen, IP in der Hosts-UI gepflegt) nicht ueberstimmen.
+        # Registry-first like mac above — the legacy runtime.host field is
+        # still set for bound runtimes and must not override a host-row edit
+        # (box moved, IP maintained in the hosts UI).
         "ip": (host.ssh_host if host else None)
         or runtime.get("host")
         or settings.porsche_lan_ip,
@@ -1172,7 +1172,7 @@ _LMS_CLI = "~/.lmstudio/bin/lms"
 
 
 async def lms_unload_all(host: ResolvedHost | None = None) -> dict:
-    """Entlädt alle Modelle in LM Studio (lms unload --all).
+    """Unloads all models in LM Studio (lms unload --all).
 
     Returns: {"ok": bool, "message": str}
     """
@@ -1188,9 +1188,9 @@ async def lms_unload_all(host: ResolvedHost | None = None) -> dict:
 
 
 async def lms_get_loaded_models(host: ResolvedHost | None = None) -> list[str]:
-    """Gibt die IDs aller aktuell in LM Studio geladenen Modelle zurück (via lms ps --json).
+    """Returns the IDs of all models currently loaded in LM Studio (via lms ps --json).
 
-    Returns: Liste der Modell-IDs, z.B. ["nvidia/nemotron-3-super", "text-embedding-nomic-embed-text-v1.5"]
+    Returns: list of model IDs, e.g. ["nvidia/nemotron-3-super", "text-embedding-nomic-embed-text-v1.5"]
     """
     import json as _json
     try:
@@ -1198,7 +1198,7 @@ async def lms_get_loaded_models(host: ResolvedHost | None = None) -> list[str]:
         raw = stdout.strip()
         if exit_code != 0 or not raw:
             return []
-        # JSON parsen
+        # Parse JSON
         data = _json.loads(raw)
         if not isinstance(data, list):
             return []
@@ -1206,7 +1206,7 @@ async def lms_get_loaded_models(host: ResolvedHost | None = None) -> list[str]:
         logger.info("Aktuell geladene LMS Modelle: %s", models)
         return models
     except _json.JSONDecodeError:
-        # Fallback: Text-Tabelle parsen (erste Spalte = Identifier, Header überspringen)
+        # Fallback: parse text table (first column = identifier, skip header)
         logger.warning("lms ps --json nicht verfügbar, parse Text-Output")
         models = []
         for line in stdout.splitlines():
@@ -1225,7 +1225,7 @@ async def lms_load_by_id(
     context_length: int | None = None,
     host: ResolvedHost | None = None,
 ) -> dict:
-    """Lädt ein Modell in LM Studio via ID (nicht via Runtime-Konfiguration).
+    """Loads a model in LM Studio by ID (not via runtime configuration).
 
     Returns: {"ok": bool, "message": str}
     """
@@ -1245,7 +1245,7 @@ async def lms_load_by_id(
 
 
 def _parse_lms_ls(stdout: str) -> list[dict]:
-    """Parst den Output von `lms ls` — gibt LLM- und Embedding-Modelle zurück."""
+    """Parses the output of `lms ls` — returns LLM and embedding models."""
     models = []
     current_section: str | None = None  # "llm" | "embedding" | None
 
@@ -1260,7 +1260,7 @@ def _parse_lms_ls(stdout: str) -> list[dict]:
         if stripped.startswith("EMBEDDING"):
             current_section = "embedding"
             continue
-        # Spalten-Header-Zeile überspringen
+        # Skip column header line
         if stripped.startswith("PARAMS") or stripped.startswith("SIZE"):
             continue
 
@@ -1269,7 +1269,7 @@ def _parse_lms_ls(stdout: str) -> list[dict]:
 
         is_loaded = "✓ LOADED" in line
 
-        # Size: MB oder GB
+        # Size: MB or GB
         size_gb = 0.0
         size_match = re.search(r"([\d.]+)\s+GB", line)
         if size_match:
@@ -1279,13 +1279,13 @@ def _parse_lms_ls(stdout: str) -> list[dict]:
             if mb_match:
                 size_gb = float(mb_match.group(1)) / 1024
 
-        # Model-Name: alles bis zum ersten Block von 3+ Leerzeichen
+        # Model name: everything up to the first block of 3+ spaces
         name_match = re.match(r"^(\S.*?)\s{3,}", line)
         if not name_match:
             continue
         raw_name = name_match.group(1).strip()
 
-        # "(X variant(s))" Suffix entfernen
+        # Remove "(X variant(s))" suffix
         model_id = re.sub(r"\s+\(\d+\s+variants?\)\s*$", "", raw_name).strip()
 
         models.append({
@@ -1300,7 +1300,7 @@ def _parse_lms_ls(stdout: str) -> list[dict]:
 
 
 async def list_lms_models(host: ResolvedHost | None = None) -> list[dict]:
-    """Gibt alle in LM Studio installierten LLM-Modelle zurück."""
+    """Returns all LLM models installed in LM Studio."""
     try:
         stdout, _, _ = await _ssh_run(f"{_LMS_CLI} ls 2>/dev/null", host=host)
         return _parse_lms_ls(stdout)
@@ -1314,12 +1314,12 @@ async def lms_download_model(
     quantization: str | None = None,
     host: ResolvedHost | None = None,
 ) -> dict:
-    """Startet einen LM Studio Modell-Download im Hintergrund.
+    """Starts an LM Studio model download in the background.
 
-    model_id: HuggingFace model ID (z.B. lmstudio-community/gemma-4-31b-it-gguf)
-    quantization: optionale Quantisierung (z.B. q4_k_m) → lms get name@quant
+    model_id: HuggingFace model ID (e.g. lmstudio-community/gemma-4-31b-it-gguf)
+    quantization: optional quantization (e.g. q4_k_m) → lms get name@quant
     """
-    # lms get erwartet Kurznamen, nicht HuggingFace-Pfade.
+    # lms get expects short names, not HuggingFace paths.
     short_name = model_id.split("/")[-1]
     short_name = re.sub(r"-gguf$", "", short_name, flags=re.IGNORECASE)
     if quantization:
@@ -1340,7 +1340,7 @@ async def lms_download_model(
 
 
 async def lms_delete_model(model_id: str, host: ResolvedHost | None = None) -> dict:
-    """Löscht ein Modell aus LM Studio (via rm -rf auf Modell-Verzeichnis)."""
+    """Deletes a model from LM Studio (via rm -rf on the model directory)."""
     try:
         model_name = model_id.split("/")[-1]
         find_out, _, _ = await _ssh_run(
@@ -1378,13 +1378,13 @@ _SPARK_UNREACHABLE: dict = {
 
 
 def _parse_spark_metrics(stdout: str) -> dict:
-    """Parst kombinierten nvidia-smi + free -m Output."""
+    """Parses combined nvidia-smi + free -m output."""
     try:
         parts = stdout.split("---", 1)
         if len(parts) != 2:
             return dict(_SPARK_UNREACHABLE)
 
-        # nvidia-smi: "47, 88064, 131072, 62" — Unified Memory Geräte (z.B. GB10) liefern "[N/A]"
+        # nvidia-smi: "47, 88064, 131072, 62" — unified memory devices (e.g. GB10) return "[N/A]"
         def _int_or_none(s: str) -> int | None:
             s = s.strip().strip("[]")
             return int(s) if s.lstrip("-").isdigit() else None
@@ -1395,7 +1395,7 @@ def _parse_spark_metrics(stdout: str) -> dict:
         vram_total_mb = _int_or_none(gpu_parts[2])
         gpu_temp_c = _int_or_none(gpu_parts[3])
 
-        # free -m: Zeile die mit "Mem:" beginnt
+        # free -m: line starting with "Mem:"
         ram_used_mb = None
         ram_total_mb = None
         for line in parts[1].splitlines():
@@ -1422,14 +1422,14 @@ def _parse_spark_metrics(stdout: str) -> dict:
 
 
 async def get_host_metrics(host: ResolvedHost | None) -> dict:
-    """Holt live Hardware-Metriken eines Hosts (ADR-048, generisch).
+    """Fetches live hardware metrics for a host (ADR-048, generic).
 
-    - kind ``ssh``      → nvidia-smi + free -m via SSH (gleiche Parsing-Logik
-      wie das alte get_spark_metrics — jetzt pro Host statt hart DGX).
-    - kind ``flask_wol`` → kein SSH-Kanal: Health-Status des Control-Servers
-      statt GPU-Metrics (reachable = Box wach + :5555 antwortet).
-    - kind ``local``    → keine Metrics (der MC-Host misst sich nicht selbst).
-    - host=None         → Settings-Fallback in _ssh_run (klassische Ein-Box).
+    - kind ``ssh``      → nvidia-smi + free -m via SSH (same parsing logic
+      as the old get_spark_metrics — now per host instead of hardcoded DGX).
+    - kind ``flask_wol`` → no SSH channel: health status of the control server
+      instead of GPU metrics (reachable = box awake + :5555 responds).
+    - kind ``local``    → no metrics (the MC host doesn't measure itself).
+    - host=None         → settings fallback in _ssh_run (classic single-box).
     """
     if host is not None and host.kind == "flask_wol":
         reachable = bool(host.control_url) and await _porsche_reachable(host.control_url)
@@ -1448,11 +1448,11 @@ async def get_host_metrics(host: ResolvedHost | None) -> dict:
 
 
 async def get_spark_metrics() -> dict:
-    """Holt live Hardware-Metriken vom DGX Spark via SSH.
+    """Fetches live hardware metrics from the DGX Spark via SSH.
 
-    Back-Compat-Wrapper (ADR-048): delegiert an get_host_metrics() mit dem
-    Settings-Fallback-Host — der geseedete `dgx-spark`-Registry-Host trägt
-    dieselben Werte. Neue Aufrufer nutzen get_host_metrics(resolved_host).
+    Back-compat wrapper (ADR-048): delegates to get_host_metrics() with the
+    settings fallback host — the seeded `dgx-spark` registry host carries
+    the same values. New callers use get_host_metrics(resolved_host).
     """
     return await get_host_metrics(settings_fallback_host())
 
@@ -1461,7 +1461,7 @@ async def get_spark_metrics() -> dict:
 
 
 async def search_lmstudio_catalog(query: str) -> list[dict]:
-    """Sucht im LM Studio Catalog (lmstudio-community auf HuggingFace)."""
+    """Searches the LM Studio catalog (lmstudio-community on HuggingFace)."""
     if not query.strip():
         return []
     try:
@@ -1494,7 +1494,7 @@ async def search_lmstudio_catalog(query: str) -> list[dict]:
 
 
 async def get_hf_repo_files(repo_id: str) -> dict:
-    """Holt alle GGUF-Dateien eines HuggingFace Repos."""
+    """Fetches all GGUF files of a HuggingFace repo."""
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(f"https://huggingface.co/api/models/{repo_id}?blobs=true")
@@ -1519,7 +1519,7 @@ async def get_hf_repo_files(repo_id: str) -> dict:
 async def download_hf_file(
     repo_id: str, filename: str, host: ResolvedHost | None = None
 ) -> dict:
-    """Lädt eine GGUF-Datei von HuggingFace direkt ins LM Studio Models-Verzeichnis."""
+    """Downloads a GGUF file from HuggingFace directly into the LM Studio models directory."""
     author, _, model_name = repo_id.partition("/")
     dest_dir = f"~/.lmstudio/models/{author}/{model_name}"
     safe_name = (repo_id + "_" + filename).replace("/", "_").replace(" ", "_")
@@ -1540,11 +1540,11 @@ async def download_hf_file(
 
 
 async def get_active_downloads(host: ResolvedHost | None = None) -> list[dict]:
-    """Gibt alle aktiven Downloads zurück (lms get + HF curl), dedupliziert."""
+    """Returns all active downloads (lms get + HF curl), deduplicated."""
     results: list[dict] = []
     seen_ids: set[str] = set()
 
-    # ── lms get Prozesse — nur echte lms-Binaries, nicht bash-Wrapper ──
+    # ── lms get processes — only real lms binaries, not bash wrappers ──
     try:
         ps_out, _, _ = await _ssh_run(
             "ps aux | grep '[l]ms get' | grep -v 'bash -c' 2>/dev/null", host=host
@@ -1574,7 +1574,7 @@ async def get_active_downloads(host: ResolvedHost | None = None) -> list[dict]:
     except Exception as e:
         logger.warning("Download-Check (lms) fehlgeschlagen: %s", e)
 
-    # ── HF curl Prozesse ──
+    # ── HF curl processes ──
     try:
         ps_out, _, _ = await _ssh_run("ps aux | grep '[c]url' | grep 'huggingface' 2>/dev/null", host=host)
         for line in ps_out.strip().splitlines():
@@ -1607,22 +1607,22 @@ async def get_active_downloads(host: ResolvedHost | None = None) -> list[dict]:
 
 
 async def list_db_runtimes(session: AsyncSession) -> list[Runtime]:
-    """Gibt alle Runtime-Rows aus der DB zurück, sortiert nach ui_order.
+    """Returns all runtime rows from the DB, sorted by ui_order.
 
-    Phase 16 (D-03): Ersetzt load_registry() als primärer Datenpfad für
-    GET /runtimes. load_registry() bleibt für den Bootstrap-Seed (D-02)
-    erhalten und wird vom main.py lifespan + Migration 0094 aufgerufen.
+    Phase 16 (D-03): replaces load_registry() as the primary data path for
+    GET /runtimes. load_registry() is kept for the bootstrap seed (D-02)
+    and is called by the main.py lifespan + migration 0094.
     """
     result = await session.exec(select(Runtime).order_by(Runtime.ui_order))
     return list(result.all())
 
 
 async def cancel_download(model_name: str, host: ResolvedHost | None = None) -> dict:
-    """Bricht einen laufenden Download ab (pkill + Log aufräumen)."""
+    """Cancels a running download (pkill + clean up log)."""
     try:
-        # Alle Prozesse die diesen Modellnamen im lms get Befehl haben killen
+        # Kill all processes that have this model name in the lms get command
         await _ssh_run(f"pkill -f \"lms get '?{re.escape(model_name)}'?\" 2>/dev/null; true", host=host)
-        # Log-Datei entfernen
+        # Remove log file
         safe_id = model_name.replace("/", "_").replace(" ", "_")
         await _ssh_run(f"rm -f /tmp/lms-download-{safe_id}.log 2>/dev/null; true", host=host)
         logger.info("Download abgebrochen: %s", model_name)

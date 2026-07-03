@@ -1,22 +1,22 @@
-"""Qdrant Service — Vektorsuche fuer das 3-stufige Memory-System.
+"""Qdrant Service — vector search for the 3-tier memory system.
 
-Phase 3 (2026-04-11): 3 getrennte Collections pro Memory-Layer:
+Phase 3 (2026-04-11): 3 separate collections per memory layer:
 
-- memory_semantic: wiederverwendbares Wissen (knowledge, reference, research).
-  Global + board-scoped, keine Recency-Bevorzugung.
-- memory_agent: Agent-private Lessons + Peer-Lessons. Immer gefiltert nach
-  agent_id im payload.
-- memory_episodic: zeitgebundene Events (journal, weekly_review, insight,
-  task_log). Recency-Score via created_at im payload.
+- memory_semantic: reusable knowledge (knowledge, reference, research).
+  Global + board-scoped, no recency preference.
+- memory_agent: agent-private lessons + peer lessons. Always filtered by
+  agent_id in the payload.
+- memory_episodic: time-bound events (journal, weekly_review, insight,
+  task_log). Recency score via created_at in the payload.
 
-Payload-Schema (pro Point):
+Payload schema (per point):
     memory_id: UUID (DB primary key, string)
     memory_type: str  (knowledge, lesson, journal, ...)
     agent_id: str | None
     board_id: str | None
     title: str | None
-    content_preview: str (erste 500 Chars)
-    created_at: float (unix timestamp, fuer recency boost)
+    content_preview: str (first 500 chars)
+    created_at: float (unix timestamp, for recency boost)
     tags: list[str]
 
 Usage:
@@ -219,8 +219,8 @@ class QdrantService:
             filters = qmodels.Filter(must=must)
 
         client = await self._get_client()
-        # Phase C (2026-04-11): fuer episodic layer mehr holen um Recency-
-        # Boost anwenden zu koennen (Re-Rank auf Client-Seite).
+        # Phase C (2026-04-11): fetch more for the episodic layer so we can
+        # apply a recency boost (re-rank on the client side).
         search_limit = top_k * 3 if layer == "episodic" else top_k
         try:
             response = await client.query_points(
@@ -244,21 +244,21 @@ class QdrantService:
             for r in results
         ]
 
-        # Recency-Boost nur fuer episodic — time-sensitive events
+        # Recency boost only for episodic — time-sensitive events
         if layer == "episodic" and hits:
             import time as _time
             now = _time.time()
-            # 30 days decay: frische Events bekommen voll, 30-Tage-alt halbiert
+            # 30 days decay: fresh events get full weight, 30-days-old is halved
             DECAY_SEC = 30 * 24 * 3600
-            RECENCY_WEIGHT = 0.25  # max 25% Boost fuer ganz frische Events
+            RECENCY_WEIGHT = 0.25  # max 25% boost for very fresh events
             for h in hits:
                 created = float(h["payload"].get("created_at", 0) or 0)
                 if created > 0:
                     age = max(0.0, now - created)
-                    recency = max(0.0, 1.0 - (age / DECAY_SEC))  # 1.0 (jetzt) → 0.0 (30d+)
+                    recency = max(0.0, 1.0 - (age / DECAY_SEC))  # 1.0 (now) → 0.0 (30d+)
                     h["score"] = h["score"] + RECENCY_WEIGHT * recency
                     h["_recency_boost"] = RECENCY_WEIGHT * recency
-            # Re-sort und auf top_k truncaten
+            # Re-sort and truncate to top_k
             hits.sort(key=lambda h: h["score"], reverse=True)
             hits = hits[:top_k]
 

@@ -1,25 +1,25 @@
-"""Agent-Provisioning — runtime-aware (post-Gateway-Sunset, Phase 29).
+"""Agent Provisioning — runtime-aware (post-gateway-sunset, Phase 29).
 
-Vor Phase 29: provisioning.py orchestrierte den Gateway-Push (config.patch +
-agents.files.set + sessions.reset). Mit dem OpenClaw-Sunset (D-11) entfaellt
-dieser komplette Pfad. provision_agent_background() delegiert jetzt
+Before Phase 29: provisioning.py orchestrated the gateway push (config.patch +
+agents.files.set + sessions.reset). With the OpenClaw sunset (D-11), that
+entire path is gone. provision_agent_background() now delegates
 runtime-aware:
 
-- agent_runtime == "cli-bridge": Compose neu rendern + Docker-Files syncen +
-  Status auf 'provisioned' setzen.
-- agent_runtime == "host": Boss-on-host laeuft via launchd, kein Provisioning
-  noetig — wir markieren nur 'provisioned'.
-- Sonstige Runtimes: Warnung + Status 'local'.
+- agent_runtime == "cli-bridge": re-render compose + sync docker files +
+  set status to 'provisioned'.
+- agent_runtime == "host": Boss-on-host runs via launchd, no provisioning
+  needed — we just mark it 'provisioned'.
+- Other runtimes: warning + status 'local'.
 
-Die ehemaligen Gateway-Sync-Helper (Skills- und Model-Push) und die Inline-
-RPC-Aufrufe sind komplett entfernt.
+The former gateway sync helpers (skills and model push) and the inline
+RPC calls have been completely removed.
 
-Phase 30: cleanup_sync_ghosts wurde geloescht — der einzige Konsument war der
-inzwischen entfernte Gateway-Startup-Sync, und post-Phase-30 existiert
-gateway_agent_id auf dem Agent-Model nicht mehr.
+Phase 30: cleanup_sync_ghosts was deleted — its only consumer was the
+gateway startup sync (since removed), and post-Phase-30 gateway_agent_id
+no longer exists on the agent model.
 
-convert_model_to_oc_format ist mit TODO-Phase-31-Hinweis weiterhin exportiert,
-weil routers/agents.py:1781 ihn noch importiert; Plan 29-05 raeumt das auf.
+convert_model_to_oc_format is still exported with a TODO-Phase-31 note
+because routers/agents.py:1781 still imports it; plan 29-05 will clean this up.
 """
 
 import logging
@@ -34,16 +34,16 @@ from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
 
-# ── Konstanten ─────────────────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────────────
 
-# Subset das ehemals auf den Gateway gepusht wurde. Wird von routers/agents.py
-# noch verwendet (TOOLS.md / SOUL.md / HEARTBEAT.md / MEMORY.md auf Disk-Layer);
-# Plan 29-05 raeumt diese Konstante mit auf wenn die Gateway-Push-Pfade dort
-# vollstaendig entfernt sind.
+# Subset that used to be pushed to the gateway. Still used by routers/agents.py
+# (TOOLS.md / SOUL.md / HEARTBEAT.md / MEMORY.md on the disk layer);
+# plan 29-05 will clean up this constant once the gateway push paths there
+# are fully removed.
 GATEWAY_SYNC_FILE_TYPES = {"tools_md", "identity_md", "soul_md", "memory_md"}
 
-# Mapping MC field names → File names auf Disk (cli-bridge nutzt diese Namen
-# fuer die gerenderten Dateien unter ~/.mc/agents/{slug}/agent/).
+# Mapping of MC field names → file names on disk (cli-bridge uses these names
+# for the rendered files under ~/.mc/agents/{slug}/agent/).
 # heartbeat_md removed in migration 0125 — was never read by agents.
 OC_FILENAME_MAP = {
     "soul_md": "SOUL.md",
@@ -53,7 +53,7 @@ OC_FILENAME_MAP = {
 }
 
 
-# ── Hilfsfunktionen ───────────────────────────────────────────────────────────
+# ── Helper functions ─────────────────────────────────────────────────────────
 
 def convert_model_to_oc_format(model: str | None) -> str:
     """MC model format → OpenClaw provider/model format.
@@ -61,10 +61,10 @@ def convert_model_to_oc_format(model: str | None) -> str:
     glm-5:cloud           → ollama-cloud/glm-5
     minimax-m2.5:cloud    → ollama-cloud/minimax-m2.5
     qwen3.5:397b-cloud    → ollama-cloud/qwen3.5:397b
-    openai/gpt-4          → openai/gpt-4  (unveraendert)
+    openai/gpt-4          → openai/gpt-4  (unchanged)
 
-    TODO Phase 31: nach Cleanup der letzten Gateway-spezifischen Modelnamen
-    in routers/agents.py kann diese Funktion ersatzlos entfallen.
+    TODO Phase 31: once the last gateway-specific model names in
+    routers/agents.py are cleaned up, this function can be removed outright.
     """
     if not model:
         return "ollama-cloud/minimax-m2.5"
@@ -79,7 +79,7 @@ def convert_model_to_oc_format(model: str | None) -> str:
 
 
 def extract_token_from_tools_md(tools_md: str) -> str | None:
-    """Extrahiert den Bearer-Token aus einer bestehenden TOOLS.md."""
+    """Extracts the bearer token from an existing TOOLS.md."""
     match = re.search(r"Authorization: Bearer ([A-Za-z0-9_\-]+)", tools_md)
     return match.group(1) if match else None
 
@@ -87,14 +87,14 @@ def extract_token_from_tools_md(tools_md: str) -> str | None:
 # ── Provisioning (D-11: runtime-aware) ─────────────────────────────────────────
 
 async def provision_agent_background(agent_id: uuid.UUID) -> None:
-    """Provisioniert Agent runtime-aware (D-11).
+    """Provisions an agent runtime-aware (D-11).
 
     cli-bridge → write_compose_agents + sync_docker_agent_files + mark provisioned
-    host       → mark provisioned (Boss-on-host bootet via launchd)
+    host       → mark provisioned (Boss-on-host boots via launchd)
     other      → warn + mark provision_status='local'
 
-    Commits exactly once per branch (D-15: kein try/except um SQL). Failures
-    propagate to the BackgroundTask-Caller, der sie loggt.
+    Commits exactly once per branch (D-15: no try/except around SQL). Failures
+    propagate to the BackgroundTask caller, which logs them.
     """
     from app.database import engine
 
@@ -117,13 +117,13 @@ async def provision_agent_background(agent_id: uuid.UUID) -> None:
             sync_results = await sync_docker_agent_files(session, agent)
 
             if "_error" in sync_results:
-                # Kein Silent-Fail (OSS Fresh-Install-Pfad): direkt nach
-                # Template-Instantiate existiert ~/.mc/agents/{slug}/claude-config/
-                # noch nicht — das legt erst der Provision-Schritt (cli-bridge
-                # Host-Helper) an. Der Agent ist dann NICHT provisioniert;
-                # Status ehrlich auf 'local' lassen statt faelschlich
-                # 'provisioned' zu melden (ProvisionBadge wuerde sonst "Live"
-                # zeigen ohne Files/Container).
+                # No silent fail (OSS fresh-install path): right after
+                # template instantiation, ~/.mc/agents/{slug}/claude-config/
+                # doesn't exist yet — only the provision step (cli-bridge
+                # host helper) creates it. The agent is then NOT provisioned;
+                # honestly leave status at 'local' instead of falsely
+                # reporting 'provisioned' (otherwise ProvisionBadge would show
+                # "Live" without files/container).
                 logger.warning(
                     "provision_agent_background(%s): file-sync failed — %s",
                     agent.name, sync_results["_error"],
@@ -145,10 +145,10 @@ async def provision_agent_background(agent_id: uuid.UUID) -> None:
                 )
                 return
 
-            # Autostart: Files+Compose liegen — Container hochbringen, damit
-            # One-Click-Deploy wirklich in einem laufenden Agent endet statt
-            # auf einen Runtime-Switch oder start-all.sh zu warten. Läuft der
-            # Container schon (Re-Provision), wird er bewusst nicht angefasst.
+            # Autostart: files+compose are in place — bring up the container so
+            # one-click-deploy really ends with a running agent instead of
+            # waiting on a runtime switch or start-all.sh. If the container is
+            # already running (re-provision), it's deliberately left untouched.
             start_result = ensure_agent_container_started(agent)
             start_status = start_result.get("status", "")
 
@@ -206,7 +206,7 @@ async def provision_agent_background(agent_id: uuid.UUID) -> None:
             )
             return
 
-        # Andere Runtimes: nicht provisionierbar via diesem Service.
+        # Other runtimes: not provisionable via this service.
         logger.warning(
             "Agent %s has unsupported runtime '%s' for provisioning — marking 'local'",
             agent_id, runtime,

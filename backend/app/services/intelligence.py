@@ -1,11 +1,11 @@
 """
-Intelligence Service — MC denkt mit.
+Intelligence Service — MC thinks along.
 
-Periodische Analyse von Task-Daten, Agent-Performance und Failure-Patterns.
-Rule-based Analyse (kein LLM noetig) + optionale taegliche LLM-Destillation via Ollama.
-Fuettert Erkenntnisse zurueck ins System (Dispatch-Messages, ActivityEvents, AgentMetrics).
+Periodic analysis of task data, agent performance, and failure patterns.
+Rule-based analysis (no LLM needed) + optional daily LLM distillation via Ollama.
+Feeds insights back into the system (dispatch messages, ActivityEvents, AgentMetrics).
 
-Gleicher Pattern wie WatchdogService: Singleton, asyncio loop, Redis lock.
+Same pattern as WatchdogService: singleton, asyncio loop, Redis lock.
 """
 
 import asyncio
@@ -30,7 +30,7 @@ from app.services.activity import emit_event
 
 logger = logging.getLogger("mc.intelligence")
 
-# Bekannte Fehler-Muster fuer Keyword-Matching
+# Known failure patterns for keyword matching
 FAILURE_KEYWORDS: dict[str, list[str]] = {
     "timeout": ["timeout", "timed out", "zeitueberschreitung"],
     "permission": ["permission", "denied", "access", "zugriff"],
@@ -58,7 +58,7 @@ class IntelligenceService:
         return self._last_analysis_at
 
     async def _get_config(self):
-        """Config aus Redis lesen, Fallback auf Defaults."""
+        """Read config from Redis, fallback to defaults."""
         from app.routers.system import IntelligenceConfig
 
         try:
@@ -71,7 +71,7 @@ class IntelligenceService:
         return IntelligenceConfig()
 
     async def trigger_analysis(self) -> str:
-        """Manueller Trigger — Analyse sofort ausfuehren."""
+        """Manual trigger — run analysis immediately."""
         await self._analyze_all()
         self._last_analysis_at = utcnow()
         self._cycles_total += 1
@@ -96,7 +96,7 @@ class IntelligenceService:
         logger.info("Intelligence stopped")
 
     async def _run_loop(self) -> None:
-        # Grace Period: warten bis DB + Redis + andere Services bereit
+        # Grace period: wait until DB + Redis + other services are ready
         await asyncio.sleep(20)
         while self._running:
             try:
@@ -123,7 +123,7 @@ class IntelligenceService:
             await asyncio.sleep(config.interval_seconds)
 
     async def _acquire_lock(self) -> bool:
-        """Redis-Lock damit nur ein Worker pro Zyklus die Analyse ausfuehrt."""
+        """Redis lock so only one worker per cycle runs the analysis."""
         try:
             redis = await get_redis()
             acquired = await redis.set(
@@ -133,7 +133,7 @@ class IntelligenceService:
         except Exception:
             return True
 
-    # ── Haupt-Analyse ──────────────────────────────────────────────────
+    # ── Main Analysis ──────────────────────────────────────────────────
 
     async def _analyze_all(self) -> None:
         config = await self._get_config()
@@ -152,7 +152,7 @@ class IntelligenceService:
             await self._populate_agent_metrics(session)
             await self._maybe_daily_destillation(insights, config)
 
-            # Zusammenfassung loggen
+            # Log summary
             td = insights["task_durations"]
             fp = insights["failure_patterns"]
             ap = insights["agent_performance"]
@@ -165,10 +165,10 @@ class IntelligenceService:
                 len(anomalies),
             )
 
-    # ── Task-Dauer-Analyse ─────────────────────────────────────────────
+    # ── Task Duration Analysis ─────────────────────────────────────────
 
     async def _analyze_task_durations(self, session: AsyncSession, config=None) -> dict:
-        """Alle done-Tasks der letzten N Tage analysieren: Durchschnitt, Outlier, pro Agent."""
+        """Analyze all done tasks of the last N days: average, outliers, per agent."""
         window_days = config.analysis_window_days if config else 7
         cutoff = utcnow() - timedelta(days=window_days)
         result = await session.exec(
@@ -184,7 +184,7 @@ class IntelligenceService:
         if not tasks:
             return {"avg_minutes": 0, "total": 0, "outliers": [], "per_agent": {}}
 
-        # Dauern berechnen
+        # Compute durations
         durations: list[dict] = []
         for t in tasks:
             started = ensure_aware(t.started_at)  # type: ignore[union-attr]
@@ -204,11 +204,11 @@ class IntelligenceService:
 
         avg = sum(d["minutes"] for d in durations) / len(durations)
 
-        # Outlier: >Nx Durchschnitt
+        # Outliers: >Nx average
         multiplier = config.outlier_multiplier if config else 2.0
         outliers = [d for d in durations if d["minutes"] > avg * multiplier]
 
-        # Pro Agent
+        # Per agent
         agent_durations: dict[str, list[float]] = {}
         for d in durations:
             aid = d["agent_id"] or "unassigned"
@@ -219,7 +219,7 @@ class IntelligenceService:
             for aid, mins in agent_durations.items()
         }
 
-        # Agent-Namen auflösen
+        # Resolve agent names
         agent_ids = [uid for uid in per_agent if uid != "unassigned"]
         if agent_ids:
             name_result = await session.exec(
@@ -236,7 +236,7 @@ class IntelligenceService:
             for aid, avg_min in per_agent.items()
         }
 
-        # Outlier mit Agent-Namen anreichern
+        # Enrich outliers with agent names
         for o in outliers:
             o["agent"] = name_map.get(o.get("agent_id", ""), "unassigned")
 
@@ -247,10 +247,10 @@ class IntelligenceService:
             "per_agent": per_agent_named,
         }
 
-    # ── Agent-Performance ──────────────────────────────────────────────
+    # ── Agent Performance ──────────────────────────────────────────────
 
     async def _analyze_agent_performance(self, session: AsyncSession, config=None) -> list[dict]:
-        """Pro Agent: Tasks done, failed, Success Rate, Avg Dauer."""
+        """Per agent: tasks done, failed, success rate, avg duration."""
         window_days = config.analysis_window_days if config else 7
         cutoff = utcnow() - timedelta(days=window_days)
 
@@ -261,7 +261,7 @@ class IntelligenceService:
 
         performance: list[dict] = []
         for agent in agents:
-            # Done-Tasks
+            # Done tasks
             done_result = await session.exec(
                 select(func.count()).where(
                     Task.assigned_agent_id == agent.id,
@@ -271,7 +271,7 @@ class IntelligenceService:
             )
             done_count = done_result.one()
 
-            # Failed-Tasks
+            # Failed tasks
             failed_result = await session.exec(
                 select(func.count()).where(
                     Task.assigned_agent_id == agent.id,
@@ -284,7 +284,7 @@ class IntelligenceService:
             total = done_count + failed_count
             success_rate = (done_count / total * 100) if total > 0 else 100.0
 
-            # Durchschnittliche Dauer
+            # Average duration
             dur_result = await session.exec(
                 select(Task).where(
                     Task.assigned_agent_id == agent.id,
@@ -315,10 +315,10 @@ class IntelligenceService:
 
         return performance
 
-    # ── Failure-Pattern-Erkennung ──────────────────────────────────────
+    # ── Failure Pattern Detection ──────────────────────────────────────
 
     async def _detect_failure_patterns(self, session: AsyncSession, config=None) -> dict:
-        """Failed-Tasks der letzten N Tage: Keyword-Matching auf Kommentare."""
+        """Failed tasks of the last N days: keyword matching on comments."""
         window_days = config.analysis_window_days if config else 7
         cutoff = utcnow() - timedelta(days=window_days)
         result = await session.exec(
@@ -332,7 +332,7 @@ class IntelligenceService:
         if not failed_tasks:
             return {"total": 0, "patterns": {}, "details": []}
 
-        # Agent-Namen laden
+        # Load agent names
         agent_ids = [t.assigned_agent_id for t in failed_tasks if t.assigned_agent_id]
         name_map: dict[str, str] = {}
         if agent_ids:
@@ -347,7 +347,7 @@ class IntelligenceService:
         details: list[dict] = []
 
         for task in failed_tasks:
-            # Letzten Kommentar als Fehlergrund laden
+            # Load last comment as failure reason
             comment_result = await session.exec(
                 select(TaskComment)
                 .where(TaskComment.task_id == task.id)
@@ -357,7 +357,7 @@ class IntelligenceService:
             comment = comment_result.first()
             reason = comment.content if comment else ""
 
-            # Keyword-Matching
+            # Keyword matching
             text_lower = f"{task.title} {reason}".lower()
             matched_pattern = "unknown"
             for pattern_name, keywords in FAILURE_KEYWORDS.items():
@@ -385,12 +385,12 @@ class IntelligenceService:
             "details": details[:20],  # Max 20
         }
 
-    # ── Anomalie-Erkennung ─────────────────────────────────────────────
+    # ── Anomaly Detection ──────────────────────────────────────────────
 
     async def _detect_anomalies(
         self, session: AsyncSession, insights: dict, config=None
     ) -> list[dict]:
-        """Proaktive Alerts bei auffaelligen Mustern."""
+        """Proactive alerts for conspicuous patterns."""
         anomalies: list[dict] = []
         td = insights.get("task_durations", {})
         ap = insights.get("agent_performance", [])
@@ -400,7 +400,7 @@ class IntelligenceService:
         success_threshold = config.success_rate_threshold if config else 50.0
         failure_threshold = config.failure_count_threshold if config else 5
 
-        # 1. Outlier-Tasks (>Nx Durchschnitt)
+        # 1. Outlier tasks (>Nx average)
         outliers = td.get("outliers", [])
         if outliers:
             anomalies.append({
@@ -409,7 +409,7 @@ class IntelligenceService:
                 "severity": "info",
             })
 
-        # 2. Agents mit niedriger Success Rate
+        # 2. Agents with low success rate
         for agent in ap:
             if agent["done"] + agent["failed"] >= 3 and agent["success_rate"] < success_threshold:
                 desc = (
@@ -424,7 +424,7 @@ class IntelligenceService:
                     "agent_id": agent["agent_id"],
                 })
 
-        # 3. Haeufige Failures
+        # 3. Frequent failures
         total_failures = fp.get("total", 0)
         if total_failures > failure_threshold:
             top_pattern = max(fp.get("patterns", {}), key=fp["patterns"].get, default="unknown")
@@ -434,7 +434,7 @@ class IntelligenceService:
                 "severity": "warning",
             })
 
-        # Anomalie-Events emittieren
+        # Emit anomaly events
         for anomaly in anomalies:
             if anomaly["severity"] == "warning":
                 await emit_event(
@@ -451,7 +451,7 @@ class IntelligenceService:
     # ── AgentMetrics Populator ─────────────────────────────────────────
 
     async def _populate_agent_metrics(self, session: AsyncSession) -> None:
-        """Fuellt die bestehende AgentMetrics Tabelle (stuendlich pro Agent)."""
+        """Fills the existing AgentMetrics table (hourly per agent)."""
         now = utcnow()
         hour_key = now.strftime("%Y%m%d%H")
 
@@ -462,7 +462,7 @@ class IntelligenceService:
         redis = await get_redis()
 
         for agent in agents:
-            # Dedup: einmal pro Stunde pro Agent
+            # Dedup: once per hour per agent
             dedup_key = RedisKeys.intelligence_metrics_dedup(str(agent.id), hour_key)
             already = await redis.get(dedup_key)
             if already:
@@ -471,7 +471,7 @@ class IntelligenceService:
             period_start = now.replace(minute=0, second=0, microsecond=0)
             period_end = period_start + timedelta(hours=1)
 
-            # Tasks started (in dieser Stunde)
+            # Tasks started (in this hour)
             started_result = await session.exec(
                 select(func.count()).where(
                     Task.assigned_agent_id == agent.id,
@@ -481,7 +481,7 @@ class IntelligenceService:
             )
             tasks_started = started_result.one()
 
-            # Tasks completed (in dieser Stunde)
+            # Tasks completed (in this hour)
             completed_result = await session.exec(
                 select(func.count()).where(
                     Task.assigned_agent_id == agent.id,
@@ -492,7 +492,7 @@ class IntelligenceService:
             )
             tasks_completed = completed_result.one()
 
-            # Comments posted (in dieser Stunde)
+            # Comments posted (in this hour)
             comments_result = await session.exec(
                 select(func.count()).where(
                     TaskComment.author_agent_id == agent.id,
@@ -502,7 +502,7 @@ class IntelligenceService:
             )
             comments_posted = comments_result.one()
 
-            # Avg Task Duration (alle done-Tasks der letzten 24h)
+            # Avg task duration (all done tasks of the last 24h)
             cutoff_24h = now - timedelta(hours=24)
             dur_result = await session.exec(
                 select(Task).where(
@@ -536,7 +536,7 @@ class IntelligenceService:
             )
             session.add(metrics)
 
-            # Dedup-Flag setzen (2h TTL)
+            # Set dedup flag (2h TTL)
             await redis.set(dedup_key, "1", ex=7200)
 
         await session.commit()
@@ -544,40 +544,40 @@ class IntelligenceService:
     # ── Insight Cache (Redis) ──────────────────────────────────────────
 
     async def _cache_insights(self, insights: dict) -> None:
-        """Aktuelle Analyse-Ergebnisse als JSON in Redis cachen."""
+        """Cache current analysis results as JSON in Redis."""
         try:
             redis = await get_redis()
             await redis.set(
                 RedisKeys.intelligence_insights(),
                 json.dumps(insights, default=str),
-                ex=600,  # 10 Minuten TTL
+                ex=600,  # 10 minute TTL
             )
         except Exception as e:
             logger.warning("Failed to cache insights: %s", e)
 
-    # ── LLM-Destillation (taeglich) ───────────────────────────────────
+    # ── LLM Distillation (daily) ──────────────────────────────────────
 
     async def _maybe_daily_destillation(self, insights: dict, config=None) -> None:
-        """Einmal taeglich: Patterns via Ollama in lesbare Erkenntnisse destillieren."""
+        """Once daily: distill patterns into readable insights via Ollama."""
         try:
             redis = await get_redis()
-            # Dedup: max 1x pro 20 Stunden
+            # Dedup: max 1x per 20 hours
             dedup_key = RedisKeys.intelligence_daily_dedup()
             already = await redis.get(dedup_key)
             if already:
                 return
 
-            # Nur destillieren wenn es genug Daten gibt
+            # Only distill if there's enough data
             td = insights.get("task_durations", {})
             if td.get("total", 0) < 3:
                 return
 
-            # Ollama aufrufen
+            # Call Ollama
             response = await self._call_ollama(self._build_destillation_prompt(insights, config), config)
             if not response:
                 return
 
-            # Als BoardMemory speichern
+            # Save as BoardMemory
             async with AsyncSession(engine, expire_on_commit=False) as session:
                 today = utcnow().strftime("%Y-%m-%d")
                 memory = BoardMemory(
@@ -606,7 +606,7 @@ class IntelligenceService:
                     severity="info",
                 )
 
-            # Dedup-Flag setzen (20h TTL)
+            # Set dedup flag (20h TTL)
             await redis.set(dedup_key, "1", ex=72000)
             logger.info("Daily intelligence report created")
 
@@ -614,7 +614,7 @@ class IntelligenceService:
             logger.warning("Daily destillation failed (non-critical): %s", e)
 
     def _build_destillation_prompt(self, insights: dict, config=None) -> str:
-        """Prompt fuer Ollama aus den aktuellen Insights zusammenbauen."""
+        """Build the Ollama prompt from the current insights."""
         td = insights.get("task_durations", {})
         ap = insights.get("agent_performance", [])
         fp = insights.get("failure_patterns", {})
@@ -652,7 +652,7 @@ class IntelligenceService:
 - Anomalien:
 {anomaly_lines}"""
 
-        # Custom system prompt wenn gesetzt
+        # Custom system prompt if set
         if config and config.system_prompt.strip():
             return f"""{config.system_prompt.strip()}
 
@@ -667,7 +667,7 @@ Jede Erkenntnis: **Titel** + kurze Erklaerung + Empfehlung.
 Schreibe auf Deutsch, maximal 500 Woerter. Sei konkret und praxisnah."""
 
     async def _call_ollama(self, prompt: str, config=None) -> str | None:
-        """HTTP POST an lokales Ollama. Graceful degradation bei Fehler."""
+        """HTTP POST to local Ollama. Graceful degradation on error."""
         model = config.ollama_model if config else "qwen2.5-coder:14b"
         temperature = config.temperature if config else 0.3
         max_tokens = config.max_tokens if config else 1024
@@ -698,10 +698,10 @@ Schreibe auf Deutsch, maximal 500 Woerter. Sei konkret und praxisnah."""
             return None
 
 
-# ── Hilfsfunktion fuer Dispatch ────────────────────────────────────
+# ── Helper Function for Dispatch ──────────────────────────────────
 
 async def fetch_recent_insights(session: AsyncSession, limit: int = 2) -> list[BoardMemory]:
-    """Neueste auto-generierte Intelligence-Insights laden (fuer Dispatch-Messages)."""
+    """Load the newest auto-generated intelligence insights (for dispatch messages)."""
     result = await session.exec(
         select(BoardMemory)
         .where(
@@ -714,5 +714,5 @@ async def fetch_recent_insights(session: AsyncSession, limit: int = 2) -> list[B
     return list(result.all())
 
 
-# Singleton-Instanz
+# Singleton instance
 intelligence = IntelligenceService()

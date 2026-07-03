@@ -1,10 +1,10 @@
-"""Tests fuer Approval Cleanup — Task-Status supersedes obsolete Approvals.
+"""Tests for approval cleanup — task status supersedes obsolete approvals.
 
-Lifecycle-Regeln:
-- blocker_decision: gueltig nur bei task.status == blocked
-- spawn_timeout: gueltig nur bei task.status == inbox
-- dispatch_escalation: gueltig nur bei task.status == inbox
-- Wenn Task den Zustand verlaesst → Approval → superseded
+Lifecycle rules:
+- blocker_decision: valid only when task.status == blocked
+- spawn_timeout: valid only when task.status == inbox
+- dispatch_escalation: valid only when task.status == inbox
+- When task leaves the state → approval → superseded
 """
 import uuid
 
@@ -39,7 +39,7 @@ async def _create_task_with_approval(action_type: str, task_status: str = "block
 
 @pytest.mark.asyncio
 async def test_blocker_decision_superseded_on_unblock():
-    """blocker_decision → superseded wenn Task nicht mehr blocked."""
+    """blocker_decision → superseded when task is no longer blocked."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -54,7 +54,7 @@ async def test_blocker_decision_superseded_on_unblock():
 
 @pytest.mark.asyncio
 async def test_spawn_timeout_superseded_on_progress():
-    """spawn_timeout → superseded wenn Task nicht mehr inbox."""
+    """spawn_timeout → superseded when task is no longer inbox."""
     ids = await _create_task_with_approval("spawn_timeout", task_status="inbox")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -68,7 +68,7 @@ async def test_spawn_timeout_superseded_on_progress():
 
 @pytest.mark.asyncio
 async def test_dispatch_escalation_superseded_on_ack():
-    """dispatch_escalation → superseded wenn Task nicht mehr inbox."""
+    """dispatch_escalation → superseded when task is no longer inbox."""
     ids = await _create_task_with_approval("dispatch_escalation", task_status="inbox")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -82,7 +82,7 @@ async def test_dispatch_escalation_superseded_on_ack():
 
 @pytest.mark.asyncio
 async def test_blocker_stays_pending_while_blocked():
-    """blocker_decision bleibt pending wenn Task immer noch blocked."""
+    """blocker_decision stays pending while task is still blocked."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -96,7 +96,7 @@ async def test_blocker_stays_pending_while_blocked():
 
 @pytest.mark.asyncio
 async def test_approved_not_overwritten():
-    """Bereits approved Approval wird nicht versehentlich überschrieben."""
+    """An already approved approval is not accidentally overwritten."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -113,23 +113,23 @@ async def test_approved_not_overwritten():
         s.add(Task(id=task_id, board_id=board_id, title="Approved Task", status="in_progress", assigned_agent_id=agent_id))
         s.add(Approval(id=approval_id, board_id=board_id, task_id=task_id, agent_id=agent_id,
                         action_type="blocker_decision", description="Already resolved",
-                        status="approved"))  # Schon approved!
+                        status="approved"))  # Already approved!
         await s.commit()
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         count = await cleanup_obsolete_approvals(s, task_id, "in_progress", board_id)
-        assert count == 0  # Nicht anfassen!
+        assert count == 0  # Do not touch!
 
         approval = await s.get(Approval, approval_id)
-        assert approval.status == "approved"  # Bleibt approved
+        assert approval.status == "approved"  # Stays approved
 
 
 @pytest.mark.asyncio
 async def test_watchdog_reconciliation():
-    """Watchdog räumt driftende Approvals auf."""
+    """Watchdog cleans up drifted approvals."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
 
-    # Task manuell auf in_progress setzen (simuliert den Drift)
+    # Manually set task to in_progress (simulates the drift)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
         task = await s.get(Task, ids["task_id"])
@@ -137,7 +137,7 @@ async def test_watchdog_reconciliation():
         s.add(task)
         await s.commit()
 
-    # Reconciliation sollte den Drift finden
+    # Reconciliation should find the drift
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         count = await reconcile_stale_approvals(s)
         assert count >= 1
@@ -150,7 +150,7 @@ async def test_watchdog_reconciliation():
 
 @pytest.mark.asyncio
 async def test_done_supersedes_all_flow_approvals():
-    """Task auf done → alle flow-bezogenen pending Approvals superseded."""
+    """Task set to done → all flow-related pending approvals superseded."""
     ids = await _create_task_with_approval("blocker_decision", task_status="blocked")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:

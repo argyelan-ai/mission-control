@@ -1,14 +1,14 @@
 """
-TaskLifecycleService — Zentrale Stelle fuer alle Status-Transition Side-Effects.
+TaskLifecycleService — central place for all status-transition side effects.
 
-Eliminiert die Duplikation zwischen agent_scoped.py und tasks.py bei:
-- Review-Handoff (in_progress → review)
-- Review-Rejection (review → in_progress)
-- Review-Decision (approve / request_changes / hold)
-- Task-Completion/Failure Auto-Memory
-- Feedback-Lesson Capture
+Eliminates the duplication between agent_scoped.py and tasks.py for:
+- Review handoff (in_progress → review)
+- Review rejection (review → in_progress)
+- Review decision (approve / request_changes / hold)
+- Task completion/failure auto-memory
+- Feedback-lesson capture
 
-Beide Router delegieren an diesen Service statt die Logik selbst zu implementieren.
+Both routers delegate to this service instead of implementing the logic themselves.
 """
 
 from __future__ import annotations
@@ -46,9 +46,9 @@ async def record_task_event(
     agent_id: uuid.UUID | None = None,
     reason: str | None = None,
 ) -> None:
-    """Task-Status-Event loggen (Event Sourcing).
+    """Log a task-status event (event sourcing).
 
-    Wird bei JEDER Statusaenderung aufgerufen — egal ob User, Agent, Watchdog oder System.
+    Called on EVERY status change — regardless of whether it's User, Agent, Watchdog, or System.
     """
     event = TaskEvent(
         task_id=task_id,
@@ -59,7 +59,7 @@ async def record_task_event(
         reason=reason,
     )
     session.add(event)
-    # Kein separater commit — Caller committed zusammen mit dem Status-Update
+    # No separate commit — caller commits together with the status update
 
 
 async def reopen_parent_for_new_subtask(
@@ -67,23 +67,23 @@ async def reopen_parent_for_new_subtask(
     parent_task_id: uuid.UUID,
     new_subtask_title: str | None = None,
 ) -> bool:
-    """Parent-Task automatisch auf in_progress zuruecksetzen wenn neuer Subtask
-    erstellt wird waehrend Parent bereits auf `review` oder `done` wartet.
+    """Automatically resets the parent task to in_progress when a new subtask
+    is created while the parent is already waiting on `review` or `done`.
 
-    Grund: Phase-Approval setzt Parent auf review sobald alle bisherigen Subtasks
-    done sind. Wenn der Board Lead danach noch einen Follow-up-Subtask erstellt
-    (z.B. "Neues Konzept basierend auf Research"), wuerde der Parent auf review
-    bleiben — der Operator sieht einen review-Task, obwohl unten eine neue Subarbeit
-    laeuft. Das ist ein Deadlock fuer den Task-Lifecycle.
+    Reason: phase approval sets the parent to review as soon as all existing
+    subtasks are done. If the Board Lead then creates a follow-up subtask
+    (e.g. "New concept based on research"), the parent would stay on review —
+    the operator sees a review task even though new sub-work is running
+    underneath. That's a deadlock for the task lifecycle.
 
-    Verhalten:
-      - parent.status == 'review'  -> zurueck auf in_progress + Event + True
-      - parent.status == 'done'    -> KEIN auto-reopen (Caller muss 422 raisen)
-      - parent.status == 'failed'  -> KEIN auto-reopen
-      - sonst                      -> kein Eingriff, False
+    Behavior:
+      - parent.status == 'review'  -> back to in_progress + event + True
+      - parent.status == 'done'    -> NO auto-reopen (caller must raise 422)
+      - parent.status == 'failed'  -> NO auto-reopen
+      - otherwise                  -> no intervention, False
 
-    Returns: True wenn Parent reopened wurde, sonst False.
-    Kein Commit — Caller commiteert zusammen mit dem Subtask-Insert.
+    Returns: True if the parent was reopened, otherwise False.
+    No commit — caller commits together with the subtask insert.
     """
     parent = await session.get(Task, parent_task_id)
     if parent is None or parent.status != "review":
@@ -92,7 +92,7 @@ async def reopen_parent_for_new_subtask(
     old_status = parent.status
     parent.status = "in_progress"
     parent.updated_at = utcnow()
-    parent.completed_at = None  # falls bereits gesetzt, ruecksetzen
+    parent.completed_at = None  # reset if already set
     session.add(parent)
 
     await record_task_event(
@@ -119,11 +119,11 @@ async def reopen_parent_for_new_subtask(
 
 
 def clear_spawn_tracking(task: Task) -> None:
-    """Spawn-Session-IDs loeschen.
+    """Clear spawn-session IDs.
 
     Lifecycle:
-    - done/failed/blocked -> Session ist beendet, IDs irrelevant
-    - inbox (requeue) -> alter Dispatch ungueltig
+    - done/failed/blocked -> session has ended, IDs are irrelevant
+    - inbox (requeue) -> old dispatch is invalid
 
     Post Phase 29 / Gateway-Sunset: spawn_session_key + spawn_run_id are
     gateway-only artifacts (cli-bridge / host runtimes don't use them).
@@ -133,88 +133,88 @@ def clear_spawn_tracking(task: Task) -> None:
 
     # TODO Phase 30: drop spawn_session_key + spawn_run_id columns from Task.
 
-    NICHT enthalten: dispatch_attempt_id clear. Caller die das brauchen
-    rufen `dispatch_attempt_audit.clear_dispatch_attempt_id` mit eigenem
-    caller/reason auf, damit der Audit-Trail in task_attempt_audit den
-    Aufruf-Kontext kennt (siehe doppelter-dispatch incident 2026-05-15).
+    NOT included: dispatch_attempt_id clear. Callers that need that call
+    `dispatch_attempt_audit.clear_dispatch_attempt_id` with their own
+    caller/reason, so the audit trail in task_attempt_audit knows the
+    calling context (see the double-dispatch incident 2026-05-15).
     """
     task.spawn_run_id = None
     task.spawn_session_key = None
 
 
 # ── Terminal Unassign ───────────────────────────────────────────────────
-# Schutz gegen die Cancel-Schleife im agent_poll: wenn ein Task auf failed
-# oder blocked geht und assigned_agent_id stehen bleibt, prueft agent_poll
-# als ERSTES ob ein failed Task fuer den Agent existiert → liefert
-# state="cancelled" → poll.sh sendet ESC → naechster Poll: gleiche
-# Antwort. Endlos. Neue Tasks werden NIE delivered weil der failed Task
-# immer Vorrang hat.
+# Protection against the cancel loop in agent_poll: if a task goes to failed
+# or blocked and assigned_agent_id stays set, agent_poll checks FIRST
+# whether a failed task exists for the agent → returns
+# state="cancelled" → poll.sh sends ESC → next poll: same
+# response. Endless. New tasks are NEVER delivered because the failed task
+# always takes precedence.
 #
-# Loesung: assigned_agent_id beim Uebergang nach failed/blocked auf NULL
-# setzen. Wer den Task wieder freigeben will (der Operator via Approval, manuelle
-# Re-Assign, planner) muss ohnehin neu zuweisen — das ist konsistent mit
-# der Tatsache dass failed/blocked Tasks menschliche Intervention brauchen
-# und kein Worker-Polling mehr.
+# Solution: set assigned_agent_id to NULL on the transition to failed/blocked.
+# Whoever wants to free up the task again (the operator via approval, manual
+# re-assign, planner) has to re-assign it anyway — that's consistent with
+# the fact that failed/blocked tasks need human intervention
+# and no more worker polling.
 #
-# Ausnahme: blocked mit blocked_by_task_id (Callback-Wait via help_request,
-# delegate). Der Parent-Agent muss assigned bleiben damit der Resume nach
-# Subtask-done zum richtigen Agent zurueckrouten kann.
+# Exception: blocked with blocked_by_task_id (callback wait via help_request,
+# delegate). The parent agent must stay assigned so the resume after
+# subtask-done can route back to the right agent.
 
 async def apply_terminal_unassign(
     session: AsyncSession,
     task: Task,
     new_status: str,
 ) -> bool:
-    """assigned_agent_id beim Uebergang nach failed/blocked loeschen.
+    """Clear assigned_agent_id on the transition to failed/blocked.
 
-    Verhindert die stille Cancel-Schleife (siehe Modul-Doku oben). Wird
-    von allen Pfaden aufgerufen die `task.status` auf failed/blocked
-    setzen — User-PATCH, Worker-PATCH, Backend-Cleanup.
+    Prevents the silent cancel loop (see module doc above). Called
+    from all paths that set `task.status` to failed/blocked —
+    user PATCH, worker PATCH, backend cleanup.
 
     Args:
-        session: Aktive DB-Session (kein Commit hier — Caller commitet)
-        task: Task mit BEREITS gesetztem neuem Status (oder vor dem Set;
-              die Methode liest nur new_status fuer die Entscheidung)
-        new_status: Der Ziel-Status nach dem Uebergang
+        session: active DB session (no commit here — caller commits)
+        task: task with the new status ALREADY set (or before the set;
+              the method only reads new_status for the decision)
+        new_status: the target status after the transition
 
     Returns:
-        True wenn unassignt wurde, False wenn nichts geaendert wurde.
+        True if unassigned, False if nothing was changed.
 
-    Verhalten (nach Fix 2026-04-24):
-        - new_status == "failed"   -> immer unassign (terminal)
-        - new_status == "blocked"  -> NIE unassign (blocked ist IMMER temporaer —
-          entweder Callback-Wait, mc blocked Clarification, oder manual stop.
-          assigned_agent_id wird gebraucht damit der Worker beim Resume wieder
-          den Task bekommt und Clarification-Resolution-Comments via poll
-          delivered werden koennen.)
-        - sonst -> kein Eingriff
-        - assigned_agent_id bereits None -> kein Crash, returnt False
+    Behavior (after fix 2026-04-24):
+        - new_status == "failed"   -> always unassign (terminal)
+        - new_status == "blocked"  -> NEVER unassign (blocked is ALWAYS temporary —
+          either a callback wait, mc blocked clarification, or manual stop.
+          assigned_agent_id is needed so the worker gets the task back on
+          resume and clarification-resolution comments can be
+          delivered via poll.)
+        - otherwise -> no intervention
+        - assigned_agent_id already None -> no crash, returns False
 
-    Loescht zusaetzlich agent.current_task_id falls dieser Task referenziert
-    wird (Lock freigeben). update_agent_active_task macht das auch, aber
-    nur wenn old_status == "in_progress". Bei Pfaden wie inbox→failed oder
-    review→failed greift das nicht — daher hier defensive in depth.
+    Additionally clears agent.current_task_id if this task is referenced
+    there (release the lock). update_agent_active_task also does this, but
+    only if old_status == "in_progress". Paths like inbox→failed or
+    review→failed don't hit that — hence defensive in depth here.
 
-    Live-Lessons die zu dieser Logik fuehrten:
-    - PR #107: stop_task_run ruft apply_terminal_unassign nicht mehr →
-      Der Stop/Resume des Operators verliert nicht mehr den Agent.
-    - PR #111 (hier): blocker_decision via mc blocked hat assigned_agent_id
-      verloren → Resolution-Comment nicht mehr delivered → Worker orphaned,
-      Task eskalierte zum Board-Lead als Workaround. Jetzt bleibt assignment
-      bei blocked erhalten.
+    Live lessons that led to this logic:
+    - PR #107: stop_task_run no longer calls apply_terminal_unassign →
+      the operator's stop/resume no longer loses the agent.
+    - PR #111 (here): blocker_decision via mc blocked lost assigned_agent_id
+      → resolution comment no longer delivered → worker orphaned,
+      task escalated to Board Lead as a workaround. Now assignment stays
+      intact on blocked.
     """
     if new_status != "failed":
-        # blocked ist immer temporaer — assigned_agent_id wird fuer Resume
-        # und Resolution-Comment-Delivery gebraucht.
+        # blocked is always temporary — assigned_agent_id is needed for resume
+        # and resolution-comment delivery.
         if new_status == "blocked":
-            # Lock-Strategie haengt vom Blocker-Typ ab:
-            # - blocked_by_task_id gesetzt (Callback-Wait): Worker wartet AKTIV
-            #   auf Subtask — current_task_id BEHALTEN (Worker macht nichts
-            #   anderes parallel). Behavior wie vor PR #111.
-            # - blocked_by_task_id None (mc blocked, Human-Wait): Worker ist
-            #   effektiv idle waehrend der Operator antwortet — Lock freigeben damit
-            #   Worker andere Tasks nehmen kann. Bei Resume kommt der Task
-            #   via poll zurueck (assigned_agent_id intakt).
+            # Lock strategy depends on the blocker type:
+            # - blocked_by_task_id set (callback wait): worker is ACTIVELY waiting
+            #   on a subtask — KEEP current_task_id (worker isn't doing anything
+            #   else in parallel). Behavior as before PR #111.
+            # - blocked_by_task_id None (mc blocked, human wait): worker is
+            #   effectively idle while the operator answers — release the lock so
+            #   the worker can pick up other tasks. On resume the task comes
+            #   back via poll (assigned_agent_id intact).
             if task.blocked_by_task_id is None and task.assigned_agent_id is not None:
                 agent = await session.get(Agent, task.assigned_agent_id)
                 if agent is not None and agent.current_task_id == task.id:
@@ -225,16 +225,16 @@ async def apply_terminal_unassign(
             return False
         return False
 
-    # Defensive: Watchdog/Cleanup hat den Task vielleicht schon unassignt
+    # Defensive: watchdog/cleanup may have already unassigned the task
     if task.assigned_agent_id is None:
         return False
 
-    # Agent-Lock freigeben falls dieser Task im current_task_id steht
+    # Release the agent lock if this task is in current_task_id
     agent_id_to_clear = task.assigned_agent_id
     agent = await session.get(Agent, agent_id_to_clear)
     if agent is not None and agent.current_task_id == task.id:
         agent.current_task_id = None
-        # run_state nur anpassen wenn er bisher diesen Task gespiegelt hat
+        # Only adjust run_state if it previously mirrored this task
         if agent.run_state in ("running", None):
             agent.run_state = "blocked" if new_status == "blocked" else "idle"
         session.add(agent)
@@ -245,13 +245,13 @@ async def apply_terminal_unassign(
 
 
 # ── Active-Task Tracking ────────────────────────────────────────────────
-# Ein Agent hat maximal einen aktiven Haupttask. current_task_id auf dem
-# Agent-Objekt wird gesetzt/geloescht wenn ein Task in_progress wird oder
-# diesen Zustand verlaesst. Dispatch prueft dieses Feld als Guard.
+# An agent has at most one active main task. current_task_id on the
+# Agent object is set/cleared when a task becomes in_progress or
+# leaves that state. Dispatch checks this field as a guard.
 #
-# HINWEIS: Bei use_subagent_dispatch=True haben Workers parallele Sessions.
-# current_task_id kann nur EINEN Task tracken und ist fuer Workers daher
-# nur ein Hinweis (kein Lock). Der Busy-Check im Dispatch wird uebersprungen.
+# NOTE: with use_subagent_dispatch=True, workers have parallel sessions.
+# current_task_id can only track ONE task and is therefore just a hint
+# for workers (not a lock). The busy check in dispatch is skipped.
 
 async def update_agent_active_task(
     session: AsyncSession,
@@ -260,24 +260,24 @@ async def update_agent_active_task(
     new_status: str,
     old_status: str,
 ) -> None:
-    """current_task_id auf dem Agent setzen/loeschen bei Status-Wechseln.
+    """Set/clear current_task_id on the agent for status changes.
 
-    Setzt current_task_id wenn:
-    - Task wechselt zu in_progress UND Agent hat keinen aktiven Task
-      (oder der aktive Task ist dieser hier)
+    Sets current_task_id when:
+    - task changes to in_progress AND the agent has no active task
+      (or the active task is this one)
 
-    Loescht current_task_id wenn:
-    - Task verlaesst in_progress (review, done, blocked, failed, inbox)
-      UND current_task_id == task.id
+    Clears current_task_id when:
+    - task leaves in_progress (review, done, blocked, failed, inbox)
+      AND current_task_id == task.id
 
-    Bei use_subagent_dispatch: Workers ueberspringen current_task_id Tracking
-    (parallele Sessions → Feld kann nur einen Task abbilden).
+    With use_subagent_dispatch: workers skip current_task_id tracking
+    (parallel sessions → the field can only represent one task).
     """
     from app.config import settings
 
-    # Spawn-Tracking loeschen wenn Task einen terminalen/inaktiven Zustand erreicht.
-    # Bei in_progress bleiben die IDs erhalten (Session laeuft noch).
-    # Bei Handoff/Rejection/Dispatch werden sie vom Caller ueberschrieben.
+    # Clear spawn tracking when the task reaches a terminal/inactive state.
+    # On in_progress the IDs are kept (session is still running).
+    # On handoff/rejection/dispatch they get overwritten by the caller.
     if new_status in ("done", "failed", "blocked", "inbox"):
         clear_spawn_tracking(task)
         from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
@@ -291,15 +291,15 @@ async def update_agent_active_task(
     if not agent:
         return
 
-    # Workers mit isolierten Sessions: current_task_id nicht setzen/loeschen
-    # (parallele Tasks → Feld waere sofort inkonsistent)
-    # run_state trotzdem aktualisieren fuer UI-Anzeige.
+    # Workers with isolated sessions: don't set/clear current_task_id
+    # (parallel tasks → field would be immediately inconsistent)
+    # Still update run_state for UI display.
     if settings.use_subagent_dispatch and not agent.is_board_lead:
         if new_status == "in_progress" and old_status != "in_progress":
             agent.run_state = "running"
             session.add(agent)
         elif old_status == "in_progress" and new_status != "in_progress":
-            # run_state nur auf idle wenn kein anderer Task mehr in_progress ist
+            # run_state only goes to idle if no other task is still in_progress
             other_active = (await session.exec(
                 select(Task).where(
                     Task.assigned_agent_id == agent_id,
@@ -318,14 +318,14 @@ async def update_agent_active_task(
         return
 
     if new_status == "in_progress" and old_status != "in_progress":
-        # Task wird aktiv — Agent-Lock setzen
+        # Task becomes active — set the agent lock
         if agent.current_task_id is None or agent.current_task_id == task.id:
             agent.current_task_id = task.id
             agent.run_state = "running"
             session.add(agent)
         else:
-            # Agent hat schon einen anderen aktiven Task — loggen aber nicht blockieren
-            # (der Busy-Check im Dispatch sollte das verhindern)
+            # Agent already has another active task — log but don't block
+            # (the busy check in dispatch should prevent this)
             logger.warning(
                 "Agent %s hat bereits aktiven Task %s, neuer Task %s wird trotzdem in_progress",
                 agent.name, agent.current_task_id, task.id,
@@ -335,10 +335,10 @@ async def update_agent_active_task(
             session.add(agent)
 
     elif old_status == "in_progress" and new_status != "in_progress":
-        # Task verlaesst in_progress — Agent-Lock freigeben
+        # Task leaves in_progress — release the agent lock
         if agent.current_task_id == task.id:
             agent.current_task_id = None
-            # run_state basierend auf neuem Status
+            # run_state based on the new status
             if new_status == "blocked":
                 agent.run_state = "blocked"
             elif new_status == "aborted":
@@ -353,7 +353,7 @@ async def _merge_pr_if_exists(
     task: Task,
     actor_agent: Agent | None,
 ) -> None:
-    """PR mergen wenn vorhanden (best effort). Extrahiert aus agent_scoped.py."""
+    """Merge PR if one exists (best effort). Extracted from agent_scoped.py."""
     if not task.project_id:
         return
     try:
@@ -382,7 +382,7 @@ async def _merge_pr_if_exists(
         pr_number = int(pr_match.group(1))
         project_slug = slugify_project(project.name)
 
-        # Workspace finden (Reviewer oder Fallback)
+        # Find workspace (reviewer or fallback)
         workspace = actor_agent.workspace_path if actor_agent else None
         if workspace:
             reviewer_dir = os.path.join(workspace, project_slug)
@@ -391,7 +391,7 @@ async def _merge_pr_if_exists(
                 logger.info("PR #%d gemerged fuer Task '%s'", pr_number, task.title)
                 return
 
-        # Fallback: gh CLI global
+        # Fallback: global gh CLI
         if project.github_repo_name:
             await git_service._run_cmd(
                 "gh", "pr", "merge", str(pr_number),
@@ -412,10 +412,10 @@ async def execute_review_decision(
     actor_agent: Agent | None = None,
     actor_user_id: uuid.UUID | None = None,
 ) -> None:
-    """Einzige Wahrheit fuer Review-Entscheidungen.
+    """The single source of truth for review decisions.
 
-    Macht alles atomar: Kommentar + Decision + Status-Transition + Events.
-    Drei Ausgaenge: approve (→done), request_changes (→in_progress), hold (bleibt review).
+    Makes everything atomic: comment + decision + status transition + events.
+    Three outcomes: approve (→done), request_changes (→in_progress), hold (stays review).
     """
     # ── Guards ──────────────────────────────────────────────
     if task.status != "review":
@@ -423,15 +423,15 @@ async def execute_review_decision(
     if task.run_control in ("stopped", "manual_hold"):
         raise HTTPException(409, f"Task run_control={task.run_control}")
 
-    # Parent/Child Guard: Bei Approve pruefen ob Children alle done sind
+    # Parent/child guard: on approve, check whether all children are done
     if decision == "approve":
         from app.task_status import check_children_complete
         children_ok, children_detail = await check_children_complete(task.id, session)
         if not children_ok:
             raise HTTPException(400, children_detail)
 
-    # Self-Review Guard: Agent der am Task GEARBEITET hat darf nicht approven.
-    # Reviewer-ACK (review → in_progress durch Reviewer) zaehlt NICHT als Arbeit.
+    # Self-review guard: the agent that WORKED on the task may not approve it.
+    # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work.
     if decision == "approve" and actor_agent:
         from app.models.task import TaskEvent
         from app.models.agent import Agent as AgentModel
@@ -446,9 +446,9 @@ async def execute_review_decision(
         for event in events_result.all():
             if not event.agent_id:
                 continue
-            # Reviewer-Transitions ausfiltern: Review-Arbeit ist kein Implementierungsakt.
-            # Reviewer-ACK (review → in_progress) und Review-Abschluss (in_progress → review)
-            # durch einen Reviewer zaehlen NICHT als Developer-Arbeit.
+            # Filter out reviewer transitions: review work is not an implementation act.
+            # Reviewer ACK (review → in_progress) and review completion (in_progress → review)
+            # by a reviewer do NOT count as developer work.
             is_review_transition = (
                 (event.from_status == "review" and event.to_status == "in_progress") or
                 (event.from_status == "in_progress" and event.to_status == "review")
@@ -456,12 +456,12 @@ async def execute_review_decision(
             if is_review_transition:
                 event_agent = await session.get(AgentModel, event.agent_id)
                 if event_agent and event_agent.role == "reviewer":
-                    continue  # Review-Arbeit, nicht als Worker zaehlen
+                    continue  # Review work, don't count as worker
             worker_agent_ids.add(event.agent_id)
 
         if actor_agent.id in worker_agent_ids:
             if not actor_agent.is_board_lead:
-                # Self-Review blockiert → an Board Lead eskalieren statt hart blocken
+                # Self-review blocked → escalate to Board Lead instead of hard-blocking
                 _bl_result = await session.exec(
                     select(Agent).where(
                         Agent.board_id == board_id,
@@ -483,7 +483,7 @@ async def execute_review_decision(
                         board_id=board_id, task_id=task.id, agent_id=actor_agent.id,
                         severity="warning",
                     )
-                    return  # Return ohne approve — Board Lead muss entscheiden
+                    return  # Return without approve — Board Lead must decide
                 else:
                     raise HTTPException(
                         409,
@@ -491,8 +491,8 @@ async def execute_review_decision(
                         f"Kein Board Lead fuer Eskalation verfuegbar.",
                     )
 
-    # ── Konsistenz-Guard: ship-ready ↔ review_decision ────
-    # "ship-ready" im Kommentar + request_changes/hold = Widerspruch
+    # ── Consistency guard: ship-ready ↔ review_decision ────
+    # "ship-ready" in the comment + request_changes/hold = contradiction
     comment_lower = (comment_text or "").lower()
     has_ship_ready = "ship-ready" in comment_lower and "not ship-ready" not in comment_lower
     has_not_ship_ready = "not ship-ready" in comment_lower
@@ -519,7 +519,7 @@ async def execute_review_decision(
     old_status = task.status
     actor_name = actor_agent.name if actor_agent else "Operator"
 
-    # ── 1. Kommentar (immer, atomar mit Entscheidung) ──────
+    # ── 1. Comment (always, atomic with the decision) ──────
     comment = TaskComment(
         task_id=task.id,
         author_type="agent" if actor_agent else "user",
@@ -529,7 +529,7 @@ async def execute_review_decision(
     )
     session.add(comment)
 
-    # ── 2. Decision-Felder setzen ──────────────────────────
+    # ── 2. Set decision fields ──────────────────────────
     decision_map = {
         "approve": "approved",
         "request_changes": "changes_requested",
@@ -538,7 +538,7 @@ async def execute_review_decision(
     task.review_decision = decision_map[decision]
     task.review_decided_at = utcnow()
 
-    # ── 3. Reviewer-Agent freigeben ──────────────────────────
+    # ── 3. Release the reviewer agent ──────────────────────────
     if decision in ("approve", "request_changes"):
         reviewer_id = task.assigned_agent_id
         if reviewer_id:
@@ -552,10 +552,10 @@ async def execute_review_decision(
                     session, reviewer.id, task, target_status, old_status,
                 )
 
-    # ── 4. Status-Transition (decision-abhaengig) ───────────
+    # ── 4. Status transition (decision-dependent) ───────────
     if decision == "approve":
-        # Phase-Parents mit Subtasks → user_test Gate statt direkt done
-        # Alles andere (Einzeltasks, Subtasks) → direkt done
+        # Phase parents with subtasks → user_test gate instead of straight to done
+        # Everything else (single tasks, subtasks) → straight to done
         _has_children = False
         if task.parent_task_id is None:  # Root-Level
             _children_result = await session.exec(
@@ -563,7 +563,7 @@ async def execute_review_decision(
             )
             _has_children = _children_result.first() is not None
 
-        # user_test nur bei Browser-relevanten Phase-Tasks
+        # user_test only for browser-relevant phase tasks
         _needs_test = _has_children and (
             getattr(task, "needs_browser", None)
             or getattr(task, "delegation_type", None) == "visual_proof"
@@ -573,10 +573,10 @@ async def execute_review_decision(
             task.status = "user_test"
             logger.info("Review approved → user_test Gate: '%s'", task.title[:40])
         else:
-            # Report-Back Hard-Gate (analog zu PATCH-Handler in agent_scoped.py):
-            # /review mit decision=approve darf keinen Root-Task mit offener
-            # report_back_required-Pflicht schliessen. Reviewer muss Developer
-            # bitten zuerst `mc telegram` zu senden, oder den Operator direkt fragen.
+            # Report-back hard gate (analog to the PATCH handler in agent_scoped.py):
+            # /review with decision=approve may not close a root task with an open
+            # report_back_required obligation. The reviewer must ask the developer
+            # to send `mc telegram` first, or ask the operator directly.
             if (
                 task.parent_task_id is None
                 and task.report_back_required
@@ -596,11 +596,11 @@ async def execute_review_decision(
             task.status = "done"
             task.completed_at = utcnow()
 
-        # PR merge — nur bei echtem done, NICHT bei user_test (Test Gate vor Merge)
+        # PR merge — only for a real done, NOT for user_test (test gate before merge)
         if task.status == "done":
             await _merge_pr_if_exists(session, task, actor_agent)
 
-        # Test-Handoff: Tester-Agent fuer user_test dispatchen (wenn vorhanden)
+        # Test handoff: dispatch a tester agent for user_test (if one exists)
         if task.status == "user_test":
             try:
                 tester = await handle_test_handoff(session, task, board_id)
@@ -636,7 +636,7 @@ async def execute_review_decision(
             actor_agent.last_task_activity_at = utcnow()
             session.add(actor_agent)
 
-        # Abhaengige Tasks dispatchen
+        # Dispatch dependent tasks
         from app.models.task import TaskDependency
         from app.services.dispatch import dependencies_met, auto_dispatch_task
         dep_result = await session.exec(
@@ -651,25 +651,25 @@ async def execute_review_decision(
                 from app.utils import create_tracked_task
                 create_tracked_task(auto_dispatch_task(dependent_task.id, dependent_task.board_id))
 
-        # ── Board Lead Completion-Callback ──────────────────────
-        # Informiert Henry (Board Lead), damit er dem Operator antworten kann
+        # ── Board Lead completion callback ──────────────────────
+        # Informs Henry (Board Lead) so he can respond to the operator
         from app.utils import create_tracked_task
         create_tracked_task(
             _notify_lead_on_completion(session, task, board_id, actor_name)
         )
 
     elif decision == "request_changes":
-        # Status vorlaeufig auf in_progress (Fallback wenn kein Developer gefunden)
+        # Status provisionally in_progress (fallback if no developer is found)
         task.status = "in_progress"
 
-        # handle_review_rejection ueberschreibt auf inbox + dispatched_at
-        # wenn Rework-Dispatch erfolgreich → ACK-Check des Task-Runners greift
+        # handle_review_rejection overwrites to inbox + dispatched_at
+        # if the rework dispatch succeeds → the task runner's ACK check kicks in
         await handle_review_rejection(
             session, task, board_id, rejecting_agent=actor_agent,
         )
 
     elif decision == "hold":
-        # Kein Status-Wechsel, kein Dispatch. Task bleibt in review.
+        # No status change, no dispatch. Task stays in review.
         await emit_event(
             session, "task.review_hold",
             f"Review angehalten von {actor_name} — '{task.title}'",
@@ -690,16 +690,16 @@ async def handle_review_handoff(
     board_id: uuid.UUID,
     developer: Agent | None = None,
 ) -> Agent | None:
-    """Review-Handoff: Task an Reviewer uebergeben + Push-Benachrichtigung.
+    """Review handoff: hand the task to a reviewer + push notification.
 
-    Shared zwischen agent_scoped.py (Agent setzt review) und tasks.py (User setzt review).
-    Git/PR-Erstellung bleibt im jeweiligen Router (agent-spezifisch).
+    Shared between agent_scoped.py (agent sets review) and tasks.py (user sets review).
+    Git/PR creation stays in the respective router (agent-specific).
 
-    Returns: Reviewer-Agent oder None.
+    Returns: reviewer agent or None.
     """
     from app.routers.agent_scoped import _find_reviewer
 
-    # ── Dedupe: Wenn Task schon an einen Reviewer zugewiesen ist, kein zweiter Handoff
+    # ── Dedupe: if the task is already assigned to a reviewer, no second handoff
     if task.assigned_agent_id and task.dispatch_intent == "review_handoff":
         existing_reviewer = await session.get(Agent, task.assigned_agent_id)
         if existing_reviewer and existing_reviewer.role == "reviewer":
@@ -710,9 +710,9 @@ async def handle_review_handoff(
     if not reviewer:
         return None
     if developer and reviewer.id == developer.id:
-        return None  # Reviewer darf nicht gleicher Agent sein
+        return None  # Reviewer must not be the same agent
 
-    # dispatch_intent setzen + Operational Controls Guard
+    # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_handoff"
     from app.services.operations import check_dispatch_allowed
     allowed, reason = await check_dispatch_allowed(task, reviewer, session)
@@ -720,19 +720,19 @@ async def handle_review_handoff(
         logger.info("Review-Handoff blocked: '%s' — %s", task.title, reason)
         return None
 
-    # Developer-Lock freigeben (current_task_id loeschen)
+    # Release the developer lock (clear current_task_id)
     if developer and developer.current_task_id == task.id:
         developer.current_task_id = None
         session.add(developer)
 
-    # Reviewer-Zuweisung committen (OHNE dispatched_at — das kommt erst nach RPC-Erfolg)
+    # Commit the reviewer assignment (WITHOUT dispatched_at — that only comes after RPC success)
     task.assigned_agent_id = reviewer.id
     task.ack_at = None
-    task.completed_at = None  # Reset falls aus vorherigem Zyklus gesetzt
-    task.review_decision = None  # Neue Review-Runde startet sauber
+    task.completed_at = None  # Reset in case it was set from a previous cycle
+    task.review_decision = None  # New review round starts clean
     task.review_decided_at = None
     task.updated_at = utcnow()
-    clear_spawn_tracking(task)  # Alte Spawn-Session-IDs loeschen
+    clear_spawn_tracking(task)  # Clear old spawn-session IDs
     from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
     await clear_dispatch_attempt_id(
         session, task,
@@ -747,13 +747,13 @@ async def handle_review_handoff(
         board_id=board_id, task_id=task.id, agent_id=reviewer.id,
     )
 
-    # Push-Benachrichtigung an Reviewer
-    # Post Phase 29 / Gateway-Sunset: kein gateway_agent_id-Gate, kein RPC.
-    # Re-Dispatch via auto_dispatch_task → der Dispatcher waehlt die richtige
-    # Runtime-Delivery (cli-bridge / host / claude-code) und der Reviewer
-    # bekommt die Review-Message ueber sein poll.sh / launchd.
-    # Wir setzen dispatched_at hier NICHT — auto_dispatch_task setzt es nach
-    # erfolgreicher Auslieferung selbst.
+    # Push notification to the reviewer
+    # Post Phase 29 / Gateway-Sunset: no gateway_agent_id gate, no RPC.
+    # Re-dispatch via auto_dispatch_task → the dispatcher picks the right
+    # runtime delivery (cli-bridge / host / claude-code) and the reviewer
+    # gets the review message via their poll.sh / launchd.
+    # We do NOT set dispatched_at here — auto_dispatch_task sets it itself
+    # after successful delivery.
     from app.services.dispatch import auto_dispatch_task
     task.dispatched_at = None
     task.ack_at = None
@@ -769,10 +769,10 @@ async def handle_test_handoff(
     task: Task,
     board_id: uuid.UUID,
 ) -> Agent | None:
-    """Test-Handoff: Task an Tester uebergeben bei user_test.
+    """Test handoff: hand the task to a tester on user_test.
 
-    Analog zu handle_review_handoff, aber fuer QA/User-Testing.
-    Tester prueft via Browser ob das Ergebnis aus User-Sicht funktioniert.
+    Analogous to handle_review_handoff, but for QA/user testing.
+    The tester checks via browser whether the result works from the user's perspective.
     """
     from app.services.dispatch import find_agent_by_role
 
@@ -800,10 +800,10 @@ async def handle_test_handoff(
         board_id=board_id, task_id=task.id, agent_id=tester.id,
     )
 
-    # Dispatch an Tester
-    # Post Phase 29 / Gateway-Sunset: Re-Dispatch via auto_dispatch_task.
-    # Der Dispatcher waehlt die richtige Runtime-Delivery (cli-bridge / host /
-    # claude-code) und schickt die Test-Message ueber poll.sh / launchd.
+    # Dispatch to the tester
+    # Post Phase 29 / Gateway-Sunset: re-dispatch via auto_dispatch_task.
+    # The dispatcher picks the right runtime delivery (cli-bridge / host /
+    # claude-code) and sends the test message via poll.sh / launchd.
     from app.services.dispatch import auto_dispatch_task
     task.dispatched_at = None
     task.ack_at = None
@@ -820,16 +820,16 @@ async def handle_review_rejection(
     board_id: uuid.UUID,
     rejecting_agent: Agent | None = None,
 ) -> Agent | None:
-    """Review-Rejection: Task zurueck an Original-Developer.
+    """Review rejection: send the task back to the original developer.
 
-    Shared zwischen agent_scoped.py und tasks.py.
-    Beinhaltet Busy-Check, Queue-Fallback und Rejection-Counter.
+    Shared between agent_scoped.py and tasks.py.
+    Includes a busy check, queue fallback, and rejection counter.
 
-    Returns: Original-Developer oder None.
+    Returns: original developer or None.
     """
     from app.routers.agent_scoped import _find_last_developer
 
-    # Rejection Counter (nur bei Agent-Rejection)
+    # Rejection counter (only for agent rejections)
     if rejecting_agent:
         try:
             from app.services.task_queue import increment_rejection_count, MAX_REJECTIONS
@@ -856,19 +856,19 @@ async def handle_review_rejection(
         except Exception:
             logger.warning("Rejection counter failed for task %s", task.id)
 
-    # Rejection-Routing: bevorzuge IMMER den Original-Developer (Context-
-    # Preservation). Board Lead ist nur Fallback wenn kein Developer
-    # ermittelbar ist. Geänderte Reihenfolge gegenüber früher: vorher gingen
-    # Root-Tasks (parent_task_id=NULL) zuerst an den Board Lead — das hat
-    # spezifisch dispatched Tasks (z.B. argyelan-viral-shorts an Davinci) bei
-    # Rejection an Boss umgeleitet, der den Context nie hatte. Siehe
-    # 2026-05-08 viral-shorts E2E-Run: Davinci hatte P1-P6 fertig, der
-    # "change"-Klick des Operators schickte den Task an Boss statt zurück an Davinci.
+    # Rejection routing: ALWAYS prefer the original developer (context
+    # preservation). Board Lead is only a fallback when no developer
+    # can be determined. Changed order compared to before: previously
+    # root tasks (parent_task_id=NULL) went to the Board Lead first — that
+    # rerouted specifically-dispatched tasks (e.g. argyelan-viral-shorts to Davinci)
+    # to Boss on rejection, who never had the context. See the
+    # 2026-05-08 viral-shorts E2E run: Davinci had P1-P6 done, the
+    # operator's "change" click sent the task to Boss instead of back to Davinci.
     original_dev = await _find_last_developer(session, task)
 
-    # Fallback: Board Lead für Root-Tasks ohne identifizierbaren Developer
-    # (z.B. Tasks die direkt vom Operator erstellt wurden ohne dass jemand sie
-    # je in_progress → review gesetzt hat).
+    # Fallback: Board Lead for root tasks with no identifiable developer
+    # (e.g. tasks created directly by the operator without anyone ever
+    # having set them to in_progress → review).
     if not original_dev and task.parent_task_id is None:
         from sqlmodel import select as _sel
         _board_lead = (await session.exec(
@@ -888,9 +888,9 @@ async def handle_review_rejection(
         return None
 
     if rejecting_agent and original_dev.id == rejecting_agent.id:
-        return None  # Gleicher Agent, kein Re-Dispatch noetig
+        return None  # Same agent, no re-dispatch needed
 
-    # dispatch_intent setzen + Operational Controls Guard
+    # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_rework"
     from app.services.operations import check_dispatch_allowed
     allowed, reason = await check_dispatch_allowed(task, original_dev, session)
@@ -898,7 +898,7 @@ async def handle_review_rejection(
         logger.info("Review-Rejection re-dispatch blocked: '%s' — %s", task.title, reason)
         return None
 
-    # Reviewer-Lock freigeben
+    # Release the reviewer lock
     if rejecting_agent and rejecting_agent.current_task_id == task.id:
         rejecting_agent.current_task_id = None
         session.add(rejecting_agent)
@@ -908,8 +908,8 @@ async def handle_review_rejection(
     task.dispatched_at = None
     task.ack_at = None
 
-    # Busy-Check: Hat der Developer schon einen aktiven Task?
-    # Mit isolierten Sessions entfaellt der Busy-Check fuer Workers
+    # Busy check: does the developer already have an active task?
+    # With isolated sessions, the busy check for workers is skipped
     from app.config import settings as _settings
     _skip_busy = _settings.use_subagent_dispatch and not original_dev.is_board_lead
 
@@ -926,7 +926,7 @@ async def handle_review_rejection(
             )
         )).first()
 
-    old_status = task.status  # review oder in_progress
+    old_status = task.status  # review or in_progress
 
     if dev_active:
         await record_task_event(
@@ -946,8 +946,8 @@ async def handle_review_rejection(
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
         )
     else:
-        # Status auf inbox setzen — Agent muss ACKen (PATCH status: in_progress)
-        # Das stellt sicher dass der Task-Runner ACK-Timeout erkennt
+        # Set status to inbox — the agent must ACK (PATCH status: in_progress)
+        # This ensures the task runner detects the ACK timeout
         await record_task_event(
             session, task.id, old_status, "inbox",
             changed_by="system",
@@ -963,12 +963,12 @@ async def handle_review_rejection(
             f"Review abgelehnt: '{task.title}' zurueck an {original_dev.name}",
             board_id=board_id, task_id=task.id, agent_id=original_dev.id,
         )
-        # Re-Dispatch nach Review-Rejection.
-        # Post Phase 29 / Gateway-Sunset: kein gateway_agent_id-Gate, kein RPC.
-        # Re-Dispatch via auto_dispatch_task — der Dispatcher haendelt die
-        # Runtime-spezifische Auslieferung (cli-bridge / host / claude-code).
-        # Kontext-Erhalt: TaskComment-history bleibt erhalten — poll.sh
-        # liefert die history (including review feedback) ueber /agent/me/poll.
+        # Re-dispatch after review rejection.
+        # Post Phase 29 / Gateway-Sunset: no gateway_agent_id gate, no RPC.
+        # Re-dispatch via auto_dispatch_task — the dispatcher handles the
+        # runtime-specific delivery (cli-bridge / host / claude-code).
+        # Context preservation: TaskComment history is kept — poll.sh
+        # delivers the history (including review feedback) via /agent/me/poll.
         from app.services.dispatch import auto_dispatch_task
         task.dispatched_at = None
         task.ack_at = None
@@ -984,9 +984,9 @@ def trigger_auto_memory(
     new_status: str,
     old_status: str,
 ) -> None:
-    """Background-Tasks fuer Auto-Memory bei Status-Wechseln starten.
+    """Start background tasks for auto-memory on status changes.
 
-    Fire-and-forget — Fehler werden im Task-Callback geloggt.
+    Fire-and-forget — errors are logged in the task callback.
     """
     if new_status not in ("done", "failed"):
         return
@@ -1014,9 +1014,9 @@ async def trigger_feedback_lesson(
     new_status: str,
     old_status: str,
 ) -> None:
-    """Feedback-Lessons bei Review-Entscheidungen erfassen.
+    """Capture feedback lessons on review decisions.
 
-    Approved (review → done) oder Rejected (review → in_progress).
+    Approved (review → done) or rejected (review → in_progress).
     """
     if not task.board_id or old_status != "review":
         return
@@ -1045,14 +1045,14 @@ async def trigger_feedback_lesson(
         )
 
 
-# ── Completion Callback: Board Lead benachrichtigen ──────────────
+# ── Completion Callback: notify Board Lead ──────────────
 #
-# Phase 29 / Gateway-Sunset: `select_lead_callback_session()` wurde entfernt.
-# Der Helper diente dazu, aus einer Gateway-`sessions.list()`-Antwort die
-# beste Session-Key fuer einen Lead-Nudge zu waehlen (Telegram > Discord >
-# Main). Mit dem Gateway-Sunset entfaellt die Session-Liste komplett —
-# Lieferung erfolgt jetzt ueber TaskComment + (optional) direkten
-# `telegram_bot.send_message()` Aufruf.
+# Phase 29 / Gateway-Sunset: `select_lead_callback_session()` was removed.
+# The helper picked the best session key for a lead nudge from a Gateway
+# `sessions.list()` response (Telegram > Discord >
+# Main). With the gateway sunset, the session list is gone entirely —
+# delivery now happens via TaskComment + (optionally) a direct
+# `telegram_bot.send_message()` call.
 
 
 async def _notify_lead_on_completion(
@@ -1061,14 +1061,14 @@ async def _notify_lead_on_completion(
     board_id: uuid.UUID,
     reviewer_name: str,
 ) -> None:
-    """Completion-Callback: Henry bekommt verpflichtenden Rueckmeldeauftrag.
+    """Completion callback: Henry gets a mandatory report-back obligation.
 
-    Stufe 1 (sofort): Henry bekommt Callback mit offener Verpflichtung
+    Stage 1 (immediate): Henry gets a callback with an open obligation
       → report_back_status = "pending"
-      → Henry soll dem Operator organisch antworten
-    Stufe 2 (Fallback, 5 min): System-Sicherheitsnetz
-      → NUR wenn report_back_status noch "pending"
-      → Knappe System-Nachricht an den Operator via Telegram
+      → Henry is expected to respond to the operator organically
+    Stage 2 (fallback, 5 min): system safety net
+      → ONLY if report_back_status is still "pending"
+      → a terse system message to the operator via Telegram
     """
     from app.database import engine
 
@@ -1078,7 +1078,7 @@ async def _notify_lead_on_completion(
             if not task:
                 return
 
-            # ── Evidence sammeln ──────────────────────────────
+            # ── Collect evidence ──────────────────────────────
             evidence_cmt = (await session.exec(
                 select(TaskComment)
                 .where(
@@ -1104,28 +1104,28 @@ async def _notify_lead_on_completion(
                 if project:
                     project_info = f"**Projekt:** {project.name}\n"
 
-            # ── Stufe 1: Callback-Routing (Prio: callback_agent_id → owner falls Board Lead → Board Lead) ────
-            # Post Phase 29 / Gateway-Sunset: Lead-Auswahl nutzt keine
-            # gateway_agent_id-Filter mehr; Auslieferung erfolgt via
+            # ── Stage 1: callback routing (priority: callback_agent_id → owner if Board Lead → Board Lead) ────
+            # Post Phase 29 / Gateway-Sunset: lead selection no longer uses a
+            # gateway_agent_id filter; delivery happens via
             # TaskComment (runtime-agnostic — Board Lead's poll.sh / launchd
-            # liefert ueber /agent/me/comments) + optional direkter Telegram-
-            # Hinweis fuer den Operator.
+            # delivers via /agent/me/comments) + an optional direct Telegram
+            # notice for the operator.
             lead = None
             if board_id:
-                # Primaer: expliziter callback_agent_id
+                # Primary: explicit callback_agent_id
                 if task.callback_agent_id:
                     cb_agent = await session.get(Agent, task.callback_agent_id)
                     if cb_agent:
                         lead = cb_agent
 
-                # Sekundaer: owner_agent_id — aber nur wenn der Owner ein Board Lead ist
-                # (Planner als Owner soll NICHT den Callback bekommen)
+                # Secondary: owner_agent_id — but only if the owner is a Board Lead
+                # (Planner as owner should NOT get the callback)
                 if not lead and task.owner_agent_id:
                     owner = await session.get(Agent, task.owner_agent_id)
                     if owner and owner.is_board_lead:
                         lead = owner
 
-                # Fallback: Board Lead des Boards
+                # Fallback: the board's Board Lead
                 if not lead:
                     lead = (await session.exec(
                         select(Agent).where(
@@ -1135,10 +1135,10 @@ async def _notify_lead_on_completion(
                     )).first()
 
                 if lead:
-                    # Completion-Info fuer Board Lead. Der Report-Back an den Operator
-                    # wird NICHT durch den Lead erledigt — der ausfuehrende Agent hat
-                    # bereits via `mc telegram` vor `mc done` direkt an den Reports-Chat des Operators
-                    # geliefert (Hard-Gate erzwingt das).
+                    # Completion info for the Board Lead. The report-back to the operator
+                    # is NOT handled by the lead — the executing agent already
+                    # delivered directly to the operator's reports chat via `mc telegram`
+                    # before `mc done` (a hard gate enforces this).
                     contract_block = (
                         f"\n## Naechster Schritt\n"
                         f"Klassifiziere das Ergebnis (Task only / Reusable Asset / Content Opportunity / Revenue Opportunity).\n"
@@ -1162,9 +1162,9 @@ async def _notify_lead_on_completion(
                         f"## Evidence / Ergebnisse\n{evidence_text}\n"
                     )
 
-                    # TaskComment ist der runtime-agnostische Lieferkanal —
-                    # Board Lead's poll.sh / launchd-host pollt /agent/me/comments
-                    # und pasted den Inhalt in dessen Session.
+                    # TaskComment is the runtime-agnostic delivery channel —
+                    # the Board Lead's poll.sh / launchd host polls /agent/me/comments
+                    # and pastes the content into their session.
                     session.add(TaskComment(
                         task_id=task.id,
                         author_type="system",
@@ -1173,8 +1173,8 @@ async def _notify_lead_on_completion(
                     ))
                     await session.commit()
 
-                    # Direkter Telegram-Hinweis an den Operator (best-effort).
-                    # Bevorzugter Kanal aus Task-Kontext.
+                    # Direct Telegram notice to the operator (best-effort).
+                    # Preferred channel from task context.
                     preferred = task.report_back_channel or task.requester_channel or None
                     if preferred == "telegram":
                         try:
@@ -1188,7 +1188,7 @@ async def _notify_lead_on_completion(
                         lead.name, task.title,
                     )
 
-            # Owner-Callback Event loggen
+            # Log the owner-callback event
             if lead is not None:
                 await emit_event(
                     session, "owner.completion_callback",
@@ -1204,11 +1204,11 @@ async def _notify_lead_on_completion(
 async def _existing_phase_approval_for_parent(
     session: AsyncSession, parent_id: uuid.UUID
 ) -> Task | None:
-    """Pruefen ob bereits ein phase_approval-Task fuer diesen Parent existiert.
+    """Check whether a phase_approval task already exists for this parent.
 
-    Idempotenz-Check: gibt bestehenden open Approval-Task zurueck (inbox/in_progress/review)
-    damit Push-Pfad (agent_scoped) + Watchdog-Sweep (task_monitor) keine Duplikate erzeugen.
-    Done/failed werden ignoriert (Decision bereits getroffen, nachfolgender Approval waere neu).
+    Idempotency check: returns an existing open approval task (inbox/in_progress/review)
+    so the push path (agent_scoped) + watchdog sweep (task_monitor) don't create duplicates.
+    Done/failed are ignored (decision already made, a subsequent approval would be new).
     """
     existing = await session.exec(
         select(Task).where(
@@ -1242,9 +1242,9 @@ async def create_phase_approval_task(
     if board_lead is None:
         return None
 
-    # Idempotenz: Duplikat-Schutz. Zwei Pfade rufen uns auf (agent_scoped push
-    # bei Subtask-done + Watchdog 30s-Sweep), ohne diesen Check kam es am
-    # 2026-04-22 zu Doppel-Approval-Tasks die Boss beide bearbeiten musste.
+    # Idempotency: duplicate protection. Two paths call us (agent_scoped push
+    # on subtask-done + watchdog 30s sweep); without this check we got
+    # duplicate approval tasks on 2026-04-22 that Boss had to process both of.
     existing = await _existing_phase_approval_for_parent(session, parent.id)
     if existing is not None:
         logger.info(
@@ -1315,12 +1315,12 @@ async def create_phase_approval_task(
     return approval
 
 
-# Magic-Marker damit der Reminder-System-Comment in der DB wiedererkannt
-# werden kann (Idempotenz-Check + Eskalations-Logik).
+# Magic marker so the reminder system comment can be recognized again in
+# the DB (idempotency check + escalation logic).
 ORCH_CLOSE_REMINDER_MARKER = "[orch-close-reminder]"
 
-# Nach N ergebnislosen Reminders wird der Operator via Reports-Bot benachrichtigt.
-# Gewollt großzügig: Boss hat Zeit zu reagieren bevor der Operator gestört wird.
+# After N reminders with no result, the operator is notified via the reports bot.
+# Deliberately generous: Boss has time to react before the operator is disturbed.
 ORCH_CLOSE_ESCALATION_THRESHOLD = 3
 
 
@@ -1329,13 +1329,13 @@ async def _escalate_orch_close_to_mark(
     orchestrator: Agent,
     nudge_count: int,
 ) -> bool:
-    """Nach N ergebnislosen Close-Reminders: den Operator via Reports-Bot benachrichtigen.
+    """After N close reminders with no result: notify the operator via the reports bot.
 
-    Idempotent pro Parent (Redis-Key `orch_close_escalated`, 48h TTL). Wird einmal
-    gesendet und dann erst nach Expiry wieder.
+    Idempotent per parent (Redis key `orch_close_escalated`, 48h TTL). Sent once
+    and only again after expiry.
 
-    Returns True wenn gesendet, False wenn geskippt (nicht-konfiguriert, bereits
-    eskaliert, Redis-Fehler, oder API-Error).
+    Returns True if sent, False if skipped (not configured, already
+    escalated, Redis error, or API error).
     """
     try:
         redis = await get_redis()
@@ -1382,8 +1382,8 @@ async def _escalate_orch_close_to_mark(
 
 
 async def _increment_close_nudge_count(parent_id: uuid.UUID) -> int:
-    """Incrementiert den Nudge-Counter fuer diesen Parent. Returns neuer Wert
-    oder 0 wenn Redis nicht verfuegbar (fail-soft)."""
+    """Increments the nudge counter for this parent. Returns the new value
+    or 0 if Redis is unavailable (fail-soft)."""
     try:
         redis = await get_redis()
         count_key = f"mc:watchdog:orch_close_nudge_count:{parent_id}"
@@ -1404,26 +1404,26 @@ async def _post_close_reminder_comment(
     needs_report: bool,
     dedup_window_minutes: int | None = None,
 ) -> bool:
-    """System-Comment auf Parent posten — wird via /agent/me/poll an den
-    Owner-Agent zugestellt (poll.sh pasted ihn in dessen tmux-Session).
+    """Post a system comment on the parent — delivered to the owner agent via
+    /agent/me/poll (poll.sh pastes it into their tmux session).
 
-    Runtime-agnostischer Push-Pfad: alle Runtimes (cli-bridge / host /
-    claude-code) verwenden poll.sh / launchd, um TaskComments zu
-    konsumieren. Nutzt den bestehenden Mechanismus
-    `_collect_and_ack_new_comments` + `_DELIVER_SYSTEM_COMMENT_TYPES`
-    (siehe routers/agents.py) — `comment_type="system"` ist auf der
-    Allowlist und wird in der Claude-Session paste-buffert.
+    Runtime-agnostic push path: all runtimes (cli-bridge / host /
+    claude-code) use poll.sh / launchd to consume TaskComments. Uses the
+    existing mechanism `_collect_and_ack_new_comments` +
+    `_DELIVER_SYSTEM_COMMENT_TYPES` (see routers/agents.py) —
+    `comment_type="system"` is on the allowlist and gets paste-buffered
+    into the Claude session.
 
-    Idempotent: keine zweite Lieferung wenn ein Reminder mit demselben
-    Marker bereits im dedup_window existiert.
+    Idempotent: no second delivery if a reminder with the same marker
+    already exists within the dedup_window.
 
-    Default-Dedup (10 min) greift fuer den Push-Pfad direkt nach phase_approved.
-    Der Watchdog-Safety-Net-Pfad (reason=stuck_safety_net) nutzt seinen
-    eigenen Redis-Dedup (3-min-TTL) — dort wollen wir alle 3 min einen neuen
-    Reminder bis Auto-Close. Default fuer stuck_safety_net: 2 min (ein Tick
-    weniger als Watchdog-Dedup).
+    Default dedup (10 min) applies to the push path right after phase_approved.
+    The watchdog safety-net path (reason=stuck_safety_net) uses its own
+    Redis dedup (3-min TTL) — there we want a new reminder every 3 min
+    until auto-close. Default for stuck_safety_net: 2 min (one tick
+    shorter than the watchdog dedup).
 
-    Returns True wenn ein neuer Comment angelegt wurde.
+    Returns True if a new comment was created.
     """
     from datetime import timedelta
 
@@ -1498,27 +1498,27 @@ async def send_orchestrator_close_nudge(
     *,
     reason: Literal["phase_approved", "stuck_safety_net"] = "phase_approved",
 ) -> bool:
-    """Aktiver Nudge an Orchestrator: 'du musst diesen Parent abschliessen'.
+    """Active nudge to the orchestrator: 'you must close out this parent'.
 
-    Trust-by-Default-Boards lassen den Parent nach `phase_approved` auf
-    `in_progress` statt auf `review`. Ohne diesen Nudge sieht der
-    Orchestrator in seiner Session keinen offenen Task mehr (Approval
-    ist done) und vergisst die Hard-Gate-Sequenz `mc telegram` + `mc done`.
+    Trust-by-default boards leave the parent on `in_progress` instead of
+    `review` after `phase_approved`. Without this nudge, the orchestrator
+    no longer sees an open task in their session (the approval is done)
+    and forgets the hard-gate sequence `mc telegram` + `mc done`.
 
-    Post Phase 29 / Gateway-Sunset: NUR Pfad A (System-Comment + Poll).
-    Alle verbleibenden Runtimes (cli-bridge / host / claude-code) liefern
-    System-Comments via /agent/me/comments ueber poll.sh / launchd in die
-    tmux-Session des Orchestrators. Der frueher hier vorhandene Gateway-
-    Pfad (RPC chat-send mit Telegram-Session-Bevorzugung) ist entfallen.
+    Post Phase 29 / Gateway-Sunset: ONLY path A (system comment + poll).
+    All remaining runtimes (cli-bridge / host / claude-code) deliver
+    system comments via /agent/me/comments through poll.sh / launchd into
+    the orchestrator's tmux session. The gateway path that used to exist
+    here (RPC chat-send with Telegram-session preference) is gone.
 
-    Aufrufer:
-    - `handle_phase_approval_decision` direkt nach `phase_approved`
-    - Watchdog `_check_stuck_orchestrator_close` als Safety-Net nach 3 Min
+    Callers:
+    - `handle_phase_approval_decision` right after `phase_approved`
+    - watchdog `_check_stuck_orchestrator_close` as a safety net after 3 min
 
-    Returns True wenn die Message zugestellt wurde.
+    Returns True if the message was delivered.
     """
-    # Hard-Gate gilt nur fuer telegram-routed Tasks (analog task_lifecycle.py:486).
-    # Discord-routed Tasks brauchen keinen `mc telegram`-Hinweis.
+    # The hard gate only applies to telegram-routed tasks (analogous to task_lifecycle.py:486).
+    # Discord-routed tasks don't need an `mc telegram` hint.
     is_telegram_channel = (parent.report_back_channel or "telegram") == "telegram"
     needs_report = (
         bool(parent.report_back_required)
@@ -1603,11 +1603,11 @@ async def handle_phase_approval_decision(
     if comment_type == "phase_approved":
         result["decision"] = "approved"
         if parent.status == "in_progress":
-            # Trust-by-Default-Boards haben keinen dedicated Reviewer — `review`
-            # wuerde den Parent ins Leere haengen lassen (Bug 2, 2026-04-22:
-            # Parent blieb 8 Min auf review). Stattdessen: Parent bleibt
-            # in_progress, Orchestrator schliesst via Hard-Gate (mc telegram
-            # → mc done) selbst ab.
+            # Trust-by-default boards have no dedicated reviewer — `review`
+            # would leave the parent hanging in limbo (bug 2, 2026-04-22:
+            # parent stayed on review for 8 min). Instead: the parent stays
+            # in_progress, the orchestrator closes it out themselves via the
+            # hard gate (mc telegram → mc done).
             from app.models.board import Board
             _board = await session.get(Board, parent.board_id)
             _trust_by_default = _board is not None and not _board.require_review_before_done
@@ -1631,9 +1631,9 @@ async def handle_phase_approval_decision(
                     )
                 except Exception as e:
                     logger.warning("phase_approved event emission failed: %s", e)
-                # Aktiver Re-Dispatch-Nudge: ohne den uebersieht der Orchestrator
-                # leicht, dass der Parent noch offen ist (Approval-Task ist done,
-                # in seiner Sicht erscheint nichts mehr offenes).
+                # Active re-dispatch nudge: without it the orchestrator easily
+                # overlooks that the parent is still open (the approval task is
+                # done, from their view nothing looks open anymore).
                 try:
                     nudged = await send_orchestrator_close_nudge(
                         session, parent, agent, reason="phase_approved",
@@ -1644,7 +1644,7 @@ async def handle_phase_approval_decision(
                     logger.warning("Orchestrator close nudge after phase_approved failed: %s", e)
                 return result
 
-            # Klassischer Review-Pfad fuer Boards mit require_review_before_done=true
+            # Classic review path for boards with require_review_before_done=true
             parent.status = "review"
             parent.updated_at = utcnow()
             session.add(parent)
@@ -1692,8 +1692,8 @@ async def handle_phase_approval_decision(
             if st.delegation_type == "phase_approval":
                 continue
             if str(st.id) in mentioned_ids:
-                # done → in_progress (DB-CHECK-Constraint laesst done → inbox
-                # nicht zu — war vor 2026-04-23 ein hart bekannter Crash).
+                # done → in_progress (the DB CHECK constraint doesn't allow
+                # done → inbox — that was a well-known hard crash before 2026-04-23).
                 #
                 # Full dispatch-state reset — analog handle_review_handoff
                 # (Z.687-762). Old behavior preserved dispatched_at/ack_at
@@ -1704,8 +1704,8 @@ async def handle_phase_approval_decision(
                 # explicitly via auto_dispatch_task() and post a per-subtask
                 # rewrite-directive TaskComment so the agent sees WHAT to
                 # fix in its next dispatch context. Incident 2026-05-20:
-                # Researcher-Subtask 6a65a509 hing 1h still nach rewrite-
-                # Anfrage — Live-Beweis für die Lücke.
+                # researcher subtask 6a65a509 hung silently for 1h after a rewrite
+                # request — live proof of the gap.
                 st.status = "in_progress"
                 st.completed_at = None
                 st.dispatched_at = None

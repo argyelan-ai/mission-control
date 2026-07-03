@@ -1,18 +1,19 @@
-"""MeetingService — Strukturierte Agent-Diskussionen.
+"""MeetingService — Structured agent discussions.
 
-Ablauf:
-1. start_meeting() → Background-Task startet Meeting
-2. Pro Agenda-Topic: Agents werden sequentiell befragt
-   (Agent B sieht was Agent A gesagt hat → echte Diskussion)
-3. Board Lead fasst am Ende zusammen
-4. Ergebnisse → BoardMemory + Telegram an den Operator
+Flow:
+1. start_meeting() → background task starts the meeting
+2. Per agenda topic: agents are questioned sequentially
+   (agent B sees what agent A said → real discussion)
+3. Board Lead summarizes at the end
+4. Results → BoardMemory + Telegram to the operator
 
-Phase 29 (Gateway Sunset, D-10): Der synchrone "Frage Agent, warte auf Antwort"-
-Pfad lief frueher ueber den Gateway-Chat-RPC mit Wait-for-Reply. Ohne Gateway ist diese
-Synchron-Loop nicht mehr moeglich. Bis Phase 31 einen cli-bridge-basierten
-Replacement liefert, antworten Agents im Meeting mit einem Placeholder und das
-Meeting laeuft trotzdem durch (BoardMemory + Auto-Summary). Telegram-Benachrichtigung
-geht ueber telegram_bot.send_message direkt zur Bot API.
+Phase 29 (Gateway Sunset, D-10): The synchronous "ask agent, wait for reply"
+path used to run over the Gateway chat RPC with wait-for-reply. Without the
+Gateway this synchronous loop is no longer possible. Until Phase 31 delivers
+a cli-bridge-based replacement, agents respond in the meeting with a
+placeholder and the meeting still runs to completion (BoardMemory +
+auto-summary). Telegram notification goes via telegram_bot.send_message
+directly to the Bot API.
 """
 
 import asyncio
@@ -38,15 +39,15 @@ from app.utils import create_tracked_task, utcnow
 
 logger = logging.getLogger("mc.meetings")
 
-# ── Konfiguration ──────────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────
 
-AGENT_RESPONSE_TIMEOUT = 180.0  # 3 Minuten pro Agent
-SUMMARY_TIMEOUT = 300.0  # 5 Minuten fuer Zusammenfassung
+AGENT_RESPONSE_TIMEOUT = 180.0  # 3 minutes per agent
+SUMMARY_TIMEOUT = 300.0  # 5 minutes for summary
 MEETING_MAX_DURATION = timedelta(hours=2)
-MEETING_LOCK_TTL = 7200  # 2h in Sekunden
+MEETING_LOCK_TTL = 7200  # 2h in seconds
 
 
-# ── Oeffentliche API ───────────────────────────────────────────────────
+# ── Public API ────────────────────────────────────────────────────────
 
 
 async def start_meeting(
@@ -58,22 +59,22 @@ async def start_meeting(
     participant_ids: list[uuid.UUID] | None = None,
     scheduled_at: datetime | None = None,
 ) -> AgentMeeting:
-    """Meeting erstellen und als Background-Task starten.
+    """Create meeting and start it as a background task.
 
-    Returns das Meeting-Objekt sofort — die Durchfuehrung laeuft async.
+    Returns the meeting object immediately — execution runs async.
     """
-    # Lock pruefen — nur ein Meeting pro Board gleichzeitig
+    # Check lock — only one meeting per board at a time
     locked = await _acquire_meeting_lock(str(board_id))
     if not locked:
         raise MeetingAlreadyRunningError(
             f"Es laeuft bereits ein Meeting auf Board {board_id}"
         )
 
-    # Teilnehmer laden (oder alle Board-Agents nehmen)
+    # Load participants (or take all board agents)
     if participant_ids:
         pid_strs = [str(pid) for pid in participant_ids]
     else:
-        pid_strs = None  # wird im Runner aufgeloest
+        pid_strs = None  # resolved in the runner
 
     meeting = AgentMeeting(
         board_id=board_id,
@@ -96,7 +97,7 @@ async def start_meeting(
         detail={"meeting_id": str(meeting.id), "agenda": agenda},
     )
 
-    # Meeting als Background-Task starten
+    # Start meeting as a background task
     create_tracked_task(
         _run_meeting(meeting.id, board_id),
         name=f"meeting:{meeting.id}",
@@ -109,7 +110,7 @@ async def cancel_meeting(
     session: AsyncSession,
     meeting_id: uuid.UUID,
 ) -> AgentMeeting:
-    """Laufendes oder geplantes Meeting abbrechen."""
+    """Cancel a running or scheduled meeting."""
     meeting = await session.get(AgentMeeting, meeting_id)
     if not meeting:
         raise MeetingNotFoundError(f"Meeting {meeting_id} nicht gefunden")
@@ -139,7 +140,7 @@ async def cancel_meeting(
 
 
 async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
-    """Hauptloop: Fuehrt Meeting durch, Topic fuer Topic."""
+    """Main loop: runs the meeting, topic by topic."""
     from sqlmodel.ext.asyncio.session import AsyncSession as AS
 
     async with AS(async_engine) as session:
@@ -161,7 +162,7 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
         })
 
         try:
-            # Teilnehmer laden
+            # Load participants
             participants = await _load_participants(session, meeting)
             if not participants:
                 logger.warning("Meeting %s: keine Teilnehmer gefunden", meeting_id)
@@ -175,13 +176,13 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
             lead = await _find_board_lead(session, board_id)
             all_responses: list[dict[str, Any]] = []
 
-            # Pro Agenda-Topic
+            # Per agenda topic
             for topic_idx, topic in enumerate(meeting.agenda or []):
                 if utcnow() > deadline:
                     logger.warning("Meeting %s: Zeitlimit erreicht", meeting_id)
                     break
 
-                # Facilitator-Frage als Message speichern
+                # Save facilitator question as message
                 await _save_message(
                     session, meeting.id,
                     role="facilitator_question",
@@ -196,7 +197,7 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     "topic": topic,
                 })
 
-                # Agents sequentiell befragen
+                # Question agents sequentially
                 topic_responses: list[dict[str, str]] = []
                 for agent in participants:
                     if utcnow() > deadline:
@@ -219,19 +220,19 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     "responses": topic_responses,
                 })
 
-            # Zusammenfassung durch Board Lead
+            # Summary by Board Lead
             summary = await _generate_summary(
                 session, meeting, lead, all_responses
             )
 
-            # Ergebnisse speichern
+            # Save results
             meeting.summary = summary.get("summary", "")
             meeting.decisions = summary.get("decisions", [])
             meeting.action_items = summary.get("action_items", [])
             meeting.status = "completed"
             meeting.completed_at = utcnow()
 
-            # Als BoardMemory speichern
+            # Save as BoardMemory
             memory = BoardMemory(
                 board_id=board_id,
                 title=f"Meeting: {meeting.title}",
@@ -253,7 +254,7 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
                 "decisions_count": len(meeting.decisions or []),
             })
 
-            # Telegram an den Operator — direct Bot API (no Gateway dependency)
+            # Telegram to the operator — direct Bot API (no Gateway dependency)
             decisions_text = ""
             if meeting.decisions:
                 decisions_text = "\n".join(
@@ -269,7 +270,7 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
             except Exception as e:
                 logger.warning("Meeting Telegram notify failed: %s", e)
 
-            # Optional: per-board lead Discord-Channel-Notify
+            # Optional: per-board lead Discord channel notify
             if lead and getattr(lead, "discord_channel_id", None):
                 try:
                     await send_to_discord_channel(
@@ -303,7 +304,7 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
             await _release_meeting_lock(str(board_id))
 
 
-# ── Agent-Befragung ───────────────────────────────────────────────────
+# ── Agent Questioning ────────────────────────────────────────────────
 
 
 async def _ask_agent(
@@ -314,11 +315,11 @@ async def _ask_agent(
     topic_index: int,
     previous_responses: list[dict[str, str]],
 ) -> str:
-    """Einen Agent zum aktuellen Topic befragen.
+    """Question a single agent on the current topic.
 
-    Baut Kontext aus vorherigen Antworten auf → echte Diskussion.
+    Builds context from previous answers → real discussion.
     """
-    # Frage formulieren mit Kontext
+    # Formulate question with context
     question = _build_agent_question(
         meeting.title, topic, agent.name, previous_responses
     )
@@ -330,10 +331,10 @@ async def _ask_agent(
         "topic_index": topic_index,
     })
 
-    # RPC an Agent senden
+    # Send RPC to agent
     response_text = await _send_and_wait(agent, question)
 
-    # Antwort speichern
+    # Save response
     await _save_message(
         session, meeting.id,
         agent_id=agent.id,
@@ -361,7 +362,7 @@ def _build_agent_question(
     agent_name: str,
     previous_responses: list[dict[str, str]],
 ) -> str:
-    """Baut die Frage fuer einen Agent mit Kontext vorheriger Antworten."""
+    """Build the question for an agent with context of prior answers."""
     parts = [
         f"# Meeting: {meeting_title}",
         f"\n## Aktuelles Thema\n{topic}",
@@ -382,13 +383,13 @@ def _build_agent_question(
 
 
 async def _send_and_wait(agent: Agent, message: str) -> str:
-    """Placeholder nach Gateway-Sunset (Phase 29, D-10).
+    """Placeholder after Gateway sunset (Phase 29, D-10).
 
-    Vor Phase 29 lief hier eine synchrone Chat-RPC mit Wait-for-Reply. Ohne
-    Gateway gibt es keinen synchronen Replikationspfad mehr; cli-bridge Agents
-    arbeiten async (Task → TaskComment → poll). Bis Phase 31 einen async
-    Meeting-Runner liefert, antworten Agents mit einem markierten Placeholder
-    und das Meeting laeuft mit Auto-Summary durch.
+    Before Phase 29 a synchronous chat RPC with wait-for-reply ran here.
+    Without the Gateway there is no synchronous reply path anymore;
+    cli-bridge agents work async (task → TaskComment → poll). Until Phase 31
+    delivers an async meeting runner, agents respond with a marked
+    placeholder and the meeting still runs to completion with auto-summary.
     """
     logger.info(
         "Meeting question for %s skipped — Gateway sunset, awaiting Phase 31 cli-bridge meeting runner",
@@ -400,7 +401,7 @@ async def _send_and_wait(agent: Agent, message: str) -> str:
     )
 
 
-# ── Zusammenfassung ───────────────────────────────────────────────────
+# ── Summary ───────────────────────────────────────────────────────────
 
 
 async def _generate_summary(
@@ -409,12 +410,12 @@ async def _generate_summary(
     lead: Agent | None,
     all_responses: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Meeting-Zusammenfassung (post-Gateway-Sunset).
+    """Meeting summary (post-Gateway-sunset).
 
-    Vor Phase 29 hat der Board Lead via Gateway-Chat synchron eine Summary
-    generiert. Ohne Gateway gibt es keinen synchronen LLM-Pfad mehr — wir
-    fallen sofort auf die deterministische Auto-Summary zurueck. Phase 31 wird
-    einen cli-bridge-basierten Async-Summary-Runner liefern.
+    Before Phase 29 the Board Lead generated a summary synchronously via
+    Gateway chat. Without the Gateway there is no synchronous LLM path
+    anymore — we fall back immediately to the deterministic auto-summary.
+    Phase 31 will deliver a cli-bridge-based async summary runner.
     """
     if lead is not None:
         logger.info(
@@ -428,7 +429,7 @@ def _auto_summary(
     meeting: AgentMeeting,
     all_responses: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Fallback-Zusammenfassung wenn kein Lead verfuegbar."""
+    """Fallback summary when no lead is available."""
     parts = [f"## Meeting: {meeting.title}\n"]
     for topic_data in all_responses:
         parts.append(f"### {topic_data['topic']}")
@@ -443,17 +444,17 @@ def _auto_summary(
     }
 
 
-# ── Hilfsfunktionen ──────────────────────────────────────────────────
+# ── Helper Functions ─────────────────────────────────────────────────
 
 
 async def _load_participants(
     session: AsyncSession,
     meeting: AgentMeeting,
 ) -> list[Agent]:
-    """Meeting-Teilnehmer laden — aus participant_ids oder alle Board-Agents.
+    """Load meeting participants — from participant_ids or all board agents.
 
-    Phase 29 (D-10): kein gateway_agent_id-Filter mehr — cli-bridge / host
-    Agents haben keine gateway_agent_id.
+    Phase 29 (D-10): no more gateway_agent_id filter — cli-bridge / host
+    agents don't have a gateway_agent_id.
     """
     if meeting.participant_ids:
         pids = [uuid.UUID(pid) for pid in meeting.participant_ids]
@@ -468,7 +469,7 @@ async def _find_board_lead(
     session: AsyncSession,
     board_id: uuid.UUID,
 ) -> Agent | None:
-    """Board Lead finden (role='lead' oder is_board_lead=True)."""
+    """Find Board Lead (role='lead' or is_board_lead=True)."""
     stmt = (
         select(Agent)
         .where(Agent.board_id == board_id)
@@ -499,7 +500,7 @@ async def _save_message(
     round: int = 1,
     topic_index: int = 0,
 ) -> AgentMeetingMessage:
-    """Meeting-Nachricht in DB speichern."""
+    """Save meeting message in DB."""
     msg = AgentMeetingMessage(
         meeting_id=meeting_id,
         agent_id=agent_id,
@@ -520,7 +521,7 @@ async def _broadcast_meeting_event(
     event_type: str,
     data: dict[str, Any],
 ) -> None:
-    """SSE Event fuer Meeting-Updates broadcasten."""
+    """Broadcast SSE event for meeting updates."""
     try:
         payload = {
             **data,
@@ -542,7 +543,7 @@ async def _broadcast_meeting_event(
 
 
 async def _acquire_meeting_lock(board_id: str) -> bool:
-    """Nur ein Meeting pro Board gleichzeitig. Fail-open."""
+    """Only one meeting per board at a time. Fail-open."""
     try:
         redis = await get_redis()
         result = await redis.set(
@@ -557,7 +558,7 @@ async def _acquire_meeting_lock(board_id: str) -> bool:
 
 
 async def _release_meeting_lock(board_id: str) -> None:
-    """Meeting-Lock freigeben."""
+    """Release meeting lock."""
     try:
         redis = await get_redis()
         await redis.delete(RedisKeys.meeting_lock(board_id))

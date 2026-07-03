@@ -1,10 +1,10 @@
 """
-Discord Server Setup — Erstellt Categories + Channels und speichert IDs in Redis.
+Discord server setup — creates categories + channels and stores IDs in Redis.
 
-Aufruf: docker compose exec backend python3 scripts/setup_discord_channels.py
+Usage: docker compose exec backend python3 scripts/setup_discord_channels.py
 
-Voraussetzung: DISCORD_BOT_TOKEN in .env + discord_config-Zeile mit guild_id in DB
-(Phase 30 — die Gateway-Tabelle wurde durch discord_config ersetzt).
+Prerequisite: DISCORD_BOT_TOKEN in .env + discord_config row with guild_id in DB
+(Phase 30 — the gateway table was replaced by discord_config).
 """
 
 import asyncio
@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import httpx
 
-# Channel-Struktur: (category_name, [(channel_name, redis_purpose)])
+# Channel structure: (category_name, [(channel_name, redis_purpose)])
 CHANNEL_STRUCTURE = [
     ("MISSION CONTROL", [
         ("mc-alerts", "alerts"),
@@ -39,7 +39,7 @@ CHANNEL_STRUCTURE = [
     ]),
 ]
 
-# Agent-Name → Channel-Name Mapping (fuer discord_channel_id Update)
+# Agent name → channel name mapping (for discord_channel_id update)
 AGENT_CHANNEL_MAP = {
     "henry": "agent-henry",
     "cody": "agent-cody",
@@ -59,7 +59,7 @@ class DiscordAPI:
         )
 
     async def create_category(self, guild_id: str, name: str) -> dict:
-        """Category erstellen (type=4)."""
+        """Create a category (type=4)."""
         resp = await self.client.post(
             f"/guilds/{guild_id}/channels",
             json={"name": name, "type": 4},
@@ -68,7 +68,7 @@ class DiscordAPI:
         return resp.json()
 
     async def create_text_channel(self, guild_id: str, name: str, parent_id: str) -> dict:
-        """Text-Channel unter einer Category erstellen (type=0)."""
+        """Create a text channel under a category (type=0)."""
         resp = await self.client.post(
             f"/guilds/{guild_id}/channels",
             json={"name": name, "type": 0, "parent_id": parent_id},
@@ -77,7 +77,7 @@ class DiscordAPI:
         return resp.json()
 
     async def list_channels(self, guild_id: str) -> list[dict]:
-        """Alle Channels eines Guilds auflisten."""
+        """List all channels of a guild."""
         resp = await self.client.get(f"/guilds/{guild_id}/channels")
         resp.raise_for_status()
         return resp.json()
@@ -94,11 +94,11 @@ async def main():
         print("DISCORD_BOT_TOKEN nicht gesetzt. Bitte in .env eintragen.")
         sys.exit(1)
 
-    # Guild ID aus DB oder Environment lesen
+    # Read guild ID from DB or environment
     guild_id = os.environ.get("DISCORD_GUILD_ID")
 
     if not guild_id:
-        # Aus DB lesen (Phase 30: discord_config statt gateways)
+        # Read from DB (Phase 30: discord_config instead of gateways)
         from app.database import engine
         from sqlmodel.ext.asyncio.session import AsyncSession
         from sqlmodel import select
@@ -121,13 +121,13 @@ async def main():
     api = DiscordAPI(bot_token)
 
     try:
-        # Bestehende Channels pruefen (getrennt nach Typ)
+        # Check existing channels (split by type)
         existing = await api.list_channels(guild_id)
         existing_categories = {ch["name"]: ch for ch in existing if ch["type"] == 4}
         existing_text = {ch["name"]: ch for ch in existing if ch["type"] == 0}
         existing_names = {ch["name"]: ch for ch in existing}
 
-        # Redis-Verbindung
+        # Redis connection
         import redis.asyncio as aioredis
         redis = aioredis.from_url(settings.redis_url, decode_responses=True)
 
@@ -136,7 +136,7 @@ async def main():
         skipped = 0
 
         for category_name, channels in CHANNEL_STRUCTURE:
-            # Category erstellen oder wiederverwenden (nur type=4 matchen)
+            # Create category or reuse (only match type=4)
             cat_slug = category_name.lower().replace(" ", "-")
             cat_name_lower = category_name.lower()
             matched_cat = existing_categories.get(cat_slug) or existing_categories.get(cat_name_lower) or existing_categories.get(category_name)
@@ -162,12 +162,12 @@ async def main():
 
                 channel_ids[channel_name] = ch["id"]
 
-                # Redis-Key setzen fuer Purpose-Routing
+                # Set Redis key for purpose routing
                 if redis_purpose:
                     await redis.set(f"mc:discord:channel:{redis_purpose}", ch["id"])
                     print(f"  -> Redis: mc:discord:channel:{redis_purpose} = {ch['id']}")
 
-        # Agent discord_channel_id updaten via Raw SQL (asyncpg-kompatibel)
+        # Update agent discord_channel_id via raw SQL (asyncpg-compatible)
         print()
         print("Agent-Channels in DB updaten...")
         import asyncpg

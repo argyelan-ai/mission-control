@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Seed cli_plugins fuer alle CLI-Bridge Agents aus deren aktueller settings.json."""
+"""Seed cli_plugins for all CLI-bridge agents from their current settings.json."""
 import asyncio
 import json
 import os

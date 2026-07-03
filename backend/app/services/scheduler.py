@@ -1,8 +1,8 @@
 """
-Scheduler Service — Fuehrt geplante Jobs via APScheduler aus.
+Scheduler Service — runs scheduled jobs via APScheduler.
 
-Laeuft als asyncio Background Service in der FastAPI Lifespan.
-Jobs werden aus der DB geladen und in APScheduler registriert.
+Runs as an asyncio background service in the FastAPI lifespan.
+Jobs are loaded from the DB and registered in APScheduler.
 """
 
 import asyncio
@@ -26,12 +26,13 @@ from app.services.activity import emit_event
 logger = logging.getLogger("mc.scheduler")
 
 
-# Lock-Lifecycle:
-#   TTL kurz halten (120s) damit ein Crash schnell heilt — kein hängender 1h-Lock.
-#   Refresh-Task hält den Lock am Leben solange der Service läuft.
-#   Acquire mit Retry — wenn ein alter Worker den Lock noch hält, warten wir, statt
-#   beim Boot sofort aufzugeben (Bug der bis 2026-05-19 dazu führte, dass ein
-#   abrupter Container-Restart den Scheduler bis zum nächsten Restart komplett tot legte).
+# Lock lifecycle:
+#   Keep TTL short (120s) so a crash heals quickly — no hanging 1h lock.
+#   Refresh task keeps the lock alive as long as the service runs.
+#   Acquire with retry — if an old worker still holds the lock, we wait
+#   instead of giving up immediately at boot (a bug that until 2026-05-19
+#   caused an abrupt container restart to leave the scheduler completely
+#   dead until the next restart).
 LOCK_TTL_SECONDS = 120
 LOCK_REFRESH_INTERVAL_SECONDS = 60
 LOCK_ACQUIRE_MAX_ATTEMPTS = 10
@@ -43,20 +44,20 @@ class SchedulerService:
         self._scheduler = AsyncIOScheduler(
             timezone="Europe/Zurich",
             job_defaults={
-                "misfire_grace_time": 3600,  # 1h Nachholzeit nach verpasstem Trigger
-                "coalesce": True,            # Mehrere verpasste Läufe → nur 1x nachholen
+                "misfire_grace_time": 3600,  # 1h catch-up window after a missed trigger
+                "coalesce": True,            # multiple missed runs → catch up only once
             },
         )
         self._running = False
         self._refresh_task: asyncio.Task | None = None
 
     async def _acquire_lock(self) -> bool:
-        """Versucht den Redis-Lock zu erwerben, mit Retry.
+        """Tries to acquire the Redis lock, with retry.
 
-        Returns True wenn der Lock geholt wurde, False wenn nach allen Versuchen nicht.
-        Die Retry-Strategie deckt den Fall ab, in dem ein alter Worker beim
-        Container-Restart noch nicht ganz tot ist oder einen stale Lock hinterlassen
-        hat — durch die kurze TTL läuft dieser spätestens nach LOCK_TTL_SECONDS aus.
+        Returns True if the lock was acquired, False if not after all attempts.
+        The retry strategy covers the case where an old worker isn't quite dead
+        yet during a container restart or left a stale lock behind — thanks to
+        the short TTL it expires after LOCK_TTL_SECONDS at the latest.
         """
         from app.redis_client import RedisKeys, get_redis
         redis = await get_redis()
@@ -78,13 +79,13 @@ class SchedulerService:
         return False
 
     async def _refresh_lock_loop(self):
-        """Hält den Lock am Leben solange der Service läuft.
+        """Keeps the lock alive as long as the service runs.
 
-        Refresh alle LOCK_REFRESH_INTERVAL_SECONDS via EXPIRE. Wenn der Refresh
-        einmal fehlschlägt, läuft der Lock nach LOCK_TTL_SECONDS aus — APScheduler
-        läuft trotzdem mit den schon registrierten Jobs weiter (der Lock ist nur
-        ein Boot-Gate, kein Pre-Trigger-Check). Bei Recovery erwirbt der nächste
-        Worker den Lock automatisch via _acquire_lock.
+        Refreshes every LOCK_REFRESH_INTERVAL_SECONDS via EXPIRE. If a refresh
+        fails once, the lock expires after LOCK_TTL_SECONDS — APScheduler keeps
+        running with the already-registered jobs regardless (the lock is only a
+        boot gate, not a pre-trigger check). On recovery, the next worker
+        acquires the lock automatically via _acquire_lock.
         """
         from app.redis_client import RedisKeys, get_redis
         redis = await get_redis()
@@ -100,11 +101,11 @@ class SchedulerService:
                 logger.exception("Scheduler lock refresh failed (will retry next tick)")
 
     async def start(self):
-        """Service starten — Redis-Lock verhindert Doppel-Start bei mehreren Workern.
+        """Start the service — Redis lock prevents double-start across multiple workers.
 
-        Bei besetztem Lock wird mit Retry gewartet (siehe _acquire_lock). Damit ist
-        ein abrupter Container-Restart kein Killer-Szenario mehr: der alte Lock
-        läuft spätestens nach LOCK_TTL_SECONDS aus und der neue Worker übernimmt.
+        If the lock is held, we wait with retry (see _acquire_lock). This means
+        an abrupt container restart is no longer a killer scenario: the old lock
+        expires after LOCK_TTL_SECONDS at the latest and the new worker takes over.
         """
         if not await self._acquire_lock():
             logger.warning(
@@ -119,7 +120,7 @@ class SchedulerService:
         logger.info("SchedulerService started")
 
     async def stop(self):
-        """Service stoppen."""
+        """Stop the service."""
         if self._running:
             self._running = False
             if self._refresh_task is not None:
@@ -132,7 +133,7 @@ class SchedulerService:
         logger.info("SchedulerService stopped")
 
     async def _load_jobs_from_db(self):
-        """Beim Start alle enabled Jobs aus DB in APScheduler laden."""
+        """At startup, load all enabled jobs from the DB into APScheduler."""
         async with AsyncSession(engine, expire_on_commit=False) as session:
             result = await session.exec(
                 select(ScheduledJob).where(ScheduledJob.enabled == True)  # noqa: E712
@@ -155,7 +156,7 @@ class SchedulerService:
             logger.info("Loaded scheduled workflow: %s", workflow.name)
 
     def _build_trigger(self, job: ScheduledJob) -> tuple[str, dict]:
-        """APScheduler-Trigger aus Job-Config bauen."""
+        """Build an APScheduler trigger from the job config."""
         # Collect optional start_date / end_date kwargs
         date_kwargs: dict = {}
         if job.start_date:
@@ -208,7 +209,7 @@ class SchedulerService:
             )
 
     def _register_job(self, job: ScheduledJob):
-        """Job in APScheduler registrieren."""
+        """Register a job in APScheduler."""
         try:
             trigger_type, trigger_kwargs = self._build_trigger(job)
 
@@ -236,7 +237,7 @@ class SchedulerService:
             logger.error("Failed to register job %s: %s", job.name, e)
 
     def _unregister_job(self, job_id: str):
-        """Job aus APScheduler entfernen."""
+        """Remove a job from APScheduler."""
         try:
             self._scheduler.remove_job(job_id)
         except Exception:
@@ -308,7 +309,7 @@ class SchedulerService:
         await self._update_workflow_next_run(workflow_id)
 
     async def _update_next_run(self, job_id: str):
-        """next_run_at aus APScheduler lesen + in DB schreiben."""
+        """Read next_run_at from APScheduler + write it to the DB."""
         await asyncio.sleep(0.1)
         ap_job = self._scheduler.get_job(job_id)
         if ap_job and getattr(ap_job, "next_run_time", None):
@@ -320,7 +321,7 @@ class SchedulerService:
                     await session.commit()
 
     async def _execute_job(self, job_id: str, retry_attempt: int = 0):
-        """Job ausfuehren + Run-Record in DB schreiben + SSE broadcast."""
+        """Execute a job + write a run record to the DB + SSE broadcast."""
         from app.models.scheduled_job_run import ScheduledJobRun
         from app.redis_client import RedisKeys
         from app.services.sse import broadcast
@@ -330,17 +331,17 @@ class SchedulerService:
             if not job or not job.enabled:
                 return
 
-            # Snooze-Check: Job ist bis snoozed_until pausiert
+            # Snooze check: job is paused until snoozed_until
             now = datetime.now(timezone.utc)
             if job.snoozed_until and job.snoozed_until > now:
                 logger.info(
                     "Job %s is snoozed until %s, skipping", job.id, job.snoozed_until
                 )
-                return  # Kein Run-Record für snoozed Jobs
+                return  # No run record for snoozed jobs
 
             logger.info("Executing job: %s (attempt %d)", job.name, retry_attempt)
 
-            # Run-Record anlegen
+            # Create run record
             run = ScheduledJobRun(
                 job_id=uuid.UUID(job_id),
                 started_at=datetime.now(timezone.utc),
@@ -352,7 +353,7 @@ class SchedulerService:
             await session.refresh(run)
             run_id = str(run.id)
 
-        # SSE: Job gestartet
+        # SSE: job started
         await broadcast(
             RedisKeys.schedule_events(),
             "job.started",
@@ -392,7 +393,7 @@ class SchedulerService:
 
         finished_at = datetime.now(timezone.utc)
 
-        # consecutive_failures aktualisieren + ggf. auto-disable
+        # Update consecutive_failures + auto-disable if applicable
         async with AsyncSession(engine, expire_on_commit=False) as session:
             job = await session.get(ScheduledJob, uuid.UUID(job_id))
             if job:
@@ -413,7 +414,7 @@ class SchedulerService:
                     session.add(job)
                     await session.commit()
 
-        # Run-Record finalisieren
+        # Finalize run record
         async with AsyncSession(engine, expire_on_commit=False) as session:
             run = await session.get(ScheduledJobRun, uuid.UUID(run_id))
             if run:
@@ -423,7 +424,7 @@ class SchedulerService:
                 run.detail = detail if detail else None
                 session.add(run)
 
-            # last_run_* auf ScheduledJob aktualisieren (backward compat)
+            # Update last_run_* on ScheduledJob (backward compat)
             job = await session.get(ScheduledJob, uuid.UUID(job_id))
             if job:
                 job.last_run_at = finished_at
@@ -433,22 +434,22 @@ class SchedulerService:
 
             await session.commit()
 
-        # Run-History beschneiden
+        # Prune run history
         await self._prune_run_history(job_id)
 
-        # Retry-Logik
+        # Retry logic
         if not success and job.retry_max > 0 and retry_attempt < job.retry_max:
             await self._schedule_retry(job_id, retry_attempt + 1, job.retry_delay_minutes)
 
-        # Failure-Notification
+        # Failure notification
         if not success and job.notify_on_failure:
             await self._send_failure_notification(job, error)
 
-        # Dependent Jobs triggern wenn erfolgreich
+        # Trigger dependent jobs if successful
         if success:
             await self._trigger_dependent_jobs(job_id)
 
-        # SSE: Job abgeschlossen
+        # SSE: job completed
         await broadcast(
             RedisKeys.schedule_events(),
             "job.completed",
@@ -474,11 +475,11 @@ class SchedulerService:
                 detail={"job_id": job_id, "job_name": job.name, "run_id": run_id},
             )
 
-        # Scheduler Status → #dev-log (mc:discord:channel:jobs).
-        # Vorher hardcoded job_channel_map = {Morning Briefing: briefing, ...}
-        # postete "Erfolgreich ausgefuehrt." in den Content-Channel und
-        # blockierte den Channel fuer den eigentlichen Job-Output
-        # (das echte Briefing kommt vom Researcher selbst). 2026-05-18.
+        # Scheduler status → #dev-log (mc:discord:channel:jobs).
+        # Previously a hardcoded job_channel_map = {Morning Briefing: briefing, ...}
+        # posted "Erfolgreich ausgefuehrt." into the content channel and
+        # blocked the channel for the actual job output
+        # (the real briefing comes from the researcher itself). 2026-05-18.
         try:
             from app.services.discord_router import get_channel_id
             from app.services.discord import send_to_discord_channel
@@ -499,7 +500,7 @@ class SchedulerService:
         await self._update_next_run(job_id)
 
     async def _prune_run_history(self, job_id: str, max_runs: int = 50):
-        """Alte Run-Records löschen — max. 50 pro Job."""
+        """Delete old run records — max. 50 per job."""
         from sqlalchemy import delete as sa_delete
         from app.models.scheduled_job_run import ScheduledJobRun
 
@@ -520,7 +521,7 @@ class SchedulerService:
                 await session.commit()
 
     async def _schedule_retry(self, job_id: str, attempt: int, delay_minutes: int):
-        """Einmaliger Retry-Job nach delay_minutes."""
+        """One-off retry job after delay_minutes."""
         from apscheduler.triggers.date import DateTrigger
 
         run_at = datetime.now(timezone.utc) + timedelta(minutes=delay_minutes)
@@ -535,7 +536,7 @@ class SchedulerService:
         logger.info("Scheduled retry %d for job %s at %s", attempt, job_id, run_at)
 
     async def _trigger_dependent_jobs(self, completed_job_id: str):
-        """Alle Jobs triggern die auf diesen Job warten."""
+        """Trigger all jobs that depend on this job."""
         async with AsyncSession(engine, expire_on_commit=False) as session:
             result = await session.exec(
                 select(ScheduledJob).where(
@@ -549,7 +550,7 @@ class SchedulerService:
             create_tracked_task(self._execute_job(str(dep.id)))
 
     async def _send_failure_notification(self, job: ScheduledJob, error: str | None):
-        """Telegram-Notification bei Job-Fehler (Phase 29: direct HTTPS path)."""
+        """Telegram notification on job failure (Phase 29: direct HTTPS path)."""
         try:
             from app.services.telegram_bot import telegram_bot
             await telegram_bot.send_message(
@@ -562,10 +563,10 @@ class SchedulerService:
     async def _do_create_task(
         self, session: AsyncSession, job: ScheduledJob
     ) -> tuple[bool, str | None, dict]:
-        """Task erstellen via create_task_internal + aktiven Dispatch."""
+        """Create a task via create_task_internal + active dispatch."""
         from app.services.task_create import create_task_internal
 
-        # Payload aus task_payload (neu) mit Fallback auf alte Felder
+        # Payload from task_payload (new), with fallback to legacy fields
         payload = job.task_payload or {}
         board_id = payload.get("board_id") or job.task_board_id
         title = payload.get("title") or job.task_title or job.name
@@ -578,11 +579,11 @@ class SchedulerService:
         description = payload.get("description")
         assigned_agent_id_raw = payload.get("assigned_agent_id")
 
-        # Fallback: agent_id aus Job-Feld (für alte Jobs)
+        # Fallback: agent_id from the job field (for legacy jobs)
         if not assigned_agent_id_raw and job.agent_id:
             assigned_agent_id_raw = str(job.agent_id)
 
-        # Discord-Hinweis in Description einbauen (backward compat)
+        # Add Discord note to description (backward compat)
         if job.discord_channel_id:
             channel_label = job.discord_channel_name or job.discord_channel_id
             discord_note = (
@@ -619,15 +620,15 @@ class SchedulerService:
     async def _do_run_meeting(
         self, session: AsyncSession, job: ScheduledJob
     ) -> tuple[bool, str | None, dict]:
-        """Meeting starten via MeetingService."""
+        """Start a meeting via MeetingService."""
         from app.services.meeting_service import MeetingError, start_meeting
 
-        board_id = job.task_board_id  # Board-ID aus dem Job
+        board_id = job.task_board_id  # Board ID from the job
         if not board_id:
             return False, "task_board_id (= Meeting Board) fehlt", {}
 
         title = job.task_title or f"Weekly Meeting — {job.name}"
-        # Agenda aus message-Feld (JSON-Liste) oder Default
+        # Agenda from the message field (JSON list) or default
         agenda = []
         if job.message:
             import json as _json
@@ -659,7 +660,7 @@ class SchedulerService:
             return False, str(e), {}
 
     async def _resolve_agent_id(self, session: AsyncSession, job: ScheduledJob) -> str | None:
-        """agent_id aus Job holen, oder by name suchen."""
+        """Get agent_id from the job, or look it up by name."""
         if job.agent_id:
             return str(job.agent_id)
         if job.agent_name:

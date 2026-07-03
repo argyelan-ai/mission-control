@@ -190,8 +190,8 @@ async def switch_recipe(
         runtime.slug, old_recipe, new_recipe,
     )
 
-    # Host der Runtime auflösen (ADR-048) — Eviction + Start laufen host-scoped,
-    # damit ein Switch auf Box A nie Modelle auf Box B stoppt.
+    # Resolve the runtime's host (ADR-048) — eviction + start run host-scoped,
+    # so a switch on box A never stops models on box B.
     host = await resolve_host_for_runtime(session, runtime)
 
     # 1. Evict ALL running Spark model containers (label + solo sweep) and wait

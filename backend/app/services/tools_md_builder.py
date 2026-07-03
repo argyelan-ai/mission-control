@@ -1,8 +1,8 @@
 """
-ToolsMdBuilder — Generiert TOOLS.md fuer Agents.
+ToolsMdBuilder — generates TOOLS.md for agents.
 
-Aus agents.py extrahiert fuer bessere Testbarkeit und kuerzere Dateien.
-Pure function (keine DB-Abhaengigkeit, reine String-Generierung).
+Extracted from agents.py for better testability and shorter files.
+Pure function (no DB dependency, pure string generation).
 """
 
 
@@ -15,24 +15,24 @@ def generate_tools_md(
     scopes: list[str] | None = None,
     runtime: str = "docker",
 ) -> str:
-    """Generiert eine vorausgefuellte TOOLS.md fuer einen neu erstellten Agent.
+    """Generates a pre-filled TOOLS.md for a newly created agent.
 
-    Wenn scopes angegeben, werden nur Sektionen fuer erlaubte Scopes generiert.
-    scopes=None oder scopes=[] → alle Sektionen (backward compat).
+    If scopes is given, only sections for allowed scopes are generated.
+    scopes=None or scopes=[] → all sections (backward compat).
 
-    runtime: "docker" (cli-bridge, default) oder "host" (Boss). Beeinflusst
-    nur die Vault-Sektion, weil host-Agents direkt aufs Filesystem ~/.mc/vault
-    zugreifen statt auf den Container-Mount /vault.
+    runtime: "docker" (cli-bridge, default) or "host" (Boss). Affects
+    only the vault section, because host agents access the filesystem
+    ~/.mc/vault directly instead of the container mount /vault.
     """
     from app.scopes import Scope
 
     def _has(scope: str) -> bool:
-        """True wenn keine Scopes gesetzt (backward compat) oder Scope vorhanden."""
+        """True if no scopes are set (backward compat) or the scope is present."""
         if not scopes:
             return True
         return scope in scopes
 
-    # ── Board-Sektionen ──────────────────────────────────────────────────
+    # ── Board sections ───────────────────────────────────────────────────
     board_section = ""
     if board_id:
         parts = []
@@ -49,7 +49,7 @@ Authorization: Bearer $MC_AGENT_TOKEN
 HTTP 200 → Task + Kontext zurueck (Task automatisch auf in_progress gesetzt)
 HTTP 204 → Kein Task verfuegbar (Agent idle oder alle Dependencies blockiert)""")
 
-            # Deliverables lesen
+            # Read deliverables
             parts.append(f"""## Deliverables eines Tasks lesen
 ```
 curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{task_id}}/deliverables" \\
@@ -70,7 +70,7 @@ Antwort: Liste mit id, name, role, is_board_lead pro Agent.""")
 
         if _has(Scope.TASKS_CREATE):
             if is_board_lead:
-                # Board Lead bekommt Projekt-Verwaltung + Orchestrator-Sektion
+                # Board Lead gets project management + orchestrator section
                 parts.append(f"""## Projekte auflisten
 
 BEVOR du ein neues Projekt erstellst, pruefe ob es schon existiert.
@@ -248,7 +248,7 @@ Content-Type: application/json
 
 comment_type: message | handoff | blocker | progress | resolution [terminal — auto-promotes Task zu review/done] | feedback""")
 
-            # Deliverable registrieren
+            # Register deliverable
             parts.append(f"""## Deliverable registrieren (Ergebnis-Artefakt)
 Registriere Ergebnisse als Deliverable — sichtbar im MC UI.
 
@@ -390,7 +390,7 @@ Content-Type: application/json
   "content": "Nachricht an den Board-Channel"
 }}{chat_hint}""")
 
-        # ── Projekt-Sektion ──────────────────────────────────────────
+        # ── Project section ────────────────────────────────────────────
         if _has(Scope.PROJECT_READ):
             parts.append(f"""## Projekt-Kontext abrufen
 
@@ -539,9 +539,9 @@ curl -s -X PUT "$MC_API_URL/api/v1/agent/config/soul_md" \\
 - Aenderung wird automatisch zum Gateway/Disk synchronisiert
 """
 
-    # ── Vertical-Sektionen (z.B. News-Studio Content-Pipeline) ───────────
-    # Verticals registrieren (scope, builder) in app.verticals.hooks —
-    # gestrippter Public-Release: leere Liste, keine Sektion.
+    # ── Vertical sections (e.g. News Studio content pipeline) ────────────
+    # Verticals register (scope, builder) in app.verticals.hooks —
+    # stripped public release: empty list, no section.
     from app.verticals import hooks as vertical_hooks
 
     content_section = ""
@@ -549,7 +549,7 @@ curl -s -X PUT "$MC_API_URL/api/v1/agent/config/soul_md" \\
         if _has(Scope(_scope_str)):
             content_section += _builder({})
 
-    # ── Credentials Sektion ──────────────────────────────────────────────
+    # ── Credentials section ───────────────────────────────────────────────
     credentials_section = ""
     if board_id and _has(Scope.CREDENTIALS_READ):
         credentials_section = f"""
@@ -597,7 +597,7 @@ Antwort: id, name, credential_type, url, notes, data (vollstaendiges entschluess
 **Sicherheitshinweis:** Credentials nie in Kommentaren, Commits oder Logs speichern.
 """
 
-    # ── Deploy Sektion ─────────────────────────────────────────────────
+    # ── Deploy section ────────────────────────────────────────────────────
     deploy_section = ""
     if _has(Scope.DEPLOY_EXECUTE):
         deploy_section = f"""
@@ -763,7 +763,7 @@ mc telegram "Deploy-Check: APP_NAME.your-domain.com — [OK/Probleme]" --photo <
 8. Deploy aufzeichnen (POST /api/v1/agent/deploy/record)
 """
 
-    # ── Install-Request Sektion ──────────────────────────────────────────
+    # ── Install request section ───────────────────────────────────────────
     install_request_section = ""
     if _has(Scope.AGENTS_MANAGE):
         install_request_section = f"""
@@ -978,7 +978,7 @@ Response: 201 mit approval_id + existing=false (oder 200 + existing=true bei Dup
 - Requests expiren nach 7 Tagen.
 """
 
-    # ── Knowledge-Sektionen ──────────────────────────────────────────────
+    # ── Knowledge sections ────────────────────────────────────────────────
     knowledge_parts = []
     if _has(Scope.KNOWLEDGE_READ):
         knowledge_parts.append(f"""## Knowledge Base lesen
@@ -1011,7 +1011,7 @@ memory_type: knowledge | lesson | reference | research | journal | weekly_review
 
     knowledge_section = "\n\n".join(knowledge_parts)
 
-    # ── Vault Sektion (Karpathy Wiki) ────────────────────────────────────
+    # ── Vault section (Karpathy Wiki) ─────────────────────────────────────
     vault_section = ""
     if _has(Scope.VAULT_WRITE):
         if runtime == "host":
@@ -1172,7 +1172,7 @@ der vorherige Agent waehrend dieses Tasks geschrieben hat.
 - NIEMALS direkt in den Ordner eines anderen Agents schreiben — der Watcher lehnt Pfad-Eigentuemerschafts-Verletzungen ab
 - Shared Knowledge (Entscheidungen, Projekt-Notes) → immer Inbox-API mit explizitem `target`"""
 
-    # ── Memory Sektion ────────────────────────────────────────────────────
+    # ── Memory section ─────────────────────────────────────────────────────
     memory_section = ""
     if _has(Scope.MEMORY_WRITE):
         memory_section = f"""## Eigene Memory aktualisieren (persistiert zwischen Sessions)
@@ -1200,7 +1200,7 @@ mc remember "Lesson" --tags "docker,restart" --type lesson
 Shortcut fuer `mc vault-write`. Defaults: type=lesson,
 auto-Title aus Text, auto-Idempotency-Key, $TASK_ID aus env."""
 
-    # ── Heartbeat Sektion ────────────────────────────────────────────────
+    # ── Heartbeat section ───────────────────────────────────────────────────
     heartbeat_section = ""
     if _has(Scope.HEARTBEAT):
         heartbeat_section = f"""## Eigenen Status melden
@@ -1215,7 +1215,7 @@ Content-Type: application/json
 
 Status: online | busy | idle | offline"""
 
-    # ── Help Request Sektion ─────────────────────────────────────────────
+    # ── Help request section ──────────────────────────────────────────────
     help_request_section = ""
     if _has(Scope.TASKS_HELP):
         help_request_section = f"""## Help Request — Andere Agents um Hilfe bitten
@@ -1258,7 +1258,7 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/clarification" \\
 Das `options`-Feld ist optional. Nutze es wenn du Antwort-Vorschlaege hast.
 Du bekommst die Antwort des Operators als Nachricht und machst dann weiter."""
 
-    # ── Browser-Referenz (fuer alle Agents) ────────────────────────────
+    # ── Browser reference (for all agents) ───────────────────────────────
     browser_section = """
 ---
 
@@ -1334,17 +1334,17 @@ Regeln:
 - Named pages (`browser.getPage("name")`) bleiben zwischen Script-Runs erhalten
 """
 
-    # ── Typische Abläufe (role-aware worked examples) ───────────────────
-    # Ziel: Agents lernen durch konkrete Szenarien, nicht Command-Dumps.
-    # Jeder Flow ist ein copy-paste-fähiger End-to-End-Ablauf mit realen
-    # Beispiel-Inputs und zeigt welche Commands in welcher Reihenfolge für
-    # eine typische Task-Art richtig sind.
+    # ── Typical flows (role-aware worked examples) ───────────────────────
+    # Goal: agents learn through concrete scenarios, not command dumps.
+    # Each flow is a copy-paste-ready end-to-end sequence with real
+    # example inputs and shows which commands in which order are
+    # correct for a typical task type.
     #
-    # Design-Regel: worked example = ausgeführter Flow, nicht Command-Liste.
-    # Kommentare im Block erklären Zweck jeder Zeile.
+    # Design rule: worked example = executed flow, not command list.
+    # Comments in the block explain the purpose of each line.
     flow_blocks: list[str] = []
 
-    # Universal: Task-Lifecycle mit konkreten Beispielen
+    # Universal: task lifecycle with concrete examples
     flow_blocks.append(
         "### Ablauf 1 — Task empfangen und abschliessen (jede Rolle)\n\n"
         "```bash\n"
@@ -1375,7 +1375,7 @@ Regeln:
         "`permission_needed` | `dependency_blocked` | `other`."
     )
 
-    # Chat-Write: Reporting-Flow mit konkreten File-Beispielen
+    # Chat-write: reporting flow with concrete file examples
     if _has(Scope.CHAT_WRITE):
         flow_blocks.append(
             "### Ablauf 2 — Report an den Operator über Telegram\n\n"
@@ -1395,7 +1395,7 @@ Regeln:
             "```"
         )
 
-    # Tasks-Write: Deliverable + PDF-Flow mit realem Beispiel
+    # Tasks-write: deliverable + PDF flow with a real example
     if _has(Scope.TASKS_WRITE):
         flow_blocks.append(
             "### Ablauf 3 — Ergebnis als Deliverable registrieren + PDF generieren\n\n"
@@ -1429,7 +1429,7 @@ Regeln:
             "```"
         )
 
-    # Tasks-Create (Orchestrator): Delegation-Flow mit Parent/Subtask
+    # Tasks-create (orchestrator): delegation flow with parent/subtask
     if _has(Scope.TASKS_CREATE):
         flow_blocks.append(
             "### Ablauf 4 — Multi-Phase Task orchestrieren (Delegate + Callback warten)\n\n"
@@ -1460,7 +1460,7 @@ Regeln:
             "```"
         )
 
-    # Plugin-Management (Board Lead): komplettes Discovery + Install + Assign Flow
+    # Plugin management (Board Lead): complete discovery + install + assign flow
     if is_board_lead and _has(Scope.AGENTS_MANAGE):
         flow_blocks.append(
             "### Ablauf 5 — Worker mit neuem Tool/Skill ausstatten (Board Lead)\n\n"
@@ -1524,7 +1524,7 @@ Regeln:
 
     quick_ref = "\n\n".join(flow_blocks)
 
-    # ── Zusammenbauen ────────────────────────────────────────────────────
+    # ── Assemble ───────────────────────────────────────────────────────────
     sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, install_request_section, credentials_section, deploy_section] if s]
     main_body = "\n\n".join(sections)
 

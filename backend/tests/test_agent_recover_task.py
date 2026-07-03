@@ -1,10 +1,10 @@
-"""/agent/me/recover-task — Recovery-Endpoint für Poll-Runtime Agents.
+"""/agent/me/recover-task — recovery endpoint for poll-runtime agents.
 
-Nach Container/Host-Restart während aktivem Task ist die tmux/claude-Session
-weg, aber DB-Status bleibt `in_progress`. poll.sh kann den Prompt nicht mehr
-pasten, weil /agent/me/poll nur `state=working` zurückgibt. Der Recovery-
-Endpoint setzt den Task auf inbox → nächster Poll liefert ihn als `new_task`
-mit frischem Prompt.
+After a container/host restart during an active task, the tmux/claude
+session is gone, but the DB status stays `in_progress`. poll.sh can no
+longer paste the prompt, because /agent/me/poll only returns `state=working`.
+The recovery endpoint resets the task to inbox → the next poll delivers it
+as `new_task` with a fresh prompt.
 """
 
 import uuid
@@ -58,7 +58,7 @@ async def _setup_agent_with_task(session: AsyncSession, status: str = "in_progre
 
 @pytest.mark.asyncio
 async def test_recover_resets_in_progress_task_to_inbox(client: AsyncClient):
-    """Task in_progress → Recovery setzt auf inbox + clearet Dispatch-Tracking."""
+    """Task in_progress → recovery resets to inbox + clears dispatch tracking."""
     from app.models.task import Task
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -75,7 +75,7 @@ async def test_recover_resets_in_progress_task_to_inbox(client: AsyncClient):
     assert data["task_id"] == str(task_id)
     assert data["previous_status"] == "in_progress"
 
-    # DB: Task ist zurueck auf inbox, dispatch-tracking gelöscht
+    # DB: task is back to inbox, dispatch tracking cleared
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         refreshed = await s.get(Task, task_id)
         assert refreshed.status == "inbox"
@@ -86,9 +86,9 @@ async def test_recover_resets_in_progress_task_to_inbox(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_idempotent_when_no_active_task(client: AsyncClient):
-    """Kein aktiver Task → recovered=False, kein Fehler."""
+    """No active task → recovered=False, no error."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        # Setup: Agent ohne in_progress Task (task ist 'done')
+        # Setup: agent without in_progress task (task is 'done')
         _, agent, task, token = await _setup_agent_with_task(s, status="done")
 
     resp = await client.post(
@@ -103,7 +103,7 @@ async def test_recover_idempotent_when_no_active_task(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_leaves_system_comment(client: AsyncClient):
-    """Recovery postet einen system-Kommentar fuer audit trail."""
+    """Recovery posts a system comment for the audit trail."""
     from app.models.task import TaskComment
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -127,7 +127,7 @@ async def test_recover_leaves_system_comment(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_works_for_host_runtime(client: AsyncClient):
-    """Host-Runtime Agents (Boss) brauchen Recovery genauso nach launchd-Restart."""
+    """Host-runtime agents (Boss) need recovery the same way after a launchd restart."""
     from app.models.task import Task
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -149,18 +149,18 @@ async def test_recover_works_for_host_runtime(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_clears_run_control_stopped(client: AsyncClient):
-    """Recovery muss run_control=stopped loeschen — sonst Deadlock beim Agent.
+    """Recovery must clear run_control=stopped — otherwise the agent deadlocks.
 
-    Szenario: Task war 'stopped' vom User, wurde spaeter manuell reassigned,
-    lief wieder, Agent versuchte status=review → Backend blockte wegen
-    run_control=stopped. Recovery muss run_control mit zuruecksetzen.
+    Scenario: task was 'stopped' by the user, was later manually reassigned,
+    ran again, agent tried status=review → backend blocked because of
+    run_control=stopped. Recovery must also reset run_control.
     """
     from app.models.task import Task
     from app.utils import utcnow
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         _, agent, task, token = await _setup_agent_with_task(s, status="in_progress")
-        # Simuliere stopped Run-Control
+        # Simulate stopped run control
         t = await s.get(Task, task.id)
         t.run_control = "stopped"
         s.add(t)
@@ -182,23 +182,23 @@ async def test_recover_clears_run_control_stopped(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_rate_limited_after_recent_recovery(client: AsyncClient):
-    """Schutz gegen poll.sh-Crash-Loop: zwei Recoveries in <60s → zweiter wird abgelehnt.
+    """Protection against poll.sh crash loop: two recoveries in <60s → second is rejected.
 
-    Wenn der erste Recovery einen Task auf inbox setzt und der nächste Poll-Zyklus
-    den Task wieder claimt (status=in_progress), darf ein zweiter Recovery-Call
-    nicht sofort wieder auf inbox setzen — sonst entsteht ein Infinite-Loop.
+    If the first recovery sets a task to inbox and the next poll cycle claims
+    the task again (status=in_progress), a second recovery call must not
+    immediately set it back to inbox — otherwise an infinite loop results.
     """
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         _, agent, task, token = await _setup_agent_with_task(s, status="in_progress")
 
-    # Erster Recovery: erfolgreich
+    # First recovery: successful
     r1 = await client.post(
         "/api/v1/agent/me/recover-task",
         headers={"Authorization": f"Bearer {token}"},
     )
     assert r1.json()["recovered"] is True
 
-    # Simuliere: Task wurde inzwischen wieder geclaimt (inbox → in_progress)
+    # Simulate: task was claimed again in the meantime (inbox → in_progress)
     from app.models.task import Task
     from app.utils import utcnow
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -209,7 +209,7 @@ async def test_recover_rate_limited_after_recent_recovery(client: AsyncClient):
         s.add(t)
         await s.commit()
 
-    # Zweiter Recovery innerhalb 60s: muss rate-limited werden
+    # Second recovery within 60s: must be rate-limited
     r2 = await client.post(
         "/api/v1/agent/me/recover-task",
         headers={"Authorization": f"Bearer {token}"},
@@ -220,7 +220,7 @@ async def test_recover_rate_limited_after_recent_recovery(client: AsyncClient):
     assert data["reason"] == "rate_limited"
     assert "last_recovery_at" in data
 
-    # Task bleibt in_progress — nicht zurück auf inbox gesetzt
+    # Task stays in_progress — not reset back to inbox
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         refreshed = await s.get(Task, task.id)
         assert refreshed.status == "in_progress"
@@ -228,7 +228,7 @@ async def test_recover_rate_limited_after_recent_recovery(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_recover_then_poll_delivers_new_task(client: AsyncClient):
-    """Kompletter Recovery-Flow: recover → poll gibt new_task mit Prompt zurück."""
+    """Full recovery flow: recover → poll returns new_task with a prompt."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         _, agent, task, token = await _setup_agent_with_task(s, status="in_progress")
 

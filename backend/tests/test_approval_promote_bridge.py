@@ -1,10 +1,10 @@
-"""Tests fuer Approval→Promote Bridge.
+"""Tests for the approval → promote bridge.
 
-Testmatrix:
-- approved → Task verlässt planning
-- rejected → kein Promote
-- idempotent → doppelte Bearbeitung sicher
-- dedupe → kein Approval-Spam
+Test matrix:
+- approved → task leaves planning
+- rejected → no promote
+- idempotent → duplicate processing is safe
+- dedupe → no approval spam
 """
 import uuid
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -23,7 +23,7 @@ from app.services.dispatch_gating import (
 
 @pytest.mark.asyncio
 async def test_dedupe_skips_approved_approval():
-    """Kein neues Approval wenn ein approved Approval existiert."""
+    """No new approval when an approved approval already exists."""
     from app.services.dispatch_gating import process_planned_tasks, NEEDS_APPROVAL
     from app.models.approval import Approval
 

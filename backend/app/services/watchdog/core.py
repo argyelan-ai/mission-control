@@ -1,4 +1,4 @@
-"""WatchdogService — Orchestrator fuer alle periodischen Checks."""
+"""WatchdogService — orchestrator for all periodic checks."""
 
 import asyncio
 import logging
@@ -16,7 +16,7 @@ from app.services.watchdog.task_monitor import TaskMonitorMixin
 
 logger = logging.getLogger("mc.watchdog")
 
-# Globales Set um Referenzen auf Background-Tasks zu halten (verhindert GC)
+# Global set to hold references to background tasks (prevents GC)
 _background_tasks: set[asyncio.Task] = set()
 
 
@@ -28,12 +28,12 @@ def _create_background_task(coro) -> asyncio.Task:
 
 
 class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
-    """Periodische Ueberwachung aller kritischen Komponenten.
+    """Periodic monitoring of all critical components.
 
-    Erbt von drei Mixins:
-    - HealthChecksMixin: Agent-Health, System-Health, Approvals
-    - SessionMonitorMixin: Heartbeat-Health (DB-basiert) — Post Phase 29 ohne RPC
-    - TaskMonitorMixin: Phasen, Queues, Dispatches
+    Inherits from three mixins:
+    - HealthChecksMixin: agent health, system health, approvals
+    - SessionMonitorMixin: heartbeat health (DB-based) — post Phase 29, no RPC
+    - TaskMonitorMixin: phases, queues, dispatches
     """
 
     def __init__(self, interval: int = 30):
@@ -92,7 +92,7 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
-        """Redis-Lock damit nur ein Worker pro Zyklus die Checks ausfuehrt."""
+        """Redis lock so only one worker per cycle runs the checks."""
         try:
             redis = await get_redis()
             acquired = await redis.set(
@@ -109,31 +109,31 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
         system_mode = await get_system_mode()
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            # Health-Checks laufen IMMER (auch bei HALTED)
+            # Health checks always run (even when HALTED)
             await self._check_agent_health(session)
             # Phase 29: _check_rpc_connection removed (Gateway sunset — no RPC to check)
             await self._check_expired_approvals(session)
 
-            # Phase 29: Gateway sunset — keine sessions_list() Polls mehr.
+            # Phase 29: Gateway sunset — no more sessions_list() polls.
             # - _check_agent_sessions/_check_session_recovery/_sync_agent_tokens/
-            #   _compact_overflowed_sessions/_check_session_health entfallen.
-            # - Heartbeat-basierte Offline-Erkennung (DB-only) bleibt aktiv.
+            #   _compact_overflowed_sessions/_check_session_health are dropped.
+            # - Heartbeat-based offline detection (DB-only) stays active.
             await self._check_heartbeat_health(session)
 
-            # Task-Checks (bei HALTED nur passive Checks, kein Dispatch)
+            # Task checks (when HALTED only passive checks, no dispatch)
             await self._check_phase_completions(session)
             await self._check_blocked_tasks(session)
             await self._check_dependency_zombies(session)
             await self._check_review_tasks(session)
             await self._check_stuck_orchestrator_close(session)
 
-            # Orphan-Recovery: Tasks die in in_progress feststecken ohne Agent-Heartbeat
+            # Orphan recovery: tasks stuck in in_progress without agent heartbeat
             recovered = await self._recover_orphaned_tasks(session)
             if recovered > 0:
                 logger.info("[WATCHDOG] %d orphaned tasks reset to inbox", recovered)
 
             if system_mode != "halted":
-                # Phase 4A: Promote-Orchestrator — geplante Tasks automatisch promoten/approval
+                # Phase 4A: Promote orchestrator — auto-promote/approval for planned tasks
                 if settings.enable_promote_orchestrator:
                     from app.services.dispatch_gating import process_planned_tasks
                     try:
@@ -146,22 +146,22 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                     except Exception as e:
                         logger.warning("Promote orchestrator failed: %s", e)
 
-                # Undispatched-Recovery: Tasks die zugewiesen aber nie dispatched wurden
-                # (z.B. Backend war offline bei Erstellung, Pairing-Fehler)
+                # Undispatched recovery: tasks assigned but never dispatched
+                # (e.g. backend was offline at creation time, pairing error)
                 await self._check_undispatched_tasks(session)
 
-                # Phase 29: Legacy Queue-Recovery-Pfade entfallen
+                # Phase 29: legacy queue-recovery paths dropped
                 # (_recover_aborted_tasks/_process_task_queues/_process_pending_dispatches
-                # waren alle gateway-only — D-07 stale-task ownership liegt bei
-                # task_runner._check_dispatch_ack). _check_spawn_timeouts war
+                # were all gateway-only — D-07 stale-task ownership lives in
+                # task_runner._check_dispatch_ack). _check_spawn_timeouts was
                 # gateway-only (TODO Phase 31: cli-bridge task-queue timeouts).
 
             db_latency, redis_latency = await self._check_system_health(session)
             await self._collect_system_metrics(db_latency, redis_latency)
 
-            # Token Harvester: Phase 31 — liest JSONL-Transkripte, insertiert
-            # model_usage_events. Laeuft alle 5 Zyklen (~2.5 Min bei 30s-Interval).
-            # try/except wie in der alten collect_session_costs — nie Watchdog crashen.
+            # Token harvester: Phase 31 — reads JSONL transcripts, inserts
+            # model_usage_events. Runs every 5 cycles (~2.5 min at 30s interval).
+            # try/except like the old collect_session_costs — never crash the watchdog.
             if self._checks_total % 5 == 0:
                 try:
                     from app.services.token_harvester import run_harvest
@@ -177,5 +177,5 @@ class WatchdogService(HealthChecksMixin, SessionMonitorMixin, TaskMonitorMixin):
                 except Exception as e:
                     logger.debug("Token harvester error: %s", e)
 
-        # Weekly Digest (ausserhalb der DB-Session, erstellt eigene)
+        # Weekly digest (outside the DB session, creates its own)
         await self._check_weekly_digest()

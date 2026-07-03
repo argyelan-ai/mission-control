@@ -1,11 +1,11 @@
-"""Visual Verifier Client — Backend → mc-playwright Container.
+"""Visual Verifier Client — Backend → mc-playwright container.
 
-Orchestriert Screenshots/Metrics via mc-playwright Service + registriert
-jeden Screenshot als TaskDeliverable + sendet optional alle Screenshots
-direkt als Bild-Anhang an den Reports-Telegram-Chat des Operators.
+Orchestrates screenshots/metrics via the mc-playwright service, registers
+each screenshot as a TaskDeliverable, and optionally sends all screenshots
+directly as image attachments to the operator's reports Telegram chat.
 
-Adressiert Bug 3 (2026-04-22): Agents brauchten eigene Playwright-Setups.
-Jetzt: dedizierter Container, Agents rufen per API.
+Addresses Bug 3 (2026-04-22): agents needed their own Playwright setups.
+Now: a dedicated container, agents call it via API.
 """
 
 from __future__ import annotations
@@ -22,9 +22,9 @@ from app.services.telegram_reports import telegram_reports
 
 logger = logging.getLogger("mc.visual_verifier")
 
-# Intra-Compose-DNS: mc-playwright:8790 (Container-Name)
+# Intra-compose DNS: mc-playwright:8790 (container name)
 PLAYWRIGHT_BASE = os.environ.get("MC_PLAYWRIGHT_URL", "http://mc-playwright:8790")
-SHARED_MOUNT = "/shared-deliverables"  # im Backend via Volume gemountet
+SHARED_MOUNT = "/shared-deliverables"  # mounted in backend via volume
 
 
 async def verify_url(
@@ -40,14 +40,14 @@ async def verify_url(
     wait_for_selector: str | None = None,
     full_page: bool = True,
 ) -> dict:
-    """Ruft mc-playwright /verify Endpoint. Returns Raw-Response von mc-playwright.
+    """Calls the mc-playwright /verify endpoint. Returns the raw response from mc-playwright.
 
-    Optionale Interaktions-Parameter (seit 2026-04-23):
-      auth_token        — JWT wird in localStorage gesetzt bevor navigate
-      login             — Form-Login dict (LoginSpec-Schema in mc-playwright)
-      interactions      — Liste von {action, selector, value?, wait_after_ms?}
-      wait_for_selector — Finale Wartezeit vor Screenshot
-      full_page         — False: nur Viewport statt Full-Page (fuer Modals)
+    Optional interaction parameters (since 2026-04-23):
+      auth_token        — JWT is set in localStorage before navigate
+      login             — form-login dict (LoginSpec schema in mc-playwright)
+      interactions      — list of {action, selector, value?, wait_after_ms?}
+      wait_for_selector — final wait before screenshot
+      full_page         — False: viewport only instead of full-page (for modals)
     """
     if viewports is None:
         viewports = ["desktop", "mobile"]
@@ -69,7 +69,7 @@ async def verify_url(
     if wait_for_selector:
         payload["wait_for_selector"] = wait_for_selector
 
-    # Timeout generoes, weil Form-Login + mehrere Viewports mehr Zeit brauchen koennen.
+    # Generous timeout, because form-login + multiple viewports can take more time.
     timeout_s = 180.0 if (login or interactions) else 120.0
     async with httpx.AsyncClient(timeout=timeout_s) as client:
         resp = await client.post(f"{PLAYWRIGHT_BASE}/verify", json=payload)
@@ -83,12 +83,12 @@ async def register_screenshots_as_deliverables(
     agent_id: uuid.UUID,
     verify_result: dict,
 ) -> list[TaskDeliverable]:
-    """Registriert alle Screenshots aus verify-Response als TaskDeliverable Rows."""
+    """Registers all screenshots from the verify response as TaskDeliverable rows."""
     created: list[TaskDeliverable] = []
 
     def _host_path(shared_path: str) -> str:
-        """mc-playwright schreibt nach /shared-deliverables, backend liest gleich.
-        Fuer Deliverable-Path: wir behalten den /shared-deliverables Pfad als Referenz.
+        """mc-playwright writes to /shared-deliverables, backend reads the same path.
+        For the deliverable path: we keep the /shared-deliverables path as reference.
         """
         return shared_path
 
@@ -127,7 +127,7 @@ async def send_screenshots_to_telegram(
     verify_result: dict,
     caption: str | None = None,
 ) -> dict | None:
-    """Sendet alle Screenshots aus verify-Response als Media-Group an den Reports-Chat."""
+    """Sends all screenshots from the verify response as a media group to the reports chat."""
     paths = [s["path"] for s in verify_result.get("screenshots", [])]
     paths += [s["path"] for s in verify_result.get("scroll_shots", [])]
     if not paths:
@@ -136,7 +136,7 @@ async def send_screenshots_to_telegram(
 
 
 def format_metrics_summary(verify_result: dict) -> str:
-    """Rendert Metrics als kompakten HTML-Block fuer Telegram."""
+    """Renders metrics as a compact HTML block for Telegram."""
     m = verify_result.get("metrics")
     if not m:
         return ""

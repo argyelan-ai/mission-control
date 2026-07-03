@@ -1,11 +1,11 @@
-"""Telegram Reports Bot — direkter Info-Delivery-Channel fuer Agent-Deliverables.
+"""Telegram Reports Bot — direct info delivery channel for agent deliverables.
 
-Getrennt vom Approval-Bot (`telegram_bot.py`), damit Kommandozentrale und
-Briefing-Board semantisch unterschieden sind:
-- Approval-Bot (`TELEGRAM_BOT_TOKEN`): Operator-Decisions mit Buttons, URL-Callbacks
-- Reports-Bot  (`TELEGRAM_REPORTS_BOT_TOKEN`): passive FYI, keine Buttons, keine Reply-Erwartung
+Separate from the approval bot (`telegram_bot.py`) so that command center and
+briefing board are semantically distinct:
+- Approval bot (`TELEGRAM_BOT_TOKEN`): operator decisions with buttons, URL callbacks
+- Reports bot  (`TELEGRAM_REPORTS_BOT_TOKEN`): passive FYI, no buttons, no reply expected
 
-Minimaler Service — nur `send()`. Kein Polling, keine Button-Workflows.
+Minimal service — only `send()`. No polling, no button workflows.
 """
 
 from __future__ import annotations
@@ -23,12 +23,12 @@ TELEGRAM_PHOTO_API = "https://api.telegram.org/bot{token}/sendPhoto"
 TELEGRAM_MEDIA_GROUP_API = "https://api.telegram.org/bot{token}/sendMediaGroup"
 TELEGRAM_DOCUMENT_API = "https://api.telegram.org/bot{token}/sendDocument"
 
-# Telegram Bot API Limit fuer sendDocument: 50 MB pro Datei
+# Telegram Bot API limit for sendDocument: 50 MB per file
 TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
 
 
 class TelegramReportsService:
-    """Singleton-Sender fuer den Reports-Bot."""
+    """Singleton sender for the reports bot."""
 
     def __init__(self) -> None:
         self._token = settings.telegram_reports_bot_token or None
@@ -45,10 +45,10 @@ class TelegramReportsService:
         parse_mode: str = "HTML",
         disable_link_preview: bool = True,
     ) -> dict | None:
-        """Sendet die Nachricht an den Reports-Chat des Operators.
+        """Sends the message to the operator's reports chat.
 
-        Returns das Telegram API-Response-Dict bei Erfolg, None bei Skip (nicht konfiguriert)
-        oder HTTPException bei Fehler.
+        Returns the Telegram API response dict on success, None on skip (not configured)
+        or HTTPException on error.
         """
         if not self.configured:
             logger.debug(
@@ -74,7 +74,7 @@ class TelegramReportsService:
                 "Reports-Bot send fehlgeschlagen: %s",
                 data.get("description", "unknown error"),
             )
-            # Description kann Markdown-Parse-Error sein — hochgereicht fuer CLI-Feedback
+            # Description may be a markdown parse error — surfaced for CLI feedback
             return data
 
         return data
@@ -85,7 +85,7 @@ class TelegramReportsService:
         caption: str | None = None,
         parse_mode: str = "HTML",
     ) -> dict | None:
-        """Sendet ein einzelnes Bild an den Reports-Chat."""
+        """Sends a single image to the reports chat."""
         if not self.configured:
             logger.debug("send_photo skipped: Reports-Bot nicht konfiguriert")
             return None
@@ -98,7 +98,7 @@ class TelegramReportsService:
         url = TELEGRAM_PHOTO_API.format(token=self._token)
         data: dict = {"chat_id": self._chat_id}
         if caption:
-            # Telegram-Caption ist auf 1024 Zeichen begrenzt
+            # Telegram caption is limited to 1024 characters
             data["caption"] = caption[:1024]
             data["parse_mode"] = parse_mode
 
@@ -121,14 +121,14 @@ class TelegramReportsService:
         caption: str | None = None,
         parse_mode: str = "HTML",
     ) -> dict | None:
-        """Sendet eine Datei (PDF/Office/etc.) als Telegram-Document.
+        """Sends a file (PDF/Office/etc.) as a Telegram document.
 
-        Im Gegensatz zu send_photo wird die Datei nicht komprimiert (Photos
-        durchlaufen Telegram's Image-Pipeline). Ideal fuer PDF, Excel,
+        Unlike send_photo, the file is not compressed (photos go through
+        Telegram's image pipeline). Ideal for PDF, Excel,
         PowerPoint, Word, ZIP, JSON, etc.
 
-        MIME-Type wird via mimetypes-Modul erkannt; Fallback `application/octet-stream`.
-        Max. 50 MB pro Datei (Telegram Bot API Limit).
+        MIME type is detected via the mimetypes module; fallback `application/octet-stream`.
+        Max. 50 MB per file (Telegram Bot API limit).
         """
         if not self.configured:
             logger.debug("send_document skipped: Reports-Bot nicht konfiguriert")
@@ -184,22 +184,22 @@ class TelegramReportsService:
         caption: str | None = None,
         parse_mode: str = "HTML",
     ) -> dict | None:
-        """Sendet mehrere Bilder als Gruppe (max. 10). Caption geht auf das ERSTE Bild.
+        """Sends multiple images as a group (max. 10). Caption goes on the FIRST image.
 
-        Erlaubt bis zu 10 Photos in einer gruppierten Nachricht — ideal fuer
-        multi-viewport Screenshots (desktop + mobile + scroll-positionen).
+        Allows up to 10 photos in a grouped message — ideal for
+        multi-viewport screenshots (desktop + mobile + scroll positions).
         """
         if not self.configured:
             return None
 
         import os as _os
-        # Valide Dateien filtern
+        # Filter valid files
         files_to_send = [p for p in photo_paths if _os.path.isfile(p)]
         if not files_to_send:
             logger.warning("send_media_group skipped: keine valid photo files in %s", photo_paths)
             return None
         if len(files_to_send) == 1:
-            # Media-Group verlangt min. 2 — fallback auf single send_photo
+            # Media group requires min. 2 — fall back to single send_photo
             return await self.send_photo(files_to_send[0], caption, parse_mode)
         if len(files_to_send) > 10:
             files_to_send = files_to_send[:10]
@@ -208,14 +208,14 @@ class TelegramReportsService:
         import json as _json
         url = TELEGRAM_MEDIA_GROUP_API.format(token=self._token)
 
-        # Media-Array bauen — Telegram erwartet attach://<field-name> Referenzen
+        # Build media array — Telegram expects attach://<field-name> references
         media = []
         files_payload = {}
         for i, path in enumerate(files_to_send):
             field = f"photo_{i}"
             entry = {"type": "photo", "media": f"attach://{field}"}
             if i == 0 and caption:
-                # Caption nur auf erstem Element, Telegram-Limit 1024
+                # Caption only on the first element, Telegram limit 1024
                 entry["caption"] = caption[:1024]
                 entry["parse_mode"] = parse_mode
             media.append(entry)
@@ -236,7 +236,7 @@ class TelegramReportsService:
                 )
             return result
         finally:
-            # File-Handles schliessen (files_payload hat open()'d)
+            # Close file handles (files_payload has open()'d them)
             for _, file_tuple in files_payload.items():
                 try:
                     file_tuple[1].close()

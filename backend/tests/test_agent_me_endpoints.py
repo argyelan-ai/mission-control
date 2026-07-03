@@ -1,13 +1,13 @@
-"""Tests: /agent/me/{pdf,deliverable,telegram} Auto-Task-Resolution Endpoints.
+"""Tests: /agent/me/{pdf,deliverable,telegram} auto-task-resolution endpoints.
 
-Prueft die Resolution-Pfade:
-  1. body_task_id Override (explizit, mit Ownership-Check)
-  2. agent.current_task_id (Board-Lead + Worker via cli-bridge)
-  3. Fallback 422 wenn keine Task gefunden
+Verifies the resolution paths:
+  1. body_task_id override (explicit, with ownership check)
+  2. agent.current_task_id (board lead + worker via cli-bridge)
+  3. Fallback 422 when no task is found
 
-Phase 30: Der legacy `task.spawn_session_key` Reverse-Lookup wurde mit der
-gateway_agent_id-Bereinigung in Plan 30-01 entfernt — cli-bridge Worker
-nutzen jetzt current_task_id (vom Dispatcher gesetzt) oder body_task_id.
+Phase 30: The legacy `task.spawn_session_key` reverse lookup was removed with
+the gateway_agent_id cleanup in Plan 30-01 — cli-bridge workers now use
+current_task_id (set by the dispatcher) or body_task_id.
 """
 
 import uuid
@@ -22,7 +22,7 @@ from tests.conftest import test_engine
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 async def _setup_board_lead_with_current_task():
-    """Board Lead mit gesetztem current_task_id."""
+    """Board lead with current_task_id set."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -52,14 +52,14 @@ async def _setup_board_lead_with_current_task():
 
 
 async def _setup_worker_with_spawn_session():
-    """Worker mit aktiver Task ueber current_task_id (cli-bridge Subagent-Modus).
+    """Worker with an active task via current_task_id (cli-bridge subagent mode).
 
-    Phase 30: Workers schreiben current_task_id beim Dispatch (poll-based
-    runtimes ack-en und setzen es). Vorher wurde stattdessen
-    spawn_session_key via OpenClaw-Pattern reverse-lookuped — der Pfad ist
-    mit Plan 30-01 entfallen. Die `gw_id` Rueckgabe bleibt fuer
-    Backwards-Compat des Tuples; die Tests selbst pruefen jetzt nicht
-    mehr den session-key path.
+    Phase 30: Workers write current_task_id on dispatch (poll-based
+    runtimes ack it and set it). Previously spawn_session_key was
+    reverse-looked-up via the OpenClaw pattern instead — that path was
+    dropped with Plan 30-01. The `gw_id` return value remains for
+    backwards compat of the tuple; the tests themselves no longer check
+    the session-key path.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -78,7 +78,7 @@ async def _setup_worker_with_spawn_session():
             board_id=board_id, agent_token_hash=token_hash,
             scopes=["tasks:read", "tasks:write", "chat:write"],
             is_board_lead=False,
-            current_task_id=task_id,  # Phase 30: Workers haben current_task_id wie Leads
+            current_task_id=task_id,  # Phase 30: workers have current_task_id like leads
             provision_status="provisioned",
         ))
         s.add(Task(
@@ -91,7 +91,7 @@ async def _setup_worker_with_spawn_session():
 
 
 async def _setup_agent_no_task():
-    """Agent ohne aktive Task (weder current_task_id noch spawn_session_key)."""
+    """Agent without an active task (neither current_task_id nor spawn_session_key)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.auth import generate_agent_token
@@ -112,7 +112,7 @@ async def _setup_agent_no_task():
     return board_id, agent_id, token_raw
 
 
-# ── /me/pdf Tests ─────────────────────────────────────────────────────────────
+# ── /me/pdf tests ─────────────────────────────────────────────────────────────
 
 def _fake_sidecar(task_id: uuid.UUID):
     return {
@@ -126,7 +126,7 @@ def _fake_sidecar(task_id: uuid.UUID):
 
 @pytest.mark.asyncio
 async def test_me_pdf_board_lead_path(client, fake_redis):
-    """POST /me/pdf nutzt agent.current_task_id (Board-Lead-Pfad)."""
+    """POST /me/pdf uses agent.current_task_id (board-lead path)."""
     board_id, agent_id, task_id, token = await _setup_board_lead_with_current_task()
 
     with patch("app.services.pdf_generator.generate_pdf", AsyncMock(return_value=_fake_sidecar(task_id))):
@@ -144,7 +144,7 @@ async def test_me_pdf_board_lead_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_pdf_worker_spawn_session_key_path(client, fake_redis):
-    """POST /me/pdf nutzt spawn_session_key Reverse-Lookup (Worker-Pfad)."""
+    """POST /me/pdf uses the spawn_session_key reverse lookup (worker path)."""
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
 
     with patch("app.services.pdf_generator.generate_pdf", AsyncMock(return_value=_fake_sidecar(task_id))):
@@ -160,7 +160,7 @@ async def test_me_pdf_worker_spawn_session_key_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_pdf_body_override(client, fake_redis):
-    """POST /me/pdf akzeptiert task_id im Body als expliziten Override."""
+    """POST /me/pdf accepts task_id in the body as an explicit override."""
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
 
     with patch("app.services.pdf_generator.generate_pdf", AsyncMock(return_value=_fake_sidecar(task_id))):
@@ -175,7 +175,7 @@ async def test_me_pdf_body_override(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_pdf_422_no_active_task(client, fake_redis):
-    """POST /me/pdf gibt 422 wenn keine aktive Task gefunden wird."""
+    """POST /me/pdf returns 422 when no active task is found."""
     board_id, agent_id, token = await _setup_agent_no_task()
 
     resp = await client.post(
@@ -188,11 +188,11 @@ async def test_me_pdf_422_no_active_task(client, fake_redis):
     assert "aktive Task" in resp.json()["detail"]
 
 
-# ── /me/deliverable Tests ─────────────────────────────────────────────────────
+# ── /me/deliverable tests ─────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_me_deliverable_board_lead_path(client, fake_redis):
-    """POST /me/deliverable nutzt agent.current_task_id (Board-Lead-Pfad)."""
+    """POST /me/deliverable uses agent.current_task_id (board-lead path)."""
     board_id, agent_id, task_id, token = await _setup_board_lead_with_current_task()
 
     resp = await client.post(
@@ -207,7 +207,7 @@ async def test_me_deliverable_board_lead_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_deliverable_worker_spawn_session_key_path(client, fake_redis):
-    """POST /me/deliverable nutzt spawn_session_key Reverse-Lookup (Worker-Pfad)."""
+    """POST /me/deliverable uses the spawn_session_key reverse lookup (worker path)."""
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
 
     resp = await client.post(
@@ -220,7 +220,7 @@ async def test_me_deliverable_worker_spawn_session_key_path(client, fake_redis):
     data = resp.json()
     assert "id" in data
 
-    # Verifizieren dass Deliverable zur richtigen Task gehoert
+    # Verify that the deliverable belongs to the correct task
     from app.models.deliverable import TaskDeliverable
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         d = await s.get(TaskDeliverable, uuid.UUID(data["id"]))
@@ -230,7 +230,7 @@ async def test_me_deliverable_worker_spawn_session_key_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_deliverable_body_override(client, fake_redis):
-    """POST /me/deliverable akzeptiert task_id im Body als Override."""
+    """POST /me/deliverable accepts task_id in the body as an override."""
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
 
     resp = await client.post(
@@ -247,7 +247,7 @@ async def test_me_deliverable_body_override(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_deliverable_422_no_active_task(client, fake_redis):
-    """POST /me/deliverable gibt 422 wenn keine aktive Task gefunden wird."""
+    """POST /me/deliverable returns 422 when no active task is found."""
     board_id, agent_id, token = await _setup_agent_no_task()
 
     resp = await client.post(
@@ -260,7 +260,7 @@ async def test_me_deliverable_422_no_active_task(client, fake_redis):
     assert "aktive Task" in resp.json()["detail"]
 
 
-# ── /me/telegram Tests ────────────────────────────────────────────────────────
+# ── /me/telegram tests ────────────────────────────────────────────────────────
 
 def _mock_telegram():
     """Patch telegram_reports.configured + send."""
@@ -281,7 +281,7 @@ def _mock_telegram():
 
 @pytest.mark.asyncio
 async def test_me_telegram_board_lead_path(client, fake_redis):
-    """POST /me/telegram nutzt agent.current_task_id und setzt report_sent_to_telegram."""
+    """POST /me/telegram uses agent.current_task_id and sets report_sent_to_telegram."""
     from app.models.task import Task
 
     board_id, agent_id, task_id, token = await _setup_board_lead_with_current_task()
@@ -296,7 +296,7 @@ async def test_me_telegram_board_lead_path(client, fake_redis):
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
 
-    # Flag gesetzt
+    # Flag set
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
         assert task.report_sent_to_telegram is True
@@ -304,7 +304,7 @@ async def test_me_telegram_board_lead_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_telegram_worker_spawn_session_key_path(client, fake_redis):
-    """POST /me/telegram nutzt spawn_session_key Reverse-Lookup (Worker-Pfad)."""
+    """POST /me/telegram uses the spawn_session_key reverse lookup (worker path)."""
     from app.models.task import Task
 
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
@@ -319,7 +319,7 @@ async def test_me_telegram_worker_spawn_session_key_path(client, fake_redis):
     assert resp.status_code == 200, resp.text
     assert resp.json()["ok"] is True
 
-    # Flag auf richtigem Task gesetzt (Worker-Pfad)
+    # Flag set on the correct task (worker path)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
         assert task.report_sent_to_telegram is True
@@ -327,7 +327,7 @@ async def test_me_telegram_worker_spawn_session_key_path(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_telegram_no_task_still_works(client, fake_redis):
-    """POST /me/telegram funktioniert auch ohne aktive Task (required=False)."""
+    """POST /me/telegram also works without an active task (required=False)."""
     board_id, agent_id, token = await _setup_agent_no_task()
 
     async with _mock_telegram():
@@ -342,7 +342,7 @@ async def test_me_telegram_no_task_still_works(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_me_telegram_body_override(client, fake_redis):
-    """POST /me/telegram akzeptiert task_id im Body als expliziten Override."""
+    """POST /me/telegram accepts task_id in the body as an explicit override."""
     board_id, agent_id, task_id, token, gw_id = await _setup_worker_with_spawn_session()
 
     async with _mock_telegram():

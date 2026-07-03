@@ -1,14 +1,14 @@
-"""Session Monitor Mixin — Heartbeat-basierte Offline-Erkennung (Phase 29 post-Gateway).
+"""Session Monitor Mixin — heartbeat-based offline detection (Phase 29 post-Gateway).
 
-Vorher: Gateway-Session-Checks, Recovery, Token-Sync, Context-Compaction, Health-Probing.
-Diese Methoden waren alle gateway-spezifisch und sind mit dem Gateway-Sunset entfallen:
-- `_check_agent_sessions` — sessions_list-basiert
-- `_check_session_recovery` — chat-send Recovery, ersetzt durch task_runner._check_dispatch_ack (Phase 26)
-- `_sync_agent_tokens` — Token-Counts aus Gateway-Sessions
-- `_reset_overflowed_sessions` + `_compact_overflowed_sessions` — Gateway-Context-Limit-Mgmt
-- `_check_session_health` + `_escalate_to_lead` — RPC-Health-Probing
+Before: Gateway session checks, recovery, token sync, context compaction, health probing.
+These methods were all gateway-specific and were removed with the Gateway sunset:
+- `_check_agent_sessions` — based on sessions_list
+- `_check_session_recovery` — chat-send recovery, replaced by task_runner._check_dispatch_ack (Phase 26)
+- `_sync_agent_tokens` — token counts from Gateway sessions
+- `_reset_overflowed_sessions` + `_compact_overflowed_sessions` — Gateway context-limit mgmt
+- `_check_session_health` + `_escalate_to_lead` — RPC health probing
 
-Nachher: heartbeat-basierte Offline-Erkennung (DB-only) + recovery-recap-Helper.
+After: heartbeat-based offline detection (DB-only) + recovery-recap helper.
 """
 
 import logging
@@ -26,7 +26,7 @@ logger = logging.getLogger("mc.watchdog")
 
 
 def _parse_interval(interval_str: str) -> int:
-    """Parse Interval-String wie '5m', '30s', '1m' zu Sekunden."""
+    """Parse an interval string like '5m', '30s', '1m' into seconds."""
     try:
         if interval_str.endswith("m"):
             return int(interval_str[:-1]) * 60
@@ -38,21 +38,21 @@ def _parse_interval(interval_str: str) -> int:
 
 
 class SessionMonitorMixin:
-    """Heartbeat-basierte Offline-Erkennung (post Gateway sunset).
+    """Heartbeat-based offline detection (post Gateway sunset).
 
-    Aller Gateway-spezifische Code (sessions_list, sessions_reset, chat_send) ist mit
-    Phase 29 entfernt. ACK-Timeout-Owner ist task_runner._check_dispatch_ack (Phase 26).
+    All gateway-specific code (sessions_list, sessions_reset, chat_send) was
+    removed in Phase 29. ACK-timeout owner is task_runner._check_dispatch_ack (Phase 26).
     """
 
     async def _check_heartbeat_health(self, session: AsyncSession) -> None:
-        """Alert wenn ein openclaw-runtime Agent laenger als 2x sein Heartbeat-Interval
-        nicht gesehen wurde.
+        """Alert when an openclaw-runtime agent hasn't been seen for longer than
+        2x its heartbeat interval.
 
-        Filter `agent_runtime == "openclaw"` bleibt stehen weil cli-bridge + host
-        ihren eigenen Heartbeat-Lebenszyklus via /agent/me/heartbeat haben und
-        diesen Check umgehen sollen. Post Phase 30 (DB-Cleanup) wird der CHECK-
-        constraint auf agent_runtime den 'openclaw' Wert verbieten — der Filter
-        matched dann garantiert 0 Rows und der Check ist effektiv no-op.
+        The `agent_runtime == "openclaw"` filter stays in place because cli-bridge + host
+        have their own heartbeat lifecycle via /agent/me/heartbeat and should
+        bypass this check. Post Phase 30 (DB cleanup), the CHECK
+        constraint on agent_runtime will forbid the 'openclaw' value — the filter
+        will then match 0 rows guaranteed and the check becomes effectively a no-op.
         """
         redis = await get_redis()
         # Phase 30: gateway_agent_id filter dropped (was leftover from Phase 29
@@ -99,12 +99,12 @@ class SessionMonitorMixin:
     async def _build_recovery_recap(
         self, task: Task, agent: Agent, session: AsyncSession,
     ) -> str:
-        """Structured Recovery Recap — kurz und fokussiert.
+        """Structured Recovery Recap — short and focused.
 
-        Helper bleibt erhalten obwohl die aufrufenden Methoden mit Phase 29
-        weg sind. Tests in test_resilient_recovery.py decken den Recap-Builder
-        weiterhin ab; Phase-31-Refaktor kann ihn fuer cli-bridge-Recovery
-        wiederverwenden.
+        Helper stays in place even though the calling methods were removed
+        in Phase 29. Tests in test_resilient_recovery.py still cover the
+        recap builder; the Phase-31 refactor can reuse it for cli-bridge
+        recovery.
         """
         parts = [
             "# Session Recovery",

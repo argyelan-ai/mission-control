@@ -1,18 +1,18 @@
-"""Report Auto-Draft fuer fehlgeschlagene Tasks.
+"""Report auto-draft for failed tasks.
 
-Wenn ein Root-Task mit `report_back_required=true` auf `failed` geht ohne
-dass der Agent selbst einen `mc telegram`-Report gesendet hat, rendern wir
-aus dem Task-Kontext einen Kurz-Report und senden ihn an den Reports-Chat.
+When a root task with `report_back_required=true` goes to `failed` without
+the agent itself having sent an `mc telegram` report, we render a short
+report from the task context and send it to the reports chat.
 
-Warum Auto-Draft nur bei `failed` (nicht bei `done`):
-- `done` = Agent hat ein Ergebnis → der Operator erwartet expliziten Report, nicht
-  Auto-Generiert. Dort greift das Hard-Gate in `agent_scoped.py`.
-- `failed` = Agent endet oft abrupt (Crash, Exception, timeouts). Wenn wir
-  auch dort blockieren, riskieren wir Task-Zombies. Besser: System macht
-  Best-Effort-Draft, Agent kann nachliefern wenn er wieder up ist.
+Why auto-draft only on `failed` (not on `done`):
+- `done` = agent produced a result → the operator expects an explicit report,
+  not an auto-generated one. The hard gate in `agent_scoped.py` applies there.
+- `failed` = the agent often ends abruptly (crash, exception, timeout). If we
+  also blocked there, we'd risk task zombies. Better: the system makes a
+  best-effort draft, and the agent can follow up once it's back up.
 
-Der Draft ist bewusst knapp (keine Emojis, klare Struktur) — der Agent
-kann dann einen vollwertigen Report nachreichen wenn noetig.
+The draft is deliberately terse (no emojis, clear structure) — the agent
+can then send a full report afterwards if needed.
 """
 
 from __future__ import annotations
@@ -30,14 +30,14 @@ logger = logging.getLogger("mc.report_auto_draft")
 
 
 def _escape(text: str | None) -> str:
-    """HTML-escape Text fuer Telegram parse_mode=HTML."""
+    """HTML-escape text for Telegram parse_mode=HTML."""
     if not text:
         return ""
     return html.escape(text, quote=False)
 
 
 def _truncate(text: str, max_chars: int) -> str:
-    """Text auf max_chars kuerzen, mit … am Ende wenn abgeschnitten."""
+    """Truncate text to max_chars, with … at the end when truncated."""
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1].rstrip() + "…"
@@ -47,7 +47,7 @@ async def _load_reflection_and_last_comments(
     session: AsyncSession,
     task: Task,
 ) -> tuple[str | None, list[str]]:
-    """Holt die letzte Reflection (falls vorhanden) + die letzten bis zu 3 Agent-Kommentare."""
+    """Fetches the latest reflection (if any) + the last up to 3 agent comments."""
     reflection_q = (
         select(TaskComment)
         .where(TaskComment.task_id == task.id, TaskComment.comment_type == "reflection")
@@ -67,7 +67,7 @@ async def _load_reflection_and_last_comments(
         .limit(3)
     )
     recent = (await session.exec(recent_q)).all()
-    # Aelteste zuerst fuer Lesereihenfolge
+    # Oldest first for reading order
     recent_texts = [c.content for c in reversed(recent)]
     return reflection_text, recent_texts
 
@@ -81,7 +81,7 @@ def _render_draft(
     reflection: str | None,
     recent_comments: list[str],
 ) -> str:
-    """Rendert einen knappen Failure-Report als HTML (Telegram parse_mode)."""
+    """Renders a terse failure report as HTML (Telegram parse_mode)."""
     parts: list[str] = []
 
     # Header
@@ -92,13 +92,13 @@ def _render_draft(
     parts.append("")
     parts.append("─────────────────")
 
-    # Reflection (erste ~300 Zeichen)
+    # Reflection (first ~300 characters)
     if reflection:
         parts.append("")
         parts.append("📝 <b>Reflexion des Agenten</b>")
         parts.append(_escape(_truncate(reflection.strip(), 500)))
 
-    # Letzte Kommentare
+    # Recent comments
     if recent_comments:
         parts.append("")
         parts.append("💬 <b>Letzte Kommentare</b>")
@@ -119,11 +119,11 @@ async def render_and_send_failure_draft(
     task: Task,
     agent: Agent,
 ) -> bool:
-    """Rendert + sendet einen Auto-Draft-Report fuer fehlgeschlagene Tasks.
+    """Renders + sends an auto-draft report for failed tasks.
 
-    Returns True bei erfolgreichem Send, False wenn Reports-Bot nicht konfiguriert
-    oder Send fehlgeschlagen. Wirft keine Exceptions — Caller muss das
-    status=failed-Transition NICHT blockieren.
+    Returns True on successful send, False if the reports bot is not configured
+    or the send failed. Never raises exceptions — the caller must NOT block the
+    status=failed transition on this.
     """
     from app.services.telegram_reports import telegram_reports
 
@@ -146,7 +146,7 @@ async def render_and_send_failure_draft(
         recent_comments=recent_comments,
     )
 
-    # Telegram limit 4096 chars — wir halten 4000 als Safety-Margin
+    # Telegram limit 4096 chars — we keep 4000 as a safety margin
     if len(text) > 4000:
         text = _truncate(text, 4000)
 

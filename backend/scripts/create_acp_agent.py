@@ -1,10 +1,10 @@
 """
-ACP Agent erstellen — Claude Code CLI als Agent in Mission Control.
+Create ACP agent — Claude Code CLI as an agent in Mission Control.
 
-Aufruf: docker compose exec backend python3 scripts/create_acp_agent.py
+Usage: docker compose exec backend python3 scripts/create_acp_agent.py
 
-Der ACP Agent arbeitet direkt im Filesystem via Claude Code CLI,
-nicht ueber den OpenClaw Gateway.
+The ACP agent works directly in the filesystem via Claude Code CLI,
+not through the OpenClaw Gateway.
 """
 
 from pathlib import Path
@@ -23,7 +23,7 @@ async def main():
     from app.models.board import Board
 
     async with AsyncSession(engine) as session:
-        # Pruefen ob ACP schon existiert
+        # Check whether ACP already exists
         result = await session.exec(
             select(Agent).where(Agent.name == "ACP")
         )
@@ -35,7 +35,7 @@ async def main():
             print(f"  Runtime: {existing.agent_runtime}")
             return
 
-        # MC Dev Board finden
+        # Find MC Dev board
         board_result = await session.exec(
             select(Board).where(Board.slug == "mc-dev")
         )
@@ -44,7 +44,7 @@ async def main():
             print("MC Dev Board (slug: mc-dev) nicht gefunden!")
             sys.exit(1)
 
-        # ACP Agent erstellen
+        # Create ACP agent
         agent = Agent(
             name="ACP",
             emoji="🧠",
@@ -53,7 +53,7 @@ async def main():
             board_id=board.id,
             agent_runtime="claude-code",
             workspace_path=str(Path.home() / "Workspace"),
-            provision_status="provisioned",  # Braucht kein Gateway-Provisioning
+            provision_status="provisioned",  # Doesn't need gateway provisioning
             is_board_lead=False,
             total_tasks_completed=0,
             scopes=["tasks:read", "tasks:write", "knowledge:read", "knowledge:write",

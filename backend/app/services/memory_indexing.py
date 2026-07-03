@@ -1,41 +1,40 @@
-"""Memory-Indexing — Auto-Embedding und Qdrant-Upsert bei Memory-Create.
+"""Memory Indexing — auto-embedding and Qdrant upsert on memory create.
 
-Wird aufgerufen von:
+Called from:
 - POST /api/v1/knowledge (routers/memory.py)
 - POST /api/v1/boards/{id}/memory (routers/memory.py)
 - POST /api/v1/agent/memory (routers/agent_scoped.py)
 
-Fail-soft: Wenn Spark oder Qdrant down sind, wird ein WARNING geloggt aber
-der DB-Insert geht trotzdem durch. Backfill kann spaeter fehlende Embeddings
-nachziehen.
+Fail-soft: if Spark or Qdrant are down, a WARNING is logged but the DB
+insert still goes through. Backfill can later fill in missing embeddings.
 """
 import logging
 from typing import Optional
 
 from app.models.memory import BoardMemory
 
-# NOTE: embedding_service und qdrant_service werden lazy importiert in
-# index_memory() und delete_memory_index(), weil qdrant_client nur im Docker
-# Container installiert ist. layer_for() funktioniert ohne Qdrant-Import und
-# kann lokal in Tests genutzt werden.
+# NOTE: embedding_service and qdrant_service are lazily imported in
+# index_memory() and delete_memory_index(), because qdrant_client is only
+# installed in the Docker container. layer_for() works without the Qdrant
+# import and can be used locally in tests.
 
 logger = logging.getLogger("mc.memory_indexing")
 
-# Mapping memory_type → Layer
+# Mapping memory_type → layer
 SEMANTIC_TYPES = {"knowledge", "reference", "research"}
 EPISODIC_TYPES = {"journal", "weekly_review", "insight", "task_log"}
 AGENT_TYPES = {"lesson"}
 
 
 async def _enqueue_embedding_retry(memory_id, attempt: int = 1) -> bool:
-    """Pusht den Memory-Eintrag in die Phase-5 MSY-04 Retry-Queue.
+    """Pushes the memory entry into the Phase-5 MSY-04 retry queue.
 
-    Lazy-Import um Zirkularitaet zu vermeiden — embedding_retry importiert
-    selbst Lazy aus diesem Modul (layer_for) im _process_one-Pfad.
+    Lazy import to avoid circularity — embedding_retry itself lazily imports
+    from this module (layer_for) in the _process_one path.
 
-    Returns True wenn enqueued, False bei Cap-Hit oder Redis-Fehler. Der Caller
-    (index_memory except branch) behandelt False als "BoardMemory bleibt im DB,
-    aber kein weiterer Retry getrackt" — fail-soft to fail-soft.
+    Returns True if enqueued, False on cap-hit or Redis failure. The caller
+    (index_memory except branch) treats False as "BoardMemory stays in the DB,
+    but no further retry is tracked" — fail-soft to fail-soft.
     """
     from app.services.embedding_retry import enqueue
     return await enqueue(memory_id, attempt=attempt)
@@ -94,12 +93,12 @@ async def _find_merge_candidate(
 
 
 def layer_for(memory: BoardMemory) -> Optional[str]:
-    """Leitet den Memory-Layer aus Typ + Scope ab.
+    """Derives the memory layer from type + scope.
 
-    - lesson mit agent_id → agent
+    - lesson with agent_id → agent
     - SEMANTIC_TYPES → semantic
     - EPISODIC_TYPES → episodic
-    - alles andere → None (kein Auto-Index)
+    - everything else → None (no auto-index)
     """
     mtype = (memory.memory_type or "").lower()
     if mtype in AGENT_TYPES and memory.agent_id:
@@ -112,9 +111,9 @@ def layer_for(memory: BoardMemory) -> Optional[str]:
 
 
 async def index_memory(memory: BoardMemory) -> Optional[str]:
-    """Erzeugt Embedding + Qdrant Upsert. Returnt den genutzten Layer oder None.
+    """Generates embedding + Qdrant upsert. Returns the used layer or None.
 
-    Fail-soft: Exceptions werden geloggt, nicht weitergegeben.
+    Fail-soft: exceptions are logged, not re-raised.
     """
     layer = layer_for(memory)
     if layer is None:
@@ -129,7 +128,7 @@ async def index_memory(memory: BoardMemory) -> Optional[str]:
     if not text:
         return None
 
-    # Lazy-Import (Qdrant-Modul nur im Docker-Container installiert)
+    # Lazy import (Qdrant module only installed in the Docker container)
     from app.services.embedding_service import embedding_service
     from app.services.qdrant_service import qdrant_service
 
@@ -140,9 +139,9 @@ async def index_memory(memory: BoardMemory) -> Optional[str]:
             "Embedding failed for memory %s (layer=%s): %s — DB-Insert bleibt, Qdrant uebersprungen, retry enqueued",
             memory.id, layer, e,
         )
-        # Phase 5 MSY-04: Retry-Queue statt nur log+drop. Cap-overflow wird
-        # innerhalb _enqueue_embedding_retry behandelt (WARN + skip; Memory
-        # bleibt persistiert, nur eben ohne Retry-Tracking).
+        # Phase 5 MSY-04: retry queue instead of just log+drop. Cap-overflow
+        # is handled inside _enqueue_embedding_retry (WARN + skip; the memory
+        # stays persisted, just without retry tracking).
         try:
             await _enqueue_embedding_retry(memory.id, attempt=1)
         except Exception as ee:
@@ -215,8 +214,8 @@ async def index_memory(memory: BoardMemory) -> Optional[str]:
 
 
 async def delete_memory_index(memory_id: str, layer: Optional[str] = None) -> None:
-    """Entfernt Qdrant-Eintrag. Wenn layer unbekannt, versucht alle drei."""
-    # Lazy-Import (siehe index_memory)
+    """Removes Qdrant entry. If layer is unknown, tries all three."""
+    # Lazy import (see index_memory)
     from app.services.qdrant_service import qdrant_service
     layers = [layer] if layer else ["semantic", "agent", "episodic"]
     for layer_name in layers:

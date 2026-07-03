@@ -1,7 +1,7 @@
-"""Gemeinsame Hilfsfunktionen fuer das gesamte Backend.
+"""Shared helper functions for the entire backend.
 
-Stellt timezone-aware datetime-Helfer und einen sicheren Task-Wrapper bereit,
-damit kein asyncio.create_task() mehr still fehlschlagen kann.
+Provides timezone-aware datetime helpers and a safe task wrapper,
+so asyncio.create_task() can no longer fail silently.
 """
 
 from __future__ import annotations
@@ -15,27 +15,27 @@ logger = logging.getLogger(__name__)
 
 
 def utcnow() -> datetime:
-    """Gibt die aktuelle UTC-Zeit als timezone-aware datetime zurueck."""
+    """Returns the current UTC time as a timezone-aware datetime."""
     return datetime.now(timezone.utc)
 
 
 def strip_tz(dt: datetime) -> datetime:
-    """Entfernt tzinfo fuer DB-Vergleiche (PostgreSQL speichert naive datetimes)."""
+    """Removes tzinfo for DB comparisons (PostgreSQL stores naive datetimes)."""
     return dt.replace(tzinfo=None)
 
 
 def ensure_aware(dt: datetime) -> datetime:
-    """Stellt sicher, dass ein datetime-Objekt timezone-aware ist.
+    """Ensures that a datetime object is timezone-aware.
 
-    Naive Datumswerte werden als UTC interpretiert. Bereits timezone-aware
-    Datumswerte bleiben unveraendert.
+    Naive date values are interpreted as UTC. Already timezone-aware
+    date values remain unchanged.
 
     Args:
-        dt: Das zu pruefende datetime-Objekt.
+        dt: The datetime object to check.
 
     Returns:
-        datetime: Das uebergebene Datum mit UTC-tzinfo, falls es zuvor naiv war,
-        sonst unveraendert.
+        datetime: The given date with UTC tzinfo if it was previously naive,
+        otherwise unchanged.
     """
     if dt.tzinfo is None or dt.utcoffset() is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -49,18 +49,18 @@ def create_tracked_task(
     coro,
     name: str | None = None,
 ) -> asyncio.Task:
-    """Erzeugt einen verfolgten Background-Task mit Fehler-Logging.
+    """Creates a tracked background task with error logging.
 
-    Der Task wird in einem globalen Set gehalten, damit er nicht durch
-    Garbage Collection verschwindet. Unbehandelte Exceptions werden beim
-    Abschluss geloggt statt still verschluckt.
+    The task is held in a global set so it doesn't disappear due to
+    garbage collection. Unhandled exceptions are logged on completion
+    instead of being silently swallowed.
 
     Args:
-        coro: Awaitable, das als Background-Task gestartet wird.
-        name: Optionaler Task-Name fuer Logging und Debugging.
+        coro: Awaitable to start as a background task.
+        name: Optional task name for logging and debugging.
 
     Returns:
-        asyncio.Task: Der erzeugte und bereits registrierte Background-Task.
+        asyncio.Task: The created and already registered background task.
     """
     task = asyncio.create_task(coro, name=name)
     _background_tasks.add(task)

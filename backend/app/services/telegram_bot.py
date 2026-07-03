@@ -1,13 +1,13 @@
 """
-Telegram Bot Service — Approval URL-Buttons fuer den Operator.
+Telegram Bot Service — approval URL buttons for the operator.
 
-Sendet Approvals als Telegram-Nachricht mit URL-Buttons (kein Polling).
-URLs zeigen auf Quick-Resolve Endpoints (GET = Bestaetigungsseite, POST = Aktion).
-Token sind zufaellige Einmal-Token in Redis (TTL 48h, single-use).
+Sends approvals as a Telegram message with URL buttons (no polling).
+URLs point to quick-resolve endpoints (GET = confirmation page, POST = action).
+Tokens are random one-time tokens in Redis (TTL 48h, single-use).
 
-Speichert message_id in Redis (TTL 2 Tage) fuer spaeteres Message-Editing.
+Stores message_id in Redis (TTL 2 days) for later message editing.
 
-Pattern: Singleton (kein Background Loop mehr — Polling deaktiviert).
+Pattern: Singleton (no more background loop — polling disabled).
 """
 
 import asyncio
@@ -203,7 +203,7 @@ class TelegramBotService:
         except Exception as e:
             logger.warning("answerCallbackQuery error: %s", e)
 
-    # ── Approval-spezifisch ─────────────────────────────────────────────
+    # ── Approval-specific ────────────────────────────────────────────────
 
     async def send_approval_telegram(
         self,
@@ -280,11 +280,11 @@ class TelegramBotService:
     # ── Poller ──────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        # DEPRECATED: Polling deaktiviert — URL-Buttons statt Callback-Buttons.
-        # Alter Code bleibt bis URL-Flow im Betrieb bewiesen ist.
+        # DEPRECATED: polling disabled — URL buttons instead of callback buttons.
+        # Old code stays until the URL flow is proven in production.
         logger.info("Telegram bot ready (polling disabled — using URL buttons)")
         return
-        # --- Alter Code darunter bleibt, wird aber nie erreicht ---
+        # --- Old code below stays but is never reached ---
         if not self.configured:  # noqa: E501 — dead code, intentionally kept
             logger.info("Telegram bot not configured — skipping")
             return
@@ -349,7 +349,7 @@ class TelegramBotService:
         from_user = callback.get("from", {})
         chat_id = str(callback.get("message", {}).get("chat", {}).get("id", ""))
 
-        # Security: nur die Chat-ID des Operators akzeptieren
+        # Security: only accept the operator's chat ID
         if chat_id != settings.telegram_chat_id:
             logger.warning(
                 "Callback from unauthorized chat %s (user: %s)",
@@ -375,7 +375,7 @@ class TelegramBotService:
             await self.answer_callback_query(callback_id, "Ungueltige ID.")
             return
 
-        # Approval resolven
+        # Resolve approval
         resolved = await self._resolve_approval(approval_id, action)
         if resolved:
             status_text = "Entblockt" if action == "approve" else "Abgebrochen"
@@ -406,7 +406,7 @@ class TelegramBotService:
             session.add(approval)
             await session.commit()
 
-            # Blocker Decision: Task entblocken/failen
+            # Blocker decision: unblock/fail the task
             if approval.action_type == "blocker_decision" and approval.task_id:
                 task = await session.get(Task, approval.task_id)
                 if task and task.status == "blocked":
@@ -415,9 +415,9 @@ class TelegramBotService:
                         task.updated_at = utcnow()
                         session.add(task)
                         await session.commit()
-                        # Agent benachrichtigen via TaskComment (runtime-agnostic
-                        # Lieferkanal — cli-bridge / host pollen /agent/me/comments).
-                        # Phase 29 D-10: ersetzt frueheren Gateway-Chat-Pfad.
+                        # Notify agent via TaskComment (runtime-agnostic delivery
+                        # channel — cli-bridge / host poll /agent/me/comments).
+                        # Phase 29 D-10: replaces the former gateway chat path.
                         if task.assigned_agent_id:
                             session.add(TaskComment(
                                 task_id=task.id,
@@ -433,9 +433,9 @@ class TelegramBotService:
                     elif status == "rejected":
                         task.status = "failed"
                         task.updated_at = utcnow()
-                        # Auto-Unassign — failed Task im agent_poll triggert
-                        # sonst eine Cancel-Schleife. Der Operator hat den Task via
-                        # Telegram explizit abgebrochen.
+                        # Auto-unassign — a failed task in agent_poll would otherwise
+                        # trigger a cancel loop. The operator explicitly cancelled
+                        # the task via Telegram.
                         from app.services.task_lifecycle import apply_terminal_unassign
                         await apply_terminal_unassign(session, task, "failed")
                         session.add(task)

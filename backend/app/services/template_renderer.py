@@ -1,8 +1,8 @@
 """
-Jinja2 Template Renderer fuer Agent-Konfigurationsdateien.
+Jinja2 template renderer for agent configuration files.
 
-Templates liegen in backend/templates/*.j2
-Wird von _provision_agent_background() und sync_agent_config_to_gateway() genutzt.
+Templates live in backend/templates/*.j2
+Used by _provision_agent_background() and sync_agent_config_to_gateway().
 """
 import logging
 from pathlib import Path
@@ -19,11 +19,11 @@ logger = logging.getLogger("mc.template_renderer")
 
 
 def _github_owner() -> str:
-    """Lazy import — git_service importiert selbst nichts Schweres."""
+    """Lazy import — git_service itself doesn't import anything heavy."""
     from app.services.git_service import GITHUB_OWNER
     return GITHUB_OWNER
 
-# /app/templates/ im Docker-Container (backend/templates/ lokal)
+# /app/templates/ in the Docker container (backend/templates/ locally)
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"
 
 _env: Environment | None = None
@@ -57,7 +57,7 @@ def _get_env() -> Environment:
 
 
 def render_agent_file(template_name: str, context: dict) -> str:
-    """Rendert ein Jinja2 Template mit dem gegebenen Kontext."""
+    """Renders a Jinja2 template with the given context."""
     env = _get_env()
     try:
         template = env.get_template(template_name)
@@ -90,20 +90,20 @@ def build_agent_context(
     board_id: str | None = None,
     agents_on_board: list["Agent"] | None = None,
 ) -> dict:
-    """Baut den Jinja2-Kontext fuer einen Agent auf.
+    """Builds the Jinja2 context for an agent.
 
-    team_ids mappt well-known Agent-Namen auf Template-Variablen damit
-    Templates direkt `{{ boss_agent_id }}` schreiben koennen ohne einen
-    {% for %}-Loop zu brauchen. Liste synchron halten mit den echten
-    DB-Agent-Namen (case-insensitive, Leerzeichen → '-').
+    team_ids maps well-known agent names to template variables so
+    templates can write `{{ boss_agent_id }}` directly without needing a
+    {% for %} loop. Keep the list in sync with the actual
+    DB agent names (case-insensitive, spaces → '-').
 
-    Cody (2026-04-09 geloescht): `cody_agent_id` entfernt.
-    Planner + Neo (2026-04-28 geloescht): `planner_agent_id`, `neo_agent_id` entfernt.
+    Cody (deleted 2026-04-09): `cody_agent_id` removed.
+    Planner + Neo (deleted 2026-04-28): `planner_agent_id`, `neo_agent_id` removed.
     Canonical delegation targets: boss_agent_id, freecode_agent_id, sparky_agent_id.
     """
     effective_board_id = board_id or str(agent.board_id) if agent.board_id else ""
 
-    # Team-UUIDs aus den aktiven Board-Agents heraussuchen.
+    # Look up team UUIDs from the active board agents.
     # Planner + Neo removed in Migration 0086 (ADR-020 workstream E).
     team_ids: dict[str, str] = {}
     role_map = {
@@ -171,12 +171,12 @@ def build_agent_context(
         "reflection_required_fields": _reflection_fields(),
         "reflection_min_chars": _reflection_min_chars(),
         "reflection_charter": _reflection_charter(),
-        # Operator-Identitaet + GitHub-Owner — aus Settings/Env, nie hardcoden
-        # (Repo ist public). OPERATOR_NAME / TELEGRAM_CHAT_ID / GITHUB_OWNER in .env.
+        # Operator identity + GitHub owner — from settings/env, never hardcode
+        # (repo is public). OPERATOR_NAME / TELEGRAM_CHAT_ID / GITHUB_OWNER in .env.
         "operator_name": settings.operator_name,
         "github_owner": _github_owner(),
         "telegram_chat_id": settings.telegram_chat_id,
-        # Canonical delegation targets (aus role_map oben befuellt)
+        # Canonical delegation targets (populated from role_map above)
         "boss_agent_id": team_ids.get("boss_agent_id", ""),
         "henry_agent_id": team_ids.get("henry_agent_id", ""),
         "freecode_agent_id": team_ids.get("freecode_agent_id", ""),
@@ -188,13 +188,13 @@ def build_agent_context(
         "shakespeare_agent_id": team_ids.get("shakespeare_agent_id", ""),
         "davinci_agent_id": team_ids.get("davinci_agent_id", ""),
         "team": team_list,
-        # Scopes — fuer bedingte Sektionen (z.B. vault:write) in Templates
+        # Scopes — for conditional sections (e.g. vault:write) in templates
         "scopes": _get_agent_scopes(agent),
     }
 
 
 def _get_agent_scopes(agent: "Agent") -> list[str]:
-    """Gibt die effektiven Scopes des Agents zurueck (leere DB-Liste = ALL_SCOPES)."""
+    """Returns the agent's effective scopes (empty DB list = ALL_SCOPES)."""
     from app.scopes import get_agent_effective_scopes
     return get_agent_effective_scopes(agent)
 
@@ -204,7 +204,7 @@ def render_all_agent_files(
     board_id: str | None = None,
     agents_on_board: list["Agent"] | None = None,
 ) -> dict[str, str]:
-    """Rendert alle Konfig-Dateien fuer einen Agent.
+    """Renders all config files for an agent.
 
     Returns: {"SOUL.md": "...", "USER.md": "...", "MEMORY.md": "..."}
 

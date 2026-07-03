@@ -1,4 +1,4 @@
-"""Tests fuer Agent Credentials Read Endpoints.
+"""Tests for Agent Credentials read endpoints.
 
 GET /api/v1/agent/boards/{board_id}/credentials        → masked list (credentials:read)
 GET /api/v1/agent/boards/{board_id}/credentials/{id}  → decrypted single (credentials:read)
@@ -15,7 +15,7 @@ from .conftest import test_engine
 
 
 async def _make_agent_client(client: AsyncClient, make_agent, scopes: list[str]):
-    """Hilfsfunktion: Agent mit Token erstellen, Client-Header setzen."""
+    """Helper: create an agent with a token, set the client header."""
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from sqlmodel import select
@@ -34,7 +34,7 @@ async def _make_agent_client(client: AsyncClient, make_agent, scopes: list[str])
 
 
 async def _create_credential(auth_client: AsyncClient, name: str = "Test Cred", credential_type: str = "login"):
-    """Hilfsfunktion: Credential via User-API anlegen."""
+    """Helper: create a credential via the user API."""
     resp = await auth_client.post(
         "/api/v1/credentials",
         json={
@@ -51,12 +51,12 @@ async def _create_credential(auth_client: AsyncClient, name: str = "Test Cred", 
 
 @pytest.mark.asyncio
 class TestAgentCredentialsListEndpoint:
-    """GET /api/v1/agent/boards/{board_id}/credentials — Masked List."""
+    """GET /api/v1/agent/boards/{board_id}/credentials — masked list."""
 
     async def test_agent_with_scope_can_list_credentials(
         self, client: AsyncClient, auth_client: AsyncClient, make_agent, make_board
     ):
-        """Agent mit credentials:read sieht die masked Liste."""
+        """Agent with credentials:read sees the masked list."""
         board = await make_board()
         cred = await _create_credential(auth_client, "My Login")
 
@@ -71,18 +71,18 @@ class TestAgentCredentialsListEndpoint:
         assert found["name"] == "My Login"
         assert found["credential_type"] == "login"
         assert "data_masked" in found
-        # Password sollte maskiert sein
+        # Password should be masked
         assert "****" in found["data_masked"]["password"]
-        # URL und Notes vorhanden
+        # URL and notes present
         assert found["url"] == "https://example.com"
         assert found["notes"] == "Testnotiz"
-        # Kein unverschlüsseltes data-Feld
+        # No unencrypted data field
         assert "data" not in found
 
     async def test_agent_without_scope_gets_403(
         self, client: AsyncClient, make_agent, make_board
     ):
-        """Agent ohne credentials:read wird mit 403 abgelehnt."""
+        """Agent without credentials:read is rejected with 403."""
         board = await make_board()
         await _make_agent_client(client, make_agent, scopes=["tasks:read"])
 
@@ -92,7 +92,7 @@ class TestAgentCredentialsListEndpoint:
     async def test_list_returns_empty_when_no_credentials(
         self, client: AsyncClient, make_agent, make_board
     ):
-        """Leere Liste wenn keine Credentials vorhanden."""
+        """Empty list when no credentials exist."""
         board = await make_board()
         await _make_agent_client(client, make_agent, scopes=["credentials:read"])
 
@@ -103,7 +103,7 @@ class TestAgentCredentialsListEndpoint:
     async def test_list_ordered_by_name(
         self, client: AsyncClient, auth_client: AsyncClient, make_agent, make_board
     ):
-        """Credentials sind alphabetisch nach Name sortiert."""
+        """Credentials are sorted alphabetically by name."""
         board = await make_board()
         await _create_credential(auth_client, "Zebra Cred")
         await _create_credential(auth_client, "Alpha Cred")
@@ -118,7 +118,7 @@ class TestAgentCredentialsListEndpoint:
         assert names == sorted(names)
 
     async def test_unauthenticated_request_fails(self, client: AsyncClient, make_board):
-        """Ohne Auth-Header → 401 oder 403."""
+        """Without an auth header → 401 or 403."""
         board = await make_board()
         client.headers.pop("Authorization", None)
         resp = await client.get(f"/api/v1/agent/boards/{board.id}/credentials")
@@ -127,15 +127,15 @@ class TestAgentCredentialsListEndpoint:
 
 @pytest.mark.asyncio
 class TestAgentCredentialDetailEndpoint:
-    """GET /api/v1/agent/boards/{board_id}/credentials/{id} — Decrypted Single."""
+    """GET /api/v1/agent/boards/{board_id}/credentials/{id} — decrypted single."""
 
     async def test_agent_with_scope_gets_decrypted_data(
         self, client: AsyncClient, auth_client: AsyncClient, make_agent, make_board
     ):
-        """Agent mit scope bekommt entschlüsselte Credentials."""
+        """Agent with scope receives decrypted credentials."""
         board = await make_board()
         cred = await _create_credential(auth_client, "API Key Cred", "token")
-        # Zweites Credential mit anderen Daten erstellen
+        # Create a second credential with different data
         resp = await auth_client.post(
             "/api/v1/credentials",
             json={
@@ -156,16 +156,16 @@ class TestAgentCredentialDetailEndpoint:
         assert body["id"] == token_cred["id"]
         assert body["name"] == "Token Cred"
         assert body["credential_type"] == "token"
-        # Entschlüsseltes data-Dict (nicht maskiert)
+        # Decrypted data dict (not masked)
         assert "data" in body
         assert body["data"]["token"] == "ghp_abc123xyz789"
-        # Kein data_masked im Detail-Response
+        # No data_masked in the detail response
         assert "data_masked" not in body
 
     async def test_agent_without_scope_gets_403_on_detail(
         self, client: AsyncClient, auth_client: AsyncClient, make_agent, make_board
     ):
-        """Agent ohne scope bekommt 403 beim Detail-Abruf."""
+        """Agent without scope gets 403 on detail retrieval."""
         board = await make_board()
         cred = await _create_credential(auth_client)
 
@@ -177,7 +177,7 @@ class TestAgentCredentialDetailEndpoint:
     async def test_nonexistent_credential_returns_404(
         self, client: AsyncClient, make_agent, make_board
     ):
-        """Nicht vorhandene Credential-ID → 404."""
+        """Nonexistent credential ID → 404."""
         board = await make_board()
         await _make_agent_client(client, make_agent, scopes=["credentials:read"])
         fake_id = str(uuid.uuid4())
@@ -188,7 +188,7 @@ class TestAgentCredentialDetailEndpoint:
     async def test_login_credential_decrypted_correctly(
         self, client: AsyncClient, auth_client: AsyncClient, make_agent, make_board
     ):
-        """Login-Credential mit username+password korrekt entschlüsselt."""
+        """Login credential with username+password decrypted correctly."""
         board = await make_board()
         cred = await _create_credential(auth_client, "Login Cred", "login")
 

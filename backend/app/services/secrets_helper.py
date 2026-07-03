@@ -1,13 +1,13 @@
 """
-Secrets-Lookup Helper — zentraler Zugriff auf die secrets-Tabelle mit
-Fernet-Dekryption.
+Secrets lookup helper — central access to the secrets table with
+Fernet decryption.
 
-Nutzung:
+Usage:
     from app.services.secrets_helper import get_secret_plaintext_by_id
     plaintext = await get_secret_plaintext_by_id(session, agent.secret_id)
 
-Wird von docker_agent_sync.py genutzt um den API-Key beim sync-config in
-das .env File im claude-config Bind-Mount zu schreiben.
+Used by docker_agent_sync.py to write the API key into the .env file in
+the claude-config bind mount during sync-config.
 """
 import logging
 import uuid
@@ -25,11 +25,11 @@ async def get_secret_plaintext_by_id(
     session: AsyncSession,
     secret_id: uuid.UUID | str | None,
 ) -> str | None:
-    """Holt einen Secret-Wert per ID und gibt den dekryptierten Plaintext zurueck.
+    """Fetches a secret value by ID and returns the decrypted plaintext.
 
     Returns:
-        str: Plaintext-Wert wenn erfolgreich dekryptiert
-        None: wenn secret_id None ist, Secret nicht gefunden, oder Dekryption fehlschlägt
+        str: plaintext value if decrypted successfully
+        None: if secret_id is None, the secret was not found, or decryption fails
     """
     if not secret_id:
         return None
@@ -60,9 +60,9 @@ async def get_secret_plaintext_by_key(
     session: AsyncSession,
     key: str,
 ) -> str | None:
-    """Alternative Variante — Lookup per key statt ID (z.B. "ollama_api_key").
+    """Alternative variant — lookup by key instead of ID (e.g. "ollama_api_key").
 
-    Nutzlich fuer Callers die den Key-Namen kennen aber keine ID haben.
+    Useful for callers that know the key name but don't have an ID.
     """
     try:
         result = await session.exec(select(Secret).where(Secret.key == key))
@@ -86,10 +86,10 @@ async def upsert_secret_by_key(
     label: str | None = None,
     description: str | None = None,
 ) -> Secret:
-    """Legt ein Secret an oder aktualisiert den Wert (Fernet-encrypted).
+    """Creates a secret or updates its value (Fernet-encrypted).
 
-    Committet die Session — Caller die eigene Transaktionen fahren rufen
-    danach ggf. refresh() auf ihren eigenen Objekten auf.
+    Commits the session — callers running their own transactions should
+    call refresh() on their own objects afterwards if needed.
     """
     result = await session.exec(select(Secret).where(Secret.key == key))
     secret = result.first()
@@ -115,19 +115,19 @@ async def upsert_agent_token_secret(
     agent_name: str,
     raw_token: str,
 ) -> None:
-    """Persistiert den MC_AGENT_TOKEN eines Agents als Vault-Secret.
+    """Persists an agent's MC_AGENT_TOKEN as a vault secret.
 
-    Key-Schema `mc_token_{agent.name.lower()}` — MUSS mit dem Lookup in
-    routers/internal.py::agent_bootstrap uebereinstimmen, sonst crash-loopt
-    poll.sh mit 'MC_TOKEN is not set' (Fresh-Install-Bug 2026-07-02): der
-    Token wurde bisher nur als PBKDF2-Hash + einmalig im Response gespeichert,
-    aber nie in den Vault geschrieben — /internal/bootstrap fand ihn nie.
-    Wird bei JEDER Token-Generierung aufgerufen (create/instantiate/reset/
-    provision), damit der Vault nie einen stale Token ausliefert.
+    Key schema `mc_token_{agent.name.lower()}` — MUST match the lookup in
+    routers/internal.py::agent_bootstrap, otherwise poll.sh crash-loops with
+    'MC_TOKEN is not set' (fresh-install bug 2026-07-02): the token used to be
+    stored only as a PBKDF2 hash + once in the response, but never written to
+    the vault — /internal/bootstrap never found it. Called on EVERY token
+    generation (create/instantiate/reset/provision) so the vault never
+    serves a stale token.
 
-    Best-effort: ein Vault-Fehler darf die Agent-Erstellung nicht killen —
-    der Token ist im Response sichtbar und kann via reset-token neu in den
-    Vault gebracht werden.
+    Best-effort: a vault error must not kill agent creation — the token is
+    visible in the response and can be brought back into the vault via
+    reset-token.
     """
     slug = agent_name.lower()
     try:

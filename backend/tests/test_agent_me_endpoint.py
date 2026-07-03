@@ -1,8 +1,8 @@
-"""Tests fuer GET /api/v1/agent/me — Self-Lookup fuer Agents.
+"""Tests for GET /api/v1/agent/me — self-lookup for agents.
 
-Convenience-Endpoint der trial-and-error mit GET /agent/agents/{id} (404) oder
-/agent/me-Varianten ersetzt. Live-Learning vom 2026-04-24: Boss verbrachte
-~6min mit dem Suchen der richtigen Endpoints bevor `mc delegate` klappte.
+Convenience endpoint that replaces trial-and-error with GET /agent/agents/{id}
+(404) or /agent/me variants. Live learning from 2026-04-24: Boss spent
+~6min searching for the right endpoints before `mc delegate` worked.
 """
 import uuid
 
@@ -57,12 +57,12 @@ async def _make_agent(
 
 @pytest.mark.asyncio
 async def test_me_returns_agent_profile(client: AsyncClient):
-    """Happy path: agent ruft /me, bekommt alle Felder."""
+    """Happy path: agent calls /me, gets all fields back."""
     agent, token, board_id = await _make_agent(
         name="AlphaTest",
         scopes=["heartbeat", "tasks:read", "tasks:write"],
         cli_skills=["summarize", "medewo-gruppe-brand"],
-        cli_plugins=None,  # null = alle installierten
+        cli_plugins=None,  # null = all installed
     )
 
     resp = await client.get(
@@ -79,17 +79,17 @@ async def test_me_returns_agent_profile(client: AsyncClient):
     assert data["agent_runtime"] == "cli-bridge"
     assert "heartbeat" in data["scopes"]
     assert data["cli_skills"] == ["summarize", "medewo-gruppe-brand"]
-    assert data["cli_plugins"] is None  # None = alle
+    assert data["cli_plugins"] is None  # None = all
     assert data["current_task"] is None
     assert data["provision_status"] == "provisioned"
 
 
 @pytest.mark.asyncio
 async def test_me_works_with_minimal_scope(client: AsyncClient):
-    """Kein spezieller Scope erforderlich — heartbeat allein reicht."""
+    """No special scope required — heartbeat alone is enough."""
     _, token, _ = await _make_agent(
         name="MinScope",
-        scopes=["heartbeat"],  # nur heartbeat, kein tasks:read
+        scopes=["heartbeat"],  # only heartbeat, no tasks:read
     )
 
     resp = await client.get(
@@ -101,10 +101,10 @@ async def test_me_works_with_minimal_scope(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_me_includes_current_task(client: AsyncClient):
-    """Wenn agent.current_task_id gesetzt ist, wird Task-Summary inkludiert."""
+    """When agent.current_task_id is set, the task summary is included."""
     from app.models.task import Task
 
-    # Agent erst anlegen, dann Task, dann agent.current_task_id setzen
+    # Create the agent first, then the task, then set agent.current_task_id
     agent, token, board_id = await _make_agent(name="BetaTest")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -140,7 +140,7 @@ async def test_me_includes_current_task(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_me_board_lead_flag(client: AsyncClient):
-    """is_board_lead wird korrekt zurueckgegeben."""
+    """is_board_lead is returned correctly."""
     _, token, _ = await _make_agent(
         name="BossTest", is_board_lead=True,
         scopes=["heartbeat", "tasks:create", "agents:manage"],
@@ -156,6 +156,6 @@ async def test_me_board_lead_flag(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_me_requires_auth(client: AsyncClient):
-    """Ohne Auth-Header → 401."""
+    """Without an auth header → 401."""
     resp = await client.get("/api/v1/agent/me")
     assert resp.status_code in (401, 403)

@@ -1,20 +1,20 @@
 """
-Task Runner Service — ueberwacht offene Tasks und sorgt dafuer, dass Agents sie abarbeiten.
+Task Runner Service — monitors open tasks and makes sure agents work through them.
 
-Laeuft als asyncio Background Task in der FastAPI Lifespan (wie Watchdog).
-Prueft periodisch:
-- Dispatch ACK: Wurde der Task vom Agent bestaetigt? Timeout → Approval fuer den Operator
-- In-Progress Tasks ohne Fortschritt → Status-Check / Eskalation
+Runs as an asyncio background task in the FastAPI lifespan (like the watchdog).
+Checks periodically:
+- Dispatch ACK: was the task confirmed by the agent? Timeout → approval for the operator
+- In-progress tasks with no activity → status check / escalation
 
-Schutz-Mechanismen:
-- Board Leads (Orchestratoren) werden NICHT fuer stale-progress gewarnt —
-  sie delegieren und warten, das ist normaler Betrieb.
-- Parent-Tasks mit aktiven Subtasks werden uebersprungen —
-  der Parent wartet auf seine Subtasks, das ist kein Stillstand.
-- Dispatch-Timeouts erstellen Approvals statt auto-reassignment —
-  Der Operator entscheidet manuell was passieren soll.
-- Stale-Check Circuit Breaker: nach MAX_STALE_CHECKS wird nicht
-  mehr der Agent gewarnt, sondern der Operator benachrichtigt.
+Protection mechanisms:
+- Board Leads (orchestrators) are NOT warned for stale progress —
+  they delegate and wait, that's normal operation.
+- Parent tasks with active subtasks are skipped —
+  the parent waiting on its subtasks is not a stall.
+- Dispatch timeouts create approvals instead of auto-reassignment —
+  the operator decides manually what should happen.
+- Stale-check circuit breaker: after MAX_STALE_CHECKS the agent is no
+  longer warned — the operator is notified instead.
 """
 
 import asyncio
@@ -36,16 +36,16 @@ from app.services.dispatch import auto_dispatch_task
 
 logger = logging.getLogger("mc.task_runner")
 
-# Thresholds (in Minuten)
-DISPATCH_PENDING_WARN_MINUTES = 5     # Dispatch nicht erfolgreich (kein dispatched_at)
-DISPATCH_PENDING_TIMEOUT_MINUTES = 15 # Pending Dispatch → Re-Assign
-# ACK_TIMEOUT_MINUTES wurde durch per-runtime Lookup ersetzt (REL-05).
-# Siehe AGENT_RUNTIME_ACK_TIMEOUTS + _get_ack_timeout_minutes weiter unten.
-STALE_PROGRESS_MINUTES = 60          # Default wenn Rolle unbekannt
+# Thresholds (in minutes)
+DISPATCH_PENDING_WARN_MINUTES = 5     # Dispatch not successful (no dispatched_at)
+DISPATCH_PENDING_TIMEOUT_MINUTES = 15 # Pending dispatch → re-assign
+# ACK_TIMEOUT_MINUTES was replaced by per-runtime lookup (REL-05).
+# See AGENT_RUNTIME_ACK_TIMEOUTS + _get_ack_timeout_minutes further below.
+STALE_PROGRESS_MINUTES = 60          # Default when role is unknown
 
-# Role-based Idle-Thresholds (Minuten).
-# Worker sind typisch in Minuten aktiv — laenger idle = wahrscheinlich stuck.
-# Orchestrator (Boss, Planner) delegieren und warten auf Callbacks → brauchen laenger.
+# Role-based idle thresholds (minutes).
+# Workers are typically active on the order of minutes — longer idle = likely stuck.
+# Orchestrators (Boss, Planner) delegate and wait on callbacks → need more time.
 STALE_PROGRESS_MINUTES_BY_ROLE = {
     "developer": 15,
     "reviewer": 15,
@@ -61,11 +61,11 @@ STALE_PROGRESS_MINUTES_BY_ROLE = {
 }
 
 # Circuit Breaker
-MAX_STALE_CHECKS = 3       # Max Status-Checks pro Task
+MAX_STALE_CHECKS = 3       # Max status checks per task
 
 
 def _idle_threshold_for(agent) -> int:
-    """Idle-Threshold fuer Agent.
+    """Idle threshold for an agent.
 
     Lookup priority (Phase 26, FND-06):
       1) agent.dispatch_config["idle_timeout_minutes"]    (Per-Agent Override, NEW — Migration 0097)
@@ -98,7 +98,7 @@ def _build_agent_stuck_description(
     error_summary: str,
     timeline_events: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Human-readable Beschreibung fuer agent_stuck Approvals."""
+    """Human-readable description for agent_stuck approvals."""
     parts = [f"Agent braucht Hilfe: \"{task_title}\" ({agent_name})\n"]
 
     if timeline_events:
@@ -119,19 +119,19 @@ def _build_agent_stuck_description(
 
 
 def _get_agent_timeout(agent, key: str, default: int) -> int:
-    """Agent-spezifischen Timeout lesen, Fallback auf globalen Default."""
+    """Read an agent-specific timeout, falling back to the global default."""
     cfg = getattr(agent, "dispatch_config", None)
     return cfg.get(key, default) if cfg else default
 
 
-# Per-Agent-Runtime ACK-Timeouts (REL-05).
+# Per-Agent-Runtime ACK Timeouts (REL-05).
 #
-# Konstanten statt DB — die existierende `runtimes` Tabelle (ADR-017) ist
-# fuer LLM-Runtimes (LM Studio, Ollama Cloud, Anthropic API), nicht fuer
-# agent_runtime-Typen (host / cli-bridge / openclaw). Wenn der Operator spaeter
-# UI-editierbare Werte will, kommt das in Phase 6 (Context Management).
+# Constants instead of DB — the existing `runtimes` table (ADR-017) is
+# for LLM runtimes (LM Studio, Ollama Cloud, Anthropic API), not for
+# agent_runtime types (host / cli-bridge / openclaw). If the operator later
+# wants UI-editable values, that lands in Phase 6 (Context Management).
 #
-# Lookup-Reihenfolge in _get_ack_timeout_minutes:
+# Lookup order in _get_ack_timeout_minutes:
 #   1) agent.dispatch_config["ack_timeout_minutes"]    (Per-Agent Override)
 #   2) AGENT_RUNTIME_ACK_TIMEOUTS[agent.agent_runtime] (Runtime-Default)
 #   3) _DEFAULT_ACK_TIMEOUT_MINUTES                    (Hard fallback = 5)
@@ -144,16 +144,15 @@ _DEFAULT_ACK_TIMEOUT_MINUTES = 5
 
 
 def _get_ack_timeout_minutes(agent) -> int:
-    """3-Step Lookup fuer ACK-Timeout (REL-05).
+    """3-step lookup for the ACK timeout (REL-05).
 
-    Ersetzt den frueher hardcodierten 10-Minuten Default. Die alte Konstante
-    war nicht runtime-aware — host-Agents haetten viel frueher eskalieren
-    sollen, Docker-Agents brauchen mehr Zeit fuer Cold-Start.
+    Replaces the previously hardcoded 10-minute default. The old constant
+    wasn't runtime-aware — host agents should have escalated much sooner,
+    Docker agents need more time for cold-start.
 
-    NB: Bewusst SEPARAT von _get_agent_timeout — der generische Helper wird
-    auch fuer max_stale_checks (line ~591) benutzt; eine spezialisierte
-    ACK-Funktion vermeidet dass eine zukuenftige Aenderung an einem den
-    anderen kaputt macht (RESEARCH.md Pitfall 6).
+    NB: deliberately SEPARATE from _get_agent_timeout — the generic helper is
+    also used for max_stale_checks (line ~591); a specialized ACK function
+    avoids a future change to one breaking the other (RESEARCH.md pitfall 6).
     """
     cfg = getattr(agent, "dispatch_config", None) or {}
     if isinstance(cfg, dict) and "ack_timeout_minutes" in cfg:
@@ -279,7 +278,7 @@ class TaskRunnerService:
         logger.info("Task Runner stopped")
 
     async def _run_loop(self) -> None:
-        # Grace Period: warten bis alles bereit ist
+        # Grace period: wait until everything is ready
         await asyncio.sleep(15)
         while self._running:
             try:
@@ -294,7 +293,7 @@ class TaskRunnerService:
             await asyncio.sleep(self._interval)
 
     async def _acquire_lock(self) -> bool:
-        """Redis-Lock damit nur ein Worker pro Zyklus die Checks ausfuehrt."""
+        """Redis lock so only one worker runs the checks per cycle."""
         try:
             redis = await get_redis()
             acquired = await redis.set(
@@ -317,14 +316,14 @@ class TaskRunnerService:
     # ── Dispatch ACK Pruefung ──────────────────────────────────────
 
     async def _check_dispatch_ack(self, session: AsyncSession, skip_pending: bool = False) -> None:
-        """Prueft ob dispatched Tasks vom Agent bestaetigt (ACK'd) wurden.
+        """Checks whether dispatched tasks were confirmed (ACK'd) by the agent.
 
-        Zwei Pruefungen:
-        1. ACK Timeout: dispatched_at gesetzt aber kein ack_at → Agent hat nicht bestaetigt
-        2. Dispatch Pending: assigned aber dispatched_at = null → Dispatch nicht angekommen
-           (uebersprungen im subagent-dispatch Modus)
+        Two checks:
+        1. ACK timeout: dispatched_at set but no ack_at → agent did not confirm
+        2. Dispatch pending: assigned but dispatched_at = null → dispatch never arrived
+           (skipped in subagent-dispatch mode)
 
-        Eskalation: Approval erstellen damit der Operator entscheiden kann.
+        Escalation: create an approval so the operator can decide.
         """
         result = await session.exec(
             select(Task).where(
@@ -346,9 +345,9 @@ class TaskRunnerService:
             if not agent:
                 continue
 
-            # Host-basierte FreeCode-Bridge Agents: eigene Stale-Pruefung.
-            # NICHT anwenden auf Docker-cli-bridge Agents — die haben ihren
-            # eigenen Turn-State-Check in poll.sh (lib/turn-state.sh).
+            # Host-based FreeCode-Bridge agents: own stale check.
+            # Do NOT apply to Docker cli-bridge agents — they have their
+            # own turn-state check in poll.sh (lib/turn-state.sh).
             if getattr(agent, "agent_runtime", None) == "free-code-bridge":
                 if task.dispatched_at:
                     await self._handle_cli_bridge_stale_dispatch(session, task, agent)
@@ -359,30 +358,31 @@ class TaskRunnerService:
             # determines whether the agent picked up the task, no per-agent
             # session presence check needed.
 
-            # Non-worker Agents (z.B. Planner) ueberspringen
+            # Skip non-worker agents (e.g. Planner)
             if Scope.TASKS_WRITE not in get_agent_effective_scopes(agent):
                 continue
 
             redis = await get_redis()
 
             if task.dispatched_at:
-                # ── Pruefung 1: ACK Timeout ──
+                # ── Check 1: ACK timeout ──
                 await self._handle_ack_timeout(session, task, agent, now, redis)
             elif not skip_pending:
-                # ── Pruefung 2: Dispatch Pending ──
-                # Im subagent-dispatch Modus entfaellt diese Pruefung
+                # ── Check 2: dispatch pending ──
+                # This check is skipped in subagent-dispatch mode
                 await self._handle_dispatch_pending(session, task, agent, now, redis)
 
     async def _handle_ack_timeout(
         self, session: AsyncSession, task: Task, agent: Agent, now: datetime, redis
     ) -> None:
-        """Task wurde dispatched (dispatched_at gesetzt) aber Agent hat nicht ACK'd.
+        """Task was dispatched (dispatched_at set) but the agent hasn't ACK'd.
 
-        Zwei-Stufen-Behandlung (D-1 Self-Heal):
-        1. Nach `ack_timeout/2` Min ohne ACK → silent retry: dispatch_attempt_id
-           rotieren. poll.sh sieht andere attempt_id → re-pasted automatisch.
-           Verhindert Sparky-Style 2.7h-Haenger wenn original paste verloren ging.
-        2. Nach `ack_timeout` Min ohne ACK → Eskalations-Approval an den Operator.
+        Two-stage handling (D-1 self-heal):
+        1. After `ack_timeout/2` min without ACK → silent retry: rotate
+           dispatch_attempt_id. poll.sh sees a different attempt_id → re-pastes
+           automatically. Prevents Sparky-style 2.7h hangs when the original
+           paste got lost.
+        2. After `ack_timeout` min without ACK → escalation approval to the operator.
         """
         dispatched = ensure_aware(task.dispatched_at)
         minutes_since_dispatch = (now - dispatched).total_seconds() / 60
@@ -390,19 +390,19 @@ class TaskRunnerService:
         ack_timeout = _get_ack_timeout_minutes(agent)
 
         if minutes_since_dispatch < ack_timeout:
-            # D-1 silent retry window: rotate attempt_id wenn >= ack_timeout/2
+            # D-1 silent retry window: rotate attempt_id if >= ack_timeout/2
             await self._maybe_rotate_dispatch_attempt(
                 session, task, agent, minutes_since_dispatch, redis, ack_timeout
             )
             return
 
-        # Vollstaendiger Timeout → Eskalations-Approval
-        # Deduplizierung — 24h Cooldown damit nicht mehrere Approvals erstellt werden
+        # Full timeout → escalation approval
+        # Dedup — 24h cooldown so multiple approvals aren't created
         ack_check_key = RedisKeys.dispatch_ack_check(str(task.id))
         if await redis.get(ack_check_key):
             return
 
-        # Approval erstellen statt auto-reassign
+        # Create an approval instead of auto-reassigning
         await self._create_dispatch_approval(
             session, task, agent, minutes_since_dispatch, "kein ACK nach Dispatch"
         )
@@ -422,25 +422,25 @@ class TaskRunnerService:
         redis,
         ack_timeout: float,
     ) -> bool:
-        """D-1 Self-Heal: bei ack_timeout/2 ohne ACK → dispatch_attempt_id rotieren.
+        """D-1 self-heal: rotate dispatch_attempt_id at ack_timeout/2 without an ACK.
 
-        poll.sh dedupliziert via `LAST_DISPATCHED_ATTEMPT_ID` shell-variable. Wenn
-        Backend die `dispatch_attempt_id` rotiert, sieht poll.sh beim naechsten Tick
-        eine andere attempt_id als zuletzt gepastet → triggert frischen paste-Pfad
-        ohne menschliches Eingreifen.
+        poll.sh dedupes via the `LAST_DISPATCHED_ATTEMPT_ID` shell variable. If
+        the backend rotates `dispatch_attempt_id`, poll.sh sees a different
+        attempt_id than the one it last pasted on its next tick → triggers a
+        fresh paste path without human intervention.
 
-        Dedup via Redis: pro `(task_id, original_attempt_id)` nur 1 Rotation.
-        TTL = full ack_timeout damit kein endloses Rotieren passiert.
+        Dedup via Redis: only 1 rotation per `(task_id, original_attempt_id)`.
+        TTL = full ack_timeout so no endless rotation happens.
 
-        Returns: True wenn rotiert, False wenn skipped (noch zu früh oder bereits rotiert).
+        Returns: True if rotated, False if skipped (still too early or already rotated).
         """
         rotation_threshold = ack_timeout / 2.0
         if minutes_since_dispatch < rotation_threshold:
-            return False  # Noch zu früh
+            return False  # Still too early
 
         rotated_key = f"mc:task:{task.id}:attempt_rotated"
         if await redis.get(rotated_key):
-            return False  # Bereits rotiert in diesem Dispatch-Fenster
+            return False  # Already rotated within this dispatch window
 
         import uuid as _uuid
         old_attempt_id = task.dispatch_attempt_id
@@ -478,12 +478,12 @@ class TaskRunnerService:
     async def _handle_cli_bridge_stale_dispatch(
         self, session: AsyncSession, task: Task, agent: Agent
     ) -> None:
-        """CLI-Bridge Task: pruefen ob Task in der Worker-Queue ist (pending/running).
+        """CLI-bridge task: check whether the task is in the worker queue (pending/running).
 
-        Nutzt /queue/status/{agent}/{task_id} statt tmux-Session-Suche, weil der
-        Worker-Loop keine eigenen Sessions pro Task erstellt.
-        Wenn Task pending/running → alles gut, kein Reset.
-        Wenn unknown/failed → dispatched_at zuruecksetzen fuer frischen Dispatch.
+        Uses /queue/status/{agent}/{task_id} instead of a tmux session search,
+        because the worker loop doesn't create its own session per task.
+        If pending/running → all good, no reset.
+        If unknown/failed → reset dispatched_at for a fresh dispatch.
         """
         import urllib.request
         import json as _json
@@ -496,11 +496,11 @@ class TaskRunnerService:
                 data = _json.loads(resp.read().decode())
             queue_status = data.get("status", "unknown")
             if queue_status in ("pending", "running"):
-                return  # Task ist aktiv in Queue, alles gut
+                return  # Task is active in queue, all good
         except Exception:
-            return  # Bridge nicht erreichbar → nichts tun, naechster Cycle versucht es
+            return  # Bridge unreachable → do nothing, next cycle will retry
 
-        # Task nicht in Queue → dispatched_at zuruecksetzen fuer frischen Dispatch
+        # Task not in queue → reset dispatched_at for a fresh dispatch
         task.dispatched_at = None
         session.add(task)
         await session.commit()
@@ -512,15 +512,15 @@ class TaskRunnerService:
     async def _handle_cli_bridge_inprogress_recovery(
         self, session: AsyncSession, task: Task, agent: Agent
     ) -> None:
-        """CLI-Bridge Task ist in_progress — Queue-Status pruefen und ggf. Recovery einleiten.
+        """CLI-bridge task is in_progress — check queue status and start recovery if needed.
 
-        Wenn Queue-Status pending/running → aktiv, nichts tun.
-        Wenn Queue-Status unknown/failed → Worker hat den Task verloren (Crash/Neustart).
-        Recovery: Task neu in die Queue einreihen mit kurzem Recap-Prompt.
-        Status bleibt in_progress — der Agent macht weiter, nicht von vorne.
+        If queue status is pending/running → active, do nothing.
+        If queue status is unknown/failed → the worker lost the task (crash/restart).
+        Recovery: re-enqueue the task with a short recap prompt.
+        Status stays in_progress — the agent continues, not starting over.
 
-        Greift erst nach CLI_BRIDGE_RECOVERY_MINUTES (Puffer fuer normalen Betrieb).
-        Deduplication via Redis-Key (30 Min Cooldown nach Recovery).
+        Only kicks in after CLI_BRIDGE_RECOVERY_MINUTES (buffer for normal operation).
+        Deduplication via a Redis key (30-minute cooldown after recovery).
         """
         import urllib.request
         import urllib.parse
@@ -529,7 +529,7 @@ class TaskRunnerService:
 
         CLI_BRIDGE_RECOVERY_MINUTES = 20
 
-        # Letzten Kommentar oder started_at als Zeitreferenz
+        # Last comment or started_at as the time reference
         now = utcnow()
         last_activity = ensure_aware(task.started_at or task.updated_at)
 
@@ -547,9 +547,9 @@ class TaskRunnerService:
 
         minutes_since_activity = (now - last_activity).total_seconds() / 60
         if minutes_since_activity < CLI_BRIDGE_RECOVERY_MINUTES:
-            return  # Zu frueh — normaler Betrieb, noch kein Eingriff noetig
+            return  # Too early — normal operation, no intervention needed yet
 
-        # Queue-Status abfragen
+        # Query queue status
         agent_slug = agent.name.lower().replace(" ", "-")
         try:
             url = f"{settings.free_code_bridge_url}/queue/status/{agent_slug}/{task.id}"
@@ -557,18 +557,18 @@ class TaskRunnerService:
                 data = _json.loads(resp.read().decode())
             queue_status = data.get("status", "unknown")
         except Exception:
-            return  # Bridge nicht erreichbar → kein Eingriff
+            return  # Bridge unreachable → no intervention
 
         if queue_status in ("pending", "running"):
-            return  # Task laeuft aktiv in der Queue
+            return  # Task is actively running in the queue
 
-        # Recovery noetig: queue_status ist unknown oder failed
+        # Recovery needed: queue_status is unknown or failed
         redis = await get_redis()
         recovery_key = f"mc:task_runner:cli_bridge_recovery:{task.id}"
         if await redis.get(recovery_key):
-            return  # Recovery bereits eingeleitet, Cooldown aktiv
+            return  # Recovery already started, cooldown active
 
-        # Recap-Prompt aus letzten Kommentaren aufbauen
+        # Build recap prompt from recent comments
         recap_lines = [
             f"# Recovery: {task.title}",
             "",
@@ -591,7 +591,7 @@ class TaskRunnerService:
         ]
         recap_prompt = "\n".join(recap_lines)
 
-        # Task neu in die Bridge-Queue einreihen
+        # Re-enqueue the task into the bridge queue
         workspace = task.workspace_path or "/tmp"
         try:
             payload = _json.dumps({
@@ -612,7 +612,7 @@ class TaskRunnerService:
             logger.warning("CLI-Bridge Recovery: Konnte Task nicht neu einreihen: %s", e)
             return
 
-        # Cooldown setzen (30 Min) um doppelten Recovery zu verhindern
+        # Set a cooldown (30 min) to prevent duplicate recovery
         await redis.set(recovery_key, "1", ex=1800)
 
         await emit_event(
@@ -637,25 +637,25 @@ class TaskRunnerService:
     async def _handle_dispatch_pending(
         self, session: AsyncSession, task: Task, agent: Agent, now: datetime, redis
     ) -> None:
-        """Task ist assigned aber dispatched_at = null — Nachricht nie erfolgreich gesendet."""
+        """Task is assigned but dispatched_at = null — message was never successfully sent."""
         task_updated = ensure_aware(task.updated_at)
         minutes_since_assigned = (now - task_updated).total_seconds() / 60
 
         if minutes_since_assigned < DISPATCH_PENDING_WARN_MINUTES:
-            return  # Noch frisch, Watchdog pending_dispatch liefert nach
+            return  # Still fresh, watchdog pending_dispatch will deliver it
 
         pending_key = RedisKeys.dispatch_pending_warn(str(task.id))
         if await redis.get(pending_key):
             return
 
         if minutes_since_assigned >= DISPATCH_PENDING_TIMEOUT_MINUTES:
-            # Zu lange pending → Approval erstellen statt auto-reassign
+            # Pending too long → create an approval instead of auto-reassigning
             await self._create_dispatch_approval(
                 session, task, agent, minutes_since_assigned, "Dispatch nie zugestellt"
             )
-            await redis.set(pending_key, "1", ex=86400)  # 24h Cooldown
+            await redis.set(pending_key, "1", ex=86400)  # 24h cooldown
         else:
-            # Warnung loggen (info severity — noch keine Eskalation)
+            # Log a warning (info severity — no escalation yet)
             await emit_event(
                 session,
                 "task.dispatch_pending",
@@ -664,21 +664,21 @@ class TaskRunnerService:
                 task_id=task.id,
                 agent_id=agent.id,
             )
-            await redis.set(pending_key, "1", ex=300)  # 5min Cooldown
+            await redis.set(pending_key, "1", ex=300)  # 5min cooldown
 
     async def _create_dispatch_approval(
         self, session: AsyncSession, task: Task, agent: Agent,
         minutes_waiting: float, reason: str,
     ) -> None:
-        """Approval erstellen statt auto-reassign — der Operator entscheidet.
+        """Create an approval instead of auto-reassigning — the operator decides.
 
-        D-2 fix (2026-05-14): direkter Telegram-Push an den Operator mit Inline-
-        Buttons. Vorher kam nur eine 'approval.created' Activity Event mit
-        severity=warning — landet im UI Inbox-Badge, aber wenn der Operator nicht
-        aktiv im UI ist, sieht er die Eskalation nicht. Sparky's Frontend-
-        Audit-Task hatte 09:43 eine Eskalation erstellt, der Operator hat sie erst
-        12:00 lokal bemerkt (= 2h 17min Reaktionszeit). Telegram ist der
-        Push-Kanal des Operators mit hohem Action-Required-Wert.
+        D-2 fix (2026-05-14): direct Telegram push to the operator with inline
+        buttons. Previously only an 'approval.created' activity event with
+        severity=warning was emitted — it lands in the UI inbox badge, but if
+        the operator isn't actively in the UI, they don't see the escalation.
+        Sparky's frontend audit task created an escalation at 09:43, the
+        operator only noticed it locally at 12:00 (= 2h 17min reaction time).
+        Telegram is the operator's push channel with high action-required value.
         """
         approval = Approval(
             board_id=task.board_id,
@@ -696,7 +696,7 @@ class TaskRunnerService:
         await session.commit()
         await session.refresh(approval)
 
-        # D-2: Telegram-Direct-Push (Action-Required-Channel)
+        # D-2: direct Telegram push (action-required channel)
         try:
             from app.services.telegram_bot import telegram_bot
             await telegram_bot.send_approval_telegram(
@@ -899,13 +899,13 @@ class TaskRunnerService:
     # ── In-Progress Tasks ohne Fortschritt ───────────────────────────
 
     async def _check_stale_in_progress(self, session: AsyncSession) -> None:
-        """Tasks im Status 'in_progress' die seit laengerem keinen Kommentar haben.
+        """Tasks in status 'in_progress' that haven't had a comment in a while.
 
-        Schutz-Mechanismen:
-        1. Board Leads ueberspringen — sie orchestrieren, nicht implementieren
-        2. Parent-Tasks mit aktiven Subtasks ueberspringen — warten ist normal
-        3. Circuit Breaker — nach MAX_STALE_CHECKS nicht mehr den Agent nerven,
-           sondern Eskalation als Event loggen
+        Protection mechanisms:
+        1. Skip Board Leads — they orchestrate, they don't implement
+        2. Skip parent tasks with active subtasks — waiting is normal
+        3. Circuit breaker — after MAX_STALE_CHECKS stop nagging the agent,
+           log an escalation event instead
         """
         result = await session.exec(
             select(Task).where(
@@ -927,33 +927,33 @@ class TaskRunnerService:
             if not agent:
                 continue
 
-            # ── Schutz 1: Board Leads ueberspringen ──
+            # ── Protection 1: skip Board Leads ──
             if agent.is_board_lead:
                 continue
 
-            # Non-worker Agents (z.B. Planner) ueberspringen
+            # Skip non-worker agents (e.g. Planner)
             if Scope.TASKS_WRITE not in get_agent_effective_scopes(agent):
                 continue
 
-            # ── Schutz 2: Parent-Tasks mit Subtasks ueberspringen ──
+            # ── Protection 2: skip parent tasks with subtasks ──
             subtask_result = await session.exec(
                 select(Task).where(Task.parent_task_id == task.id).limit(1)
             )
             if subtask_result.first():
                 continue
 
-            # Host-FreeCode-Bridge: Queue-Status via free_code_bridge_url.
-            # Docker-cli-bridge-Agents fallen durch in den normalen stale-Check
-            # mit role-basiertem Idle-Threshold (siehe _idle_threshold_for).
-            # Ihre Turn-State-Detection passiert zusaetzlich in poll.sh.
+            # Host FreeCode-Bridge: queue status via free_code_bridge_url.
+            # Docker cli-bridge agents fall through to the normal stale check
+            # with the role-based idle threshold (see _idle_threshold_for).
+            # Their turn-state detection additionally happens in poll.sh.
             if getattr(agent, "agent_runtime", "openclaw") == "free-code-bridge":
                 await self._handle_cli_bridge_inprogress_recovery(session, task, agent)
                 continue
 
-            # Letzten Kommentar oder started_at als Referenz nehmen
+            # Use last comment or started_at as the reference
             last_activity = ensure_aware(task.started_at or task.updated_at)
 
-            # Letzten Kommentar pruefen
+            # Check the last comment
             comments_result = await session.exec(
                 select(TaskComment)
                 .where(TaskComment.task_id == task.id)
@@ -966,9 +966,9 @@ class TaskRunnerService:
                 if comment_time > last_activity:
                     last_activity = comment_time
 
-            # ── Resolution-Erkennung: Letzter Kommentar ist "resolution" ──
-            # Agent hat Fertig gemeldet aber Status nie auf review gesetzt.
-            # Auto-Promote als Safety Net (zweite Verteidigungslinie nach Fix 1).
+            # ── Resolution detection: last comment is "resolution" ──
+            # Agent reported done but never set status to review.
+            # Auto-promote as a safety net (second line of defense after fix 1).
             # Phase 8 BUG-01: agent.auto_promote_on_resolution=False suppresses
             # this Path B auto-promote (mirror of the Path A guard in
             # agent_comments.py:292). agent already loaded at line 725.
@@ -1007,14 +1007,14 @@ class TaskRunnerService:
             if minutes_since_activity < stale_minutes:
                 continue
 
-            # Deduplizierung
+            # Deduplication
             redis = await get_redis()
             stale_key = RedisKeys.task_runner_stale(str(task.id))
             already_flagged = await redis.get(stale_key)
             if already_flagged:
                 continue
 
-            # ── Schutz 3: Circuit Breaker ──
+            # ── Protection 3: circuit breaker ──
             counter_key = RedisKeys.task_runner_stale_count(str(task.id))
             check_count = int(await redis.get(counter_key) or 0)
 
@@ -1049,7 +1049,7 @@ class TaskRunnerService:
                 continue
 
             # REC-01 (Phase 6): tiered automated recovery before falling
-            # through to the legacy "agent erinnern" reminder. If recovery
+            # through to the legacy "remind agent" reminder. If recovery
             # succeeds at any tier, skip the reminder + stale event entirely
             # (the recovery itself is the visible action). If all 4 tiers
             # fail, the recovery_failed Discord notification has already
@@ -1134,13 +1134,13 @@ class TaskRunnerService:
             # Operator holds.
             if getattr(agent, "operational_mode", "active") == "paused":
                 continue
-            # BEWUSST KEIN run_state-Skip (Incident 2026-07-02, omp-Zombie):
-            # run_state='running' ist ein Dispatch-Latch, kein Turn-Beweis —
-            # bei Silent-Abort setzt ihn niemand zurueck und der Skip
-            # entwaffnete den Watchdog in genau seinem Zielszenario. Echte
-            # Arbeit ist durch die Liveness-Schwelle geschuetzt: heartbeatende
-            # Agents refreshen last_task_activity_at und erreichen den
-            # Threshold nie; ein 25min+ stummer 'running'-Latch ist der Zombie.
+            # DELIBERATELY NO run_state skip (incident 2026-07-02, omp zombie):
+            # run_state='running' is a dispatch latch, not proof of an active
+            # turn — on a silent abort nobody resets it, and the skip disarmed
+            # the watchdog in exactly its target scenario. Genuine work is
+            # protected by the liveness threshold: heartbeating agents refresh
+            # last_task_activity_at and never reach the threshold; a silent
+            # 'running' latch for 25min+ is the zombie.
 
             # ── Idempotency (guards 15-17): skip if already handled ──
             block_key = RedisKeys.task_runner_stuck_block(str(task.id))
