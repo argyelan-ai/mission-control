@@ -286,6 +286,14 @@ For HTTPS on the tailnet, see `caddy/Caddyfile.tls.example`. This setup keeps
 MC completely unreachable from the public internet — exactly how it's meant
 to run.
 
+## Backups
+
+`./backup.sh` (or `make backup`) dumps the database **and** archives `~/.mc`
+(vault key material, agent configs, deliverables) into `./backups/`, keeping
+the last 10. Install a daily 03:00 schedule with `make backup-schedule`
+(launchd on macOS, cron on Linux). Restore the latest pair with
+`./backup.sh restore` — it recreates the database and restores `~/.mc`.
+
 ## Security notes
 
 - The backend reaches Docker only through a filtering socket-proxy

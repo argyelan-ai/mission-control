@@ -3,7 +3,7 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup up down build build-dev test test-backend test-frontend \
-        migrate logs ps seed seed-clean update
+        migrate logs ps seed seed-clean update backup backup-schedule
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -50,3 +50,9 @@ seed-clean: ## Remove the demo board
 
 update: ## Update an existing install (pull, refresh images, migrate)
 	./install.sh --update
+
+backup: ## Back up DB + ~/.mc now (keeps the last 10)
+	./backup.sh
+
+backup-schedule: ## Install a daily 03:00 automatic backup (launchd/cron)
+	./scripts/schedule-backup.sh
