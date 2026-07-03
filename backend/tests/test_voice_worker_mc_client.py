@@ -55,7 +55,7 @@ def _patch_client_get(mc, agents):
 
 
 # ────────────────────────────────────────────────────────────────────────
-# Bug C: STT-Disambiguierung — _resolve_agent_id Fuzzy-Match
+# Bug C: STT disambiguation — _resolve_agent_id fuzzy match
 # ────────────────────────────────────────────────────────────────────────
 
 
@@ -136,7 +136,7 @@ async def test_find_board_lead_none_when_no_lead(mc):
 
 @pytest.mark.asyncio
 async def test_create_task_without_assignee_routes_to_board_lead(mc, agents_fixture):
-    """Bug B: kein assignee → muss an Board Lead, NIE an creator (Jarvis) selbst."""
+    """Bug B: no assignee → must go to Board Lead, NEVER to creator (Jarvis) itself."""
     get_resp = MagicMock()
     get_resp.status_code = 200
     get_resp.json = MagicMock(return_value=agents_fixture)
@@ -164,7 +164,7 @@ async def test_create_task_without_assignee_routes_to_board_lead(mc, agents_fixt
 
 @pytest.mark.asyncio
 async def test_create_task_unknown_assignee_falls_back_to_board_lead(mc, agents_fixture):
-    """Bug B: unbekannter Name → Board Lead + erklärende Note."""
+    """Bug B: unknown name → Board Lead + explanatory note."""
     get_resp = MagicMock()
     get_resp.status_code = 200
     get_resp.json = MagicMock(return_value=agents_fixture)

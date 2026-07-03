@@ -4,12 +4,12 @@ Revision ID: 0070
 Revises: 0069
 Create Date: 2026-04-09
 
-Kontext: Feature "Per-Agent API-Key Zwischenschalter". Agent bekommt einen
-optionalen Foreign Key auf die secrets-Tabelle. Beim sync-config wird der
-zugehoerige Wert dekryptiert und als .env File in den Container geschrieben
-(docker_agent_sync.py). Nullable → Bestands-Agents bleiben funktional,
-docker-compose.yml env greift als Fallback. ON DELETE SET NULL → das
-Loeschen eines Secrets crasht keinen Agent.
+Context: feature "per-agent API key selector". Agent gets an optional
+foreign key to the secrets table. During sync-config, the associated
+value is decrypted and written as an .env file into the container
+(docker_agent_sync.py). Nullable → existing agents stay functional,
+docker-compose.yml env acts as fallback. ON DELETE SET NULL → deleting
+a secret does not crash an agent.
 """
 from alembic import op
 import sqlalchemy as sa

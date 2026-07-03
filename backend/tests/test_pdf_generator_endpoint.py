@@ -1,7 +1,7 @@
-"""Tests: `/agent/tasks/{task_id}/pdf` Endpoint + `mc pdf` CLI.
+"""Tests: `/agent/tasks/{task_id}/pdf` endpoint + `mc pdf` CLI.
 
-Unit-Tests mit gemocktem mc-playwright Sidecar. E2E-Tests gegen den echten
-Sidecar laufen separat (require docker-compose up + shared volume).
+Unit tests with a mocked mc-playwright sidecar. E2E tests against the real
+sidecar run separately (require docker-compose up + shared volume).
 """
 
 import uuid
@@ -42,7 +42,7 @@ async def _setup_agent_task():
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_happy_path_registers_deliverable(client, fake_redis):
-    """POST /pdf mit markdown → Sidecar-Call + Deliverable erstellt."""
+    """POST /pdf with markdown → sidecar call + deliverable created."""
     from app.models.deliverable import TaskDeliverable
     from sqlmodel import select
 
@@ -70,7 +70,7 @@ async def test_pdf_endpoint_happy_path_registers_deliverable(client, fake_redis)
     assert data["path"].endswith("report.pdf")
     deliv_id = data["deliverable_id"]
 
-    # Deliverable in DB persistiert
+    # Deliverable persisted in DB
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         d = await s.get(TaskDeliverable, uuid.UUID(deliv_id))
         assert d is not None
@@ -82,7 +82,7 @@ async def test_pdf_endpoint_happy_path_registers_deliverable(client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_rejects_both_markdown_and_html(client, fake_redis):
-    """markdown + html gleichzeitig → 422."""
+    """markdown + html at the same time → 422."""
     board_id, _, task_id, token = await _setup_agent_task()
     resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/pdf",
@@ -95,7 +95,7 @@ async def test_pdf_endpoint_rejects_both_markdown_and_html(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_rejects_neither_markdown_nor_html(client, fake_redis):
-    """weder markdown noch html → 422."""
+    """neither markdown nor html → 422."""
     board_id, _, task_id, token = await _setup_agent_task()
     resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/pdf",
@@ -118,7 +118,7 @@ async def test_pdf_endpoint_404_for_unknown_task(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_rejects_cross_board_agent(client, fake_redis):
-    """Agent auf anderem Board → 403."""
+    """Agent on a different board → 403."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -126,7 +126,7 @@ async def test_pdf_endpoint_rejects_cross_board_agent(client, fake_redis):
 
     board_a, _, task_a, _ = await _setup_agent_task()
 
-    # Agent auf Board B
+    # Agent on board B
     board_b = uuid.uuid4()
     other_agent_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -140,7 +140,7 @@ async def test_pdf_endpoint_rejects_cross_board_agent(client, fake_redis):
         ))
         await s.commit()
 
-    # Agent B versucht Task auf Board A zu adressieren
+    # Agent B tries to address a task on board A
     resp = await client.post(
         f"/api/v1/agent/boards/{board_a}/tasks/{task_a}/pdf",
         json={"title": "X", "markdown": "# x"},
@@ -151,7 +151,7 @@ async def test_pdf_endpoint_rejects_cross_board_agent(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_sidecar_failure_returns_503(client, fake_redis):
-    """Wenn Sidecar nicht erreichbar → 503 mit Hinweis auf docker ps."""
+    """If the sidecar is unreachable → 503 with a hint pointing to docker ps."""
     import httpx
     board_id, _, task_id, token = await _setup_agent_task()
 
@@ -170,7 +170,7 @@ async def test_pdf_endpoint_sidecar_failure_returns_503(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_pdf_endpoint_requires_tasks_write_scope(client, fake_redis):
-    """Agent ohne tasks:write → 403."""
+    """Agent without tasks:write → 403."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -185,7 +185,7 @@ async def test_pdf_endpoint_requires_tasks_write_scope(client, fake_redis):
         s.add(Agent(
             id=agent_id, name="ReadOnly", role="researcher",
             board_id=board_id, agent_token_hash=token_hash,
-            scopes=["tasks:read"],  # KEIN tasks:write
+            scopes=["tasks:read"],  # NO tasks:write
             provision_status="provisioned",
         ))
         s.add(Task(

@@ -4,11 +4,12 @@ Revision ID: 0110
 Revises: 0109
 Create Date: 2026-05-10
 
-Newsletter aggregator — Sonntags-Cron picked top 5 storyboards der Woche,
-rendert Markdown→HTML und versendet via Resend an Subscriber-Liste.
+Newsletter aggregator — Sunday cron picks the top 5 storyboards of the
+week, renders markdown→HTML, and sends it via Resend to the subscriber
+list.
 
-- newsletter_issues: ein Snapshot pro Woche
-- storyboards.pinned_for_newsletter: Operator kann manuell flaggen
+- newsletter_issues: one snapshot per week
+- storyboards.pinned_for_newsletter: operator can manually flag
 - viral_shorts_settings extensions: subscribers, sender_email, resend-key-secret-id
 """
 from typing import Sequence, Union

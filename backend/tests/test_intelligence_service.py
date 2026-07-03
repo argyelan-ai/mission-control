@@ -1,7 +1,7 @@
 """
-Unit-Tests fuer IntelligenceService Analyse-Methoden.
+Unit tests for IntelligenceService analysis methods.
 
-Testet die Kernlogik isoliert:
+Tests the core logic in isolation:
 - _analyze_task_durations()
 - _analyze_agent_performance()
 - _detect_failure_patterns()
@@ -64,7 +64,7 @@ class TestAnalyzeTaskDurations:
         board = await make_board()
         now = datetime.utcnow()
 
-        # 3 schnelle Tasks (je 5 min) + 1 langsamer (60 min)
+        # 3 quick tasks (5 min each) + 1 slow one (60 min)
         for i in range(3):
             await make_task(
                 board_id=board.id, title=f"Quick {i}", status="done",
@@ -79,7 +79,7 @@ class TestAnalyzeTaskDurations:
             svc = IntelligenceService(interval=9999)
             result = await svc._analyze_task_durations(session)
 
-        # Avg = (5+5+5+60)/4 = 18.75, Outlier-Schwelle = 37.5
+        # Avg = (5+5+5+60)/4 = 18.75, outlier threshold = 37.5
         assert len(result["outliers"]) == 1
         assert result["outliers"][0]["title"] == "Slow task"
 

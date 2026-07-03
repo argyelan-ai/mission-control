@@ -64,7 +64,7 @@ async def _make_task(
 
 @pytest.mark.asyncio
 async def test_poll_delivers_prompt_when_ack_missing(client: AsyncClient, async_session):
-    """Direkt-dispatch: task in_progress + dispatched_at set + ack_at None → new_task with prompt."""
+    """Direct dispatch: task in_progress + dispatched_at set + ack_at None → new_task with prompt."""
     board, agent, token = await _make_board_and_agent(async_session)
     now = dt.datetime.now(tz=dt.timezone.utc)
     await _make_task(
@@ -152,10 +152,10 @@ async def test_poll_working_when_ack_already_set(client: AsyncClient, async_sess
 
 @pytest.mark.asyncio
 async def test_poll_claims_inbox_task_and_sets_dispatched_at_only(client: AsyncClient, async_session):
-    """Inbox-Path (Plan 26-02 / HERM-10 F1+F3): poll claimt den Task → liefert
-    den Prompt + setzt dispatched_at, aber **status bleibt 'inbox'** und
-    **ack_at bleibt NULL**. Status flippt erst durch den expliziten Agent-PATCH
-    status:in_progress (= Migration 0018 ACK-Handshake).
+    """Inbox path (Plan 26-02 / HERM-10 F1+F3): poll claims the task → delivers
+    the prompt + sets dispatched_at, but **status stays 'inbox'** and
+    **ack_at stays NULL**. Status only flips via the agent's explicit PATCH
+    status:in_progress (= Migration 0018 ACK handshake).
     """
     board, agent, token = await _make_board_and_agent(async_session)
     task = await _make_task(
@@ -186,7 +186,7 @@ async def test_poll_claims_inbox_task_and_sets_dispatched_at_only(client: AsyncC
 
 @pytest.mark.asyncio
 async def test_poll_revert_preserves_dispatched_at_on_failure(client: AsyncClient, async_session):
-    """If prompt generation fails for a direkt-dispatched task, dispatched_at
+    """If prompt generation fails for a directly-dispatched task, dispatched_at
     stays intact so the next poll retries (instead of losing the audit trail)."""
     board, agent, token = await _make_board_and_agent(async_session)
     original_dispatched = dt.datetime(2026, 4, 19, 12, 0, 0, tzinfo=dt.timezone.utc)

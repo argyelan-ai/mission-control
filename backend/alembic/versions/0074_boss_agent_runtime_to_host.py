@@ -4,10 +4,10 @@ Revision ID: 0074
 Revises: 0073
 Create Date: 2026-04-17
 
-Boss läuft auf dem Host (claude-Binary direkt, nicht im Docker-Container).
-Setzt agent_runtime von 'cli-bridge' auf 'host', damit Backend-Services
-container-managed Agents (cli-bridge) von host-managed Agents (host)
-unterscheiden können (z.B. docker_agent_sync.py, Sessions-Endpoint).
+Boss runs on the host (claude binary directly, not in a Docker container).
+Sets agent_runtime from 'cli-bridge' to 'host' so backend services can
+distinguish container-managed agents (cli-bridge) from host-managed
+agents (host) (e.g. docker_agent_sync.py, sessions endpoint).
 
 Renamed from 0073 to 0074 during merge with main (0073 taken by
 agent_task_comment_cursor). Idempotent UPDATE — safe to re-run.

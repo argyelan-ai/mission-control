@@ -1,9 +1,10 @@
 """PDF Generator Client — Backend → mc-playwright Container /pdf Endpoint.
 
-Orchestriert Markdown/HTML → PDF via mc-playwright Service + registriert
-das PDF automatisch als TaskDeliverable. Backend-Flow spart Agents den
-lokalen puppeteer/chromium-Download-Dance der im ARM-Container via Rosetta
-x86 crasht (Incident 2026-04-23: FreeCode hing 2+h in Download-Kaskade).
+Orchestrates Markdown/HTML → PDF via the mc-playwright service and
+automatically registers the PDF as a TaskDeliverable. The backend flow
+saves agents the local puppeteer/chromium download dance that crashes in
+the ARM container via Rosetta x86 (Incident 2026-04-23: FreeCode hung for
+2+h in a download cascade).
 """
 
 from __future__ import annotations
@@ -34,10 +35,10 @@ async def generate_pdf(
     header_html: str | None = None,
     footer_html: str | None = None,
 ) -> dict:
-    """Ruft mc-playwright /pdf Endpoint. Returns raw response dict.
+    """Calls the mc-playwright /pdf endpoint. Returns raw response dict.
 
-    Entweder `markdown` ODER `html` angeben (nicht beide).
-    Gibt zurueck: {path, bytes, title, task_id, pages}
+    Provide either `markdown` OR `html` (not both).
+    Returns: {path, bytes, title, task_id, pages}
     """
     if not markdown and not html:
         raise ValueError("Entweder 'markdown' ODER 'html' muss gesetzt sein.")
@@ -61,7 +62,7 @@ async def generate_pdf(
     if footer_html:
         payload["footer_html"] = footer_html
 
-    # Timeout generous — grosse Dokumente mit externen Fonts brauchen bis 90s
+    # Timeout generous — large documents with external fonts can take up to 90s
     async with httpx.AsyncClient(timeout=120.0) as client:
         resp = await client.post(f"{PLAYWRIGHT_BASE}/pdf", json=payload)
         resp.raise_for_status()
@@ -80,12 +81,12 @@ async def generate_and_register_pdf(
     custom_css: str | None = None,
     description: str | None = None,
 ) -> TaskDeliverable:
-    """High-Level API: PDF generieren + als TaskDeliverable registrieren.
+    """High-level API: generate a PDF + register it as a TaskDeliverable.
 
-    Deliverable-Flow: Backend-zu-Backend, umgeht die Path-Prefix-Validation
-    aus dem Agent-Endpoint (der nur `/deliverables/<task_id>/` + `/shared-mcp/`
-    erlaubt). mc-playwright schreibt nach `/shared-deliverables/<task_id>/`
-    (named Volume `mc_shared_deliverables`) — analog zum visual_verifier flow.
+    Deliverable flow: backend-to-backend, bypasses the path-prefix validation
+    in the agent endpoint (which only allows `/deliverables/<task_id>/` +
+    `/shared-mcp/`). mc-playwright writes to `/shared-deliverables/<task_id>/`
+    (named volume `mc_shared_deliverables`) — analogous to the visual_verifier flow.
     """
     pdf_result = await generate_pdf(
         markdown=markdown,

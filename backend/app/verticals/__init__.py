@@ -1,15 +1,15 @@
-"""Vertical-Module — optional, strippbare Feature-Bundles (ADR-044).
+"""Vertical modules — optional, strippable feature bundles (ADR-044).
 
-Ein Vertical ist ein Unterpaket von ``app.verticals`` mit einem
-``register(app)``-Entrypoint in seinem ``__init__.py``. Die Discovery hier
-lädt jedes vorhandene Unterpaket; fehlt ein Verzeichnis (z.B. weil der
-Public-Release es strippt), bootet die App unverändert ohne das Feature.
+A vertical is a subpackage of ``app.verticals`` with a
+``register(app)`` entrypoint in its ``__init__.py``. The discovery here
+loads every subpackage that exists; if a directory is missing (e.g. because
+the public release stripped it), the app boots unchanged without that feature.
 
-Vertrag pro Vertical (siehe news_studio als Referenz):
-  - ``register(app: FastAPI) -> None`` — include_router / app.mount / Hook-
-    Registrierung. Wird einmalig beim App-Aufbau gerufen.
-  - Kopplung IN den Core ausschliesslich über ``app.verticals.hooks`` —
-    Core-Code importiert NIE direkt aus einem Vertical-Paket.
+Contract per vertical (see news_studio as reference):
+  - ``register(app: FastAPI) -> None`` — include_router / app.mount / hook
+    registration. Called once during app bootstrap.
+  - Coupling INTO the core exclusively via ``app.verticals.hooks`` —
+    core code NEVER imports directly from a vertical package.
 """
 from __future__ import annotations
 

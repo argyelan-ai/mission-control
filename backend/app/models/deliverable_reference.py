@@ -1,7 +1,7 @@
 """DeliverableReference — Cross-Project Deliverable Reuse.
 
-Ermöglicht es, ein Deliverable aus Projekt A in Projekt B zu referenzieren.
-Lose Verlinkung — kein Cascade-Delete.
+Allows referencing a deliverable from project A in project B.
+Loose linking — no cascade delete.
 """
 import uuid
 from datetime import datetime

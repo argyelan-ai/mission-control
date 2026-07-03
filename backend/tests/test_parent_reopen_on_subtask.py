@@ -1,8 +1,8 @@
-"""Parent-Reopen-Flow: Neuer Subtask unter review-Parent setzt Parent zurueck auf in_progress.
+"""Parent reopen flow: a new subtask under a review parent resets the parent back to in_progress.
 
-Real-Case: Boss approved Phase → Parent geht auf review. Danach delegiert Boss eine
-Follow-up-Arbeit via POST /tasks an Davinci. Parent haette sonst auf review gehaengt
-obwohl unten eine neue Subarbeit laeuft.
+Real case: Boss approved a phase → parent moves to review. Boss then delegates
+follow-up work via POST /tasks to Davinci. The parent would otherwise stay stuck
+on review even though new sub-work is running underneath.
 """
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.models.task import Task, TaskEvent
 
 @pytest.mark.asyncio
 async def test_reopen_helper_promotes_review_parent_to_in_progress(async_session, board_with_agents):
-    """reopen_parent_for_new_subtask setzt review-Parent auf in_progress."""
+    """reopen_parent_for_new_subtask sets a review parent to in_progress."""
     from app.services.task_lifecycle import reopen_parent_for_new_subtask
 
     board = board_with_agents["board"]
@@ -38,7 +38,7 @@ async def test_reopen_helper_promotes_review_parent_to_in_progress(async_session
     refreshed = await async_session.get(Task, parent.id)
     assert refreshed.status == "in_progress"
 
-    # Event wurde geloggt
+    # Event was logged
     events = (await async_session.exec(
         select(TaskEvent).where(TaskEvent.task_id == parent.id)
     )).all()
@@ -47,7 +47,7 @@ async def test_reopen_helper_promotes_review_parent_to_in_progress(async_session
 
 @pytest.mark.asyncio
 async def test_reopen_helper_noop_on_in_progress(async_session, board_with_agents):
-    """Parent ist schon in_progress -> helper macht nix."""
+    """Parent is already in_progress -> helper does nothing."""
     from app.services.task_lifecycle import reopen_parent_for_new_subtask
 
     board = board_with_agents["board"]
@@ -68,7 +68,7 @@ async def test_reopen_helper_noop_on_in_progress(async_session, board_with_agent
 
 @pytest.mark.asyncio
 async def test_reopen_helper_noop_on_done(async_session, board_with_agents):
-    """Parent ist done -> helper macht nix (Caller muss 422 raisen)."""
+    """Parent is done -> helper does nothing (caller must raise 422)."""
     from app.services.task_lifecycle import reopen_parent_for_new_subtask
 
     board = board_with_agents["board"]
@@ -91,7 +91,7 @@ async def test_reopen_helper_noop_on_done(async_session, board_with_agents):
 
 @pytest.mark.asyncio
 async def test_reopen_helper_clears_completed_at(async_session, board_with_agents):
-    """Wenn Parent completed_at hat (alter done-Restbestand) -> clearen beim reopen."""
+    """If the parent has completed_at set (leftover from an old done state) -> clear it on reopen."""
     from app.services.task_lifecycle import reopen_parent_for_new_subtask
     from app.utils import utcnow
 
@@ -100,7 +100,7 @@ async def test_reopen_helper_clears_completed_at(async_session, board_with_agent
     parent = Task(
         board_id=board.id, title="Feature X", status="review",
         assigned_agent_id=boss.id,
-        completed_at=utcnow(),  # altes Residuum
+        completed_at=utcnow(),  # old leftover
     )
     async_session.add(parent)
     await async_session.commit()

@@ -4,12 +4,12 @@ Revision ID: 0088
 Revises: 0087
 Create Date: 2026-04-20
 
-Nach ADR-023 entscheidet der Developer/Tester/Deployer selbst, ob ein
-Task ueber Review laeuft. `require_review_before_done` wird auf `mc-dev`
-von `True` auf `False` gestellt. Reflektion-Pflicht bleibt davon
-unberuehrt (Config-Flag `enforce_reflection`, Default True).
+Per ADR-023, the developer/tester/deployer decides for themselves whether
+a task goes through review. `require_review_before_done` is set on
+`mc-dev` from `True` to `False`. The reflection requirement is unaffected
+by this (config flag `enforce_reflection`, default True).
 
-Idempotent. Downgrade kehrt die Policy zurueck.
+Idempotent. Downgrade reverts the policy.
 """
 from alembic import op
 
@@ -21,7 +21,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Trust-by-default auf dem MC-Dev-Board: Review ist opt-in.
+    # Trust-by-default on the MC Dev board: review is opt-in.
     op.execute(
         "UPDATE boards "
         "SET require_review_before_done = FALSE "
@@ -30,7 +30,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Rueckwaerts: harter Review-Gate wieder aktiv.
+    # Reverting: hard review gate active again.
     op.execute(
         "UPDATE boards "
         "SET require_review_before_done = TRUE "

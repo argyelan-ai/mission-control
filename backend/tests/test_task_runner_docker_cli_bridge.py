@@ -1,13 +1,14 @@
-"""Docker-cli-bridge Agents nutzen NICHT den Host-free-code-bridge Recovery-Pfad.
+"""Docker cli-bridge agents must NOT use the host free-code-bridge recovery path.
 
-Vor dem Fix wurde `agent_runtime in ('free-code-bridge', 'cli-bridge')` als
-identisch behandelt. Docker-cli-bridge-Agents (davinci, cody, rex etc.) landeten
-dadurch in `_handle_cli_bridge_stale_dispatch` / `_handle_cli_bridge_inprogress_recovery`
-— beide nutzen `settings.free_code_bridge_url`, was fuer Docker-Agents irrelevant
-ist (die pollen direkt per HTTP, kein Queue-Daemon).
+Before the fix, `agent_runtime in ('free-code-bridge', 'cli-bridge')` was
+treated as identical. Docker cli-bridge agents (davinci, cody, rex etc.)
+therefore ended up in `_handle_cli_bridge_stale_dispatch` /
+`_handle_cli_bridge_inprogress_recovery` — both use
+`settings.free_code_bridge_url`, which is irrelevant for Docker agents
+(they poll directly via HTTP, no queue daemon).
 
-Nach dem Fix greift fuer Docker-cli-bridge-Agents nur noch der normale
-stale-Check mit role-basiertem _idle_threshold_for.
+After the fix, only the normal stale-check with role-based
+_idle_threshold_for applies to Docker cli-bridge agents.
 """
 
 import uuid
@@ -43,7 +44,7 @@ async def _create_cli_bridge_agent_with_task(session: AsyncSession, runtime: str
         title="Stale task",
         status="in_progress",
         assigned_agent_id=agent.id,
-        started_at=utcnow() - timedelta(hours=2),  # 2h alt — weit ueber jeden Threshold
+        started_at=utcnow() - timedelta(hours=2),  # 2h old — well past any threshold
         dispatched_at=utcnow() - timedelta(hours=2),
     )
     session.add(task)
@@ -82,7 +83,7 @@ async def _run_with_fake_redis(runner, runtime, fake_redis):
 
 @pytest.mark.asyncio
 async def test_docker_cli_bridge_skipped_in_stale_dispatch_recovery(fake_redis):
-    """Docker-cli-bridge Agent darf nicht im Host-Recovery-Pfad landen."""
+    """Docker cli-bridge agent must not end up in the host recovery path."""
     from app.services.task_runner import TaskRunnerService
     runner = TaskRunnerService()
     mock_stale, mock_recov = await _run_with_fake_redis(runner, "cli-bridge", fake_redis)
@@ -92,7 +93,7 @@ async def test_docker_cli_bridge_skipped_in_stale_dispatch_recovery(fake_redis):
 
 @pytest.mark.asyncio
 async def test_host_free_code_bridge_still_uses_recovery(fake_redis):
-    """Host free-code-bridge Agent nutzt weiterhin den Recovery-Pfad."""
+    """Host free-code-bridge agent still uses the recovery path."""
     from app.services.task_runner import TaskRunnerService
     runner = TaskRunnerService()
     mock_stale, mock_recov = await _run_with_fake_redis(runner, "free-code-bridge", fake_redis)

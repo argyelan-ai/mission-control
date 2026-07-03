@@ -1,16 +1,16 @@
-"""Einmaliges Backfill: Bestehende BoardMemory-Eintraege in Qdrant indexieren.
+"""One-time backfill: index existing BoardMemory entries into Qdrant.
 
-Usage (im backend container):
+Usage (inside the backend container):
     docker compose exec backend python -m scripts.backfill_memory_embeddings
     docker compose exec backend python -m scripts.backfill_memory_embeddings --dry-run
     docker compose exec backend python -m scripts.backfill_memory_embeddings --limit 100
     docker compose exec backend python -m scripts.backfill_memory_embeddings --force
 
-Default: Nur Memories die noch keinen Qdrant-Punkt haben (idempotent). Mit
---force werden alle re-indexed (fuer Modell-Wechsel).
+Default: only memories that don't have a Qdrant point yet (idempotent). With
+--force, all are re-indexed (for model changes).
 
-Fail-soft: Wenn Spark oder Qdrant down sind, wird weiter gemacht und am Ende
-die Anzahl Fehler berichtet.
+Fail-soft: if Spark or Qdrant are down, processing continues and the number
+of errors is reported at the end.
 """
 import argparse
 import asyncio
@@ -33,7 +33,7 @@ logger = logging.getLogger("backfill")
 
 
 async def _already_indexed(layer: str, memory_id: str) -> bool:
-    """Check ob ein Memory bereits in Qdrant-Collection ist."""
+    """Check whether a memory already exists in the Qdrant collection."""
     try:
         client = await qdrant_service._get_client()
         coll = LAYER_COLLECTIONS[layer]

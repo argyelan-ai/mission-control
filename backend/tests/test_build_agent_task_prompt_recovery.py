@@ -1,8 +1,8 @@
-"""build_agent_task_prompt liefert Recovery-Context bei re-dispatch.
+"""build_agent_task_prompt delivers recovery context on re-dispatch.
 
-Wenn ein Task bereits Kommentare (checkpoint/progress) oder Checklist-Items hat,
-muss der Prompt den Recovery-Block enthalten damit der Agent fortsetzt statt
-neu anzufangen. Bei frischem Task: kein Recovery-Block.
+If a task already has comments (checkpoint/progress) or checklist items,
+the prompt must include the recovery block so the agent resumes instead of
+starting over. For a fresh task: no recovery block.
 """
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.utils import utcnow
 
 @pytest.mark.asyncio
 async def test_fresh_task_has_no_recovery_section(async_session, board_with_agents):
-    """Frischer Task ohne History → kein Recovery-Header."""
+    """Fresh task without history → no recovery header."""
     from app.services.dispatch import build_agent_task_prompt
 
     board = board_with_agents["board"]
@@ -37,7 +37,7 @@ async def test_fresh_task_has_no_recovery_section(async_session, board_with_agen
 
 @pytest.mark.asyncio
 async def test_task_with_progress_comment_includes_recovery(async_session, board_with_agents):
-    """Task mit progress-comment → Recovery-Header + fortsetzen-Mandat im Prompt."""
+    """Task with progress comment → recovery header + resume mandate in the prompt."""
     from app.services.dispatch import build_agent_task_prompt
 
     board = board_with_agents["board"]
@@ -51,7 +51,7 @@ async def test_task_with_progress_comment_includes_recovery(async_session, board
     await async_session.commit()
     await async_session.refresh(task)
 
-    # Simuliere vorherigen Progress
+    # Simulate previous progress
     c = TaskComment(
         task_id=task.id,
         author_type="agent",
@@ -67,13 +67,13 @@ async def test_task_with_progress_comment_includes_recovery(async_session, board
 
     assert "## Recovery — Du hast hier aufgehoert" in prompt
     assert "NICHT neu an" in prompt
-    assert "Schritt 1+2 erledigt" in prompt  # vorheriger progress-content
+    assert "Schritt 1+2 erledigt" in prompt  # previous progress content
 
 
 @pytest.mark.asyncio
 async def test_task_with_only_checklist_includes_recovery(async_session, board_with_agents):
-    """Task ohne Comments aber mit Checklist-Items → Recovery-Header (Agent soll
-    Checkliste nicht neu erstellen)."""
+    """Task without comments but with checklist items → recovery header (agent should
+    not recreate the checklist)."""
     from app.services.dispatch import build_agent_task_prompt
     from app.models.checklist import TaskChecklistItem
 
@@ -106,8 +106,8 @@ async def test_task_with_only_checklist_includes_recovery(async_session, board_w
 
 @pytest.mark.asyncio
 async def test_recovery_context_shows_progress_comments(async_session, board_with_agents):
-    """Progress-comments erscheinen unter 'Letzter Fortschritt' (Workstream A4:
-    checkpoint-comments wurden zu progress migriert via Migration 0082)."""
+    """Progress comments appear under 'Letzter Fortschritt' (Workstream A4:
+    checkpoint comments were migrated to progress via Migration 0082)."""
     from app.services.dispatch import build_recovery_context
 
     board = board_with_agents["board"]

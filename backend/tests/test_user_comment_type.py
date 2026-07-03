@@ -45,7 +45,7 @@ async def _setup_user_and_task(s: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_user_post_comment_respects_feedback_type(client: AsyncClient):
-    """POST mit comment_type=feedback → response zeigt feedback (nicht message)."""
+    """POST with comment_type=feedback → response shows feedback (not message)."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, task, token = await _setup_user_and_task(s)
 
@@ -64,7 +64,7 @@ async def test_user_post_comment_respects_feedback_type(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_user_post_comment_respects_handoff_type(client: AsyncClient):
-    """Cross-Bug-Check (Bug 4 + Bug 9): handoff vom User funktioniert auch."""
+    """Cross-bug check (Bug 4 + Bug 9): handoff from the user also works."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, task, token = await _setup_user_and_task(s)
 
@@ -79,7 +79,7 @@ async def test_user_post_comment_respects_handoff_type(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_user_post_comment_default_message_when_omitted(client: AsyncClient):
-    """Backward compat: ohne comment_type → default 'message'."""
+    """Backward compat: without comment_type → default 'message'."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, task, token = await _setup_user_and_task(s)
 
@@ -94,7 +94,7 @@ async def test_user_post_comment_default_message_when_omitted(client: AsyncClien
 
 @pytest.mark.asyncio
 async def test_user_post_comment_rejects_unknown_type(client: AsyncClient):
-    """Validator schlaegt zu wenn comment_type nicht in ALL_COMMENT_TYPES ist."""
+    """Validator rejects when comment_type is not in ALL_COMMENT_TYPES."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, task, token = await _setup_user_and_task(s)
 

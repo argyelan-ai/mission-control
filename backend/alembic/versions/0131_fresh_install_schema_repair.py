@@ -4,18 +4,18 @@ Revision ID: 0131
 Revises: 0130
 Create Date: 2026-07-02
 
-Der CI fresh-boot E2E (Kette 0001→0130 auf leerer DB) deckte auf, dass
-sieben Model-Spalten historisch via App-``create_all``/Hand-SQL entstanden
-sind und in KEINER Migration existieren. Bestands-DBs haben sie längst
-(dort ist alles hier ein No-op via IF NOT EXISTS); frische Installationen
-brauchen sie, sonst bricht das erste ORM-Select auf news_articles/
-board_memory.
+The CI fresh-boot E2E (chain 0001→0130 on an empty DB) revealed that
+seven model columns historically originated via app ``create_all``/manual SQL
+and exist in NO migration. Existing DBs have had them for a long time
+(there, everything here is a no-op via IF NOT EXISTS); fresh installs
+need them, otherwise the first ORM select on news_articles/
+board_memory breaks.
 
-Typen exakt gegen eine Bestands-DB verifiziert (information_schema):
+Types verified exactly against an existing DB (information_schema):
 double precision / timestamptz / uuid / text / varchar.
 
-Bewusst NICHT enthalten: das Autogenerate-Rauschen (Index-/Constraint-/
-server_default-Diffs) — kein Verhalten, nur Metadaten-Kosmetik.
+Deliberately NOT included: the autogenerate noise (index/constraint/
+server_default diffs) — no behavior, just metadata cosmetics.
 """
 import sqlalchemy as sa
 from alembic import op
@@ -45,6 +45,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Nur auf frischen DBs sinnvoll rückrollbar; auf Bestands-DBs würden
-    # hier historische Daten fallen — bewusst konservativ: no-op.
+    # Only meaningfully reversible on fresh DBs; on existing DBs this
+    # would drop historical data — deliberately conservative: no-op.
     pass

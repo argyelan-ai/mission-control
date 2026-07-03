@@ -1,19 +1,19 @@
 """Recycler-Config Helpers — Two-Tier Kill-Switch for MEM-01 (Phase 3).
 
 Mirrors the `_get_ack_timeout_minutes` shape (task_runner.py:131-149) but
-scoped to the recycler boolean. Lookup-Reihenfolge:
+scoped to the recycler boolean. Lookup order:
   1) agent.recycler_enabled is True   → True  (per-agent explicit enable)
   2) agent.recycler_enabled is False  → False (per-agent disable)
   3) agent.recycler_enabled is None   → settings.agent_recycler_enabled (global)
 
-Aufrufer (Plan 03-04):
-  - docker_agent_sync.py: rendert das Ergebnis als AGENT_RECYCLER_ENABLED line in agent.env
-  - internal.py agent_bootstrap: gibt das Ergebnis als bootstrap key zurueck
+Callers (Plan 03-04):
+  - docker_agent_sync.py: renders the result as the AGENT_RECYCLER_ENABLED line in agent.env
+  - internal.py agent_bootstrap: returns the result as a bootstrap key
 
-Phase-3 Boundary: kein Class, keine async ops, keine DB-Queries. Reine
-Funktion ueber agent + settings. Tests in test_recycler_helper.py.
+Phase-3 boundary: no class, no async ops, no DB queries. Pure
+function over agent + settings. Tests in test_recycler_helper.py.
 
-Siehe auch ADR-024 (Claude-Process Recycling).
+See also ADR-024 (Claude-process recycling).
 """
 from __future__ import annotations
 

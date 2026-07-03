@@ -1,20 +1,20 @@
-"""Bug 17 — Stale-Check Auto-Promote darf nur auf Agent-Resolutions feuern.
+"""Bug 17 — Stale-check auto-promote must only fire on agent resolutions.
 
-`comment_type="resolution"` ist polysem in der Codebase:
-- `agent_comments.py` schreibt es bei Agent-Fertig-Meldungen (`author_type="agent"`)
-- `approvals.py` schreibt es bei User-Klaerungs-Antworten / Blocker-Resolves
+`comment_type="resolution"` is polysemous in the codebase:
+- `agent_comments.py` writes it for agent completion reports (`author_type="agent"`)
+- `approvals.py` writes it for user clarification answers / blocker resolves
   (`author_type="user"`)
 
-Vor dem Fix wertete `task_runner._check_stale_in_progress` nur `comment_type`
-aus und promotete deshalb auch User-Antworten faelschlich auf `review`.
-Live-Bug 2026-05-13 ~22:00: Task `c9fbe9cb` (Voice-Foundation) ging auf
-review nachdem eine clarification-resolve geschrieben wurde, obwohl Sparky
-die Arbeit noch nicht fertig hatte.
+Before the fix, `task_runner._check_stale_in_progress` only checked
+`comment_type` and therefore also incorrectly promoted user answers to
+`review`. Live bug 2026-05-13 ~22:00: task `c9fbe9cb` (Voice-Foundation)
+went to review after a clarification-resolve was written, even though
+Sparky hadn't actually finished the work yet.
 
-Zwei Tests:
-1. User-Resolution darf NICHT auto-promoten (Regression-Schutz).
-2. Agent-Resolution muss weiterhin auto-promoten (Inverse-Schutz, damit der
-   Phase-8 BUG-01 Safety-Net Path B nicht versehentlich kaputtgeht).
+Two tests:
+1. User resolution must NOT auto-promote (regression guard).
+2. Agent resolution must still auto-promote (inverse guard, so the
+   Phase-8 BUG-01 safety net Path B doesn't accidentally break).
 """
 
 import uuid
@@ -27,8 +27,8 @@ from tests.conftest import test_engine
 
 
 async def _create_test_data(session, *, auto_promote: bool = True):
-    """Board + Worker-Agent + in_progress Task. Comment wird vom Test
-    angelegt, damit author_type pro Test variieren kann."""
+    """Board + worker agent + in_progress task. The comment is created by
+    the test so author_type can vary per test."""
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.board import Board
@@ -72,18 +72,18 @@ async def _create_test_data(session, *, auto_promote: bool = True):
 
 @pytest.mark.asyncio
 async def test_user_resolution_does_not_trigger_stale_promote(fake_redis):
-    """Bug 17 regression: User-Klaerungs-Antworten (approvals.py setzt
-    `author_type="user"`, `comment_type="resolution"`) duerfen den Stale-
-    Check Auto-Promote NICHT triggern, auch wenn `auto_promote_on_resolution`
-    aktiv ist."""
+    """Bug 17 regression: user clarification answers (approvals.py sets
+    `author_type="user"`, `comment_type="resolution"`) must NOT trigger the
+    stale-check auto-promote, even when `auto_promote_on_resolution`
+    is active."""
     from app.models.task import Task, TaskComment
     from app.services.task_runner import TaskRunnerService
     from app.utils import utcnow
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         _board, _agent, task = await _create_test_data(s, auto_promote=True)
-        # Simuliere clarification-resolve: User-Antwort als resolution-Comment.
-        # Identisch zu approvals.py:355-365.
+        # Simulate a clarification-resolve: user answer as a resolution comment.
+        # Identical to approvals.py:355-365.
         s.add(TaskComment(
             task_id=task.id,
             author_type="user",
@@ -109,8 +109,8 @@ async def test_user_resolution_does_not_trigger_stale_promote(fake_redis):
 
 @pytest.mark.asyncio
 async def test_agent_resolution_still_triggers_stale_promote(fake_redis):
-    """Inverse-Schutz: Agent-Resolution-Comments triggern den Phase-8 BUG-01
-    Safety-Net Path B weiterhin (Stale-Check Auto-Promote)."""
+    """Inverse guard: agent resolution comments still trigger the Phase-8
+    BUG-01 safety net Path B (stale-check auto-promote)."""
     from app.models.task import Task, TaskComment
     from app.services.task_runner import TaskRunnerService
     from app.utils import utcnow

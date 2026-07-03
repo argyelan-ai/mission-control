@@ -1,11 +1,11 @@
 """
-Watchdog Service — Periodische Ueberwachung aller kritischen Komponenten.
+Watchdog Service — periodic monitoring of all critical components.
 
-Aufgeteilt in:
-- core.py: WatchdogService Orchestrator (start, stop, check_all)
-- session_monitor.py: Session-bezogene Checks (Recovery, Health, Tokens)
-- task_monitor.py: Task-bezogene Checks (Phasen, Queues, Dispatches)
-- health_checks.py: System- und Agent-Health Checks
+Split into:
+- core.py: WatchdogService orchestrator (start, stop, check_all)
+- session_monitor.py: session-related checks (recovery, health, tokens)
+- task_monitor.py: task-related checks (phases, queues, dispatches)
+- health_checks.py: system and agent health checks
 """
 
 from app.services.watchdog.core import WatchdogService

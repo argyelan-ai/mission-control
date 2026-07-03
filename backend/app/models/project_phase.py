@@ -1,7 +1,7 @@
-"""ProjectPhase — Phase innerhalb eines Projekts.
+"""ProjectPhase — phase within a project.
 
-Eine Phase gruppiert Tasks und hat eigene Dependencies, Git-Branch,
-und optionale Approval-Gates.
+A phase groups tasks and has its own dependencies, git branch,
+and optional approval gates.
 """
 import uuid
 from datetime import datetime

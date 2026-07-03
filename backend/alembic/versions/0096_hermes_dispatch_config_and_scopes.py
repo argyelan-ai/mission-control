@@ -4,20 +4,21 @@ Revision ID: 0096_hermes_dispatch_scopes
 Revises: 0095
 Create Date: 2026-04-30
 
-Phase 25 (D-11 + D-14): Hermes-Agent bekommt
-- Developer-Default-Scopes (gleicher Set wie Cody) -> autorisiert PATCH status,
+Phase 25 (D-11 + D-14): Hermes agent gets
+- Developer default scopes (same set as Cody) -> authorizes PATCH status,
   comments, git, knowledge/memory r/w, project r/w, tasks:help, credentials:read.
-- dispatch_config['ack_timeout_minutes']=15 -> Per-Agent-Override greift vor
-  AGENT_RUNTIME_ACK_TIMEOUTS['host']=5 (Boss bleibt bei 5min, nur Hermes ist 15min).
+- dispatch_config['ack_timeout_minutes']=15 -> per-agent override takes
+  precedence over AGENT_RUNTIME_ACK_TIMEOUTS['host']=5 (Boss stays at 5min,
+  only Hermes is 15min).
 
 Idempotent: re-running converges. No-op if Hermes row missing (logged WARN).
 
-Source-of-truth fuer HERMES_DEVELOPER_SCOPES: backend/app/scopes.py
+Source of truth for HERMES_DEVELOPER_SCOPES: backend/app/scopes.py
 DEFAULT_SCOPES[AgentRole.DEVELOPER] as of repo HEAD 3c7d7320 (2026-04-30).
 Hardcoded here intentionally so the migration is self-contained and survives
 any future scopes.py refactor -- D-14 locks the Cody-equivalent set as the
-contract. Falls scopes.py spaeter Developer-Scopes erweitert, ist eine neue
-Migration noetig (nicht dieser Edit).
+contract. If scopes.py later extends the developer scopes, a new migration
+will be needed (not this edit).
 """
 from __future__ import annotations
 

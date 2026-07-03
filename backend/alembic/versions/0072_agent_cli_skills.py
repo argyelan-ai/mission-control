@@ -4,12 +4,12 @@ Revision ID: 0072
 Revises: 0071
 Create Date: 2026-04-12
 
-Per-Agent Custom-Skill Allowlist fuer Docker-Agents.
-Gleiche Semantik wie cli_plugins:
-  null = alle Skills, [] = keine, ["mc-debug", "mc-tdd"] = nur diese.
+Per-agent custom skill allowlist for Docker agents.
+Same semantics as cli_plugins:
+  null = all skills, [] = none, ["mc-debug", "mc-tdd"] = only these.
 
-Skills leben in ~/.openclaw/skills/ und werden als echte Kopien
-in agent claude-config/skills/ synchronisiert.
+Skills live in ~/.openclaw/skills/ and are synced as real copies
+into agent claude-config/skills/.
 """
 
 from alembic import op

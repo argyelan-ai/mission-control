@@ -1,19 +1,19 @@
 """
-Built-in Scheduled Jobs anlegen (idempotent via INSERT ON CONFLICT DO NOTHING).
-Wird beim Startup aufgerufen.
+Create built-in scheduled jobs (idempotent via INSERT ON CONFLICT DO NOTHING).
+Called on startup.
 
-Stand 2026-05-19: BUILTIN_JOBS ist absichtlich leer.
-Die ursprünglichen Built-in Jobs (Session Reset Daily, AI Tech Digest, GitHub Monitor,
-und ein Morning Briefing das von "Henry" hätte gestartet werden sollen) basierten auf
-der pre-Phase-28-Architektur und nutzten Legacy-action_types (`session_reset`, `chat_send`),
-die der Scheduler heute nur noch als "no longer supported" loggt.
-Seed-Bug (AsyncSession.exec()/execute() API-Mismatch, ebenfalls 2026-05-19 gefixt) hatte den
-Seeder ohnehin seit langem ergebnislos abbrechen lassen — die Jobs existierten nie in
-laufenden Setups. Der Operator legt seine echten Jobs (z.B. das aktive "Morning Briefing" mit
-action_type=create_task) über die UI / API an.
+As of 2026-05-19: BUILTIN_JOBS is intentionally empty.
+The original built-in jobs (Session Reset Daily, AI Tech Digest, GitHub Monitor,
+and a Morning Briefing that was supposed to be started by "Henry") were based on
+the pre-Phase-28 architecture and used legacy action_types (`session_reset`, `chat_send`),
+which the scheduler today only logs as "no longer supported".
+A seed bug (AsyncSession.exec()/execute() API mismatch, also fixed 2026-05-19) had
+caused the seeder to abort without result for a long time anyway — the jobs never
+existed in running setups. The operator creates their real jobs (e.g. the active
+"Morning Briefing" with action_type=create_task) via the UI / API.
 
-Wenn neue Built-in Jobs benötigt werden: action_type muss "create_task" oder
-"run_meeting" sein, agent_name darf nicht auf retired Agents zeigen.
+If new built-in jobs are needed: action_type must be "create_task" or
+"run_meeting", agent_name must not point to retired agents.
 """
 import logging
 import uuid
@@ -28,11 +28,11 @@ BUILTIN_JOBS: list[dict] = []
 
 
 async def seed_builtin_jobs(session: AsyncSession) -> None:
-    """Built-in Jobs anlegen — INSERT ON CONFLICT DO NOTHING (echter Upsert).
+    """Create built-in jobs — INSERT ON CONFLICT DO NOTHING (a real upsert).
 
-    Nutzt session.execute() statt session.exec() für parametrisiertes Raw-SQL:
-    SQLModel.AsyncSession.exec() akzeptiert nur 1 Argument (das Statement),
-    während SQLAlchemy's execute() den (stmt, params)-Aufruf unterstützt.
+    Uses session.execute() instead of session.exec() for parameterized raw SQL:
+    SQLModel.AsyncSession.exec() only accepts 1 argument (the statement),
+    while SQLAlchemy's execute() supports the (stmt, params) call.
     """
     for job_data in BUILTIN_JOBS:
         await session.execute(

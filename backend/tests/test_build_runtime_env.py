@@ -1,9 +1,9 @@
 """Phase 16 — Tests for build_runtime_env helper.
 
-D-14: Anthropic-Runtime → CLAUDE_CODE_OAUTH_TOKEN, KEINE OPENAI_*-Keys.
+D-14: Anthropic runtime → CLAUDE_CODE_OAUTH_TOKEN, NO OPENAI_*-keys.
 D-15: openclaude/lmstudio/vllm/openai_compatible/unsloth → OPENAI_BASE_URL + OPENAI_MODEL.
-D-16: ollama-cloud → OPENAI-Shim Pfad (slug startet nicht mit anthropic-claude-).
-D-17: Helper extrahiert aus internal.py — testbar.
+D-16: ollama-cloud → OPENAI shim path (slug does not start with anthropic-claude-).
+D-17: Helper extracted from internal.py — testable.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -14,7 +14,7 @@ from app.models.runtime import Runtime
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_anthropic(async_session):
-    """Anthropic Slug → CLAUDE_CODE_OAUTH_TOKEN, keine OPENAI_*-Keys (D-14)."""
+    """Anthropic slug → CLAUDE_CODE_OAUTH_TOKEN, no OPENAI_*-keys (D-14)."""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -39,7 +39,7 @@ async def test_build_runtime_env_anthropic(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_openai_shim(async_session):
-    """Nicht-anthropic Runtime → OPENAI_BASE_URL + OPENAI_MODEL (D-15)."""
+    """Non-anthropic runtime → OPENAI_BASE_URL + OPENAI_MODEL (D-15)."""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -60,7 +60,7 @@ async def test_build_runtime_env_openai_shim(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_ollama_cloud_uses_shim(async_session):
-    """ollama-cloud (Slug startet NICHT mit anthropic-claude-) → OPENAI-Shim (D-16)."""
+    """ollama-cloud (slug does NOT start with anthropic-claude-) → OPENAI shim (D-16)."""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -81,7 +81,7 @@ async def test_build_runtime_env_ollama_cloud_uses_shim(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_disabled_or_none_returns_empty(async_session):
-    """runtime=None oder enabled=False → leeres dict."""
+    """runtime=None or enabled=False → empty dict."""
     from app.routers.internal import build_runtime_env
 
     env_none = await build_runtime_env(None, async_session)
@@ -101,7 +101,7 @@ async def test_build_runtime_env_disabled_or_none_returns_empty(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_no_model_identifier(async_session):
-    """Kein model_identifier (NULL) → OPENAI_BASE_URL gesetzt, OPENAI_MODEL fehlt."""
+    """No model_identifier (NULL) → OPENAI_BASE_URL set, OPENAI_MODEL missing."""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(

@@ -1,11 +1,11 @@
-"""Tests: Deliverable-Bild-Auslieferung."""
+"""Tests: deliverable image delivery."""
 import uuid
 import pytest
 
 
 @pytest.mark.anyio
 async def test_deliverable_image_not_found(auth_client, make_board, make_task):
-    """404 wenn Deliverable nicht existiert."""
+    """404 if the deliverable doesn't exist."""
     board = await make_board()
     task = await make_task(board.id)
     fake_id = str(uuid.uuid4())
@@ -17,7 +17,7 @@ async def test_deliverable_image_not_found(auth_client, make_board, make_task):
 
 @pytest.mark.anyio
 async def test_deliverable_image_wrong_type(auth_client, make_board, make_task, make_agent, session):
-    """400 wenn Deliverable kein Screenshot ist."""
+    """400 if the deliverable is not a screenshot."""
     from app.models.deliverable import TaskDeliverable
     board = await make_board()
     agent = await make_agent(board_id=board.id)
@@ -42,7 +42,7 @@ async def test_deliverable_image_wrong_type(auth_client, make_board, make_task, 
 
 @pytest.mark.anyio
 async def test_deliverable_image_file_missing(auth_client, make_board, make_task, make_agent, session):
-    """404 wenn Bild-Datei nicht existiert."""
+    """404 if the image file doesn't exist."""
     from app.models.deliverable import TaskDeliverable
     board = await make_board()
     agent = await make_agent(board_id=board.id)

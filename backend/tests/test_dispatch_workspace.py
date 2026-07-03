@@ -6,7 +6,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_non_code_task_gets_workspace_directory(tmp_path):
-    """Non-Code-Task bekommt ein _tasks/{id}/ Verzeichnis."""
+    """A non-code task gets a _tasks/{id}/ directory."""
     from app.services.dispatch import _ensure_task_workspace
 
     task_id = uuid.uuid4()
@@ -22,7 +22,7 @@ async def test_non_code_task_gets_workspace_directory(tmp_path):
 
 @pytest.mark.asyncio
 async def test_workspace_path_idempotent(tmp_path):
-    """Gleicher Task = gleicher Workspace-Pfad, auch wenn zweimal aufgerufen."""
+    """Same task = same workspace path, even when called twice."""
     from app.services.dispatch import _ensure_task_workspace
 
     task_id = uuid.uuid4()
@@ -34,7 +34,7 @@ async def test_workspace_path_idempotent(tmp_path):
 
 @pytest.mark.asyncio
 async def test_git_project_skips_workspace_creation(tmp_path):
-    """Wenn Projekt ein GitHub-Repo hat, wird kein _tasks/ Verzeichnis erstellt."""
+    """If the project has a GitHub repo, no _tasks/ directory is created."""
     from unittest.mock import MagicMock
     from app.services.dispatch import _ensure_task_workspace
 
@@ -49,7 +49,7 @@ async def test_git_project_skips_workspace_creation(tmp_path):
 
 @pytest.mark.asyncio
 async def test_fallback_to_tmp_when_no_agent_workspace():
-    """Wenn kein agent_workspace, Fallback auf /tmp/mc_tasks/{id}/."""
+    """If there's no agent_workspace, fall back to /tmp/mc_tasks/{id}/."""
     from app.services.dispatch import _ensure_task_workspace
     import shutil
 
@@ -68,10 +68,10 @@ async def test_fallback_to_tmp_when_no_agent_workspace():
 
 @pytest.mark.asyncio
 async def test_permission_error_returns_none_instead_of_raising(monkeypatch):
-    """Backend-Container hat oft kein Mount auf den Host-Workspace-Pfad
-    (z.B. /Users/testuser/Workspace). Wenn os.makedirs PermissionError wirft,
-    soll _ensure_task_workspace None zurückgeben, damit auto_dispatch_task
-    weiter läuft — nicht crashen."""
+    """The backend container often has no mount to the host workspace path
+    (e.g. /Users/testuser/Workspace). If os.makedirs raises PermissionError,
+    _ensure_task_workspace should return None so auto_dispatch_task
+    keeps running — not crash."""
     from app.services import dispatch
 
     def _denied(*args, **kwargs):
@@ -89,8 +89,8 @@ async def test_permission_error_returns_none_instead_of_raising(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_oserror_returns_none_instead_of_raising(monkeypatch):
-    """Generelle OSError (z.B. ReadOnly Filesystem) soll auch geschluckt werden —
-    Workspace ist Nice-to-Have, kein Hard-Requirement."""
+    """A general OSError (e.g. read-only filesystem) should also be swallowed —
+    the workspace is a nice-to-have, not a hard requirement."""
     from app.services import dispatch
 
     def _readonly(*args, **kwargs):

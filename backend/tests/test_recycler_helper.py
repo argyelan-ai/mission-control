@@ -7,7 +7,7 @@ Pattern: mock app.services.recycler_config.settings + FakeAgent class —
 mirrors test_ack_timeout_per_runtime.py shape. Per-agent override wins
 when not None; None falls back to settings.agent_recycler_enabled.
 
-Lookup-Reihenfolge:
+Lookup order:
   1. agent.recycler_enabled is False → False (per-agent disable)
   2. agent.recycler_enabled is True  → True  (per-agent explicit enable)
   3. agent.recycler_enabled is None  → settings.agent_recycler_enabled (global)
@@ -28,7 +28,7 @@ def _import_helper():
 
 
 def test_per_agent_false_overrides_global():
-    """Per-Agent agent.recycler_enabled=False schlaegt global True."""
+    """Per-agent agent.recycler_enabled=False overrides global True."""
     helper = _import_helper()
 
     class FakeAgent:
@@ -40,7 +40,7 @@ def test_per_agent_false_overrides_global():
 
 
 def test_per_agent_true_overrides_global_false():
-    """Per-Agent agent.recycler_enabled=True schlaegt global False (explicit opt-in)."""
+    """Per-agent agent.recycler_enabled=True overrides global False (explicit opt-in)."""
     helper = _import_helper()
 
     class FakeAgent:

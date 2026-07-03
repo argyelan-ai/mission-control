@@ -4,19 +4,19 @@ Revision ID: 0124
 Revises: 0123
 Create Date: 2026-05-17
 
-Routing-Regel "wer dispatcht, der sendet" — Subtasks (parent_task_id NOT NULL)
-duerfen normalerweise KEIN `mc telegram` direkt an den Operator senden. Der
-Orchestrator (Boss) konsolidiert + sendet die finale Nachricht. Vor diesem
-Patch sendete sowohl Researcher (als Subtask-Worker) als auch Boss (als
-Orchestrator) — doppelter Telegram-Hit beim User.
+Routing rule "whoever dispatches, sends" — subtasks (parent_task_id NOT NULL)
+normally must NOT send `mc telegram` directly to the operator. The
+orchestrator (Boss) consolidates + sends the final message. Before this
+patch, both the researcher (as subtask worker) and Boss (as orchestrator)
+sent — a duplicate Telegram hit for the user.
 
-Diese Migration fuegt das Override-Flag fuer den Edge-Case
-"long-running Watch-Task" hinzu: Boss kann im Subtask-Brief
-autonomous_telegram=True setzen, dann darf der Worker selbst senden
-(z.B. "beobachte Argyelan-Channel und melde Kommentare").
+This migration adds the override flag for the edge case
+"long-running watch task": Boss can set autonomous_telegram=True
+in the subtask brief, then the worker is allowed to send itself
+(e.g. "watch the Argyelan channel and report comments").
 
-Standalone-Tasks (parent_task_id IS NULL, z.B. Morning Briefing,
-Scheduled) bleiben unberuehrt — der Worker IST der Dispatcher dort.
+Standalone tasks (parent_task_id IS NULL, e.g. Morning Briefing,
+Scheduled) remain unaffected — the worker IS the dispatcher there.
 """
 from __future__ import annotations
 

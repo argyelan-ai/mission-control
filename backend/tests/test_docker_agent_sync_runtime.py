@@ -281,8 +281,8 @@ def test_env_value_clean_passes_through():
 
 
 def test_restart_respawn_window_only_calls_helper_not_restart():
-    """respawn_window_only=True → _respawn_agent_window aufgerufen, kein
-    docker restart, kein docker compose up."""
+    """respawn_window_only=True → _respawn_agent_window is called, no
+    docker restart, no docker compose up."""
     from app.services.docker_agent_sync import restart_docker_agent_container
 
     agent = Agent(name="Sparky", agent_runtime="cli-bridge")
@@ -303,7 +303,7 @@ def test_restart_respawn_window_only_calls_helper_not_restart():
 
 
 def test_restart_respawn_window_only_wins_over_force_recreate():
-    """force_recreate=True UND respawn_window_only=True → respawn-Pfad gewinnt."""
+    """force_recreate=True AND respawn_window_only=True → the respawn path wins."""
     from app.services.docker_agent_sync import restart_docker_agent_container
 
     agent = Agent(name="Davinci", agent_runtime="cli-bridge")
@@ -321,13 +321,13 @@ def test_restart_respawn_window_only_wins_over_force_recreate():
         )
 
     helper_mock.assert_called_once_with(agent)
-    # Kein docker compose up --force-recreate erreicht
+    # docker compose up --force-recreate is never reached
     run_mock.assert_not_called()
     assert result["mode"] == "respawn"
 
 
 def test_restart_default_unchanged_backward_compat():
-    """Ohne neue Flags: docker restart Pfad wie bisher (Backward-Compat)."""
+    """Without the new flags: docker restart path as before (backward compat)."""
     from app.services.docker_agent_sync import restart_docker_agent_container
 
     agent = Agent(name="Rex", agent_runtime="cli-bridge")
@@ -347,7 +347,7 @@ def test_restart_default_unchanged_backward_compat():
 
 @pytest.mark.asyncio
 async def test_wait_for_agent_healthy_respawn_mode_uses_window_ready():
-    """respawn_mode=True → _wait_for_window_ready aufgerufen, docker inspect skipped."""
+    """respawn_mode=True → _wait_for_window_ready is called, docker inspect skipped."""
     from app.services.docker_agent_sync import wait_for_agent_healthy
 
     agent = Agent(name="Neo", agent_runtime="cli-bridge")
@@ -371,7 +371,7 @@ async def test_wait_for_agent_healthy_respawn_mode_uses_window_ready():
 
 @pytest.mark.asyncio
 async def test_wait_for_agent_healthy_default_unchanged_backward_compat():
-    """Ohne respawn_mode: docker inspect Loop (Backward-Compat)."""
+    """Without respawn_mode: docker inspect loop (backward compat)."""
     from app.services.docker_agent_sync import wait_for_agent_healthy
 
     agent = Agent(name="Tester", agent_runtime="cli-bridge")

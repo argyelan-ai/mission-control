@@ -4,7 +4,7 @@ Revision ID: 0020
 Revises: 0019
 Create Date: 2026-03-01
 
-Neue Tabelle: scheduled_jobs fuer den Cron-Scheduler.
+New table: scheduled_jobs for the cron scheduler.
 """
 from alembic import op
 import sqlalchemy as sa

@@ -1,20 +1,20 @@
 """Runtime-Context Helpers — Workspace-Path Translation + Session-Reset Recap.
 
-Konsolidiert Logik die sonst in dispatch.py / agent_scoped.py / watchdog
-verstreut waere. Phase 4 wird dieses Modul zu services/work_context.py
-expandieren (siehe ROADMAP § Phase 4 / D-13). Bis dahin: kleines, fokussiertes
-Modul mit zwei oeffentlichen Funktionen.
+Consolidates logic that would otherwise be scattered across dispatch.py /
+agent_scoped.py / watchdog. Phase 4 will expand this module into
+services/work_context.py (see ROADMAP § Phase 4 / D-13). Until then: a
+small, focused module with two public functions.
 
-Aufrufer (Phase 1 Plan 04 + Plan 05):
-  - dispatch.py: workspace_path_for_runtime an Zeilen 955, 1751, 1783 (Plan 04)
-  - dispatch.py: get_session_context_for_runtime an Zeile 2368 (Plan 05)
-  - watchdog/session_monitor.py: get_session_context_for_runtime an Zeilen 254, 636 (Plan 05)
-  - watchdog/task_monitor.py: get_session_context_for_runtime an Zeilen 735, 830, 892, 1442 (Plan 05)
+Callers (Phase 1 Plan 04 + Plan 05):
+  - dispatch.py: workspace_path_for_runtime at lines 955, 1751, 1783 (Plan 04)
+  - dispatch.py: get_session_context_for_runtime at line 2368 (Plan 05)
+  - watchdog/session_monitor.py: get_session_context_for_runtime at lines 254, 636 (Plan 05)
+  - watchdog/task_monitor.py: get_session_context_for_runtime at lines 735, 830, 892, 1442 (Plan 05)
 
-Phase-1 Scope-Boundary (RESEARCH.md): nur 3 + 7 = 10 von 11+ bekannten
-Call-Sites werden in Phase 1 migriert. Die restlichen 4 (meeting_service.py,
-tasks.py:1330, agents.py:980, install_executor.py:607) gehen in Phase 4
-zusammen mit dem dispatch.py / agent_scoped.py Split.
+Phase-1 scope boundary (RESEARCH.md): only 3 + 7 = 10 of 11+ known
+call sites are migrated in Phase 1. The remaining 4 (meeting_service.py,
+tasks.py:1330, agents.py:980, install_executor.py:607) go into Phase 4
+together with the dispatch.py / agent_scoped.py split.
 """
 from __future__ import annotations
 
@@ -74,9 +74,9 @@ def workspace_path_for_runtime(
 class SessionContext:
     """Result of get_session_context_for_runtime() (Plan 05).
 
-    Encodes ABSOLUTE VERBOTE (CLAUDE.md): wenn reset_required=True, MUSS
-    recovery_recap non-empty sein (sonst Warnung im Log). Niemals Reset +
-    truncated Prompt.
+    Encodes ABSOLUTE VERBOTE (CLAUDE.md): if reset_required=True,
+    recovery_recap MUST be non-empty (otherwise a warning in the log). Never
+    reset + truncated prompt.
     """
     reset_required: bool
     recovery_recap: str | None

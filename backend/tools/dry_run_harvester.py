@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Dry-Run des Token-Harvesters — zeigt Summen ohne DB-Insert.
+"""Dry run of the token harvester — shows sums without DB insert.
 
-Verwendung:
+Usage:
     python3 backend/tools/dry_run_harvester.py
 
-Oder mit spezifischen Pfaden:
+Or with specific paths:
     python3 backend/tools/dry_run_harvester.py ~/.mc/agents/rex/claude-config/projects ~/.claude/projects
 
-Was es macht:
-- Liest alle *.jsonl unter den angegebenen Pfaden
-- Parst alle assistant-Zeilen (gleiche Logik wie der echte Harvester)
-- Gibt Summen aus: Dateien, Zeilen, Token, Modell-Verteilung
-- Ohne DB — kein Insert, keine Seiteneffekte
+What it does:
+- Reads all *.jsonl files under the given paths
+- Parses all assistant lines (same logic as the real harvester)
+- Prints sums: files, lines, tokens, model distribution
+- No DB — no insert, no side effects
 """
 import json
 import sys
 from collections import defaultdict
 from pathlib import Path
 
-# Sicherstellen dass app/ im Pfad ist
+# Make sure app/ is on the path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from app.services.token_harvester import parse_transcript_line, _should_attribute_boss_path
@@ -59,7 +59,7 @@ def scan_paths(base_paths: list[str]) -> None:
                         except json.JSONDecodeError:
                             continue
 
-                        # User-Zeilen
+                        # User lines
                         if raw.get("type") == "user":
                             total_skipped_user += 1
                             continue
@@ -72,7 +72,7 @@ def scan_paths(base_paths: list[str]) -> None:
                                     total_skipped_synth += 1
                             continue
 
-                        # Boss-Attribution-Check
+                        # Boss attribution check
                         if is_boss_path:
                             if not _should_attribute_boss_path(
                                 rec.get("cwd", ""), rec.get("git_branch")
@@ -130,7 +130,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         paths = sys.argv[1:]
     else:
-        # Default: alle relevanten Pfade
+        # Default: all relevant paths
         paths = [
             "~/.mc/agents",
             "~/.claude/projects",
