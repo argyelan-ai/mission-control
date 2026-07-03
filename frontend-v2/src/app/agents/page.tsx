@@ -154,7 +154,8 @@ function TokenDisplay({ token }: { token: string }) {
 
 // ── Create Agent Modal ───────────────────────────────────────────────────────
 
-function CreateAgentModal({
+// Exported for the component test (CreateAgentModal.test.tsx).
+export function CreateAgentModal({
   boards,
   defaultBoardId,
   onClose,
@@ -171,9 +172,27 @@ function CreateAgentModal({
   const [model, setModel] = useState("");
   const [boardId, setBoardId] = useState(defaultBoardId ?? (boards[0]?.id ?? ""));
   const [agentRuntime, setAgentRuntime] = useState("cli-bridge");
+  const [runtimeId, setRuntimeId] = useState("");
   const [isPending, setIsPending] = useState(false);
   const pendingRef = useRef(false);
   const qc = useQueryClient();
+
+  // LLM-runtime binding + bridge health: only relevant for cli-bridge agents.
+  // Binding at create time means provisioning renders the right image/env
+  // from the start — previously this lived only on the detail page and fresh
+  // agents silently fell back to docker-compose env.
+  const isCliBridge = agentRuntime === "cli-bridge";
+  const { data: runtimesData } = useQuery({
+    queryKey: ["runtimes"],
+    queryFn: () => api.runtimes.list(),
+    enabled: isCliBridge,
+  });
+  const { data: bridgeHealth } = useQuery({
+    queryKey: ["cli-bridge-health"],
+    queryFn: () => api.cliBridge.health(),
+    enabled: isCliBridge,
+    refetchInterval: 30_000,
+  });
 
   async function handleCreate() {
     if (!name.trim() || pendingRef.current) return;
@@ -187,6 +206,7 @@ function CreateAgentModal({
         model: model.trim() || undefined,
         board_id: boardId || undefined,
         agent_runtime: agentRuntime,
+        runtime_id: isCliBridge && runtimeId ? runtimeId : undefined,
       });
       notify.success(`Agent "${name}" erstellt`);
       onCreated();
@@ -303,6 +323,49 @@ function CreateAgentModal({
               <option value="manual">Manual</option>
             </select>
           </div>
+
+          {isCliBridge && (
+            <div>
+              <label className={labelClass}>LLM Runtime</label>
+              <select
+                value={runtimeId}
+                onChange={(e) => setRuntimeId(e.target.value)}
+                className={`${inputClass} cursor-pointer`}
+                style={selectStyle}
+              >
+                <option value="">— Fallback (docker-compose env) —</option>
+                {runtimesData?.runtimes.map((r) => (
+                  <option key={r.id} value={r.id} disabled={!r.enabled || r.single_instance}>
+                    {r.display_name} · {r.runtime_type}
+                    {r.model_identifier ? ` · ${r.model_identifier}` : ""}
+                    {!r.enabled ? " · disabled" : r.single_instance ? " · locked" : ""}
+                  </option>
+                ))}
+              </select>
+              {bridgeHealth?.reachable === false ? (
+                <div
+                  className="mt-2 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
+                  style={{
+                    backgroundColor: CINEMA.warningBg,
+                    border: `1px solid ${CINEMA.warningBorder}`,
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  <span className="font-medium" style={{ color: C.warning }}>
+                    cli-bridge helper not reachable.
+                  </span>{" "}
+                  The agent will be created but stays unprovisioned until the
+                  helper runs. Start it on the host:{" "}
+                  <code className="font-mono">python3 scripts/cli-bridge.py</code>
+                </div>
+              ) : (
+                <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+                  Provisions automatically after create — config, container
+                  and token are set up in the background.
+                </p>
+              )}
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">

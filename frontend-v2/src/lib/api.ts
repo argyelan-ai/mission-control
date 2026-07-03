@@ -764,7 +764,7 @@ export const api = {
       const qs = params.toString();
       return request<Agent[]>(`/api/v1/agents${qs ? `?${qs}` : ""}`);
     },
-    create: (data: { name: string; emoji?: string; role?: string; model?: string; board_id?: string; agent_runtime?: string }) =>
+    create: (data: { name: string; emoji?: string; role?: string; model?: string; board_id?: string; agent_runtime?: string; runtime_id?: string }) =>
       request<Agent>("/api/v1/agents", { method: "POST", body: JSON.stringify(data) }),
     get: (id: string) => request<Agent>(`/api/v1/agents/${id}`),
     update: (id: string, data: Partial<Agent>, opts?: { restart?: boolean }) =>
@@ -1197,7 +1197,7 @@ export const api = {
 
   // ── Activity ────────────────────────────────────────────────────────────────
   activity: {
-    list: (params?: { board_id?: string; agent_id?: string; severity?: string; limit?: number }) => {
+    list: (params?: { board_id?: string; agent_id?: string; event_type?: string; severity?: string; limit?: number }) => {
       const qs = new URLSearchParams(params as Record<string, string>).toString();
       return request<ActivityEvent[]>(`/api/v1/activity${qs ? `?${qs}` : ""}`);
     },
@@ -1481,6 +1481,13 @@ export const api = {
       request<ScheduledJob>(`/api/v1/schedule/jobs/${id}/snooze`, { method: "PATCH", body: JSON.stringify({ hours }) }),
     duplicateJob: (id: string) =>
       request<ScheduledJob>(`/api/v1/schedule/jobs/${id}/duplicate`, { method: "POST" }),
+  },
+
+  // cli-bridge host helper (scripts/cli-bridge.py) — powers the health pill
+  // in the create modal + agent detail page.
+  cliBridge: {
+    health: (): Promise<{ reachable: boolean; bridge_url: string }> =>
+      request("/api/v1/cli-bridge/health"),
   },
 
   runtimes: {
