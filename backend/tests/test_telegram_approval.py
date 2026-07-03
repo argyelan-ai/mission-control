@@ -1,13 +1,13 @@
-"""Tests fuer Telegram Approval URL-Buttons.
+"""Tests for Telegram approval URL buttons.
 
-Deckt ab:
-- send_approval_telegram sendet Nachricht mit URL-Buttons (nicht callback_data)
-- Token-Lifecycle: create, peek, consume, sibling cleanup
-- Kein Token konfiguriert → skip (kein Fehler)
-- Quick-Resolve GET → Bestaetigungsseite
-- Quick-Resolve POST → Approval resolved
-- Doppelklick → Token verbraucht, zweiter Klick abgefangen
-- UI-Resolution → Telegram Message wird editiert
+Covers:
+- send_approval_telegram sends a message with URL buttons (not callback_data)
+- Token lifecycle: create, peek, consume, sibling cleanup
+- No token configured → skip (no error)
+- Quick-resolve GET → confirmation page
+- Quick-resolve POST → approval resolved
+- Double-click → token consumed, second click intercepted
+- UI resolution → Telegram message is edited
 """
 
 import json
@@ -25,7 +25,7 @@ from tests.conftest import test_engine
 
 
 async def _create_approval_data():
-    """Board + Agent + Task + Approval erstellen."""
+    """Create board + agent + task + approval."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -90,12 +90,12 @@ async def _create_approval_data():
     }
 
 
-# ── Test: Send mit URL-Buttons ──────────────────────────────────────────
+# ── Test: Send with URL Buttons ──────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_send_approval_with_url_buttons(fake_redis):
-    """send_approval_telegram sendet Nachricht mit 2 URL-Buttons (nicht callback_data)."""
+    """send_approval_telegram sends a message with 2 URL buttons (not callback_data)."""
     from app.services.telegram_bot import TelegramBotService
 
     bot = TelegramBotService()
@@ -117,12 +117,12 @@ async def test_send_approval_with_url_buttons(fake_redis):
             text = args[0]
             markup = args[1]
 
-            # Text pruefen
+            # Check text
             assert "Cody" in text
             assert "Fix critical bug" in text
             assert "Dependency fehlt" in text
 
-            # URL-Buttons pruefen (NICHT callback_data)
+            # Check URL buttons (NOT callback_data)
             buttons = markup["inline_keyboard"][0]
             assert len(buttons) == 2
             assert buttons[0]["text"] == "Entblocken"
@@ -133,7 +133,7 @@ async def test_send_approval_with_url_buttons(fake_redis):
             assert "url" in buttons[1]
             assert "callback_data" not in buttons[1]
 
-    # Redis message_id gespeichert
+    # Redis message_id stored
     stored = await fake_redis.get(f"mc:telegram:approval:{approval_id}")
     assert stored == "42"
 
@@ -143,7 +143,7 @@ async def test_send_approval_with_url_buttons(fake_redis):
 
 @pytest.mark.asyncio
 async def test_token_create_peek_consume(fake_redis):
-    """Token erstellen, peek (ohne konsumieren), consume (einmalig)."""
+    """Create token, peek (without consuming), consume (once)."""
     from app.services.telegram_bot import (
         create_approval_tokens,
         peek_action_token,
@@ -155,36 +155,36 @@ async def test_token_create_peek_consume(fake_redis):
     with patch("app.services.telegram_bot.get_redis", return_value=fake_redis):
         approve_token, reject_token = await create_approval_tokens(approval_id)
 
-        # Peek: Token lesbar, aber nicht konsumiert
+        # Peek: token readable, but not consumed
         data = await peek_action_token(approve_token)
         assert data is not None
         assert data["approval_id"] == str(approval_id)
         assert data["action"] == "approve"
 
-        # Peek wieder → immer noch da
+        # Peek again → still there
         data2 = await peek_action_token(approve_token)
         assert data2 is not None
 
-        # Consume: Token wird geloescht + Sibling auch
+        # Consume: token is deleted + sibling too
         result = await consume_action_token(approve_token)
         assert result is not None
         assert result["action"] == "approve"
 
-        # Zweiter Consume → None (already used)
+        # Second consume → None (already used)
         result2 = await consume_action_token(approve_token)
         assert result2 is None
 
-        # Sibling (reject) auch weg
+        # Sibling (reject) also gone
         result3 = await consume_action_token(reject_token)
         assert result3 is None
 
 
-# ── Test: Kein Token → skip ──────────────────────────────────────────────
+# ── Test: No Token → skip ──────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_no_token_skips_silently(fake_redis):
-    """Wenn kein Token konfiguriert ist, passiert nichts (kein Fehler)."""
+    """When no token is configured, nothing happens (no error)."""
     from app.services.telegram_bot import TelegramBotService
 
     bot = TelegramBotService()
@@ -196,12 +196,12 @@ async def test_no_token_skips_silently(fake_redis):
         mock_send.assert_not_called()
 
 
-# ── Test: Quick-Resolve GET (Bestaetigungsseite) ────────────────────────
+# ── Test: Quick-Resolve GET (Confirmation Page) ────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_quick_resolve_get_shows_confirmation(client, fake_redis):
-    """GET quick-resolve zeigt Bestaetigungsseite mit Approval-Details."""
+    """GET quick-resolve shows confirmation page with approval details."""
     data = await _create_approval_data()
     approval_id = data["approval"].id
 
@@ -223,12 +223,12 @@ async def test_quick_resolve_get_shows_confirmation(client, fake_redis):
     assert "Fix critical bug" in body
 
 
-# ── Test: Quick-Resolve POST (Token konsumieren) ────────────────────────
+# ── Test: Quick-Resolve POST (Consume Token) ────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_quick_resolve_post_resolves_approval(client, fake_redis):
-    """POST quick-resolve konsumiert Token und resolved Approval."""
+    """POST quick-resolve consumes token and resolves approval."""
     data = await _create_approval_data()
     approval_id = data["approval"].id
 
@@ -252,7 +252,7 @@ async def test_quick_resolve_post_resolves_approval(client, fake_redis):
     assert resp.status_code == 200
     assert "Entblockt" in resp.text
 
-    # DB pruefen
+    # Check DB
     from app.models.approval import Approval
     from app.models.task import Task
 
@@ -262,15 +262,15 @@ async def test_quick_resolve_post_resolves_approval(client, fake_redis):
         assert "Telegram link" in approval.resolver_note
 
         task = await s.get(Task, data["task"].id)
-        assert task.status == "inbox"  # Blocker → inbox → auto_dispatch (Background)
+        assert task.status == "inbox"  # Blocker → inbox → auto_dispatch (background)
 
 
-# ── Test: Doppelklick → Token verbraucht ─────────────────────────────────
+# ── Test: Double-Click → Token Consumed ─────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_double_click_token_consumed(client, fake_redis):
-    """Zweiter Klick nach Token-Konsumierung wird abgefangen."""
+    """Second click after token consumption is intercepted."""
     data = await _create_approval_data()
     approval_id = data["approval"].id
 
@@ -290,14 +290,14 @@ async def test_double_click_token_consumed(client, fake_redis):
     ):
         mock_tg.update_resolved_telegram = AsyncMock()
 
-        # Erster Klick: approve
+        # First click: approve
         resp1 = await client.post(
             f"/api/v1/approvals/{approval_id}/quick-resolve/confirm",
             data={"token": "token-a"},
         )
         assert resp1.status_code == 200
 
-        # Zweiter Klick: reject-Token → consumed
+        # Second click: reject token → consumed
         resp2 = await client.post(
             f"/api/v1/approvals/{approval_id}/quick-resolve/confirm",
             data={"token": "token-b"},
@@ -306,18 +306,18 @@ async def test_double_click_token_consumed(client, fake_redis):
         assert "abgelaufen" in resp2.text or "benutzt" in resp2.text
 
 
-# ── Test: UI-Resolution editiert Telegram Message ────────────────────────
+# ── Test: UI Resolution Edits Telegram Message ────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_ui_resolution_updates_telegram(fake_redis):
-    """Wenn der Operator im Dashboard approved, wird die Telegram-Message editiert."""
+    """When the operator approves in the dashboard, the Telegram message is edited."""
     from app.services.telegram_bot import TelegramBotService
 
     bot = TelegramBotService()
     approval_id = uuid.uuid4()
 
-    # message_id in Redis simulieren
+    # Simulate message_id in Redis
     await fake_redis.set(f"mc:telegram:approval:{approval_id}", "42")
 
     with patch("app.services.telegram_bot.settings") as mock_settings:
@@ -337,17 +337,17 @@ async def test_ui_resolution_updates_telegram(fake_redis):
                 assert "approved" in text
                 assert "Dashboard" in text
 
-    # Redis Key geloescht
+    # Redis key deleted
     stored = await fake_redis.get(f"mc:telegram:approval:{approval_id}")
     assert stored is None
 
 
-# ── Test: Expired Token GET → Fehlerseite ────────────────────────────────
+# ── Test: Expired Token GET → Error Page ────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_expired_token_get_shows_error(client, fake_redis):
-    """GET mit ungueltigem/abgelaufenem Token zeigt Fehlerseite."""
+    """GET with invalid/expired token shows error page."""
     approval_id = uuid.uuid4()
 
     with patch("app.routers.approvals.peek_action_token") as mock_peek:
@@ -361,12 +361,12 @@ async def test_expired_token_get_shows_error(client, fake_redis):
     assert "abgelaufen" in resp.text or "ungueltig" in resp.text.lower()
 
 
-# ── Test: Polling deaktiviert ────────────────────────────────────────────
+# ── Test: Polling Disabled ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_polling_disabled():
-    """start() startet keinen Poller mehr (No-Op)."""
+    """start() no longer starts a poller (no-op)."""
     from app.services.telegram_bot import TelegramBotService
 
     bot = TelegramBotService()
@@ -377,6 +377,6 @@ async def test_polling_disabled():
 
         await bot.start()
 
-    # Kein Task gestartet
+    # No task started
     assert bot._task is None
     assert not bot._running

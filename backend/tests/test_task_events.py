@@ -1,4 +1,4 @@
-"""Tests fuer Task Event Sourcing + Status State Machine + Review Monitoring."""
+"""Tests for task event sourcing + status state machine + review monitoring."""
 
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -14,7 +14,7 @@ from tests.conftest import test_engine
 
 
 def test_task_status_enum_values():
-    """Alle 8 Status-Werte sind definiert."""
+    """All 8 status values are defined."""
     from app.task_status import TaskStatus
 
     assert len(TaskStatus) == 8
@@ -25,7 +25,7 @@ def test_task_status_enum_values():
 
 
 def test_valid_transitions_complete():
-    """Jeder Status hat einen Eintrag in VALID_TRANSITIONS."""
+    """Every status has an entry in VALID_TRANSITIONS."""
     from app.task_status import TaskStatus, VALID_TRANSITIONS
 
     for status in TaskStatus:
@@ -33,7 +33,7 @@ def test_valid_transitions_complete():
 
 
 def test_is_valid_transition():
-    """is_valid_transition() prueft korrekt."""
+    """is_valid_transition() checks correctly."""
     from app.task_status import is_valid_transition
 
     assert is_valid_transition("inbox", "in_progress") is True
@@ -45,7 +45,7 @@ def test_is_valid_transition():
 
 
 def test_aborted_in_transitions():
-    """aborted hat eigene Transitions (war frueher nicht definiert)."""
+    """aborted has its own transitions (previously undefined)."""
     from app.task_status import VALID_TRANSITIONS
 
     assert "aborted" in VALID_TRANSITIONS
@@ -57,7 +57,7 @@ def test_aborted_in_transitions():
 
 @pytest.mark.asyncio
 async def test_task_event_creation():
-    """TaskEvent kann erstellt und gelesen werden."""
+    """TaskEvent can be created and read."""
     from app.models.task import Task, TaskEvent
     from app.models.board import Board
 
@@ -94,7 +94,7 @@ async def test_task_event_creation():
 
 @pytest.mark.asyncio
 async def test_record_task_event():
-    """record_task_event() speichert Event korrekt."""
+    """record_task_event() stores the event correctly."""
     from app.models.task import Task, TaskEvent
     from app.models.board import Board
     from app.services.task_lifecycle import record_task_event
@@ -126,7 +126,7 @@ async def test_record_task_event():
 
 @pytest.mark.asyncio
 async def test_user_status_change_creates_event(auth_client, make_board, make_task):
-    """User-Status-Update via PATCH erzeugt ein TaskEvent."""
+    """User status update via PATCH creates a TaskEvent."""
     board = await make_board()
     task = await make_task(board.id, status="inbox")
 
@@ -137,7 +137,7 @@ async def test_user_status_change_creates_event(auth_client, make_board, make_ta
         )
     assert resp.status_code == 200
 
-    # Event pruefen
+    # Check event
     from app.models.task import TaskEvent
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
@@ -153,7 +153,7 @@ async def test_user_status_change_creates_event(auth_client, make_board, make_ta
 
 @pytest.mark.asyncio
 async def test_agent_status_change_creates_event(client):
-    """Agent-Status-Update via PATCH erzeugt ein TaskEvent mit agent_id."""
+    """Agent status update via PATCH creates a TaskEvent with agent_id."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task, TaskEvent
@@ -180,13 +180,13 @@ async def test_agent_status_change_creates_event(client):
             status="in_progress", assigned_agent_id=agent_id,
         )
         s.add(task)
-        # Evidence-Guard: mind. 1 progress Kommentar vor Review
+        # Evidence guard: at least 1 progress comment before review
         from app.models.task import TaskComment
         s.add(TaskComment(
             task_id=task_id, author_type="agent", author_agent_id=agent_id,
             comment_type="progress", content="Test evidence",
         ))
-        # ADR-023: Reflection-Pflicht vor Closing-Transition (review/done)
+        # ADR-023: reflection required before closing transition (review/done)
         s.add(TaskComment(
             task_id=task_id, author_type="agent", author_agent_id=agent_id,
             comment_type="reflection",
@@ -226,11 +226,11 @@ async def test_agent_status_change_creates_event(client):
 
 @pytest.mark.asyncio
 async def test_task_events_endpoint(auth_client, make_board, make_task):
-    """GET .../events liefert chronologische Event-History."""
+    """GET .../events returns chronological event history."""
     board = await make_board()
     task = await make_task(board.id, status="inbox")
 
-    # Zwei Status-Changes machen
+    # Make two status changes
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
         await auth_client.patch(
             f"/api/v1/boards/{board.id}/tasks/{task.id}",
@@ -247,17 +247,17 @@ async def test_task_events_endpoint(auth_client, make_board, make_task):
     assert resp.status_code == 200
     events = resp.json()
     assert len(events) >= 2
-    # Neueste zuerst (desc)
+    # Newest first (desc)
     assert events[0]["to_status"] == "review"
     assert events[1]["to_status"] == "in_progress"
 
 
-# ── State Machine — Ungueltige Transitions ───────────────────────────────
+# ── State Machine — Invalid Transitions ───────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_invalid_transition_rejected(auth_client, make_board, make_task):
-    """Ungueltiger Uebergang inbox→done wird mit 400 abgelehnt."""
+    """Invalid transition inbox→done is rejected with 400."""
     board = await make_board()
     task = await make_task(board.id, status="inbox")
 
@@ -272,7 +272,7 @@ async def test_invalid_transition_rejected(auth_client, make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_aborted_to_in_progress_allowed(auth_client, make_board, make_task):
-    """aborted→in_progress ist jetzt ein gueltiger Uebergang."""
+    """aborted→in_progress is now a valid transition."""
     board = await make_board()
     task = await make_task(board.id, status="aborted")
 

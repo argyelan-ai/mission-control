@@ -1,4 +1,4 @@
-"""Update-Check (B3, 2026-07-02): GitHub-Releases-Vergleich + Endpoint."""
+"""Update check (B3, 2026-07-02): GitHub releases comparison + endpoint."""
 import pytest
 from httpx import AsyncClient
 
@@ -10,7 +10,7 @@ def test_is_newer_semver_compare():
     assert is_newer("0.1.1", "0.1.0") is True
     assert is_newer("v0.1.0", "0.1.0") is False
     assert is_newer("v0.0.9", "0.1.0") is False
-    # Unparsebares darf NIE einen Update-Banner ausloesen
+    # Unparseable input must NEVER trigger an update banner
     assert is_newer(None, "0.1.0") is False
     assert is_newer("nightly", "0.1.0") is False
     assert is_newer("v1.0.0", None) is False
@@ -18,7 +18,7 @@ def test_is_newer_semver_compare():
 
 @pytest.fixture
 def _patched_redis(fake_redis, monkeypatch):
-    """update_check ruft get_redis() direkt (nicht via Depends) auf."""
+    """update_check calls get_redis() directly (not via Depends)."""
     import app.services.update_check as uc
 
     async def _fake():
@@ -38,7 +38,7 @@ async def test_get_latest_release_caches_and_swallows_errors(_patched_redis):
 
     first = await get_latest_release(_fetch=fetch_ok)
     assert first == {"tag": "v9.9.9", "url": "https://example.com/r"}
-    # Zweiter Aufruf kommt aus dem Cache — fetch wird nicht erneut gerufen
+    # Second call comes from the cache — fetch is not called again
     second = await get_latest_release(_fetch=fetch_ok)
     assert second == first
     assert calls["n"] == 1
@@ -55,7 +55,7 @@ async def test_get_latest_release_error_is_silent(_patched_redis):
 
 @pytest.mark.asyncio
 async def test_version_endpoint(auth_client: AsyncClient, fake_redis, monkeypatch):
-    import app.routers.system  # noqa: F401 — Endpoint-Modul
+    import app.routers.system  # noqa: F401 — endpoint module
     from app import config
 
     async def fake_latest(_fetch=None):

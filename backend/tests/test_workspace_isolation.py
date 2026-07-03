@@ -1,11 +1,11 @@
 """Bundle 4 — Workspace Isolation Tests.
 
-1. Worktree erstellen + Pfad korrekt
-2. Cleanup bei done (vollstaendig)
-3. Cleanup bei failed (Dateien behalten)
-4. workspace_path auf Task gespeichert
-5. Fallback bei Worktree-Fehler
-6. Recovery-Kontext zeigt Task-workspace_path
+1. Create worktree + path is correct
+2. Cleanup on done (complete)
+3. Cleanup on failed (files kept)
+4. workspace_path saved on task
+5. Fallback on worktree error
+6. Recovery context shows task workspace_path
 """
 import os
 import uuid
@@ -21,7 +21,7 @@ class TestWorktreeFunctions:
 
     @pytest.mark.asyncio
     async def test_create_worktree_returns_path(self):
-        """create_task_worktree gibt den Worktree-Pfad zurueck."""
+        """create_task_worktree returns the worktree path."""
         from app.services.git_service import GitService
 
         svc = GitService()
@@ -29,12 +29,12 @@ class TestWorktreeFunctions:
 
         with patch.object(svc, "_run_cmd", new_callable=AsyncMock) as mock_cmd:
             mock_cmd.return_value = ""
-            # Temporaeres Verzeichnis simulieren
+            # Simulate temporary directory
             import tempfile
             with tempfile.TemporaryDirectory() as tmpdir:
                 project_dir = os.path.join(tmpdir, "myproject")
                 os.makedirs(project_dir)
-                # Git init fuer realistischen Test
+                # Git init for a realistic test
                 os.makedirs(os.path.join(project_dir, ".git"))
 
                 path = await svc.create_task_worktree(project_dir, "test-task")
@@ -45,7 +45,7 @@ class TestWorktreeFunctions:
 
     @pytest.mark.asyncio
     async def test_create_worktree_existing_returns_path(self):
-        """Bestehender Worktree wird nicht neu erstellt."""
+        """Existing worktree is not recreated."""
         from app.services.git_service import GitService
 
         svc = GitService()
@@ -56,14 +56,14 @@ class TestWorktreeFunctions:
             project_dir = os.path.join(tmpdir, "myproject")
             worktree_dir = os.path.join(tmpdir, "worktrees", "existing-task")
             os.makedirs(project_dir)
-            os.makedirs(worktree_dir)  # Worktree existiert schon
+            os.makedirs(worktree_dir)  # Worktree already exists
 
             path = await svc.create_task_worktree(project_dir, "existing-task")
             assert path == worktree_dir
 
     @pytest.mark.asyncio
     async def test_cleanup_worktree_done(self):
-        """done: Worktree vollstaendig entfernen."""
+        """done: remove worktree completely."""
         from app.services.git_service import GitService
 
         svc = GitService()
@@ -80,14 +80,14 @@ class TestWorktreeFunctions:
                 mock_cmd.return_value = ""
                 await svc.cleanup_worktree(project_dir, worktree_dir, keep_on_fail=False)
 
-                # git worktree remove + prune aufgerufen
+                # git worktree remove + prune called
                 calls = [str(c) for c in mock_cmd.call_args_list]
                 assert any("worktree" in c and "remove" in c for c in calls)
                 assert any("prune" in c for c in calls)
 
     @pytest.mark.asyncio
     async def test_cleanup_worktree_failed_keeps_files(self):
-        """failed: Worktree aus Index entfernt, Dateien bleiben."""
+        """failed: worktree removed from index, files remain."""
         from app.services.git_service import GitService
 
         svc = GitService()
@@ -104,20 +104,20 @@ class TestWorktreeFunctions:
                 mock_cmd.return_value = ""
                 await svc.cleanup_worktree(project_dir, worktree_dir, keep_on_fail=True)
 
-                # Calls pruefen: remove mit --force aufgerufen
+                # Check calls: remove called with --force
                 calls = [str(c) for c in mock_cmd.call_args_list]
                 assert any("remove" in c for c in calls)
 
     @pytest.mark.asyncio
     async def test_cleanup_nonexistent_worktree_silent(self):
-        """Nicht-existierender Worktree → stille Rueckkehr."""
+        """Non-existent worktree → silent return."""
         from app.services.git_service import GitService
 
         svc = GitService()
         svc._configured = True
 
         await svc.cleanup_worktree("/nonexistent/repo", "/nonexistent/wt")
-        # Kein Fehler, kein Crash
+        # No error, no crash
 
 
 # ── Task Model ───────────────────────────────────────────────────────────
@@ -126,7 +126,7 @@ class TestTaskWorkspacePath:
 
     @pytest.mark.asyncio
     async def test_task_workspace_path_field(self, session: AsyncSession, make_task):
-        """Task hat workspace_path Feld."""
+        """Task has a workspace_path field."""
         board_id = uuid.uuid4()
         task = await make_task(
             board_id, title="WS Task",
@@ -136,7 +136,7 @@ class TestTaskWorkspacePath:
 
     @pytest.mark.asyncio
     async def test_task_workspace_path_default_none(self, session: AsyncSession, make_task):
-        """workspace_path ist default None."""
+        """workspace_path defaults to None."""
         board_id = uuid.uuid4()
         task = await make_task(board_id, title="No WS Task")
         assert task.workspace_path is None
@@ -150,7 +150,7 @@ class TestWorkspaceInRecovery:
     async def test_recovery_shows_task_workspace(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Recovery-Kontext zeigt Task.workspace_path (nicht Agent-Workspace)."""
+        """Recovery context shows Task.workspace_path (not agent workspace)."""
         from app.services.dispatch import build_recovery_context
         from app.models.task import TaskComment
 
@@ -176,7 +176,7 @@ workspace_path="/agent/default/workspace",
         ctx = await build_recovery_context(session, task)
         assert ctx is not None
         assert "/worktrees/ws-recovery-task" in ctx
-        # Agent-Workspace sollte NICHT auftauchen
+        # Agent workspace should NOT appear
         assert "/agent/default/workspace" not in ctx
 
 
@@ -188,7 +188,7 @@ class TestDispatchWorkspacePath:
     async def test_dispatch_message_uses_task_workspace(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Dispatch-Message nutzt Task.workspace_path statt Agent-Workspace."""
+        """Dispatch message uses Task.workspace_path instead of agent workspace."""
         from app.services.dispatch import _build_dispatch_message
 
         board_id = uuid.uuid4()
@@ -210,7 +210,7 @@ workspace_path="/agent/workspace",
     async def test_dispatch_fallback_without_workspace(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Ohne Task.workspace_path → Message enthaelt keinen Worktree-Pfad."""
+        """Without Task.workspace_path → message contains no worktree path."""
         from app.services.dispatch import _build_dispatch_message
 
         board_id = uuid.uuid4()
@@ -224,6 +224,6 @@ workspace_path="/agent/workspace",
         )
 
         msg = await _build_dispatch_message(task, agent, session)
-        # Kein Worktree-Pfad, aber Message wird gebaut
+        # No worktree path, but message still gets built
         assert "Fallback WS Test" in msg
         assert "/worktrees/" not in msg

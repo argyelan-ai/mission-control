@@ -1,12 +1,12 @@
-"""Tests fuer Workflow-Szenarien: Task Status-Transitions und Review-Handoff.
+"""Tests for workflow scenarios: task status transitions and review handoff.
 
-Deckt ab:
-- Reviewer-ACK (Regression fuer Loop-Bug: review→in_progress wurde als Rejection behandelt)
-- Happy-Path Review-Handoff
-- Review-Rejection und Zurueck-an-Developer
-- Self-Review Prevention und Edge Cases
-- Ungueltige Transitions
-- Review-Safeguard (GLM-5 Approved-aber-in_progress Bug)
+Covers:
+- Reviewer ACK (regression for loop bug: review→in_progress was treated as rejection)
+- Happy-path review handoff
+- Review rejection and hand-back to developer
+- Self-review prevention and edge cases
+- Invalid transitions
+- Review safeguard (GLM-5 approved-but-in_progress bug)
 """
 
 import uuid
@@ -27,9 +27,9 @@ async def _create_workflow_data(
     task_assigned_to="developer",
     with_reviewer=True,
 ):
-    """Board + Developer + Reviewer + Task erstellen.
+    """Create board + developer + reviewer + task.
 
-    Returns: dict mit board, developer, reviewer, task, dev_token, reviewer_token.
+    Returns: dict with board, developer, reviewer, task, dev_token, reviewer_token.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -84,8 +84,8 @@ async def _create_workflow_data(
             assigned_agent_id=assigned_id,
         )
         s.add(task)
-        # Evidence-Guard + Reflection-Guard (ADR-023): beide Kommentare
-        # muessen vor einer Closing-Transition (review/done) existieren.
+        # Evidence guard + reflection guard (ADR-023): both comments
+        # must exist before a closing transition (review/done).
         if task_status == "in_progress":
             from app.models.task import TaskComment
             s.add(TaskComment(
@@ -120,12 +120,12 @@ async def _create_workflow_data(
     }
 
 
-# ── Gruppe A: Reviewer-ACK (Regression) ─────────────────────────────────
+# ── Group A: Reviewer ACK (Regression) ─────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_reviewer_ack_does_not_trigger_rejection(client, fake_redis):
-    """Regression: Reviewer ACKt review→in_progress — darf NICHT als Rejection behandelt werden."""
+    """Regression: reviewer ACKs review→in_progress — must NOT be treated as rejection."""
     data = await _create_workflow_data(
         task_status="review", task_assigned_to="reviewer",
     )
@@ -142,7 +142,7 @@ async def test_reviewer_ack_does_not_trigger_rejection(client, fake_redis):
     assert resp.status_code == 200, resp.text
     mock_rejection.assert_not_called()
 
-    # Task bleibt beim Reviewer
+    # Task stays with the reviewer
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
         updated = await s.get(Task, data["task"].id)
@@ -152,7 +152,7 @@ async def test_reviewer_ack_does_not_trigger_rejection(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_reviewer_ack_sets_ack_timestamp(client, fake_redis):
-    """Reviewer-ACK setzt ack_at und started_at."""
+    """Reviewer ACK sets ack_at and started_at."""
     data = await _create_workflow_data(
         task_status="review", task_assigned_to="reviewer",
     )
@@ -175,12 +175,12 @@ async def test_reviewer_ack_sets_ack_timestamp(client, fake_redis):
         assert updated.started_at is not None, "started_at should be set on ACK"
 
 
-# ── Gruppe B: Happy-Path Review ─────────────────────────────────────────
+# ── Group B: Happy-Path Review ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_happy_path_review_handoff(client, fake_redis):
-    """Developer setzt in_progress→review — handle_review_handoff wird aufgerufen."""
+    """Developer sets in_progress→review — handle_review_handoff gets called."""
     data = await _create_workflow_data(
         task_status="in_progress", task_assigned_to="developer",
     )
@@ -200,7 +200,7 @@ async def test_happy_path_review_handoff(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_reviewer_approves_task_to_done(client, fake_redis):
-    """Reviewer setzt review→done (Approval) — completed_at wird gesetzt."""
+    """Reviewer sets review→done (approval) — completed_at gets set."""
     data = await _create_workflow_data(
         task_status="review", task_assigned_to="reviewer",
     )
@@ -222,12 +222,12 @@ async def test_reviewer_approves_task_to_done(client, fake_redis):
         assert updated.completed_at is not None
 
 
-# ── Gruppe C: Review-Rejection ───────────────────────────────────────────
+# ── Group C: Review Rejection ───────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_non_assigned_agent_rejects_triggers_rejection(client, fake_redis):
-    """Board Lead setzt review→in_progress auf fremdem Task — Rejection wird ausgeloest."""
+    """Board lead sets review→in_progress on someone else's task — triggers rejection."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
@@ -235,7 +235,7 @@ async def test_non_assigned_agent_rejects_triggers_rejection(client, fake_redis)
         task_status="review", task_assigned_to="developer",
     )
 
-    # Board Lead erstellen
+    # Create board lead
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         lead_token_raw, lead_token_hash = generate_agent_token()
         lead = Agent(
@@ -264,7 +264,7 @@ async def test_non_assigned_agent_rejects_triggers_rejection(client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_rejection_reassigns_to_original_developer(client, fake_redis):
-    """Unit-Test: handle_review_rejection findet Developer und weist Task zurueck."""
+    """Unit test: handle_review_rejection finds the developer and reassigns the task."""
     from app.models.activity import ActivityEvent
     from app.services.task_lifecycle import handle_review_rejection
 
@@ -272,7 +272,7 @@ async def test_rejection_reassigns_to_original_developer(client, fake_redis):
         task_status="review", task_assigned_to="reviewer",
     )
 
-    # Activity Event erstellen das den Developer als letzten Bearbeiter identifiziert
+    # Create activity event that identifies the developer as the last actor
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         event = ActivityEvent(
             id=uuid.uuid4(),
@@ -312,7 +312,7 @@ async def test_rejection_reassigns_to_original_developer(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_rejection_busy_dev_queues_task(client, fake_redis):
-    """Bei Rejection: Developer busy → Task wird in Queue gelegt (inbox)."""
+    """On rejection: developer busy → task gets queued (inbox)."""
     from app.models.task import Task as TaskModel
     from app.models.activity import ActivityEvent
     from app.services.task_lifecycle import handle_review_rejection
@@ -321,7 +321,7 @@ async def test_rejection_busy_dev_queues_task(client, fake_redis):
         task_status="review", task_assigned_to="reviewer",
     )
 
-    # Developer hat einen aktiven Task
+    # Developer has an active task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         active_task = TaskModel(
             id=uuid.uuid4(),
@@ -364,12 +364,12 @@ async def test_rejection_busy_dev_queues_task(client, fake_redis):
     mock_enqueue.assert_called_once()
 
 
-# ── Gruppe D: Edge Cases ─────────────────────────────────────────────────
+# ── Group D: Edge Cases ─────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_self_review_prevention(client, fake_redis):
-    """Developer == einziger Reviewer → handle_review_handoff gibt None zurueck."""
+    """Developer == only reviewer → handle_review_handoff returns None."""
     from app.services.task_lifecycle import handle_review_handoff
 
     data = await _create_workflow_data(
@@ -390,7 +390,7 @@ async def test_self_review_prevention(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_done_to_in_progress_triggers_rejection(client, fake_redis):
-    """done→in_progress durch Board Lead → Rejection wird ausgeloest (kein ACK-Guard fuer done)."""
+    """done→in_progress by board lead → triggers rejection (no ACK guard for done)."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
@@ -427,7 +427,7 @@ async def test_done_to_in_progress_triggers_rejection(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_user_test_to_in_progress_triggers_rejection(client, fake_redis):
-    """user_test→in_progress → Rejection wird ausgeloest."""
+    """user_test→in_progress → triggers rejection."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
@@ -461,12 +461,12 @@ async def test_user_test_to_in_progress_triggers_rejection(client, fake_redis):
     mock_rejection.assert_called_once()
 
 
-# ── Gruppe E: Ungueltige Transitions ─────────────────────────────────────
+# ── Group E: Invalid Transitions ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_invalid_transition_blocked_to_done(client, fake_redis):
-    """blocked→done ist nicht erlaubt → 400."""
+    """blocked→done is not allowed → 400."""
     data = await _create_workflow_data(
         task_status="blocked", task_assigned_to="developer",
     )
@@ -483,7 +483,7 @@ async def test_invalid_transition_blocked_to_done(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_invalid_transition_inbox_to_review(client, fake_redis):
-    """inbox→review ist nicht erlaubt → 400."""
+    """inbox→review is not allowed → 400."""
     data = await _create_workflow_data(
         task_status="inbox", task_assigned_to="developer",
     )
@@ -500,7 +500,7 @@ async def test_invalid_transition_inbox_to_review(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_invalid_transition_failed_to_done(client, fake_redis):
-    """failed→done ist nicht erlaubt → 400."""
+    """failed→done is not allowed → 400."""
     data = await _create_workflow_data(
         task_status="failed", task_assigned_to="developer",
     )
@@ -517,14 +517,14 @@ async def test_invalid_transition_failed_to_done(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_review_safeguard_corrects_approved_to_done(client, fake_redis):
-    """Reviewer setzt in_progress aber letzter Kommentar sagt 'Approved' → korrigiert zu done."""
+    """Reviewer sets in_progress but last comment says 'Approved' → corrected to done."""
     from app.models.task import TaskComment
 
     data = await _create_workflow_data(
         task_status="review", task_assigned_to="reviewer",
     )
 
-    # Reviewer-Kommentar mit "Approved" erstellen
+    # Create reviewer comment with "Approved"
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         comment = TaskComment(
             task_id=data["task"].id,
@@ -555,7 +555,7 @@ async def test_review_safeguard_corrects_approved_to_done(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_review_safeguard_uses_corrected_status_for_done_side_effects(client, fake_redis):
-    """Safeguard-korrigiertes done muss auch Auto-Memory + Feedback-Approval triggern."""
+    """Safeguard-corrected done must also trigger auto-memory + feedback approval."""
     from app.models.task import TaskComment
 
     data = await _create_workflow_data(
@@ -592,7 +592,7 @@ async def test_review_safeguard_uses_corrected_status_for_done_side_effects(clie
 
 @pytest.mark.asyncio
 async def test_review_safeguard_uses_corrected_status_for_pipeline_sync(client, fake_redis):
-    """Safeguard-korrigiertes done muss den Pipeline-Sync triggern."""
+    """Safeguard-corrected done must trigger the pipeline sync."""
     from app.models.content import ContentPipeline
     from app.models.task import Task, TaskComment
 
@@ -624,9 +624,9 @@ async def test_review_safeguard_uses_corrected_status_for_pipeline_sync(client, 
         s.add(comment)
         await s.commit()
 
-    # Seit der Vertical-Extraktion läuft pipeline_sync über die Hook-Registry
-    # (app.verticals.hooks) — gepatcht wird die Registry, nicht das Modul,
-    # weil register() die Funktions-Referenz beim App-Aufbau captured.
+    # Since the vertical extraction, pipeline_sync runs through the hook registry
+    # (app.verticals.hooks) — we patch the registry, not the module,
+    # because register() captures the function reference at app-build time.
     from app.verticals import hooks as vertical_hooks
 
     mock_sync = AsyncMock()

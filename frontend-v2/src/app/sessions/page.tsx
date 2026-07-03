@@ -46,9 +46,9 @@ function useAgentTerminal(
   const destroyedRef = useRef(false);
   const dataDisposableRef = useRef<{ dispose: () => void } | null>(null);
   const resizeDisposableRef = useRef<{ dispose: () => void } | null>(null);
-  // Scroll via tmux copy-mode (weil xterm.js-scrollback bei tmux nutzlos ist):
-  // mouse off im Container → native Text-Selection funktioniert,
-  // Wheel-Events werden in tmux copy-mode keystrokes umgewandelt und an PTY gesendet.
+  // Scroll via tmux copy-mode (because xterm.js scrollback is useless with tmux):
+  // mouse off in the container → native text selection works,
+  // wheel events get translated into tmux copy-mode keystrokes and sent to the PTY.
   const copyModeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const inCopyModeRef = useRef(false);
 
@@ -93,7 +93,7 @@ function useAgentTerminal(
       ws.onclose = (evt) => {
         setConnected(false);
         if (!destroyedRef.current && evt.code !== 1000) {
-          // Auto-reconnect nach 3s
+          // Auto-reconnect after 3s
           term.writeln("\r\n\x1b[33m[Reconnecting...]\x1b[0m");
           reconnectTimer.current = setTimeout(connect, 3000);
         }
@@ -147,19 +147,19 @@ function useAgentTerminal(
     };
   }, [agent?.id, term]);
 
-  // Custom Wheel-Handler: Scroll via tmux copy-mode
+  // Custom wheel handler: scroll via tmux copy-mode
   //
-  // Warum: tmux nutzt alternate screen buffer und zeichnet den ganzen Pane bei
-  // jedem Redraw neu → der xterm.js-eigene scrollback-Puffer ist damit effektiv
-  // leer. Die 50000 Zeilen History leben nur im tmux-copy-mode.
+  // Why: tmux uses the alternate screen buffer and redraws the whole pane on
+  // every update → xterm.js's own scrollback buffer is effectively empty
+  // because of that. The 50000 lines of history only live in tmux copy-mode.
   //
   // Flow:
-  //  1. Wheel-Event → sende C-b [ (tmux prefix + [) um copy-mode zu betreten
-  //  2. Sende Arrow-Up/Down keystrokes proportional zum scroll-delta
-  //  3. Nach 4s idle → sende 'q' um copy-mode zu verlassen
+  //  1. Wheel event → send C-b [ (tmux prefix + [) to enter copy-mode
+  //  2. Send Arrow-Up/Down keystrokes proportional to the scroll delta
+  //  3. After 4s idle → send 'q' to leave copy-mode
   //
-  // tmux mouse muss off sein (sonst faengt tmux die wheel-events selbst ab und
-  // diese handler wuerde nie aufgerufen). Siehe entrypoint.sh.
+  // tmux mouse must be off (otherwise tmux would intercept the wheel events
+  // itself and this handler would never be called). See entrypoint.sh.
   useEffect(() => {
     if (!term) return;
 
@@ -171,45 +171,45 @@ function useAgentTerminal(
       inCopyModeRef.current = false;
     };
 
-    // Gemeinsamer Scroll-Pfad für Wheel (Desktop) und Touch (Mobile): beide
-    // übersetzen ihr Delta in tmux-copy-mode Arrow-Keystrokes. lines<0 = hoch
-    // in die History, lines>0 = runter Richtung Live-Ende.
+    // Shared scroll path for wheel (desktop) and touch (mobile): both
+    // translate their delta into tmux copy-mode arrow keystrokes. lines<0 = up
+    // into history, lines>0 = down toward the live end.
     const scrollByLines = (lines: number) => {
       if (lines === 0) return;
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
       if (!inCopyModeRef.current) {
-        wsRef.current.send("\x02["); // Ctrl-B [ → copy-mode betreten
+        wsRef.current.send("\x02["); // Ctrl-B [ → enter copy-mode
         inCopyModeRef.current = true;
       }
-      // Reset auto-exit timer (4s nach letztem scroll → copy-mode verlassen)
+      // Reset auto-exit timer (4s after the last scroll → leave copy-mode)
       if (copyModeTimerRef.current) clearTimeout(copyModeTimerRef.current);
       copyModeTimerRef.current = setTimeout(exitCopyMode, 4000);
       const key = lines < 0 ? "\x1b[A" : "\x1b[B";
       wsRef.current.send(key.repeat(Math.abs(lines)));
     };
 
-    // Desktop: Mausrad / Trackpad
+    // Desktop: mouse wheel / trackpad
     term.attachCustomWheelEventHandler((e: WheelEvent) => {
       if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-        return true; // keine Verbindung → xterm.js default (scrollback, auch wenn leer)
+        return true; // no connection → xterm.js default (scrollback, even if empty)
       }
       const lines = Math.max(1, Math.abs(Math.round(e.deltaY / 40)));
       scrollByLines(e.deltaY < 0 ? -lines : lines);
-      return false; // xterm.js default unterdruecken
+      return false; // suppress xterm.js default
     });
 
-    // Mobile: Finger-Swipe. attachCustomWheelEventHandler feuert NUR für
-    // `wheel`-Events — ein Finger erzeugt Touch-Events, darum war das Terminal
-    // auf dem Handy nicht scrollbar. Desktop bleibt unberührt (Maus/Trackpad
-    // feuern keine Touch-Events). Swipe-Distanz wird ~1:1 in dieselben
-    // copy-mode Keystrokes wie das Wheel übersetzt.
+    // Mobile: finger swipe. attachCustomWheelEventHandler fires ONLY for
+    // `wheel` events — a single finger produces touch events, which is why the
+    // terminal wasn't scrollable on phones. Desktop is unaffected (mouse/trackpad
+    // don't fire touch events). Swipe distance is translated ~1:1 into the same
+    // copy-mode keystrokes as the wheel.
     const el = term.element;
-    const TOUCH_LINE_PX = 18; // ~ eine Terminalzeile Swipe pro Pfeiltaste
+    const TOUCH_LINE_PX = 18; // ~ one terminal line of swipe per arrow keystroke
     let lastY: number | null = null;
     let accum = 0;
 
     const onTouchStart = (e: TouchEvent) => {
-      if (e.touches.length !== 1) { lastY = null; return; } // Pinch/Multi ignorieren
+      if (e.touches.length !== 1) { lastY = null; return; } // ignore pinch/multi-touch
       lastY = e.touches[0].clientY;
       accum = 0;
     };
@@ -222,15 +222,15 @@ function useAgentTerminal(
       const lines = Math.trunc(accum / TOUCH_LINE_PX);
       if (lines !== 0) {
         accum -= lines * TOUCH_LINE_PX;
-        // Finger nach unten (lines>0, Inhalt wandert runter) → ältere History → hoch
+        // Finger moving down (lines>0, content moves down) → older history → up
         scrollByLines(-lines);
       }
-      e.preventDefault(); // native Page-Bounce / Selektion unterdrücken
+      e.preventDefault(); // suppress native page bounce / selection
     };
     const onTouchEnd = () => { lastY = null; };
 
-    // Capture-Phase: feuert garantiert, auch falls ein xterm-Kind die Touch-
-    // Events per stopPropagation abfängt (Bubble-Phase käme dann nie an).
+    // Capture phase: fires reliably, even if an xterm child intercepts the
+    // touch events via stopPropagation (bubble phase would then never arrive).
     el?.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
     el?.addEventListener("touchmove", onTouchMove, { passive: false, capture: true });
     el?.addEventListener("touchend", onTouchEnd, { passive: true, capture: true });
@@ -242,7 +242,7 @@ function useAgentTerminal(
       el?.removeEventListener("touchmove", onTouchMove, { capture: true });
       el?.removeEventListener("touchend", onTouchEnd, { capture: true });
       el?.removeEventListener("touchcancel", onTouchEnd, { capture: true });
-      // Cleanup: falls noch in copy-mode beim unmount → verlassen
+      // Cleanup: if still in copy-mode on unmount → leave it
       if (inCopyModeRef.current && wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send("q");
         inCopyModeRef.current = false;
@@ -551,7 +551,7 @@ export default function SessionsPage() {
     qc.invalidateQueries({ queryKey: ["agents", "host-sessions"] });
   };
 
-  // Runtime-aware: host-agents nutzen SSH→launchctl, container nutzen docker.
+  // Runtime-aware: host agents use SSH→launchctl, containers use docker.
   const findAgent = (id: string) => agents.find((a) => a.id === id);
   const isHostAgent = (id: string) => findAgent(id)?.agent_runtime === "host";
 
@@ -564,8 +564,8 @@ export default function SessionsPage() {
     onSuccess: (_data, agentId) => {
       notify.success("Session neu gestartet");
       invalidate();
-      // tmux-PTY ist nach Restart neu — Terminal muss neu mounten,
-      // sonst haengt der alte WebSocket im frozen buffer.
+      // tmux PTY is new after restart — the terminal must remount,
+      // otherwise the old WebSocket is stuck on a frozen buffer.
       setRestartTick((prev) => ({ ...prev, [agentId]: (prev[agentId] ?? 0) + 1 }));
     },
     onError: (e: Error) => notify.error(`Restart fehlgeschlagen: ${e.message}`),
@@ -594,7 +594,7 @@ export default function SessionsPage() {
     onSettled: () => setPendingId(null),
   });
 
-  // Auto-select erster laufender Agent
+  // Auto-select the first running agent
   useEffect(() => {
     if (agents.length > 0 && !selected) {
       const running = agents.find((a) => agentIsRunning(a));

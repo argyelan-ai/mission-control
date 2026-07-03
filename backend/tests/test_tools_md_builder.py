@@ -1,9 +1,9 @@
-"""Tests fuer tools_md_builder.py — Token-Sicherheit, Delegation, Skills-Passthrough."""
+"""Tests for tools_md_builder.py — token safety, delegation, skills passthrough."""
 from app.services.tools_md_builder import generate_tools_md
 
 
 def test_no_raw_token_in_output():
-    """TOOLS.md darf keinen hardcoded Token enthalten — nur $MC_AGENT_TOKEN."""
+    """TOOLS.md must not contain a hardcoded token — only $MC_AGENT_TOKEN."""
     raw_token = "supersecrettoken123"
     result = generate_tools_md(
         name="TestAgent",
@@ -17,7 +17,7 @@ def test_no_raw_token_in_output():
 
 
 def test_no_raw_token_board_lead():
-    """Board Lead TOOLS.md darf ebenfalls keinen hardcoded Token enthalten."""
+    """Board Lead TOOLS.md must also not contain a hardcoded token."""
     raw_token = "anothersecret456"
     result = generate_tools_md(
         name="Henry",
@@ -31,7 +31,7 @@ def test_no_raw_token_board_lead():
 
 
 def test_no_raw_token_no_board():
-    """Auch ohne board_id: kein hardcoded Token."""
+    """Even without board_id: no hardcoded token."""
     raw_token = "tokenwithoutboard"
     result = generate_tools_md(
         name="Wanderer",
@@ -44,7 +44,7 @@ def test_no_raw_token_no_board():
 
 
 def test_non_board_lead_has_assigned_agent_id():
-    """Nicht-Board-Lead Task-Erstellung muss assigned_agent_id und parent_task_id enthalten."""
+    """Non-board-lead task creation must contain assigned_agent_id and parent_task_id."""
     result = generate_tools_md(
         name="Planner",
         emoji="📋",
@@ -57,7 +57,7 @@ def test_non_board_lead_has_assigned_agent_id():
 
 
 def test_task_creation_has_stitch_passthrough_instruction():
-    """Task-Erstellung muss Hinweis enthalten, Skills/Tools aus dem Haupt-Task weiterzugeben."""
+    """Task creation must contain a note to pass skills/tools on from the main task."""
     result = generate_tools_md(
         name="Planner",
         emoji="📋",

@@ -251,7 +251,7 @@ export interface Task {
   last_activity_at: string | null;
   created_at: string;
   updated_at: string;
-  // Ersteller
+  // Creator
   created_by_user_id: string | null;
 }
 
@@ -276,8 +276,8 @@ export interface TaskDeliverable {
   is_reusable?: boolean;
   git_commit_hash?: string | null;
   created_at: string;
-  // Nur gesetzt wenn LIST mit ?include_subtasks=true aufgerufen wurde.
-  // Erlaubt UI-Gruppierung nach Quell-Task ohne eine zusaetzliche Query.
+  // Only set when LIST was called with ?include_subtasks=true.
+  // Allows UI grouping by source task without an extra query.
   source_task_id?: string;
   source_task_title?: string;
   source_depth?: number; // 0 = self, 1 = direct child, 2 = grandchild, ...
@@ -473,7 +473,7 @@ export interface Agent {
   emoji: string | null;
   status: AgentStatus;
   model: string | null;
-  secret_id: string | null;  // Per-Agent API-Key override (FK auf secrets.id)
+  secret_id: string | null;  // Per-Agent API-Key override (FK to secrets.id)
   is_board_lead: boolean;
   heartbeat_config: { interval: string; target: string };
   skills: string[];
@@ -1367,7 +1367,7 @@ export interface AutonomyConfig {
 }
 
 // ── Usage Tracking V1 (Theme 4: Wave 2) ─────────────────────────────────────
-// Ehrliches V1: Momentaufnahme, keine Token-Zaehlung.
+// Honest V1: snapshot only, no token counting.
 
 export interface AgentUsageSnapshot {
   agent_id: string;
@@ -1548,7 +1548,7 @@ export interface Runtime {
   control_url?: string | null;      // Flask :5555 control plane (e.g. http://192.0.2.20:5555)
   wol_mac_address?: string | null;  // target MAC for the Wake-on-LAN magic packet
   power_managed?: boolean;          // true → runtime sleeps when idle, gets a "Wecken" action
-  // State (von der API angereichert) — optional auf DB-Responses.
+  // State (enriched by the API) — optional on DB responses.
   state?: RuntimeState;
   http_reachable?: boolean;
   container_status?: string | null;
@@ -1604,7 +1604,7 @@ export interface RuntimeCreate {
   lms_cli_path?: string;
   /** DEPRECATED legacy host string — bind via host_id (Host Registry, ADR-048). */
   host?: string;
-  /** Host-Registry-Bindung: Host-UUID; explizites null = unbind (PATCH /runtimes/db/{slug}). */
+  /** Host Registry binding: host UUID; explicit null = unbind (PATCH /runtimes/db/{slug}). */
   host_id?: string | null;
   role_tags?: string[];
   supports_tools?: boolean;

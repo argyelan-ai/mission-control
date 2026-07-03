@@ -10,8 +10,8 @@ import { C } from "@/lib/colors";
 type LaneKey = "inbox" | "in_progress" | "review" | "user_test" | "blocked" | "failed" | "aborted" | "done";
 
 function priorityStripeGradient(priority: string, isDone: boolean): string {
-  // Done = Ruhe: stark gedämpfter Streifen statt Voll-Grün — das satte
-  // C.online kollidierte auf Home mit den Health-/KPI-Grüns (Operator, 11.06.)
+  // Done = calm: heavily muted stripe instead of full green — the saturated
+  // C.online clashed with the health/KPI greens on Home (operator, Jun 11)
   if (isDone) return `linear-gradient(180deg, ${C.online}59, ${C.online}26)`;
   switch (priority) {
     case "critical": return `linear-gradient(180deg, ${C.error}, ${C.error}CC)`;

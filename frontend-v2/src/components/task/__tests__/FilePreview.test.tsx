@@ -54,9 +54,9 @@ describe("FilePreview", () => {
   });
 
   it("offers Download for image types too (preview + fallback)", async () => {
-    // String-Body statt jsdom-Blob: undicis Response.blob() ruft intern
-    // body.stream() auf, das jsdoms Blob nicht implementiert (CI-only-Crash;
-    // lokal kaschiert neueres Node die Interop).
+    // String body instead of a jsdom Blob: undici's Response.blob() calls
+    // body.stream() internally, which jsdom's Blob doesn't implement
+    // (CI-only crash; locally a newer Node version papers over the interop gap).
     fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("x", { status: 200 })
     );

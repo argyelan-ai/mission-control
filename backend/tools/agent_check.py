@@ -1,8 +1,8 @@
 """
-Agent-Diagnose-Tool fuer Mission Control.
+Agent diagnostic tool for Mission Control.
 
-Laeuft im Backend-Container und gibt einen strukturierten Bericht
-ueber den aktuellen Zustand eines Agents aus.
+Runs in the backend container and outputs a structured report
+about the current state of an agent.
 
 Usage:
   docker compose exec -T backend python3 tools/agent_check.py <agent_name>
@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 
 async def check_agent(agent_name: str) -> dict:
-    """Vollstaendige Diagnose eines Agents."""
+    """Full diagnostic of an agent."""
     from sqlmodel import select
     from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -32,7 +32,7 @@ async def check_agent(agent_name: str) -> dict:
         "problems": [],
     }
 
-    # ── 1. Agent aus DB laden ──
+    # ── 1. Load agent from DB ──
     async with AsyncSession(engine, expire_on_commit=False) as session:
         result = await session.exec(
             select(Agent).where(Agent.name.ilike(f"%{agent_name}%"))  # type: ignore
@@ -54,7 +54,7 @@ async def check_agent(agent_name: str) -> dict:
             "provision_status": agent.provision_status,
         }
 
-        # ── 2. Aktive Tasks laden ──
+        # ── 2. Load active tasks ──
         task_result = await session.exec(
             select(Task).where(
                 Task.assigned_agent_id == agent.id,
@@ -74,7 +74,7 @@ async def check_agent(agent_name: str) -> dict:
                 "ack_at": t.ack_at.isoformat() if t.ack_at else None,
             }
 
-            # Projekt-Info laden
+            # Load project info
             if t.project_id:
                 from app.models.board import Project
                 proj = await session.get(Project, t.project_id)
@@ -82,7 +82,7 @@ async def check_agent(agent_name: str) -> dict:
                     task_info["project"] = proj.name
                     task_info["project_workspace"] = proj.workspace_path
 
-            # Letzter Kommentar
+            # Last comment
             comment_result = await session.exec(
                 select(TaskComment)
                 .where(TaskComment.task_id == t.id)
@@ -99,7 +99,7 @@ async def check_agent(agent_name: str) -> dict:
 
             report["tasks"].append(task_info)
 
-        # ── 3. Gateway-Session pruefen ──
+        # ── 3. Check gateway session ──
         if not agent.gateway_agent_id:
             report["session"] = {"status": "NO_GATEWAY_ID"}
             report["problems"].append("Agent hat keine gateway_agent_id")
@@ -110,7 +110,7 @@ async def check_agent(agent_name: str) -> dict:
             raw_sessions = await rpc.sessions_list(limit=100)
             sessions = raw_sessions if isinstance(raw_sessions, list) else raw_sessions.get("sessions", [])
 
-            # Sessions fuer diesen Agent finden
+            # Find sessions for this agent
             gw_id = agent.gateway_agent_id
             agent_sessions = [s for s in sessions if s.get("key", "").startswith(f"agent:{gw_id}")]
 
@@ -133,7 +133,7 @@ async def check_agent(agent_name: str) -> dict:
                     "all_keys": [s.get("key", "") for s in agent_sessions],
                 }
 
-                # ── 4. Chat-History pruefen ──
+                # ── 4. Check chat history ──
                 try:
                     history_result = await rpc.request(
                         "chat.history", {"sessionKey": session_key, "limit": 50}
@@ -146,7 +146,7 @@ async def check_agent(agent_name: str) -> dict:
                         if report.get("tasks"):
                             report["problems"].append("Session leer aber hat aktive Tasks!")
                     else:
-                        # Letzte 3 Messages zusammenfassen
+                        # Summarize last 3 messages
                         last_messages = []
                         for msg in messages[-3:]:
                             role = msg.get("role", "?")
@@ -166,7 +166,7 @@ async def check_agent(agent_name: str) -> dict:
                                     raw = tool_results[0].get("content", "")
                                     content = f"[result] {str(raw)[:200]}"
                                 else:
-                                    # Gemischte Bloecke (z.B. tool_use + text + thinking)
+                                    # Mixed blocks (e.g. tool_use + text + thinking)
                                     parts = []
                                     for b in content:
                                         btype = b.get("type", "?")
@@ -189,7 +189,7 @@ async def check_agent(agent_name: str) -> dict:
 
                         report["session"]["last_messages"] = last_messages
 
-                        # Leere Assistant-Antwort erkennen
+                        # Detect empty assistant response
                         last_msg = messages[-1]
                         if last_msg.get("role") == "assistant":
                             last_content = last_msg.get("content", "")
@@ -218,9 +218,9 @@ async def check_agent(agent_name: str) -> dict:
                                         "Letzte Antwort hat keinen Text-Content"
                                     )
 
-                        # Pruefen ob letzte Message ein tool_result ist (Agent wartet auf nichts)
+                        # Check whether last message is a tool_result (agent isn't waiting on anything)
                         if messages[-1].get("role") == "user":
-                            # Letzte Message ist von User/System — Agent sollte antworten
+                            # Last message is from user/system — agent should respond
                             pass
 
                 except Exception as e:
@@ -231,7 +231,7 @@ async def check_agent(agent_name: str) -> dict:
             report["session"] = {"status": "RPC_ERROR", "error": str(e)}
             report["problems"].append(f"RPC-Verbindung fehlgeschlagen: {e}")
 
-    # ── 5. Problem-Zusammenfassung ──
+    # ── 5. Problem summary ──
     if not report["problems"]:
         if report.get("tasks"):
             in_progress = [t for t in report["tasks"] if t["status"] == "in_progress"]
@@ -251,7 +251,7 @@ async def check_agent(agent_name: str) -> dict:
 
 
 def format_report(report: dict) -> str:
-    """Menschenlesbarer Bericht."""
+    """Human-readable report."""
     lines = []
     status_emoji = {
         "WORKING": "[OK]",
@@ -263,7 +263,7 @@ def format_report(report: dict) -> str:
     lines.append(f"{emoji} Agent: {report['agent']} — Status: {report['status']}")
     lines.append("")
 
-    # Agent-Info
+    # Agent info
     info = report.get("agent_info", {})
     if info:
         lines.append(f"  Rolle: {info.get('role', '?')} | Modell: {info.get('model', '?')}")
@@ -304,7 +304,7 @@ def format_report(report: dict) -> str:
                     lines.append(f"    {role_label}: {content_preview}")
         lines.append("")
 
-    # Probleme
+    # Problems
     problems = report.get("problems", [])
     if problems:
         lines.append("  PROBLEME:")
@@ -317,7 +317,7 @@ def format_report(report: dict) -> str:
 
 
 async def check_all() -> list[dict]:
-    """Alle Agents mit Gateway-ID pruefen."""
+    """Check all agents with a gateway ID."""
     from sqlmodel import select
     from sqlmodel.ext.asyncio.session import AsyncSession
 

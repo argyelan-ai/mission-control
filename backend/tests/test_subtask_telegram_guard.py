@@ -1,15 +1,15 @@
-"""Tests für die Subtask-Send-Guard (Routing-Regel "wer dispatcht, der sendet").
+"""Tests for the subtask send guard (routing rule "whoever dispatches, sends").
 
-Vor diesem Patch sendete sowohl Researcher (als Subtask-Worker) als auch
-Boss (als Orchestrator) `mc telegram` — doppelter Hit beim User. Diese
-Tests pinnen die neue Boundary:
+Before this patch, both the Researcher (as subtask worker) and Boss (as
+orchestrator) sent `mc telegram` — a double hit for the user. These tests
+pin the new boundary:
 
-| # | Szenario                                       | Verhalten                  |
+| # | Scenario                                       | Behavior                   |
 |---|------------------------------------------------|----------------------------|
-| 1 | Subtask + autonomous_telegram=False            | mc telegram → 422 (Guard)  |
-| 2 | Subtask + autonomous_telegram=True             | mc telegram → 200          |
-| 3 | Standalone-Task (parent_task_id IS NULL)       | mc telegram → 200          |
-| 4 | Parent-Task selbst (parent IS NULL, hat Subs)  | mc telegram → 200          |
+| 1 | Subtask + autonomous_telegram=False            | mc telegram → 422 (guard)  |
+| 2 | Subtask + autonomous_telegram=True              | mc telegram → 200          |
+| 3 | Standalone task (parent_task_id IS NULL)        | mc telegram → 200          |
+| 4 | Parent task itself (parent IS NULL, has subs)   | mc telegram → 200          |
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def _mock_reports() -> MagicMock:
 
 
 async def _setup_subtask(*, autonomous: bool):
-    """Erstellt Board + Worker + Parent + Subtask. Worker hat current_task_id=subtask."""
+    """Creates board + worker + parent + subtask. Worker has current_task_id=subtask."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -65,7 +65,7 @@ async def _setup_subtask(*, autonomous: bool):
 
 
 async def _setup_standalone(*, role: str = "researcher"):
-    """Erstellt Board + Worker + Standalone-Task (kein parent_task_id)."""
+    """Creates board + worker + standalone task (no parent_task_id)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -101,7 +101,7 @@ async def _setup_standalone(*, role: str = "researcher"):
 
 @pytest.mark.asyncio
 async def test_subtask_send_telegram_blocked_by_default(client, fake_redis):
-    """Default-Subtask darf nicht direkt an den Operator senden — Boss konsolidiert."""
+    """Default subtask may not send directly to the operator — Boss consolidates."""
     data = await _setup_subtask(autonomous=False)
 
     with patch("app.services.telegram_reports.telegram_reports", _mock_reports()):
@@ -123,7 +123,7 @@ async def test_subtask_send_telegram_blocked_by_default(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_subtask_send_telegram_allowed_when_autonomous(client, fake_redis):
-    """Long-running Watch-Tasks: Boss setzt Flag, Worker darf senden."""
+    """Long-running watch tasks: Boss sets the flag, worker is allowed to send."""
     data = await _setup_subtask(autonomous=True)
     mock_reports = _mock_reports()
 
@@ -139,12 +139,12 @@ async def test_subtask_send_telegram_allowed_when_autonomous(client, fake_redis)
 
 
 # ────────────────────────────────────────────────────────────────────
-# 3. Standalone-Task (kein Parent) → 200
+# 3. Standalone task (no parent) → 200
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_standalone_task_send_telegram_passes(client, fake_redis):
-    """Scheduled-/Standalone-Tasks (z.B. Morning Briefing) → Worker = Sender."""
+    """Scheduled/standalone tasks (e.g. morning briefing) → worker = sender."""
     data = await _setup_standalone()
     mock_reports = _mock_reports()
 
@@ -160,13 +160,13 @@ async def test_standalone_task_send_telegram_passes(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 4. Parent-Task selbst (kein parent, hat aber Subtasks) → 200
+# 4. Parent task itself (no parent, but has subtasks) → 200
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_orchestrator_parent_task_send_telegram_passes(client, fake_redis):
-    """Boss arbeitet am Parent-Task (parent_task_id IS NULL) → er darf senden,
-    auch wenn unter ihm Subtasks hängen. Das ist die Konsolidier-Nachricht."""
+    """Boss works on the parent task (parent_task_id IS NULL) → it may send,
+    even if subtasks hang below it. This is the consolidation message."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task

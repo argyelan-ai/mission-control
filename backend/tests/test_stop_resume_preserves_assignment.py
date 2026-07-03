@@ -1,14 +1,15 @@
-"""Tests fuer stop_task_run + resume_task_run — assigned_agent_id bleibt erhalten.
+"""Tests for stop_task_run + resume_task_run — assigned_agent_id is preserved.
 
-Bug-Repro 2026-04-24: Der Operator stoppte Sparky's Task, restartete Container, requeued.
-Task landete im Inbox ohne assigned_agent_id → Sparky bekam ihn nicht zurück.
+Bug repro 2026-04-24: The operator stopped Sparky's task, restarted the container,
+requeued it. Task ended up in the inbox without assigned_agent_id → Sparky didn't
+get it back.
 
-Root Cause: stop_task_run rief apply_terminal_unassign → Unassign. resume_task_run
-stellte nichts wieder her → orphaned Task.
+Root cause: stop_task_run called apply_terminal_unassign → unassign. resume_task_run
+didn't restore anything → orphaned task.
 
-Fix: stop_task_run behaelt assigned_agent_id. Der Agent-Poll-Pfad state="stopped"
-(agents.py:2635) respektiert run_control=stopped bereits sauber — erfordert aber
-dass der Agent noch assigned ist um den Stop zu sehen.
+Fix: stop_task_run keeps assigned_agent_id. The agent poll path state="stopped"
+(agents.py:2635) already handles run_control=stopped cleanly — but it requires
+the agent to still be assigned in order to see the stop.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -20,10 +21,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from tests.conftest import test_engine
 
 
-# Autouse: Patch get_redis() fuer alle Tests in diesem Modul. emit_event +
-# andere Backend-Services rufen get_redis() direkt (nicht via Depends), daher
-# Monkey-Patching der Modul-Referenzen noetig wenn wir nicht via HTTP-Client
-# testen.
+# Autouse: patch get_redis() for all tests in this module. emit_event +
+# other backend services call get_redis() directly (not via Depends), so
+# monkey-patching the module references is necessary when we're not
+# testing via the HTTP client.
 @pytest.fixture(autouse=True)
 async def _patch_redis(monkeypatch):
     server = fakeredis.aioredis.FakeServer()
@@ -32,7 +33,7 @@ async def _patch_redis(monkeypatch):
     async def _fake_get_redis():
         return fake
 
-    # Patchen in allen Modulen die get_redis direkt importieren
+    # Patch in all modules that import get_redis directly
     import app.redis_client as redis_mod
     import app.services.sse as sse_mod
     monkeypatch.setattr(redis_mod, "get_redis", _fake_get_redis)
@@ -73,7 +74,7 @@ async def _make_running_task():
         )
         s.add(task)
 
-        # Agent mit current_task_id verbinden
+        # Link agent with current_task_id
         agent.current_task_id = task.id
         s.add(agent)
         await s.commit()
@@ -85,10 +86,10 @@ async def _make_running_task():
 
 @pytest.mark.asyncio
 async def test_stop_preserves_assigned_agent_id():
-    """stop_task_run darf assigned_agent_id NICHT auf None setzen.
+    """stop_task_run must NOT set assigned_agent_id to None.
 
-    Grund: der Agent-Poll-Pfad state="stopped" (agents.py:2635) braucht den
-    Agent-Link um den Stop zu erkennen und die Session sauber zu terminieren.
+    Reason: the agent poll path state="stopped" (agents.py:2635) needs the
+    agent link to detect the stop and terminate the session cleanly.
     """
     from app.models.task import Task
     from app.services.operations import stop_task_run
@@ -111,7 +112,7 @@ async def test_stop_preserves_assigned_agent_id():
 
 @pytest.mark.asyncio
 async def test_stop_clears_current_task_id_but_keeps_assignment():
-    """Agent's current_task_id wird freigegeben (Lock), aber Task.assigned_agent_id bleibt."""
+    """Agent's current_task_id is released (lock), but Task.assigned_agent_id stays."""
     from app.models.agent import Agent
     from app.models.task import Task
     from app.services.operations import stop_task_run
@@ -125,16 +126,16 @@ async def test_stop_clears_current_task_id_but_keeps_assignment():
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         fresh_task = await s.get(Task, task.id)
         fresh_agent = await s.get(Agent, agent.id)
-        # Task-Seite: assigned bleibt
+        # Task side: assigned stays
         assert fresh_task.assigned_agent_id == agent.id
-        # Agent-Seite: Lock freigegeben
+        # Agent side: lock released
         assert fresh_agent.current_task_id is None
         assert fresh_agent.run_state == "idle"
 
 
 @pytest.mark.asyncio
 async def test_resume_restores_to_inbox_with_fresh_attempt_id():
-    """resume_task_run setzt status=inbox + generiert frische dispatch_attempt_id."""
+    """resume_task_run sets status=inbox + generates a fresh dispatch_attempt_id."""
     from app.models.task import Task
     from app.services.operations import stop_task_run, resume_task_run
 
@@ -145,7 +146,7 @@ async def test_resume_restores_to_inbox_with_fresh_attempt_id():
         await stop_task_run(s, task.id, "mark")
         await s.commit()
 
-    # Resume (mit mock für auto_dispatch_task da keine echte dispatch-Kette hier)
+    # Resume (with mock for auto_dispatch_task since there's no real dispatch chain here)
     with patch(
         "app.services.dispatch.auto_dispatch_task",
         new_callable=AsyncMock,
@@ -159,21 +160,21 @@ async def test_resume_restores_to_inbox_with_fresh_attempt_id():
         assert fresh.run_control is None
         assert fresh.dispatched_at is None
         assert fresh.ack_at is None
-        # Der Fix: assigned_agent_id bleibt durchgehend erhalten
+        # The fix: assigned_agent_id is preserved throughout
         assert fresh.assigned_agent_id == agent.id, (
             f"Resume muss assigned_agent_id behalten — sonst orphaned Task. "
             f"Got: {fresh.assigned_agent_id}"
         )
-        # dispatch_attempt_id wird in resume_task_run initial gesetzt, aber
-        # kann durch auto_dispatch_task neu generiert oder auf None gesetzt
-        # werden (siehe agent_scoped.py:3748 Stale-prevention). Wichtig:
-        # NACH Resume ist entweder ein frischer Wert ODER None, auf keinen
-        # Fall der alte vor-Stop-Wert.
+        # dispatch_attempt_id is initially set in resume_task_run, but
+        # can be regenerated or set to None by auto_dispatch_task
+        # (see agent_scoped.py:3748 stale-prevention). Important:
+        # AFTER resume it's either a fresh value OR None, never
+        # the old pre-stop value.
 
 
 @pytest.mark.asyncio
 async def test_resume_triggers_auto_dispatch():
-    """Resume ruft auto_dispatch_task um Task aktiv zum Agent zurueckzuschicken."""
+    """Resume calls auto_dispatch_task to actively send the task back to the agent."""
     from app.services.operations import stop_task_run, resume_task_run
 
     agent, task, board_id = await _make_running_task()
@@ -200,7 +201,7 @@ async def test_resume_triggers_auto_dispatch():
 
 @pytest.mark.asyncio
 async def test_stop_resume_roundtrip_preserves_agent():
-    """End-to-End Szenario (Live-Bug des Operators):
+    """End-to-end scenario (operator's live bug):
     Task → in_progress → stop → resume → inbox + same agent + fresh attempt_id."""
     from app.models.task import Task
     from app.services.operations import stop_task_run, resume_task_run

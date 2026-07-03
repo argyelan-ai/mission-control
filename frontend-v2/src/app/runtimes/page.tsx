@@ -35,7 +35,7 @@ import Link from "next/link";
 import { Plug } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 
-// ── State-Konfiguration ───────────────────────────────────────────────────────
+// ── State Configuration ───────────────────────────────────────────────────────
 
 const STATE_CONFIG: Record<
   RuntimeState,
@@ -260,7 +260,7 @@ function ContextSettingsPanel({
   initialCtx: number | null;
   onClose: () => void;
 }) {
-  // null = "Standard" (kein Override — LM Studio globaler Default)
+  // null = "Standard" (no override — LM Studio global default)
   const [selected, setSelected] = useState<number | null>(initialCtx);
   const [customInput, setCustomInput] = useState("");
   const [customError, setCustomError] = useState(false);
@@ -308,7 +308,7 @@ function ContextSettingsPanel({
           </span>
         </div>
 
-        {/* Preset pills — Standard + numerische Presets */}
+        {/* Preset pills — Standard + numeric presets */}
         <div className="flex gap-1.5 flex-wrap mb-3">
           <button
             onClick={() => setSelected(null)}
@@ -342,7 +342,7 @@ function ContextSettingsPanel({
           })}
         </div>
 
-        {/* Slider — nur aktiv wenn nicht Standard */}
+        {/* Slider — only active when not Standard */}
         <div className="mb-3">
           <input
             type="range"
@@ -395,7 +395,7 @@ function ContextSettingsPanel({
           )}
         </div>
 
-        {/* Hinweis + Save */}
+        {/* Hint + Save */}
         <div className="flex items-center justify-between gap-2">
           <span style={{ color: C.textDim, fontSize: "10px" }}>
             {isStandard ? "Nutzt LM Studio Globaleinstellung" : "Wird beim nächsten Laden verwendet"}
@@ -572,7 +572,7 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
   );
 }
 
-// ── Quantisierungs-Picker ─────────────────────────────────────────────────────
+// ── Quantization Picker ─────────────────────────────────────────────────────
 
 function QuantPicker({ modelId, onDownload, isPending }: {
   modelId: string;
@@ -645,7 +645,7 @@ function ModelCatalog() {
   const [submitted, setSubmitted] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [isError, setIsError] = useState(false);
-  const [pickingModel, setPickingModel] = useState<string | null>(null); // model_id für Quantisierungs-Picker
+  const [pickingModel, setPickingModel] = useState<string | null>(null); // model_id for the quantization picker
 
   const { data: installedData } = useQuery<LMStudioModelsResponse>({
     queryKey: ["lms-models"],
@@ -770,7 +770,7 @@ function ModelCatalog() {
             </a>
           )}
 
-          {/* Suchfeld */}
+          {/* Search field */}
           <div className="flex gap-2 mb-4">
             <input
               type="text"
@@ -820,7 +820,7 @@ function ModelCatalog() {
             </div>
           )}
 
-          {/* LM Studio Ergebnisse */}
+          {/* LM Studio results */}
           {isLms && submitted && (
             catalogLoading ? (
               <div className="text-xs text-center py-4" style={{ color: C.textMuted }}>
@@ -894,7 +894,7 @@ function ModelCatalog() {
             )
           )}
 
-          {/* HuggingFace Ergebnisse */}
+          {/* HuggingFace results */}
           {!isLms && submitted && (
             hfLoading ? (
               <div className="text-xs text-center py-4" style={{ color: C.textMuted }}>
@@ -1127,8 +1127,8 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
         overflow: "hidden",
       }}
     >
-      {/* Main row — mobil 2-zeilig: Name/Meta oben, Aktionen darunter rechts
-          (eine Zeile quetschte auf 390px Name gegen 5 Buttons) */}
+      {/* Main row — mobile 2-line layout: name/meta on top, actions below right
+          (a single row squeezed the name against 5 buttons at 390px) */}
       <div className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3">
         <div className="flex items-center gap-3 min-w-0 sm:flex-1">
         {/* Status dot */}
@@ -1159,7 +1159,7 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
                   ? "Unsloth · PORSCHE"
                   : "vLLM Docker"}
             </span>
-            {/* Host-Chip (ADR-048) — nur wenn die Runtime an einen Host gebunden ist */}
+            {/* Host chip (ADR-048) — only when the runtime is bound to a host */}
             {runtime.host && (
               <>
                 <span style={{ color: C.borderSubtle }}>·</span>
@@ -1449,7 +1449,7 @@ export default function RuntimesPage() {
   const lmsRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "lmstudio") ?? [];
   const vllmRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "vllm_docker") ?? [];
 
-  // Modelle die bereits als RuntimeCard erscheinen → aus LMStudioModelCard-Liste rausfiltern
+  // Models that already appear as a RuntimeCard → filter out of the LMStudioModelCard list
   const configuredLmsIds = new Set(lmsRuntimes.map((r) => r.lms_identifier).filter(Boolean));
   const unattachedModels = (lmsData?.models ?? []).filter(
     (m) => !configuredLmsIds.has(m.id)
@@ -1495,10 +1495,10 @@ export default function RuntimesPage() {
           </button>
         </div>
 
-        {/* Host-Metriken — eine Bar pro enabled Host (ADR-048) */}
+        {/* Host metrics — one bar per enabled host (ADR-048) */}
         <HostMetricsBar />
 
-        {/* vLLM Docker Sektion */}
+        {/* vLLM Docker section */}
         <div className="mb-8">
           <div className="flex items-center gap-3 mb-4">
             <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.info} 0%, transparent 100%)`, minHeight: "36px" }} />
@@ -1541,7 +1541,7 @@ export default function RuntimesPage() {
           )}
         </div>
 
-        {/* LM Studio Sektion */}
+        {/* LM Studio section */}
         <div>
           <div className="flex items-center gap-3 mb-4">
             <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.accent} 0%, transparent 100%)`, minHeight: "36px" }} />
@@ -1566,7 +1566,7 @@ export default function RuntimesPage() {
             </div>
           )}
 
-          {/* Aktiv / Inaktiv Bereiche */}
+          {/* Active / Inactive sections */}
           {(() => {
             const lmsSizeMap = new Map((lmsData?.models ?? []).map((m) => [m.id, m.size_gb]));
             const getSizeGb = (rt: Runtime) => lmsSizeMap.get(rt.lms_identifier ?? "") ?? undefined;

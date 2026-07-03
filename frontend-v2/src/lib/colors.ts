@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Mission Control — Color Tokens („Der Leitstand", siehe DESIGN.md)
+ * Mission Control — Color Tokens („Der Leitstand", see DESIGN.md)
  * Design-Guideline: Serious. Dark. No neon. No purple.
  *
  * Inspirations: Bloomberg Terminal, Linear.app, Stripe Dashboard
@@ -11,8 +11,8 @@
  *   - Status colors muted, never glowing
  *   - No blur, no glass, no shadow-glow
  *
- * App-weite Single Source seit Juni 2026 (vorher components/homepage/colors.ts —
- * dort liegt ein Re-Export für bestehende Imports).
+ * App-wide single source since June 2026 (previously components/homepage/colors.ts —
+ * a re-export lives there for existing imports).
  */
 
 export const C = {
@@ -78,20 +78,20 @@ export const LANE: Record<string, string> = {
   done: C.online,
 };
 
-// ── Status-Text — AA-sichere Stufen für Fliesstext auf dunklen Flächen ───────
-// C.error (3.7:1) und C.info (3.8:1) sind als Border/Fläche/Icon ok, aber zu
-// dunkel für Body-Text. Diese Stufen erfüllen ≥4.5:1 auf #050505–#161616.
+// ── Status text — AA-safe tones for body text on dark surfaces ──────────────
+// C.error (3.7:1) and C.info (3.8:1) are fine as border/surface/icon, but too
+// dark for body text. These tones meet ≥4.5:1 on #050505–#161616.
 
 export const STATUS_TEXT = {
-  online: C.online,   // 5.0:1 — unverändert nutzbar
-  warning: C.warning, // 5.6:1 — unverändert nutzbar
-  error: "#D05F5F",   // Text-Stufe von C.error
-  info: "#5A8CE0",    // Text-Stufe von C.info
+  online: C.online,   // 5.0:1 — usable unchanged
+  warning: C.warning, // 5.6:1 — usable unchanged
+  error: "#D05F5F",   // Text tone derived from C.error
+  info: "#5A8CE0",    // Text tone derived from C.info
 } as const;
 
-// ── Externe Marken-Farben — einzige erlaubte Nicht-Token-Farben ──────────────
-// Plattform-Identitäten (Logos, Social-Badges) bleiben original, werden aber
-// hier zentralisiert statt inline gestreut.
+// ── External brand colors — the only allowed non-token colors ──────────────
+// Platform identities (logos, social badges) stay original, but are
+// centralized here instead of scattered inline.
 
 export const BRAND: Record<string, string> = {
   linkedin: "#0A66C2",
@@ -101,7 +101,7 @@ export const BRAND: Record<string, string> = {
   instagram: "#E1306C",
   x: "#1DA1F2",        // X / Twitter
   telegram: "#26A5E4",
-  newsletter: "#FFB224", // internal neutral — amber für Newsletter-Brand
+  newsletter: "#FFB224", // internal neutral — amber for the Newsletter brand
   hackernews: "#FF6600",
   reddit: "#FF4500",
   anthropic: "#D4A373",

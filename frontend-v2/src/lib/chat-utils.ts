@@ -19,13 +19,13 @@ export function stripMarkdownBold(text: string): string {
 }
 
 export function parseOptionsFromMessage(content: string): ParsedMessage {
-  // <<STAGES: ...>> und <<STAGE: N>> Marker entfernen (nur fuer Step-Tracking)
+  // Strip <<STAGES: ...>> and <<STAGE: N>> markers (only for step tracking)
   content = content
     .replace(/<<STAGES:\s*.+?>>/g, "")
     .replace(/<<STAGE:\s*\d+\s*>>/g, "")
     .trim();
 
-  // Erlaubt [ A ] mit Leerzeichen innerhalb der Klammern
+  // Allows [ A ] with whitespace inside the brackets
   const optionRegex = /^\[\s*([A-D])\s*\]\s+(.+?)(?:\s*[-—–]\s*(.+))?$/gm;
   const options: ParsedOption[] = [];
   let match;
@@ -40,7 +40,7 @@ export function parseOptionsFromMessage(content: string): ParsedMessage {
 
   if (options.length < 2) return { textBefore: content, options: [] };
 
-  // Text vor der ersten Option extrahieren
+  // Extract text before the first option
   const firstOptionMatch = content.match(/\[\s*[A-D]\s*\]/);
   const firstOptionIdx = firstOptionMatch
     ? content.indexOf(firstOptionMatch[0])

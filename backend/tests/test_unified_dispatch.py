@@ -1,4 +1,4 @@
-"""Tests fuer Unified Push Dispatch + Pending Dispatch Queue."""
+"""Tests for unified push dispatch + pending dispatch queue."""
 import uuid
 from unittest.mock import patch
 

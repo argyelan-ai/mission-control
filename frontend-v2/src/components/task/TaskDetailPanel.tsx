@@ -199,7 +199,7 @@ function DeliverablesTab({
   const screenshots = deliverables.filter((d) => d.deliverable_type === "screenshot" && d.path);
   const others = deliverables.filter((d) => d.deliverable_type !== "screenshot" || !d.path);
 
-  // Subtask-Count: wenn include_subtasks=true, wie viele kommen aus Children?
+  // Subtask count: when include_subtasks=true, how many come from children?
   const fromSubtasks = deliverables.filter((d) => (d.source_depth ?? 0) > 0).length;
 
   return (
@@ -281,7 +281,7 @@ function DeliverablesTab({
         </div>
       )}
 
-      {/* Other deliverables — expandierbare Karten mit Preview */}
+      {/* Other deliverables — expandable cards with preview */}
       {others.length > 0 && (
         <div className="space-y-1.5">
           {others.map((d) => (
@@ -806,16 +806,16 @@ export default function TaskDetailPanel({
 
   const { data: deliverables } = useQuery({
     queryKey: ["deliverables", boardId, task.id, "include_subtasks"],
-    // include_subtasks=true zeigt auch Subtask-Deliverables — wichtig fuer
-    // Orchestrator-Parent-Tasks (Boss-Delegation) damit der Operator den gesamten
-    // Output-Tree sieht ohne jeden Subtask einzeln zu oeffnen. Grouping
-    // passiert client-side via source_depth / source_task_title.
+    // include_subtasks=true also shows subtask deliverables — important for
+    // orchestrator parent tasks (boss delegation) so the operator sees the full
+    // output tree without opening each subtask individually. Grouping
+    // happens client-side via source_depth / source_task_title.
     queryFn: () =>
       api.tasks.deliverables.list(boardId, task.id, { includeSubtasks: true, depth: 2 }),
     enabled: activeTab === "deliverables",
   });
 
-  // Git-Info (nur wenn workspace_path gesetzt)
+  // Git info (only when workspace_path is set)
   const { data: gitInfo } = useQuery<TaskGitInfo>({
     queryKey: ["task-git-info", boardId, task.id],
     queryFn: () => api.tasks.gitInfo(boardId, task.id),
@@ -833,7 +833,7 @@ export default function TaskDetailPanel({
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const currentUser = useAppStore((s) => s.currentUser);
 
-  // Ersteller-Name: currentUser wenn ID matcht, sonst User-Liste fetchen
+  // Creator name: currentUser if ID matches, otherwise fetch the user list
   const { data: usersList } = useQuery({
     queryKey: ["users-list"],
     queryFn: () => api.auth.users.list(),

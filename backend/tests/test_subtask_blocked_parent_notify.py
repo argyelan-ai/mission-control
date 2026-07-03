@@ -1,18 +1,18 @@
-"""Subtask → blocked muss einen System-Comment auf den Parent posten.
+"""Subtask → blocked must post a system comment on the parent.
 
-Lücke vor Fix (2026-04-23): Wenn ein Worker (z.B. Tester) einen Subtask auf
-`blocked` setzt, gab es zwar:
-  1. Eine Approval fuer den Operator
-  2. (Bei vorhandenem Gateway) eine RPC-Nachricht an den Lead
-  3. Ein Activity-Event
+Gap before fix (2026-04-23): when a worker (e.g. Tester) set a subtask to
+`blocked`, there was:
+  1. An approval for the operator
+  2. (If a gateway was present) an RPC message to the lead
+  3. An activity event
 
-Aber KEINEN sichtbaren Comment auf dem PARENT-Task. Der Parent-Owner (Boss
-oder ein orchestrierender Agent) sah im /poll keinen Hinweis und konnte nicht
-reagieren — der Parent blieb stuck bis ein menschlicher Eingriff erfolgte.
+But NO visible comment on the PARENT task. The parent owner (Boss or an
+orchestrating agent) saw no hint in /poll and couldn't react — the parent
+stayed stuck until a human intervened.
 
-Dieser Test deckt: nach blocked auf einem Subtask wird ein TaskComment vom
-Type 'blocker' auf dem Parent erstellt, der via /poll an den Parent-Owner
-ausgeliefert wird (siehe _DELIVER_SYSTEM_COMMENT_TYPES in agents.py).
+This test covers: after blocked on a subtask, a TaskComment of type
+'blocker' is created on the parent, which gets delivered to the parent
+owner via /poll (see _DELIVER_SYSTEM_COMMENT_TYPES in agents.py).
 """
 
 import uuid
@@ -26,10 +26,10 @@ from tests.conftest import test_engine
 
 
 async def _create_parent_subtask_setup(*, task_status: str = "in_progress"):
-    """Board + Worker (Tester) + Boss (Parent-Owner) + Parent-Task + Subtask.
+    """Board + Worker (Tester) + Boss (parent owner) + parent task + subtask.
 
-    Parent ist Boss zugewiesen, Subtask dem Worker — exakt das Setup aus dem
-    Live-Bug (Boss orchestriert, Tester arbeitet auf Subtask).
+    Parent is assigned to Boss, subtask to the worker — exactly the setup
+    from the live bug (Boss orchestrates, Tester works on the subtask).
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -55,9 +55,9 @@ async def _create_parent_subtask_setup(*, task_status: str = "in_progress"):
             agent_token_hash=worker_token_hash,
             is_board_lead=False,
             scopes=["tasks:read", "tasks:write"],
-            # Kein gateway_agent_id → cli-bridge-Agent ohne Gateway-RPC.
-            # Replicates production: Boss + Worker laufen via cli-bridge,
-            # die RPC-Notification-Strecke greift nicht.
+            # No gateway_agent_id → cli-bridge agent without gateway RPC.
+            # Replicates production: Boss + Worker run via cli-bridge,
+            # the RPC notification path doesn't apply.
         )
         s.add(worker)
 
@@ -108,7 +108,7 @@ async def _create_parent_subtask_setup(*, task_status: str = "in_progress"):
 
 @pytest.mark.asyncio
 async def test_subtask_blocked_posts_system_comment_on_parent(client, fake_redis):
-    """Subtask → blocked erzeugt einen 'blocker'-Comment auf dem Parent-Task."""
+    """Subtask → blocked creates a 'blocker' comment on the parent task."""
     data = await _create_parent_subtask_setup(task_status="in_progress")
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -147,20 +147,20 @@ async def test_subtask_blocked_posts_system_comment_on_parent(client, fake_redis
     assert cmt.author_type == "agent"
     assert cmt.author_agent_id == data["worker"].id
     assert "Subtask blocked" in cmt.content or "blocked" in cmt.content.lower()
-    # Subtask-Titel sollte erwaehnt sein
+    # Subtask title should be mentioned
     assert "Bullet-Test" in cmt.content
-    # Blocker-Frage sollte erwaehnt sein damit Boss kontextualisiert reagieren kann
+    # Blocker question should be mentioned so Boss can react with context
     assert "Sidecar" in cmt.content
 
 
 @pytest.mark.asyncio
 async def test_subtask_blocked_no_comment_when_blocked_on_subtask(client, fake_redis):
-    """Wenn der Subtask selbst auf einen weiteren Sub-Subtask wartet
-    (blocked_by_task_id gesetzt), ist das interne Orchestration —
-    kein Comment auf dem Parent (waere Laerm)."""
+    """If the subtask itself is waiting on another sub-subtask
+    (blocked_by_task_id set), that's internal orchestration —
+    no comment on the parent (would be noise)."""
     data = await _create_parent_subtask_setup(task_status="in_progress")
 
-    # Sub-Subtask anlegen auf den der subtask wartet
+    # Create the sub-subtask the subtask is waiting on
     from app.models.task import Task
     sub_subtask_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -205,7 +205,7 @@ async def test_subtask_blocked_no_comment_when_blocked_on_subtask(client, fake_r
 
 @pytest.mark.asyncio
 async def test_root_task_blocked_no_parent_comment(client, fake_redis):
-    """Root-Task (parent_task_id is None) → kein Parent-Comment-Versuch (no-op)."""
+    """Root task (parent_task_id is None) → no parent comment attempt (no-op)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -246,16 +246,16 @@ async def test_root_task_blocked_no_parent_comment(client, fake_redis):
                 headers={"Authorization": f"Bearer {worker_token_raw}"},
             )
 
-    # Root-Task blocked-Pfad muss weiterhin sauber durchlaufen
+    # Root task blocked path must still complete cleanly
     assert resp.status_code == 200, resp.text
     assert resp.json()["status"] == "blocked"
 
 
 @pytest.mark.asyncio
 async def test_subtask_blocked_no_self_echo(client, fake_redis):
-    """Wenn der Worker zufaellig SELBST der Parent-Owner ist (z.B. Boss
-    delegiert an sich selbst — selten aber moeglich), darf kein Echo-Comment
-    entstehen."""
+    """If the worker happens to be the parent owner ITSELF (e.g. Boss
+    delegates to itself — rare but possible), no echo comment must be
+    created."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task

@@ -426,8 +426,8 @@ export const api = {
         body: JSON.stringify({ path }),
       }),
 
-    // Phase E task-klammer — fetch every vault note that shares a `task`
-    // frontmatter field. Used by Reading-Panel's "Verwandt"-Sektion to
+    // Phase E task bracket — fetch every vault note that shares a `task`
+    // frontmatter field. Used by the Reading Panel's "Verwandt" section to
     // surface the rest of the task's output once the operator opens any single hit.
     related: (taskId: string) =>
       request<{
@@ -552,8 +552,8 @@ export const api = {
       request<import("./types").TaskDeliverable[]>(`/api/v1/boards/${boardId}/projects/${projectId}/deliverables`),
   },
 
-  // Planner deaktiviert 2026-04-11 (Boss-Autonomy-Overhaul). Backend-Router liefert 404.
-  // PlannerMessage-Type bleibt — wird noch von research: genutzt.
+  // Planner disabled 2026-04-11 (Boss autonomy overhaul). Backend router returns 404.
+  // PlannerMessage type stays — still used by research:.
 
   // ── Playbooks / Henry ───────────────────────────────────────────────────────
   playbooks: {
@@ -915,13 +915,13 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ board_id: boardId, provision: provision ?? false }),
       }),
-    // Setup-Coordination (Templates + USER.md + MEMORY.md neu generieren)
+    // Setup coordination (regenerate templates + USER.md + MEMORY.md)
     setupCoordination: (boardSlug = "mc-dev") =>
       request<{ board: string; agents: unknown[] }>("/api/v1/agents/setup-coordination", {
         method: "POST",
         body: JSON.stringify({ board_slug: boardSlug, sync_to_gateway: true }),
       }),
-    // Board-Zuweisung ändern
+    // Change board assignment
     assignBoard: (id: string, boardId: string | null) =>
       request<Agent>(`/api/v1/agents/${id}/assign-board`, {
         method: "PATCH",

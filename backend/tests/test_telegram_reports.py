@@ -1,4 +1,4 @@
-"""Tests fuer TelegramReportsService + /agent/telegram/send Endpoint."""
+"""Tests for TelegramReportsService + /agent/telegram/send endpoint."""
 
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -31,7 +31,7 @@ async def _setup_agent_with_chat_scope():
 
 @pytest.mark.asyncio
 async def test_telegram_report_sends_when_configured(client, fake_redis):
-    """Happy-Path: konfigurierter Bot sendet, API-Response wird durchgereicht."""
+    """Happy path: configured bot sends, API response is passed through."""
     _, token = await _setup_agent_with_chat_scope()
 
     mock_service = AsyncMock()
@@ -52,7 +52,7 @@ async def test_telegram_report_sends_when_configured(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_report_503_when_not_configured(client, fake_redis):
-    """Nicht konfigurierter Bot → 503 mit Hinweis."""
+    """Unconfigured bot → 503 with hint."""
     _, token = await _setup_agent_with_chat_scope()
 
     mock_service = AsyncMock()
@@ -107,7 +107,7 @@ async def test_telegram_report_rejects_over_4000_chars(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_report_surfaces_parse_error(client, fake_redis):
-    """Telegram parse_mode Fehler wird 1:1 an Agent durchgereicht fuer Self-Correct."""
+    """Telegram parse_mode error is passed through 1:1 to the agent for self-correction."""
     _, token = await _setup_agent_with_chat_scope()
 
     mock_service = AsyncMock()
@@ -130,7 +130,7 @@ async def test_telegram_report_surfaces_parse_error(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_report_requires_chat_write_scope(client, fake_redis):
-    """Agent ohne chat:write bekommt 403."""
+    """Agent without chat:write gets 403."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.auth import generate_agent_token
@@ -142,7 +142,7 @@ async def test_telegram_report_requires_chat_write_scope(client, fake_redis):
         s.add(Agent(
             id=uuid.uuid4(), name="Silent", role="researcher",
             board_id=board_id, agent_token_hash=token_hash,
-            scopes=["tasks:read"],  # KEIN chat:write
+            scopes=["tasks:read"],  # NO chat:write
             provision_status="provisioned",
         ))
         await s.commit()
@@ -155,11 +155,11 @@ async def test_telegram_report_requires_chat_write_scope(client, fake_redis):
     assert resp.status_code == 403
 
 
-# ── /telegram/send mit --photo (Screenshot-Deliverable) ────────────────────────
+# ── /telegram/send with --photo (screenshot deliverable) ────────────────────────
 
 
 async def _setup_agent_with_screenshot(deliverable_path: str, agent_id_override=None):
-    """Setup: Agent + Task + Screenshot-Deliverable."""
+    """Setup: agent + task + screenshot deliverable."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -196,13 +196,13 @@ async def _setup_agent_with_screenshot(deliverable_path: str, agent_id_override=
 
 @pytest.mark.asyncio
 async def test_telegram_photo_attach_calls_send_photo(client, fake_redis, tmp_path):
-    """Mit deliverable_id ruft Backend send_photo statt send."""
-    # File anlegen so dass _resolve_deliverable_fs_path es findet
+    """With deliverable_id, backend calls send_photo instead of send."""
+    # Create file so _resolve_deliverable_fs_path can find it
     fake_png = tmp_path / "test.png"
     fake_png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
-    # Path im Format /shared-mcp/<task_id>/test.png — Resolver nutzt /shared-mcp prefix
-    # Wir mocken _resolve_deliverable_fs_path damit wir nicht mit echten Mounts kämpfen.
+    # Path in format /shared-mcp/<task_id>/test.png — resolver uses /shared-mcp prefix
+    # We mock _resolve_deliverable_fs_path so we don't have to deal with real mounts.
     _, token, deliv_id, _ = await _setup_agent_with_screenshot(
         f"/shared-mcp/sometask/test.png"
     )
@@ -221,16 +221,16 @@ async def test_telegram_photo_attach_calls_send_photo(client, fake_redis, tmp_pa
 
     assert resp.status_code == 200, resp.text
     mock_service.send_photo.assert_called_once()
-    # send (text-only) wurde NICHT aufgerufen
+    # send (text-only) was NOT called
     mock_service.send.assert_not_called()
-    # Caption ist der text-Wert
+    # Caption is the text value
     call_args = mock_service.send_photo.call_args
     assert call_args.kwargs.get("caption") == "Caption hier" or "Caption hier" in str(call_args)
 
 
 @pytest.mark.asyncio
 async def test_telegram_photo_rejects_non_screenshot(client, fake_redis):
-    """Deliverable mit type != screenshot → 422."""
+    """Deliverable with type != screenshot → 422."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -258,7 +258,7 @@ async def test_telegram_photo_rejects_non_screenshot(client, fake_redis):
         s.add(TaskDeliverable(
             id=deliv_id, task_id=task_id, agent_id=agent_id,
             title="Doc not photo",
-            deliverable_type="document",  # NICHT screenshot
+            deliverable_type="document",  # NOT screenshot
             content="some text",
         ))
         await s.commit()
@@ -280,7 +280,7 @@ async def test_telegram_photo_rejects_non_screenshot(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_photo_404_for_missing_deliverable(client, fake_redis):
-    """Nicht-existierende deliverable_id → 404."""
+    """Non-existent deliverable_id → 404."""
     _, token = await _setup_agent_with_chat_scope()
     fake_id = uuid.uuid4()
 
@@ -297,11 +297,11 @@ async def test_telegram_photo_404_for_missing_deliverable(client, fake_redis):
     assert resp.status_code == 404
 
 
-# ── /telegram/send mit --file (Document-Deliverable: PDF/Office/etc.) ──────────
+# ── /telegram/send with --file (document deliverable: PDF/Office/etc.) ──────────
 
 
 async def _setup_agent_with_document(deliverable_path: str, dtype: str = "document"):
-    """Setup: Agent + Task + File-Deliverable (default type=document)."""
+    """Setup: agent + task + file deliverable (default type=document)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -338,7 +338,7 @@ async def _setup_agent_with_document(deliverable_path: str, dtype: str = "docume
 
 @pytest.mark.asyncio
 async def test_telegram_file_attach_calls_send_document(client, fake_redis, tmp_path):
-    """Mit document_deliverable_id ruft Backend send_document statt send."""
+    """With document_deliverable_id, backend calls send_document instead of send."""
     fake_pdf = tmp_path / "report.pdf"
     fake_pdf.write_bytes(b"%PDF-1.4\n" + b"\x00" * 200)
 
@@ -369,7 +369,7 @@ async def test_telegram_file_attach_calls_send_document(client, fake_redis, tmp_
 
 @pytest.mark.asyncio
 async def test_telegram_file_rejects_url_type(client, fake_redis):
-    """Deliverable mit type=url → 422 (kein File-Pfad sendbar)."""
+    """Deliverable with type=url → 422 (no sendable file path)."""
     _, token, deliv_id, _ = await _setup_agent_with_document(
         "https://example.com/foo", dtype="url"
     )
@@ -391,7 +391,7 @@ async def test_telegram_file_rejects_url_type(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_file_404_for_missing_deliverable(client, fake_redis):
-    """Nicht-existierende document_deliverable_id → 404."""
+    """Non-existent document_deliverable_id → 404."""
     _, token = await _setup_agent_with_chat_scope()
     fake_id = uuid.uuid4()
 
@@ -410,7 +410,7 @@ async def test_telegram_file_404_for_missing_deliverable(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_photo_and_file_mutex(client, fake_redis):
-    """deliverable_id + document_deliverable_id gleichzeitig → 422."""
+    """deliverable_id + document_deliverable_id simultaneously → 422."""
     _, token = await _setup_agent_with_chat_scope()
 
     mock_service = AsyncMock()
@@ -436,7 +436,7 @@ async def test_telegram_photo_and_file_mutex(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_telegram_file_unresolved_path_returns_422(client, fake_redis):
-    """Deliverable ohne resolvbaren Pfad → 422."""
+    """Deliverable without a resolvable path → 422."""
     _, token, deliv_id, _ = await _setup_agent_with_document(
         "/deliverables/unknown/missing.pdf"
     )

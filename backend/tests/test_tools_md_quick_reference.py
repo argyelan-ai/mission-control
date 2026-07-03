@@ -1,9 +1,9 @@
-"""Tests fuer 'Typische Ablaeufe' Sektion in TOOLS.md — role-aware worked examples.
+"""Tests for the 'Typische Abläufe' section in TOOLS.md — role-aware worked examples.
 
-Ziel: jeder Flow ist ein copy-paste-faehiger End-to-End-Ablauf mit konkreten
-Tool-Call-Beispielen und realen Inputs (nicht Command-Liste). Role-Awareness
-via Scopes: ein Writer sieht kein Delegation-Flow, ein Researcher kein Plugin-
-Management, etc.
+Goal: each flow is a copy-paste-able end-to-end walkthrough with concrete
+tool-call examples and real inputs (not a command list). Role-awareness
+via scopes: a writer sees no delegation flow, a researcher sees no plugin
+management, etc.
 """
 from app.services.tools_md_builder import generate_tools_md
 
@@ -26,16 +26,16 @@ def test_flows_header_present():
 
 
 def test_flow1_lifecycle_universal():
-    """Ablauf 1 (Task empfangen + abschliessen) ist IMMER drin, unabhaengig von Scopes."""
+    """Ablauf 1 (task received + completed) is ALWAYS present, regardless of scopes."""
     flows = _flows_section(_gen(scopes=["heartbeat"]))
     assert "Ablauf 1" in flows
     assert "mc me" in flows
     assert "mc ack" in flows
     assert "mc done" in flows
     assert "mc blocked --type" in flows
-    # ACK-Error-Hinweis (Already-ACKed Awareness)
+    # ACK error note (already-ACKed awareness)
     assert "In Progress" in flows
-    # Nicht-relevante Flows NICHT bei heartbeat-only
+    # Non-relevant flows NOT present with heartbeat-only
     assert "Ablauf 2" not in flows  # telegram
     assert "Ablauf 4" not in flows  # delegation
 
@@ -62,25 +62,25 @@ def test_flow4_delegation_tasks_create():
     flows = _flows_section(_gen(scopes=["heartbeat", "tasks:create"]))
     assert "Ablauf 4" in flows
     assert "mc delegate" in flows
-    # Klare Regel dass Callback-Wait = in_progress (nicht blocked)
+    # Clear rule that callback-wait = in_progress (not blocked)
     assert "in_progress" in flows
     assert "blocked" in flows  # part of the warning
 
 
 def test_flow5_plugin_mgmt_only_board_lead():
-    """Plugin-Mgmt Flow NUR fuer is_board_lead=True + AGENTS_MANAGE."""
-    # Non-lead mit agents:manage → nicht sichtbar
+    """Plugin-mgmt flow ONLY for is_board_lead=True + AGENTS_MANAGE."""
+    # Non-lead with agents:manage → not visible
     flows_worker = _flows_section(_gen(scopes=["heartbeat", "agents:manage"], is_board_lead=False))
     assert "Ablauf 5" not in flows_worker
     assert "mc plugin-list" not in flows_worker
 
-    # Board-lead mit agents:manage → sichtbar
+    # Board-lead with agents:manage → visible
     flows_lead = _flows_section(_gen(scopes=["heartbeat", "agents:manage"], is_board_lead=True))
     assert "Ablauf 5" in flows_lead
     assert "mc plugin-list" in flows_lead
     assert "mc plugin-assign" in flows_lead
     assert "mc worker-restart" in flows_lead
-    # Install-Request mit task_id-Koppelung
+    # Install request with task_id coupling
     assert "install-requests" in flows_lead
     assert "task_id" in flows_lead
 
@@ -92,7 +92,7 @@ def test_flow6_memory_knowledge_read():
 
 
 def test_empty_scopes_means_all_flows():
-    """scopes=[] → backward-compat ALL_SCOPES → alle Flows sichtbar."""
+    """scopes=[] → backward-compat ALL_SCOPES → all flows visible."""
     flows = _flows_section(_gen(scopes=[], is_board_lead=True))
     assert "Ablauf 1" in flows
     assert "Ablauf 2" in flows
@@ -103,13 +103,13 @@ def test_empty_scopes_means_all_flows():
 
 
 def test_flows_use_real_task_context_placeholders():
-    """Flows nutzen $TASK_ID (real env-var) und nicht <task-uuid> als Platzhalter."""
+    """Flows use $TASK_ID (real env-var) and not <task-uuid> as a placeholder."""
     flows = _flows_section(_gen(scopes=[]))
-    assert "$TASK_ID" in flows  # echte env-var aus mc-context.env
+    assert "$TASK_ID" in flows  # real env-var from mc-context.env
 
 
 def test_blocker_types_documented():
-    """Alle 6 valide blocker_type Werte sind im Ablauf 1 erklaert."""
+    """All 6 valid blocker_type values are explained in Ablauf 1."""
     flows = _flows_section(_gen(scopes=["heartbeat"]))
     for bt in ["missing_info", "technical_problem", "decision_needed",
                "permission_needed", "dependency_blocked", "other"]:

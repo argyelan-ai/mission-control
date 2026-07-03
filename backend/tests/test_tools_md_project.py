@@ -1,4 +1,4 @@
-"""Tests fuer Project-Sektion in tools_md_builder.py."""
+"""Tests for the Project section in tools_md_builder.py."""
 from app.services.tools_md_builder import generate_tools_md
 from app.scopes import Scope
 

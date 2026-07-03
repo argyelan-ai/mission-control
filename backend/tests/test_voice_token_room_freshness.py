@@ -1,14 +1,14 @@
-"""Tests fuer voice.py — Room-Naming pro Token-Request.
+"""Tests for voice.py — room naming per token request.
 
-Bug 2026-05-14 abends: Der Operator connectet, beendet Call, neuer Call → kein Audio.
-Root-Cause: voice.py nutzte fixen Room-Namen `voice-{user_id}` pro User.
-LiveKit dispatched seinen Worker-Job aber nur EINMAL pro Room (beim
-CreateRoom-Event). Reconnect mit gleichem Room → Browser joint, aber kein
-Worker-Dispatch → keine Stimme. Plus xAI Realtime-Session-State Korruption
-(`failed to insert item already exists`) weil derselbe Worker-Subprocess
-mehrere Calls geteilt hat.
+Bug 2026-05-14 evening: operator connects, ends call, new call → no audio.
+Root cause: voice.py used a fixed room name `voice-{user_id}` per user.
+LiveKit only dispatches its worker job ONCE per room (on the CreateRoom
+event). Reconnecting with the same room → browser joins, but no worker
+dispatch → no voice. Plus xAI realtime session-state corruption
+(`failed to insert item already exists`) because the same worker subprocess
+shared multiple calls.
 
-Fix: pro Token-Request frischer Room `voice-{user_id}-{ts}-{rand}`.
+Fix: a fresh room per token request, `voice-{user_id}-{ts}-{rand}`.
 """
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_voice_token_room_unique_per_request(client):
-    """Zwei aufeinanderfolgende /voice/token Requests geben verschiedene Rooms."""
+    """Two consecutive /voice/token requests return different rooms."""
     from app.auth import create_access_token
     from app.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -33,7 +33,7 @@ async def test_voice_token_room_unique_per_request(client):
         await s.commit()
     jwt = create_access_token(str(user_id), "admin")
 
-    # LiveKit Keys mocken damit kein 503 kommt
+    # Mock LiveKit keys so we don't get a 503
     with patch("app.routers.voice.LIVEKIT_API_KEY", "test-key"), \
          patch("app.routers.voice.LIVEKIT_API_SECRET", "test-secret-for-jwt-signing"):
         r1 = await client.post("/api/v1/voice/token",
@@ -53,7 +53,7 @@ async def test_voice_token_room_unique_per_request(client):
 
 @pytest.mark.asyncio
 async def test_voice_token_room_contains_user_id(client):
-    """Room-Name muss user_id enthalten (für Multi-User-Isolation in Zukunft)."""
+    """Room name must contain user_id (for future multi-user isolation)."""
     from app.auth import create_access_token
     from app.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -78,8 +78,8 @@ async def test_voice_token_room_contains_user_id(client):
 
 @pytest.mark.asyncio
 async def test_voice_token_token_includes_correct_room_claim(client):
-    """JWT-Payload muss die richtige Room im video.room Claim haben — sonst
-    rejected LiveKit den Join."""
+    """JWT payload must have the correct room in the video.room claim — otherwise
+    LiveKit rejects the join."""
     from app.auth import create_access_token
     from app.models.user import User
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -102,7 +102,7 @@ async def test_voice_token_token_includes_correct_room_claim(client):
     decoded = jose_jwt.decode(
         body["token"], "test-secret-for-jwt-signing",
         algorithms=["HS256"],
-        # JWT enthält keine 'aud' Claim aber default-Decoder erwartet keine
+        # JWT contains no 'aud' claim, but the default decoder doesn't expect one
         options={"verify_aud": False},
     )
     assert decoded["video"]["room"] == body["room"]

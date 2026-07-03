@@ -38,8 +38,8 @@ export function KPICard({
   className,
 }: KPICardProps) {
   const trendInfo = trend ? trendConfig[trend] : null;
-  // Lange String-Werte ("morgen 07:00") sprengen mobil die halbe Karte —
-  // Zahlen bleiben 3xl, Text skaliert auf Mobile runter (Desktop unverändert).
+  // Long string values ("tomorrow 07:00") blow out half the card on mobile —
+  // numbers stay 3xl, text scales down on mobile (desktop unchanged).
   const isLongText = typeof value === "string" && value.length > 6;
 
   return (

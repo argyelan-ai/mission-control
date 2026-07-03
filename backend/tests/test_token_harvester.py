@@ -1,15 +1,15 @@
-"""Tests fuer token_harvester — TDD-First.
+"""Tests for token_harvester — TDD-first.
 
-Test-Fixtures gemaess Spec:
-(a) Normale assistant-Zeile mit cache-Tokens
-(b) Zwei Zeilen mit gleicher message.id aber verschiedenen uuid (beide zaehlen)
-(c) Gleiche uuid doppelt (einmal zaehlen — UNIQUE-Constraint-Backstop)
-(d) <synthetic>-Model (skip)
-(e) user-Zeile (skip)
-(f) ~/.claude-Pfad mit privatem cwd (skip) vs MC-cwd (Boss)
+Test fixtures per spec:
+(a) Normal assistant line with cache tokens
+(b) Two lines with the same message.id but different uuid (both count)
+(c) Same uuid twice (counts once — UNIQUE constraint backstop)
+(d) <synthetic> model (skip)
+(e) user line (skip)
+(f) ~/.claude path with private cwd (skip) vs MC cwd (Boss)
 
-Preismatching: Glob-Prioritaet, valid_from, kein Match → None.
-Offset-Resume: Datei waechst, zweiter Lauf liest nur Neues.
+Price matching: glob priority, valid_from, no match → None.
+Offset resume: file grows, second run reads only new lines.
 """
 import json
 import uuid
@@ -78,7 +78,7 @@ def _make_line(
 
 class TestParseTranscriptLine:
     def test_normal_assistant_line_parsed(self):
-        """(a) Normale assistant-Zeile mit cache-Tokens."""
+        """(a) Normal assistant line with cache tokens."""
         line = _make_line(
             uuid_="aaaa-1111",
             model="claude-sonnet-4-6",
@@ -99,57 +99,57 @@ class TestParseTranscriptLine:
         assert rec["git_branch"] == "feat/test"
 
     def test_user_line_skipped(self):
-        """(e) user-Zeile → None."""
+        """(e) user line → None."""
         line = _make_line(type_="user")
         assert parse_transcript_line(line) is None
 
     def test_synthetic_model_skipped(self):
-        """(d) <synthetic>-Model → None."""
+        """(d) <synthetic> model → None."""
         line = _make_line(model="<synthetic>")
         assert parse_transcript_line(line) is None
 
     def test_synthetic_in_model_name_skipped(self):
-        """Modell-Name enthaelt '<synthetic>' → None."""
+        """Model name contains '<synthetic>' → None."""
         line = _make_line(model="some-<synthetic>-model")
         assert parse_transcript_line(line) is None
 
     def test_missing_model_skipped(self):
-        """Fehlendes model-Feld → None."""
+        """Missing model field → None."""
         d = json.loads(_make_line())
         del d["message"]["model"]
         assert parse_transcript_line(json.dumps(d)) is None
 
     def test_missing_usage_skipped(self):
-        """Kein usage-Block → None."""
+        """No usage block → None."""
         d = json.loads(_make_line())
         del d["message"]["usage"]
         assert parse_transcript_line(json.dumps(d)) is None
 
     def test_missing_uuid_skipped(self):
-        """Kein top-level uuid → None."""
+        """No top-level uuid → None."""
         d = json.loads(_make_line())
         del d["uuid"]
         assert parse_transcript_line(json.dumps(d)) is None
 
     def test_non_assistant_type_skipped(self):
-        """Nicht-assistant type → None (auch system, tool etc.)."""
+        """Non-assistant type → None (also system, tool, etc.)."""
         d = json.loads(_make_line())
         d["type"] = "system"
         assert parse_transcript_line(json.dumps(d)) is None
 
     def test_invalid_json_skipped(self):
-        """Invalides JSON → None."""
+        """Invalid JSON → None."""
         assert parse_transcript_line("not json{{{") is None
 
     def test_no_git_branch_field(self):
-        """Zeile ohne gitBranch → rec hat git_branch=None."""
+        """Line without gitBranch → rec has git_branch=None."""
         line = _make_line(git_branch=None)
         rec = parse_transcript_line(line)
         assert rec is not None
         assert rec.get("git_branch") is None
 
     def test_cache_defaults_to_zero(self):
-        """Fehlende cache-Felder → 0 (keine KeyError)."""
+        """Missing cache fields → 0 (no KeyError)."""
         d = json.loads(_make_line())
         del d["message"]["usage"]["cache_read_input_tokens"]
         del d["message"]["usage"]["cache_creation_input_tokens"]
@@ -190,7 +190,7 @@ class TestMatchPrice:
         assert cost is not None
 
     def test_higher_priority_wins(self):
-        """Spezifischeres Pattern (hoehere priority) gewinnt."""
+        """More specific pattern (higher priority) wins."""
         prices = [
             self._price("*", 0.0, 0.0, 0.0, 0.0, priority=0),
             self._price("claude-sonnet-4-*", 3.0, 15.0, 0.3, 3.75, priority=80),
@@ -200,13 +200,13 @@ class TestMatchPrice:
         assert cost["input_per_mtok"] == 3.0
 
     def test_no_match_returns_none(self):
-        """Kein Preis fuer dieses Modell → None."""
+        """No price for this model → None."""
         prices = [self._price("claude-opus-4-*", 15.0, 75.0, 1.5, 18.75)]
         cost = match_price("unknown-model", datetime(2026, 6, 1, tzinfo=timezone.utc), prices)
         assert cost is None
 
     def test_valid_from_filter(self):
-        """Nur Preise mit valid_from <= ts werden beruecksichtigt."""
+        """Only prices with valid_from <= ts are considered."""
         future_price = self._price(
             "claude-sonnet-4-*", 99.0, 99.0, 0.0, 0.0, priority=90,
             valid_from=datetime(2030, 1, 1, tzinfo=timezone.utc),
@@ -224,7 +224,7 @@ class TestMatchPrice:
         assert cost["input_per_mtok"] == 3.0  # future price was excluded
 
     def test_newest_valid_from_wins_for_same_priority(self):
-        """Bei gleicher priority gewinnt der Preis mit dem neuesten valid_from."""
+        """For equal priority, the price with the newest valid_from wins."""
         old = self._price(
             "claude-sonnet-4-*", 2.0, 10.0, 0.0, 0.0, priority=80,
             valid_from=datetime(2022, 1, 1, tzinfo=timezone.utc),
@@ -249,7 +249,7 @@ class TestMatchPrice:
 # ── compute_cost_usd helper ────────────────────────────────────────────────
 
 class TestComputeCostUsd:
-    """Test die Kostenberechnung (integration mit match_price)."""
+    """Test the cost calculation (integration with match_price)."""
 
     def test_cost_calculation(self):
         from app.services.token_harvester import _compute_cost_usd
@@ -269,7 +269,7 @@ class TestComputeCostUsd:
 
 class TestHarvestFile:
     def test_offset_resume(self, tmp_path):
-        """Zweiter Lauf liest nur neue Zeilen (Offset-Resume)."""
+        """Second run reads only new lines (offset resume)."""
         from app.services.token_harvester import harvest_file
 
         jsonl = tmp_path / "session.jsonl"
@@ -282,7 +282,7 @@ class TestHarvestFile:
         assert len(records_first) == 1
         assert records_first[0]["uuid"] == "uuid-001"
 
-        # Datei wächst
+        # File grows
         with open(jsonl, "a") as f:
             f.write(line2 + "\n")
 
@@ -291,9 +291,9 @@ class TestHarvestFile:
         assert records_second[0]["uuid"] == "uuid-002"
 
     def test_same_uuid_deduplicated_in_file(self, tmp_path):
-        """Gleiche uuid doppelt in einer Datei → harvest_file gibt beide zurueck,
-        aber DB-Insert wird durch UNIQUE constraint gestoppt (Backstop).
-        harvest_file selbst dedupliziert NICHT — das ist DB-Aufgabe.
+        """Same uuid twice in one file → harvest_file returns both,
+        but DB insert is stopped by the UNIQUE constraint (backstop).
+        harvest_file itself does NOT deduplicate — that's the DB's job.
         """
         from app.services.token_harvester import harvest_file
 
@@ -302,11 +302,11 @@ class TestHarvestFile:
         jsonl.write_text(line + "\n" + line + "\n")
 
         records = harvest_file(str(jsonl), processed_lines=0)
-        # harvest_file gibt alle geparsten zurueck (DB macht Dedup)
+        # harvest_file returns all parsed lines (DB handles dedup)
         assert len(records) == 2
 
     def test_same_msg_id_different_uuid_both_counted(self, tmp_path):
-        """(b) Zwei Zeilen mit gleicher message.id aber verschiedenen uuid: beide zaehlen."""
+        """(b) Two lines with the same message.id but different uuid: both count."""
         from app.services.token_harvester import harvest_file
 
         jsonl = tmp_path / "session.jsonl"
@@ -319,7 +319,7 @@ class TestHarvestFile:
         assert {r["uuid"] for r in records} == {"uuid-A", "uuid-B"}
 
     def test_skip_lines_are_not_returned(self, tmp_path):
-        """(d,e) synthetic + user → nicht in records."""
+        """(d,e) synthetic + user → not in records."""
         from app.services.token_harvester import harvest_file
 
         jsonl = tmp_path / "session.jsonl"
@@ -333,11 +333,11 @@ class TestHarvestFile:
         assert records[0]["uuid"] == "uuid-good"
 
 
-# ── Boss-Attribution (cwd/gitBranch-Heuristik) ────────────────────────────
+# ── Boss attribution (cwd/gitBranch heuristic) ────────────────────────────
 
 class TestBossAttribution:
     def test_mc_cwd_is_attributed(self):
-        """cwd unter mission-control → attribuieren (Boss-Kandidat)."""
+        """cwd under mission-control → attribute (Boss candidate)."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -346,7 +346,7 @@ class TestBossAttribution:
         ) is True
 
     def test_mc_cwd_subcdir_attributed(self):
-        """Tieferes Unterverzeichnis von mission-control → attribuieren."""
+        """Deeper subdirectory of mission-control → attribute."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -355,7 +355,7 @@ class TestBossAttribution:
         ) is True
 
     def test_mc_home_cwd_attributed(self):
-        """cwd unter ~/.mc/ → attribuieren."""
+        """cwd under ~/.mc/ → attribute."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -364,7 +364,7 @@ class TestBossAttribution:
         ) is True
 
     def test_task_branch_attributed(self):
-        """gitBranch beginnt mit 'task/' → attribuieren."""
+        """gitBranch starts with 'task/' → attribute."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -373,7 +373,7 @@ class TestBossAttribution:
         ) is True
 
     def test_private_cwd_skipped(self):
-        """(f) Private cwd → SKIP (Operators private Sessions)."""
+        """(f) Private cwd → SKIP (operator's private sessions)."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -382,7 +382,7 @@ class TestBossAttribution:
         ) is False
 
     def test_root_cwd_skipped(self):
-        """cwd '/' (wie im echten JSONL oben) → SKIP wenn kein task/-Branch."""
+        """cwd '/' (as in the real JSONL above) → SKIP if no task/ branch."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -391,7 +391,7 @@ class TestBossAttribution:
         ) is False
 
     def test_root_cwd_with_task_branch_attributed(self):
-        """cwd '/' aber gitBranch=task/... → attribuieren."""
+        """cwd '/' but gitBranch=task/... → attribute."""
         from app.services.token_harvester import _should_attribute_boss_path
 
         assert _should_attribute_boss_path(
@@ -443,11 +443,11 @@ class TestProviderFromModel:
         assert _provider_from_model("totally-unknown-model-xyz") == "unknown"
 
 
-# ── DB-Integration (async, SQLite in-memory) ──────────────────────────────
+# ── DB integration (async, SQLite in-memory) ──────────────────────────────
 
 @pytest.fixture
 async def async_db_session(tmp_path):
-    """Async SQLite in-memory DB mit allen relevanten Tabellen."""
+    """Async SQLite in-memory DB with all relevant tables."""
     from sqlmodel import SQLModel
     from app.models.model_usage import ModelUsageEvent, ModelPrice, ModelUsageHarvestState
 
@@ -464,10 +464,10 @@ async def async_db_session(tmp_path):
 
 @pytest.mark.asyncio
 class TestRunHarvestIntegration:
-    """Integration-Tests fuer run_harvest mit echter (SQLite) DB."""
+    """Integration tests for run_harvest with a real (SQLite) DB."""
 
     async def test_harvest_inserts_events(self, tmp_path, async_db_session):
-        """run_harvest liest JSONL und insertiert Events in DB."""
+        """run_harvest reads JSONL and inserts events into the DB."""
         from app.services.token_harvester import run_harvest
 
         agents_dir = tmp_path / "agents"
@@ -490,7 +490,7 @@ class TestRunHarvestIntegration:
         assert any(e.message_uuid == "harvest-001" for e in events)
 
     async def test_dedup_same_uuid(self, tmp_path, async_db_session):
-        """(c) Gleiche uuid zweimal → nur einmal in DB."""
+        """(c) Same uuid twice → only once in DB."""
         from app.services.token_harvester import run_harvest
 
         agents_dir = tmp_path / "agents"
@@ -498,7 +498,7 @@ class TestRunHarvestIntegration:
         rex_dir.mkdir(parents=True)
 
         line = _make_line(uuid_="dedup-uuid", model="claude-sonnet-4-6")
-        # Gleiche uuid in zwei verschiedenen Dateien
+        # Same uuid in two different files
         (rex_dir / "sess1.jsonl").write_text(line + "\n")
         (rex_dir / "sess2.jsonl").write_text(line + "\n")
 
@@ -516,7 +516,7 @@ class TestRunHarvestIntegration:
         assert len(events) == 1
 
     async def test_private_claude_path_skipped(self, tmp_path, async_db_session):
-        """(f) ~/.claude-Pfad mit privatem cwd → skipped_private zaehlt."""
+        """(f) ~/.claude path with private cwd → skipped_private counts."""
         from app.services.token_harvester import run_harvest
 
         boss_dir = tmp_path / "boss_projects" / "-Users-testuser-argyelan"
@@ -542,7 +542,7 @@ class TestRunHarvestIntegration:
         assert not any(e.message_uuid == "private-001" for e in events)
 
     async def test_mc_cwd_boss_attributed(self, tmp_path, async_db_session):
-        """(f) ~/.claude-Pfad mit MC-cwd → Boss-Event wird insertiert."""
+        """(f) ~/.claude path with MC cwd → Boss event is inserted."""
         from app.services.token_harvester import run_harvest
 
         boss_dir = tmp_path / "boss_projects" / "-Users-testuser-Workspace-Projects-mc"
@@ -570,7 +570,7 @@ class TestRunHarvestIntegration:
         assert events[0].harness == "host"
 
     async def test_offset_resume_second_run(self, tmp_path, async_db_session):
-        """Zweiter run_harvest liest nur neue Zeilen dank Offset-Resume."""
+        """Second run_harvest reads only new lines thanks to offset resume."""
         from app.services.token_harvester import run_harvest
 
         agents_dir = tmp_path / "agents"
@@ -581,7 +581,7 @@ class TestRunHarvestIntegration:
         line1 = _make_line(uuid_="off-001")
         jsonl.write_text(line1 + "\n")
 
-        # Erster Lauf
+        # First run
         stats1 = await run_harvest(
             async_db_session,
             agent_base_paths=[str(agents_dir)],
@@ -590,29 +590,29 @@ class TestRunHarvestIntegration:
         )
         assert stats1["new_events"] == 1
 
-        # Datei waechst
+        # File grows
         line2 = _make_line(uuid_="off-002")
         with open(jsonl, "a") as f:
             f.write(line2 + "\n")
 
-        # Zweiter Lauf
+        # Second run
         stats2 = await run_harvest(
             async_db_session,
             agent_base_paths=[str(agents_dir)],
             boss_base_paths=[],
             agent_slug_map={},
         )
-        assert stats2["new_events"] == 1  # nur die neue Zeile
+        assert stats2["new_events"] == 1  # only the new line
 
         result = await async_db_session.exec(select(ModelUsageEvent))
         all_events = result.all()
         assert len(all_events) == 2
 
     async def test_cost_computed_from_prices(self, tmp_path, async_db_session):
-        """Kostenberechnung: cost_usd wird bei Insert aus model_prices berechnet."""
+        """Cost calculation: cost_usd is computed from model_prices on insert."""
         from app.services.token_harvester import run_harvest
 
-        # Preis-Seed in DB
+        # Price seed in DB
         price = ModelPrice(
             id=uuid.uuid4(),
             model_pattern="claude-sonnet-4-*",
@@ -660,11 +660,11 @@ class TestRunHarvestIntegration:
 
 @pytest.mark.asyncio
 async def test_costs_endpoint_aggregation(tmp_path, async_db_session):
-    """Sicherstellen dass die Aggregationslogik korrekt summiert."""
+    """Ensure the aggregation logic sums correctly."""
     import uuid as uuid_mod
     from sqlmodel import select
 
-    # Direkte Inserts — kein Harvester-Durchlauf
+    # Direct inserts — no harvester run
     agent_id = uuid_mod.uuid4()
     now = datetime(2026, 6, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -716,8 +716,8 @@ async def test_costs_endpoint_aggregation(tmp_path, async_db_session):
 
 @pytest.mark.asyncio
 async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
-    """Ohne explizite Map wird sie aus der agents-Tabelle gebaut; Boss-Zeilen
-    aus ~/.claude bekommen die Boss-Agent-ID (nur bei MC-cwd)."""
+    """Without an explicit map, it is built from the agents table; Boss lines
+    from ~/.claude get the Boss agent ID (only for MC cwd)."""
     from app.models import Agent
     from app.services.token_harvester import (
         _build_agent_slug_map,
@@ -739,7 +739,7 @@ async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
     assert slug_map[_slugify_agent_name("Rex")] == rex.id
     assert slug_map["boss-host"] == boss.id
 
-    # Agent-Datei (rex) + Boss-Datei (MC-cwd) anlegen
+    # Create agent file (rex) + Boss file (MC cwd)
     rex_dir = tmp_path / "agents" / "rex" / "claude-config" / "projects" / "p"
     rex_dir.mkdir(parents=True)
     (rex_dir / "s1.jsonl").write_text(
@@ -760,7 +760,7 @@ async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
         session,
         agent_base_paths=[str(tmp_path / "agents")],
         boss_base_paths=[str(tmp_path / "claude-projects")],
-        agent_slug_map=None,  # ← muss aus DB gebaut werden
+        agent_slug_map=None,  # ← must be built from DB
     )
     assert stats["new_events"] == 2
 

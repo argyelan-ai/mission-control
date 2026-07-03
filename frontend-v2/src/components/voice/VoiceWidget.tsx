@@ -38,9 +38,9 @@ import { VoicePreviewSheet } from "./VoicePreviewSheet";
 
 // ────────────────────────────────────────────────────────────────────────────
 // VoiceContext + Provider
-// Hostet die LiveKit Room-Instance, connection state und drawer toggle.
-// VoiceButton + VoiceDrawer sind reine Consumers — koennen ueberall im UI
-// gerendert werden ohne floating-position-hacks.
+// Hosts the LiveKit room instance, connection state, and drawer toggle.
+// VoiceButton + VoiceDrawer are pure consumers — can be rendered anywhere
+// in the UI without floating-position hacks.
 // ────────────────────────────────────────────────────────────────────────────
 
 interface VoiceContextValue {
@@ -49,15 +49,15 @@ interface VoiceContextValue {
   drawerOpen: boolean;
   error: string | null;
   room: Room;
-  // Trigger-Button-Ref — shared zwischen VoiceButton + VoiceOverlay damit
-  // der Drawer per getBoundingClientRect direkt neben dem Mic-Icon sitzt
-  // (Sidebar links auf Desktop, Top-Bar rechts auf Mobile).
+  // Trigger button ref — shared between VoiceButton + VoiceOverlay so
+  // the drawer sits right next to the mic icon via getBoundingClientRect
+  // (sidebar left on desktop, top bar right on mobile).
   anchorRef: RefObject<HTMLButtonElement | null>;
-  // Display-Cards die Jarvis via show_* tools auf den Drawer-Stack pushed.
+  // Display cards that Jarvis pushes onto the drawer stack via show_* tools.
   cards: DisplayCard[];
   dismissCard: (id: string) => void;
-  // Preview-Sheet — gelifted in den Provider damit der Operator den Call beenden
-  // ("abhaengen") kann ohne dass die offene Notiz mit weggeraeumt wird.
+  // Preview sheet — lifted into the provider so the operator can end the call
+  // ("hang up") without the open note getting cleared away with it.
   previewCard: DisplayCard | null;
   openPreview: (card: DisplayCard) => void;
   closePreview: () => void;
@@ -89,7 +89,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const anchorRef = useRef<HTMLButtonElement | null>(null);
 
-  // Display-Cards-WS — nur aktiv waehrend einer Voice-Session.
+  // Display-cards WS — only active during a voice session.
   const { cards, clear: clearCards } = useVoiceDisplay(active);
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(() => new Set());
   const visibleCards = useMemo(
@@ -104,14 +104,14 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Preview-Sheet auf Provider-Ebene: ueberlebt endSession() damit der Operator
-  // den Call ("Tokens sparen") beenden kann, waehrend die Notiz weiter
-  // sichtbar bleibt zum Lesen. Erst manuelles Close raeumt sie weg.
+  // Preview sheet at the provider level: survives endSession() so the operator
+  // can end the call ("save tokens") while the note stays
+  // visible to keep reading. Only a manual close clears it away.
   const [previewCard, setPreviewCard] = useState<DisplayCard | null>(null);
   const openPreview = useCallback((c: DisplayCard) => setPreviewCard(c), []);
   const closePreview = useCallback(() => setPreviewCard(null), []);
 
-  // Eine Room-Instance pro Page-Lifetime (StrictMode-safe)
+  // One room instance per page lifetime (StrictMode-safe)
   const room = useMemo(
     () =>
       new Room({
@@ -121,7 +121,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     [],
   );
 
-  // State-Sync mit Room-Events
+  // State sync with room events
   useEffect(() => {
     const onDisconnected = (reason?: DisconnectReason) => {
       console.log("[voice] disconnected, reason=", reason);
@@ -146,7 +146,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
     };
   }, [room]);
 
-  // Cleanup beim Unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       void room.disconnect();
@@ -163,9 +163,9 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
       await room.localParticipant.setMicrophoneEnabled(true);
       console.log("[voice] connected + mic enabled");
       setActive(true);
-      // Panel direkt mit-aufpoppen: ein Mic-Tap startet UND zeigt den Anruf.
-      // Der Drawer mountet erst wenn `active` true ist (siehe VoiceOverlay),
-      // darum ist das Vorsetzen hier safe — kein Flash vor Connect.
+      // Pop the panel open right away: a mic tap starts AND shows the call.
+      // The drawer only mounts once `active` is true (see VoiceOverlay),
+      // so setting it ahead of time here is safe — no flash before connect.
       setDrawerOpen(true);
     } catch (e) {
       console.error("[voice] start-session failed:", e);
@@ -192,7 +192,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
   }, [room, clearCards]);
 
   const toggleButton = useCallback(() => {
-    // Stale-State-Guard: UI 'active' aber Room disconnect → Hard reset
+    // Stale state guard: UI 'active' but room disconnected → hard reset
     if (active && room.state !== ConnectionState.Connected) {
       console.warn("[voice] stale active state (room=%s) — hard reset", room.state);
       setActive(false);
@@ -232,7 +232,7 @@ export function VoiceProvider({ children }: { children: ReactNode }) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// VoiceButton — kompakt, kann in MobileNav-Header oder Sidebar gerendert werden
+// VoiceButton — compact, can be rendered in the MobileNav header or sidebar
 // ────────────────────────────────────────────────────────────────────────────
 
 interface VoiceButtonProps {
@@ -312,8 +312,8 @@ function SoundWaveBars() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// VoiceOverlay — Error-Toast + RoomContext + Drawer. Wird einmal vom AppShell
-// gerendert, behaviour-state vom Context.
+// VoiceOverlay — error toast + RoomContext + drawer. Rendered once by the
+// AppShell, behavior state comes from the context.
 // ────────────────────────────────────────────────────────────────────────────
 
 export function VoiceOverlay() {
@@ -358,8 +358,8 @@ export function VoiceOverlay() {
         </RoomContext.Provider>
       )}
 
-      {/* Preview-Sheet lebt AUSSERHALB des active-Blocks: der Operator kann den
-          Call beenden ("abhängen") und weiter in Ruhe die Notiz lesen. */}
+      {/* Preview sheet lives OUTSIDE the active block: the operator can end the
+          call ("hang up") and keep reading the note in peace. */}
       <VoicePreviewSheet card={previewCard} onClose={closePreview} />
     </>
   );
@@ -395,9 +395,9 @@ function VoiceDrawer({
   const [position, setPosition] = useState<DrawerPosition | null>(null);
   const [mobile, setMobile] = useState(false);
 
-  // Position vom Anchor-Button neu berechnen bei Open + Scroll + Resize.
-  // Wenn der Button ausserhalb des Viewport ist (z.B. Sidebar collapsed
-  // war beim Klick), fallen wir auf zentriertes Mobile-Layout zurueck.
+  // Recompute the position from the anchor button on open + scroll + resize.
+  // If the button is outside the viewport (e.g. the sidebar was collapsed
+  // at the time of the click), we fall back to a centered mobile layout.
   useLayoutEffect(() => {
     if (!open) return;
     const compute = () => {
@@ -410,9 +410,9 @@ function VoiceDrawer({
       const r = anchorRef.current.getBoundingClientRect();
       const DRAWER_WIDTH = 340;
       const GAP = 12;
-      // Sidebar-Button (variant=sidebar) sitzt links → Panel rechts daneben
-      // expandieren. MobileNav-Button (variant=header) sitzt nicht auf
-      // Desktop sichtbar, also irrelevant hier.
+      // Sidebar button (variant=sidebar) sits on the left → expand the panel
+      // to the right of it. MobileNav button (variant=header) isn't visible
+      // on desktop, so it's irrelevant here.
       const spaceRight = window.innerWidth - r.right - GAP;
       const dropRight = spaceRight >= DRAWER_WIDTH;
       setPosition({
@@ -448,7 +448,7 @@ function VoiceDrawer({
   const isSpeaking = state === "speaking";
   const isThinking = state === "thinking";
 
-  // Style — mobile bleibt zentriert oben, Desktop nutzt anchor-Position
+  // Style — mobile stays centered at the top, desktop uses the anchor position
   const panelStyle: React.CSSProperties = mobile || !position
     ? {
         top: "calc(env(safe-area-inset-top) + 4.5rem)",
@@ -456,9 +456,9 @@ function VoiceDrawer({
         transform: "translateX(-50%)",
         width: "calc(100vw - 1.5rem)",
         maxWidth: 340,
-        // Nie über den unteren Viewport-Rand hinaus (sonst sind die Controls
-        // abgeschnitten). dvh respektiert die iOS-Safari-Toolbar; der Card-
-        // Stack scrollt intern, Header + Controls bleiben immer sichtbar.
+        // Never beyond the bottom of the viewport (otherwise the controls
+        // get cut off). dvh respects the iOS Safari toolbar; the card
+        // stack scrolls internally, header + controls always stay visible.
         maxHeight:
           "calc(100dvh - env(safe-area-inset-top) - 4.5rem - env(safe-area-inset-bottom) - 1rem)",
       }
@@ -476,7 +476,7 @@ function VoiceDrawer({
     <AnimatePresence>
       {open && (
         <>
-          {/* Backdrop — outside-click + dezenter Dim */}
+          {/* Backdrop — outside-click + subtle dim */}
           <motion.div
             className="fixed inset-0 z-[55]"
             initial={{ opacity: 0 }}
@@ -504,7 +504,7 @@ function VoiceDrawer({
                 "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(15,163,163,0.10), inset 0 1px 0 0 rgba(255,255,255,0.06)",
             }}
           >
-            {/* Edge highlight — subtler "rim" am oberen Rand */}
+            {/* Edge highlight — subtler "rim" at the top edge */}
             <div
               className="absolute inset-x-0 top-0 h-px pointer-events-none"
               style={{
@@ -512,7 +512,7 @@ function VoiceDrawer({
                   "linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.16) 50%, transparent 100%)",
               }}
             />
-            {/* Subtler radial glow — verfärbt sich mit State */}
+            {/* Subtler radial glow — changes color with state */}
             <div
               className="absolute -top-16 left-1/2 -translate-x-1/2 w-64 h-32 pointer-events-none transition-opacity duration-500"
               style={{
@@ -552,8 +552,8 @@ function VoiceDrawer({
               </button>
             </div>
 
-            {/* Live BarVisualizer — kompakter wenn Cards da sind, damit das
-                Panel nicht zu hoch wird. */}
+            {/* Live BarVisualizer — more compact when cards are present, so
+                the panel doesn't grow too tall. */}
             <div
               className={`relative shrink-0 px-5 ${cards.length > 0 ? "pt-4 pb-3" : "pt-6 pb-5"}`}
             >
@@ -573,9 +573,9 @@ function VoiceDrawer({
               </div>
             </div>
 
-            {/* Display-Cards-Stack — gepusht von Jarvis' show_* tools.
-                Scrollbar bei >3 Cards damit der Drawer nicht ueber den
-                Viewport laeuft. Neueste oben. */}
+            {/* Display-cards stack — pushed by Jarvis' show_* tools.
+                Scrollable at >3 cards so the drawer doesn't overflow the
+                viewport. Newest on top. */}
             {cards.length > 0 && (
               <div
                 className="relative px-2.5 pb-2 flex flex-col gap-1.5 scrollbar-none flex-1 min-h-0"
@@ -660,8 +660,8 @@ function VoiceDrawer({
               </button>
             </div>
           </motion.div>
-          {/* VoicePreviewSheet rendert separat aus VoiceOverlay — bleibt
-              also stehen wenn der Operator hier "End-Call" drueckt. */}
+          {/* VoicePreviewSheet renders separately from VoiceOverlay — so it
+              stays in place when the operator presses "End Call" here. */}
         </>
       )}
     </AnimatePresence>,
@@ -690,8 +690,8 @@ function StatusPulse({ connected, speaking }: { connected: boolean; speaking: bo
   );
 }
 
-// Backwards-compat default export (alt: floating widget — wird abgelöst durch
-// Provider + Button + Overlay Pattern in AppShell).
+// Backwards-compat default export (old: floating widget — being replaced by
+// the Provider + Button + Overlay pattern in AppShell).
 export default function VoiceWidget() {
   return null;
 }

@@ -1,11 +1,11 @@
-"""Regression-Tests fuer template_seeder — verhindert Drift zwischen
-Code-Defaults (DEFAULT_SCOPES) und Template-Specs (BUILTIN_TEMPLATES).
+"""Regression tests for template_seeder — prevents drift between
+code defaults (DEFAULT_SCOPES) and template specs (BUILTIN_TEMPLATES).
 
-Hintergrund (2026-04-23): Nach dem Tester-credentials:read-Fix war die
-Template-DB nicht in sync mit den neuen Code-Defaults — neue Tester via
-Template-Instantiate haetten weiterhin die alten Scopes bekommen. Der
-Seeder updated jetzt automatisch beim Backend-Startup, aber dieser Test
-sichert ab dass die Spec-Definitionen nicht von DEFAULT_SCOPES driften.
+Background (2026-04-23): After the tester credentials:read fix, the
+template DB was out of sync with the new code defaults — new testers
+created via template-instantiate would still get the old scopes. The
+seeder now updates automatically on backend startup, but this test
+ensures the spec definitions don't drift from DEFAULT_SCOPES.
 """
 import pytest
 
@@ -14,11 +14,11 @@ from app.scopes import DEFAULT_SCOPES, AgentRole
 
 
 def test_all_builtin_templates_use_default_scopes():
-    """Jedes Builtin-Template muss seine Scopes aus DEFAULT_SCOPES beziehen.
+    """Every builtin template must source its scopes from DEFAULT_SCOPES.
 
-    Wenn jemand future inline ['tasks:read', ...] hardcodet statt
-    get_default_scopes(role) zu rufen, drifted die DB nach dem naechsten
-    Seeder-Run nicht mehr automatisch mit Code-Aenderungen mit.
+    If someone hardcodes inline ['tasks:read', ...] in the future instead
+    of calling get_default_scopes(role), the DB will no longer drift
+    automatically with code changes after the next seeder run.
     """
     for spec in BUILTIN_TEMPLATES:
         role_name = spec["role"]
@@ -39,10 +39,10 @@ def test_all_builtin_templates_use_default_scopes():
 
 
 def test_credentials_read_scope_in_expected_roles():
-    """Sanity: credentials:read muss in genau den Rollen sein die mit
-    Vault-Credentials arbeiten (Login-Tests, Deploy-Secrets etc.).
-    Side-Issue #2 (2026-04-23): Tester wurde nachgezogen weil mc verify
-    --login-as Vault-Resolve braucht."""
+    """Sanity: credentials:read must be present in exactly the roles that
+    work with vault credentials (login tests, deploy secrets, etc.).
+    Side issue #2 (2026-04-23): tester was added because mc verify
+    --login-as needs vault resolve."""
     roles_with_cred_read = {
         role for role, scopes in DEFAULT_SCOPES.items()
         if "credentials:read" in scopes

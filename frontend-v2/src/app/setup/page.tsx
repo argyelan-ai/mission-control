@@ -1,9 +1,9 @@
 "use client";
 
-// First-Run-Wizard — landet hier direkt nach der Erst-Registrierung.
-// Schritt 1 (Admin) ist beim Ankommen schon erledigt; der Wizard fuehrt
-// durch Provider-Key (ueberspringbar) und Start-Inhalte. Kein neuer
-// Backend-Endpoint noetig — alles laeuft ueber bestehende APIs.
+// First-run wizard — lands here right after initial registration.
+// Step 1 (Admin) is already done on arrival; the wizard walks through
+// the provider key (skippable) and starter content. No new backend
+// endpoint needed — everything runs over existing APIs.
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -38,7 +38,7 @@ export default function SetupWizardPage() {
   const router = useRouter();
   const [step, setStep] = useState<2 | 3>(2);
 
-  // Provider-Key (Schritt 2)
+  // Provider key (step 2)
   const [providers, setProviders] = useState<
     Array<{ provider: string; key: string; label: string; description: string; placeholder: string }>
   >([]);
@@ -48,7 +48,7 @@ export default function SetupWizardPage() {
   const [keySaved, setKeySaved] = useState(false);
   const [error, setError] = useState("");
 
-  // Demo-Board (Schritt 3)
+  // Demo board (step 3)
   const [seeding, setSeeding] = useState(false);
   const [seeded, setSeeded] = useState(false);
 

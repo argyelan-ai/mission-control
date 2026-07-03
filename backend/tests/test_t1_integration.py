@@ -1,4 +1,4 @@
-"""T-1 Integration-Tests — End-to-End-Szenarien aus der Design-Spec."""
+"""T-1 integration tests — end-to-end scenarios from the design spec."""
 import uuid
 
 import pytest
@@ -7,10 +7,10 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from tests.conftest import test_engine
 
 
-# ── Hilfsfunktion: Standard-Setup (Board + Agent + Task) ─────────────────
+# ── Helper function: standard setup (board + agent + task) ─────────────────
 
 async def _setup_scenario():
-    """Board + Agent (tasks:read/write) + Task anlegen, Agent-Token zurückgeben."""
+    """Create board + agent (tasks:read/write) + task, return the agent token."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -72,17 +72,17 @@ async def _setup_scenario():
     }
 
 
-# ── Test 1: Fake-Completion blockiert ────────────────────────────────────
+# ── Test 1: Fake completion is blocked ────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_scenario_fake_completion_blocked(client):
-    """Szenario 7: Agent versucht done ohne alle Checklist-Items erledigt — 422 erwartet."""
+    """Scenario 7: agent tries done without all checklist items completed — 422 expected."""
     ids = await _setup_scenario()
     board_id = ids["board_id"]
     task_id = ids["task_id"]
     agent_headers = ids["agent_headers"]
 
-    # Checklist anlegen
+    # Create checklist
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -94,8 +94,8 @@ async def test_scenario_fake_completion_blocked(client):
     )
     assert create_resp.status_code == 201, create_resp.json()
 
-    # Task ist bereits in_progress (direkt in DB angelegt).
-    # Direkt done versuchen — muss 422 geben
+    # Task is already in_progress (created directly in DB).
+    # Try done directly — must return 422
     resp = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
         headers=agent_headers,
@@ -106,18 +106,18 @@ async def test_scenario_fake_completion_blocked(client):
     assert "3" in detail or "offen" in detail.lower()
 
 
-# ── Test 2: Checklist-Zähler auf Task stimmt ─────────────────────────────
+# ── Test 2: Checklist counter on task is correct ─────────────────────────────
 
 @pytest.mark.asyncio
 async def test_scenario_checklist_counter_accuracy(client):
-    """Checklist-Zähler auf Task stimmt mit tatsächlichen Items überein."""
+    """Checklist counter on the task matches the actual items."""
     ids = await _setup_scenario()
     board_id = ids["board_id"]
     task_id = ids["task_id"]
     agent_headers = ids["agent_headers"]
     auth_headers = ids["auth_headers"]
 
-    # 3 Items anlegen
+    # Create 3 items
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -130,7 +130,7 @@ async def test_scenario_checklist_counter_accuracy(client):
     assert create_resp.status_code == 201, create_resp.json()
     items = create_resp.json()
 
-    # 2 davon done
+    # Mark 2 of them done
     for item in items[:2]:
         resp = await client.patch(
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist/{item['id']}",
@@ -139,7 +139,7 @@ async def test_scenario_checklist_counter_accuracy(client):
         )
         assert resp.status_code == 200, resp.json()
 
-    # Task-Counter prüfen
+    # Check task counter
     task_resp = await client.get(
         f"/api/v1/boards/{board_id}/tasks/{task_id}",
         headers=auth_headers,
@@ -150,11 +150,11 @@ async def test_scenario_checklist_counter_accuracy(client):
     assert data["checklist_done"] == 2
 
 
-# ── Test 3: Git-Info-Endpoint ohne workspace_path ─────────────────────────
+# ── Test 3: Git info endpoint without workspace_path ─────────────────────────
 
 @pytest.mark.asyncio
 async def test_scenario_git_info_endpoint_returns_no_workspace(client):
-    """Git-info endpoint gibt leere Daten zurück wenn kein workspace_path gesetzt."""
+    """Git-info endpoint returns empty data when no workspace_path is set."""
     ids = await _setup_scenario()
     board_id = ids["board_id"]
     task_id = ids["task_id"]
@@ -172,11 +172,11 @@ async def test_scenario_git_info_endpoint_returns_no_workspace(client):
     assert data["ahead"] == 0
 
 
-# ── Test 4: Recovery-Kontext enthält Checklist ────────────────────────────
+# ── Test 4: Recovery context includes checklist ────────────────────────────
 
 @pytest.mark.asyncio
 async def test_scenario_recovery_context_includes_checklist(session):
-    """Recovery-Kontext enthält Checklist-Fortschritt mit HIER WEITERMACHEN Hint."""
+    """Recovery context includes checklist progress with a HIER WEITERMACHEN hint."""
     from app.models.board import Board
     from app.models.task import Task
     from app.models.checklist import TaskChecklistItem
@@ -192,7 +192,7 @@ async def test_scenario_recovery_context_includes_checklist(session):
     await session.commit()
     await session.refresh(task)
 
-    # Checklist mit gemischtem Fortschritt
+    # Checklist with mixed progress
     items = [
         TaskChecklistItem(task_id=task.id, title="Analyse", status="done", sort_order=0),
         TaskChecklistItem(task_id=task.id, title="Tests schreiben", status="done", sort_order=1),
@@ -203,14 +203,14 @@ async def test_scenario_recovery_context_includes_checklist(session):
         session.add(item)
     await session.commit()
 
-    # build_recovery_context braucht mindestens einen Kommentar um nicht None zu returnen.
-    # Wenn kein Kommentar → None ist valides Verhalten.
-    # Wir testen hier nur dass es nicht crasht.
+    # build_recovery_context needs at least one comment to not return None.
+    # If there's no comment → None is valid behavior.
+    # We're only testing here that it doesn't crash.
     recovery = await build_recovery_context(session, task)
 
-    # Recovery-Kontext muss Checklist enthalten (wenn Checklist-Sektion implementiert)
+    # Recovery context must include checklist (if checklist section is implemented)
     if recovery and "Checkliste" in recovery:
         assert "Analyse" in recovery
         assert "API anbinden" in recovery
         assert "HIER WEITERMACHEN" in recovery
-    # Wenn kein Kommentar → None ist OK
+    # If there's no comment → None is OK

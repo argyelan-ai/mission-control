@@ -165,7 +165,7 @@ function SessionList({
               </div>
             </button>
 
-            {/* Kill-Button bei Hover */}
+            {/* Kill button on hover */}
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -202,7 +202,7 @@ function TerminalPanel({
     mutationFn: (text: string) => api.agents.cli.input(agentId, taskId, text),
   });
 
-  // xterm.js initialisieren
+  // Initialize xterm.js
   useEffect(() => {
     if (!termRef.current) return;
 
@@ -235,7 +235,7 @@ function TerminalPanel({
     const fitAddon = new FitAddon();
     t.loadAddon(fitAddon);
     t.open(termRef.current);
-    // Fit nach einem Tick damit der Browser die Höhe des absolut positionierten Divs kennt
+    // Fit after a tick so the browser knows the height of the absolutely positioned div
     requestAnimationFrame(() => fitAddon.fit());
 
     const ro = new ResizeObserver(() => fitAddon.fit());
@@ -248,7 +248,7 @@ function TerminalPanel({
     };
   }, []);
 
-  // WebSocket verbinden
+  // Connect WebSocket
   useTerminalWebSocket(agentId, taskId, term);
 
   const handleSend = useCallback(() => {
@@ -270,7 +270,7 @@ function TerminalPanel({
         </span>
       </div>
 
-      {/* xterm.js Output — position:relative Wrapper gibt xterm eine definierte Bounding Box */}
+      {/* xterm.js output — position:relative wrapper gives xterm a defined bounding box */}
       <div className="flex-1 min-h-0 relative">
         <div ref={termRef} className="absolute inset-0 p-1" />
       </div>
@@ -308,7 +308,7 @@ function TerminalPanel({
 export function CliTerminalTab({ agentId }: Props) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
 
-  // Erste Session auto-selektieren wenn keine gewählt
+  // Auto-select first session when none is selected
   const { data: sessions } = useQuery({
     queryKey: ["cli-sessions", agentId],
     queryFn: () => api.agents.cli.sessions(agentId),
@@ -318,10 +318,10 @@ export function CliTerminalTab({ agentId }: Props) {
   useEffect(() => {
     if (!sessions) return;
     if (sessions.length > 0 && !selectedTaskId) {
-      // Erste Session auto-selektieren
+      // Auto-select first session
       setSelectedTaskId(sessions[0].task_id);
     } else if (selectedTaskId && !sessions.find((s) => s.task_id === selectedTaskId)) {
-      // Selektierte Session wurde beendet — zurücksetzen
+      // Selected session has ended — reset
       setSelectedTaskId(sessions[0]?.task_id ?? null);
     }
   }, [sessions, selectedTaskId]);
@@ -331,7 +331,7 @@ export function CliTerminalTab({ agentId }: Props) {
       className="flex rounded-xl overflow-hidden border border-[rgba(255,255,255,0.06)]"
       style={{ height: "480px" }}
     >
-      {/* Linke Spalte: Session-Liste */}
+      {/* Left column: session list */}
       <div className="w-[220px] border-r border-[rgba(255,255,255,0.06)] bg-[rgba(255,255,255,0.02)] shrink-0 overflow-y-auto">
         <SessionList
           agentId={agentId}
@@ -340,7 +340,7 @@ export function CliTerminalTab({ agentId }: Props) {
         />
       </div>
 
-      {/* Rechte Spalte: Terminal */}
+      {/* Right column: terminal */}
       <div className="flex-1 overflow-hidden">
         {selectedTaskId ? (
           <TerminalPanel agentId={agentId} taskId={selectedTaskId} />

@@ -1,13 +1,13 @@
 "use client";
 
 /**
- * CreateVaultNoteModal — "Neuer Eintrag" für die memory-Page.
+ * CreateVaultNoteModal — "New Entry" for the memory page.
  *
- * Modelliert nach CreateTaskModal (CreateTaskModal.tsx) — gleiche Modal-
- * Choreografie (overlay, focus trap, ESC + Cmd+Enter shortcuts, mobile
- * bottom-sheet auf <sm) aber radikal schlankere Felder weil ein Vault-
- * Eintrag aus Title + Body + Type + Tags besteht. Kein Board, kein Agent
- * Picker (Default-Namespace agents/mark/ — wie mit dem Operator besprochen).
+ * Modeled after CreateTaskModal (CreateTaskModal.tsx) — same modal
+ * choreography (overlay, focus trap, ESC + Cmd+Enter shortcuts, mobile
+ * bottom-sheet on <sm) but radically slimmer fields, since a vault
+ * entry consists of just Title + Body + Type + Tags. No board, no agent
+ * picker (default namespace agents/mark/ — as discussed with the operator).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -33,10 +33,10 @@ const C = {
   inputBg:     "rgba(255,255,255,0.02)",
 };
 
-// Auswählbare Note-Types. Reihenfolge = Häufigkeit der Use-Cases des Operators:
-// note (default, schnelle Gedanken), knowledge (etwas Gelerntes festhalten),
-// journal (Tageseintrag), lesson/reference für späteres Detail-Tagging.
-// Werte 1:1 wie im Backend (_ADMIN_NOTE_TYPES).
+// Selectable note types. Order = frequency of the operator's use cases:
+// note (default, quick thoughts), knowledge (capturing something learned),
+// journal (daily entry), lesson/reference for later detail-tagging.
+// Values match the backend 1:1 (_ADMIN_NOTE_TYPES).
 const NOTE_TYPES: { value: VaultNoteType; label: string; hint: string }[] = [
   { value: "note",       label: "Note",       hint: "freier Eintrag" },
   { value: "knowledge",  label: "Knowledge",  hint: "fakten / wissen" },
@@ -46,10 +46,10 @@ const NOTE_TYPES: { value: VaultNoteType; label: string; hint: string }[] = [
 ];
 
 interface CreateVaultNoteModalProps {
-  /** Wenn null → Trigger-Button ist disabled (Konsistenz mit CreateTaskModal). */
+  /** If null → trigger button is disabled (consistency with CreateTaskModal). */
   enabled: boolean;
-  /** Wird mit dem neuen Vault-Path aufgerufen wenn der Save erfolgreich war —
-   *  damit der Caller den Eintrag direkt selektieren kann. */
+  /** Called with the new vault path once the save succeeded —
+   *  so the caller can select the entry directly. */
   onCreated?: (path: string) => void;
 }
 
@@ -77,8 +77,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
   const canSubmit = titleTrimmed.length >= 3 && contentTrimmed.length >= 1;
 
   const tags = useMemo(() => {
-    // Whitespace + Komma trennen, '#' am Anfang dulden, leere Tokens raus,
-    // dedupe. Identische Logik zum Edit-Panel.
+    // Split on whitespace + comma, tolerate a leading '#', drop empty tokens,
+    // dedupe. Same logic as the edit panel.
     const seen = new Set<string>();
     const out: string[] = [];
     for (const raw of tagsRaw.split(/[\s,]+/)) {
@@ -99,8 +99,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
     setOpen(false);
   }, []);
 
-  // Auto-focus Title beim Öffnen + Save previously-focused so wir später
-  // dorthin zurückspringen. Selbe Choreografie wie CreateTaskModal.
+  // Auto-focus Title on open + save previously-focused so we can jump back
+  // there later. Same choreography as CreateTaskModal.
   useEffect(() => {
     if (!open) return;
     previouslyFocused.current = document.activeElement as HTMLElement | null;
@@ -111,8 +111,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
     };
   }, [open]);
 
-  // Body-Textarea bei Open einmal grosszügig vorbestimmen — verhindert
-  // dass ein leerer Zustand wie 1-zeiliges Input wirkt.
+  // Pre-size the body textarea generously once on open — prevents an
+  // empty state from looking like a 1-line input.
   useEffect(() => {
     if (!open) return;
     const t = setTimeout(() => {
@@ -125,7 +125,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
     return () => clearTimeout(t);
   }, [open]);
 
-  // Focus-Trap — Tab + Shift-Tab innerhalb des Dialogs halten.
+  // Focus trap — keep Tab + Shift-Tab within the dialog.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -163,9 +163,9 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
         type,
         tags,
       });
-      // Invalidate alles was die memory-Page neu laden muss: liste, suche,
-      // graph, trash-counter etc. Ein einziger Prefix-Invalidate reicht
-      // weil TanStack-Query partial-matching macht.
+      // Invalidate everything the memory page needs to reload: list, search,
+      // graph, trash counter etc. A single prefix invalidate is enough
+      // because TanStack Query does partial matching.
       qc.invalidateQueries({ queryKey: ["vault"] });
       notify.success("Eintrag erstellt");
       onCreated?.(res.path);
@@ -316,8 +316,8 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                     value={content}
                     onChange={(e) => {
                       setContent(e.target.value);
-                      // Auto-grow auf Inhalt — caps bei ~50dvh damit der Footer
-                      // nicht aus dem Viewport rutscht.
+                      // Auto-grow to content — caps at ~50dvh so the footer
+                      // doesn't slide out of the viewport.
                       const el = e.currentTarget;
                       el.style.height = "auto";
                       el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.5)}px`;
@@ -391,7 +391,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
 
                 {/* Hint: target path so the operator sees where it lands. Helps build
                     intuition for the vault topology before he goes hunting in
-                    the Liste. */}
+                    the list. */}
                 <div
                   className="text-[10px] font-mono px-3 py-2 rounded-md"
                   style={{

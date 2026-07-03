@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Einmaliges Script: Regeneriert soul_md und tools_md fuer alle provisionierten Agents
-aus den aktuellen Templates (SOUL.md.j2 + tools_md_builder).
+One-off script: regenerates soul_md and tools_md for all provisioned agents
+from the current templates (SOUL.md.j2 + tools_md_builder).
 
-Ausfuehren im Backend-Container:
+Run inside the backend container:
   docker compose exec backend python tools/regenerate_templates.py
 """
 import asyncio
 import sys
 import os
 
-# App-Pfad setzen
+# Set app path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlmodel import select
@@ -29,13 +29,13 @@ async def main():
         agents = list(result.all())
         print(f"Gefunden: {len(agents)} provisionierte Agents\n")
 
-        # Alle Agents auf dem Board sammeln (fuer USER.md Context)
+        # Collect all agents on the board (for USER.md context)
         all_agents = agents
 
         for agent in agents:
             print(f"--- {agent.emoji} {agent.name} ---")
 
-            # 1) SOUL.md aus Template rendern
+            # 1) Render SOUL.md from template
             try:
                 board_id_str = str(agent.board_id) if agent.board_id else None
                 board_agents = [a for a in all_agents if a.board_id == agent.board_id]
@@ -52,7 +52,7 @@ async def main():
             except Exception as e:
                 print(f"  SOUL.md: FEHLER — {e}")
 
-            # 2) TOOLS.md mit bestehendem Token regenerieren
+            # 2) Regenerate TOOLS.md with the existing token
             if agent.tools_md:
                 existing_token = extract_token_from_tools_md(agent.tools_md)
                 if existing_token:

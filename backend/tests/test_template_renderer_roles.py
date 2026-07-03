@@ -1,4 +1,4 @@
-"""Tests fuer template_renderer role_type_map + SOUL.md Rendering."""
+"""Tests for template_renderer role_type_map + SOUL.md rendering."""
 import uuid
 import pytest
 from app.services.template_renderer import build_agent_context, render_agent_file
@@ -16,42 +16,42 @@ def _make_agent(name: str, role: str = "developer", is_board_lead: bool = False)
 
 
 def test_freecode_gets_developer_role():
-    """FreeCode soll weiterhin role=developer bekommen."""
+    """FreeCode should still get role=developer."""
     agent = _make_agent("FreeCode", role="Developer")
     ctx = build_agent_context(agent, agents_on_board=[])
     assert ctx["role"] == "developer"
 
 
 def test_boss_gets_orchestrator_role():
-    """Boss soll role=orchestrator bekommen."""
+    """Boss should get role=orchestrator."""
     agent = _make_agent("Boss", role="Orchestrator")
     ctx = build_agent_context(agent, agents_on_board=[])
     assert ctx["role"] == "orchestrator"
 
 
 def test_henry_gets_lead_role():
-    """Henry soll role=lead bekommen."""
+    """Henry should get role=lead."""
     agent = _make_agent("Henry", role="Board Lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     assert ctx["role"] == "lead"
 
 
 def test_shakespeare_gets_writer_role():
-    """Shakespeare soll role=writer bekommen."""
+    """Shakespeare should get role=writer."""
     agent = _make_agent("Shakespeare", role="Content Writer")
     ctx = build_agent_context(agent, agents_on_board=[])
     assert ctx["role"] == "writer"
 
 
 def test_davinci_gets_designer_role():
-    """Davinci soll role=designer bekommen."""
+    """Davinci should get role=designer."""
     agent = _make_agent("Davinci", role="Graphic Designer")
     ctx = build_agent_context(agent, agents_on_board=[])
     assert ctx["role"] == "designer"
 
 
 def test_rendered_soul_no_mc_token():
-    """Kein $MC_TOKEN im gerenderten SOUL.md — soll $MC_AGENT_TOKEN sein."""
+    """No $MC_TOKEN in the rendered SOUL.md — should be $MC_AGENT_TOKEN."""
     agent = _make_agent("Rex", role="reviewer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -59,7 +59,7 @@ def test_rendered_soul_no_mc_token():
 
 
 def test_rendered_developer_soul_no_mc_token():
-    """Kein $MC_TOKEN im developer SOUL.md."""
+    """No $MC_TOKEN in the developer SOUL.md."""
     agent = _make_agent("FreeCode", role="developer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -67,7 +67,7 @@ def test_rendered_developer_soul_no_mc_token():
 
 
 def test_henry_soul_has_autonomy_level_rule():
-    """Henry's SOUL.md muss autonomy_level-Regel enthalten."""
+    """Henry's SOUL.md must contain the autonomy_level rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -76,7 +76,7 @@ def test_henry_soul_has_autonomy_level_rule():
 
 
 def test_henry_soul_has_tags_rule():
-    """Henry's SOUL.md muss Tags-Pflicht enthalten."""
+    """Henry's SOUL.md must contain the mandatory tags rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -84,7 +84,7 @@ def test_henry_soul_has_tags_rule():
 
 
 def test_henry_soul_has_preview_url_rule():
-    """Henry's SOUL.md muss Preview-URL-Regel enthalten."""
+    """Henry's SOUL.md must contain the preview URL rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -92,7 +92,7 @@ def test_henry_soul_has_preview_url_rule():
 
 
 def test_henry_soul_has_markdown_description_rule():
-    """Henry's SOUL.md muss Markdown-Description-Pflicht enthalten."""
+    """Henry's SOUL.md must contain the mandatory Markdown description rule."""
     agent = _make_agent("Henry", role="lead", is_board_lead=True)
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -100,7 +100,7 @@ def test_henry_soul_has_markdown_description_rule():
 
 
 def test_freecode_soul_has_workspace_path():
-    """FreeCode's SOUL.md muss Workspace-Pfad enthalten."""
+    """FreeCode's SOUL.md must contain the workspace path."""
     agent = _make_agent("FreeCode", role="developer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -108,15 +108,15 @@ def test_freecode_soul_has_workspace_path():
 
 
 def test_freecode_soul_has_git_workflow():
-    """FreeCode's SOUL.md muss Git-Workflow-Sektion enthalten.
+    """FreeCode's SOUL.md must contain a Git workflow section.
 
-    Historisch war die Annahme: der Agent macht `git checkout -b task/...`
-    selbst. Seit dem Worktree-basierten Dispatch ist das Worktree aber
-    schon vorher auf `task/<slug>` ausgecheckt — der Agent pushed nur.
-    Dieser Test prueft darum die neuen essentiellen Marker:
-    - Git-Workflow Sektion existiert
-    - task/ Branch Naming wird erwaehnt
-    - git push zum remote ist dokumentiert
+    Historically the assumption was: the agent runs `git checkout -b task/...`
+    itself. Since the worktree-based dispatch, the worktree is already
+    checked out to `task/<slug>` beforehand — the agent only pushes.
+    This test therefore checks the new essential markers:
+    - Git workflow section exists
+    - task/ branch naming is mentioned
+    - git push to remote is documented
     """
     agent = _make_agent("FreeCode", role="developer")
     ctx = build_agent_context(agent, agents_on_board=[])
@@ -127,7 +127,7 @@ def test_freecode_soul_has_git_workflow():
 
 
 def test_researcher_soul_has_knowledge_base():
-    """Researcher's SOUL.md muss Knowledge-Base-Eintrag als Output erwähnen."""
+    """Researcher's SOUL.md must mention a knowledge base entry as output."""
     agent = _make_agent("Researcher", role="researcher")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -135,7 +135,7 @@ def test_researcher_soul_has_knowledge_base():
 
 
 def test_shakespeare_soul_has_marks_stil():
-    """Shakespeare's SOUL.md muss die Stil-Referenz des Operators enthalten."""
+    """Shakespeare's SOUL.md must contain the operator's style reference."""
     agent = _make_agent("Shakespeare", role="writer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -143,7 +143,7 @@ def test_shakespeare_soul_has_marks_stil():
 
 
 def test_deployer_soul_has_deploy_url_deliverable():
-    """Deployer's SOUL.md muss Deploy-URL als Deliverable erwähnen."""
+    """Deployer's SOUL.md must mention the deploy URL as a deliverable."""
     agent = _make_agent("Deployer", role="deployer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)
@@ -151,7 +151,7 @@ def test_deployer_soul_has_deploy_url_deliverable():
 
 
 def test_davinci_soul_has_tools():
-    """Davinci's SOUL.md muss ComfyUI oder Remotion erwähnen."""
+    """Davinci's SOUL.md must mention ComfyUI or Remotion."""
     agent = _make_agent("Davinci", role="designer")
     ctx = build_agent_context(agent, agents_on_board=[])
     soul = render_agent_file("SOUL.md.j2", ctx)

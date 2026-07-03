@@ -142,7 +142,7 @@ export default function InsightsPage() {
     ([name, count]) => ({ name, value: count as number })
   );
 
-  // Cache-Hit-Quote: cache_read / (cache_read + input) %
+  // Cache hit rate: cache_read / (cache_read + input) %
   const cacheHitPct = (() => {
     if (!byModel || byModel.length === 0) return null;
     const totalCacheRead = byModel.reduce((s: number, m: CostByModel) => s + m.cache_read_tokens, 0);
@@ -152,7 +152,7 @@ export default function InsightsPage() {
     return Math.round((totalCacheRead / denom) * 100 * 10) / 10;
   })();
 
-  // Harness-Split fuer PieChart
+  // Harness split for PieChart
   const harnessData = (() => {
     if (!byModel) return [];
     const map: Record<string, number> = {};
@@ -166,7 +166,7 @@ export default function InsightsPage() {
       .sort((a, b) => b.value - a.value);
   })();
 
-  // Farben fuer Harness-Split aus C-Tokens (KEINE neuen Hex-Werte)
+  // Colors for the harness split from C tokens (NO new hex values)
   const HARNESS_COLORS: Record<string, string> = {
     "cli-bridge": C.accent,
     "host": C.info,
@@ -253,7 +253,7 @@ export default function InsightsPage() {
           </div>
         ) : (
           <>
-            {/* ── Tab: Übersicht ── */}
+            {/* ── Tab: Overview ── */}
             {activeTab === "overview" && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 {/* KPI row */}
@@ -461,7 +461,7 @@ export default function InsightsPage() {
                   )}
                 </div>
 
-                {/* ── Cache-Hit-Quote KPI + Harness-Split Zaehler ── */}
+                {/* ── Cache hit rate KPI + harness split counter ── */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4 mb-4">
                   <KPICard
                     label="Cache-Hit-Quote"
@@ -478,7 +478,7 @@ export default function InsightsPage() {
                   />
                 </div>
 
-                {/* ── Tokens & Kosten pro Modell ── */}
+                {/* ── Tokens & cost per model ── */}
                 <div
                   className="rounded-2xl overflow-hidden mb-4"
                   style={{ background: IN_bg, border: `1px solid ${C.border}` }}
@@ -595,7 +595,7 @@ export default function InsightsPage() {
                   )}
                 </div>
 
-                {/* ── Kosten pro Tag (AreaChart) ── */}
+                {/* ── Cost per day (AreaChart) ── */}
                 <div
                   className="rounded-2xl p-5 mb-4"
                   style={{ background: IN_bg, border: `1px solid ${C.border}` }}
@@ -655,9 +655,9 @@ export default function InsightsPage() {
                   )}
                 </div>
 
-                {/* ── Teuerste Tasks + Harness-Split ── */}
+                {/* ── Most expensive tasks + harness split ── */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  {/* Teuerste Tasks */}
+                  {/* Most expensive tasks */}
                   <div
                     className="rounded-2xl overflow-hidden"
                     style={{ background: IN_bg, border: `1px solid ${C.border}` }}
@@ -720,7 +720,7 @@ export default function InsightsPage() {
                     )}
                   </div>
 
-                  {/* Harness-Split PieChart */}
+                  {/* Harness split PieChart */}
                   <div
                     className="rounded-2xl p-5"
                     style={{ background: IN_bg, border: `1px solid ${C.border}` }}

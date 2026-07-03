@@ -10,32 +10,32 @@ export interface ParsedComment {
 }
 
 /**
- * Dynamischer Comment-Parser.
+ * Dynamic comment parser.
  *
- * Erkennt JEDES Pattern mit **Label:** oder **Label** gefolgt von Inhalt.
- * Kein hardcoded Label-Set mehr — alles was in **...** steht wird als
- * Section-Label behandelt.
+ * Recognizes ANY pattern with **Label:** or **Label** followed by content.
+ * No more hardcoded label set — anything inside **...** is treated as
+ * a section label.
  *
- * Checklist-Zeilen (- [x] / - [ ]) werden als eigene "Checklist"-Section
- * extrahiert wenn sie ausserhalb von bold-Sections stehen.
+ * Checklist lines (- [x] / - [ ]) are extracted as their own "Checklist"
+ * section when they sit outside bold sections.
  */
 export function parseComment(content: string, _commentType?: string): ParsedComment {
   if (!content.trim()) {
     return { type: "plain", sections: [], raw: content };
   }
 
-  // Regex: Zeilenanfang (optional whitespace), dann **Label** gefolgt von
-  // optionalem : oder — oder einfach Whitespace, dann Rest der Zeile.
-  // Multiline-Flag: jede Zeile wird geprüft.
+  // Regex: start of line (optional whitespace), then **Label** followed by
+  // an optional : or — or plain whitespace, then the rest of the line.
+  // Multiline flag: every line is checked.
   const labelPattern = /^\s*\*\*([^*]+)\*\*\s*(?:[:—–\-]\s*)?/gm;
 
-  // Alle Label-Positionen sammeln
+  // Collect all label positions
   const matches: Array<{ label: string; matchEnd: number; startIndex: number }> = [];
   let match: RegExpExecArray | null;
 
   while ((match = labelPattern.exec(content)) !== null) {
     const label = match[1].trim();
-    // Leere Labels oder Labels die nur Sonderzeichen sind ignorieren
+    // Ignore empty labels or labels that consist only of special characters
     if (!label || /^[\s*_~`]+$/.test(label)) continue;
 
     matches.push({
@@ -46,7 +46,7 @@ export function parseComment(content: string, _commentType?: string): ParsedComm
   }
 
   if (matches.length === 0) {
-    // Checklist-only check: wenn der Content nur Checklist-Zeilen hat
+    // Checklist-only check: when the content has only checklist lines
     const checklistLines = content.split("\n").filter((l) =>
       /^\s*-\s*\[(x| )\]/i.test(l)
     );
@@ -63,7 +63,7 @@ export function parseComment(content: string, _commentType?: string): ParsedComm
 
   const sections: CommentSection[] = [];
 
-  // Content vor dem ersten Match als "Intro" aufnehmen (wenn vorhanden)
+  // Capture content before the first match as "Intro" (if present)
   if (matches[0].startIndex > 0) {
     const intro = content.slice(0, matches[0].startIndex).trim();
     if (intro) {
@@ -71,8 +71,8 @@ export function parseComment(content: string, _commentType?: string): ParsedComm
     }
   }
 
-  // Sections extrahieren: Content geht vom Ende des Label-Match
-  // bis zum Start des nächsten Label-Match (oder Ende des Strings)
+  // Extract sections: content runs from the end of the label match
+  // to the start of the next label match (or the end of the string)
   for (let i = 0; i < matches.length; i++) {
     const m = matches[i];
     const contentEnd = i + 1 < matches.length

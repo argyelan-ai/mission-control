@@ -1,8 +1,8 @@
-"""Tests fuer /agent/tasks/{id}/visual-verify Endpoint + TelegramReports Media-Group.
+"""Tests for /agent/tasks/{id}/visual-verify endpoint + TelegramReports media group.
 
-Testet den Integrations-Layer zwischen MC-Backend und mc-playwright Service.
-Der echte Playwright-Call wird gemockt — mc-playwright-Container wird in
-einem separaten Live-Test mitgetestet.
+Tests the integration layer between the MC backend and the mc-playwright service.
+The real Playwright call is mocked — the mc-playwright container is covered
+by a separate live test.
 """
 
 import uuid
@@ -64,7 +64,7 @@ def _fake_verify_result():
 
 @pytest.mark.asyncio
 async def test_visual_verify_registers_deliverables(client, fake_redis):
-    """Alle Screenshots+Scroll-Shots werden als TaskDeliverable registriert."""
+    """All screenshots+scroll_shots are registered as TaskDeliverable."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
@@ -86,7 +86,7 @@ async def test_visual_verify_registers_deliverables(client, fake_redis):
     assert body["deliverables_registered"] == 5  # 2 screenshots + 3 scroll_shots
     assert len(body["screenshots"]) == 2
 
-    # In DB: 5 TaskDeliverable-Rows mit type=screenshot
+    # In DB: 5 TaskDeliverable rows with type=screenshot
     from app.models.deliverable import TaskDeliverable
     from sqlmodel import select
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -100,7 +100,7 @@ async def test_visual_verify_registers_deliverables(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_visual_verify_sends_telegram_media_group(client, fake_redis):
-    """Bei send_to_telegram=true (default) wird send_media_group aufgerufen."""
+    """With send_to_telegram=true (default), send_media_group is called."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
@@ -120,14 +120,14 @@ async def test_visual_verify_sends_telegram_media_group(client, fake_redis):
     assert r.json()["telegram_sent"] is True
     mock_reports.send_media_group.assert_awaited_once()
     call_args = mock_reports.send_media_group.await_args
-    # caption sollte Metrics-Block enthalten
+    # caption should contain the metrics block
     assert "Performance" in call_args.kwargs.get("caption", "") or \
            "Performance" in (call_args.args[1] if len(call_args.args) > 1 else "")
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_respects_no_telegram(client, fake_redis):
-    """send_to_telegram=false → media_group nicht aufgerufen."""
+    """send_to_telegram=false → media_group is not called."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
@@ -150,7 +150,7 @@ async def test_visual_verify_respects_no_telegram(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_visual_verify_rejects_foreign_task(client, fake_redis):
-    """Agent darf nicht visual-verify auf fremdem Task (Ownership-Check)."""
+    """Agent must not visual-verify a foreign task (ownership check)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -158,7 +158,7 @@ async def test_visual_verify_rejects_foreign_task(client, fake_redis):
 
     data = await _setup_agent_with_task()
 
-    # Fremder Task
+    # Foreign task
     foreign_task_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         other_id = uuid.uuid4()
@@ -184,7 +184,7 @@ async def test_visual_verify_rejects_foreign_task(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_visual_verify_503_when_playwright_unreachable(client, fake_redis):
-    """Wenn mc-playwright unreachable ist → 503 mit klarer Message."""
+    """When mc-playwright is unreachable → 503 with a clear message."""
     import httpx
     data = await _setup_agent_with_task()
 
@@ -209,13 +209,13 @@ async def test_visual_verify_503_when_playwright_unreachable(client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_send_media_group_falls_back_to_single_photo_for_one_item(tmp_path):
-    """Media-Group mit nur 1 Photo → fallback auf send_photo."""
+    """Media group with only 1 photo → falls back to send_photo."""
     from app.services.telegram_reports import TelegramReportsService
     svc = TelegramReportsService()
     svc._token = "fake:token"
     svc._chat_id = "123"
 
-    # Dummy-PNG
+    # Dummy PNG
     p = tmp_path / "one.png"
     p.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
@@ -229,35 +229,35 @@ async def test_send_media_group_falls_back_to_single_photo_for_one_item(tmp_path
 
 @pytest.mark.asyncio
 async def test_send_media_group_skips_missing_files(tmp_path):
-    """Nicht-existente Files werden gefiltert, kein Crash."""
+    """Non-existent files are filtered out, no crash."""
     from app.services.telegram_reports import TelegramReportsService
     svc = TelegramReportsService()
     svc._token = "fake:token"
     svc._chat_id = "123"
 
-    # Nur 1 Datei existiert
+    # Only 1 file exists
     p_real = tmp_path / "real.png"
     p_real.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
 
     mock_send_photo = AsyncMock(return_value={"ok": True, "message_id": 1})
     with patch.object(TelegramReportsService, "send_photo", mock_send_photo):
-        # 3 paths, nur real.png existiert → fallback auf single
+        # 3 paths, only real.png exists → falls back to single
         r = await svc.send_media_group([
             str(p_real), "/nope/missing1.png", "/nope/missing2.png",
         ])
 
-    # Hat single-send fallback genutzt
+    # Used the single-send fallback
     assert r == {"ok": True, "message_id": 1}
 
 
 # ────────────────────────────────────────────────────────────────────
-# Interaktions-Mode (auth_token, credential_id, interactions, wait_for)
+# Interaction mode (auth_token, credential_id, interactions, wait_for)
 # ────────────────────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_passes_interaction_params_through(client, fake_redis):
-    """auth_token, interactions, wait_for_selector, full_page werden an verify_url durchgereicht."""
+    """auth_token, interactions, wait_for_selector, full_page are passed through to verify_url."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
@@ -302,14 +302,14 @@ async def test_visual_verify_passes_interaction_params_through(client, fake_redi
 
 @pytest.mark.asyncio
 async def test_visual_verify_credential_id_resolves_from_vault(client, fake_redis):
-    """credential_id → Backend entschluesselt Vault → login-dict an verify_url."""
+    """credential_id → backend decrypts vault → login dict passed to verify_url."""
     import json as _json
     from app.models.credential import Credential
     from app.services.encryption import encrypt
 
     data = await _setup_agent_with_task()
 
-    # Tester-Agent muss CREDENTIALS_READ Scope fuer diesen Test haben
+    # Tester agent needs the CREDENTIALS_READ scope for this test
     from app.models.agent import Agent
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         a = await s.get(Agent, data["agent_id"])
@@ -358,14 +358,14 @@ async def test_visual_verify_credential_id_resolves_from_vault(client, fake_redi
 
 @pytest.mark.asyncio
 async def test_visual_verify_credential_id_requires_credentials_read_scope(client, fake_redis):
-    """Agent ohne credentials:read bekommt 403 wenn credential_id mitgeschickt wird."""
+    """Agent without credentials:read gets 403 when credential_id is sent."""
     from app.models.credential import Credential
     from app.services.encryption import encrypt
     import json as _json
 
     data = await _setup_agent_with_task()
-    # Default-Tester in _setup hat nur tasks:read, tasks:write, chat:write
-    # → fehlt credentials:read
+    # Default tester in _setup only has tasks:read, tasks:write, chat:write
+    # → credentials:read is missing
 
     cred_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -393,9 +393,9 @@ async def test_visual_verify_credential_id_requires_credentials_read_scope(clien
 
 @pytest.mark.asyncio
 async def test_visual_verify_credential_id_404_when_missing(client, fake_redis):
-    """credential_id das nicht existiert → 404."""
+    """credential_id that does not exist → 404."""
     data = await _setup_agent_with_task()
-    # Scope hinzufuegen damit wir nicht am 403 haengen bleiben
+    # Add scope so we don't get stuck on the 403
     from app.models.agent import Agent
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         a = await s.get(Agent, data["agent_id"])
@@ -417,7 +417,7 @@ async def test_visual_verify_credential_id_404_when_missing(client, fake_redis):
 
 
 async def _patch_agent_scoped_redis(monkeypatch, fake_redis):
-    """Patcht `from app.redis_client import get_redis` in agent_scoped auf fakeredis."""
+    """Patches `from app.redis_client import get_redis` in agent_scoped to fakeredis."""
     import app.redis_client as rc
     async def _fake_get_redis():
         return fake_redis
@@ -426,7 +426,7 @@ async def _patch_agent_scoped_redis(monkeypatch, fake_redis):
 
 @pytest.mark.asyncio
 async def test_visual_verify_dedup_skips_second_send(client, fake_redis, monkeypatch):
-    """Zweite visual-verify auf derselben Task → Telegram dedup (keine 2. send)."""
+    """Second visual-verify on the same task → Telegram dedup (no 2nd send)."""
     await _patch_agent_scoped_redis(monkeypatch, fake_redis)
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
@@ -437,13 +437,13 @@ async def test_visual_verify_dedup_skips_second_send(client, fake_redis, monkeyp
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
          patch("app.services.visual_verifier.telegram_reports", mock_reports):
-        # Erste Call — sendet
+        # First call — sends
         r1 = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://example.com"},
             headers={"Authorization": f"Bearer {data['token']}"},
         )
-        # Zweite Call — muss deduped sein
+        # Second call — must be deduped
         r2 = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://example.com"},
@@ -458,13 +458,13 @@ async def test_visual_verify_dedup_skips_second_send(client, fake_redis, monkeyp
     assert r2.json()["telegram_sent"] is False
     assert r2.json()["telegram_skipped"] == "already_sent"
 
-    # send_media_group wurde nur EINMAL aufgerufen (zweite Call deduped)
+    # send_media_group was called only ONCE (second call deduped)
     assert mock_reports.send_media_group.await_count == 1
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_force_resend_overrides_dedup(client, fake_redis, monkeypatch):
-    """force_telegram_resend=True überschreibt Dedup — beide Calls senden."""
+    """force_telegram_resend=True overrides dedup — both calls send."""
     await _patch_agent_scoped_redis(monkeypatch, fake_redis)
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
@@ -480,7 +480,7 @@ async def test_visual_verify_force_resend_overrides_dedup(client, fake_redis, mo
             json={"url": "https://example.com"},
             headers={"Authorization": f"Bearer {data['token']}"},
         )
-        # Zweite Call mit force_telegram_resend=True
+        # Second call with force_telegram_resend=True
         r2 = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://example.com", "force_telegram_resend": True},
@@ -490,17 +490,17 @@ async def test_visual_verify_force_resend_overrides_dedup(client, fake_redis, mo
     assert r1.json()["telegram_sent"] is True
     assert r2.json()["telegram_sent"] is True
     assert r2.json().get("telegram_skipped") is None
-    # Beide Calls haben send_media_group getriggert
+    # Both calls triggered send_media_group
     assert mock_reports.send_media_group.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_dedup_scoped_per_task(client, fake_redis, monkeypatch):
-    """Dedup ist per-task — zweite Task auf gleichem Agent sendet normal."""
+    """Dedup is per-task — a second task on the same agent sends normally."""
     await _patch_agent_scoped_redis(monkeypatch, fake_redis)
     data1 = await _setup_agent_with_task()
 
-    # Zweite Task gleicher Agent
+    # Second task, same agent
     from app.models.task import Task
     task2_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -531,13 +531,13 @@ async def test_visual_verify_dedup_scoped_per_task(client, fake_redis, monkeypat
 
     assert r1.json()["telegram_sent"] is True
     assert r2.json()["telegram_sent"] is True
-    # Beide Tasks senden — Dedup ist per-task, nicht per-agent
+    # Both tasks send — dedup is per-task, not per-agent
     assert mock_reports.send_media_group.await_count == 2
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_inline_login_beats_credential_id(client, fake_redis):
-    """Wenn inline login UND credential_id gesetzt → inline login gewinnt."""
+    """When inline login AND credential_id are set → inline login wins."""
     import json as _json
     from app.models.credential import Credential
     from app.models.agent import Agent
@@ -594,14 +594,14 @@ async def test_visual_verify_inline_login_beats_credential_id(client, fake_redis
 
 @pytest.mark.asyncio
 async def test_visual_verify_login_failed_returns_422(client, fake_redis):
-    """Bug B (2026-04-23): mc-playwright meldet form-login als 'fertig' obwohl
-    Page nach Submit auf /login bleibt → Screenshot zeigt Login-Maske statt
-    eingeloggter Page. Backend MUSS das als 422 abweisen, nicht als ok=true
-    durchwinken.
+    """Bug B (2026-04-23): mc-playwright reports form login as 'done' even though
+    the page stays on /login after submit → screenshot shows the login mask
+    instead of the logged-in page. Backend MUST reject this as 422, not wave
+    it through with ok=true.
     """
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
-    # mc-playwright meldet jetzt explizit succeeded=False
+    # mc-playwright now explicitly reports succeeded=False
     fake["login"] = {
         "succeeded": False,
         "final_url": "http://caddy/login",
@@ -630,14 +630,14 @@ async def test_visual_verify_login_failed_returns_422(client, fake_redis):
     detail = r.json()["detail"]
     assert detail["error"] == "form_login_failed"
     assert "Login-URL" in detail["message"]
-    # KEINE Telegram-Sendung wenn Login fehlschlug
+    # NO Telegram send if login failed
     mock_reports.send_media_group.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_visual_verify_login_succeeded_passes_through(client, fake_redis):
-    """Wenn mc-playwright login.succeeded=True meldet, laeuft alles normal durch.
-    Sanity-Check fuer den happy-path."""
+    """When mc-playwright reports login.succeeded=True, everything runs through
+    normally. Sanity check for the happy path."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
     fake["login"] = {
@@ -668,11 +668,11 @@ async def test_visual_verify_login_succeeded_passes_through(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_visual_verify_no_login_field_does_not_break(client, fake_redis):
-    """Backwards-compat: alte mc-playwright Versionen liefern keinen login-Field.
-    Backend darf nicht crashen wenn key fehlt."""
+    """Backwards-compat: old mc-playwright versions don't return a login field.
+    Backend must not crash when the key is missing."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
-    # Bewusst KEIN "login" key
+    # Deliberately NO "login" key
 
     mock_reports = MagicMock()
     mock_reports.configured = True

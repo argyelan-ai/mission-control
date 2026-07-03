@@ -1,4 +1,4 @@
-"""Tests fuer Task-Dependency-Enforcement beim Dispatch."""
+"""Tests for task dependency enforcement during dispatch."""
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -13,7 +13,7 @@ from tests.conftest import test_engine
 
 @pytest.mark.asyncio
 async def test_dependencies_met_no_deps(make_board, make_task):
-    """Task ohne Dependencies → True."""
+    """Task without dependencies → True."""
     board = await make_board()
     task = await make_task(board_id=board.id)
 
@@ -25,7 +25,7 @@ async def test_dependencies_met_no_deps(make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_dependencies_met_all_done(make_board, make_task):
-    """Alle Dependencies done → True."""
+    """All dependencies done → True."""
     board = await make_board()
     dep_task = await make_task(board_id=board.id, title="Dep Task", status="done")
     task = await make_task(board_id=board.id, title="Blocked Task")
@@ -43,7 +43,7 @@ async def test_dependencies_met_all_done(make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_dependencies_met_not_done(make_board, make_task):
-    """Dependency nicht done → False."""
+    """Dependency not done → False."""
     board = await make_board()
     dep_task = await make_task(board_id=board.id, title="Dep Task", status="in_progress")
     task = await make_task(board_id=board.id, title="Blocked Task")
@@ -61,7 +61,7 @@ async def test_dependencies_met_not_done(make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_dependencies_met_partial(make_board, make_task):
-    """Eine von zwei Dependencies nicht done → False."""
+    """One of two dependencies not done → False."""
     board = await make_board()
     dep1 = await make_task(board_id=board.id, title="Dep 1", status="done")
     dep2 = await make_task(board_id=board.id, title="Dep 2", status="inbox")
@@ -84,7 +84,7 @@ async def test_dependencies_met_partial(make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_dispatch_blocked_by_dependency(client, make_board, make_agent, make_task):
-    """Task mit unerfuellter Dependency wird NICHT dispatcht."""
+    """Task with an unmet dependency is NOT dispatched."""
     board = await make_board(auto_dispatch_enabled=True)
     agent = await make_agent(
         board_id=board.id, is_board_lead=True,     )
@@ -103,10 +103,10 @@ async def test_dispatch_blocked_by_dependency(client, make_board, make_agent, ma
         from app.services.dispatch import auto_dispatch_task
         await auto_dispatch_task(task.id, board.id)
 
-    # chat_send darf NICHT aufgerufen worden sein
+    # chat_send must NOT have been called
     mock_rpc.chat_send.assert_not_called()
 
-    # Task bleibt unveraendert (kein dispatched_at, kein assigned_agent_id)
+    # Task remains unchanged (no dispatched_at, no assigned_agent_id)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         refreshed = await s.get(type(task), task.id)
         assert refreshed.dispatched_at is None

@@ -96,8 +96,8 @@ export function VoicePreviewSheet({
 
 function SheetContent({ card, onClose }: { card: DisplayCard; onClose: () => void }) {
   if (card.kind === "task") return <TaskSheet card={card} onClose={onClose} />;
-  // UrlCard bietet kein onPreview an — dieser Zweig ist zur Laufzeit
-  // unerreichbar, macht aber das Narrowing auf memory|file explizit.
+  // UrlCard doesn't offer onPreview — this branch is unreachable at
+  // runtime, but makes the narrowing to memory|file explicit.
   if (card.kind === "url") return null;
   return <NoteSheet card={card} onClose={onClose} />;
 }

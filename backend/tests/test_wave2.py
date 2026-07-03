@@ -1,5 +1,5 @@
 """
-Tests fuer MC Product Wave 2 Features.
+Tests for MC Product Wave 2 Features.
 
 Theme 1: Task Hierarchy (Parent/Children, Report-Back, Credentials)
 Theme 3: Autonomy (3-Tier Levels: L1/L2/L3, Defaults, Overrides)
@@ -28,7 +28,7 @@ class TestTaskHierarchy:
     async def test_task_hierarchy_with_parent_and_children(
         self, auth_client: AsyncClient, make_board, make_task
     ):
-        """Parent + 2 Children erstellen, Hierarchie-Response pruefen."""
+        """Create parent + 2 children, check the hierarchy response."""
         board = await make_board(name="Hierarchy Board", slug="hierarchy")
 
         parent = await make_task(
@@ -54,17 +54,17 @@ class TestTaskHierarchy:
             sort_order=1,
         )
 
-        # Teste Hierarchie vom Parent aus
+        # Test hierarchy from the parent's perspective
         resp = await auth_client.get(
             f"/api/v1/boards/{board.id}/tasks/{parent.id}/hierarchy"
         )
         assert resp.status_code == 200
         data = resp.json()
 
-        # Parent hat keinen Parent
+        # Parent has no parent
         assert data["parent"] is None
 
-        # 2 Children in sort_order
+        # 2 children in sort_order
         assert len(data["children"]) == 2
         assert data["children"][0]["id"] == str(child1.id)
         assert data["children"][0]["title"] == "Set up models"
@@ -72,7 +72,7 @@ class TestTaskHierarchy:
         assert data["children"][1]["id"] == str(child2.id)
         assert data["children"][1]["title"] == "Create API routes"
 
-        # Teste Hierarchie vom Child aus — sieht Parent
+        # Test hierarchy from the child's perspective — sees the parent
         resp2 = await auth_client.get(
             f"/api/v1/boards/{board.id}/tasks/{child1.id}/hierarchy"
         )
@@ -89,7 +89,7 @@ class TestTaskHierarchy:
     async def test_task_hierarchy_no_children(
         self, auth_client: AsyncClient, make_board, make_task
     ):
-        """Einzelner Task ohne Parent und ohne Children."""
+        """Single task without a parent and without children."""
         board = await make_board(name="Solo Board", slug="solo")
         task = await make_task(board.id, title="Standalone Task")
 
@@ -108,7 +108,7 @@ class TestTaskHierarchy:
     async def test_task_hierarchy_report_back(
         self, auth_client: AsyncClient, make_board, make_task
     ):
-        """Task mit report_back Feldern gesetzt."""
+        """Task with report_back fields set."""
         board = await make_board(name="ReportBack Board", slug="reportback")
         task = await make_task(
             board.id,
@@ -135,7 +135,7 @@ class TestTaskHierarchy:
     async def test_task_hierarchy_credentials_indicator(
         self, auth_client: AsyncClient, make_board, make_task
     ):
-        """Task mit credentials_encrypted gesetzt → has_credentials=True."""
+        """Task with credentials_encrypted set → has_credentials=True."""
         board = await make_board(name="Creds Board", slug="creds")
         task_with = await make_task(
             board.id,
@@ -147,14 +147,14 @@ class TestTaskHierarchy:
             title="Task without Credentials",
         )
 
-        # Mit Credentials
+        # With credentials
         resp1 = await auth_client.get(
             f"/api/v1/boards/{board.id}/tasks/{task_with.id}/hierarchy"
         )
         assert resp1.status_code == 200
         assert resp1.json()["has_credentials"] is True
 
-        # Ohne Credentials
+        # Without credentials
         resp2 = await auth_client.get(
             f"/api/v1/boards/{board.id}/tasks/{task_without.id}/hierarchy"
         )
@@ -166,13 +166,13 @@ class TestTaskHierarchy:
 
 
 class TestAutonomyDefaults:
-    """AUTONOMY_DEFAULTS Konfiguration."""
+    """AUTONOMY_DEFAULTS configuration."""
 
     async def test_autonomy_defaults(self):
-        """Alle erwarteten Keys und Levels vorhanden."""
+        """All expected keys and levels are present."""
         from app.services.autonomy import AUTONOMY_DEFAULTS
 
-        # Erwartete Keys
+        # Expected keys
         expected_keys = {
             "deploy", "external_post", "config_change", "browser_action",
             "visual_review", "blocker_decision", "question", "code_change",
@@ -180,24 +180,24 @@ class TestAutonomyDefaults:
         }
         assert set(AUTONOMY_DEFAULTS.keys()) == expected_keys
 
-        # Spot-Check: konkrete Levels
+        # Spot check: concrete levels
         assert AUTONOMY_DEFAULTS["code_change"] == "L1"
         assert AUTONOMY_DEFAULTS["mark_done"] == "L1"
         assert AUTONOMY_DEFAULTS["browser_action"] == "L2"
         assert AUTONOMY_DEFAULTS["deploy"] == "L3"
         assert AUTONOMY_DEFAULTS["question"] == "L3"
 
-        # Alle Werte sind gueltige Levels
+        # All values are valid levels
         valid_levels = {"L1", "L2", "L3"}
         for key, level in AUTONOMY_DEFAULTS.items():
             assert level in valid_levels, f"{key} hat ungueltiges Level: {level}"
 
 
 class TestAutonomyEnforcement:
-    """enforce_autonomy() — 3-Tier Verhalten."""
+    """enforce_autonomy() — 3-tier behavior."""
 
     async def _setup_data(self):
-        """Board + Agent erstellen fuer Autonomy-Tests."""
+        """Create board + agent for autonomy tests."""
         from app.models.board import Board
         from app.models.agent import Agent
 
@@ -215,11 +215,11 @@ class TestAutonomyEnforcement:
 
     @patch("app.services.autonomy.get_redis", new_callable=AsyncMock)
     async def test_l1_no_approval(self, mock_get_redis):
-        """L1 (code_change) → kein Approval, return 'L1'."""
+        """L1 (code_change) → no approval, return 'L1'."""
         from app.services.autonomy import enforce_autonomy
 
         mock_redis = AsyncMock()
-        mock_redis.get = AsyncMock(return_value=None)  # Keine Overrides
+        mock_redis.get = AsyncMock(return_value=None)  # No overrides
         mock_get_redis.return_value = mock_redis
 
         board_id, agent_id = await self._setup_data()
@@ -236,7 +236,7 @@ class TestAutonomyEnforcement:
 
         assert result == "L1"
 
-        # Kein Approval in der DB
+        # No approval in the DB
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             from app.models.approval import Approval
             approvals = (await s.exec(select(Approval))).all()
@@ -244,7 +244,7 @@ class TestAutonomyEnforcement:
 
     @patch("app.services.autonomy.get_redis", new_callable=AsyncMock)
     async def test_l2_emits_event(self, mock_get_redis):
-        """L2 (browser_action) → emit_event aufgerufen, return 'L2'."""
+        """L2 (browser_action) → emit_event called, return 'L2'."""
         from app.services.autonomy import enforce_autonomy
 
         mock_redis = AsyncMock()
@@ -273,7 +273,7 @@ class TestAutonomyEnforcement:
 
     @patch("app.services.autonomy.get_redis", new_callable=AsyncMock)
     async def test_l3_creates_approval(self, mock_get_redis):
-        """L3 (deploy) → Approval in DB mit autonomy_level='L3'."""
+        """L3 (deploy) → approval in DB with autonomy_level='L3'."""
         from app.services.autonomy import enforce_autonomy
         from app.models.approval import Approval
 
@@ -299,7 +299,7 @@ class TestAutonomyEnforcement:
 
         assert result == "L3"
 
-        # Approval in DB pruefen
+        # Check the approval in the DB
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             approvals = (await s.exec(select(Approval))).all()
             assert len(approvals) == 1
@@ -315,10 +315,10 @@ class TestAutonomyEnforcement:
 
     @patch("app.services.autonomy.get_redis", new_callable=AsyncMock)
     async def test_autonomy_override(self, mock_get_redis):
-        """Override via set_autonomy_config → resolve_autonomy gibt neuen Wert."""
+        """Override via set_autonomy_config → resolve_autonomy returns the new value."""
         from app.services.autonomy import set_autonomy_config, resolve_autonomy
 
-        # Simulate: deploy wurde von L3 auf L1 geaendert
+        # Simulate: deploy was changed from L3 to L1
         stored_overrides = {}
 
         async def fake_get(key):
@@ -333,19 +333,19 @@ class TestAutonomyEnforcement:
         mock_redis.set = AsyncMock(side_effect=fake_set)
         mock_get_redis.return_value = mock_redis
 
-        # Vorher: deploy = L3 (Default)
+        # Before: deploy = L3 (default)
         level_before = await resolve_autonomy("deploy")
         assert level_before == "L3"
 
-        # Override setzen
+        # Set override
         result = await set_autonomy_config({"deploy": "L1"})
         assert result["deploy"] == "L1"
 
-        # Nachher: deploy = L1
+        # After: deploy = L1
         level_after = await resolve_autonomy("deploy")
         assert level_after == "L1"
 
-        # Andere Defaults bleiben
+        # Other defaults remain unchanged
         assert (await resolve_autonomy("code_change")) == "L1"
         assert (await resolve_autonomy("browser_action")) == "L2"
 
@@ -356,7 +356,7 @@ class TestAutonomyAPI:
     async def test_get_autonomy_settings(
         self, fake_redis, auth_client: AsyncClient
     ):
-        """GET /settings/autonomy gibt Defaults zurueck."""
+        """GET /settings/autonomy returns the defaults."""
         resp = await auth_client.get("/api/v1/settings/autonomy")
         assert resp.status_code == 200
         data = resp.json()
@@ -377,7 +377,7 @@ class TestUsageAnalytics:
     async def test_usage_endpoint_returns_agents(
         self, fake_redis, auth_client: AsyncClient, make_board, make_agent
     ):
-        """Usage-Endpoint gibt Agent-Liste mit korrekten Feldern zurueck."""
+        """Usage endpoint returns an agent list with correct fields."""
         board = await make_board(name="Usage Board", slug="usage")
         agent = await make_agent(
             name="Cody",
@@ -397,7 +397,7 @@ class TestUsageAnalytics:
         assert "models" in data
         assert data["total_agents"] >= 1
 
-        # Agent in der Liste finden
+        # Find the agent in the list
         agent_data = next(
             (a for a in data["agents"] if a["agent_id"] == str(agent.id)),
             None,
@@ -415,10 +415,10 @@ class TestUsageAnalytics:
 
 
 class TestHeartbeatModelTracking:
-    """POST /api/v1/agent/heartbeat mit model_id."""
+    """POST /api/v1/agent/heartbeat with model_id."""
 
     async def test_heartbeat_model_id_saved(self, client: AsyncClient, fake_redis):
-        """Heartbeat mit model_id → Redis-Key mc:agent:{id}:heartbeat_model existiert."""
+        """Heartbeat with model_id → Redis key mc:agent:{id}:heartbeat_model exists."""
         from app.models.board import Board
         from app.models.agent import Agent
         from app.auth import generate_agent_token
@@ -441,7 +441,7 @@ class TestHeartbeatModelTracking:
             s.add(agent)
             await s.commit()
 
-        # Heartbeat-Handler importiert get_redis inline — muss gepatcht werden
+        # Heartbeat handler imports get_redis inline — must be patched
         async def override_get_redis():
             return fake_redis
 
@@ -456,11 +456,11 @@ class TestHeartbeatModelTracking:
             )
         assert resp.status_code == 200
 
-        # Redis-Key pruefen
+        # Check the Redis key
         redis_key = f"mc:agent:{agent_id}:heartbeat_model"
         value = await fake_redis.get(redis_key)
         assert value is not None
-        # fakeredis kann str oder bytes zurueckgeben
+        # fakeredis can return str or bytes
         val = value.decode() if isinstance(value, bytes) else value
         assert val == "claude-sonnet-4-20250514"
 
@@ -469,15 +469,15 @@ class TestHeartbeatModelTracking:
 
 
 class TestAgentHealthFields:
-    """Agent Model hat die Wave-2 Health-Felder."""
+    """Agent model has the wave-2 health fields."""
 
     async def test_agent_has_health_fields(self, make_board, make_agent):
-        """Agent-Model hat last_seen_at, context_tokens, run_state."""
+        """Agent model has last_seen_at, context_tokens, run_state."""
         from app.models.agent import Agent
 
         board = await make_board(name="Health Board", slug="health")
 
-        # Agent mit expliziten Health-Werten erstellen
+        # Create agent with explicit health values
         agent = await make_agent(
             name="HealthBot",
             board_id=board.id,
@@ -485,27 +485,27 @@ class TestAgentHealthFields:
             run_state="running",
         )
 
-        # Aus DB lesen und pruefen
+        # Read from DB and verify
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             db_agent = await s.get(Agent, agent.id)
             assert db_agent is not None
 
-            # Health-Felder existieren und haben korrekte Werte
+            # Health fields exist and have correct values
             assert db_agent.context_tokens == 120000
             assert db_agent.run_state == "running"
 
-            # last_seen_at ist nullable (None bei neuem Agent)
+            # last_seen_at is nullable (None for a new agent)
             assert hasattr(db_agent, "last_seen_at")
             assert db_agent.last_seen_at is None
 
-            # Weitere Health-Felder
+            # More health fields
             assert hasattr(db_agent, "context_max")
             assert db_agent.context_max == 150_000  # Default
             assert hasattr(db_agent, "total_compactions")
             assert db_agent.total_compactions == 0
 
     async def test_agent_default_health_values(self, make_board, make_agent):
-        """Agent ohne explizite Health-Werte hat sinnvolle Defaults."""
+        """Agent without explicit health values has sensible defaults."""
         board = await make_board(name="Defaults Board", slug="defaults")
         agent = await make_agent(name="DefaultBot", board_id=board.id)
 

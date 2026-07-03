@@ -562,9 +562,9 @@ function InstantiateModal({
                 <div>
                   <label className={labelClass}>Board *</label>
                   {boards.length === 0 ? (
-                    // Fresh-Install: ohne Board ist Instantiate ein Dead-End
-                    // (Backend verlangt board_id) — klarer Hinweis statt
-                    // leerem Select + stumm-disabled Button.
+                    // Fresh install: without a board, Instantiate is a dead end
+                    // (backend requires board_id) — clear message instead of
+                    // an empty select + a silently-disabled button.
                     <div
                       className="rounded-xl px-3 py-2.5 text-xs"
                       style={{
@@ -958,10 +958,10 @@ function TemplatesTab({
 
 // ── Agent List Card (for Agents tab — richer than AgentGrid card) ───────────
 
-// ── Roster (Leitstand-Liste) ────────────────────────────────────────────────
-// Operator (11.06.2026): Karten → dichte Einsatzliste. Eine Zeile pro Agent,
-// Aktionen im ⋮-Sheet, Zeilen-Tap öffnet das Detail (Stretched-Pattern —
-// Name-Link deckt die Zeile via ::after, kein Button-in-Button).
+// ── Roster (command-center list) ────────────────────────────────────────────
+// Operator (11.06.2026): cards → dense roster list. One row per agent,
+// actions in a ⋮ sheet, row tap opens the detail (stretched-link pattern —
+// the name link covers the row via ::after, no button-in-button).
 
 const DOT_STATUS = (status: string) => {
   switch (status) {
@@ -1027,7 +1027,7 @@ function AgentRosterRow({
         {agent.emoji ?? "🤖"}
       </span>
 
-      {/* Name + Rolle = Zeilen-Link (deckt die Zeile via ::after) */}
+      {/* Name + role = row link (covers the row via ::after) */}
       <Link
         href={`/agents/${agent.id}`}
         aria-label={`Agent öffnen: ${agent.name}`}
@@ -1062,7 +1062,7 @@ function AgentRosterRow({
         )}
       </Link>
 
-      {/* Kennzahlen-Spalten */}
+      {/* Metric columns */}
       {model && (
         <span
           className="font-mono text-[10px] truncate max-w-[120px] shrink-0 max-md:hidden"
@@ -1084,7 +1084,7 @@ function AgentRosterRow({
         {agent.total_tasks_completed}
       </span>
 
-      {/* Aktionen — über dem Zeilen-Overlay */}
+      {/* Actions — above the row overlay */}
       <button
         onClick={() => onMenu(agent)}
         aria-label={`Aktionen für ${agent.name}`}
@@ -1154,12 +1154,12 @@ function AgentActionsSheet({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Drag-Indicator (mobil) */}
+        {/* Drag indicator (mobile) */}
         <div className="sm:hidden flex justify-center pt-2.5 shrink-0">
           <div className="w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
         </div>
 
-        {/* Kopf */}
+        {/* Header */}
         <div className="px-4 pt-3 pb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
           <div className="flex items-center gap-2.5">
             <span className="text-xl leading-none" aria-hidden>{agent.emoji ?? "🤖"}</span>
@@ -1182,7 +1182,7 @@ function AgentActionsSheet({
           )}
         </div>
 
-        {/* Aktionen */}
+        {/* Actions */}
         <div
           className="flex flex-col p-2 overflow-y-auto"
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.5rem)" }}
@@ -1327,8 +1327,8 @@ export default function AgentsPage() {
     },
   });
 
-  // "online" = lebt (heartbeatet): idle/working zaehlen mit — vorher zeigte
-  // die Liste 0/14 obwohl die ganze Flotte lief (idle wurde ignoriert).
+  // "online" = alive (heartbeating): idle/working count too — previously the
+  // list showed 0/14 even though the whole fleet was running (idle was ignored).
   const ALIVE = new Set(["online", "busy", "idle", "working"]);
   const onlineCount = agents?.filter((a) => ALIVE.has(a.status)).length ?? 0;
   const totalCount = agents?.length ?? 0;
@@ -1445,7 +1445,7 @@ export default function AgentsPage() {
               )}
             </div>
 
-            {/* Roster — eine flache Einsatzliste statt Karten (Leitstand) */}
+            {/* Roster — a flat list instead of cards (command center) */}
             {isLoading ? (
               <div
                 className="rounded-xl overflow-hidden animate-pulse"

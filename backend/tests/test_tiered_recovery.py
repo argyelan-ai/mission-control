@@ -1,4 +1,4 @@
-"""Tests fuer REC-01 / REC-02 / REC-03 — Tiered Recovery (Plan 06-05).
+"""Tests for REC-01 / REC-02 / REC-03 — Tiered Recovery (Plan 06-05).
 
 Verifies `_run_tiered_recovery` extension of
 `app.services.task_runner._check_stale_in_progress`.
@@ -56,11 +56,11 @@ async def _patched_test_session():
 
 
 # ── Test 1: Tier 1 heartbeat probe ─────────────────────────────────────
-# Entfernt (Phase 29 / Wave 4 cleanup, D-21 in task_runner.py): Tier 1
-# (gateway_client.send_heartbeat) wurde mit dem Openclaw-Sunset entfernt.
-# Recovery springt jetzt direkt zu Tier 2 (per-runtime restart). Es gibt
-# kein cross-runtime "is the agent alive?"-Probe mehr fuer cli-bridge /
-# host / claude-code agents. Siehe task_runner._run_tiered_recovery.
+# Removed (Phase 29 / Wave 4 cleanup, D-21 in task_runner.py): Tier 1
+# (gateway_client.send_heartbeat) was removed with the Openclaw sunset.
+# Recovery now jumps straight to Tier 2 (per-runtime restart). There is
+# no more cross-runtime "is the agent alive?" probe for cli-bridge /
+# host / claude-code agents. See task_runner._run_tiered_recovery.
 
 
 # ── Test 2: Tier 2 docker runtime calls restart_docker_agent_container ──
@@ -79,9 +79,9 @@ async def test_tier2_docker_runtime_calls_restart_docker_agent_container(
 
     restart_spy = MagicMock(return_value={"status": "restarted", "container": "mc-agent-test"})
 
-    # Phase 29 / Wave 4 cleanup: Tier 1 (gateway_client.send_heartbeat) wurde
-    # mit dem Openclaw-Sunset entfernt — kein Patch mehr noetig, Tier 2 wird
-    # direkt aufgerufen.
+    # Phase 29 / Wave 4 cleanup: Tier 1 (gateway_client.send_heartbeat) was
+    # removed with the Openclaw sunset — no patch needed anymore, Tier 2 is
+    # called directly.
 
     with patch("app.services.task_runner.get_redis", AsyncMock(return_value=fake_redis)), \
          patch("app.services.task_runner.emit_event", new_callable=AsyncMock), \
@@ -113,9 +113,9 @@ async def test_tier2_host_runtime_calls_host_agent_lifecycle_restart(
 
     lifecycle_spy = AsyncMock(return_value={"ok": True, "action": "restart", "agent": "boss"})
 
-    # Phase 29 / Wave 4 cleanup: Tier 1 (gateway_client.send_heartbeat) wurde
-    # mit dem Openclaw-Sunset entfernt — kein Patch mehr noetig, Tier 2 wird
-    # direkt aufgerufen.
+    # Phase 29 / Wave 4 cleanup: Tier 1 (gateway_client.send_heartbeat) was
+    # removed with the Openclaw sunset — no patch needed anymore, Tier 2 is
+    # called directly.
 
     with patch("app.services.task_runner.get_redis", AsyncMock(return_value=fake_redis)), \
          patch("app.services.task_runner.emit_event", new_callable=AsyncMock), \

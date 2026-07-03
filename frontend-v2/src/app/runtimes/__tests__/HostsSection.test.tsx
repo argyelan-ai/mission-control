@@ -108,8 +108,8 @@ describe("HostMetricsBar", () => {
     expect(await screen.findByText(/GPU Box 1 nicht erreichbar/)).toBeInTheDocument();
   });
 
-  // flask_wol: Backend setzt reachable = awake — eine schlafende power-managed
-  // Box (ADR-042) ist ein NORMALER Zustand und darf nicht als Ausfall rendern.
+  // flask_wol: backend sets reachable = awake — a sleeping power-managed
+  // box (ADR-042) is a NORMAL state and must not render as a failure.
   it("renders a sleeping flask_wol host as 'Schläft', not as unreachable", async () => {
     vi.spyOn(api.hosts, "list").mockResolvedValue([
       makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true }),
@@ -139,7 +139,7 @@ describe("HostMetricsBar", () => {
     renderWithQuery(<HostMetricsBar />);
 
     expect(await screen.findByText("Wach")).toBeInTheDocument();
-    // roher Backend-Status ("awake") darf nicht durchsickern
+    // raw backend status ("awake") must not leak through
     expect(screen.queryByText("awake")).toBeNull();
   });
 });

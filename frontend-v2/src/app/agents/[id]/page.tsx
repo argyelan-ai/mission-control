@@ -785,8 +785,8 @@ function ConfigTab({
   const qc = useQueryClient();
 
   // ── API Key Selector (per-agent override) ────────────────────────────────
-  // Laedt alle Secrets (masked) aus der secrets-Table → Dropdown.
-  // Aenderung via PATCH /agents/{id} { secret_id }, Apply via sync-config?restart=true.
+  // Loads all secrets (masked) from the secrets table → dropdown.
+  // Change via PATCH /agents/{id} { secret_id }, apply via sync-config?restart=true.
   const { data: secrets } = useQuery({
     queryKey: ["secrets"],
     queryFn: () => api.secrets.list(),
@@ -911,8 +911,8 @@ function ConfigTab({
                 : "Aus Settings → API Keys. Wird bei Apply in das .env des Containers geschrieben und beim openclaude-Start geladen."}
             </div>
             {/* Warning: Ollama local daemon proxy case.
-                DB-Feld agent.model kann mit oder ohne "ollama/" prefix sein
-                (MC speichert oft nur Model-Namen wie "glm-5.1:cloud"). */}
+                DB field agent.model may be with or without "ollama/" prefix
+                (MC often only stores model names like "glm-5.1:cloud"). */}
             {agent.agent_runtime === "openclaw" &&
               agent.model?.toLowerCase().includes(":cloud") && (
                 <div
@@ -1226,11 +1226,11 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 
 // ── Local Memory Tab ─────────────────────────────────────────────────────────
 //
-// Zeigt die .md-Files im Agent-Container unter
+// Shows the .md files in the agent container under
 // /home/agent/.claude/projects/-home-agent/memory/team/.
-// Use-Case: toxic Lessons löschen die der Operator sonst nur via `docker exec rm`
-// erreichbar waren (Sparky 2026-05-12: mc-comment-python3.md hat ihn zu
-// python3 urllib statt mc CLI gepusht).
+// Use case: delete toxic lessons that the operator would otherwise only
+// reach via `docker exec rm` (Sparky 2026-05-12: mc-comment-python3.md
+// pushed him toward python3 urllib instead of the mc CLI).
 
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
   const qc = useQueryClient();
@@ -2115,7 +2115,7 @@ export default function AgentDetailPage() {
               key={tab.key}
               onClick={(e) => {
                 setActiveTab(tab.key);
-                // Aktiven Tab bei Klick sichtbar machen (MOBILE-SPEC)
+                // Scroll the clicked tab into view (MOBILE-SPEC)
                 e.currentTarget.scrollIntoView({ inline: "nearest", behavior: "smooth" });
               }}
               className={cn(

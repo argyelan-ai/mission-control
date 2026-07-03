@@ -1,4 +1,4 @@
-"""Tests fuer create_task_internal — shared internal task creation helper."""
+"""Tests for create_task_internal — shared internal task creation helper."""
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -9,10 +9,10 @@ from app.models.task import Task
 
 
 class TestCreateTaskInternal:
-    """Unit tests fuer services/task_create.py."""
+    """Unit tests for services/task_create.py."""
 
     async def test_creates_task_with_minimal_args(self, session):
-        """Helper erstellt Task mit Pflichtfeldern und Defaults."""
+        """Helper creates task with required fields and defaults."""
         board = Board(name="Test Board", slug="test-board")
         session.add(board)
         await session.commit()
@@ -28,7 +28,7 @@ class TestCreateTaskInternal:
                 session,
                 board_id=board.id,
                 title="Scheduled daily briefing",
-                dispatch=False,  # kein auto-dispatch in Unit-Test
+                dispatch=False,  # no auto-dispatch in unit test
             )
 
         assert task.id is not None
@@ -39,18 +39,18 @@ class TestCreateTaskInternal:
         assert task.task_type == "story"
         assert task.is_auto_created is False
 
-        # Activity-Event muss emittiert werden
+        # Activity event must be emitted
         mock_emit.assert_called_once()
         call_kwargs = mock_emit.call_args
         assert call_kwargs.args[1] == "task.created"
 
-        # Task ist in DB persistiert
+        # Task is persisted in DB
         from_db = await session.get(Task, task.id)
         assert from_db is not None
         assert from_db.title == "Scheduled daily briefing"
 
     async def test_emits_task_created_event(self, session):
-        """emit_event wird mit 'task.created' und korrekter task_id aufgerufen."""
+        """emit_event is called with 'task.created' and the correct task_id."""
         board = Board(name="Event Board", slug="event-board")
         session.add(board)
         await session.commit()
@@ -79,7 +79,7 @@ class TestCreateTaskInternal:
         assert task.auto_reason == "scheduler"
 
     async def test_resolves_project_id_from_board_default(self, session):
-        """Wenn project_id fehlt und kein Parent: Board.default_project_id wird uebernommen."""
+        """When project_id is missing and there's no parent: Board.default_project_id is used."""
         from app.models.board import Project
 
         board = Board(name="Project Board", slug="project-board")
@@ -95,7 +95,7 @@ class TestCreateTaskInternal:
         await session.commit()
         await session.refresh(project)
 
-        # Board auf default_project_id setzen
+        # Set board's default_project_id
         board.default_project_id = project.id
         session.add(board)
         await session.commit()
@@ -116,7 +116,7 @@ class TestCreateTaskInternal:
         assert task.project_id == project.id
 
     async def test_resolves_project_id_from_parent_task(self, session):
-        """Wenn parent_task_id gesetzt: project_id wird vom Parent geerbt."""
+        """When parent_task_id is set: project_id is inherited from the parent."""
         from app.models.board import Project
 
         board = Board(name="Parent Board", slug="parent-board")
@@ -152,20 +152,20 @@ class TestCreateTaskInternal:
                 dispatch=False,
             )
 
-        # Subtask erbt project_id vom Parent
+        # Subtask inherits project_id from the parent
         assert subtask.project_id == project.id
         assert subtask.parent_task_id == parent_task.id
 
     async def test_dispatch_triggered_when_auto_dispatch_enabled(self, session):
-        """create_tracked_task wird aufgerufen wenn Board.auto_dispatch_enabled=True."""
+        """create_tracked_task is called when Board.auto_dispatch_enabled=True."""
         board = Board(name="Dispatch Board", slug="dispatch-board", auto_dispatch_enabled=True)
         session.add(board)
         await session.commit()
         await session.refresh(board)
 
-        # auto_dispatch_task ist ein lazy import im Funktionskörper → am Quell-Modul patchen.
-        # MagicMock (nicht AsyncMock) verwenden, da create_tracked_task die Coroutine
-        # nur als Argument entgegennimmt — sie wird nicht im Test awaited.
+        # auto_dispatch_task is a lazy import inside the function body → patch at the source module.
+        # Use MagicMock (not AsyncMock) since create_tracked_task only receives the coroutine
+        # as an argument — it is not awaited in the test.
         with (
             patch("app.services.task_create.emit_event", new_callable=AsyncMock),
             patch("app.services.task_create.create_tracked_task") as mock_tracked,
@@ -183,7 +183,7 @@ class TestCreateTaskInternal:
         mock_tracked.assert_called_once()
 
     async def test_dispatch_skipped_when_disabled(self, session):
-        """create_tracked_task wird NICHT aufgerufen wenn dispatch=False."""
+        """create_tracked_task is NOT called when dispatch=False."""
         board = Board(name="No Dispatch Board", slug="no-dispatch-board", auto_dispatch_enabled=True)
         session.add(board)
         await session.commit()
@@ -205,7 +205,7 @@ class TestCreateTaskInternal:
         mock_tracked.assert_not_called()
 
     async def test_extra_fields_applied(self, session):
-        """extra_fields werden via setattr auf den Task angewendet."""
+        """extra_fields are applied to the task via setattr."""
         board = Board(name="Extra Board", slug="extra-board")
         session.add(board)
         await session.commit()

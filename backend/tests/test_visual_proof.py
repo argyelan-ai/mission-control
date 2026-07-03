@@ -1,14 +1,14 @@
-"""Tests fuer Visual-Proof Evidence Validation (Phase 5B + 5B.1 Security Hardening).
+"""Tests for visual-proof evidence validation (Phase 5B + 5B.1 security hardening).
 
-Testmatrix:
-- Pfad-Extraktion: MEDIA, shared-artifacts, kein Pfad, mehrere
-- Root-Begrenzung: erlaubte Roots OK, beliebige Pfade FAIL
-- Path Traversal: ../-Tricks FAIL
-- Symlink Escape: Symlinks ausserhalb Root FAIL
-- Dateiendung: erlaubte OK, falsche FAIL
-- Dateigroesse: >= 5KB OK, < 5KB FAIL
-- expected_content: Keywords geprueft
-- Regression: non-visual_proof unberuehrt
+Test matrix:
+- Path extraction: MEDIA, shared-artifacts, no path, multiple
+- Root boundary: allowed roots OK, arbitrary paths FAIL
+- Path traversal: ../ tricks FAIL
+- Symlink escape: symlinks outside root FAIL
+- File extension: allowed OK, wrong FAIL
+- File size: >= 5KB OK, < 5KB FAIL
+- expected_content: keywords checked
+- Regression: non-visual_proof unaffected
 """
 import os
 import tempfile
@@ -44,7 +44,7 @@ def _create_valid_file(directory: str, name: str = "test.png", size: int = 20_00
 # ── Path Extraction ─────────────────────────────────────
 
 def test_extract_media_path():
-    """MEDIA:-Pfad wird korrekt extrahiert."""
+    """MEDIA: path is extracted correctly."""
     comments = [_comment("Evidence: MEDIA:~/.openclaw/media/browser/abc.png")]
     paths = extract_evidence_paths(comments)
     assert len(paths) == 1
@@ -52,7 +52,7 @@ def test_extract_media_path():
 
 
 def test_extract_shared_artifacts_path():
-    """shared-artifacts Pfad wird extrahiert."""
+    """shared-artifacts path is extracted."""
     root = ALLOWED_EVIDENCE_ROOTS[1]  # shared-artifacts root
     comments = [_comment(f"Evidence: {root}/task-123/screenshot.png")]
     paths = extract_evidence_paths(comments)
@@ -61,13 +61,13 @@ def test_extract_shared_artifacts_path():
 
 
 def test_extract_no_path():
-    """Kommentar ohne Pfad → leere Liste."""
+    """Comment without path → empty list."""
     comments = [_comment("**Update** — Alles fertig")]
     assert extract_evidence_paths(comments) == []
 
 
 def test_extract_multiple_paths():
-    """Mehrere Pfade in verschiedenen Kommentaren."""
+    """Multiple paths in different comments."""
     comments = [
         _comment("MEDIA:~/.openclaw/media/browser/a.png"),
         _comment(f"Auch: {ALLOWED_EVIDENCE_ROOTS[0]}/b.jpg"),
@@ -76,10 +76,10 @@ def test_extract_multiple_paths():
     assert len(paths) == 2
 
 
-# ── Root Begrenzung ─────────────────────────────────────
+# ── Root Boundary ─────────────────────────────────────
 
 def test_valid_file_in_media_root():
-    """Datei im erlaubten MEDIA-Root → akzeptiert."""
+    """File in allowed MEDIA root → accepted."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "test-valid.png")
     try:
@@ -90,7 +90,7 @@ def test_valid_file_in_media_root():
 
 
 def test_valid_file_in_shared_artifacts():
-    """Datei im erlaubten shared-artifacts Root → akzeptiert."""
+    """File in allowed shared-artifacts root → accepted."""
     root = ALLOWED_EVIDENCE_ROOTS[1]
     subdir = os.path.join(root, "test-task-123")
     path = _create_valid_file(subdir, "screenshot.png")
@@ -103,7 +103,7 @@ def test_valid_file_in_shared_artifacts():
 
 
 def test_arbitrary_absolute_path_rejected():
-    """Beliebiger absoluter Pfad ausserhalb erlaubter Roots → abgelehnt."""
+    """Arbitrary absolute path outside allowed roots → rejected."""
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"x" * 20_000)
         f.flush()
@@ -114,7 +114,7 @@ def test_arbitrary_absolute_path_rejected():
 
 
 def test_home_directory_file_rejected():
-    """Datei in Home-Verzeichnis (aber nicht in erlaubtem Root) → abgelehnt."""
+    """File in home directory (but not in allowed root) → rejected."""
     path = _create_valid_file(os.path.expanduser("~/Desktop"), "fake-evidence.png")
     try:
         valid, reason = validate_evidence_file(path)
@@ -127,28 +127,28 @@ def test_home_directory_file_rejected():
 # ── Path Traversal ──────────────────────────────────────
 
 def test_path_traversal_rejected():
-    """../-Traversal aus erlaubtem Root heraus → abgelehnt."""
-    # Pfad sieht aus als waere er im Root, ist es aber nach realpath nicht
+    """../-traversal out of an allowed root → rejected."""
+    # Path looks like it's within the root, but isn't after realpath resolution
     traversal_path = os.path.join(ALLOWED_EVIDENCE_ROOTS[0], "..", "..", "etc", "passwd.png")
     valid, reason = validate_evidence_file(traversal_path)
     assert valid is False
-    # Entweder "ausserhalb" (Root-Check) oder "existiert nicht"
+    # Either "ausserhalb" (root check) or "existiert nicht"
     assert "ausserhalb" in reason.lower() or "existiert nicht" in reason.lower()
 
 
 # ── Symlink Escape ──────────────────────────────────────
 
 def test_symlink_escape_rejected():
-    """Symlink im erlaubten Root der auf Datei ausserhalb zeigt → abgelehnt."""
+    """Symlink in an allowed root pointing to a file outside → rejected."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     os.makedirs(root, exist_ok=True)
 
-    # Erstelle Datei AUSSERHALB des Roots
+    # Create file OUTSIDE the root
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir="/tmp") as f:
         f.write(b"x" * 20_000)
         outside_path = f.name
 
-    # Erstelle Symlink INNERHALB des Roots
+    # Create symlink INSIDE the root
     link_path = os.path.join(root, "symlink-escape-test.png")
     try:
         os.symlink(outside_path, link_path)
@@ -160,10 +160,10 @@ def test_symlink_escape_rejected():
         os.unlink(outside_path)
 
 
-# ── Dateiendung ─────────────────────────────────────────
+# ── File Extension ─────────────────────────────────────────
 
 def test_allowed_extensions():
-    """Alle erlaubten Endungen werden akzeptiert."""
+    """All allowed extensions are accepted."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     for ext in ALLOWED_EXTENSIONS:
         path = _create_valid_file(root, f"test{ext}")
@@ -175,7 +175,7 @@ def test_allowed_extensions():
 
 
 def test_disallowed_extension_txt():
-    """.txt Datei → abgelehnt."""
+    """.txt file → rejected."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "fake.txt")
     try:
@@ -187,7 +187,7 @@ def test_disallowed_extension_txt():
 
 
 def test_disallowed_extension_pdf():
-    """.pdf Datei → abgelehnt."""
+    """.pdf file → rejected."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "report.pdf")
     try:
@@ -199,7 +199,7 @@ def test_disallowed_extension_pdf():
 
 
 def test_disallowed_extension_html():
-    """.html Datei → abgelehnt."""
+    """.html file → rejected."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "page.html")
     try:
@@ -210,10 +210,10 @@ def test_disallowed_extension_html():
         os.unlink(path)
 
 
-# ── Dateigroesse ────────────────────────────────────────
+# ── File Size ────────────────────────────────────────
 
 def test_file_too_small():
-    """Datei < 5KB → abgelehnt."""
+    """File < 5KB → rejected."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "tiny.png", size=100)
     try:
@@ -225,7 +225,7 @@ def test_file_too_small():
 
 
 def test_file_not_exists():
-    """Nicht existierende Datei → abgelehnt."""
+    """Non-existent file → rejected."""
     path = os.path.join(ALLOWED_EVIDENCE_ROOTS[0], "nonexistent-12345.png")
     valid, reason = validate_evidence_file(path)
     assert valid is False
@@ -235,7 +235,7 @@ def test_file_not_exists():
 # ── Full Validation Pipeline ────────────────────────────
 
 def test_full_validation_success():
-    """Vollstaendige Validierung mit gueltiger MEDIA-Datei."""
+    """Full validation with a valid MEDIA file."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "full-valid.png")
     try:
@@ -248,7 +248,7 @@ def test_full_validation_success():
 
 
 def test_full_validation_no_path():
-    """Keine MEDIA-Referenz → ungueltig."""
+    """No MEDIA reference → invalid."""
     comments = [_comment("Alles fertig, sieht gut aus")]
     valid, issues = validate_visual_proof_evidence(comments)
     assert valid is False
@@ -256,7 +256,7 @@ def test_full_validation_no_path():
 
 
 def test_full_validation_arbitrary_path_fails():
-    """Referenzierter Pfad ausserhalb erlaubter Roots → ungueltig."""
+    """Referenced path outside allowed roots → invalid."""
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
         f.write(b"x" * 20_000)
         f.flush()
@@ -268,7 +268,7 @@ def test_full_validation_arbitrary_path_fails():
 
 
 def test_full_validation_with_expected_content():
-    """expected_content Keywords in Evidence → OK."""
+    """expected_content keywords present in evidence → OK."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "content-check.png")
     try:
@@ -282,7 +282,7 @@ def test_full_validation_with_expected_content():
 
 
 def test_full_validation_expected_content_missing():
-    """expected_content Keywords fehlen → Warning aber valid (Datei ok)."""
+    """expected_content keywords missing → warning but valid (file ok)."""
     root = ALLOWED_EVIDENCE_ROOTS[0]
     path = _create_valid_file(root, "no-content.png")
     try:
@@ -290,7 +290,7 @@ def test_full_validation_expected_content_missing():
         valid, issues = validate_visual_proof_evidence(
             comments, expected_content="Spezifischer Dashboard Inhalt mit Sidebar"
         )
-        assert valid is True  # Datei ist ok
+        assert valid is True  # file is ok
         assert any("expected_content" in i for i in issues)  # Warning
     finally:
         os.unlink(path)
@@ -299,10 +299,10 @@ def test_full_validation_expected_content_missing():
 # ── Regression ──────────────────────────────────────────
 
 def test_non_visual_proof_unaffected():
-    """Validation wird nur fuer visual_proof aufgerufen — andere Typen nicht betroffen.
-    Dieser Test dokumentiert die Grenze: die Funktion validiert immer streng,
-    der AUFRUF im Guard passiert nur bei delegation_type=='visual_proof'.
+    """Validation is only invoked for visual_proof — other types unaffected.
+    This test documents the boundary: the function always validates strictly,
+    the CALL in the guard only happens for delegation_type=='visual_proof'.
     """
     comments = [_comment("Code geschrieben, Tests laufen")]
     valid, issues = validate_visual_proof_evidence(comments)
-    assert valid is False  # Wuerde fehlschlagen — wird aber nie fuer code_change aufgerufen
+    assert valid is False  # Would fail — but is never invoked for code_change
