@@ -4,7 +4,7 @@ id: mission-control
 # getumbrel/umbrel-apps before submitting (e.g. ollama's manifest).
 category: ai
 name: Mission Control
-version: "0.1.0"
+version: "0.1.1"
 tagline: Your AI agent fleet, on your hardware
 description: >-
   Mission Control is a self-hosted command center for AI agent fleets.

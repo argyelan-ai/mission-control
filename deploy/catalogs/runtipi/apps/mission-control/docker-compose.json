@@ -1,0 +1,61 @@
+{
+  "$schema": "https://schemas.runtipi.io/v2/dynamic-compose.json",
+  "schemaVersion": 2,
+  "services": [
+    {
+      "name": "mission-control",
+      "image": "caddy:2-alpine@sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648",
+      "isMain": true,
+      "internalPort": 80,
+      "dependsOn": ["mission-control-backend", "mission-control-frontend"],
+      "command": [
+        "sh",
+        "-c",
+        "printf ':80 {\\n  encode gzip zstd\\n  handle /api/* {\\n    reverse_proxy mission-control-backend:8000\\n  }\\n  handle /health {\\n    reverse_proxy mission-control-backend:8000\\n  }\\n  handle {\\n    reverse_proxy mission-control-frontend:3000\\n  }\\n}\\n' > /etc/caddy/Caddyfile && exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile"
+      ]
+    },
+    {
+      "name": "mission-control-db",
+      "image": "postgres:16-alpine@sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb",
+      "environment": [
+        { "key": "POSTGRES_USER", "value": "mc" },
+        { "key": "POSTGRES_PASSWORD", "value": "${MC_DB_PASSWORD}" },
+        { "key": "POSTGRES_DB", "value": "mission_control" }
+      ],
+      "volumes": [
+        {
+          "hostPath": "${APP_DATA_DIR}/data/db",
+          "containerPath": "/var/lib/postgresql/data"
+        }
+      ]
+    },
+    {
+      "name": "mission-control-redis",
+      "image": "redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99",
+      "command": ["redis-server", "--requirepass", "${MC_REDIS_PASSWORD}"]
+    },
+    {
+      "name": "mission-control-backend",
+      "image": "ghcr.io/argyelan-ai/mc-backend:0.1.1@sha256:5c9d24bbe7271c35e3db240c3e1ed0c20ca1a60ec7d512f6ae8818a004a53cf2",
+      "dependsOn": ["mission-control-db", "mission-control-redis"],
+      "environment": [
+        { "key": "DATABASE_URL", "value": "postgresql+asyncpg://mc:${MC_DB_PASSWORD}@mission-control-db:5432/mission_control" },
+        { "key": "REDIS_URL", "value": "redis://:${MC_REDIS_PASSWORD}@mission-control-redis:6379/0" },
+        { "key": "JWT_SECRET_KEY", "value": "${MC_JWT_SECRET_KEY}" },
+        { "key": "SECRETS_ENCRYPTION_KEY", "value": "${MC_SECRETS_ENCRYPTION_KEY}" },
+        { "key": "ENVIRONMENT", "value": "production" }
+      ],
+      "volumes": [
+        {
+          "hostPath": "${APP_DATA_DIR}/data/mc",
+          "containerPath": "/home/mcuser/.mc"
+        }
+      ]
+    },
+    {
+      "name": "mission-control-frontend",
+      "image": "ghcr.io/argyelan-ai/mc-frontend:0.1.1@sha256:0e5c3b4893e168b159b0288205db78b900f6e6d83fbd7fb091e19790a8c7f607",
+      "dependsOn": ["mission-control-backend"]
+    }
+  ]
+}

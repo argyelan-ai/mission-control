@@ -24,8 +24,8 @@ pins (all multi-arch amd64+arm64, digests read from the registry APIs):
 
 | Image | Tag | Digest |
 |---|---|---|
-| ghcr.io/argyelan-ai/mc-backend | 0.1.0 | `sha256:11f7a8af325f73752809bb84a09f3cc593fa81525e97fefc7682025b5cf68755` |
-| ghcr.io/argyelan-ai/mc-frontend | 0.1.0 | `sha256:deecaea941d1da1367a826c23b8ef48608cb906f011960f8b3acf96db0a308f7` |
+| ghcr.io/argyelan-ai/mc-backend | 0.1.1 | `sha256:5c9d24bbe7271c35e3db240c3e1ed0c20ca1a60ec7d512f6ae8818a004a53cf2` |
+| ghcr.io/argyelan-ai/mc-frontend | 0.1.1 | `sha256:0e5c3b4893e168b159b0288205db78b900f6e6d83fbd7fb091e19790a8c7f607` |
 | postgres | 16-alpine | `sha256:e013e867e712fec275706a6c51c966f0bb0c93cfa8f51000f85a15f9865a28cb` |
 | redis | 7-alpine | `sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99` |
 | caddy | 2-alpine | `sha256:5f5c8640aae01df9654968d946d8f1a56c497f1dd5c5cda4cf95ab7c14d58648` |
@@ -44,11 +44,13 @@ Catalogs cannot run `setup.sh`, so secrets come from the store:
 - **Runtipi**: `form_fields` with `type: random` — the store generates
   random strings at install time.
 
-`SECRETS_ENCRYPTION_KEY` must be a valid Fernet key in mc-backend 0.1.0.
-Since 0.1.1 (unreleased) the backend derives a proper key from any
-passphrase (`backend/app/services/encryption.py`), which the CasaOS and
-Runtipi flows rely on — **submit those two only after the next release**
-and bump their pinned tags. The Umbrel package works with 0.1.0 as-is.
+Since mc-backend 0.1.1 the backend derives a proper Fernet key from any
+passphrase (`backend/app/services/encryption.py`) — the CasaOS and
+Runtipi flows rely on this (0.1.0 required a Fernet-formatted value).
+The Umbrel package derives a valid Fernet key in `exports.sh` either way.
+
+The Runtipi package is published as a custom app store:
+**github.com/argyelan-ai/tipi-store** (synced from this directory).
 
 ## Scope note
 
