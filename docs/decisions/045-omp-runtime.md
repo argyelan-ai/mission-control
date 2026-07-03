@@ -1,6 +1,6 @@
 # ADR-045: `omp` Runtime Type — Clean-Stream Headless Agent (omp + Qwen)
 
-- **Status:** Proposed
+- **Status:** Proposed — **drive model superseded by [ADR-049](049-omp-native-tui-session.md)** (native TUI + turn-end hook replaces the headless `omp -p` one-shot). The runtime *type*, `omp-qwen` row, OpenAI-compatible token routing, `models.yml` render, and `mc ack/finish/blocked` contract below remain in force; only §4 (headless subprocess) and §5 (readiness sentinel) are revised by ADR-049.
 - **Date:** 2026-07-01
 - **Deciders:** Operator (owner), Lead architect
 - **Supersedes / relates to:** ADR-017 (runtime registry DB), ADR-024 (process recycling), ADR-027/028 (universal runtime binding + session propagation), ADR-041 (compose-renderer emits agent services)

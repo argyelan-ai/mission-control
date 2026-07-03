@@ -492,17 +492,18 @@ async def switch_agent_runtime(
         # D-12: respawn_mode delegates to tmux capture-pane polling instead of
         # docker inspect, matching the respawn restart path above.
         timeout = HEALTH_TIMEOUT_RECREATE if image_change else HEALTH_TIMEOUT_RESTART
-        # ADR-045: for the omp headless runtime, anchor readiness on the
-        # OMP_BRIDGE_READY sentinel (pane scrape) regardless of image_change.
-        # The initial openclaude→omp switch is cross-image (respawn_mode=False),
-        # whose docker-inspect check would report healthy before bridge.py is up
-        # — so pass the sentinel to force the pane scrape on BOTH paths.
+        # ADR-049: the omp runtime now runs omp's native TUI in Window 0 (not the
+        # headless bridge print). Anchor readiness on the TUI's prompt glyphs via
+        # pane scrape regardless of image_change — the initial openclaude→omp
+        # switch is cross-image (respawn_mode=False), whose docker-inspect check
+        # would report healthy before the TUI is up. The glyphs match the omp
+        # chat prompt box ("╭─" frame + "❯" input) shown after setup-wizard skip.
         is_omp = new_runtime.runtime_type == "omp"
         health = await wait_for_agent_healthy(
             agent,
             timeout=timeout,
             respawn_mode=(not image_change),
-            ready_signals=("OMP_BRIDGE_READY",) if is_omp else None,
+            ready_signals=("╭─", "❯") if is_omp else None,
         )
         if not health.get("healthy"):
             await _rollback(session, agent, snapshot_old_runtime_id, image_change)
