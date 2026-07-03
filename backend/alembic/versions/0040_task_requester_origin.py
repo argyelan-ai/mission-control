@@ -1,10 +1,10 @@
-"""Requester/Origin Tracking fuer Tasks.
+"""Requester/origin tracking for tasks.
 
-Speichert WER und VON WO einen Task ausgeloest hat,
-damit die Rueckmeldung an den richtigen Kanal geht.
+Stores WHO triggered a task and FROM WHERE,
+so the response goes back to the right channel.
 
 - requester_channel: "telegram" | "discord" | "web" | "agent" | None
-- requester_id: Telegram chat_id, Discord user_id, oder User-UUID
+- requester_id: Telegram chat_id, Discord user_id, or User UUID
 
 Revision ID: 0040
 Revises: 0039

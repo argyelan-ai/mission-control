@@ -1,19 +1,19 @@
-"""Korrigiert die Modell-Preise (Seed 0127 war an Legacy-Opus orientiert).
+"""Fixes the model prices (seed 0127 was aligned with legacy Opus).
 
-Befunde (verifiziert an der offiziellen Anthropic-Pricing-Doku, 2026-06-12):
-- claude-opus-4-* : Seed hatte 15/75 (= Legacy Opus 4.0/4.1). Aktuelle Opus 4.5-4.8
-  kosten 5/25. Cache analog 0.5 / 6.25. -> 3x zu teuer berechnet.
-- claude-fable-*  : Seed war Platzhalter mit Sonnet-Preis (3/15). Fable 5 kostet
-  real 10/50, Cache 1.0 / 12.50.
-- claude-haiku-4-5-* : fehlte komplett -> fiel auf Fallback "*" (0) -> wurde gar
-  nicht berechnet. Real 1/5, Cache 0.10 / 1.25.
-- claude-sonnet-4-* (3/15/0.3/3.75) war bereits korrekt -> unveraendert.
-- Lokale Modelle (glm/qwen/spark/minimax) bleiben 0 (Flatrate/lokal).
+Findings (verified against the official Anthropic pricing docs, 2026-06-12):
+- claude-opus-4-* : seed had 15/75 (= legacy Opus 4.0/4.1). Current Opus 4.5-4.8
+  cost 5/25. Cache analogously 0.5 / 6.25. -> was billed 3x too expensive.
+- claude-fable-*  : seed was a placeholder with Sonnet price (3/15). Fable 5
+  actually costs 10/50, cache 1.0 / 12.50.
+- claude-haiku-4-5-* : was missing entirely -> fell through to fallback "*" (0)
+  -> wasn't billed at all. Real price 1/5, cache 0.10 / 1.25.
+- claude-sonnet-4-* (3/15/0.3/3.75) was already correct -> unchanged.
+- Local models (glm/qwen/spark/minimax) stay at 0 (flat rate/local).
 
-Cache-Multiplikatoren = Anthropic-Standard: read 0.1x Input, write(5min) 1.25x Input.
+Cache multipliers = Anthropic standard: read 0.1x input, write (5min) 1.25x input.
 
-Nach dieser Migration muessen die Event-Kosten neu berechnet werden
-(POST /api/v1/model-prices/recompute bzw. Recompute-Skript).
+After this migration the event costs need to be recomputed
+(POST /api/v1/model-prices/recompute or the recompute script).
 
 Revision ID: 0128
 Revises: 0127
@@ -34,7 +34,7 @@ _EPOCH = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
 
 def upgrade() -> None:
-    # ── Opus 4.x: 15/75 -> 5/25 (aktueller Opus 4.5-4.8 Listenpreis) ──────────
+    # ── Opus 4.x: 15/75 -> 5/25 (current Opus 4.5-4.8 list price) ─────────────
     op.execute(
         "UPDATE model_prices "
         "SET input_per_mtok=5.0, output_per_mtok=25.0, "
@@ -44,7 +44,7 @@ def upgrade() -> None:
         "WHERE model_pattern='claude-opus-4-*'"
     )
 
-    # ── Fable: Sonnet-Platzhalter -> echter Fable-5-Preis 10/50 ───────────────
+    # ── Fable: Sonnet placeholder -> real Fable 5 price 10/50 ─────────────────
     op.execute(
         "UPDATE model_prices "
         "SET input_per_mtok=10.0, output_per_mtok=50.0, "
@@ -54,7 +54,7 @@ def upgrade() -> None:
         "WHERE model_pattern='claude-fable-*'"
     )
 
-    # ── Haiku 4.5: fehlte komplett (wurde als 0 verrechnet) -> 1/5 ────────────
+    # ── Haiku 4.5: was missing entirely (billed as 0) -> 1/5 ──────────────────
     mp_table = sa.table(
         "model_prices",
         sa.column("id", sa.Uuid()),
@@ -80,7 +80,7 @@ def upgrade() -> None:
                 "cache_write_per_mtok": 1.25,
                 "currency": "USD",
                 "valid_from": _EPOCH,
-                "priority": 85,  # spezifischer als claude-*-4-* Familien-Patterns
+                "priority": 85,  # more specific than the claude-*-4-* family patterns
                 "note": "Anthropic Haiku 4.5 — API Listenpreis 1/5 (verifiziert 2026-06-12).",
             }
         ],
@@ -88,7 +88,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Opus zurueck auf alten Seed-Wert
+    # Revert Opus to the old seed value
     op.execute(
         "UPDATE model_prices "
         "SET input_per_mtok=15.0, output_per_mtok=75.0, "
@@ -96,7 +96,7 @@ def downgrade() -> None:
         "note='Anthropic Opus 4 — API Listenpreis (Boss nutzt Subscription = Schattenkosten)' "
         "WHERE model_pattern='claude-opus-4-*'"
     )
-    # Fable zurueck auf Platzhalter
+    # Revert Fable to the placeholder
     op.execute(
         "UPDATE model_prices "
         "SET input_per_mtok=3.0, output_per_mtok=15.0, "
@@ -104,5 +104,5 @@ def downgrade() -> None:
         "note='Anthropic Fable — Platzhalter, bitte Preis nachpflegen' "
         "WHERE model_pattern='claude-fable-*'"
     )
-    # Haiku-Row entfernen
+    # Remove the Haiku row
     op.execute("DELETE FROM model_prices WHERE model_pattern='claude-haiku-4-5-*'")

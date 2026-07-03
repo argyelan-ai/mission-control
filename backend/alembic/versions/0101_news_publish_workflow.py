@@ -15,9 +15,9 @@ depends_on = None
 
 def upgrade() -> None:
     # ── 1. news_articles: publishing metadata ─────────────────────────────────────────────────────────
-    # 0099 wurde nachtraeglich um published_at ergaenzt — auf frischen DBs
-    # existiert die Spalte hier also schon (CI fresh-boot E2E, 2026-07-02).
-    # Idempotent via IF NOT EXISTS; Bestands-DBs unveraendert.
+    # 0099 was later extended with published_at — on fresh DBs the column
+    # already exists here (CI fresh-boot E2E, 2026-07-02).
+    # Idempotent via IF NOT EXISTS; existing DBs unchanged.
     op.execute(
         "ALTER TABLE news_articles "
         "ADD COLUMN IF NOT EXISTS published_at TIMESTAMP WITH TIME ZONE"
@@ -35,8 +35,8 @@ def upgrade() -> None:
     # ── 2. Migrate existing data: in_pipeline → scored ────────────────────────────────────────────────────
     op.execute("UPDATE news_articles SET status = 'scored' WHERE status = 'in_pipeline'")
     op.execute("UPDATE news_articles SET status = 'scored' WHERE status = 'posted'")
-    # ai_score entstand historisch via create_all, nicht via Kette — auf
-    # frischen DBs existiert die Spalte hier nicht (Tabelle ist ohnehin leer).
+    # ai_score originated historically via create_all, not via the chain — on
+    # fresh DBs the column doesn't exist here (table is empty anyway).
     op.execute(
         """
         DO $$ BEGIN

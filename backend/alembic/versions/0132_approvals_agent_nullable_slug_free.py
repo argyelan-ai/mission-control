@@ -1,21 +1,21 @@
-"""approvals.agent_id nullable + archivierte Board-Slugs freigeben
+"""approvals.agent_id nullable + free up archived board slugs
 
 Revision ID: 0132
 Revises: 0131
 Create Date: 2026-07-02
 
-Zwei Funde aus dem Demo-Seed-Testlauf (2026-07-02):
+Two findings from the demo-seed test run (2026-07-02):
 
-1. approvals.agent_id war NOT NULL, aber der Watchdog erstellt
-   review_stuck-Approvals mit ``agent_id=task.assigned_agent_id`` — bei
-   Tasks ohne Agent (jeder Fresh-Install mit unassigned Review-Task nach
-   3h) crashte damit JEDER Watchdog-Tick in einer Endlosschleife
-   (Commit schlaegt fehl -> Redis-Dedup wird nie gesetzt -> Retry).
+1. approvals.agent_id was NOT NULL, but the watchdog creates
+   review_stuck approvals with ``agent_id=task.assigned_agent_id`` — for
+   tasks without an agent (every fresh install with an unassigned review
+   task after 3h) this crashed EVERY watchdog tick in an infinite loop
+   (commit fails -> Redis dedup never gets set -> retry).
 
-2. delete_board() ist ein Soft-Delete (is_archived=True), boards.slug
-   ist aber UNIQUE — archivierte Boards blockierten ihren Slug fuer
-   immer (Neuanlage -> 500). Der Router benennt ab jetzt beim
-   Archivieren um; diese Migration zieht Bestands-Leichen nach.
+2. delete_board() is a soft delete (is_archived=True), but boards.slug
+   is UNIQUE — archived boards blocked their slug forever (recreating it
+   -> 500). The router now renames boards on archive; this migration
+   cleans up the existing leftovers.
 """
 from alembic import op
 
@@ -38,6 +38,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # agent_id wieder NOT NULL zu machen wuerde bestehende NULL-Approvals
-    # verletzen; Slug-Umbenennung ist nicht sinnvoll umkehrbar. No-op.
+    # Making agent_id NOT NULL again would violate existing NULL approvals;
+    # the slug rename can't be meaningfully reversed. No-op.
     pass

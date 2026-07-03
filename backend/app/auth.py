@@ -125,7 +125,7 @@ async def require_user(
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
             if not user or not user.is_active:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
-            # token_version Check — Logout invalidiert alle alten Tokens
+            # token_version check — logout invalidates all old tokens
             token_tv = payload.get("tv", 0)
             if token_tv != user.token_version:
                 raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Token revoked")
@@ -204,24 +204,24 @@ def verify_agent_token(token: str, token_hash: str) -> bool:
 
 
 def _agent_token_cache_key(raw_token: str) -> str:
-    """SHA256 des raw tokens als Cache-Key — nie das Token selbst speichern."""
+    """SHA256 of the raw token as cache key — never store the token itself."""
     sha = hashlib.sha256(raw_token.encode()).hexdigest()
     return f"mc:agent-auth:{sha}"
 
 
 async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent | None":
     """
-    Agent via Token ermitteln — Redis-Cache zuerst, dann PBKDF2-Fallback.
+    Resolve agent via token — Redis cache first, then PBKDF2 fallback.
 
     Cache: SHA256(token) → agent_id (TTL 5min)
-    Dadurch: nur ein PBKDF2-Aufruf noetig statt N (bei N Agents) bei jedem Request.
+    This means: only one PBKDF2 call needed instead of N (for N agents) per request.
     """
     from app.models.agent import Agent
     from app.redis_client import get_redis
 
     cache_key = _agent_token_cache_key(token)
 
-    # 1. Redis-Cache pruefen (schnell, kein PBKDF2)
+    # 1. Check Redis cache (fast, no PBKDF2)
     try:
         redis = await get_redis()
         cached = await redis.get(cache_key)
@@ -230,12 +230,12 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
             agent = await session.get(Agent, agent_id)
             if agent and agent.agent_token_hash:
                 return agent
-            # Cache-Eintrag ungueltig (Agent geloescht oder Token geaendert)
+            # Cache entry invalid (agent deleted or token changed)
             await redis.delete(cache_key)
     except Exception:
-        pass  # Redis nicht verfuegbar — Fallback zu PBKDF2
+        pass  # Redis unavailable — fall back to PBKDF2
 
-    # 2. PBKDF2-Verifikation (teuer, aber einmalig pro Token)
+    # 2. PBKDF2 verification (expensive, but only once per token)
     result = await session.exec(
         select(Agent).where(Agent.agent_token_hash.isnot(None))  # type: ignore[arg-type]
     )
@@ -243,7 +243,7 @@ async def _resolve_agent_from_token(token: str, session: AsyncSession) -> "Agent
 
     for agent in agents:
         if agent.agent_token_hash and verify_agent_token(token, agent.agent_token_hash):
-            # Ergebnis cachen (5min TTL)
+            # Cache the result (5min TTL)
             try:
                 redis = await get_redis()
                 await redis.set(cache_key, str(agent.id), ex=300)
@@ -258,7 +258,7 @@ async def require_agent(
     credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
     session: AsyncSession = Depends(get_session),
 ):
-    from app.models.agent import Agent  # noqa: F401 (für Type-Hints)
+    from app.models.agent import Agent  # noqa: F401 (for type hints)
 
     if credentials is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
@@ -326,7 +326,7 @@ async def require_user_or_agent(
     ):
         return {"type": "user"}
 
-    # 3. Agent token (mit Redis-Cache)
+    # 3. Agent token (with Redis cache)
     agent = await _resolve_agent_from_token(raw_token, session)
     if agent is not None:
         now = utcnow()
@@ -342,8 +342,8 @@ async def require_user_or_agent(
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
 
-# ── Aliases fuer semantische Klarheit ─────────────────────────────────────
-# "Control Plane" = interne Steuerung (Board Lead Agent oder User).
-# Semantisch identisch mit require_user_or_agent, aber expliziter Name.
+# ── Aliases for semantic clarity ─────────────────────────────────────────
+# "Control Plane" = internal control (Board Lead agent or user).
+# Semantically identical to require_user_or_agent, but a more explicit name.
 require_user_or_control_plane = require_user_or_agent
-require_control_plane = require_agent  # Nur Agents (interne Steuerung)
+require_control_plane = require_agent  # Agents only (internal control)

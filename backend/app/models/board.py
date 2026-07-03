@@ -39,8 +39,8 @@ class Board(SQLModel, table=True):
     icon: str | None = None
     color: str | None = None
 
-    # Default-Projekt fuer automatische Zuweisung bei Task-Erstellung
-    # use_alter=True: bricht den FK-Zyklus boards↔projects fuer SQLAlchemy INSERT-Sortierung
+    # Default project for automatic assignment on task creation
+    # use_alter=True: breaks the FK cycle boards↔projects for SQLAlchemy INSERT ordering
     default_project_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
@@ -98,8 +98,8 @@ class Project(SQLModel, table=True):
     plan_summary: str | None = None
     progress_pct: int = Field(default=0, ge=0, le=100)
     github_repo_url: str | None = None
-    github_repo_name: str | None = None  # z.B. "<owner>/agar-io-clone"
-    workspace_path: str | None = None  # Lokaler Pfad zum Projekt (z.B. /private/tmp/my-portfolio)
+    github_repo_name: str | None = None  # e.g. "<owner>/agar-io-clone"
+    workspace_path: str | None = None  # Local path to the project (e.g. /private/tmp/my-portfolio)
     project_config: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
@@ -121,25 +121,25 @@ class Project(SQLModel, table=True):
 
     # Project System Extensions
     briefing_doc: str | None = None
-    # Markdown, auto-updated bei Deliverable-Registrierung und Phase-Abschluss
+    # Markdown, auto-updated on deliverable registration and phase completion
 
     parent_project_id: uuid.UUID | None = Field(
         default=None, foreign_key="projects.id", nullable=True
     )
-    # Sub-Projekte: dieses Projekt ist Teil von parent_project_id
+    # Sub-projects: this project is part of parent_project_id
 
     last_active_phase_id: uuid.UUID | None = Field(
         default=None, nullable=True
     )
-    # Kein FK-Constraint hier — Phase-Tabelle existiert in separatem File.
-    # Wird per Migration als FK gesetzt.
+    # No FK constraint here — the phase table exists in a separate file.
+    # Set as FK via migration.
 
     resume_briefing: str | None = None
-    # Auto-generiert aus git log beim Wiederaufnehmen eines pausierten Projekts
+    # Auto-generated from git log when resuming a paused project
 
 
 class PlannerMessage(SQLModel, table=True):
-    """Chat-Nachrichten fuer Planner und Research Sessions."""
+    """Chat messages for planner and research sessions."""
     __tablename__ = "planner_messages"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

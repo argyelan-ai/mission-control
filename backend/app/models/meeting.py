@@ -1,9 +1,9 @@
-"""Agent Meetings — Tabellen fuer strukturierte Agent-Diskussionen.
+"""Agent Meetings — tables for structured agent discussions.
 
-Drei Tabellen:
-- AgentMeeting: Meeting-Session (weekly/ad_hoc/retrospective)
-- AgentMeetingMessage: Einzelne Nachrichten im Meeting-Verlauf
-- AgentMessage: Direktnachrichten zwischen Agents (unabhaengig von Meetings)
+Three tables:
+- AgentMeeting: meeting session (weekly/ad_hoc/retrospective)
+- AgentMeetingMessage: individual messages in the meeting transcript
+- AgentMessage: direct messages between agents (independent of meetings)
 """
 import uuid
 from datetime import datetime
@@ -29,7 +29,7 @@ class AgentMeeting(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
-    # Ergebnisse
+    # Results
     summary: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
     decisions: list[dict[str, Any]] | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
@@ -38,7 +38,7 @@ class AgentMeeting(SQLModel, table=True):
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
-    # Referenz auf gespeicherte Board-Memory
+    # Reference to stored board memory
     memory_id: uuid.UUID | None = Field(
         default=None, foreign_key="board_memory.id", nullable=True
     )
@@ -80,7 +80,7 @@ class AgentMeetingMessage(SQLModel, table=True):
 
 
 class AgentMessage(SQLModel, table=True):
-    """Direktnachrichten zwischen Agents (unabhaengig von Meetings)."""
+    """Direct messages between agents (independent of meetings)."""
     __tablename__ = "agent_messages"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

@@ -25,7 +25,7 @@ class AgentTemplate(SQLModel, table=True):
         default_factory=dict,
         sa_column=Column(JSON),
     )
-    is_builtin: bool = False  # True = via Seeding erstellt, kann nicht gelöscht werden
+    is_builtin: bool = False  # True = created via seeding, cannot be deleted
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,

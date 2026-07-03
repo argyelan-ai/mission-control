@@ -1,6 +1,6 @@
-"""Task Checkpoints — Agent-gespeicherte Zwischenstaende fuer Crash Recovery.
+"""Task Checkpoints — agent-saved intermediate states for crash recovery.
 
-Minimales V1: Agent schreibt Checkpoint, Recovery liest ihn.
+Minimal V1: agent writes checkpoint, recovery reads it.
 """
 import uuid
 from datetime import datetime
@@ -16,13 +16,13 @@ class TaskCheckpoint(SQLModel, table=True):
     task_id: uuid.UUID = Field(foreign_key="tasks.id", index=True)
     agent_id: uuid.UUID = Field(foreign_key="agents.id")
 
-    # auto | manual (Agent entscheidet)
+    # auto | manual (agent decides)
     checkpoint_type: str = Field(default="manual")
 
-    # Knapper Arbeitsstand (Freitext, ~200 Zeichen)
+    # Brief work status (free text, ~200 characters)
     state_summary: str
 
-    # Strukturierte Daten: erledigte Schritte, naechste Schritte, Artefakte
+    # Structured data: completed steps, next steps, artifacts
     context_data: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )

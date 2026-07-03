@@ -1,5 +1,5 @@
-"""Bestehende Agents bekommen role basierend auf is_board_lead und Name-Pattern.
-Composite Index auf (board_id, role).
+"""Existing agents get a role based on is_board_lead and name pattern.
+Composite index on (board_id, role).
 
 Revision ID: 0025
 Revises: 0024
@@ -15,7 +15,7 @@ branch_labels = None
 depends_on = None
 
 
-# Name-Pattern → Rolle Mapping
+# Name pattern → role mapping
 _NAME_ROLE_MAP = {
     "planner": "planner",
     "researcher": "researcher",
@@ -28,19 +28,19 @@ _DEVELOPER_PATTERNS = ("cody", "dev", "developer")
 
 
 def upgrade() -> None:
-    # Composite Index fuer schnelle Board+Role Queries
+    # Composite index for fast board+role queries
     op.create_index("ix_agents_board_id_role", "agents", ["board_id", "role"])
 
-    # Bestehende Agents: role setzen basierend auf is_board_lead + Name
+    # Existing agents: set role based on is_board_lead + name
     conn = op.get_bind()
 
-    # Gueltige Enum-Werte — Agents die schon einen davon haben, ueberspringen
+    # Valid enum values — agents that already have one of these are skipped
     _VALID_ROLES = {"lead", "developer", "reviewer", "planner", "researcher", "deployer", "writer"}
 
-    # Board Leads → lead (auch wenn role schon gesetzt aber kein gueltiger Enum-Wert)
-    # expanding-bindparam statt Tuple-Substitution: unter asyncpg (heutiges
-    # alembic-env) expandiert sa.text ein Tuple nicht — Fresh-Installs
-    # crashten hier (CI fresh-boot E2E, 2026-07-02). Semantik unveraendert.
+    # Board leads → lead (even if role is already set but not a valid enum value)
+    # expanding bindparam instead of tuple substitution: under asyncpg (current
+    # alembic-env) sa.text doesn't expand a tuple — fresh installs
+    # crashed here (CI fresh-boot E2E, 2026-07-02). Semantics unchanged.
     conn.execute(
         sa.text(
             "UPDATE agents SET role = 'lead' "
@@ -49,7 +49,7 @@ def upgrade() -> None:
         {"valid": list(_VALID_ROLES)},
     )
 
-    # Name-basiertes Mapping (fuer alle ohne gueltigen Enum-Wert)
+    # Name-based mapping (for all without a valid enum value)
     agents = conn.execute(
         sa.text(
             "SELECT id, name FROM agents "
@@ -62,7 +62,7 @@ def upgrade() -> None:
         name_lower = name.lower()
         role = None
 
-        # Exakte Pattern
+        # Exact pattern
         for pattern, mapped_role in _NAME_ROLE_MAP.items():
             if pattern in name_lower:
                 role = mapped_role
@@ -89,4 +89,4 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_index("ix_agents_board_id_role", table_name="agents")
-    # role-Werte nicht zuruecksetzen (kein Datenverlust)
+    # don't reset role values (no data loss)

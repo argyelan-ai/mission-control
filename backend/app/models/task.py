@@ -30,17 +30,17 @@ class Task(SQLModel, table=True):
         default=None, foreign_key="agents.id", nullable=True
     )
 
-    # Ownership — wer ist verantwortlich (immutable nach Erstellung)
-    # Unterschied zu assigned_agent_id: assigned wechselt (Developer → Reviewer → zurueck),
-    # owner bleibt der Agent der den Task erstellt/delegiert hat.
+    # Ownership — who is responsible (immutable after creation)
+    # Difference from assigned_agent_id: assigned changes (Developer → Reviewer → back),
+    # owner stays the agent who created/delegated the task.
     owner_agent_id: uuid.UUID | None = Field(
         default=None, foreign_key="agents.id", nullable=True
     )
 
-    # Completion-Callback-Routing — wer bekommt die Done-Notification?
-    # Getrennt von owner_agent_id (Creator-Semantik, immutable).
-    # null = Fallback auf Board Lead.
-    # Wird bei Erstellung durch Nicht-Board-Lead automatisch auf Board Lead gesetzt.
+    # Completion callback routing — who gets the done notification?
+    # Separate from owner_agent_id (creator semantics, immutable).
+    # null = fallback to board lead.
+    # Automatically set to board lead when created by a non-board-lead.
     callback_agent_id: uuid.UUID | None = Field(
         default=None, foreign_key="agents.id", nullable=True, index=True
     )
@@ -64,20 +64,20 @@ class Task(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
-    # Spawn Session Tracking (chat_send_isolated Session-Keys + runId)
+    # Spawn session tracking (chat_send_isolated session keys + runId)
     spawn_run_id: str | None = None
     spawn_session_key: str | None = None
 
-    # Workspace Isolation (Bundle 4) — isolierter Arbeitspfad pro Task
+    # Workspace isolation (Bundle 4) — isolated working path per task
     workspace_path: str | None = None
     workspace_port: int | None = None
 
-    # Checklist-Aggregat (T-1 — denormalisiert für schnelle Queries)
+    # Checklist aggregate (T-1 — denormalized for fast queries)
     checklist_total: int = Field(default=0)
     checklist_done: int = Field(default=0)
 
-    # planner_mode Feld entfernt in Migration 0071 (2026-04-11, Phase D).
-    # Boss plant selbst via openclaude-Subagents, kein Planner-Intermediate.
+    # planner_mode field removed in migration 0071 (2026-04-11, Phase D).
+    # Boss plans itself via openclaude subagents, no planner intermediate.
 
     # Content Pipeline Link
     pipeline_id: uuid.UUID | None = Field(
@@ -91,51 +91,51 @@ class Task(SQLModel, table=True):
     # Operational Controls
     run_control: str | None = None  # null | manual_hold | stopped
     dispatch_intent: str = Field(default="root")  # root | subtask | review_handoff | review_rework | manual_redispatch
-    dispatch_attempt_id: str | None = None  # UUID pro Dispatch-Versuch, validiert Agent-Updates
+    dispatch_attempt_id: str | None = None  # UUID per dispatch attempt, validates agent updates
 
     # Pre-Dispatch Gate (Phase 1 Systemic Orchestration)
-    # None = Legacy (sofort dispatch, kein Gating)
-    # "planning" = Dispatch blockiert
-    # "ready" = Dispatch freigegeben, nach Dispatch → None
+    # None = legacy (immediate dispatch, no gating)
+    # "planning" = dispatch blocked
+    # "ready" = dispatch approved, becomes None after dispatch
     dispatch_phase: str | None = None
 
-    # Review Decision (explizite Review-Entscheidung statt impliziter Status-Änderung)
+    # Review decision (explicit review decision instead of implicit status change)
     review_decision: str | None = None  # null | approved | changes_requested | hold
     review_decided_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
-    # Completion Contract — was der Operator erwartet
+    # Completion contract — what the operator expects
     report_back_required: bool = False
     report_back_channel: str | None = None      # "telegram" | "discord" | None
-    report_back_chat_id: str | None = None       # Telegram chat_id oder Discord channel_id
-    report_back_requirements: str | None = None  # "summary,screenshot,before_after" (kommasepariert)
-    report_back_status: str | None = "none"      # Deprecated (alter Henry-Fallback-Flow) — nicht mehr aktiv genutzt
-    # Gate-Flag: wird durch `mc telegram` mit current_task_id gesetzt, vom status=done Guard geprueft
+    report_back_chat_id: str | None = None       # Telegram chat_id or Discord channel_id
+    report_back_requirements: str | None = None  # "summary,screenshot,before_after" (comma-separated)
+    report_back_status: str | None = "none"      # Deprecated (old Henry fallback flow) — no longer actively used
+    # Gate flag: set by `mc telegram` with current_task_id, checked by the status=done guard
     report_sent_to_telegram: bool = False
-    # Routing-Regel "wer dispatcht, der sendet": Subtasks (parent_task_id NOT NULL)
-    # duerfen normalerweise KEIN mc telegram an den Operator senden — der Orchestrator
-    # (Boss) konsolidiert + sendet final. Ausnahme fuer long-running Watch-Tasks
-    # (z.B. "beobachte Channel und melde Events"): Boss setzt autonomous_telegram=True
-    # im Subtask-Brief, dann darf der Worker selbst senden.
+    # Routing rule "whoever dispatches, sends": subtasks (parent_task_id NOT NULL)
+    # normally must NOT send mc telegram to the operator — the orchestrator
+    # (Boss) consolidates + sends the final message. Exception for long-running watch
+    # tasks (e.g. "watch channel and report events"): Boss sets autonomous_telegram=True
+    # in the subtask brief, then the worker is allowed to send itself.
     autonomous_telegram: bool = Field(default=False)
-    skip_review: bool = Field(default=False)      # Scheduler-Tasks: Review-Gate überspringen
+    skip_review: bool = Field(default=False)      # Scheduler tasks: skip the review gate
 
     # Requester / Origin Tracking
     requester_channel: str | None = None   # "telegram" | "discord" | "web" | "agent"
-    requester_id: str | None = None        # Chat-ID, User-ID, oder Agent-UUID
+    requester_id: str | None = None        # Chat ID, user ID, or agent UUID
 
-    # Verschluesselte Credentials (Fernet-Ciphertext, nur fuer berechtigte Agents entschluesselt)
+    # Encrypted credentials (Fernet ciphertext, decrypted only for authorized agents)
     credentials_encrypted: str | None = None
     credential_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(Uuid, ForeignKey("credentials.id", ondelete="SET NULL"), nullable=True),
     )
 
-    # Delegation Contract — strukturierte Pflichtfelder pro Task-Typ
+    # Delegation contract — structured required fields per task type
     delegation_type: str | None = None     # code_change | visual_proof | credential_bound | review
-    branch_name: str | None = None         # z.B. "feature/format-duration"
-    # use_alter=True: bricht den FK-Zyklus tasks↔task_deliverables fuer SQLAlchemy INSERT-Sortierung
+    branch_name: str | None = None         # e.g. "feature/format-duration"
+    # use_alter=True: breaks the tasks↔task_deliverables FK cycle for SQLAlchemy INSERT ordering
     triggered_by_deliverable_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(
@@ -144,45 +144,45 @@ class Task(SQLModel, table=True):
             nullable=True,
         ),
     )
-    # Welches Deliverable hat diesen Task ausgelöst (Provenance)
+    # Which deliverable triggered this task (provenance)
     use_separate_repo: bool = Field(default=False)
-    target_url: str | None = None          # z.B. "http://localhost/tasks"
-    acceptance_criteria: str | None = None  # V1: text, spaeter JSON-Migration moeglich
-    requires_auth: bool = False            # Braucht der Task Login/Auth?
+    target_url: str | None = None          # e.g. "http://localhost/tasks"
+    acceptance_criteria: str | None = None  # V1: text, JSON migration possible later
+    requires_auth: bool = False            # Does the task need login/auth?
     source_task_id: uuid.UUID | None = Field(
         default=None, foreign_key="tasks.id", nullable=True
-    )  # Fuer review: strukturelle Referenz zum reviewten Task
-    expected_content: str | None = None  # Fuer visual_proof: was soll auf der Seite sichtbar sein
+    )  # For review: structural reference to the reviewed task
+    expected_content: str | None = None  # For visual_proof: what should be visible on the page
 
-    # Help Request System — Agent-zu-Agent Kollaboration
+    # Help request system — agent-to-agent collaboration
     help_request_from: uuid.UUID | None = Field(
         default=None, foreign_key="agents.id", nullable=True
-    )  # Agent-ID des Absenders. Gesetzt = "ich bin ein Help-Request-Subtask"
+    )  # Agent ID of the sender. Set = "I am a help-request subtask"
     blocked_by_task_id: uuid.UUID | None = Field(
         default=None, foreign_key="tasks.id", nullable=True
-    )  # Referenz auf den Help-Request-Subtask der diesen Task blockiert
+    )  # Reference to the help-request subtask blocking this task
 
-    # Operator-Intake (Phase 2 — primaer fuer Root-/Intake-Tasks)
-    intake_mode: str | None = None           # "quick" | "structured" | null (Legacy)
-    request_kind: str | None = None          # Operator-Intent (getrennt von delegation_type)
-    desired_output: str | None = None        # Was soll rauskommen?
-    scope_out: str | None = None             # Was ist explizit NICHT im Scope
-    risk_notes: str | None = None            # Was darf nicht kaputtgehen?
-    reference_urls: list | None = Field(     # Links als JSON-Liste
+    # Operator intake (Phase 2 — primarily for root/intake tasks)
+    intake_mode: str | None = None           # "quick" | "structured" | null (legacy)
+    request_kind: str | None = None          # Operator intent (separate from delegation_type)
+    desired_output: str | None = None        # What should come out of this?
+    scope_out: str | None = None             # What is explicitly NOT in scope
+    risk_notes: str | None = None            # What must not break?
+    reference_urls: list | None = Field(     # Links as JSON list
         default=None, sa_column=Column(JSON, nullable=True)
     )
-    reference_notes: str | None = None       # Freitext-Referenzen
-    approval_policy: str | None = None       # Freigabe-Regel (erfasst, nicht enforced in Phase 2)
-    autonomy_level: str | None = None        # Autonomie-Level (erfasst, nicht enforced in Phase 2)
-    publish_allowed: bool | None = None      # Darf veroeffentlicht werden?
-    needs_browser: bool | None = None        # Browser-Interaktion noetig? (getrennt von requires_auth)
-    credential_consent: bool | None = None   # Operator hat Credential-Nutzung fuer diesen Auftrag freigegeben
+    reference_notes: str | None = None       # Free-text references
+    approval_policy: str | None = None       # Approval rule (captured, not enforced in Phase 2)
+    autonomy_level: str | None = None        # Autonomy level (captured, not enforced in Phase 2)
+    publish_allowed: bool | None = None      # Is publishing allowed?
+    needs_browser: bool | None = None        # Is browser interaction needed? (separate from requires_auth)
+    credential_consent: bool | None = None   # Operator has approved credential usage for this task
 
     sort_order: int = 0
     is_auto_created: bool = False
     auto_reason: str | None = None
 
-    # Ersteller (User, der den Task über die UI angelegt hat)
+    # Creator (user who created the task via the UI)
     created_by_user_id: uuid.UUID | None = Field(
         default=None, foreign_key="users.id", nullable=True
     )
@@ -198,10 +198,10 @@ class Task(SQLModel, table=True):
 
 
 class TaskEvent(SQLModel, table=True):
-    """Event Sourcing fuer Task-Status-Aenderungen.
+    """Event sourcing for task status changes.
 
-    Jede Statusaenderung wird als immutables Event geloggt.
-    Ermoeglicht: Silent Failure Detection, Audit Trail, Duration Analytics.
+    Every status change is logged as an immutable event.
+    Enables: silent failure detection, audit trail, duration analytics.
     """
     __tablename__ = "task_events"
 
@@ -213,7 +213,7 @@ class TaskEvent(SQLModel, table=True):
     agent_id: uuid.UUID | None = Field(
         default=None, foreign_key="agents.id", nullable=True
     )
-    reason: str | None = None  # Optionaler Kontext (z.B. "aborted_recovery", "review_handoff")
+    reason: str | None = None  # Optional context (e.g. "aborted_recovery", "review_handoff")
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),

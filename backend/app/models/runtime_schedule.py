@@ -9,12 +9,12 @@ class RuntimeSchedule(SQLModel, table=True):
     __tablename__ = "runtime_schedules"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-    runtime_id: str  # Key aus runtimes.json, z.B. "nemotron-super"
+    runtime_id: str  # Key from runtimes.json, e.g. "nemotron-super"
     name: str
     action: str  # "start" | "stop"
-    time_of_day: str  # "HH:MM" im 24h-Format, z.B. "22:00"
+    time_of_day: str  # "HH:MM" in 24h format, e.g. "22:00"
     days: str  # "daily" | "weekdays" | "weekends"
-    unload_first: bool = Field(default=False)  # lms unload --all vorher (nur lmstudio)
+    unload_first: bool = Field(default=False)  # lms unload --all beforehand (lmstudio only)
     enabled: bool = Field(default=True)
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),

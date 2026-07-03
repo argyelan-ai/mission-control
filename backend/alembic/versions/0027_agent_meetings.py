@@ -1,4 +1,4 @@
-"""Agent Meetings — 3 neue Tabellen fuer strukturierte Agent-Diskussionen.
+"""Agent Meetings — 3 new tables for structured agent discussions.
 
 Revision ID: 0027
 Revises: 0026
@@ -48,7 +48,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=False),
     )
 
-    # ── agent_messages (Direktnachrichten) ──────────────────────────────
+    # ── agent_messages (direct messages) ──────────────────────────────
     op.create_table(
         "agent_messages",
         sa.Column("id", sa.Uuid(), primary_key=True),

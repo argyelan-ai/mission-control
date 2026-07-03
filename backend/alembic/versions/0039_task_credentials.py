@@ -1,7 +1,7 @@
-"""Verschluesseltes Credential-Feld fuer Tasks.
+"""Encrypted credential field for tasks.
 
-Tasks koennen jetzt optionale Credentials enthalten (Fernet-verschluesselt).
-Agents lesen sie entschluesselt via API — nie als Klartext in DB.
+Tasks can now contain optional credentials (Fernet-encrypted).
+Agents read them decrypted via API — never as plaintext in the DB.
 
 Revision ID: 0039
 Revises: 0038

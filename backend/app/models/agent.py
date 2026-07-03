@@ -57,12 +57,12 @@ class Agent(SQLModel, table=True):
     # Auth
     agent_token_hash: str | None = None
 
-    # Per-Agent API Key selection (optional). Wenn gesetzt, schreibt
-    # docker_agent_sync den dekryptierten Wert als OPENAI_API_KEY in die
-    # .env Datei im claude-config Bind-Mount. start-claude.sh sourced die
-    # .env vor dem openclaude-Start. NULL = fallback auf docker-compose env.
-    # ON DELETE SET NULL (siehe migration 0070) — Löschen eines Secrets
-    # crasht keinen Agent.
+    # Per-Agent API Key selection (optional). When set, docker_agent_sync
+    # writes the decrypted value as OPENAI_API_KEY into the .env file in
+    # the claude-config bind mount. start-claude.sh sources the .env
+    # before the openclaude start. NULL = fallback to docker-compose env.
+    # ON DELETE SET NULL (see migration 0070) — deleting a secret
+    # does not crash any agent.
     secret_id: uuid.UUID | None = Field(
         default=None,
         foreign_key="secrets.id",
@@ -149,7 +149,7 @@ class Agent(SQLModel, table=True):
     last_task_activity_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
-    # use_alter=True: bricht den FK-Zyklus agents↔tasks fuer SQLAlchemy INSERT-Sortierung
+    # use_alter=True: breaks the FK cycle agents↔tasks for SQLAlchemy INSERT ordering
     current_task_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(

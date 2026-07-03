@@ -1,4 +1,4 @@
-"""Task Events — Event Sourcing fuer Status-Aenderungen.
+"""Task Events — event sourcing for status changes.
 
 Revision ID: 0032
 Revises: 0031
@@ -25,7 +25,7 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.text("NOW()"), nullable=False),
     )
-    # Composite Index fuer schnelle Task-History-Abfragen
+    # Composite index for fast task history queries
     op.create_index("ix_task_events_task_created", "task_events", ["task_id", "created_at"])
 
 

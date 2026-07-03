@@ -4,7 +4,7 @@ Revision ID: 0021
 Revises: 0020
 Create Date: 2026-03-01
 
-Neue Tabelle: scheduled_job_runs + neue Spalten auf scheduled_jobs.
+New table: scheduled_job_runs + new columns on scheduled_jobs.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ── Neue Tabelle: scheduled_job_runs ──────────────────────────────────
+    # ── New table: scheduled_job_runs ──────────────────────────────────
     op.create_table(
         "scheduled_job_runs",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -38,7 +38,7 @@ def upgrade() -> None:
         "ix_scheduled_job_runs_started_at", "scheduled_job_runs", ["started_at"]
     )
 
-    # ── Neue Spalten auf scheduled_jobs ──────────────────────────────────
+    # ── New columns on scheduled_jobs ──────────────────────────────────
     # Retry
     op.add_column(
         "scheduled_jobs",
@@ -50,7 +50,7 @@ def upgrade() -> None:
             "retry_delay_minutes", sa.Integer(), nullable=False, server_default="5"
         ),
     )
-    # Dependencies (self-referential FK — manuell, nicht via autogenerate)
+    # Dependencies (self-referential FK — manual, not via autogenerate)
     op.add_column(
         "scheduled_jobs",
         sa.Column(

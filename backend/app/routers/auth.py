@@ -195,7 +195,7 @@ async def login(
     _clear_attempts(client_ip)
     token = create_access_token(str(user.id), user.role, user.token_version)
 
-    # SSE-Auth Cookie setzen (HttpOnly — kein JS-Zugriff, kein Token in URL-Logs)
+    # Set the SSE-auth cookie (HttpOnly — no JS access, no token in URL logs)
     response = JSONResponse(
         content=TokenResponse(access_token=token, user=_user_dict(user)).model_dump(),
     )

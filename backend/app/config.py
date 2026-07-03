@@ -41,8 +41,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
-    # Telegram Reports-Bot (separat — Agent-Deliverables, kein Approval-Flow)
-    # Zweiter Bot + Chat damit Info-Delivery nicht den Kommando-Chat verrauscht.
+    # Telegram Reports Bot (separate — agent deliverables, no approval flow)
+    # Second bot + chat so info delivery doesn't clutter the command chat.
     telegram_reports_bot_token: str = ""
     telegram_reports_chat_id: str = ""
 
@@ -80,13 +80,13 @@ class Settings(BaseSettings):
     # Secrets encryption (Fernet key for MC-managed secrets)
     secrets_encryption_key: str = ""
 
-    # Subagent Dispatch (chat_send_isolated statt chat_send fuer Workers)
-    # Kill-Switch: USE_SUBAGENT_DISPATCH=false in .env → sofort Legacy-Modus
+    # Subagent dispatch (chat_send_isolated instead of chat_send for workers)
+    # Kill-switch: USE_SUBAGENT_DISPATCH=false in .env → immediate legacy mode
     use_subagent_dispatch: bool = True
 
-    # Reflection-Pflicht vor Task-Abschluss (Boss-Autonomy-Overhaul 2026-04-11)
-    # True = letzter eigener Kommentar vor status=review/done muss comment_type=reflection sein
-    # Eingeschaltet Phase E (2026-04-12) nach Worker-SOUL-Audit
+    # Reflection requirement before task completion (Boss autonomy overhaul 2026-04-11)
+    # True = last own comment before status=review/done must be comment_type=reflection
+    # Enabled in Phase E (2026-04-12) after the worker SOUL audit
     enforce_reflection: bool = True
 
     # Memory-System / Embeddings (Phase 3, 2026-04-11)
@@ -102,46 +102,46 @@ class Settings(BaseSettings):
     # Callers (spark_client, news_ai_worker) auto-detect recipe swaps via
     # the resolver and fall back to this value only if the resolver fails.
     spark_llm_model: str = "Qwen/Qwen3.6-35B-A3B-FP8"
-    # Qdrant: Service-name im Docker-Netzwerk
+    # Qdrant: service name on the Docker network
     qdrant_host: str = "qdrant"
     qdrant_port: int = 6333
 
-    # Phase 5 MSY-02: Cosine-Similarity-Threshold fuer MERGE-Badge
+    # Phase 5 MSY-02: cosine similarity threshold for MERGE badge
     # Plan 05-05 consumes this in _find_merge_candidate; tunable post-soak.
     memory_merge_threshold: float = 0.9
 
-    # Phase 5 MSY-04: Embedding-Retry-Loop tick interval (Sekunden).
+    # Phase 5 MSY-04: embedding retry loop tick interval (seconds).
     # EmbeddingRetryLoop._run_loop awakens every N seconds to drain the
     # mc:embeddings:retry Redis LIST. Tests override to 99999 (conftest.py)
     # so the loop never auto-fires; tests call _drain_once() directly.
     embedding_retry_interval: int = 60
 
     # Operational Controls
-    enforce_dispatch_attempt_id: bool = True  # Phase B: aktiv — harter 409 bei fehlendem/falschem Header
+    enforce_dispatch_attempt_id: bool = True  # Phase B: active — hard 409 on missing/wrong header
 
     # Pre-Dispatch Gating (Phase 1 Systemic Orchestration)
-    # False = Legacy: dispatch_phase ignoriert, Tasks dispatchen sofort
-    # True = Tasks mit dispatch_phase="planning" werden NICHT auto-dispatched
+    # False = legacy: dispatch_phase ignored, tasks dispatch immediately
+    # True = tasks with dispatch_phase="planning" are NOT auto-dispatched
     enable_dispatch_gating: bool = False
 
     # Promote Orchestrator (Phase 4A)
-    # False = geplante Tasks bleiben liegen bis manuell promoted
-    # True = System trifft Auto-Promote/Approval/Wait-Entscheidungen alle 30s
+    # False = planned tasks stay put until manually promoted
+    # True = system makes auto-promote/approval/wait decisions every 30s
     enable_promote_orchestrator: bool = False
 
     # Structured Intake (Phase 2)
-    # False = nur bestehende Textbox, neue Intake-Felder werden ignoriert
-    # True = Quick Mode + Structured Mode aktiv, Planning Brief fuer Henry
+    # False = only the existing text box, new intake fields are ignored
+    # True = Quick Mode + Structured Mode active, planning brief for Henry
     structured_intake_enabled: bool = False
 
     # App
     environment: str = "development"
-    # Entspricht dem Public-Release-Tag (CHANGELOG.md / GitHub Releases).
-    # Release-Prozess: hier + pyproject.toml + CHANGELOG bumpen, dann taggen.
+    # Matches the public release tag (CHANGELOG.md / GitHub Releases).
+    # Release process: bump here + pyproject.toml + CHANGELOG, then tag.
     app_version: str = "0.1.1"
-    # Fallback-Arbeitsverzeichnis fuer Tasks OHNE Projekt-Kontext.
-    # Primaer nutzt dispatch.py project.workspace_path (via default_project_id auf Board).
-    # mc_repo_path greift nur wenn kein Projekt und kein Agent-Workspace vorhanden ist.
+    # Fallback working directory for tasks WITHOUT project context.
+    # Primarily dispatch.py uses project.workspace_path (via default_project_id on board).
+    # mc_repo_path only kicks in when there is no project and no agent workspace.
     # Default derives from the host home (HOME_HOST in Docker) — override via
     # MC_REPO_PATH env var (setup.sh writes the actual checkout path).
     mc_repo_path: str = str(
@@ -149,17 +149,17 @@ class Settings(BaseSettings):
         / "Workspace" / "Projects" / "mission-control"
     )
 
-    # Free-Code Agent: Basis-Verzeichnis fuer Task-Isolation (Worktrees oder Plain Workspaces)
-    # Im Container: /home/mcuser/free-code-projects (gemountet vom Host,
-    # siehe docker-compose.override.example.yml)
+    # Free-Code Agent: base directory for task isolation (worktrees or plain workspaces)
+    # In the container: /home/mcuser/free-code-projects (mounted from the host,
+    # see docker-compose.override.example.yml)
     free_code_projects_path: str = "/home/mcuser/free-code-projects"
 
-    # Free-Code Bridge: HTTP-Endpunkt auf dem Host (ausserhalb Docker)
+    # Free-Code Bridge: HTTP endpoint on the host (outside Docker)
     free_code_bridge_url: str = "http://host.docker.internal:18792"
 
-    # Free-Code Path-Mapping: Docker-Pfad → Host-Pfad (fuer Bridge-Requests)
-    # Mehrere Mappings als Semikolon-getrennte Liste: "docker_path:host_path;..."
-    # Reihenfolge: laengste Pfade zuerst fuer korrekte Ersetzung.
+    # Free-Code path mapping: Docker path → host path (for bridge requests)
+    # Multiple mappings as a semicolon-separated list: "docker_path:host_path;..."
+    # Order: longest paths first for correct replacement.
     # Default derives from the host home — override via FREE_CODE_PATH_MAPPINGS.
     free_code_path_mappings: str = (
         "/home/mcuser/free-code-projects:"
@@ -178,7 +178,7 @@ class Settings(BaseSettings):
 
     # Intelligence Service
     ollama_url: str = "http://host.docker.internal:11434"
-    intelligence_interval: int = 600  # 10 Minuten — MEM-05 reduces overlap risk
+    intelligence_interval: int = 600  # 10 minutes — MEM-05 reduces overlap risk
 
     # Lifecycle Safety Watchdog (ADR-046) — global kill-switch for the
     # silent-abort auto-block check (task_runner._check_stuck_in_progress).
@@ -265,10 +265,10 @@ class Settings(BaseSettings):
     vault_lint_interval_hours: int = 24
 
     # Token Harvester (Phase 31)
-    # Basis-Pfade fuer Agent-JSONL-Transkripte (cli-bridge + sparky + hermes).
-    # Standard: ~/.mc/agents (expanduser passiert im Harvester).
-    # Boss-Pfad (~/.claude/projects) ist separat hartkodiert im Harvester und
-    # wird via docker-compose.yml als :ro in den Container gemountet.
+    # Base paths for agent JSONL transcripts (cli-bridge + sparky + hermes).
+    # Default: ~/.mc/agents (expanduser happens in the harvester).
+    # Boss path (~/.claude/projects) is separately hardcoded in the harvester and
+    # gets mounted into the container as :ro via docker-compose.yml.
     token_harvest_paths: list[str] = ["~/.mc/agents"]
 
 

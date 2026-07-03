@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import engine
 from app.redis_client import close_redis
 
-# Strukturiertes Logging (structlog) — JSON in Production, human-readable in Dev
+# Structured logging (structlog) — JSON in production, human-readable in dev
 import structlog
 
 shared_processors = [
@@ -23,7 +23,7 @@ shared_processors = [
 ]
 
 if settings.environment == "production":
-    # JSON fuer docker compose logs | jq
+    # JSON for docker compose logs | jq
     structlog.configure(
         processors=[
             *shared_processors,
@@ -34,7 +34,7 @@ if settings.environment == "production":
         logger_factory=structlog.stdlib.LoggerFactory(),
     )
 else:
-    # Human-readable fuer lokale Entwicklung
+    # Human-readable for local development
     structlog.configure(
         processors=[
             *shared_processors,
@@ -119,7 +119,7 @@ logger = logging.getLogger("mc.startup")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup — Templates pruefen + Builtin Templates seeden + Background-Services starten.
+    # Startup — check templates + seed builtin templates + start background services.
     # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
     _verify_jinja_templates()
     await _seed_templates()
@@ -145,9 +145,9 @@ async def lifespan(app: FastAPI):
     # set embedding_retry_interval=99999 in conftest so the loop never
     # auto-fires (Pitfall 4).
     await embedding_retry.start()
-    # Phase 7 OBS-02: vault-export Singleton — periodischer (Default 300s)
-    # Walk ueber board_memory + Markdown-Render in ${HOME_HOST}/.mc/vault/.
-    # Tests setzen obsidian_export_interval=99999 in conftest so the loop
+    # Phase 7 OBS-02: vault-export singleton — periodic (default 300s)
+    # walk over board_memory + Markdown render into ${HOME_HOST}/.mc/vault/.
+    # Tests set obsidian_export_interval=99999 in conftest so the loop
     # never auto-fires (Pitfall 4 mirror).
     # M.2: Disabled by default — Vault is now Source of Truth.
     # Re-enable via OBSIDIAN_EXPORT_ENABLED=true for rollback.
@@ -171,8 +171,8 @@ async def lifespan(app: FastAPI):
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
     await runtime_schedule_service.start()
     await telegram_bot.start()
-    # Defense-in-Depth: Agents die `gh repo create` ohne --private aufrufen
-    # werden alle 5 Min auto-privatisiert. Fail-safe fuer SOUL-Regel-Verletzungen.
+    # Defense-in-depth: agents that call `gh repo create` without --private
+    # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
     import asyncio as _asyncio
     from app.services.github_visibility_monitor import run_forever as _gh_monitor
     _gh_monitor_task = _asyncio.create_task(_gh_monitor(), name="github_visibility_monitor")
@@ -194,9 +194,9 @@ async def lifespan(app: FastAPI):
     try:
         vault_path = settings.vault_path
         vault_path.mkdir(parents=True, exist_ok=True)
-        # Attachments-Tree für Deliverable-Files (Phase 0 vault-as-brain).
-        # Hardlinks aus ~/.mc/deliverables landen hier, plus später Voice-
-        # Memos. Idempotent — exist_ok=True macht restart-storms harmlos.
+        # Attachments tree for deliverable files (Phase 0 vault-as-brain).
+        # Hardlinks from ~/.mc/deliverables land here, plus voice memos
+        # later. Idempotent — exist_ok=True makes restart storms harmless.
         for _kind in ("files", "images", "audio"):
             (vault_path / "attachments" / _kind).mkdir(parents=True, exist_ok=True)
         index_db = vault_path / ".mc_index.db"
@@ -299,7 +299,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("Vault decay loop failed to schedule: %s", e, exc_info=True)
     yield
-    # Shutdown — Telegram + Intelligence + Task Runner + Watchdog stoppen.
+    # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
     _gh_monitor_task.cancel()
     try:
@@ -351,7 +351,7 @@ async def lifespan(app: FastAPI):
     await task_runner.stop()
     await watchdog.stop()
     await scheduler.stop()
-    # Memory-Subsystem-Cleanup (Phase 3)
+    # Memory subsystem cleanup (Phase 3)
     try:
         from app.services.embedding_service import embedding_service
         await embedding_service.close()
@@ -367,15 +367,15 @@ async def lifespan(app: FastAPI):
 
 
 def _verify_jinja_templates() -> None:
-    """Parse-Check aller Jinja2 Templates beim Backend-Startup.
+    """Parse check of all Jinja2 templates at backend startup.
 
-    Erkennt Syntax-Errors FRUEH (Startup statt beim ersten Render-Call).
-    Rendering testet nicht alle Pfade — nur ob die Templates ueberhaupt
-    geparst werden koennen. Semantische Probleme (missing variables etc.)
-    fangen wir zur Render-Zeit.
+    Catches syntax errors EARLY (startup instead of on the first render
+    call). Rendering doesn't test all paths — only whether the templates
+    can be parsed at all. We catch semantic issues (missing variables
+    etc.) at render time.
 
-    Non-fatal: warnt nur, blockiert den Start nicht. Ein kaputtes
-    Template ist besser als kein Backend.
+    Non-fatal: only warns, doesn't block startup. A broken template is
+    better than no backend.
     """
     try:
         from jinja2 import TemplateSyntaxError
@@ -412,7 +412,7 @@ def _verify_jinja_templates() -> None:
 
 
 async def _seed_templates() -> None:
-    """Builtin Agent Templates beim Startup anlegen (idempotent)."""
+    """Create builtin agent templates at startup (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.services.template_seeder import seed_builtin_templates
@@ -424,7 +424,7 @@ async def _seed_templates() -> None:
 
 
 async def _seed_scheduled_jobs() -> None:
-    """Built-in Scheduled Jobs beim Startup anlegen (idempotent)."""
+    """Create built-in scheduled jobs at startup (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.services.schedule_seeder import seed_builtin_jobs
@@ -510,7 +510,7 @@ async def _seed_github_token() -> None:
 
 
 async def _seed_playbook_assets() -> None:
-    """Core skill packs fuer Henry/Playbooks seeden (idempotent)."""
+    """Seed core skill packs for Henry/Playbooks (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.services.playbook_seeder import seed_skill_packs
@@ -635,7 +635,7 @@ app = FastAPI(
 # the operator's machine. (Operator: set PUBLIC_HOST to your Tailscale IP to keep phone access.)
 _cors_origins = [
     "http://localhost", "http://localhost:80", "http://localhost:3000",
-    "http://localhost:3001", "http://localhost:3002",  # Preview-Ports
+    "http://localhost:3001", "http://localhost:3002",  # preview ports
     "http://frontend:3000", "https://mc.local",
 ]
 if settings.public_host:
@@ -681,19 +681,19 @@ app.include_router(activity.router)
 # Phase 29-09 (ADR-039): gateway.router deleted. Discord channel CRUD now
 # lives exclusively on routers/discord.py (Plan 29-01, D-04).
 app.include_router(discord_router.router)
-app.include_router(internal.router)  # /api/v1/internal/bootstrap — Agent-Container holen Tokens aus Vault
+app.include_router(internal.router)  # /api/v1/internal/bootstrap — agent containers fetch tokens from Vault
 app.include_router(model_prices.router)
 app.include_router(models.router)
 app.include_router(runtimes.router)
-app.include_router(hosts.router)  # /api/v1/hosts — Host-Registry CRUD + Metrics (ADR-048)
+app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)
 app.include_router(credentials.router)
 app.include_router(skills.router)
 app.include_router(clawhub.router)
-# planner.router entfernt 2026-04-11 (Phase 6) — Boss plant selbst via
-# openclaude-Subagents, delegation-guards sind weg, Router-File geloescht.
+# planner.router removed 2026-04-11 (Phase 6) — Boss now plans itself via
+# openclaude subagents, delegation guards are gone, the router file was deleted.
 app.include_router(research.router)
 app.include_router(playbooks.router)
 app.include_router(automations.router)
@@ -708,9 +708,9 @@ app.include_router(consensus.router)
 app.include_router(schedule.router)
 app.include_router(voice.router)
 
-# ── Verticals (optionale, strippbare Feature-Bundles — ADR-044) ──────────────
-# Discovery lädt jedes Unterpaket von app/verticals/ mit register(app).
-# Public-Release ohne z.B. news_studio/: App bootet unverändert ohne die Routen.
+# ── Verticals (optional, strippable feature bundles — ADR-044) ──────────────
+# Discovery loads every subpackage of app/verticals/ with register(app).
+# Public release without e.g. news_studio/: app boots unchanged without those routes.
 from app.verticals import register_all as _register_verticals
 _loaded_verticals = _register_verticals(app)
 app.include_router(meetings.router)

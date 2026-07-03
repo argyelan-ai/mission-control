@@ -15,10 +15,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # ws_url fuer WebSocket RPC Verbindungen
+    # ws_url for WebSocket RPC connections
     op.add_column("gateways", sa.Column("ws_url", sa.Text(), nullable=True))
 
-    # workspace_root nullable machen (lokale Gateways brauchen keinen festen Pfad)
+    # make workspace_root nullable (local gateways don't need a fixed path)
     op.alter_column(
         "gateways",
         "workspace_root",

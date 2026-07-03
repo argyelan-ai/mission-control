@@ -1,4 +1,4 @@
-"""Cost Events — Token-/Kosten-Tracking pro Task und Agent.
+"""Cost events — token/cost tracking per task and agent.
 
 Revision ID: 0049
 Revises: 0048

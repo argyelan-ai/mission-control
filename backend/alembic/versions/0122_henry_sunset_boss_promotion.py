@@ -67,9 +67,9 @@ def upgrade() -> None:
     bind = op.get_bind()
 
     # ----- Step 0: Fresh-Install-Gate (CI fresh-boot E2E, 2026-07-02) ----
-    # Diese Daten-Migration überführt eine konkrete Bestandsflotte
-    # (Henry → Boss). Auf frischen DBs existiert weder Henry noch Boss —
-    # nichts zu migrieren, sauber durchwinken statt Pre-Flight-RuntimeError.
+    # This data migration carries over a concrete existing fleet
+    # (Henry → Boss). On fresh DBs neither Henry nor Boss exists —
+    # nothing to migrate, wave it through cleanly instead of a Pre-Flight RuntimeError.
     henry_exists = bind.execute(
         sa.text("SELECT 1 FROM agents WHERE name = :name LIMIT 1"),
         {"name": HENRY_NAME},

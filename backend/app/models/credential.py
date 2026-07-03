@@ -1,4 +1,4 @@
-"""Credentials Vault — verschluesselte Zugangsdaten fuer Agent-Tasks."""
+"""Credentials Vault — encrypted access data for agent tasks."""
 import uuid
 from datetime import datetime
 
@@ -7,9 +7,9 @@ from sqlmodel import Column, Field, SQLModel
 
 
 class Credential(SQLModel, table=True):
-    """Verschluesselte Credential-Eintraege (Logins, Tokens, Freitext).
+    """Encrypted credential entries (logins, tokens, free text).
 
-    encrypted_data enthaelt ein Fernet-verschluesseltes JSON-Objekt:
+    encrypted_data holds a Fernet-encrypted JSON object:
     - login:  {"username": "...", "password": "..."}
     - token:  {"token": "..."}
     - custom: {"content": "..."}

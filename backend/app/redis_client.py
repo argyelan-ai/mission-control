@@ -208,7 +208,7 @@ class RedisKeys:
     # ── Recovery Dedup ─────────────────────────────────────────────────
     @staticmethod
     def recovery_attempt(task_id: str, recovery_type: str) -> str:
-        """Zentraler Dedup-Key fuer alle Recovery-Versuche.
+        """Central dedup key for all recovery attempts.
 
         recovery_type: aborted | session_loss | spawn_timeout | dependency_zombie
         """
@@ -216,16 +216,16 @@ class RedisKeys:
 
     @staticmethod
     def recovery_inprogress(agent_id: str, task_id: str) -> str:
-        """Dedup-Key fuer REC-01 tiered recovery — aktiv waehrend Tiers 1-3.
-        TTL 600s deckt Tier 1 (10s probe) + Tier 2 (30s restart wait) +
-        Tier 3 (5min ACK-wait) ab. Siehe 06-CONTEXT.md D-18."""
+        """Dedup key for REC-01 tiered recovery — active during Tiers 1-3.
+        TTL 600s covers Tier 1 (10s probe) + Tier 2 (30s restart wait) +
+        Tier 3 (5min ACK-wait). See 06-CONTEXT.md D-18."""
         return f"mc:recovery:inprogress:{agent_id}:{task_id}"
 
     # ── Compaction Lock (Phase 6 CTX-02) ──────────────────────────────
     @staticmethod
     def compaction_lock(agent_id: str) -> str:
-        """Dedup-Key fuer CTX-02 compaction — 90s TTL verhindert Double-Trigger
-        waehrend des 60s Checkpoint-Waits (D-09 in 06-CONTEXT.md)."""
+        """Dedup key for CTX-02 compaction — 90s TTL prevents double-trigger
+        during the 60s checkpoint wait (D-09 in 06-CONTEXT.md)."""
         return f"mc:compaction:{agent_id}"
 
     # ── System Mode (Operational Controls) ────────────────────────────

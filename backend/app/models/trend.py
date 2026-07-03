@@ -18,7 +18,7 @@ from sqlalchemy import JSON, DateTime, text
 from sqlmodel import Column, Field, SQLModel
 
 
-# Source-Konstanten — string statt Enum, damit Migration ohne CHECK-Constraint bleibt
+# Source constants — string instead of enum, so migration stays without a CHECK constraint
 TREND_SOURCE_X = "x"
 TREND_SOURCE_HACKERNEWS = "hackernews"
 TREND_SOURCE_REDDIT = "reddit"
@@ -44,8 +44,8 @@ class TrendSignal(SQLModel, table=True):
         default=None, foreign_key="news_articles.id", nullable=True,
     )
 
-    # og:image cache (0111): Crawler extrahiert beim Fetch und speichert URL hier;
-    # Storyboard-Creation kopiert per default als image_source='extracted'
+    # og:image cache (0111): crawler extracts it on fetch and stores the URL here;
+    # storyboard creation copies it by default as image_source='extracted'
     image_url: str | None = None
 
     captured_at: datetime = Field(
@@ -56,15 +56,15 @@ class TrendSignal(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
     )
 
-    # extra_metadata: flexibles JSON-Feld für source-spezifische Daten
-    # (z.B. tweet_id, hn_score, reddit_subreddit, like-count, etc.)
+    # extra_metadata: flexible JSON field for source-specific data
+    # (e.g. tweet_id, hn_score, reddit_subreddit, like-count, etc.)
     extra_metadata: dict[str, Any] | None = Field(
         default=None, sa_column=Column(JSON, nullable=True),
     )
 
 
 class ViralShortsSettings(SQLModel, table=True):
-    """Singleton-Tabelle (id=1, CHECK constraint) — globale Pipeline-Settings."""
+    """Singleton table (id=1, CHECK constraint) — global pipeline settings."""
     __tablename__ = "viral_shorts_settings"
 
     id: int = Field(default=1, primary_key=True)
@@ -84,7 +84,7 @@ class ViralShortsSettings(SQLModel, table=True):
     newsletter_sender_email: str | None = None
     newsletter_sender_name: str | None = None
     newsletter_resend_secret_id: uuid.UUID | None = Field(default=None, nullable=True)
-    # i18n default (0111): pro storyboard kann Shakespeare daraus output_languages ableiten
+    # i18n default (0111): per storyboard, Shakespeare can derive output_languages from this
     default_languages: list[str] = Field(
         default_factory=lambda: ["de"],
         sa_column=Column(JSON, nullable=False, server_default='["de"]'),

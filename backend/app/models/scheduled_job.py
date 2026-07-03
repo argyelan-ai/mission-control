@@ -23,8 +23,8 @@ class ScheduledJob(SQLModel, table=True):
 
     # Schedule
     schedule_type: str  # "daily" | "weekdays" | "interval" | "cron" | "weekly_custom"
-    schedule_time: Optional[str] = None          # "07:30" für daily/weekdays
-    schedule_interval_hours: Optional[int] = None  # für interval
+    schedule_time: Optional[str] = None          # "07:30" for daily/weekdays
+    schedule_interval_hours: Optional[int] = None  # for interval
 
     # New schedule fields (migration 0103)
     schedule_cron: Optional[str] = Field(default=None)
@@ -35,7 +35,7 @@ class ScheduledJob(SQLModel, table=True):
     # Action
     action_type: str  # "chat_send" | "api_call" | "create_task"
     agent_id: Optional[uuid.UUID] = Field(default=None, foreign_key="agents.id", nullable=True)
-    agent_name: Optional[str] = None   # Fallback für Lookup wenn agent_id null
+    agent_name: Optional[str] = None   # Fallback for lookup when agent_id is null
     message: Optional[str] = Field(default=None, sa_column=Column(Text, nullable=True))
     api_endpoint: Optional[str] = None
 
@@ -79,7 +79,7 @@ class ScheduledJob(SQLModel, table=True):
     )
     consecutive_failures: int = Field(default=0)
 
-    # Run history (letzter Lauf — backward compat)
+    # Run history (last run — backward compat)
     last_run_at: Optional[datetime] = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )

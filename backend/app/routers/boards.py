@@ -185,9 +185,9 @@ async def delete_board(
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")
     board.is_archived = True
-    # Slug freigeben: Archivieren ist ein Soft-Delete, aber boards.slug ist
-    # UNIQUE — ohne Umbenennung blockiert ein geloeschtes Board seinen Slug
-    # fuer immer (Neuanlage -> 500 UniqueViolation).
+    # Free up the slug: archiving is a soft delete, but boards.slug is
+    # UNIQUE — without renaming, a deleted board blocks its slug forever
+    # (re-creation -> 500 UniqueViolation).
     if "--archived-" not in board.slug:
         board.slug = f"{board.slug}--archived-{board.id.hex[:8]}"
     board.updated_at = utcnow()
@@ -257,8 +257,8 @@ async def list_projects(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    # Research- und Planner-Projekte werden ueber ihre eigenen Router verwaltet
-    # und sollen nicht in der allgemeinen Projektliste (z.B. Sidebar) erscheinen.
+    # Research and planner projects are managed via their own routers
+    # and should not appear in the general project list (e.g. sidebar).
     HIDDEN_TYPES = ["research"]
     result = await session.exec(
         select(Project)
@@ -325,10 +325,10 @@ async def init_project_repo(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """GitHub-Repo für ein Projekt initialisieren.
+    """Initialize a GitHub repo for a project.
 
-    Erstellt {GITHUB_OWNER}/mc-{slug} (immer privat), initialisiert mit briefing.md,
-    und speichert github_repo_url + github_repo_name auf dem Projekt.
+    Creates {GITHUB_OWNER}/mc-{slug} (always private), initializes it with briefing.md,
+    and stores github_repo_url + github_repo_name on the project.
     """
     from app.services.git_service import GitService, slugify_project
 
@@ -371,36 +371,36 @@ async def delete_project(
     if not project or project.board_id != board_id:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Planner-Messages loeschen
+    # Delete planner messages
     await session.exec(  # type: ignore[call-overload]
         delete(PlannerMessage).where(PlannerMessage.project_id == project_id)
     )
 
-    # Task-IDs sammeln fuer kaskadierendes Loeschen
+    # Collect task IDs for cascading delete
     task_ids_result = await session.exec(
         select(Task.id).where(Task.project_id == project_id)
     )
     task_ids = list(task_ids_result.all())
 
     if task_ids:
-        # 1) Parent-Referenzen aufloesen (self-FK)
+        # 1) Resolve parent references (self-FK)
         await session.exec(  # type: ignore[call-overload]
             update(Task)
             .where(Task.parent_task_id.in_(task_ids))  # type: ignore[union-attr]
             .values(parent_task_id=None)
         )
-        # 2) Kommentare loeschen
+        # 2) Delete comments
         await session.exec(  # type: ignore[call-overload]
             delete(TaskComment).where(TaskComment.task_id.in_(task_ids))  # type: ignore[union-attr]
         )
-        # 3) Dependencies loeschen
+        # 3) Delete dependencies
         await session.exec(  # type: ignore[call-overload]
             delete(TaskDependency).where(
                 TaskDependency.task_id.in_(task_ids)  # type: ignore[union-attr]
                 | TaskDependency.depends_on_task_id.in_(task_ids)  # type: ignore[union-attr]
             )
         )
-        # 4) Tasks loeschen
+        # 4) Delete tasks
         await session.exec(  # type: ignore[call-overload]
             delete(Task).where(Task.project_id == project_id)
         )

@@ -4,16 +4,16 @@ Revision ID: 0071
 Revises: 0070
 Create Date: 2026-04-11
 
-Kontext: Phase 6 (Boss-Autonomy-Overhaul) hat den Planner-Pfad komplett
-entfernt (Router, Delegation-Guards, Dispatch-Logik, Template). Das
-planner_mode Schema-Feld wurde aus Backward-Compat-Gruenden in Phase 6
-stehen gelassen, wird aber nirgendwo mehr gelesen.
+Context: Phase 6 (Boss autonomy overhaul) completely removed the planner
+path (router, delegation guards, dispatch logic, template). The
+planner_mode schema field was left in place in Phase 6 for backward-compat
+reasons, but is no longer read anywhere.
 
-Phase D Cleanup: Feld + Constraint droppen.
+Phase D cleanup: drop field + constraint.
 
-Downgrade: re-create als nullable (KEIN NOT NULL mit default 'auto',
-weil alte Tasks beim Up-Down-Up sonst unsaubere Werte haetten). Wer
-downgraded kann das planner_mode manuell neu seeden.
+Downgrade: re-create as nullable (NOT NOT NULL with default 'auto',
+because old tasks would otherwise end up with unclean values on an
+up-down-up cycle). Whoever downgrades can manually reseed planner_mode.
 """
 from alembic import op
 import sqlalchemy as sa
@@ -26,7 +26,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Constraint zuerst entfernen, dann Spalte droppen
+    # Remove constraint first, then drop the column
     op.execute("ALTER TABLE tasks DROP CONSTRAINT IF EXISTS ck_planner_mode")
     op.drop_column("tasks", "planner_mode")
 
@@ -37,7 +37,7 @@ def downgrade() -> None:
         sa.Column(
             "planner_mode",
             sa.String(),
-            nullable=True,  # downgrade-state: nullable damit alte Rows OK sind
+            nullable=True,  # downgrade state: nullable so old rows stay valid
         ),
     )
-    # kein CHECK-Constraint im downgrade — die Validation war ohnehin obsolet
+    # no CHECK constraint on downgrade — the validation was obsolete anyway

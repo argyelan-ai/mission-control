@@ -1,8 +1,8 @@
 """Token/Cost-Tracking Phase 1: model_usage_events + model_prices + harvest_state.
 
-Neue, saubere Append-Event-Tabelle mit Message-Granularitaet (uuid UNIQUE).
-Ersetzt CostEvent-Writes fuer den Cost-Endpoint; CostEvent bleibt fuer
-check_budget_warnings erhalten.
+New, clean append-only event table with message granularity (uuid UNIQUE).
+Replaces CostEvent writes for the cost endpoint; CostEvent is kept for
+check_budget_warnings.
 
 Revision ID: 0127
 Revises: 0126
@@ -19,8 +19,8 @@ down_revision = "0126"
 branch_labels = None
 depends_on = None
 
-# Epoch fuer valid_from der Seed-Rows
-# Echte datetime, KEIN isoformat-String — Postgres castet VARCHAR nicht zu TIMESTAMP
+# Epoch for valid_from of the seed rows
+# Real datetime, NOT an isoformat string — Postgres won't cast VARCHAR to TIMESTAMP
 _EPOCH = datetime(2020, 1, 1, tzinfo=timezone.utc)
 
 
@@ -58,7 +58,7 @@ def upgrade() -> None:
     op.create_index("ix_model_usage_model_ts", "model_usage_events", ["model", "ts"])
     op.create_index("ix_model_usage_agent_ts", "model_usage_events", ["agent_id", "ts"])
     op.create_index("ix_model_usage_harness_ts", "model_usage_events", ["harness", "ts"])
-    # UNIQUE constraint on message_uuid — Idempotenz-Garant
+    # UNIQUE constraint on message_uuid — guarantees idempotency
     op.create_unique_constraint(
         "uq_model_usage_message_uuid", "model_usage_events", ["message_uuid"]
     )
@@ -80,7 +80,7 @@ def upgrade() -> None:
     op.create_index("ix_model_prices_model_pattern", "model_prices", ["model_pattern"])
     op.create_index("ix_model_prices_priority", "model_prices", ["priority"])
 
-    # Default-Seeds — an echter Flotte ausgerichtet (Preise lt. Spec §4.2)
+    # Default seeds — aligned with the real fleet (prices per spec §4.2)
     seeds = [
         # (pattern, input, output, cache_r, cache_w, priority, note)
         ("claude-opus-4-*",   15.0,   75.0,  1.5,  18.75, 80,

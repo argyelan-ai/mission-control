@@ -6,26 +6,26 @@ from sqlmodel import Column, Field, SQLModel
 
 
 class Secret(SQLModel, table=True):
-    """Verschlüsselte Secrets für API-Keys, Tokens, etc.
+    """Encrypted secrets for API keys, tokens, etc.
 
-    Werte werden mit Fernet verschlüsselt in der DB gespeichert.
-    Im Frontend werden sie nur maskiert angezeigt.
+    Values are stored Fernet-encrypted in the DB.
+    The frontend only displays them masked.
     """
 
     __tablename__ = "secrets"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
 
-    # Eindeutiger Schlüssel (z.B. "openai_api_key", "anthropic_api_key")
+    # Unique key (e.g. "openai_api_key", "anthropic_api_key")
     key: str = Field(index=True, unique=True)
 
-    # Verschlüsselter Wert (Fernet-Ciphertext)
+    # Encrypted value (Fernet ciphertext)
     encrypted_value: str = Field(sa_column=Column(Text, nullable=False))
 
-    # Metadaten für UI
+    # Metadata for UI
     provider: str | None = None  # "openai", "anthropic", "ollama", "discord", etc.
-    label: str | None = None  # Anzeigename im UI
-    description: str | None = None  # Hilfetext
+    label: str | None = None  # Display name in UI
+    description: str | None = None  # Help text
 
     created_at: datetime = Field(
         default_factory=datetime.utcnow,

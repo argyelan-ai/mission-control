@@ -35,7 +35,7 @@ async def _post_install_callback(
     install_result,
     install_exception: Exception | None,
 ) -> None:
-    """Callback an Requester nach Install-Executor — mirror zu subtask_completed.
+    """Callback to the requester after the Install-Executor — mirrors subtask_completed.
 
     Creates a TaskComment (install_completed / install_failed) on the
     requester's task if task_id was captured on request. Always emits an
@@ -54,7 +54,7 @@ async def _post_install_callback(
     item_name = payload.get("name", "?")
     target_name = payload.get("target_agent_name", "?")
 
-    # Ergebnis klassifizieren
+    # Classify the outcome
     if install_exception is not None:
         outcome = "failed"
         error_text = f"Executor-Crash: {install_exception}"
@@ -71,7 +71,7 @@ async def _post_install_callback(
         outcome = "failed"
         error_text = install_result.error or "unknown"
 
-    # activity_event fuer UI + Observability — immer, auch ohne task_id
+    # activity_event for UI + observability — always, even without task_id
     await emit_event(
         session,
         event_type=f"install.{outcome}",
@@ -95,7 +95,7 @@ async def _post_install_callback(
         },
     )
 
-    # Ohne task_id kein Auto-Comment (Requester hatte keine Task-Koppelung)
+    # No auto-comment without task_id (requester had no task coupling)
     if not requester_task_id_str or not requester_id_str:
         return
 
@@ -211,7 +211,7 @@ async def resolve_approval(
     await session.commit()
     await session.refresh(approval)
 
-    # ── Blocker Decision: Operator resolved → Task entblocken/failen ──
+    # ── Blocker Decision: Operator resolved → unblock/fail the task ──
     if approval.action_type == "blocker_decision" and approval.task_id:
         from app.models.task import Task as TaskModel
         from app.models.agent import Agent
@@ -219,18 +219,18 @@ async def resolve_approval(
         task = await session.get(TaskModel, approval.task_id)
         if task and task.status == "blocked":
             if payload.status == "approved":
-                # Der Operator hat entschieden → Task entblocken via Re-Dispatch.
-                # blocked ist session-terminal: die alte Task-Session wurde
-                # bei blocked geloescht. Statt in eine tote Session zu schreiben,
-                # setzen wir den Task auf inbox und lassen den normalen
-                # Dispatch-Mechanismus eine frische Session erstellen.
+                # The operator has decided → unblock the task via re-dispatch.
+                # blocked is session-terminal: the old task session was
+                # deleted when it went blocked. Instead of writing into a dead
+                # session, we set the task to inbox and let the normal
+                # dispatch mechanism create a fresh session.
                 note = payload.resolver_note or "Blocker wurde vom Operator geloest."
 
-                # Resolution-Comment MIT Antworttext — analog zu clarification_question.
-                # build_recovery_context() liest comment_type="resolution" und baut
-                # den Text in die Re-Dispatch-Message ein (via build_agent_task_prompt).
-                # Ohne diesen Comment sieht HOST_POLL-Agents (z.B. Hermes) nur den
-                # Original-Prompt — die Antwort des Operators geht verloren (Live-Bug 2026-05-01).
+                # Resolution comment WITH the answer text — analogous to clarification_question.
+                # build_recovery_context() reads comment_type="resolution" and builds
+                # the text into the re-dispatch message (via build_agent_task_prompt).
+                # Without this comment, HOST_POLL agents (e.g. Hermes) only see the
+                # original prompt — the operator's answer gets lost (live bug 2026-05-01).
                 from app.models.task import TaskComment
                 block_reason = approval.payload.get("reason", "") if approval.payload else ""
                 session.add(TaskComment(
@@ -259,18 +259,18 @@ async def resolve_approval(
                 await session.commit()
                 logger.info("Task %s unblocked → inbox for re-dispatch (note: %s)", task.id, note[:50])
 
-                # Sofort Re-Dispatch ausloesen (wie beim initialen Dispatch)
+                # Trigger re-dispatch immediately (same as the initial dispatch)
                 from app.services.dispatch import auto_dispatch_task
                 from app.utils import create_tracked_task
                 create_tracked_task(
                     auto_dispatch_task(str(task.id), str(task.board_id))
                 )
             elif payload.status == "rejected":
-                # Der Operator will den Task abbrechen
+                # The operator wants to cancel the task
                 task.status = "failed"
                 task.updated_at = utcnow()
-                # Auto-Unassign — failed Task im agent_poll triggert sonst
-                # eine Cancel-Schleife. Der Operator hat den Task explizit abgebrochen.
+                # Auto-unassign — otherwise a failed task in agent_poll triggers
+                # a cancel loop. The operator explicitly cancelled the task.
                 from app.services.task_lifecycle import apply_terminal_unassign
                 await apply_terminal_unassign(session, task, "failed")
                 session.add(task)
@@ -282,11 +282,11 @@ async def resolve_approval(
         task = await session.get(TaskModel, approval.task_id)
         if task and task.dispatch_phase == "planning":
             if payload.status == "approved":
-                # Policy-Freigabe erteilt → Promote unabhaengig von Agent-Liveness
+                # Policy approval granted → promote independent of agent liveness
                 from app.services.dispatch_gating import promote_task_to_ready
                 try:
                     await promote_task_to_ready(task, session)
-                    # Dispatch ausloesen (Agent-Liveness ist separater Schritt)
+                    # Trigger dispatch (agent liveness is a separate step)
                     from app.services.dispatch import auto_dispatch_task
                     from app.utils import create_tracked_task
                     create_tracked_task(auto_dispatch_task(task.id, task.board_id))
@@ -323,9 +323,9 @@ async def resolve_approval(
             session.add(original_task)
             await session.commit()
 
-    # ── Clarification Question: Antwort an Agent senden, Task entblocken ──
-    # Nur bei status=approved: der Operator hat geantwortet + Task soll weiterlaufen.
-    # Bei rejected: Task bleibt blocked (der Operator hat nicht beantwortet, nur abgelehnt).
+    # ── Clarification Question: send answer to agent, unblock task ──
+    # Only for status=approved: the operator has answered + the task should continue.
+    # For rejected: task stays blocked (the operator didn't answer, only declined).
     if (
         approval.action_type == "clarification_question"
         and approval.task_id
@@ -342,11 +342,11 @@ async def resolve_approval(
             answer_text = payload.resolver_note or "(Keine Antwort — nur bestaetigt)"
             agent = await session.get(Agent, approval.agent_id)
 
-            # Phase 29: TaskComment ist der einzige (runtime-agnostische)
-            # Callback-Pfad. Gateway-side chat_send_isolated entfaellt nach dem
-            # Gateway-Sunset. Vorher gab es noch einen optionalen Live-Delivery
-            # Versuch — den Pfad gibt es nicht mehr; TaskComment + poll.sh
-            # deliver_comments deckt alle aktiven Runtimes (host, cli-bridge,
+            # Phase 29: TaskComment is the only (runtime-agnostic) callback
+            # path. The gateway-side chat_send_isolated call is gone after the
+            # gateway sunset. There used to be an optional live-delivery
+            # attempt — that path no longer exists; TaskComment + poll.sh
+            # deliver_comments covers all active runtimes (host, cli-bridge,
             # claude-code).
             question_text = approval.payload.get("question", "") if approval.payload else ""
             session.add(TaskComment(
@@ -373,7 +373,7 @@ async def resolve_approval(
                 agent_id=approval.agent_id,
             )
 
-    # ── Boss Spawn-Approval: approved → Agent erstellen + provisionieren ──
+    # ── Boss Spawn-Approval: approved → create + provision agent ──
     if approval.action_type == "spawn_agent":
         import re as _re
         from app.models.agent import Agent as AgentModel
@@ -399,7 +399,7 @@ async def resolve_approval(
                 )
 
             try:
-                # 2 Pfade: via template_id (aus Template) oder custom (soul_md direkt)
+                # 2 paths: via template_id (from a template) or custom (soul_md directly)
                 template_id = spawn_payload.get("template_id")
                 raw_token = None
 
@@ -418,7 +418,7 @@ async def resolve_approval(
                         model=spawn_payload.get("model"),
                         session=session,
                     )
-                    # Optional overrides aus payload anwenden
+                    # Apply optional overrides from the payload
                     if spawn_payload.get("scopes") is not None:
                         new_agent.scopes = spawn_payload["scopes"]
                     if spawn_payload.get("skill_filter") is not None:
@@ -426,7 +426,7 @@ async def resolve_approval(
                     if spawn_payload.get("cli_plugins") is not None:
                         new_agent.cli_plugins = spawn_payload["cli_plugins"]
                 else:
-                    # Custom agent ohne Template
+                    # Custom agent without a template
                     from app.auth import generate_agent_token
                     from app.routers.agents import _generate_tools_md
                     from app.scopes import get_default_scopes
@@ -462,12 +462,12 @@ async def resolve_approval(
                     await session.commit()
                     await session.refresh(new_agent)
 
-                    # Vault-Write mc_token_{slug} fuer /internal/bootstrap
-                    # (Template-Pfad laeuft via _do_instantiate, das selbst schreibt).
+                    # Vault write mc_token_{slug} for /internal/bootstrap
+                    # (the template path runs via _do_instantiate, which writes itself).
                     from app.services.secrets_helper import upsert_agent_token_secret
                     await upsert_agent_token_secret(session, new_agent.name, raw_token)
 
-                # Ephemeral-Flag: als Tag im skills-Array (kein Schema-Change)
+                # Ephemeral flag: as a tag in the skills array (no schema change)
                 if spawn_payload.get("ephemeral", True):
                     current_skills = list(new_agent.skills or [])
                     if "ephemeral" not in current_skills:
@@ -475,7 +475,7 @@ async def resolve_approval(
                         new_agent.skills = current_skills
                         session.add(new_agent)
 
-                # Spawner-Tag fuer Audit
+                # Spawner tag for audit
                 spawner_tag = f"spawned-by:{approval.agent_id}"
                 _skills = list(new_agent.skills or [])
                 if spawner_tag not in _skills:
@@ -483,13 +483,13 @@ async def resolve_approval(
                     new_agent.skills = _skills
                     session.add(new_agent)
 
-                # Explizit provision_status setzen BEVOR wir den Background-Task
-                # feuern — verhindert Race-Conditions mit parallelen Spawns.
+                # Explicitly set provision_status BEFORE firing the background
+                # task — prevents race conditions with parallel spawns.
                 new_agent.provision_status = "provisioning"
                 session.add(new_agent)
                 await session.commit()
 
-                # Provisioning im Hintergrund
+                # Provisioning in the background
                 from app.services.provisioning import provision_agent_background as _prov
                 import asyncio as _aio
                 _aio.create_task(_prov(new_agent.id))
@@ -514,7 +514,7 @@ async def resolve_approval(
                 )
             except Exception as e:
                 logger.exception("Spawn failed for approval %s: %s", approval.id, e)
-                # Rollback: dangling Agent-Row loeschen wenn sie schon committed wurde
+                # Rollback: delete the dangling Agent row if it was already committed
                 if new_agent is not None and getattr(new_agent, "id", None):
                     try:
                         _dangling_id = new_agent.id
@@ -530,7 +530,7 @@ async def resolve_approval(
                             "Spawn-Rollback ebenfalls fehlgeschlagen: %s",
                             _rollback_err,
                         )
-                # Approval-Note mit Fehler anreichern damit der Operator weiss was schief lief
+                # Enrich the approval note with the error so the operator knows what went wrong
                 try:
                     approval.resolver_note = (
                         (approval.resolver_note or "") + f"\n[SPAWN FAILED] {e}"
@@ -549,7 +549,7 @@ async def resolve_approval(
                     detail={"error": str(e), "approval_id": str(approval.id)},
                 )
         else:
-            # rejected — nur Event, kein Agent
+            # rejected — event only, no agent
             await emit_event(
                 session,
                 event_type="agent.spawn_rejected",
@@ -588,8 +588,8 @@ async def resolve_approval(
             session.add(approval)
             await session.commit()
 
-        # Callback an Requester: Comment auf seine Task (mirror zu subtask_completed)
-        # Wenn kein requester_task_id hinterlegt → nur emit_event, kein Comment.
+        # Callback to the requester: comment on their task (mirrors subtask_completed)
+        # If no requester_task_id is set → emit_event only, no comment.
         await _post_install_callback(
             session,
             approval=approval,
@@ -597,7 +597,7 @@ async def resolve_approval(
             install_exception=install_exception,
         )
 
-    # ── Telegram Message updaten (Buttons entfernen) ──
+    # ── Update Telegram message (remove buttons) ──
     try:
         await telegram_bot.update_resolved_telegram(
             approval_id, payload.status, payload.resolver_note,
@@ -749,7 +749,7 @@ async def quick_resolve_confirm(
         task = await session.get(TaskModel, approval.task_id)
         if task and task.status == "blocked":
             if status == "approved":
-                # Generischer Audit-Kommentar OHNE Originaltext (Leak-Prevention).
+                # Generic audit comment WITHOUT the original text (leak prevention).
                 from app.models.task import TaskComment
                 session.add(TaskComment(
                     task_id=task.id,
@@ -758,7 +758,7 @@ async def quick_resolve_confirm(
                     comment_type="resolution",
                 ))
 
-                # Re-Dispatch statt Session-Wakeup (blocked ist session-terminal)
+                # Re-dispatch instead of session wakeup (blocked is session-terminal)
                 task.status = "inbox"
                 task.dispatched_at = None
                 task.ack_at = None
@@ -782,7 +782,7 @@ async def quick_resolve_confirm(
             elif status == "rejected":
                 task.status = "failed"
                 task.updated_at = utcnow()
-                # Auto-Unassign — siehe oben (Cancel-Schleifen-Schutz).
+                # Auto-unassign — see above (cancel-loop protection).
                 from app.services.task_lifecycle import apply_terminal_unassign
                 await apply_terminal_unassign(session, task, "failed")
                 session.add(task)

@@ -24,9 +24,9 @@ router = APIRouter(prefix="/api/v1", tags=["agents"])
 
 CONFIG_FILE_TYPES = {"tools_md", "rules_md", "identity_md", "soul_md", "memory_md"}
 
-# Provisioning-Konstanten und Funktionen — delegiert an services/provisioning.py
-# Phase 29: Gateway-Pfad ist entfernt; cli-bridge + host bleiben. Plan 29-07
-# refaktoriert services/provisioning.py weiter (Symbol-Cleanup).
+# Provisioning constants and functions — delegated to services/provisioning.py
+# Phase 29: the gateway path is removed; cli-bridge + host remain. Plan 29-07
+# further refactors services/provisioning.py (symbol cleanup).
 from app.services.agent_bootstrap import bootstrap_hermes_agent
 from app.services.provisioning import (
     extract_token_from_tools_md as _extract_token_from_tools_md,
@@ -54,12 +54,12 @@ class AgentUpdate(BaseModel):
     skills: list[Any] | None = None
     context_max: int | None = None
     operational_mode: str | None = None  # active | paused
-    # Per-Agent API-Key selection (optional FK auf secrets.id).
-    # None = Fallback auf docker-compose env. "null" als explicit unset via JSON.
+    # Per-Agent API-Key selection (optional FK on secrets.id).
+    # None = fallback to docker-compose env. "null" as explicit unset via JSON.
     secret_id: uuid.UUID | None = None
-    # Ob dieser Agent Git-Commits bei Task-Abschluss produzieren muss.
-    # True (default) fuer Developer/Deployer/Reviewer. False fuer Designer/
-    # Research/Writer/Orchestrator die Files als Deliverables liefern statt Code.
+    # Whether this agent must produce git commits on task completion.
+    # True (default) for Developer/Deployer/Reviewer. False for Designer/
+    # Research/Writer/Orchestrator, which deliver files as deliverables instead of code.
     requires_git_workflow: bool | None = None
     # Per-Agent runtime (cli-bridge only). Setting this makes sync-config /
     # bootstrap render OPENAI_BASE_URL + OPENAI_MODEL from the runtime row.
@@ -103,7 +103,7 @@ async def create_agent(
     from app.auth import generate_agent_token
     raw_token, token_hash = generate_agent_token()
 
-    # Auto-generiertes TOOLS.md mit korrektem Token (wird nie wieder im Klartext verfuegbar sein)
+    # Auto-generated TOOLS.md with the correct token (will never be available in plaintext again)
     board_id_str = str(payload.board_id) if payload.board_id else None
     tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
 
@@ -122,12 +122,12 @@ async def create_agent(
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
-    # Vault-Write mc_token_{slug} — /internal/bootstrap liefert den Token an
-    # den Container (Fresh-Install-Fix 2026-07-02: vorher gab es KEINEN
-    # Write-Pfad, poll.sh crash-loopte mit 'MC_TOKEN is not set').
+    # Vault write mc_token_{slug} — /internal/bootstrap delivers the token to
+    # the container (Fresh-Install-Fix 2026-07-02: before this there was NO
+    # write path, poll.sh crash-looped with 'MC_TOKEN is not set').
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
-    # CLI-Bridge agents werden manuell über /provision provisioniert, kein OpenClaw-Provisioning
+    # CLI-Bridge agents are provisioned manually via /provision, no OpenClaw provisioning
     if payload.agent_runtime not in ("cli-bridge", "free-code-bridge", "manual"):
         background_tasks.add_task(_provision_agent_background, agent.id)
     result = agent.model_dump()
@@ -149,7 +149,7 @@ async def list_agents(
         query = query.where(
             (Agent.board_id == board_id) | (Agent.board_id == None)  # noqa: E711
         )
-    # ohne board_id: alle
+    # without board_id: all
     query = query.order_by(Agent.name)
     result = await session.exec(query)
     return result.all()
@@ -202,7 +202,7 @@ async def agents_runtime_status(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Kompakter Runtime-Status aller Agents fuer Board-Observability."""
+    """Compact runtime status of all agents for board observability."""
     result = await session.exec(select(Agent).where(Agent.board_id.isnot(None)).order_by(Agent.name))  # type: ignore[arg-type]
     agents = result.all()
     return [
@@ -222,7 +222,7 @@ async def agents_runtime_status(
     ]
 
 
-# ── Specialized Agents Setup (MUSS vor {agent_id} Routen stehen) ─────────────
+# ── Specialized Agents Setup (MUST come before {agent_id} routes) ─────────────
 
 SPECIALIZED_AGENTS_SPECS = [
     {
@@ -367,7 +367,7 @@ Du bist der Reviewer von Mission Control. Du prüfst Content-Drafts kritisch und
 
 class SpecializedAgentSetupRequest(BaseModel):
     board_id: uuid.UUID
-    provision: bool = False  # Provision auf Gateway (braucht aktive RPC-Verbindung)
+    provision: bool = False  # provision on gateway (requires active RPC connection)
 
 
 @router.post("/agents/setup-specialized", status_code=status.HTTP_201_CREATED)
@@ -377,9 +377,9 @@ async def setup_specialized_agents(
     current_user=Depends(require_user),
 ):
     """
-    Erstellt 4 spezialisierte Agents für Content-Pipeline: Planner, Researcher, Writer, Reviewer.
-    Nutzt Templates aus der DB (mit Modell-Konfiguration). Fallback auf SPECIALIZED_AGENTS_SPECS.
-    Tokens werden einmalig zurückgegeben und danach nicht mehr abrufbar.
+    Creates 4 specialized agents for the content pipeline: Planner, Researcher, Writer, Reviewer.
+    Uses templates from the DB (with model config). Falls back to SPECIALIZED_AGENTS_SPECS.
+    Tokens are returned once and are not retrievable afterwards.
     """
     from app.auth import generate_agent_token
     from app.models.agent_template import AgentTemplate
@@ -388,7 +388,7 @@ async def setup_specialized_agents(
     created = []
     TEMPLATE_NAMES = ["Planner", "Researcher", "Writer", "Reviewer"]
 
-    # Templates aus DB laden
+    # Load templates from the DB
     result = await session.exec(
         select(AgentTemplate).where(AgentTemplate.name.in_(TEMPLATE_NAMES))
     )
@@ -397,10 +397,10 @@ async def setup_specialized_agents(
     for spec in SPECIALIZED_AGENTS_SPECS:
         raw_token, token_hash = generate_agent_token()
 
-        # Template aus DB bevorzugen (hat Modell-Config), sonst Fallback auf SPEC
+        # Prefer template from the DB (has model config), otherwise fall back to SPEC
         tmpl = templates.get(spec["name"])
 
-        # Scopes: Template > Default-Lookup > leer
+        # Scopes: template > default lookup > empty
         from app.scopes import get_default_scopes
         agent_scopes = list(tmpl.scopes or []) if tmpl and tmpl.scopes else get_default_scopes(spec["name"])
 
@@ -411,7 +411,7 @@ async def setup_specialized_agents(
             name=spec["name"],
             emoji=spec["emoji"],
             role=spec["role"],
-            model=tmpl.default_model if tmpl else None,  # Fix: Modell immer setzen
+            model=tmpl.default_model if tmpl else None,  # Fix: always set the model
             is_board_lead=False,
             soul_md=tmpl.soul_md if tmpl else spec["soul_md"],
             rules_md=spec.get("rules_md"),
@@ -426,7 +426,7 @@ async def setup_specialized_agents(
         await session.commit()
         await session.refresh(agent)
 
-        # Vault-Write mc_token_{slug} fuer /internal/bootstrap (siehe create_agent).
+        # Vault write mc_token_{slug} for /internal/bootstrap (see create_agent).
         from app.services.secrets_helper import upsert_agent_token_secret
         await upsert_agent_token_secret(session, agent.name, raw_token)
 
@@ -441,7 +441,7 @@ async def setup_specialized_agents(
             "name": agent.name,
             "emoji": agent.emoji,
             "model": agent.model,
-            "token": raw_token,  # einmalig zurückgeben
+            "token": raw_token,  # return once
         })
 
     await emit_event(
@@ -459,7 +459,7 @@ async def setup_specialized_agents(
     }
 
 
-# ── Agent Coordination Setup (MUSS vor {agent_id} Routen stehen) ─────────────
+# ── Agent Coordination Setup (MUST come before {agent_id} routes) ─────────────
 
 
 class SetupCoordinationPayload(BaseModel):
@@ -474,28 +474,28 @@ async def setup_agent_coordination(
     current_user = Depends(require_user),
 ):
     """
-    Agent Coordination einrichten: Henry (Lead), Cody (Dev), Rex (Review).
-    Setzt Identitaeten, Rollen, Config-Files und Board-Zuweisungen.
+    Set up agent coordination: Henry (Lead), Cody (Dev), Rex (Review).
+    Sets identities, roles, config files, and board assignments.
     """
     from app.models.board import Board
 
     board_slug = (payload and payload.board_slug) or "mc-dev"
     sync_to_gateway = (payload and payload.sync_to_gateway) if payload else True
 
-    # Board finden
+    # Find the board
     result = await session.exec(select(Board).where(Board.slug == board_slug))
     board = result.first()
     if not board:
         raise HTTPException(status_code=404, detail=f"Board '{board_slug}' not found")
 
-    # Alle Agents laden
+    # Load all agents
     result = await session.exec(select(Agent))
     all_agents = result.all()
 
     setup_results = []
 
     for config_key, config in AGENT_CONFIGS.items():
-        # Agent finden per Name-Match (case-insensitive)
+        # Find the agent by name match (case-insensitive)
         agent = None
         for a in all_agents:
             if a.name.lower() in config["match_names"]:
@@ -510,20 +510,20 @@ async def setup_agent_coordination(
             })
             continue
 
-        # DB-Felder updaten
+        # Update DB fields
         agent.name = config["name"]
         agent.emoji = config["emoji"]
         agent.role = config["role"]
         agent.is_board_lead = config["is_board_lead"]
         agent.board_id = board.id
 
-        # Skills + Scopes + Prozess-Regeln setzen
+        # Set skills + scopes + process rules
         agent.skills = config.get("skills", [])
         agent.scopes = config.get("scopes", [])
         if "rules_md" in config:
             agent.rules_md = config["rules_md"]
 
-        # Config-Files setzen — soul_md via Templates
+        # Set config files — soul_md via templates
         # heartbeat_md removed in migration 0125 — was never read by agents.
         agent.identity_md = config["identity_md"]
 
@@ -541,7 +541,7 @@ async def setup_agent_coordination(
             logger.warning("Template-Rendering fehlgeschlagen fuer %s: %s — nutze Fallback", agent.name, e)
             agent.soul_md = config["soul_md"]
 
-        # tools_md fuer alle Agents mit bestehendem Token neu generieren
+        # Regenerate tools_md for all agents with an existing token
         if agent.tools_md:
             existing_token = _extract_token_from_tools_md(agent.tools_md)
             if existing_token:
@@ -555,9 +555,9 @@ async def setup_agent_coordination(
         agent.updated_at = utcnow()
         session.add(agent)
 
-        # Gateway-Sync entfernt (Phase 29). Disk-Persistence ist nun die
-        # alleinige Wahrheit; cli-bridge picked sie via `sync_docker_agent_files`
-        # beim naechsten Restart auf.
+        # Gateway sync removed (Phase 29). Disk persistence is now the
+        # sole source of truth; cli-bridge picks it up via
+        # `sync_docker_agent_files` on the next restart.
 
         setup_results.append({
             "agent": config["name"],
@@ -594,7 +594,7 @@ async def assign_agent_board(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Board-Zuweisung eines Agents ändern (oder entfernen)."""
+    """Change (or remove) an agent's board assignment."""
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -631,7 +631,7 @@ async def update_agent(
         raise HTTPException(status_code=404, detail="Agent not found")
     changes = payload.model_dump(exclude_none=True)
 
-    # operational_mode Validierung + Audit
+    # operational_mode validation + audit
     if "operational_mode" in changes:
         new_mode = changes["operational_mode"]
         if new_mode not in ("active", "paused"):
@@ -668,9 +668,9 @@ async def update_agent(
     await session.commit()
     await session.refresh(agent)
 
-    # Modell-Änderung wird nicht mehr via Gateway gepushed (Phase 29).
-    # DB-State ist die alleinige Wahrheit; cli-bridge respektiert das beim
-    # naechsten Restart durch `sync_docker_agent_files`.
+    # Model changes are no longer pushed via the gateway (Phase 29).
+    # DB state is the sole source of truth; cli-bridge honors it on the
+    # next restart through `sync_docker_agent_files`.
 
     switch_summary: dict[str, Any] | None = None
     restart_result: dict[str, str] | None = None
@@ -832,15 +832,14 @@ async def delete_agent(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Loescht einen Agent inklusive aller FK-Referenzen.
+    """Deletes an agent including all FK references.
 
-    Aktuell haben 27 Tabellen FKs auf agents.id (siehe mc-task-delete-guard
-    skill — gleiches Pattern, andere Root-Tabelle). Die meisten sind
-    nullable und werden auf NULL gesetzt. 7 sind NOT NULL und muessen
-    vorher geloescht werden, sonst bricht session.delete(agent) mit
-    IntegrityError.
+    Currently 27 tables have FKs on agents.id (see the mc-task-delete-guard
+    skill — same pattern, different root table). Most are nullable and get
+    set to NULL. 7 are NOT NULL and must be deleted first, otherwise
+    session.delete(agent) fails with an IntegrityError.
 
-    NOT NULL FK Tabellen (müssen DELETEd werden):
+    NOT NULL FK tables (must be DELETEd):
       agent_messages.from_agent_id, .to_agent_id
       agent_metrics.agent_id
       approvals.agent_id
@@ -848,7 +847,7 @@ async def delete_agent(
       task_checkpoints.agent_id
       task_deliverables.agent_id
 
-    Nullable FK Tabellen (SET NULL):
+    Nullable FK tables (SET NULL):
       activity_events, agent_meeting_messages, board_memory,
       chat_messages.{sender_agent_id, agent_id},
       content_pipelines.{writing, review, research}_agent_id,
@@ -863,11 +862,11 @@ async def delete_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # Gateway-Cleanup entfernt (Phase 29). DB-Delete + FK-Cleanup ist
-    # nun die alleinige Persistenz; cli-bridge Container werden per
-    # docker_agent_sync zentral verwaltet.
+    # Gateway cleanup removed (Phase 29). DB delete + FK cleanup is now
+    # the sole persistence; cli-bridge containers are managed centrally
+    # via docker_agent_sync.
 
-    # FK Cleanup — NOT NULL rows loeschen
+    # FK cleanup — delete NOT NULL rows
     not_null_deletes = [
         ("agent_messages", "from_agent_id = :aid OR to_agent_id = :aid"),
         ("agent_metrics", "agent_id = :aid"),
@@ -882,8 +881,8 @@ async def delete_agent(
             {"aid": str(agent_id)},
         )
 
-    # FK Cleanup — nullable Spalten auf NULL setzen (nur wenn die Spalte
-    # existiert — jeder Satz ist idempotent)
+    # FK cleanup — set nullable columns to NULL (only if the column
+    # exists — each statement is idempotent)
     nullable_updates = [
         ("activity_events", "agent_id"),
         ("agent_meeting_messages", "agent_id"),
@@ -929,7 +928,7 @@ async def get_agent_config(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # USER.md dynamisch generieren
+    # Dynamically generate USER.md
     user_md_content = None
     try:
         from app.services.template_renderer import render_agent_file, build_agent_context
@@ -996,9 +995,9 @@ async def update_agent_config_file(
     session.add(agent)
     await session.commit()
 
-    # Auto-sync to Gateway entfernt (Phase 29). DB-Schreib + Template-Render
-    # ist die alleinige Wahrheit; cli-bridge holt sich die Files via
-    # `sync_docker_agent_files` beim naechsten Restart.
+    # Auto-sync to gateway removed (Phase 29). The DB write + template render
+    # is the sole source of truth; cli-bridge fetches the files via
+    # `sync_docker_agent_files` on the next restart.
 
     result = {"saved": True, "gateway_sync": False, "warnings": warnings}
     return result
@@ -1013,10 +1012,10 @@ def _generate_tools_md(
     scopes: list[str] | None = None,
     runtime: str = "docker",
 ) -> str:
-    """Proxy — delegiert an services/tools_md_builder.py.
+    """Proxy — delegates to services/tools_md_builder.py.
 
-    runtime: "host" (Boss) oder "docker" (cli-bridge, default). Bestimmt
-    nur die Phrasierung der Vault-Sektion (host-Pfad vs Container-Mount).
+    runtime: "host" (Boss) or "docker" (cli-bridge, default). Only
+    determines the phrasing of the vault section (host path vs container mount).
     """
     from app.services.tools_md_builder import generate_tools_md
     return generate_tools_md(
@@ -1069,7 +1068,7 @@ async def reset_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
     if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
-        # CLI-Bridge Agents: Worker neu starten statt Session reset
+        # CLI-Bridge agents: restart the worker instead of resetting the session
         from app.routers.cli_terminal import _bridge_post
         agent_slug = agent.name.lower().replace(" ", "-")
         result = _bridge_post(f"/worker/{agent_slug}/restart", {})
@@ -1201,9 +1200,9 @@ async def reset_agent_token(
     current_user=Depends(require_user),
 ):
     """
-    Generiert einen neuen Agent-Token und aktualisiert TOOLS.md.
-    Sinnvoll fuer Agents die via setup-coordination eingerichtet wurden (kein Token).
-    Ruckgabe: { token } — einmalig sichtbar, danach nicht mehr abrufbar!
+    Generates a new agent token and updates TOOLS.md.
+    Useful for agents that were set up via setup-coordination (no token).
+    Returns: { token } — visible once, not retrievable afterwards!
     """
     from app.auth import generate_agent_token
 
@@ -1228,13 +1227,13 @@ async def reset_agent_token(
     session.add(agent)
     await session.commit()
 
-    # Vault-Rotation: neuer Token muss mc_token_{slug} ueberschreiben, sonst
-    # liefert /internal/bootstrap beim naechsten Container-Start den alten.
+    # Vault rotation: the new token must overwrite mc_token_{slug}, otherwise
+    # /internal/bootstrap serves the old one on the next container start.
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
 
-    # Gateway-Sync entfernt (Phase 29). Neues TOOLS.md liegt auf Disk; der
-    # cli-bridge `sync_docker_agent_files` Pfad hebt es beim naechsten Restart.
+    # Gateway sync removed (Phase 29). New TOOLS.md sits on disk; the
+    # cli-bridge `sync_docker_agent_files` path picks it up on the next restart.
 
     await emit_event(
         session,
@@ -1248,7 +1247,7 @@ async def reset_agent_token(
     return {
         "agent_id": str(agent.id),
         "name": agent.name,
-        "token": raw_token,  # einmalig — danach nicht mehr abrufbar
+        "token": raw_token,  # one-time — not retrievable afterwards
     }
 
 
@@ -1262,7 +1261,7 @@ class ProvisionPayload(BaseModel):
     longer gated by Gateway-row presence.
     """
     discord_channel: bool = False  # create and bind Discord channel
-    # CLI-Bridge Felder (werden nur fuer cli-bridge Agents verwendet)
+    # CLI-Bridge fields (only used for cli-bridge agents)
     model: str | None = None
     system_prompt: str | None = None
     role: str | None = None
@@ -1301,8 +1300,8 @@ async def provision_agent_on_gateway(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # CLI-Bridge Agents haben einen eigenen Provision-Endpoint in cli_terminal.py —
-    # da agents.router vor cli_terminal.router registriert ist, fangen wir hier ab.
+    # CLI-Bridge agents have their own provision endpoint in cli_terminal.py —
+    # since agents.router is registered before cli_terminal.router, we intercept here.
     if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
         from app.routers.cli_terminal import provision_cli_agent, CliProvisionPayload
         cli_payload = None
@@ -1388,10 +1387,10 @@ async def provision_agent_on_gateway(
                 detail=f"Host-agent provisioning failed: {e}",
             )
 
-    # Gateway-Provisioning entfernt (Phase 29 — Gateway sunset).
-    # Nur cli-bridge und host Runtimes werden vom Provision-Endpoint
-    # unterstuetzt; alle anderen `agent_runtime` Werte sind obsolet und
-    # liefern 410.
+    # Gateway provisioning removed (Phase 29 — gateway sunset).
+    # Only cli-bridge and host runtimes are supported by the provision
+    # endpoint; all other `agent_runtime` values are obsolete and
+    # return 410.
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
         detail=(
@@ -1413,27 +1412,27 @@ async def sync_agent_config_to_gateway(
     """Push all (or selected) config files from MC into the claude-config
     Bind-Mount (cli-bridge / Docker-V2) or the host runtime workspace.
 
-    Phase 29: Der openclaw Gateway-Pfad ist entfernt — agent_runtime muss
-    entweder "cli-bridge" oder "host" sein.
+    Phase 29: the openclaw gateway path is removed — agent_runtime must
+    be either "cli-bridge" or "host".
 
     Query Parameters:
-        restart: Wenn true:
-                 - cli-bridge (Docker): Container wird neu gestartet
-                 - host: nur Files schreiben, kein Restart (caller managed)
+        restart: When true:
+                 - cli-bridge (Docker): the container is restarted
+                 - host: only writes files, no restart (caller managed)
 
-    Runtime-Weiche:
-    - cli-bridge (Docker) -> sync_docker_agent_files() ins Host-Filesystem
+    Runtime switch:
+    - cli-bridge (Docker) -> sync_docker_agent_files() into the host filesystem
                           + optional restart_docker_agent_container()
-    - host -> sync_host_agent_files() (kein Restart)
+    - host -> sync_host_agent_files() (no restart)
     """
 
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
-    # cli-bridge (Docker-V2 / Host-Legacy) Pfad: rendert Templates ins
-    # claude-config Bind-Mount; der Docker-Container liest SOUL.md beim
-    # openclaude-Start via start-claude.sh Wrapper.
+    # cli-bridge (Docker-V2 / Host-Legacy) path: renders templates into the
+    # claude-config bind mount; the Docker container reads SOUL.md on
+    # openclaude startup via the start-claude.sh wrapper.
     if getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
         from app.services.docker_agent_sync import (
             sync_docker_agent_files,
@@ -1474,9 +1473,9 @@ async def sync_agent_config_to_gateway(
         )
         return response
 
-    # openclaw Gateway Pfad entfernt (Phase 29 — Gateway sunset).
-    # Wer auf diesen Endpoint trifft, hat eine obsolete `agent_runtime`-Setting
-    # (alles ausser "cli-bridge" / "host"). Antwort: 410 Gone mit Hinweis.
+    # openclaw gateway path removed (Phase 29 — gateway sunset).
+    # Anyone hitting this endpoint has an obsolete `agent_runtime` setting
+    # (anything other than "cli-bridge" / "host"). Response: 410 Gone with a hint.
     raise HTTPException(
         status_code=status.HTTP_410_GONE,
         detail=(
@@ -1521,7 +1520,7 @@ async def _redirect_delete_discord_channel(agent_id: uuid.UUID):
     )
 
 
-# Agent-Konfigurationen fuer das Coordination-Setup (am Ende der Datei, damit der Router-Code oben uebersichtlich bleibt)
+# Agent configurations for the coordination setup (at the end of the file, so the router code above stays clear)
 from app.scopes import ALL_SCOPES, DEFAULT_SCOPES, AgentRole
 
 AGENT_CONFIGS = {
@@ -1717,7 +1716,7 @@ Ich bin Rex, zustaendig fuer Code Reviews und Security im Mission Control Team. 
 
 
 
-# Endpoint-Funktion ist oben definiert (vor {agent_id} Routen)
+# Endpoint function is defined above (before {agent_id} routes)
 
 
 # ── Agent Task-Sessions ───────────────────────────────────────────────────────
@@ -1730,7 +1729,7 @@ async def get_agent_task_sessions(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle dispatched Tasks dieses Agents mit Session-Keys."""
+    """All dispatched tasks of this agent with session keys."""
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(404, "Agent not found")
@@ -1761,41 +1760,41 @@ async def get_agent_task_sessions(
     return items
 
 
-# Comment-Types, die als actionable System-Events an den zustaendigen Agent
-# ausgeliefert werden (zusaetzlich zu User-Kommentaren). Single Source of
-# Truth: app/comment_types.py (REL-01). Aliasing erhaelt den historischen
-# Import-Namen `_DELIVER_SYSTEM_COMMENT_TYPES` fuer bestehende Tests.
+# Comment types that get delivered as actionable system events to the
+# responsible agent (in addition to user comments). Single source of
+# truth: app/comment_types.py (REL-01). The alias keeps the historical
+# import name `_DELIVER_SYSTEM_COMMENT_TYPES` for existing tests.
 #
-# Live-Bug-Historie (siehe comment_types.py Modul-Docstring):
-#   - 2026-04-23: feedback-Comment silent-drop, Tester blieb stuck
+# Live-bug history (see the comment_types.py module docstring):
+#   - 2026-04-23: feedback comment silent-drop, Tester got stuck
 #   - 2026-04-24 (PR #99/#110): install_completed/install_failed silent-drop
-# Wer einen neuen Type ergaenzen will → app/comment_types.py editieren.
+# To add a new type → edit app/comment_types.py.
 from app.comment_types import DELIVERABLE_SYSTEM_TYPES as _DELIVER_SYSTEM_COMMENT_TYPES  # noqa: E402
 
 
 def _is_deliverable_for(c, agent_id) -> bool:
-    """True wenn Comment an den Agent ausgeliefert werden soll.
+    """True if the comment should be delivered to the agent.
 
-    Liefere aus:
-      (a) User-Kommentare (author_type='user')   -> der Operator spricht direkt mit dem Agent
-      (b) Actionable Events auf dem Task, NICHT vom Agent selbst
+    Deliver:
+      (a) User comments (author_type='user')   -> the operator talks directly to the agent
+      (b) Actionable events on the task, NOT from the agent itself
           (subtask_completed, resolution, blocker, system)
 
-    Skippe:
-      - Kommentare des Agents selbst (keine Echo-Loop)
-      - Routine-Comments (checkpoint, progress, message von anderen agents, audit, etc.)
+    Skip:
+      - The agent's own comments (no echo loop)
+      - Routine comments (checkpoint, progress, message from other agents, audit, etc.)
     """
     if c.author_type == "user":
         return True
-    # agent-eigene Kommentare werden NIE ausgeliefert (author_agent_id == polling agent)
+    # The agent's own comments are NEVER delivered (author_agent_id == polling agent)
     if c.author_agent_id == agent_id:
         return False
-    # Fuer agent/system authored comments: nur wenn comment_type actionable ist
+    # For agent/system authored comments: only if comment_type is actionable
     return c.comment_type in _DELIVER_SYSTEM_COMMENT_TYPES
 
 
 def _comment_source(c) -> str:
-    """Kategorie fuer die Client-seitige Darstellung."""
+    """Category for client-side display."""
     if c.author_type == "user":
         return "user"
     if c.comment_type in _DELIVER_SYSTEM_COMMENT_TYPES:
@@ -1804,25 +1803,25 @@ def _comment_source(c) -> str:
 
 
 async def _collect_and_ack_new_comments(agent: Agent, session: AsyncSession) -> list[dict]:
-    """Sammelt neue Kommentare auf aktiven Tasks des Agents.
+    """Collects new comments on the agent's active tasks.
 
-    Liefert User-Kommentare (Nachrichten des Operators) UND actionable System-Events
-    (subtask_completed, resolution, blocker) aus — letztere auch wenn sie von
-    einem anderen Agent (z.B. dem Worker im Subtask) geschrieben wurden. So
-    erfaehrt der Parent-Task-Agent z.B. wenn sein delegierter Subtask fertig ist.
+    Delivers user comments (messages from the operator) AND actionable system
+    events (subtask_completed, resolution, blocker) — the latter even if they
+    were written by another agent (e.g. the worker on a subtask). This is how
+    the parent-task agent learns, e.g., that its delegated subtask is done.
 
-    Fortschreiben des Cursors passiert hier — ein Kommentar wird beim naechsten
-    Poll nicht erneut ausgeliefert. Der Cursor ist per (agent, task). Fehlt er,
-    gelten alle relevanten Kommentare als neu (erster Poll nach Task-Claim).
+    Cursor advancement happens here — a comment isn't delivered again on the
+    next poll. The cursor is per (agent, task). If missing, all relevant
+    comments count as new (first poll after task claim).
     """
     from app.models.task import TaskComment
     from app.models.agent_task_comment_cursor import AgentTaskCommentCursor
 
-    # 2026-05-18: `done` + `user_test` aufgenommen. Der Operator hatte auf einem
-    # done-Task einen Kommentar geschrieben ("MC Home Page fixen", 19:51 UTC)
-    # und erwartete dass Boss reagiert — Comment landete im Void, weil der
-    # frühere Filter terminale Lanes ausschloss. `failed`/`aborted` bleiben
-    # bewusst draussen: dort soll explizit re-opened werden, nicht über Comment.
+    # 2026-05-18: added `done` + `user_test`. The operator had written a
+    # comment on a done task ("MC Home Page fixen", 19:51 UTC) and expected
+    # Boss to react — the comment landed in the void because the previous
+    # filter excluded terminal lanes. `failed`/`aborted` are deliberately
+    # left out: those should be explicitly re-opened, not handled via comment.
     active_res = await session.exec(
         select(Task).where(
             Task.assigned_agent_id == agent.id,
@@ -1844,9 +1843,9 @@ async def _collect_and_ack_new_comments(agent: Agent, session: AsyncSession) -> 
         cursor = cursor_res.first()
         last_seen = cursor.last_seen_comment_id if cursor else None
 
-        # Alle Kommentare chronologisch laden; Filter passiert in Python um
-        # die DB-Query simpel zu halten und den "skip own comments" Check
-        # sauber ausdruecken zu koennen.
+        # Load all comments chronologically; filtering happens in Python to
+        # keep the DB query simple and to express the "skip own comments"
+        # check cleanly.
         all_res = await session.exec(
             select(TaskComment)
             .where(TaskComment.task_id == task.id)
@@ -1856,14 +1855,14 @@ async def _collect_and_ack_new_comments(agent: Agent, session: AsyncSession) -> 
         if not all_comments:
             continue
 
-        # Deliverable-Subset
+        # Deliverable subset
         deliverable = [c for c in all_comments if _is_deliverable_for(c, agent.id)]
         if not deliverable:
             continue
 
-        # Slice "unseen" relativ zum Cursor. Cursor kann auf einen nicht-
-        # deliverable Kommentar zeigen (Historie) — wir suchen nach ID im
-        # Full-Log und nehmen deliverables nach dieser Position.
+        # Slice "unseen" relative to the cursor. The cursor can point to a
+        # non-deliverable comment (history) — we search for the ID in the
+        # full log and take the deliverables after that position.
         if last_seen is None:
             unseen = deliverable
         else:
@@ -1887,10 +1886,10 @@ async def _collect_and_ack_new_comments(agent: Agent, session: AsyncSession) -> 
                 "created_at": c.created_at.isoformat(),
             })
 
-        # Cursor auf den letzten gesehenen ECHTEN Kommentar im Full-Log setzen
-        # (nicht nur auf den letzten deliverable), damit Cursor monoton bleibt.
-        # Atomic upsert — vermeidet UniqueConstraintViolation bei parallel polls
-        # (Bug 2026-04-22: 3× DETAIL: Key (agent_id, task_id) already exists im log).
+        # Set the cursor to the last seen REAL comment in the full log (not
+        # just the last deliverable one), so the cursor stays monotonic.
+        # Atomic upsert — avoids UniqueConstraintViolation on parallel polls
+        # (bug 2026-04-22: 3x DETAIL: Key (agent_id, task_id) already exists in the log).
         if unseen:
             last_id = all_comments[-1].id
             await _upsert_cursor(session, agent.id, task.id, last_id)
@@ -1907,10 +1906,10 @@ async def _upsert_cursor(
     task_id: uuid.UUID,
     last_seen_comment_id: uuid.UUID,
 ) -> None:
-    """Dialect-agnostic upsert fuer AgentTaskCommentCursor.
+    """Dialect-agnostic upsert for AgentTaskCommentCursor.
 
-    Nutzt PostgreSQL/SQLite `INSERT ... ON CONFLICT DO UPDATE` — atomare
-    DB-Operation, keine Race-Condition bei concurrent polls fuer denselben
+    Uses PostgreSQL/SQLite `INSERT ... ON CONFLICT DO UPDATE` — an atomic
+    DB operation, no race condition for concurrent polls on the same
     (agent_id, task_id).
     """
     from app.models.agent_task_comment_cursor import AgentTaskCommentCursor as _Cursor
@@ -1948,16 +1947,16 @@ async def agent_poll(
     - new_task: claimed a new inbox task → poll.sh pastes prompt to tmux
     - idle: nothing to do
 
-    Jede Response enthaelt zusaetzlich `new_comments` (Liste) — neue User-
-    Kommentare auf aktiven Tasks, die der Agent noch nicht gesehen hat.
-    poll.sh pasted sie als eigene Nachricht in die tmux-Session.
+    Every response additionally includes `new_comments` (a list) — new user
+    comments on active tasks that the agent hasn't seen yet. poll.sh pastes
+    them as separate messages into the tmux session.
     """
     import datetime as dt
     from app.services.dispatch import build_agent_task_prompt
 
     new_comments = await _collect_and_ack_new_comments(agent, session)
 
-    # 1. Failed tasks first — Agent muss ESC bekommen bevor irgendwas anderes passiert
+    # 1. Failed tasks first — the agent must get ESC before anything else happens
     failed_result = await session.exec(
         select(Task)
         .where(Task.assigned_agent_id == agent.id)
@@ -1969,10 +1968,10 @@ async def agent_poll(
     if failed is not None:
         return {"state": "cancelled", "task_id": str(failed.id), "new_comments": new_comments}
 
-    # 1b. Manuell gestoppte Tasks (run_control=stopped). Eigener state damit
-    # poll.sh die Session sauber terminiert (ESC + /clear + context reset)
-    # ohne das als Failure zu behandeln. Resume generiert spaeter eine frische
-    # dispatch_attempt_id + volle Prompt-Lieferung via inbox-claim Pfad.
+    # 1b. Manually stopped tasks (run_control=stopped). Own state so that
+    # poll.sh cleanly terminates the session (ESC + /clear + context reset)
+    # without treating it as a failure. Resume later generates a fresh
+    # dispatch_attempt_id + full prompt delivery via the inbox-claim path.
     stopped_result = await session.exec(
         select(Task)
         .where(Task.assigned_agent_id == agent.id)
@@ -1984,9 +1983,9 @@ async def agent_poll(
     if stopped is not None:
         return {"state": "stopped", "task_id": str(stopped.id), "new_comments": new_comments}
 
-    # 2. Phase-Approval-Tasks haben Vorrang vor "working"-Bail, weil der Parent
-    # bewusst auf in_progress bleibt bis der Board Lead den Approval-Task bearbeitet.
-    # Ohne diesen Check wäre der Approval-Task unerreichbar.
+    # 2. Phase-approval tasks take priority over the "working" bail-out, because the
+    # parent deliberately stays in_progress until the Board Lead processes the approval task.
+    # Without this check, the approval task would be unreachable.
     approval_result = await session.exec(
         select(Task)
         .where(Task.assigned_agent_id == agent.id)
@@ -1999,17 +1998,17 @@ async def agent_poll(
     if approval_task is not None:
         task = approval_task
     else:
-        # 3. Agent mit aktivem Task. Zwei Fälle:
-        #    a) ack_at gesetzt → Agent hat den Prompt schon bekommen → `working`
-        #    b) ack_at == NULL → Task dispatched aber Prompt nie an Agent geliefert
-        #       (passiert bei "direkt"-Dispatch der inbox überspringt, oder wenn
-        #       recover-task den Task auf inbox zurücksetzt und dispatch ihn
-        #       direkt wieder claimt bevor poll.sh ihn sieht). In dem Fall
-        #       unten in die Prompt-Lieferung fallen.
-        # F1 fix (Plan 26-02 / HERM-10): nach dem Split flippt der inbox-Pfad
-        # status nicht mehr — ein Task im Status "inbox" mit dispatched_at
-        # gesetzt + ack_at NULL bleibt im inbox-candidates-Block weiter unten
-        # sichtbar (das ist OK; Bridge-Cache deduptiziert auf task_id).
+        # 3. Agent with an active task. Two cases:
+        #    a) ack_at set → agent already got the prompt → `working`
+        #    b) ack_at == NULL → task dispatched but prompt never delivered to the agent
+        #       (happens with "direct" dispatch that skips inbox, or when
+        #       recover-task resets the task to inbox and dispatch claims it
+        #       again immediately before poll.sh sees it). In that case,
+        #       fall through to prompt delivery below.
+        # F1 fix (Plan 26-02 / HERM-10): after the split, the inbox path no
+        # longer flips status — a task in status "inbox" with dispatched_at
+        # set + ack_at NULL stays visible further below in the
+        # inbox-candidates block (that's OK; the bridge cache dedupes on task_id).
         # Include `review` so review-handoffs to cli-bridge agents actually
         # reach them (ADR-022 review finding FB-1 — the old predicate only
         # covered inbox/in_progress/blocked, so Rex never saw tasks Rex
@@ -2027,15 +2026,15 @@ async def agent_poll(
         if active is not None:
             if active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}
-            # Prompt wurde nie geliefert — fall through und ausliefern.
+            # Prompt was never delivered — fall through and deliver it.
             task = active
         else:
-            # 4. No active task — look for next inbox task mit erfuellten
-            # Dependencies. Der Claim-Pfad unten (`was_inbox → in_progress`)
-            # umgeht dispatch.auto_dispatch_task, wo dependencies_met()
-            # normalerweise greift — daher hier explizit pruefen. Sonst
-            # claimt ein pollender Worker blindlings Tasks deren
-            # Vorgaenger noch nicht fertig sind (Bug vom 2026-04-22).
+            # 4. No active task — look for the next inbox task with satisfied
+            # dependencies. The claim path below (`was_inbox → in_progress`)
+            # bypasses dispatch.auto_dispatch_task, where dependencies_met()
+            # normally applies — so we check explicitly here. Otherwise a
+            # polling worker would blindly claim tasks whose predecessors
+            # aren't done yet (bug from 2026-04-22).
             from app.services.dispatch import dependencies_met
             candidates_result = await session.exec(
                 select(Task)
@@ -2070,32 +2069,32 @@ async def agent_poll(
     if task is None:
         return {"state": "idle", "new_comments": new_comments}
 
-    # 3. Claim the task. Zwei Pfade:
-    #    - inbox: nur dispatched_at setzen (wenn noch None) — Status bleibt
-    #      "inbox", ack_at bleibt NULL. Der Agent muss explizit per
-    #      PATCH status:in_progress den ACK senden (= Migration 0018
-    #      Handshake-Contract).
-    #    - bereits in_progress / blocked / review (direkt-dispatch / recovery):
-    #      ack_at setzen damit der recovery-Branch oben (active.ack_at != None)
-    #      beim naechsten Poll greift und kein Re-Deliver passiert.
+    # 3. Claim the task. Two paths:
+    #    - inbox: only set dispatched_at (if still None) — status stays
+    #      "inbox", ack_at stays NULL. The agent must explicitly send the
+    #      ACK via PATCH status:in_progress (= Migration 0018
+    #      handshake contract).
+    #    - already in_progress / blocked / review (direct-dispatch / recovery):
+    #      set ack_at so the recovery branch above (active.ack_at != None)
+    #      kicks in on the next poll and no re-deliver happens.
     #
-    # F1 fix (Plan 26-02 / HERM-10): Status flippt NICHT mehr beim Poll-Claim.
-    # Vorher (agents.py:2946 alt) wurde status="in_progress" + ack_at=now in
-    # demselben atomic write gesetzt — die LLM-Session hatte den Prompt da noch
-    # nicht gesehen. Status bleibt jetzt "inbox" bis der Agent selbst den
-    # PATCH macht (tasks.py:1239-1241 setzt dort started_at + ack_at).
+    # F1 fix (Plan 26-02 / HERM-10): status no longer flips on poll-claim.
+    # Previously (agents.py:2946 old) status="in_progress" + ack_at=now were
+    # set in the same atomic write — the LLM session hadn't seen the prompt
+    # yet at that point. Status now stays "inbox" until the agent itself
+    # does the PATCH (tasks.py:1239-1241 sets started_at + ack_at there).
     #
-    # F3 fix (Plan 26-02 / HERM-10): dispatched_at und ack_at koennen nicht
-    # mehr beide auf denselben `now`-Literalwert gesetzt werden, weil sie
-    # in zwei separate Schreibpfade gewandert sind: dispatched_at = poll
-    # (hier), ack_at = agent's eigener PATCH (tasks.py / agent_scoped.py).
-    # Damit ist eine messbare Spanne `dispatched_at < ack_at` garantiert.
+    # F3 fix (Plan 26-02 / HERM-10): dispatched_at and ack_at can no longer
+    # both be set to the same `now` literal value, because they moved into
+    # two separate write paths: dispatched_at = poll (here), ack_at = the
+    # agent's own PATCH (tasks.py / agent_scoped.py). This guarantees a
+    # measurable span `dispatched_at < ack_at`.
     #
-    # Duplicate-dispatch concern: Solange der Agent noch nicht ACKt, retourniert
-    # poll bei jedem Aufruf wieder state=new_task. Die Bridge (hermes-bridge.py
-    # _last_dispatched_task_id, docker poll.sh LAST_DISPATCHED_TASK_ID) dedupt
-    # bereits per task_id-Cache, also kein Re-Paste in tmux. Plan 26-05
-    # haertet die Bridge zusaetzlich.
+    # Duplicate-dispatch concern: as long as the agent hasn't ACKed, poll
+    # returns state=new_task again on every call. The bridge (hermes-bridge.py
+    # _last_dispatched_task_id, docker poll.sh LAST_DISPATCHED_TASK_ID) already
+    # dedupes via task_id cache, so no re-paste into tmux. Plan 26-05
+    # hardens the bridge further.
     now = dt.datetime.now(tz=dt.timezone.utc)
     was_inbox = task.status == "inbox"
     if was_inbox:
@@ -2113,29 +2112,29 @@ async def agent_poll(
         # signal — preserved unchanged so the recovery-branch above
         # (active.ack_at != None) catches the next poll.
         task.ack_at = now
-    # Active-Task-Lock setzen — analog zu Comment-Auto-ACK in
-    # agent_scoped.py:3788 und PATCH-ACK in agent_scoped.py:1294.
-    # Ohne das bleibt agent.current_task_id=None und mc delegate /
-    # mc help-request / mc clarification antworten 409 "Kein aktiver Task"
-    # bei Agents die per Push-Dispatch arbeiten und VOR dem ersten Comment
-    # delegieren wollen (Live-Bug Boss 2026-04-25: 6 Min Loop bei
-    # weather-task vor erstem Comment, mehrere mc delegate 409). Gleiche
-    # Skip-Bedingung: Workers im Subagent-Modus haben parallele Sessions
-    # und brauchen den Lock nicht.
+    # Set the active-task lock — analogous to comment auto-ACK in
+    # agent_scoped.py:3788 and PATCH-ACK in agent_scoped.py:1294.
+    # Without this, agent.current_task_id stays None and mc delegate /
+    # mc help-request / mc clarification respond with 409 "Kein aktiver Task"
+    # for agents that work via push dispatch and want to delegate BEFORE
+    # the first comment (live bug Boss 2026-04-25: 6-minute loop on the
+    # weather task before the first comment, multiple mc delegate 409s). Same
+    # skip condition: workers in subagent mode have parallel sessions
+    # and don't need the lock.
     from app.config import settings as _poll_ack_settings
     if not (_poll_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
         if agent.current_task_id != task.id:
             agent.current_task_id = task.id
             session.add(agent)
-    # Ohne dispatch_attempt_id wuerde der naechste `mc ack`/`mc done` mit
-    # HTTP 409 abgewiesen (enforce_dispatch_attempt_id=True). Der Direct-
-    # Poll-Pfad ruft NICHT auto_dispatch_task() → wir generieren den
-    # attempt_id hier selbst wenn noch keiner existiert.
+    # Without dispatch_attempt_id, the next `mc ack`/`mc done` would be
+    # rejected with HTTP 409 (enforce_dispatch_attempt_id=True). The direct
+    # poll path does NOT call auto_dispatch_task() → we generate the
+    # attempt_id here ourselves if none exists yet.
     #
-    # Race-Fix (2026-05-15): conditional UPDATE … WHERE attempt_id IS NULL
-    # via set_dispatch_attempt_id(only_if_null=True). Verhindert dass /me/poll
-    # und auto_dispatch_task (BackgroundTask) sich gegenseitig überschreiben
-    # während eines git-clone Fensters. Plus permanenter Audit-Eintrag.
+    # Race fix (2026-05-15): conditional UPDATE … WHERE attempt_id IS NULL
+    # via set_dispatch_attempt_id(only_if_null=True). Prevents /me/poll
+    # and auto_dispatch_task (BackgroundTask) from overwriting each other
+    # during a git-clone window. Plus a permanent audit entry.
     session.add(task)
     await session.commit()
     await session.refresh(task)
@@ -2149,18 +2148,18 @@ async def agent_poll(
     try:
         prompt = await build_agent_task_prompt(task=task, agent=agent, session=session)
     except Exception as e:
-        # Revert on prompt generation failure. Nur das zurücksetzen was wir
-        # gerade gesetzt haben — sonst würden wir bei direkt-dispatch den
-        # ursprünglichen dispatched_at verlieren.
-        # F1 fix (Plan 26-02): wir setzen status nicht mehr im inbox-Pfad, also
-        # auch hier kein Status-Revert noetig. dispatched_at nur zuruecksetzen
-        # wenn WIR ihn in diesem Aufruf zum ersten Mal gesetzt haben.
+        # Revert on prompt generation failure. Only revert what we just
+        # set — otherwise we'd lose the original dispatched_at on
+        # direct-dispatch tasks.
+        # F1 fix (Plan 26-02): we no longer set status in the inbox path, so
+        # no status revert needed here either. Only reset dispatched_at if
+        # WE set it for the first time in this call.
         if was_inbox and task.dispatched_at == now:
             task.dispatched_at = None
         else:
-            # Recovery-Pfad (was_inbox=False): wir hatten nur ack_at gesetzt.
+            # Recovery path (was_inbox=False): we only set ack_at.
             task.ack_at = None
-        # Active-Task-Lock wieder freigeben, sonst blockiert er den naechsten poll
+        # Release the active-task lock again, otherwise it blocks the next poll
         if agent.current_task_id == task.id:
             agent.current_task_id = None
             session.add(agent)
@@ -2186,9 +2185,9 @@ async def agent_poll(
             "workspace_path": task.workspace_path,
             "prompt": prompt,
             "slug": getattr(task, "slug", None),
-            # Ohne diesen Wert in der Response kann poll.sh den Header nicht
-            # in /tmp/mc-context.env schreiben und `mc ack` schlaegt mit HTTP
-            # 409 "Fehlender X-Dispatch-Attempt-Id" fehl (ADR-023 ultrareview).
+            # Without this value in the response, poll.sh can't write the
+            # header to /tmp/mc-context.env and `mc ack` fails with HTTP
+            # 409 "Fehlender X-Dispatch-Attempt-Id" (ADR-023 ultrareview).
             "dispatch_attempt_id": task.dispatch_attempt_id,
         },
         "new_comments": new_comments,
@@ -2200,18 +2199,18 @@ async def agent_active_task_recovery(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent-initiated recovery (ADR-024): read-only, gibt den aktuellen
-    Task-Prompt + Recovery-Context zurueck und generiert eine frische
-    `dispatch_attempt_id`. **Mutiert KEINEN Status** — im Gegensatz zum
-    alten POST /recover-task der den Task auf inbox zurücksetzte (→
-    Dispatch-Loop bei Crash-Loops, silent Kontext-Verlust).
+    """Agent-initiated recovery (ADR-024): read-only, returns the current
+    task prompt + recovery context and generates a fresh
+    `dispatch_attempt_id`. **Mutates NO status** — unlike the old
+    POST /recover-task which reset the task to inbox (→ dispatch loop
+    on crash loops, silent context loss).
 
-    Wird aufgerufen von:
-    - `mc recover` CLI (Agent-Startup-Hook, SOUL-Kernregel)
-    - poll.sh FIRST_POLL (fallback wenn Agent selbst nicht `mc recover` laeuft)
+    Called by:
+    - `mc recover` CLI (agent startup hook, SOUL core rule)
+    - poll.sh FIRST_POLL (fallback if the agent itself isn't running `mc recover`)
 
     Returns:
-      - {active: false} wenn kein aktiver Task
+      - {active: false} if there's no active task
       - {active: true, task: {... prompt, dispatch_attempt_id, ...}}
     """
     from app.services.dispatch import build_agent_task_prompt
@@ -2228,9 +2227,9 @@ async def agent_active_task_recovery(
     if active is None:
         return {"active": False, "reason": "no_active_task"}
 
-    # Rate-Limit: pro Task max 1 Recovery alle 30s (Redis TTL-Key).
-    # Schutz gegen poll.sh Crash-Loop + Agent der `mc recover` in einer
-    # Schleife aufruft. Backend logs warnings aber liefert den cached Prompt.
+    # Rate limit: max 1 recovery per task every 30s (Redis TTL key).
+    # Protection against poll.sh crash loops + an agent calling `mc recover`
+    # in a loop. Backend logs warnings but still serves the cached prompt.
     from app.redis_client import get_redis
     redis = await get_redis()
     cache_key = f"mc:recovery:attempt_id:{active.id}"
@@ -2240,16 +2239,16 @@ async def agent_active_task_recovery(
         cached_attempt = None
 
     if cached_attempt:
-        # Reuse der letzten attempt_id statt neue zu generieren — verhindert
-        # dass der Agent seine eigenen vorherigen Header invalidiert.
+        # Reuse the last attempt_id instead of generating a new one — prevents
+        # the agent from invalidating its own previous headers.
         active.dispatch_attempt_id = cached_attempt.decode() if isinstance(cached_attempt, bytes) else cached_attempt
     elif active.dispatch_attempt_id:
-        # Race-Fix (2026-05-12): wenn der Task schon eine attempt_id hat
-        # (zugewiesen via /me/poll oder auto_dispatch_task), nicht ueberschreiben.
-        # Sonst sieht poll.sh beim naechsten Poll eine andere attempt_id und
-        # paste den Task erneut. Wir reusen die existierende ID und cachen sie
-        # auch im Redis-Slot damit nachfolgende Recovery-Calls in den 30s-TTL
-        # konsistent bleiben.
+        # Race fix (2026-05-12): if the task already has an attempt_id
+        # (assigned via /me/poll or auto_dispatch_task), don't overwrite it.
+        # Otherwise poll.sh would see a different attempt_id on the next poll
+        # and re-paste the task. We reuse the existing ID and also cache it
+        # in the Redis slot so subsequent recovery calls within the 30s TTL
+        # stay consistent.
         try:
             await redis.setex(cache_key, 30, active.dispatch_attempt_id)
         except Exception:
@@ -2302,20 +2301,20 @@ async def agent_recover_task(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """DEPRECATED (ADR-024): mutiert Task-Status → inbox, was zu Dispatch-Loops
-    bei Crash-Loops fuehren kann. Neuer Weg: `GET /agent/me/active-task-recovery`
-    (read-only, generiert frische attempt_id, kein Status-Change).
+    """DEPRECATED (ADR-024): mutates task status → inbox, which can lead to
+    dispatch loops on crash loops. New way: `GET /agent/me/active-task-recovery`
+    (read-only, generates a fresh attempt_id, no status change).
 
-    Aelterer Recovery-Endpoint fuer Poll-Runtimes (cli-bridge, host) nach Restart.
-    poll.sh ruft jetzt den neuen GET-Endpoint. Dieser POST bleibt nur fuer
-    Backward-Compat und wird in Zukunft entfernt.
+    Older recovery endpoint for poll runtimes (cli-bridge, host) after a restart.
+    poll.sh now calls the new GET endpoint. This POST remains only for
+    backward compat and will be removed in the future.
 
-    Wenn ein Agent-Container/launchd-Job neu startet waehrend ein Task auf
-    'in_progress' steht, ist der tmux-/claude-Kontext weg, aber der Backend-
-    Status bleibt 'in_progress' → /agent/me/poll liefert nur `state=working`
-    ohne Prompt. poll.sh ruft beim ersten Startup-Poll diesen Endpoint auf,
-    der den Task zurueck auf 'inbox' setzt. Der naechste Poll-Zyklus liefert
-    ihn als `new_task` mit vollem Prompt.
+    If an agent container/launchd job restarts while a task is 'in_progress',
+    the tmux/claude context is gone, but the backend status stays
+    'in_progress' → /agent/me/poll only returns `state=working` without a
+    prompt. poll.sh calls this endpoint on the first startup poll, which
+    resets the task to 'inbox'. The next poll cycle delivers it as
+    `new_task` with the full prompt.
     """
     from app.models.task import TaskComment as _TC, TaskEvent
     import datetime as _dt
@@ -2332,8 +2331,8 @@ async def agent_recover_task(
     if active is None:
         return {"recovered": False, "reason": "no_active_task"}
 
-    # Rate-limit: Recovery darf nicht mehr als 1x/60s pro Task ausgeloest werden.
-    # Schutz gegen poll.sh-Crash-Loop (FIRST_POLL=true bei jedem Neustart).
+    # Rate limit: recovery may be triggered no more than 1x/60s per task.
+    # Protection against poll.sh crash loops (FIRST_POLL=true on every restart).
     cooldown_cutoff = _dt.datetime.now(tz=_dt.timezone.utc) - _dt.timedelta(seconds=60)
     recent_recovery = (await session.exec(
         select(TaskEvent)
@@ -2359,13 +2358,13 @@ async def agent_recover_task(
     active.dispatched_at = None
     active.ack_at = None
     active.started_at = None
-    # run_control zuruecksetzen: sonst bleibt ein alter 'stopped'-Flag haengen
-    # und blockiert spaeter die Status-Transition (-> Deadlock im Agent).
+    # Reset run_control: otherwise an old 'stopped' flag lingers and
+    # later blocks the status transition (-> deadlock in the agent).
     active.run_control = None
     active.updated_at = utcnow()
     session.add(active)
 
-    # Recovery-System-Kommentar (audit trail)
+    # Recovery system comment (audit trail)
     recovery_comment = _TC(
         task_id=active.id,
         author_type="agent",
@@ -2412,21 +2411,21 @@ async def agent_heartbeat(
 ):
     """Agent signals it's alive. Updates last_seen_at, run_state AND status.
 
-    Fuer Non-Gateway-Agents (cli-bridge, host) ist dies der einzige Weg, den
-    Status auf idle/working zu setzen — session_monitor greift bei ihnen nicht.
+    For non-gateway agents (cli-bridge, host), this is the only way to set
+    status to idle/working — session_monitor doesn't apply to them.
 
-    Bug 2 self-heal (2026-05-13): die DB-Felder `status`, `current_task_id`,
-    `last_task_activity_at` driften regelmaessig vom Task-Tabellen-State weg
-    (Live-Bug: Sparky hatte einen `in_progress` Task assigned, claude cookte
-    intern 12 Min lang, poll.sh sendete `status: idle` weil er keinen NEUEN
-    Task hatte → der Agent erschien fuer den Operator als "idle" obwohl er arbeitete,
-    Boss/Operator koennten ihm fahrlaessig einen 2. Task zudispatchen). Fix:
-    Heartbeat prueft die Task-Tabelle auf einen aktiven assigned Task (Status
-    `in_progress`). Wenn ja → status bleibt `working`, current_task_id wird
-    auf den Task gesynct, last_task_activity_at wird gestempelt. So
-    konvergiert der Agent-Row spaetestens beim naechsten Heartbeat zur
-    Wahrheit. `blocked`/`review`/`done`/`failed` sind NICHT "aktiv
-    arbeitend" — bei denen wird der Payload-Status respektiert.
+    Bug 2 self-heal (2026-05-13): the DB fields `status`, `current_task_id`,
+    `last_task_activity_at` regularly drift from the task-table state
+    (live bug: Sparky had an `in_progress` task assigned, claude was cooking
+    internally for 12 minutes, poll.sh sent `status: idle` because it had no
+    NEW task → the agent appeared "idle" to the operator even though it was
+    working, Boss/operator could carelessly dispatch it a 2nd task). Fix:
+    heartbeat checks the task table for an active assigned task (status
+    `in_progress`). If yes → status stays `working`, current_task_id gets
+    synced to the task, last_task_activity_at gets stamped. This way the
+    agent row converges to the truth by the next heartbeat at the latest.
+    `blocked`/`review`/`done`/`failed` are NOT "actively working" — for
+    those, the payload status is respected.
     """
     import datetime
 
@@ -2434,9 +2433,9 @@ async def agent_heartbeat(
 
     agent.last_seen_at = datetime.datetime.now(tz=datetime.timezone.utc)
 
-    # Task-Tabelle ist die Wahrheit. Wir lesen sie hier einmal und leiten
-    # daraus ab, ob der Agent "wirklich" arbeitet — unabhaengig davon was
-    # poll.sh meldet.
+    # The task table is the source of truth. We read it here once and
+    # derive from it whether the agent is "really" working — independent
+    # of what poll.sh reports.
     active_res = await session.exec(
         select(_Task).where(
             _Task.assigned_agent_id == agent.id,
@@ -2446,16 +2445,16 @@ async def agent_heartbeat(
     active_task = active_res.first()
 
     if active_task is not None:
-        # current_task_id Lock self-heal: unabhaengig vom Payload, aus DB
-        # ableiten. Das fixt den ursprueglichen Bug 2 (Sparky.current_task_id=
-        # None obwohl Task assigned) ohne den Agent-State zu maskieren.
+        # current_task_id lock self-heal: derive from the DB independent of
+        # the payload. This fixes the original bug 2 (Sparky.current_task_id=
+        # None even though a task was assigned) without masking agent state.
         agent.current_task_id = active_task.id
-        # status / run_state / last_task_activity_at folgen dem Payload
-        # (Bug 2 refined 2026-05-13). poll.sh ist verantwortlich, "working"
-        # zu senden wenn claude wirklich aktiv ist (Bug 13). Wenn poll.sh
-        # idle meldet bei active Task → sieht der Operator im UI status=idle +
-        # current_task_id gesetzt = klares Signal "Task assigned aber Agent
-        # nicht aktiv, was ist los?".
+        # status / run_state / last_task_activity_at follow the payload
+        # (bug 2 refined 2026-05-13). poll.sh is responsible for sending
+        # "working" when claude is really active (bug 13). If poll.sh
+        # reports idle on an active task → the operator sees status=idle +
+        # current_task_id set in the UI = a clear signal "task assigned but
+        # agent not active, what's going on?".
         if payload.status == "working":
             agent.status = "working"
             agent.run_state = "running"
@@ -2465,14 +2464,14 @@ async def agent_heartbeat(
             if payload.status in ("idle", "working", "online"):
                 agent.status = payload.status
     else:
-        # Kein aktiver Task in der Task-Tabelle.
-        # Bug 18 fix (2026-05-14): wenn poll.sh "working" meldet aber das
-        # Backend keinen in_progress assigned Task findet → Stale-State.
-        # Beispiel: claude rendert im pane noch Memory-Save nach Task done →
-        # detect_turn_state sagt "working" → Heartbeat schickt working →
-        # OHNE diesen Fix bleibt agent.status="working" forever (gesehen
-        # bei Sparky 2026-05-14: status=working + current_task_id=None
-        # ueber Stunden). Self-heal: working ohne Task → idle erzwingen.
+        # No active task in the task table.
+        # Bug 18 fix (2026-05-14): if poll.sh reports "working" but the
+        # backend finds no in_progress assigned task → stale state.
+        # Example: claude still renders a memory-save in the pane after task
+        # done → detect_turn_state says "working" → heartbeat sends working →
+        # WITHOUT this fix, agent.status="working" stays forever (seen with
+        # Sparky 2026-05-14: status=working + current_task_id=None for
+        # hours). Self-heal: force working-without-task → idle.
         if payload.status == "working":
             logger.warning(
                 "Bug 18 self-heal: agent %s heartbeated 'working' but no "
@@ -2485,8 +2484,8 @@ async def agent_heartbeat(
             agent.run_state = "running" if payload.status == "working" else "idle"
             if payload.status in ("idle", "working", "online"):
                 agent.status = payload.status
-        # current_task_id explizit clearen — verhindert dass alter Pointer
-        # nach Task done/failed haengen bleibt (Sparky-Symptom 2026-05-14).
+        # Explicitly clear current_task_id — prevents an old pointer from
+        # lingering after task done/failed (Sparky symptom 2026-05-14).
         if agent.current_task_id is not None:
             agent.current_task_id = None
 

@@ -162,7 +162,7 @@ class DelegateCreate(BaseModel):
 class DelegateResponse(BaseModel):
     subtask_id: uuid.UUID
     assigned_to: str
-    your_status: str  # "blocked" wenn callback=True, sonst "in_progress"
+    your_status: str  # "blocked" if callback=True, otherwise "in_progress"
 
 
 class ClarificationCreate(BaseModel):
@@ -181,7 +181,7 @@ class ClarificationResponse(BaseModel):
 
 
 class SpawnAgentRequest(BaseModel):
-    """Boss fragt den Operator ob er einen neuen CLI-Agent spawnen darf."""
+    """Boss asks the operator whether it may spawn a new CLI agent."""
     name: str
     role: str
     reason: str
@@ -200,23 +200,23 @@ class SpawnApprovalResponse(BaseModel):
 
 
 class PluginUpdateRequest(BaseModel):
-    cli_plugins: list[str] | None  # None = alle, [] = keine, [...] = Allowlist
-    restart_worker: bool = False   # True → nach Disk-Sync Worker-Session reloaden
-                                   # (claude/openclaude liest settings.json nur
-                                   # beim Start — ohne Restart aktivieren sich
-                                   # neue Plugins erst nach naechstem Container-
-                                   # Restart oder /clear). Default false damit
-                                   # Boss bewusst entscheidet ob der aktuelle
-                                   # Task-Kontext verloren gehen darf.
+    cli_plugins: list[str] | None  # None = all, [] = none, [...] = allowlist
+    restart_worker: bool = False   # True → reload worker session after disk sync
+                                   # (claude/openclaude only reads settings.json
+                                   # on start — without a restart, new plugins
+                                   # only activate after the next container
+                                   # restart or /clear). Default false so
+                                   # Boss consciously decides whether the
+                                   # current task context may be lost.
 
 
 # VALID_BLOCKER_TYPES is now imported at the top of this module from
 # app.services.work_context (Phase 4 REF-02 Plan 04-04). Single source of truth.
 
-# Single Source of Truth: app/comment_types.py (REL-01). Aliasing erhaelt
-# den historischen Import-Namen `VALID_COMMENT_TYPES` fuer bestehende Tests
-# (test_phase_approval.py etc.). Wer einen neuen comment_type braucht
-# → app/comment_types.py editieren, NICHT hier.
+# Single source of truth: app/comment_types.py (REL-01). The alias preserves
+# the historical import name `VALID_COMMENT_TYPES` for existing tests
+# (test_phase_approval.py etc.). Anyone needing a new comment_type should
+# → edit app/comment_types.py, NOT here.
 from app.comment_types import ALL_COMMENT_TYPES as VALID_COMMENT_TYPES  # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────
@@ -310,7 +310,7 @@ async def agent_heartbeat(
     if payload.session_message_count is not None:
         agent.session_message_count = payload.session_message_count
     if payload.current_task_id is not None:
-        # Workers mit isolierten Sessions: current_task_id nicht per Heartbeat setzen
+        # Workers with isolated sessions: don't set current_task_id via heartbeat
         from app.config import settings as _hb_settings
         if not (_hb_settings.use_subagent_dispatch and not agent.is_board_lead):
             agent.current_task_id = payload.current_task_id
@@ -318,7 +318,7 @@ async def agent_heartbeat(
         agent.status = payload.status
 
     # Model Usage Tracking V1 (Theme 4: Wave 2)
-    # Speichert nur das aktive Modell als Snapshot — kein kumulierter Counter.
+    # Stores only the active model as a snapshot — no cumulative counter.
     if payload.model_id:
         try:
             from app.redis_client import get_redis as _get_redis
@@ -326,7 +326,7 @@ async def agent_heartbeat(
             await _redis.set(
                 f"mc:agent:{agent.id}:heartbeat_model",
                 payload.model_id,
-                ex=900,  # 15min TTL — verfaellt wenn Agent offline
+                ex=900,  # 15min TTL — expires when the agent is offline
             )
         except Exception as e:
             logger.warning("Heartbeat model_id save failed for %s: %s", agent.name, e)
@@ -336,7 +336,7 @@ async def agent_heartbeat(
     session.add(agent)
     await session.commit()
 
-    # Agent kommt nach Neustart zurueck
+    # Agent comes back after a restart
     if old_status == "restarting" and agent.status != "restarting":
         await emit_event(
             session,
@@ -376,7 +376,7 @@ class AgentMemoryUpdate(BaseModel):
 
 class AgentSoulUpdate(BaseModel):
     content: str
-    reason: str | None = None  # Warum die Aenderung? (fuer Activity-Log)
+    reason: str | None = None  # Why the change? (for the activity log)
 
 
 @router.put("/config/soul_md")
@@ -385,10 +385,10 @@ async def agent_update_own_soul(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Agent aktualisiert sein eigenes SOUL.md in MC DB + Gateway/Disk.
+    """Agent updates its own SOUL.md in the MC DB + gateway/disk.
 
-    Nur fuer Agents mit agents:manage Scope (Board Leads).
-    Aenderung wird als Activity-Event geloggt damit der Operator sie sieht.
+    Only for agents with agents:manage scope (Board Leads).
+    The change is logged as an activity event so the operator sees it.
     """
     old_length = len(agent.soul_md or "")
     agent.soul_md = payload.content
@@ -396,8 +396,8 @@ async def agent_update_own_soul(
     session.add(agent)
     await session.commit()
 
-    # Gateway-Sync entfernt (Phase 29). Disk-Persistence (cli-bridge / host)
-    # ist die alleinige Wahrheit; openclaw-Runtime wird nicht mehr unterstuetzt.
+    # Gateway sync removed (Phase 29). Disk persistence (cli-bridge / host)
+    # is the sole source of truth; the openclaw runtime is no longer supported.
     gateway_synced = False
 
     # Disk sync — depends on runtime:
@@ -428,7 +428,7 @@ async def agent_update_own_soul(
         except Exception as e:
             logger.warning("SOUL.md Host-Disk-Sync fehlgeschlagen fuer %s: %s", agent.name, e)
 
-    # Activity-Event (Der Operator sieht die Aenderung)
+    # Activity event (the operator sees the change)
     await emit_event(
         session,
         "agent.soul_updated",
@@ -461,7 +461,7 @@ async def agent_update_own_soul(
 async def agent_get_own_soul(
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Agent liest sein eigenes SOUL.md."""
+    """Agent reads its own SOUL.md."""
     return {"content": agent.soul_md or ""}
 
 
@@ -471,14 +471,14 @@ async def agent_update_memory(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.MEMORY_WRITE)),
 ):
-    """Agent aktualisiert seine eigene MEMORY.md in MC DB + Gateway."""
+    """Agent updates its own MEMORY.md in the MC DB + gateway."""
     agent.memory_md = payload.content
     agent.updated_at = utcnow()
     session.add(agent)
     await session.commit()
 
-    # Gateway-Sync entfernt (Phase 29). MEMORY.md liegt nur in der DB +
-    # wird ggf. via sync-config in den Container-Workspace gerendert.
+    # Gateway sync removed (Phase 29). MEMORY.md lives only in the DB and
+    # is optionally rendered into the container workspace via sync-config.
 
     return {"status": "updated"}
 
@@ -488,16 +488,16 @@ async def agent_get_me(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_agent),
 ):
-    """Self-Lookup — Agent ruft seine eigene Info ab.
+    """Self-lookup — agent retrieves its own info.
 
-    Convenience-Endpoint fuer Workers die sich orientieren muessen: "wer bin ich,
-    welche Rolle, was hab ich an Tools, welche Task laeuft gerade?". Vorher haben
-    Agents trial-and-error versucht (GET /agent/agents/{id} → 404), das ist der
-    kanonische Weg.
+    Convenience endpoint for workers that need to orient themselves: "who am
+    I, what role, what tools do I have, what task is currently running?".
+    Agents used to try trial-and-error (GET /agent/agents/{id} → 404) — this
+    is the canonical way.
 
-    Keine Scope-Anforderung — jeder auth'd Agent darf sich selbst sehen.
+    No scope requirement — any authenticated agent may look up itself.
     """
-    # Current task summary (wenn vorhanden)
+    # Current task summary (if present)
     current_task = None
     if agent.current_task_id:
         task = await session.get(Task, agent.current_task_id)
@@ -532,7 +532,7 @@ async def agent_get_memory(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.MEMORY_READ)),
 ):
-    """Agent liest seine eigene MEMORY.md."""
+    """Agent reads its own MEMORY.md."""
     return {"content": agent.memory_md or ""}
 
 
@@ -677,14 +677,14 @@ async def agent_get_board(
         )
     ).all()
 
-    # Fix 1: Agents mit Kontext fuer Orchestrator-Entscheidungen
+    # Fix 1: agents with context for orchestrator decisions
     agents = (
         await session.exec(
             select(Agent).where(Agent.board_id == board_id)
         )
     ).all()
 
-    # Projekte laden — damit Agent weiss welche Projekte existieren
+    # Load projects — so the agent knows which projects exist
     projects = (
         await session.exec(
             select(Project)
@@ -693,10 +693,10 @@ async def agent_get_board(
         )
     ).all()
 
-    # Agent-ID → Name Mapping fuer Tasks
+    # Agent-ID → name mapping for tasks
     agent_map = {a.id: a.name for a in agents}
 
-    # Tasks mit agent_name enrichen
+    # Enrich tasks with agent_name
     enriched_tasks = []
     for t in tasks:
         td = t.model_dump()
@@ -737,14 +737,14 @@ async def agent_get_board(
     }
 
 
-# Priority ordering fuer Pull-Dispatch
+# Priority ordering for pull dispatch
 @router.get("/boards/{board_id}/agents")
 async def agent_list_board_agents(
     board_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
 ):
-    """Alle Agents eines Boards auflisten — fuer Delegation (assigned_agent_id)."""
+    """List all agents of a board — for delegation (assigned_agent_id)."""
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
@@ -769,10 +769,10 @@ async def agent_list_board_agents(
     ]
 
 
-# ── Agent-Auth Task CRUD (Board Lead / Koordinator Endpoints) ─────────────────
+# ── Agent-Auth Task CRUD (Board Lead / Coordinator Endpoints) ─────────────────
 
 
-# ── Agent-Auth Agent-Inspection Endpoints ─────────────────────────────────────
+# ── Agent-Auth Agent-Inspection Endpoints ───────────────────────────────────
 
 
 @router.get("/agents/list")
@@ -780,7 +780,7 @@ async def agent_list_all_agents(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Alle Agents im System auflisten — nur fuer Board Leads mit agents:manage."""
+    """List all agents in the system — only for Board Leads with agents:manage."""
     result = await session.exec(select(Agent).order_by(Agent.name))
     agents = result.all()
     return [
@@ -809,7 +809,7 @@ async def agent_get_agent_detail(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Agent-Detail lesen — Config, Scopes, Plugins, Skills."""
+    """Read agent detail — config, scopes, plugins, skills."""
     target = await session.get(Agent, agent_id)
     if not target:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -843,7 +843,7 @@ async def agent_list_projects(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
 ):
-    """Alle Projekte eines Boards auflisten."""
+    """List all projects of a board."""
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
@@ -865,7 +865,7 @@ async def agent_create_project(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_CREATE)),
 ):
-    """Board Lead kann Projekte erstellen um zusammengehoerige Tasks zu buendeln."""
+    """Board Lead can create projects to bundle related tasks."""
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
@@ -874,8 +874,8 @@ async def agent_create_project(
         raise HTTPException(status_code=404, detail="Board not found")
 
     # ── Duplicate Project Guard ──────────────────────────────────
-    # Verhindert doppelte Projekte durch Agent-Retry/Doppelaufruf.
-    # Gleicher Name + Board + 60s Fenster → 409 mit existing_project_id.
+    # Prevents duplicate projects from agent retries/double calls.
+    # Same name + board + 60s window → 409 with existing_project_id.
     from datetime import timedelta
 
     _norm_name = re.sub(r"\s+", " ", (payload.name or "").strip().lower())
@@ -928,10 +928,10 @@ async def agent_help_request(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
-    """Agent bittet einen anderen Agent um Hilfe. Erstellt Subtask, blockiert Absender."""
+    """Agent asks another agent for help. Creates a subtask, blocks the requester."""
     from app.services.dispatch import auto_dispatch_task
 
-    # 1. Aktuellen Task des Agents finden
+    # 1. Find the agent's current task
     current_task_id = agent.current_task_id
     if not current_task_id:
         raise HTTPException(
@@ -952,7 +952,7 @@ async def agent_help_request(
             detail="Help Requests koennen nicht verschachtelt werden (max. 1 Ebene).",
         )
 
-    # 3. Helfer-Agent finden
+    # 3. Find a helper agent
     helper_query = select(Agent).where(
         Agent.board_id == board_id,
         Agent.role == payload.needed_role,
@@ -967,7 +967,7 @@ async def agent_help_request(
 
     helper = next((h for h in helpers if h.current_task_id is None), helpers[0])
 
-    # 4. Subtask erstellen
+    # 4. Create subtask
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
@@ -1033,10 +1033,10 @@ async def agent_delegate_task(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_CREATE)),
 ):
-    """Orchestrator-Delegation: Subtask erstellen + explizit warten auf Callback.
+    """Orchestrator delegation: create subtask + explicitly wait for callback.
 
-    Atomare Alternative zu 'mc task-create + mc blocked getrennt'. Erzeugt KEINE
-    Operator-Approval — reine Orchestration.
+    Atomic alternative to 'mc task-create + mc blocked separately'. Creates NO
+    operator approval — pure orchestration.
     """
     from app.services.dispatch import auto_dispatch_task
     from app.services.operations import check_dispatch_allowed
@@ -1063,7 +1063,7 @@ async def agent_delegate_task(
     target_agent = await session.get(Agent, payload.assigned_agent_id)
     if not target_agent:
         raise HTTPException(status_code=404, detail="Ziel-Agent nicht gefunden.")
-    # Board-Isolation: Target muss auf demselben Board sein (verhindert Cross-Board-Leak)
+    # Board isolation: target must be on the same board (prevents cross-board leak)
     if target_agent.board_id != board_id:
         raise HTTPException(
             status_code=422,
@@ -1088,7 +1088,7 @@ async def agent_delegate_task(
             detail="Selbst-Delegation ist nicht erlaubt. Eigenarbeit direkt am Task machen.",
         )
 
-    # Subtask in-memory konstruieren (noch nicht persistieren)
+    # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
         board_id=board_id,
@@ -1101,13 +1101,13 @@ async def agent_delegate_task(
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
-        # Callback-Pattern: Subtask zeigt zurueck auf den delegierenden Agent
+        # Callback pattern: subtask points back to the delegating agent
         callback_agent_id=agent.id if payload.callback else None,
         is_auto_created=True,
         auto_reason=f"delegation from {agent.name}",
     )
 
-    # Dispatch-Guard VOR Commit — kein Zombie-Subtask wenn System/Agent gerade nicht dispatchbar
+    # Dispatch guard BEFORE commit — no zombie subtask if the system/agent isn't dispatchable right now
     allowed, reason = await check_dispatch_allowed(subtask, target_agent, session)
     if not allowed:
         raise HTTPException(
@@ -1121,20 +1121,21 @@ async def agent_delegate_task(
     session.add(subtask)
 
     if payload.callback:
-        # Explicit flush vor dem UPDATE des current_task. Ohne flush kann
-        # SQLAlchemy beim folgenden emit_event() (das intern session.commit()
-        # macht, activity.py:41) die Operationen falsch ordnen — current_task
-        # UPDATE mit blocked_by_task_id wird vor INSERT subtask ausgefuehrt
-        # und die FK fk_tasks_blocked_by_task_id (nicht deferrable) kracht.
-        # Reflexive FKs (tasks → tasks) verwirren SQLAlchemys topological sort.
-        # Live-Bug Boss 2026-04-25: HTTP 500 bei mc delegate --callback.
+        # Explicit flush before the current_task UPDATE. Without a flush,
+        # SQLAlchemy could order the operations wrong in the following
+        # emit_event() call (which internally does session.commit(),
+        # activity.py:41) — the current_task UPDATE with blocked_by_task_id
+        # runs before the subtask INSERT and the non-deferrable FK
+        # fk_tasks_blocked_by_task_id blows up.
+        # Reflexive FKs (tasks → tasks) confuse SQLAlchemy's topological sort.
+        # Live bug Boss 2026-04-25: HTTP 500 on mc delegate --callback.
         await session.flush()
         current_task.status = "blocked"
         current_task.blocked_by_task_id = subtask.id
         current_task.callback_agent_id = agent.id
         session.add(current_task)
 
-    # Progress-Comment mit Delegation-Kontext
+    # Progress comment with delegation context
     comment = TaskComment(
         id=uuid.uuid4(),
         task_id=current_task.id,
@@ -1169,7 +1170,7 @@ async def agent_delegate_task(
     await session.commit()
     await session.refresh(subtask)
 
-    # Dispatch (async, fire-and-forget) — Guard oben hat bereits bestaetigt dass dispatchbar
+    # Dispatch (async, fire-and-forget) — guard above already confirmed it's dispatchable
     import asyncio as _aio
     _aio.create_task(auto_dispatch_task(subtask.id, board_id))
 
@@ -1193,9 +1194,9 @@ async def agent_clarification(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_HELP)),
 ):
-    """Agent stellt dem Operator eine Klaerungsfrage. Task wird blockiert bis der Operator antwortet."""
+    """Agent asks the operator a clarifying question. Task is blocked until the operator answers."""
 
-    # 1. Aktuellen Task des Agents pruefen
+    # 1. Check the agent's current task
     current_task_id = agent.current_task_id
     if not current_task_id:
         raise HTTPException(
@@ -1209,14 +1210,14 @@ async def agent_clarification(
             detail="Task ist nicht in_progress — Klaerungsfrage nur waehrend aktiver Arbeit moeglich.",
         )
 
-    # 2. Projekt-Name fuer Kontext laden
+    # 2. Load project name for context
     project_name = None
     if current_task.project_id:
         project = await session.get(Project, current_task.project_id)
         if project:
             project_name = project.name
 
-    # 3. Approval erstellen
+    # 3. Create approval
     approval = Approval(
         id=uuid.uuid4(),
         board_id=board_id,
@@ -1235,7 +1236,7 @@ async def agent_clarification(
     )
     session.add(approval)
 
-    # 4. Task blockieren
+    # 4. Block task
     current_task.status = "blocked"
     session.add(current_task)
 
@@ -1286,7 +1287,7 @@ async def agent_clarification(
 # ── Deliverable Endpoints ─────────────────────────────────────────────────
 
 class DeliverableCreate(BaseModel):
-    """Agent registriert ein Deliverable — Ergebnis-Artefakt."""
+    """Agent registers a deliverable — a result artifact."""
     deliverable_type: Literal["screenshot", "file", "url", "artifact", "document", "data"]
     title: str
     path: str | None = None
@@ -1318,7 +1319,7 @@ class DeliverableCreate(BaseModel):
 
 
 class MeDeliverableCreate(DeliverableCreate):
-    """DeliverableCreate + optionales task_id-Override fuer /me/deliverable."""
+    """DeliverableCreate + optional task_id override for /me/deliverable."""
     task_id: uuid.UUID | None = None
 
 
@@ -1334,7 +1335,7 @@ async def agent_create_deliverable(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
-    """Agent registriert ein Deliverable — Screenshot, File, URL, Artifact oder Document."""
+    """Agent registers a deliverable — screenshot, file, URL, artifact, or document."""
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
@@ -1357,13 +1358,13 @@ async def agent_create_deliverable(
 
     from app.models.deliverable import TaskDeliverable
 
-    # Dedup-Check: verhindert doppelte Registrierung wenn Agent den gleichen
-    # Content nochmal submittet (z.B. weil er dachte der erste Call waere
-    # fehlgeschlagen — Incident 2026-04-23 Root-Cause Bug A: Researcher hat
-    # 4x dasselbe Deliverable registriert weil der LIST-Endpoint kein content
-    # zurueckgab). Match-Kriterium: (task_id, path) wenn path vorhanden, sonst
-    # (task_id, title) fuer inline-only Deliverables. Same-Agent-Only — Cross-
-    # Agent-Duplikate sind legitime separate Beitraege.
+    # Dedup check: prevents duplicate registration when an agent resubmits
+    # the same content (e.g. because it thought the first call had failed —
+    # Incident 2026-04-23 root cause Bug A: Researcher registered the same
+    # deliverable 4x because the LIST endpoint returned no content). Match
+    # criterion: (task_id, path) when path is present, otherwise
+    # (task_id, title) for inline-only deliverables. Same-agent-only — cross-
+    # agent duplicates are legitimate separate contributions.
     from sqlmodel import and_ as _and_
     dedup_query = select(TaskDeliverable).where(
         TaskDeliverable.task_id == task_id,
@@ -1447,8 +1448,8 @@ async def agent_create_deliverable(
     await session.refresh(deliverable)
 
     # Auto-Memory-Write: jedes Deliverable landet im 3-schichtigen Memory-System
-    # (board_memory), damit Research-Resultate durchsuchbar sind und nicht verloren
-    # gehen — ohne dass der Agent einen zweiten POST machen muss.
+    # (board_memory) so research results are searchable and don't get lost —
+    # without the agent having to make a second POST.
     from app.models.memory import BoardMemory
 
     _TYPE_TO_MEMORY_TYPE = {
@@ -1487,7 +1488,7 @@ async def agent_create_deliverable(
         session.add(memory_entry)
         await session.commit()
     except Exception as e:
-        # Memory-Write-Fehler darf den Deliverable-Flow nicht blocken — nur loggen.
+        # A memory-write failure must not block the deliverable flow — just log it.
         logger.warning("Auto-memory-write fuer deliverable %s fehlgeschlagen: %s", deliverable.id, e)
 
     logger.info(
@@ -1540,19 +1541,19 @@ async def agent_list_deliverables(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
 ):
-    """Alle Deliverables fuer einen Task lesen.
+    """Read all deliverables for a task.
 
-    Query-Params:
-      include_content: Wenn true, wird das `content`-Feld (volle Markdown/Text-
-          Body) mitgeliefert. Default false um Response-Size klein zu halten.
-      include_subtasks: Wenn true, werden auch Deliverables aller Descendant-
-          Subtasks (rekursiv bis `depth` Ebenen) mitgeliefert. Jedes Subtask-
-          Deliverable bekommt `source_task_id` + `source_task_title` + `depth`
-          (0=self, 1=direct child, etc.) fuer UI-Gruppierung. Orchestrator-
-          Parent-Tasks koennen damit den gesamten Output-Tree auf einen Blick
-          sehen ohne jeden Subtask einzeln abzufragen.
-      depth: Max Subtask-Tiefe (1=direkte Kinder, 2=Enkel, ...). Default 2,
-          Maximum 5 als Response-Size-Schutz.
+    Query params:
+      include_content: If true, the `content` field (full markdown/text
+          body) is included. Default false to keep the response size small.
+      include_subtasks: If true, deliverables of all descendant subtasks
+          (recursively up to `depth` levels) are included too. Each subtask
+          deliverable gets `source_task_id` + `source_task_title` + `depth`
+          (0=self, 1=direct child, etc.) for UI grouping. This lets
+          orchestrator parent tasks see the entire output tree at a glance
+          without querying each subtask individually.
+      depth: Max subtask depth (1=direct children, 2=grandchildren, ...).
+          Default 2, maximum 5 as a response-size guard.
     """
     from app.models.deliverable import TaskDeliverable
     from sqlmodel import col as _col
@@ -1560,11 +1561,11 @@ async def agent_list_deliverables(
     # Depth clamp (server-side safety)
     effective_depth = max(1, min(int(depth or 2), 5))
 
-    # Task-IDs + Titel sammeln per BFS (falls include_subtasks).
+    # Collect task IDs + titles via BFS (if include_subtasks).
     # Map: task_id -> (task_title, depth)
     task_meta: dict[uuid.UUID, tuple[str, int]] = {task_id: ("", 0)}
 
-    # Titel des Root-Tasks holen (fuer konsistente source_task_title-Ausgabe)
+    # Fetch the root task's title (for consistent source_task_title output)
     root_task = await session.get(Task, task_id)
     if root_task is None:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1588,7 +1589,7 @@ async def agent_list_deliverables(
                     next_level.append(child.id)
             current_level = next_level
 
-    # Deliverables fuer alle gesammelten task_ids
+    # Deliverables for all collected task_ids
     deliverables_result = await session.exec(
         select(TaskDeliverable)
         .where(_col(TaskDeliverable.task_id).in_(list(task_meta.keys())))
@@ -1612,8 +1613,8 @@ async def agent_list_deliverables(
         if include_content:
             row["content"] = d.content
         if include_subtasks:
-            # Nur bei include_subtasks, sonst wird LIST-Response-Shape unnoetig
-            # geaendert fuer Aufrufer die die alten Feldnamen erwarten.
+            # Only when include_subtasks is set, otherwise the LIST-response
+            # shape would needlessly change for callers expecting the old field names.
             row["source_task_id"] = str(d.task_id)
             row["source_task_title"] = source_title
             row["source_depth"] = source_depth  # 0=self, 1=direct child, ...
@@ -1630,17 +1631,17 @@ async def agent_get_deliverable(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
 ):
-    """Einzelnes Deliverable mit vollem `content`-Feld lesen.
+    """Read a single deliverable with the full `content` field.
 
-    Closes verification-gap: der LIST-Endpoint blendet `content` standardmaessig
-    aus (Response-Size). Agents (Boss, FreeCode, Planner) brauchen aber den
-    vollen Markdown/Text-Body um Follow-Up-Arbeit zu machen — dieser Endpoint
-    liefert ihn. Scope: TASKS_READ (gleich wie LIST).
+    Closes a verification gap: the LIST endpoint omits `content` by default
+    (response size). Agents (Boss, FreeCode, Planner) need the full
+    markdown/text body to do follow-up work — this endpoint provides it.
+    Scope: TASKS_READ (same as LIST).
 
-    Incident-Context 2026-04-23: ohne diesen Endpoint haben Agents aus der
-    `content_length=0`-Abwesenheit im LIST-Response faelschlich geschlossen
-    dass content fehlt — was zu doppelten Re-Registrierungen und kaputten
-    phase_rewrite_requests fuehrte.
+    Incident context 2026-04-23: without this endpoint, agents wrongly
+    concluded from the absent `content_length=0` in the LIST response that
+    content was missing — which led to duplicate re-registrations and
+    broken phase_rewrite_requests.
     """
     from app.models.deliverable import TaskDeliverable
 
@@ -1653,7 +1654,7 @@ async def agent_get_deliverable(
             detail=f"Deliverable {deliverable_id} gehoert nicht zu Task {task_id}",
         )
 
-    # Board-Check via Task: verhindert Cross-Board-Leak
+    # Board check via task: prevents cross-board leak
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1673,7 +1674,7 @@ async def agent_get_deliverable(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Boss Agent-Spawn Request — der Operator muss approven (Phase 2, 2026-04-11)
+# Boss agent-spawn request — the operator must approve it (Phase 2, 2026-04-11)
 # ─────────────────────────────────────────────────────────────────────────
 
 
@@ -1683,10 +1684,10 @@ async def agent_request_spawn(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Boss erstellt eine Spawn-Approval. Operator approved → Agent wird erstellt.
+    """Boss creates a spawn approval. Operator approves → agent gets created.
 
-    Nur Board-Leads (Boss, Henry) duerfen das — Scope AGENTS_MANAGE.
-    Der eigentliche Spawn passiert im resolve_approval() Handler.
+    Only Board Leads (Boss, Henry) may do this — scope AGENTS_MANAGE.
+    The actual spawn happens in the resolve_approval() handler.
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -1699,8 +1700,8 @@ async def agent_request_spawn(
         raise HTTPException(status_code=400, detail="Requester hat kein board_id")
 
     # Race-safe Duplicate-Check via Redis SET NX Lock (60s TTL).
-    # Verhindert dass zwei parallele POST-Requests beide durchkommen. Der
-    # bestehende SELECT+INSERT-Pfad darunter bleibt als Defense-in-Depth.
+    # Prevents two parallel POST requests from both getting through. The
+    # existing SELECT+INSERT path below remains as defense-in-depth.
     _spawn_lock_key = f"mc:spawn_request:{payload.name.strip().lower()}"
     _lock_acquired = False
     try:
@@ -1716,9 +1717,9 @@ async def agent_request_spawn(
         raise
     except Exception as e:
         logger.warning("Redis spawn-lock nicht verfuegbar, fallback auf DB-Check: %s", e)
-        # Weiter zum DB-Check — nicht blocken wenn Redis down ist
+        # Continue to the DB check — don't block if Redis is down
 
-    # Duplikat-Check: kein pending spawn mit gleichem Namen
+    # Duplicate check: no pending spawn with the same name
     existing_result = await session.exec(
         select(Approval).where(
             Approval.action_type == "spawn_agent",
@@ -1767,7 +1768,7 @@ async def agent_request_spawn(
 
 
 # ─────────────────────────────────────────────────────────────────────────
-# Boss Plugin-Self-Service — Boss darf eigene + Worker-Plugins toggeln
+# Boss Plugin-Self-Service — Boss may toggle its own + worker plugins
 # ─────────────────────────────────────────────────────────────────────────
 
 
@@ -1775,12 +1776,12 @@ async def agent_request_spawn(
 async def agent_list_plugins(
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Shared-Cache Plugins auflisten fuer Plugin-Zuweisung an Worker.
+    """List shared-cache plugins for plugin assignment to workers.
 
-    Nur Board Leads — die einzigen, die Plugins auch zuweisen duerfen
-    (siehe PATCH /agents/{id}/plugins). Reine Read-Operation, kein Install.
-    Install neuer Plugins laeuft weiter via POST /install-requests (Operator-
-    Approval-Gate, Supply-Chain-Schutz).
+    Board Leads only — the only ones allowed to assign plugins too
+    (see PATCH /agents/{id}/plugins). Pure read operation, no install.
+    Installing new plugins still runs via POST /install-requests (operator
+    approval gate, supply-chain protection).
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -1801,11 +1802,11 @@ async def agent_get_plugins(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Aktuell zugewiesene cli_plugins eines Worker-Agents lesen.
+    """Read the cli_plugins currently assigned to a worker agent.
 
-    Komplement zu PATCH — Boss kann pruefen welche Plugins ein Worker heute
-    hat bevor er zuweist/entfernt. None = alle installierten, [] = keine,
-    Liste = Allowlist.
+    Complement to PATCH — Boss can check which plugins a worker currently
+    has before assigning/removing. None = all installed, [] = none,
+    list = allowlist.
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -1834,10 +1835,10 @@ async def agent_patch_plugins(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Boss/Board-Lead darf cli_plugins fuer sich selbst oder Worker setzen.
+    """Boss/Board-Lead may set cli_plugins for itself or a worker.
 
-    Triggert sync_agent_plugins_to_disk() — settings.json + installed_plugins.json
-    werden neu gerendert. Worker-Restart ist nicht noetig, Next-Start liest neu.
+    Triggers sync_agent_plugins_to_disk() — settings.json + installed_plugins.json
+    are re-rendered. A worker restart isn't required, the next start reads fresh.
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -1852,8 +1853,8 @@ async def agent_patch_plugins(
             status_code=403,
             detail="Ziel-Agent gehoert zu einem anderen Board",
         )
-    # Board Leads duerfen sich gegenseitig NICHT Plugins setzen (Privilege-Guard):
-    # Boss soll Henry's Plugin-Config nicht aendern koennen und umgekehrt.
+    # Board Leads may NOT set plugins on each other (privilege guard):
+    # Boss shouldn't be able to change Henry's plugin config and vice versa.
     if target.is_board_lead and target.id != agent.id:
         raise HTTPException(
             status_code=403,
@@ -1865,7 +1866,7 @@ async def agent_patch_plugins(
     await session.commit()
     await session.refresh(target)
 
-    # Sync auf Disk — fail-soft, DB ist Source of Truth
+    # Sync to disk — fail-soft, DB is the source of truth
     synced: dict[str, bool] = {}
     slug = (target.name or "").lower().replace(" ", "-")
     try:
@@ -1879,9 +1880,9 @@ async def agent_patch_plugins(
     except Exception as e:
         logger.warning("Plugin sync to disk failed for %s: %s", target.name, e)
 
-    # Worker-Restart optional — claude/openclaude liest settings.json nur beim
-    # Start. Ohne Restart wirken neue Plugins erst beim naechsten Neustart.
-    # Nur fuer CLI-Bridge-Agents — host-Runtime (Boss) hat keinen Worker.
+    # Worker restart optional — claude/openclaude only reads settings.json on
+    # start. Without a restart, new plugins only take effect on the next restart.
+    # Only for CLI-bridge agents — host runtime (Boss) has no worker.
     worker_restarted: bool | None = None
     if payload.restart_worker:
         if target.agent_runtime != "cli-bridge":
@@ -1929,14 +1930,15 @@ async def agent_restart_worker(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Board-Lead darf Worker-Session eines CLI-Bridge Agents neu starten.
+    """Board Lead may restart a CLI-bridge agent's worker session.
 
-    Sinnvoll wenn: neue Plugins zugewiesen (ohne restart_worker=true), settings
-    haben sich geaendert, Worker steckt in altem Zustand. Kill + Neustart der
-    claude-Session in tmux Window 0 — Container bleibt up, poll.sh laeuft weiter.
+    Useful when: new plugins were assigned (without restart_worker=true),
+    settings changed, or the worker is stuck in a stale state. Kills and
+    restarts the claude session in tmux window 0 — the container stays up,
+    poll.sh keeps running.
 
-    WARNUNG: laufender Task-Kontext geht verloren. Boss sollte pruefen
-    (current_task_id) bevor er restarted.
+    WARNING: in-flight task context is lost. Boss should check
+    (current_task_id) before restarting.
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -2001,14 +2003,14 @@ async def agent_patch_workflow_flags(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Board-Lead darf Workflow-Flags fuer Worker setzen.
+    """Board Lead may set workflow flags for a worker.
 
-    Primaerer Use-Case: Boss erkennt dass ein Design/Writer/Research-Worker
-    wegen Git-Commit-Gate blocked steht → setzt requires_git_workflow=false
-    statt den Operator zu fragen. Autonomer Unblock ohne Mensch im Loop.
+    Primary use case: Boss notices a Design/Writer/Research worker is blocked
+    on the git-commit gate → sets requires_git_workflow=false instead of
+    asking the operator. Autonomous unblock with no human in the loop.
 
-    Privilege-Guard: Board Leads koennen einander keine Flags setzen (nur self
-    oder Worker). Analog zu /plugins Endpoint.
+    Privilege guard: Board Leads cannot set flags on each other (only self
+    or a worker). Same pattern as the /plugins endpoint.
     """
     if not agent.is_board_lead:
         raise HTTPException(
@@ -2081,18 +2083,18 @@ async def agent_memory_query(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.MEMORY_READ)),
 ):
-    """Hybrid Vektor-/Keyword-Suche ueber 3 Memory-Layer.
+    """Hybrid vector/keyword search across 3 memory layers.
 
     Layers:
-    - semantic: wiederverwendbares Wissen (knowledge, decision, concept, reference, research)
-    - agent: Agent-Lessons (gefiltert nach agent_id)
-    - episodic: zeitgebundene Eintraege (journal, weekly_review, insight)
+    - semantic: reusable knowledge (knowledge, decision, concept, reference, research)
+    - agent: agent lessons (filtered by agent_id)
+    - episodic: time-bound entries (journal, weekly_review, insight)
 
     Special values:
-    - agent_id="self" → eigene agent_id einsetzen
-    - board_id="current" → agent.board_id einsetzen
+    - agent_id="self" → substitute the caller's own agent_id
+    - board_id="current" → substitute agent.board_id
     """
-    # Resolve special values auf den Agent-Kontext VOR dem Helper-Call
+    # Resolve special values against the agent context BEFORE the helper call
     resolved_agent_id: str | None = None
     if payload.agent_id == "self":
         resolved_agent_id = str(agent.id)
@@ -2151,11 +2153,11 @@ async def agent_request_approval(
     from datetime import timedelta
     from app.services.autonomy import resolve_autonomy
 
-    # Theme 3: Autonomy-Check — L1/L2 brauchen kein Approval
+    # Theme 3: autonomy check — L1/L2 need no approval
     autonomy_level = await resolve_autonomy(payload.action_type)
 
     if autonomy_level == "L1":
-        # Auto-execute: kein Approval noetig
+        # Auto-execute: no approval needed
         return {"id": None, "status": "auto_approved", "autonomy_level": "L1"}
 
     if autonomy_level == "L2":
@@ -2168,7 +2170,7 @@ async def agent_request_approval(
         )
         return {"id": None, "status": "auto_approved", "autonomy_level": "L2"}
 
-    # L3: Normaler Approval-Flow
+    # L3: normal approval flow
     approval = Approval(
         board_id=board_id,
         agent_id=agent.id,
@@ -2220,12 +2222,12 @@ async def agent_list_knowledge(
     agent: Agent = Depends(require_scope(Scope.KNOWLEDGE_READ)),
 ):
     """
-    Liest Knowledge-Base-Eintraege die fuer den Agent relevant sind:
-    - Eigene Eintraege (agent_id = this agent)
-    - Board-Memory des eigenen Boards
-    - Globale Knowledge (board_id=null, agent_id=null)
+    Reads knowledge-base entries relevant to the agent:
+    - Own entries (agent_id = this agent)
+    - Board memory of the agent's own board
+    - Global knowledge (board_id=null, agent_id=null)
     """
-    # Scope-Filter: eigene + board + global
+    # Scope filter: own + board + global
     scope_conditions = [
         BoardMemory.agent_id == agent.id,  # eigene Eintraege
         and_(BoardMemory.board_id.is_(None), BoardMemory.agent_id.is_(None)),  # type: ignore[attr-defined]  # globale Eintraege
@@ -2264,10 +2266,10 @@ async def agent_create_knowledge(
     agent: Agent = Depends(require_scope(Scope.KNOWLEDGE_WRITE)),
 ):
     """
-    Schreibt einen Eintrag in die Knowledge Base.
-    scope="agent"  → agent_id gesetzt, kein board_id (nur dieser Agent sieht es)
-    scope="board"  → board_id gesetzt (alle Board-Agents sehen es)
-    scope="global" → weder board_id noch agent_id (alle sehen es)
+    Writes an entry to the knowledge base.
+    scope="agent"  → agent_id set, no board_id (only this agent sees it)
+    scope="board"  → board_id set (all board agents see it)
+    scope="global" → neither board_id nor agent_id (everyone sees it)
     """
     board_id: uuid.UUID | None = None
     agent_id: uuid.UUID | None = None
@@ -2299,11 +2301,11 @@ async def agent_create_knowledge(
     return entry
 
 
-# ── Content Pipeline Agent-Callback: lebt jetzt im News-Studio-Vertical ──────
-# (app/verticals/news_studio/routers/content_agent.py — gleicher Prefix)
+# ── Content Pipeline Agent-Callback: now lives in the News-Studio vertical ──
+# (app/verticals/news_studio/routers/content_agent.py — same prefix)
 
 
-# ── Agent-Erstellung (nur Board Lead) ─────────────────────────────────────────
+# ── Agent Creation (Board Lead only) ─────────────────────────────────────────
 
 
 class AgentInstantiateByAgentRequest(BaseModel):
@@ -2339,7 +2341,7 @@ async def agent_list_templates(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
-    """Listet alle verfuegbaren Agent-Templates auf. Nur fuer Agents mit agents:manage Scope."""
+    """Lists all available agent templates. Only for agents with agents:manage scope."""
     result = await session.exec(select(AgentTemplate).order_by(AgentTemplate.name))
     return result.all()
 
@@ -2353,9 +2355,9 @@ async def agent_instantiate_template(
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
     """
-    Erstellt einen neuen Agent aus einem Template — nur fuer Board Leads.
-    Provisioning erfolgt automatisch im Hintergrund.
-    Rueckgabe: { agent, token } — Token einmalig sichtbar!
+    Creates a new agent from a template — Board Leads only.
+    Provisioning happens automatically in the background.
+    Returns: { agent, token } — token is visible only once!
     """
     from app.routers.agent_templates import _do_instantiate
     from app.services.provisioning import provision_agent_background as _provision_agent_background
@@ -2385,7 +2387,7 @@ async def agent_instantiate_template(
         board_id=new_agent.board_id,
     )
 
-    # Provisioning im Hintergrund starten
+    # Start provisioning in the background
     background_tasks.add_task(_provision_agent_background, new_agent.id)
 
     return {
@@ -2402,9 +2404,9 @@ async def agent_create_custom(
     agent: Agent = Depends(require_scope(Scope.AGENTS_MANAGE)),
 ):
     """
-    Erstellt einen neuen Agent ohne Template — nur fuer Board Leads.
-    Provisioning erfolgt automatisch im Hintergrund.
-    Rueckgabe: { agent, token } — Token einmalig sichtbar!
+    Creates a new agent without a template — Board Leads only.
+    Provisioning happens automatically in the background.
+    Returns: { agent, token } — token is visible only once!
     """
     from app.auth import generate_agent_token
     from app.routers.agents import _generate_tools_md
@@ -2436,7 +2438,7 @@ async def agent_create_custom(
     await session.commit()
     await session.refresh(new_agent)
 
-    # Vault-Write mc_token_{slug} fuer /internal/bootstrap (Fresh-Install-Fix).
+    # Vault write mc_token_{slug} for /internal/bootstrap (fresh-install fix).
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, new_agent.name, raw_token)
 
@@ -2448,7 +2450,7 @@ async def agent_create_custom(
         board_id=new_agent.board_id,
     )
 
-    # Provisioning im Hintergrund starten
+    # Start provisioning in the background
     background_tasks.add_task(_provision_agent_background, new_agent.id)
 
     return {
@@ -2457,7 +2459,7 @@ async def agent_create_custom(
     }
 
 
-# ── Checklist CRUD (T-1) ─────────────────────────────────────────────────────
+# ── Checklist CRUD (T-1) ────────────────────────────────────────────────────
 
 class ChecklistItemCreate(BaseModel):
     title: str
@@ -2484,7 +2486,7 @@ async def agent_create_checklist(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent legt Checklist-Items für einen Task an (bulk)."""
+    """Agent creates checklist items for a task (bulk)."""
     from app.models.checklist import TaskChecklistItem
 
     if agent.board_id != board_id:
@@ -2505,7 +2507,7 @@ async def agent_create_checklist(
         session.add(item)
         items.append(item)
 
-    # Zähler aktualisieren
+    # Update counters
     task.checklist_total = task.checklist_total + len(items)
     session.add(task)
     await session.commit()
@@ -2526,7 +2528,7 @@ async def agent_update_checklist_item(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent setzt Status eines Checklist-Items."""
+    """Agent sets the status of a checklist item."""
     from app.models.checklist import TaskChecklistItem
 
     if agent.board_id != board_id:
@@ -2577,7 +2579,7 @@ async def agent_get_checklist(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent liest Checklist eines Tasks (für Recovery)."""
+    """Agent reads a task's checklist (for recovery)."""
     from app.models.checklist import TaskChecklistItem
 
     if agent.board_id != board_id:
@@ -2607,17 +2609,17 @@ async def agent_send_discord(
     body: DiscordSendBody,
     agent: Agent = Depends(require_agent),
 ):
-    """Agent sendet Text-Nachricht in einen Discord Channel."""
+    """Agent sends a text message to a Discord channel."""
     from app.services.discord import send_to_discord_channel
 
     await send_to_discord_channel(body.channel_id, content=body.content)
 
 
 class VisualVerifyInteraction(BaseModel):
-    """Einzelne Browser-Interaktion vor dem Screenshot (click/fill/wait_for/...).
+    """A single browser interaction before the screenshot (click/fill/wait_for/...).
 
-    Pydantic laesst zusaetzliche Felder durch — das Schema muss mit
-    InteractionSpec in mc-playwright/service.py synchron bleiben.
+    Pydantic lets extra fields through — this schema must stay in sync with
+    InteractionSpec in mc-playwright/service.py.
     """
     action: str  # click | fill | wait_for | scroll_to | evaluate | press
     selector: str | None = None
@@ -2627,7 +2629,7 @@ class VisualVerifyInteraction(BaseModel):
 
 
 class VisualVerifyLogin(BaseModel):
-    """Inline-Form-Login (Alternative zu credential_id)."""
+    """Inline form login (alternative to credential_id)."""
     url: str
     username: str
     password: str
@@ -2639,62 +2641,63 @@ class VisualVerifyLogin(BaseModel):
 
 
 class VisualVerifyBody(BaseModel):
-    """Body fuer /agent/tasks/{task_id}/visual-verify — ruft mc-playwright + Telegram."""
+    """Body for /agent/tasks/{task_id}/visual-verify — calls mc-playwright + Telegram."""
     url: str
     viewports: list[str] = ["desktop", "mobile"]
     scroll: bool = True
     metrics: bool = True
     send_to_telegram: bool = True
-    caption: str | None = None  # HTML-Caption auf das erste Bild
+    caption: str | None = None  # HTML caption on the first image
 
     # --- Interaktions-Mode (2026-04-23) ---------------------------------------
     credential_id: uuid.UUID | None = None   # Vault-Resolve (Login) — Backend
     auth_token: str | None = None            # JWT direkt in localStorage
-    login: VisualVerifyLogin | None = None   # Inline-Form-Login ohne Vault
+    login: VisualVerifyLogin | None = None   # Inline form login without vault
     interactions: list[VisualVerifyInteraction] = []
-    wait_for_selector: str | None = None     # Finale Wartezeit vor Screenshot
-    full_page: bool = True                   # False: Viewport-only (fuer Modals)
+    wait_for_selector: str | None = None     # Final wait before screenshot
+    full_page: bool = True                   # False: viewport-only (for modals)
     force_telegram_resend: bool = False      # Override per-task Dedup — sendet auch bei 2.+ run
 
 
 class TelegramReportBody(BaseModel):
-    """Body fuer agenten-initiierten Telegram-Report an den Operator."""
+    """Body for an agent-initiated Telegram report to the operator."""
     text: str
-    # Optional: Task-Kontext fuer Flag-Setzen. Im Subagent-Dispatch-Modus haben Worker
-    # kein agent.current_task_id — deswegen muss die CLI die Task-ID mitschicken
-    # (aus /tmp/mc-context.env das poll.sh schreibt). Fuer Board Leads reicht der
-    # Fallback auf current_task_id.
+    # Optional: task context for flag setting. In subagent-dispatch mode,
+    # workers have no agent.current_task_id — so the CLI must send the task
+    # ID along (from /tmp/mc-context.env that poll.sh writes). For Board
+    # Leads, the fallback to current_task_id is sufficient.
     task_id: uuid.UUID | None = None
-    # Optional: Screenshot-Deliverable an Telegram als sendPhoto anhaengen (statt
-    # plain sendMessage). text wird zur Photo-Caption (1024 Zeichen max — laenger
-    # wird truncated). Deliverable muss type=screenshot sein und ein resolvable
-    # File haben. Use case: Tester/Deployer hat per MCP einen Screenshot gemacht
-    # → mc deliverable registriert → mc telegram --photo <id> schickt das echte
-    # Bild an den Reports-Chat des Operators (statt nur Text-Beschreibung).
+    # Optional: attach a screenshot deliverable to Telegram as sendPhoto (instead
+    # of plain sendMessage). text becomes the photo caption (1024 chars max — longer
+    # will be truncated). Deliverable must be type=screenshot and have a
+    # resolvable file. Use case: Tester/Deployer took a screenshot via MCP
+    # → registered via mc deliverable → mc telegram --photo <id> sends the
+    # actual image to the operator's reports chat (instead of just a text
+    # description).
     deliverable_id: uuid.UUID | None = None
-    # Optional: File-Deliverable (PDF/Excel/PowerPoint/Word/ZIP/...) als
-    # sendDocument anhaengen. Mutex zu deliverable_id (man kann nicht beides
-    # gleichzeitig schicken). Akzeptiert alle deliverable_types ausser `url`
-    # und `data` (haben keinen aufloesbaren Pfad). Anders als sendPhoto wird
-    # die Datei nicht komprimiert — ideal fuer Office-Dokumente.
+    # Optional: attach a file deliverable (PDF/Excel/PowerPoint/Word/ZIP/...)
+    # as sendDocument. Mutually exclusive with deliverable_id (can't send
+    # both at once). Accepts all deliverable_types except `url` and `data`
+    # (they have no resolvable path). Unlike sendPhoto, the file is not
+    # compressed — ideal for office documents.
     document_deliverable_id: uuid.UUID | None = None
-    # Optional: vault-relative Pfad zu einem Deliverable-Wrapper unter
-    # ~/.mc/vault/agents/{slug}/deliverables/*.md. Backend liest das Wrapper-
-    # Frontmatter, resolved attachment_path zur echten Binary unter
-    # vault/attachments/{files,images,audio}/ und sendet sie via sendDocument.
-    # Use case: Voice-Concierge bekommt vault_search-Hits zurueck und kennt
-    # nur den Wrapper-Pfad, nicht die deliverable_id — dieser Pfad gibt ihm
-    # den Telegram-Versand in einem Call. Mutex zu deliverable_id und
+    # Optional: vault-relative path to a deliverable wrapper under
+    # ~/.mc/vault/agents/{slug}/deliverables/*.md. Backend reads the wrapper
+    # frontmatter, resolves attachment_path to the actual binary under
+    # vault/attachments/{files,images,audio}/ and sends it via sendDocument.
+    # Use case: Voice-Concierge gets vault_search hits back and only knows
+    # the wrapper path, not the deliverable_id — this path lets it do the
+    # Telegram send in one call. Mutually exclusive with deliverable_id and
     # document_deliverable_id.
     vault_path: str | None = None
 
 
 class PdfGenerateBody(BaseModel):
-    """Body fuer Agent-initiierte PDF-Generierung via mc-playwright."""
+    """Body for agent-initiated PDF generation via mc-playwright."""
     title: str
-    # Entweder markdown ODER html (nicht beide). Default-Stylesheet ist auf
-    # Research-Reports / Deliverable-Docs optimiert (Geist-like Typography,
-    # neutrale Farben, kein AI-slop).
+    # Either markdown OR html (not both). Default stylesheet is optimized
+    # for research reports / deliverable docs (Geist-like typography,
+    # neutral colors, no AI-slop).
     markdown: str | None = None
     html: str | None = None
     custom_css: str | None = None
@@ -2703,7 +2706,7 @@ class PdfGenerateBody(BaseModel):
 
 
 class MePdfBody(PdfGenerateBody):
-    """PdfGenerateBody + optionales task_id-Override fuer /me/pdf."""
+    """PdfGenerateBody + optional task_id override for /me/pdf."""
     task_id: uuid.UUID | None = None
 
 
@@ -2718,19 +2721,20 @@ async def agent_generate_pdf(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Markdown oder HTML → PDF via zentralen mc-playwright Sidecar.
+    """Markdown or HTML → PDF via the central mc-playwright sidecar.
 
-    Zero-Setup-Alternative zu lokalem puppeteer/chromium im Agent-Container.
-    Vermeidet ARM-Rosetta-Konflikte (Incident 2026-04-23: FreeCode hing 2+h
-    in Download-Kaskade weil x86-Binaries im ARM-Container scheiterten).
+    Zero-setup alternative to local puppeteer/chromium in the agent
+    container. Avoids ARM/Rosetta conflicts (Incident 2026-04-23: FreeCode
+    hung for 2+h in a download cascade because x86 binaries failed in the
+    ARM container).
 
-    Der Sidecar rendert das PDF mit page.pdf() in Chromium (ARM-nativ, immer
-    verfuegbar) + schreibt nach /shared-deliverables/<task_id>/. Backend
-    registriert das PDF automatisch als TaskDeliverable (type=file).
+    The sidecar renders the PDF with page.pdf() in Chromium (ARM-native,
+    always available) and writes to /shared-deliverables/<task_id>/. The
+    backend automatically registers the PDF as a TaskDeliverable (type=file).
 
     Response: {deliverable_id, path, title, bytes, pages}
     """
-    # Task-Check (Agent darf nur eigene/assignend Tasks adressieren)
+    # Task check (agent may only address its own/assigned tasks)
     task = await session.get(Task, task_id)
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} nicht gefunden.")
@@ -2786,8 +2790,8 @@ async def agent_generate_pdf(
         task_id, agent.name, body.title, deliverable.id,
     )
 
-    # Content-Length fuer Response-Payload neu lesen (das File auf Disk ist
-    # die source of truth)
+    # Re-read content length for the response payload (the file on disk is
+    # the source of truth)
     import os as _os
     try:
         file_bytes = _os.path.getsize(deliverable.path) if deliverable.path else 0
@@ -2813,19 +2817,19 @@ async def agent_visual_verify(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Screenshots + Metrics via mc-playwright + optional Telegram-Foto-Anhang.
+    """Screenshots + metrics via mc-playwright + optional Telegram photo attachment.
 
-    Ruft den zentralen mc-playwright Service (kein eigenes Browser-Setup
-    pro Agent mehr noetig). Registriert jedes Screenshot als TaskDeliverable.
-    Wenn send_to_telegram=True, sendet die Screenshots zusaetzlich als
-    Media-Group an den Reports-Chat des Operators.
+    Calls the central mc-playwright service (no more per-agent browser
+    setup needed). Registers each screenshot as a TaskDeliverable.
+    If send_to_telegram=True, also sends the screenshots as a media group
+    to the operator's reports chat.
     """
     from app.services.visual_verifier import (
         verify_url, register_screenshots_as_deliverables,
         send_screenshots_to_telegram, format_metrics_summary,
     )
 
-    # Task laden + Ownership-Check
+    # Load task + ownership check
     task = await session.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "Task nicht gefunden")
@@ -2836,10 +2840,10 @@ async def agent_visual_verify(
             403, "Du bist nicht assigned, owner oder same-board Lead auf diesem Task."
         )
 
-    # --- Vault-Resolve bei credential_id ------------------------------------
-    # Wenn der Agent einen Credential-Verweis mitschickt, resolven wir die
-    # verschluesselte Credential zu einem Form-Login-Dict. Der Agent darf das
-    # nur wenn er CREDENTIALS_READ Scope hat — sonst 403.
+    # --- Vault resolve on credential_id --------------------------------------
+    # If the agent sends a credential reference, we resolve the encrypted
+    # credential to a form-login dict. The agent may only do this if it has
+    # the CREDENTIALS_READ scope — otherwise 403.
     resolved_login: dict | None = None
     if body.credential_id is not None:
         from app.scopes import Scope, get_agent_effective_scopes
@@ -2879,7 +2883,7 @@ async def agent_visual_verify(
             "password": password,
         }
 
-    # Inline-Login gewinnt gegen resolved_login (falls beide gesetzt)
+    # Inline login wins over resolved_login (if both are set)
     login_payload: dict | None = None
     if body.login is not None:
         login_payload = body.login.model_dump(exclude_none=True)
@@ -2888,7 +2892,7 @@ async def agent_visual_verify(
 
     interactions_payload = [i.model_dump(exclude_none=True) for i in body.interactions] or None
 
-    # Aufruf mc-playwright — kann 10-60s dauern (Login + Interactions)
+    # Call mc-playwright — can take 10-60s (login + interactions)
     try:
         result = await verify_url(
             url=body.url,
@@ -2910,12 +2914,12 @@ async def agent_visual_verify(
     except httpx.HTTPError as e:
         raise HTTPException(503, f"mc-playwright unreachable: {e}")
 
-    # Bug B (2026-04-23): Login-Success-Check vom mc-playwright Service
-    # auswerten. Wenn der Form-Login faktisch fehlschlug (Page blieb auf
-    # Login-URL), ist der Screenshot wertlos — Agent wuerde sonst die
-    # Login-Maske als "eingeloggter Zustand" interpretieren (siehe Bug A).
-    # Hier hart abbrechen mit klarer Fehlermeldung statt das Bild + ok=true
-    # zurueckzugeben.
+    # Bug B (2026-04-23): evaluate the login-success check from the
+    # mc-playwright service. If the form login actually failed (page stayed
+    # on the login URL), the screenshot is worthless — the agent would
+    # otherwise interpret the login mask as a "logged-in state" (see Bug A).
+    # Hard-abort here with a clear error message instead of returning the
+    # image + ok=true.
     login_info = result.get("login") if isinstance(result, dict) else None
     if login_info and login_info.get("succeeded") is False:
         raise HTTPException(
@@ -2945,18 +2949,18 @@ async def agent_visual_verify(
         session, task_id, agent.id, result,
     )
 
-    # --- Telegram Send mit per-task Dedup -----------------------------------
-    # Problem (2026-04-23 Bug): Agents machen oft mehrere visual-verify Calls
-    # pro Task (Selbst-Verifikation, fresh re-take, retry nach Timeout). Jeder
-    # Call sendete default an Telegram → der Operator bekam das gleiche Modal 3-5x.
-    # Fix: Redis-Dedup pro Task. Erste Call sendet, Folge-Calls loggen skip.
-    # Opt-out via `force_telegram_resend=True` fuer legitime Re-Sends.
+    # --- Telegram send with per-task dedup -----------------------------------
+    # Problem (2026-04-23 bug): agents often make multiple visual-verify calls
+    # per task (self-verification, fresh re-take, retry after timeout). Each
+    # call defaulted to sending to Telegram → the operator got the same modal 3-5x.
+    # Fix: Redis dedup per task. First call sends, follow-up calls log a skip.
+    # Opt-out via `force_telegram_resend=True` for legitimate re-sends.
     tg_result = None
     tg_sent = False
     tg_skipped_reason: str | None = None
     if body.send_to_telegram:
-        # Redis-Dedup — Fail-open bei Redis-Fehlern (Container-Issue / Tests),
-        # damit Telegram-Send nicht grundlos ausfaellt.
+        # Redis dedup — fail-open on Redis errors (container issue / tests),
+        # so the Telegram send doesn't fail without reason.
         redis = None
         already_sent = False
         try:
@@ -2983,8 +2987,8 @@ async def agent_visual_verify(
             tg_result = await send_screenshots_to_telegram(result, caption=caption_html or None)
             tg_sent = tg_result is not None and (tg_result.get("ok") if isinstance(tg_result, dict) else False)
             if tg_sent and redis is not None:
-                # TTL 24h — lang genug fuer normalen Task-Lifecycle, kurz genug
-                # dass Tasks die nach Langzeit reopened werden trotzdem 1 send kriegen.
+                # TTL 24h — long enough for a normal task lifecycle, short enough
+                # that tasks reopened after a long time still get 1 send.
                 try:
                     await redis.set(dedup_key, "1", ex=24 * 3600)
                 except Exception as e:  # noqa: BLE001
@@ -3010,15 +3014,15 @@ async def agent_send_telegram_report(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent sendet Report-Nachricht an den Reports-Telegram-Chat des Operators.
+    """Agent sends a report message to the operator's reports Telegram chat.
 
-    Nutze diesen Endpoint fuer Info-Delivery am Task-Ende (Summary, Deliverable-
-    Liste, Empfehlung). KEIN Status-Spam — nur final-relevante Reports.
-    HTML Parse-Mode: nutze `<b>`, `<i>`, `<code>`, `<a href="...">...</a>`.
+    Use this endpoint for info delivery at task end (summary, deliverable
+    list, recommendation). NO status spam — only reports relevant at the end.
+    HTML parse mode: use `<b>`, `<i>`, `<code>`, `<a href="...">...</a>`.
 
-    Side-Effect: wenn Agent einen aktiven Task hat (current_task_id), wird
-    `task.report_sent_to_telegram = True` gesetzt — damit weiss der `mc done`
-    Guard dass der Report-Back-Contract erfuellt ist.
+    Side effect: if the agent has an active task (current_task_id),
+    `task.report_sent_to_telegram = True` is set — so the `mc done` guard
+    knows the report-back contract is fulfilled.
     """
     from app.services.telegram_reports import telegram_reports
 
@@ -3057,12 +3061,13 @@ async def agent_send_telegram_report(
         agent, body.task_id, session, required=False
     )
 
-    # Routing-Regel "wer dispatcht, der sendet" (Subtask-Send-Guard, 2026-05-17):
-    # Wenn der Agent an einem Subtask arbeitet (parent_task_id NOT NULL), gehoert
-    # der finale Telegram-Hit zum Orchestrator (Boss), nicht zum Worker. Sonst
-    # bekommt der Operator eine Worker-Nachricht UND eine Boss-Konsolidier-Nachricht =
-    # Duplikat. Ausnahme: long-running Watch-Tasks bei denen Boss explizit
-    # autonomous_telegram=True setzt — dann darf der Worker autonom melden.
+    # Routing rule "whoever dispatches, sends" (subtask-send guard, 2026-05-17):
+    # If the agent is working on a subtask (parent_task_id NOT NULL), the
+    # final Telegram send belongs to the orchestrator (Boss), not the
+    # worker. Otherwise the operator gets a worker message AND a Boss
+    # consolidation message = duplicate. Exception: long-running watch tasks
+    # where Boss explicitly sets autonomous_telegram=True — then the worker
+    # may report autonomously.
     if (
         resolved_task is not None
         and resolved_task.parent_task_id is not None
@@ -3078,10 +3083,10 @@ async def agent_send_telegram_report(
             ),
         )
 
-    # Flag-Claim VOR Telegram-Send (Race-Schutz C4 + Duplicate-Schutz C5):
-    # Atomic UPDATE WHERE flag=false — Rowcount sagt ob wir "gewonnen" haben.
-    # Wenn Flag schon true: Send trotzdem durchlassen (Idempotenz), aber
-    # nicht nochmal setzen.
+    # Flag claim BEFORE Telegram send (race protection C4 + duplicate protection C5):
+    # Atomic UPDATE WHERE flag=false — rowcount tells us whether we "won".
+    # If the flag is already true: let the send through anyway (idempotency),
+    # but don't set it again.
     from sqlalchemy import update as _sa_update
     claimed = False
     if resolved_task is not None and not resolved_task.report_sent_to_telegram:
@@ -3110,10 +3115,10 @@ async def agent_send_telegram_report(
                 resolved_task.id, _rb_exc,
             )
 
-    # Wenn deliverable_id mitgegeben: Photo-Send statt Plain-Text. Ermoeglicht
-    # Agents (Tester etc.) das echte Bild an den Operator anzuhaengen, nicht nur eine
-    # Text-Beschreibung. Caption ist auf 1024 Zeichen begrenzt (Telegram-Limit
-    # — send_photo truncated automatisch).
+    # If deliverable_id is given: photo send instead of plain text. Lets
+    # agents (Tester etc.) attach the actual image to the operator instead of
+    # just a text description. Caption is limited to 1024 characters
+    # (Telegram limit — send_photo truncates automatically).
     photo_path: str | None = None
     if body.deliverable_id is not None:
         from app.models.deliverable import TaskDeliverable
@@ -3133,7 +3138,7 @@ async def agent_send_telegram_report(
                     "nur 'screenshot' kann als Telegram-Photo angehaengt werden."
                 ),
             )
-        # Ownership-Check: Agent darf nur eigene Deliverables (oder seines Boards) senden
+        # Ownership check: agent may only send its own deliverables (or its board's)
         if (
             deliverable.agent_id != agent.id
             and not agent.is_board_lead
@@ -3152,9 +3157,9 @@ async def agent_send_telegram_report(
                 ),
             )
 
-    # Wenn document_deliverable_id mitgegeben: sendDocument (PDF/Office/ZIP/...).
-    # Anders als sendPhoto wird die Datei NICHT komprimiert — ideal fuer alle
-    # Nicht-Bild-Dateien wo Pixel-Genauigkeit oder Original-Format wichtig sind.
+    # If document_deliverable_id is given: sendDocument (PDF/Office/ZIP/...).
+    # Unlike sendPhoto, the file is NOT compressed — ideal for all non-image
+    # files where pixel accuracy or the original format matters.
     document_path: str | None = None
     if body.document_deliverable_id is not None:
         from app.models.deliverable import TaskDeliverable
@@ -3166,7 +3171,7 @@ async def agent_send_telegram_report(
                 status_code=404,
                 detail=f"Deliverable {body.document_deliverable_id} nicht gefunden.",
             )
-        # url/data haben keinen Pfad — sinnlos als Document zu schicken
+        # url/data have no path — pointless to send as a document
         if deliverable.deliverable_type in ("url", "data"):
             raise HTTPException(
                 status_code=422,
@@ -3176,7 +3181,7 @@ async def agent_send_telegram_report(
                     "Telegram-Document gesendet werden."
                 ),
             )
-        # Ownership-Check: analog zum Photo-Pfad
+        # Ownership check: same as the photo path
         if (
             deliverable.agent_id != agent.id
             and not agent.is_board_lead
@@ -3195,11 +3200,11 @@ async def agent_send_telegram_report(
                 ),
             )
 
-    # Wenn vault_path mitgegeben: Wrapper-basierter Versand. Voice-Concierge
-    # kennt aus vault_search nur den Wrapper-Pfad, nicht die deliverable_id.
-    # Wir lesen das Wrapper-Frontmatter, resolven attachment_path zur echten
-    # Binary unter /vault/attachments/{files,images,audio}/ und schicken sie
-    # via sendDocument. body.text wird zur Caption.
+    # If vault_path is given: wrapper-based delivery. Voice-Concierge only
+    # knows the wrapper path from vault_search, not the deliverable_id.
+    # We read the wrapper frontmatter, resolve attachment_path to the actual
+    # binary under /vault/attachments/{files,images,audio}/ and send it
+    # via sendDocument. body.text becomes the caption.
     if body.vault_path is not None:
         from app.config import settings as _settings
         from app.helpers.vault_frontmatter import FrontmatterError, parse_frontmatter
@@ -3239,17 +3244,17 @@ async def agent_send_telegram_report(
 
         document_path = str(candidate)
 
-    # Telegram-Send NACH Flag-Claim — try/except faengt auch httpx-Exceptions (B1-Fix)
+    # Telegram send AFTER flag claim — try/except also catches httpx exceptions (B1-Fix)
     try:
         if photo_path is not None:
-            # Caption = text (truncated auf 1024 von telegram_reports.send_photo)
+            # Caption = text (truncated to 1024 by telegram_reports.send_photo)
             result = await telegram_reports.send_photo(photo_path, caption=text)
         elif document_path is not None:
             result = await telegram_reports.send_document(document_path, caption=text)
         else:
             result = await telegram_reports.send(text)
     except Exception as send_exc:
-        # Network/Timeout/HTTP-Level Errors — Flag zurueckrollen, damit Agent retryen kann
+        # Network/timeout/HTTP-level errors — roll back the flag so the agent can retry
         logger.warning(
             "Telegram-Send Exception (%s): %s — rolling back flag claim",
             type(send_exc).__name__, send_exc,
@@ -3283,7 +3288,7 @@ async def agent_send_telegram_report(
 
 
 # ── /me/* Auto-Task-Resolution Endpoints ─────────────────────────────────────
-# Agent muss keine Task-UUID mehr manuell in die URL einsetzen.
+# Agent no longer has to manually put a task UUID into the URL.
 # Backend resolviert via: body.task_id > current_task_id > spawn_session_key.
 
 @router.post(
@@ -3295,11 +3300,11 @@ async def agent_me_generate_pdf(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """PDF generieren — aktive Task automatisch aufloesen.
+    """Generate a PDF — active task resolved automatically.
 
-    Kein board_id/task_id in der URL noetig. Backend resolviert via
-    current_task_id (Board Leads) oder spawn_session_key (Workers/cli-bridge).
-    Optional: task_id im Body als explizites Override (mit Ownership-Check).
+    No board_id/task_id needed in the URL. Backend resolves via
+    current_task_id (Board Leads) or spawn_session_key (workers/cli-bridge).
+    Optional: task_id in the body as an explicit override (with ownership check).
     """
     task = await _resolve_active_task_for_agent(agent, body.task_id, session)
     return await agent_generate_pdf(
@@ -3321,11 +3326,11 @@ async def agent_me_create_deliverable(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_WRITE)),
 ):
-    """Deliverable registrieren — aktive Task automatisch aufloesen.
+    """Register a deliverable — active task resolved automatically.
 
-    Kein board_id/task_id in der URL noetig. Backend resolviert via
-    current_task_id (Board Leads) oder spawn_session_key (Workers/cli-bridge).
-    Optional: task_id im Body als explizites Override (mit Ownership-Check).
+    No board_id/task_id needed in the URL. Backend resolves via
+    current_task_id (Board Leads) or spawn_session_key (workers/cli-bridge).
+    Optional: task_id in the body as an explicit override (with ownership check).
     """
     task = await _resolve_active_task_for_agent(agent, payload.task_id, session)
     return await agent_create_deliverable(
@@ -3347,12 +3352,12 @@ async def agent_me_send_telegram_report(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Telegram-Report senden — /me/*-konsistenter Pfad.
+    """Send a Telegram report — /me/*-consistent path.
 
-    Identisches Verhalten wie POST /telegram/send (Task-Resolution via
-    body.task_id > current_task_id > spawn_session_key bereits dort integriert).
-    Dieser Endpoint existiert fuer API-Konsistenz — alle drei Delivery-Aktionen
-    unter /me/*.
+    Identical behavior to POST /telegram/send (task resolution via
+    body.task_id > current_task_id > spawn_session_key is already integrated
+    there). This endpoint exists for API consistency — all three delivery
+    actions under /me/*.
     """
     return await agent_send_telegram_report(body=body, agent=agent, session=session)
 
@@ -3368,10 +3373,10 @@ async def agent_list_credentials(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent listet alle verfuegbaren Credentials (maskiert, alphabetisch sortiert).
+    """Agent lists all available credentials (masked, sorted alphabetically).
 
-    Credentials sind global (nicht board-scoped) — board_id nur fuer URL-Konsistenz.
-    Gibt data_masked zurueck (letzte 4 Zeichen sichtbar, Rest Sternchen).
+    Credentials are global (not board-scoped) — board_id is only for URL consistency.
+    Returns data_masked (last 4 characters visible, rest asterisks).
     """
     import json
     from app.models.credential import Credential
@@ -3406,10 +3411,10 @@ async def agent_get_credential(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent holt eine einzelne Credential vollstaendig entschluesselt.
+    """Agent fetches a single credential, fully decrypted.
 
-    Gibt das entschluesselte data-Dict zurueck (kein Masking).
-    404 wenn Credential nicht existiert.
+    Returns the decrypted data dict (no masking).
+    404 if the credential doesn't exist.
     """
     import json
     from app.models.credential import Credential

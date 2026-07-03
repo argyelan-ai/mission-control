@@ -1,10 +1,10 @@
 """TaskComment.comment_type — Single Source of Truth (REL-01).
 
-Importiert von:
+Imported by:
   - backend/app/routers/agents.py (DELIVERABLE_SYSTEM_TYPES → _DELIVER_SYSTEM_COMMENT_TYPES)
   - backend/app/routers/agent_scoped.py (ALL_COMMENT_TYPES → VALID_COMMENT_TYPES)
 
-Kein anderer Ort darf eigene comment-type-Sets definieren.
+No other place is allowed to define its own comment-type sets.
 
 Live-Bug-Regression: 2026-04-23 (Tester-blocked) und 2026-04-24
 (install_completed silent-drop, PR #110). Fix-PR: REL-01 dieser Phase.
@@ -24,15 +24,15 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
     "install_completed", "install_failed",
 })
 
-# Comment_types die als actionable System-Events an den zustaendigen
-# Agent ausgeliefert werden ueber /me/poll. Subset von ALL_COMMENT_TYPES
-# bis auf den historischen server-only `system` Type.
+# Comment_types that get delivered as actionable system events to the
+# responsible agent via /me/poll. Subset of ALL_COMMENT_TYPES, minus the
+# historical server-only `system` type.
 #
-# `handoff` (Bug 9, 2026-05-13): Board Lead → Worker Briefing auf einen
-# bereits assigned Task. Default-Comments (`message`) werden bewusst NICHT
-# ausgeliefert (Echo-Loop-Schutz / Audit-Routine) — wer einen Worker
-# anstossen will, nutzt entweder `mc delegate` (eigener Sub-Task) oder
-# `mc comment --type handoff` (Wake-Signal auf existing Task). Siehe Bug-Memo
+# `handoff` (Bug 9, 2026-05-13): Board Lead → worker briefing on an
+# already-assigned task. Default comments (`message`) are deliberately NOT
+# delivered (echo-loop protection / audit routine) — anyone wanting to
+# nudge a worker uses either `mc delegate` (own sub-task) or
+# `mc comment --type handoff` (wake signal on an existing task). See bug memo
 # project_open_bugs_mc_agent_observability.md.
 DELIVERABLE_SYSTEM_TYPES: Final[frozenset[str]] = frozenset({
     "subtask_completed", "resolution", "blocker", "system", "feedback",
@@ -40,9 +40,9 @@ DELIVERABLE_SYSTEM_TYPES: Final[frozenset[str]] = frozenset({
     "install_completed", "install_failed",
 })
 
-# Sanity-check at import time (defense in depth — D-02). Kein anderer
-# Code-Pfad darf DELIVERABLE_SYSTEM_TYPES auf eine Obermenge ausdehnen
-# ohne ALL_COMMENT_TYPES gleichzeitig zu erweitern.
+# Sanity-check at import time (defense in depth — D-02). No other
+# code path is allowed to extend DELIVERABLE_SYSTEM_TYPES into a superset
+# without extending ALL_COMMENT_TYPES at the same time.
 _drift = DELIVERABLE_SYSTEM_TYPES - ALL_COMMENT_TYPES - {"system"}
 assert not _drift, (
     f"comment_types.py drift: {_drift} are in DELIVERABLE_SYSTEM_TYPES "

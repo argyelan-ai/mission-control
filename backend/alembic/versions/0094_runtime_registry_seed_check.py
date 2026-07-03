@@ -8,7 +8,7 @@ Phase 16 (D-04): Idempotent seed assertion. Reads backend/config/runtimes.json,
 compares to runtimes table, inserts any missing rows. Existing rows are left
 untouched (no drops, no updates). The JSON file is NOT removed — it remains
 as the canonical seed template for fresh deploys (D-02). After this migration
-the DB is the alleinige Wahrheit für GET /runtimes (D-01/D-03).
+the DB is the sole source of truth for GET /runtimes (D-01/D-03).
 
 Idempotent: only INSERTs missing slugs, never UPDATEs or DROPs. Re-running is
 a no-op once all seeds are present.
@@ -45,7 +45,7 @@ def upgrade() -> None:
     registry_path = _resolve_registry_path()
     if registry_path is None:
         # JSON not in image (already removed or relocated) — DB stays as-is.
-        # Bootstrap-Seed läuft via main.py lifespan über andere Pfade.
+        # Bootstrap seed runs via main.py lifespan through other paths.
         logger.info("0094: runtimes.json not found — skipping seed check")
         return
 
@@ -68,9 +68,9 @@ def upgrade() -> None:
             continue
         conn.execute(
             sa.text(
-                # id explizit generieren: die Spalte hat keinen Server-Default —
-                # auf Bestands-DBs war dieser INSERT ein No-op (Seeder war
-                # schneller), auf frischen DBs crashte er (CI fresh-boot E2E).
+                # generate id explicitly: the column has no server default —
+                # on existing DBs this INSERT was a no-op (the seeder was
+                # faster), on fresh DBs it crashed (CI fresh-boot E2E).
                 "INSERT INTO runtimes (id, slug, display_name, runtime_type, endpoint, enabled) "
                 "VALUES (gen_random_uuid(), :slug, :dn, :rt, :ep, :en)"
             ),

@@ -4,7 +4,7 @@ Revision ID: 0081
 Revises: 0080
 Create Date: 2026-04-20
 
-Claude-Fleet Migration (siehe docs/superpowers/plans/2026-04-20-anthropic-
+Claude-Fleet Migration (see docs/superpowers/plans/2026-04-20-anthropic-
 claude-fleet-migration.md):
 
   - Boss (agent_runtime=host)       → anthropic-claude-opus (opus-4-7)
@@ -14,18 +14,18 @@ claude-fleet-migration.md):
   - Sparky                           → unchanged (qwen-coder-lms)
   - Henry                            → unchanged (openclaw gateway)
 
-Setzt sowohl agents.runtime_id (FK, authoritativ für docker_agent_sync +
-bootstrap) als auch agents.model (Fretext-Fallback, von dispatch.py in
-manchen Pfaden genutzt), damit kein Widerspruch zwischen den zwei
-Source-of-Truth-Feldern entsteht.
+Sets both agents.runtime_id (FK, authoritative for docker_agent_sync +
+bootstrap) and agents.model (free-text fallback, used by dispatch.py in
+some code paths), so the two source-of-truth fields never contradict
+each other.
 
-WICHTIG: Diese Migration ändert NICHT agent_runtime — alle 9 bleiben
-'cli-bridge' (Hybrid-Architektur — Container bleiben, Binary wechselt von
-openclaude zu claude). Boss bleibt 'host' (war er schon via 0074).
+IMPORTANT: This migration does NOT change agent_runtime — all 9 stay
+'cli-bridge' (hybrid architecture — containers stay, binary switches from
+openclaude to claude). Boss stays 'host' (already was, via 0074).
 
-Reprovisioning (sync-config pro Agent → rendert settings.json mit neuem
-Model in claude-config/) ist ein separater Operator-Step nach dem Image-
-Deploy.
+Reprovisioning (sync-config per agent → renders settings.json with the
+new model into claude-config/) is a separate operator step after the
+image deploy.
 """
 from alembic import op
 
@@ -63,7 +63,7 @@ def upgrade() -> None:
         """
     )
 
-    # 9 Sonnet-Agents
+    # 9 Sonnet agents
     agents_csv = ", ".join(f"'{n}'" for n in SONNET_AGENTS)
     op.execute(
         f"""
@@ -79,10 +79,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Rollback auf ollama-cloud (glm-5.1:cloud) — vor der Migration waren
-    # die 9 Agents dort via 0079 gelinkt. Boss hatte claude-opus-4-7
-    # (hardcoded in start-claude.sh), aber runtime_id war vermutlich NULL —
-    # Downgrade setzt es auf NULL zurück.
+    # Rollback to ollama-cloud (glm-5.1:cloud) — before this migration the
+    # 9 agents were linked there via 0079. Boss had claude-opus-4-7
+    # (hardcoded in start-claude.sh), but runtime_id was probably NULL —
+    # downgrade resets it back to NULL.
     op.execute(
         """
         UPDATE agents

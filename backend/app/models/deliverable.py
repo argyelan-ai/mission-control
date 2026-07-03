@@ -1,6 +1,6 @@
-"""Task Deliverables — Agent-registrierte Ergebnisse pro Task.
+"""Task Deliverables — agent-registered results per task.
 
-V2: scope, content, tags, is_pinned, is_reusable, git_commit_hash hinzugefügt.
+V2: added scope, content, tags, is_pinned, is_reusable, git_commit_hash.
 """
 import uuid
 from datetime import datetime
@@ -26,22 +26,22 @@ class TaskDeliverable(SQLModel, table=True):
     path: str | None = None
     description: str | None = None
 
-    # V2: Inhalt direkt gespeichert (für Markdown-Deliverables)
+    # V2: content stored directly (for Markdown deliverables)
     content: str | None = None
 
-    # V2: Sichtbarkeits-Ebene
+    # V2: visibility level
     scope: str = Field(default="task")  # task | phase | project
 
-    # V2: Tags für Suche (JSON Array)
+    # V2: tags for search (JSON array)
     tags: list[Any] | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
 
-    # V2: Kontext-Injection Flags
+    # V2: context-injection flags
     is_pinned: bool = Field(default=False)
     is_reusable: bool = Field(default=False)
 
-    # V2: Git-Traceability
+    # V2: Git traceability
     git_commit_hash: str | None = None
 
     created_at: datetime = Field(

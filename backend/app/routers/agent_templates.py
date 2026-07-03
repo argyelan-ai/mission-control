@@ -38,8 +38,8 @@ class TemplateUpdate(BaseModel):
 
 class InstantiateRequest(BaseModel):
     board_id: uuid.UUID
-    model: str | None = None   # überschreibt template.default_model
-    name: str | None = None    # überschreibt template.name
+    model: str | None = None   # overrides template.default_model
+    name: str | None = None    # overrides template.name
 
 
 @router.get("/agent-templates")
@@ -117,8 +117,8 @@ async def _do_instantiate(
     is_board_lead: bool = False,
 ) -> tuple[Agent, str]:
     """
-    Erstellt einen Agent aus einem Template und gibt (agent, raw_token) zurueck.
-    Wird von user-auth und agent-auth Endpoints gemeinsam genutzt.
+    Creates an Agent from a Template and returns (agent, raw_token).
+    Shared by the user-auth and agent-auth endpoints.
     """
     from app.auth import generate_agent_token
     from app.routers.agents import _generate_tools_md
@@ -128,7 +128,7 @@ async def _do_instantiate(
     agent_model = model or template.default_model
     board_id_str = str(board_id) if board_id else None
 
-    # Scopes: Template > Default-Lookup > leer
+    # Scopes: Template > default lookup > empty
     agent_scopes = list(template.scopes or []) if template.scopes else get_default_scopes(template.name)
 
     raw_token, token_hash = generate_agent_token()
@@ -156,9 +156,9 @@ async def _do_instantiate(
     await session.commit()
     await session.refresh(agent)
 
-    # Vault-Write mc_token_{slug} — /internal/bootstrap liefert den Token an
-    # den Container. Ohne diesen Write crash-loopt ein frisch instantiierter
-    # Agent mit 'MC_TOKEN is not set' (Fresh-Install-Fix 2026-07-02).
+    # Vault write mc_token_{slug} — /internal/bootstrap delivers the token to
+    # the container. Without this write, a freshly instantiated agent
+    # crash-loops with 'MC_TOKEN is not set' (Fresh-Install-Fix 2026-07-02).
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
 
@@ -174,9 +174,9 @@ async def instantiate_template(
     current_user=Depends(require_user),
 ):
     """
-    Erstellt einen Agent aus einem Template.
-    Modell-Priorität: body.model > template.default_model > None
-    Rückgabe: { agent, token } — Token einmalig, nicht wieder abrufbar!
+    Creates an Agent from a Template.
+    Model priority: body.model > template.default_model > None
+    Returns: { agent, token } — token is shown once, not retrievable again!
     """
     template = await session.get(AgentTemplate, template_id)
     if not template:
@@ -193,5 +193,5 @@ async def instantiate_template(
     background_tasks.add_task(_provision_agent_background, agent.id)
     return {
         "agent": agent,
-        "token": raw_token,  # einmalig — danach nicht mehr abrufbar
+        "token": raw_token,  # one-time — not retrievable afterwards
     }

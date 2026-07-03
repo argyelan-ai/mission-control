@@ -1,10 +1,10 @@
-"""Model Usage Events — Token/Kosten-Tracking pro Modell × Agent × Harness.
+"""Model Usage Events — token/cost tracking per model × agent × harness.
 
-Ersetzt das Gateway-era CostEvent-Schema fuer neue Writes.
-CostEvent bleibt fuer Budget-Warnungen erhalten (check_budget_warnings liest davon).
+Replaces the gateway-era CostEvent schema for new writes.
+CostEvent is kept for budget warnings (check_budget_warnings reads from it).
 
-Datenquelle: JSONL-Transkripte die Claude Code / openclaude schreiben.
-Dedup-Key: top-level `uuid` (UNIQUE) — NIEMALS message.id (hat Kollisionen).
+Data source: JSONL transcripts written by Claude Code / openclaude.
+Dedup key: top-level `uuid` (UNIQUE) — NEVER message.id (has collisions).
 """
 import uuid
 from datetime import datetime
@@ -14,10 +14,10 @@ from sqlmodel import Column, Field, SQLModel
 
 
 class ModelUsageEvent(SQLModel, table=True):
-    """Eine assistant-Zeile aus einem JSONL-Transkript.
+    """An assistant line from a JSONL transcript.
 
-    Ein Row = eine Message (uuid UNIQUE). Idempotent: kann beliebig oft
-    ueber dieselben Dateien laufen ohne Duplikate.
+    One row = one message (uuid UNIQUE). Idempotent: can run over the
+    same files any number of times without duplicates.
     """
 
     __tablename__ = "model_usage_events"
@@ -40,24 +40,24 @@ class ModelUsageEvent(SQLModel, table=True):
     harness: str = Field(index=True)
     # "cli-bridge" | "host" | "sparky" | "backend-ollama"
 
-    # Modell
+    # Model
     model: str = Field(index=True)
     provider: str | None = Field(default=None, nullable=True)
 
-    # Session / Message Identifiers
+    # Session / message identifiers
     session_id: str = Field(index=True)
-    message_uuid: str = Field(unique=True)  # top-level `uuid` aus JSONL
+    message_uuid: str = Field(unique=True)  # top-level `uuid` from JSONL
 
-    # Token-Counts
+    # Token counts
     input_tokens: int = Field(default=0)
     output_tokens: int = Field(default=0)
     cache_read_tokens: int = Field(default=0)   # cache_read_input_tokens
     cache_write_tokens: int = Field(default=0)  # cache_creation_input_tokens (5m+1h)
 
-    # Berechnete Kosten (aus model_prices bei Insert)
+    # Computed cost (from model_prices at insert time)
     cost_usd: float | None = Field(default=None, nullable=True)
 
-    # Zeitstempel
+    # Timestamps
     ts: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False, index=True)
     )
@@ -68,7 +68,7 @@ class ModelUsageEvent(SQLModel, table=True):
     )
 
     # Provenance
-    source_file: str = Field()  # JSONL-Pfad fuer Debug + Re-Harvest-Skip
+    source_file: str = Field()  # JSONL path for debug + re-harvest skip
 
     __table_args__ = (
         Index("ix_model_usage_model_ts", "model", "ts"),
@@ -78,39 +78,39 @@ class ModelUsageEvent(SQLModel, table=True):
 
 
 class ModelPrice(SQLModel, table=True):
-    """Editierbare Preistabelle fuer Modell-Kosten.
+    """Editable price table for model costs.
 
-    Pattern-Matching via fnmatch-Glob. Spezifischere Patterns (hoehere priority)
-    gewinnen. valid_from ermoeglicht Preishistorie und rueckwirkende Neuberechnung.
+    Pattern matching via fnmatch glob. More specific patterns (higher priority)
+    win. valid_from enables price history and retroactive recalculation.
     """
 
     __tablename__ = "model_prices"
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
 
-    model_pattern: str = Field(index=True)  # exakt oder glob (claude-opus-4-*, qwen*)
-    input_per_mtok: float = Field(default=0.0)   # USD / 1M Input-Tokens
-    output_per_mtok: float = Field(default=0.0)  # USD / 1M Output-Tokens
-    cache_read_per_mtok: float = Field(default=0.0)   # ca. 0.1x Input
-    cache_write_per_mtok: float = Field(default=0.0)  # ca. 1.25x Input
+    model_pattern: str = Field(index=True)  # exact or glob (claude-opus-4-*, qwen*)
+    input_per_mtok: float = Field(default=0.0)   # USD / 1M input tokens
+    output_per_mtok: float = Field(default=0.0)  # USD / 1M output tokens
+    cache_read_per_mtok: float = Field(default=0.0)   # approx. 0.1x input
+    cache_write_per_mtok: float = Field(default=0.0)  # approx. 1.25x input
 
     currency: str = Field(default="USD")
     valid_from: datetime = Field(
         sa_column=Column(DateTime(timezone=True), nullable=False)
     )
     priority: int = Field(default=0, index=True)
-    # Hoehere priority = spezifischeres Pattern gewinnt beim Matching.
-    # Fallback `*` hat priority=0 (niedrigst).
+    # Higher priority = more specific pattern wins when matching.
+    # Fallback `*` has priority=0 (lowest).
 
     note: str | None = Field(default=None, nullable=True)
 
 
 class ModelUsageHarvestState(SQLModel, table=True):
-    """Persistenter Offset-State pro JSONL-Datei (Inkremental-Harvesting).
+    """Persistent offset state per JSONL file (incremental harvesting).
 
-    file_path = PK. Append-only JSONL: processed_lines Zeilen wurden bereits
-    gelesen. Naechster Lauf beginnt ab dieser Zeilennummer.
-    mtime-Skip: wenn mtime unveraendert → Datei wird komplett uebersprungen.
+    file_path = PK. Append-only JSONL: processed_lines lines have already
+    been read. Next run starts from this line number.
+    mtime skip: if mtime is unchanged → file is skipped entirely.
     """
 
     __tablename__ = "model_usage_harvest_state"

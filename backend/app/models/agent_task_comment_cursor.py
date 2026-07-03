@@ -1,10 +1,10 @@
-"""Per-agent, per-task cursor fuer User-Comment-Delivery via /me/poll.
+"""Per-agent, per-task cursor for user-comment delivery via /me/poll.
 
-Der Poll-Endpoint liefert neue User-Kommentare an den Agent aus. Damit derselbe
-Kommentar nicht mehrfach zugestellt wird, merken wir uns den letzten Comment-ID,
-den der Agent bereits gesehen hat — pro (agent_id, task_id).
+The poll endpoint delivers new user comments to the agent. To avoid delivering
+the same comment more than once, we track the last comment ID the agent has
+already seen — per (agent_id, task_id).
 
-Siehe Plan: docs/superpowers/plans/2026-04-17-comment-delivery-and-status-sync.md
+See plan: docs/superpowers/plans/2026-04-17-comment-delivery-and-status-sync.md
 """
 import uuid
 from datetime import datetime

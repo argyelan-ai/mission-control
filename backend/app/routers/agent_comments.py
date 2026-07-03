@@ -56,26 +56,26 @@ async def _post_subtask_blocker_comment(
 ) -> None:
     """Post a 'blocker' comment on the parent when a subtask transitions to blocked.
 
-    Live-stream fuer Parent-Owner (Boss/Orchestrator): ohne diesen Comment sah
-    der Parent-Owner im /poll keinen Hinweis dass sein Subtask blockiert ist —
-    er konnte nicht reagieren und der Parent blieb stuck (Bug 2026-04-23).
+    Live-stream for the parent owner (Boss/Orchestrator): without this comment
+    the parent owner saw no indication in /poll that its subtask was blocked —
+    it couldn't react and the parent stayed stuck (Bug 2026-04-23).
 
-    Guard-Logik:
-      - No-op fuer Root-Tasks (parent_task_id is None)
-      - No-op wenn Parent nicht (mehr) existiert
-      - No-op wenn Subtask auf einen weiteren Subtask wartet
-        (blocked_by_task_id gesetzt) — das ist interne Orchestration und
-        braucht keine Operator-Decision, also auch keinen Parent-Notify
-      - No-op bei Self-Delegation (Worker == Parent-Owner) — sonst Echo-Loop
+    Guard logic:
+      - No-op for root tasks (parent_task_id is None)
+      - No-op when the parent no longer exists
+      - No-op when the subtask is waiting on another subtask
+        (blocked_by_task_id set) — that's internal orchestration and
+        needs no operator decision, hence no parent notify either
+      - No-op on self-delegation (worker == parent owner) — otherwise echo loop
 
-    Best-effort: Caller umschliesst mit try/except, damit ein Fehler hier
-    den eigentlichen PATCH nicht auf 500 kippt.
+    Best-effort: caller wraps this in try/except so a failure here doesn't
+    tip the actual PATCH into a 500.
     """
     if task.parent_task_id is None:
         return
 
-    # Callback-Wait: keine Operator-Decision, keine Parent-Notify (analoge Logik
-    # wie bei der Approval-Erstellung weiter unten im Handler).
+    # Callback-wait: no operator decision, no parent notify (same logic
+    # as the approval creation further down in the handler).
     if task.blocked_by_task_id is not None:
         return
 
@@ -83,8 +83,8 @@ async def _post_subtask_blocker_comment(
     if parent is None:
         return
 
-    # Self-Echo vermeiden: wenn der Worker zufaellig der Parent-Owner ist,
-    # schreibt er sich nicht selbst einen Comment.
+    # Avoid self-echo: if the worker happens to be the parent owner,
+    # it doesn't write a comment to itself.
     if parent.assigned_agent_id == agent.id:
         return
 
@@ -212,7 +212,7 @@ async def agent_list_comments(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
 ):
-    """Agent kann Kommentare eines Tasks lesen."""
+    """Agent can read a task's comments."""
     if agent.board_id != board_id:
         raise HTTPException(status_code=403, detail="Agent not assigned to this board")
 
@@ -225,7 +225,7 @@ async def agent_list_comments(
     )
     comments = result.all()
 
-    # Agent-Namen anreichern
+    # Enrich with agent names
     agent_ids = {c.author_agent_id for c in comments if c.author_agent_id}
     agent_map: dict[uuid.UUID, tuple[str, str]] = {}
     if agent_ids:
@@ -255,7 +255,7 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    # ── Auto-ACK: erster Kommentar des zugewiesenen Agents → ack_at setzen ──
+    # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
     if (
         task.assigned_agent_id == agent.id
         and task.ack_at is None
@@ -266,12 +266,13 @@ async def agent_add_comment(
             task.status = "in_progress"
             task.started_at = utcnow()
         task.updated_at = utcnow()
-        # Active-Task-Lock mitsetzen. Ohne das bleibt agent.current_task_id=None
-        # und mc delegate / mc help-request / mc clarification antworten 409
-        # "Kein aktiver Task". Gleiche Skip-Bedingung wie PATCH-ACK (PR #103):
-        # Workers im Subagent-Dispatch-Modus haben parallele Sessions, brauchen
-        # den Lock nicht. Live-Bug aus Boss-Reflection 2026-04-24:
-        # Boss ACKed via comment statt PATCH, mc delegate scheiterte.
+        # Also set the active-task lock. Without this, agent.current_task_id
+        # stays None and mc delegate / mc help-request / mc clarification
+        # respond with 409 "Kein aktiver Task". Same skip condition as
+        # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
+        # parallel sessions and don't need the lock. Live bug from Boss's
+        # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
+        # mc delegate failed.
         from app.config import settings as _auto_ack_settings
         if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
             if agent.current_task_id != task.id:
@@ -292,9 +293,10 @@ async def agent_add_comment(
     session.add(agent)
 
     # ── Resolution Auto-Promote ──────────────────────────────────────────
-    # Wenn Agent "resolution"-Kommentar schreibt aber Task noch in_progress:
-    # → Subtasks direkt auf done (Review laeuft auf Phase-Ebene)
-    # → Root-Tasks auf review (Agent hat vergessen PATCH zu senden)
+    # When an agent writes a "resolution" comment but the task is still
+    # in_progress:
+    # → subtasks go straight to done (review runs at the phase level)
+    # → root tasks go to review (agent forgot to send PATCH)
     auto_promoted = False
     # Phase 8 BUG-01: agent.auto_promote_on_resolution=False suppresses both
     # auto-promote paths (here + task_runner.py:771). Default True preserves
@@ -307,13 +309,13 @@ async def agent_add_comment(
         and agent.auto_promote_on_resolution
     ):
         old_status = task.status
-        # Subtasks gehen direkt auf done (Review laeuft auf Phase-Ebene)
+        # Subtasks go straight to done (review runs at the phase level)
         if task.parent_task_id is not None:
             task.status = "done"
             task.completed_at = utcnow()
         else:
             task.status = "review"
-        # Stale dispatch_attempt_id verhindern (audit trail).
+        # Prevent stale dispatch_attempt_id (audit trail).
         from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
         await clear_dispatch_attempt_id(
             session, task,
@@ -328,8 +330,8 @@ async def agent_add_comment(
             agent.name, task.title[:60], task.status,
         )
 
-    # ── Report-Back Contract erfuellen ──────────────────────────────
-    # Wenn Board Lead einen report_back Kommentar postet → Contract erfuellt
+    # ── Fulfill report-back contract ──────────────────────────────
+    # When the Board Lead posts a report_back comment → contract fulfilled
     if (
         payload.comment_type == "report_back"
         and agent.is_board_lead
@@ -347,9 +349,9 @@ async def agent_add_comment(
     await session.commit()
     await session.refresh(comment)
 
-    # Side-Effects nach Auto-Promote (ausserhalb der Transaktion)
+    # Side effects after auto-promote (outside the transaction)
     if auto_promoted:
-        new_status = task.status  # "done" fuer Subtasks, "review" fuer Root-Tasks
+        new_status = task.status  # "done" for subtasks, "review" for root tasks
         # Activity Event
         await emit_event(
             session, "task.status_changed",
@@ -362,7 +364,7 @@ async def agent_add_comment(
         from app.services.task_lifecycle import update_agent_active_task
         await update_agent_active_task(session, agent.id, task, new_status, "in_progress")
 
-        # Review-Handoff: Nur bei review (Subtasks gehen direkt auf done)
+        # Review handoff: only for review (subtasks go straight to done)
         if new_status == "review":
             from app.services.task_lifecycle import handle_review_handoff
             await handle_review_handoff(session, task, board_id, developer=agent)
@@ -386,24 +388,24 @@ async def agent_add_comment(
                 task.id, e,
             )
 
-    # Phase 29: RPC-Notification an den assigned Agent entfernt.
-    # Der Comment ist bereits via session.add(comment) persistiert; cli-bridge
-    # poll.sh des Ziel-Agents holt ihn beim naechsten Tick via
-    # GET /agent/me/comments. Damit ist die Delivery runtime-agnostisch.
+    # Phase 29: RPC notification to the assigned agent removed.
+    # The comment is already persisted via session.add(comment); the target
+    # agent's cli-bridge poll.sh picks it up on the next tick via
+    # GET /agent/me/comments. This makes delivery runtime-agnostic.
 
     # ── Reflection → Agent-Memory Pipeline (Phase B, 2026-04-11) ─────────
-    # Wenn ein Agent einen reflection-Kommentar postet → den Lesson-Teil
-    # automatisch als BoardMemory(type=lesson, agent_id=self) speichern +
-    # in Qdrant indexieren. Schliesst den Learning-Loop: Reflexionen landen
-    # automatisch im Agent-Memory-Layer und sind beim naechsten Dispatch
-    # via Vektorsuche abrufbar.
+    # When an agent posts a reflection comment → automatically store the
+    # lesson part as BoardMemory(type=lesson, agent_id=self) and index it
+    # in Qdrant. Closes the learning loop: reflections automatically land
+    # in the agent-memory layer and are retrievable via vector search on
+    # the next dispatch.
     if payload.comment_type == "reflection":
         try:
             lesson_text = _extract_reflection_lesson(payload.content or "")
             if lesson_text and len(lesson_text) >= 20:
                 lesson_memory = BoardMemory(
                     board_id=task.board_id,
-                    agent_id=agent.id,  # agent-scoped → Agent-Layer in Qdrant
+                    agent_id=agent.id,  # agent-scoped → agent layer in Qdrant
                     title=f"Lesson: {task.title[:60]}",
                     content=lesson_text,
                     memory_type="lesson",
@@ -426,11 +428,11 @@ async def agent_add_comment(
         except Exception as e:
             logger.warning("Reflection pipeline failed for task %s: %s", task.id, e)
 
-    # Bug 9 (2026-05-13): wenn ein Agent einen default `message`-Comment auf
-    # einem fremden assigned Task postet (z.B. Boss schreibt Briefing an
-    # Sparky), warnen wir — `message` ist NICHT in DELIVERABLE_SYSTEM_TYPES,
-    # der Worker sieht das nie via /me/poll. Statt fail-silent geben wir
-    # einen `delivery_hint` im Response zurueck — `mc` CLI rendert ihn.
+    # Bug 9 (2026-05-13): when an agent posts a default `message` comment on
+    # a task assigned to someone else (e.g. Boss writes a briefing to
+    # Sparky), we warn — `message` is NOT in DELIVERABLE_SYSTEM_TYPES, so
+    # the worker never sees it via /me/poll. Instead of failing silently we
+    # return a `delivery_hint` in the response — the `mc` CLI renders it.
     from fastapi.encoders import jsonable_encoder
     response = jsonable_encoder(comment)
     if (
@@ -448,27 +450,27 @@ async def agent_add_comment(
 
 
 def _extract_reflection_lesson(content: str) -> str:
-    """Extrahiert den Lesson-Teil aus einem Reflection-Kommentar.
+    """Extracts the lesson part from a reflection comment.
 
-    Reflection-Format ist Single Source of Truth in `app.constants`:
-    `REFLECTION_REQUIRED_FIELDS`. Der letzte Eintrag ist das Lesson-Feld
-    — die erste "bedeutungstragende" Wort-Variante daraus (+ ein paar
-    Synonyme) wird als Regex-Anker verwendet. Wenn der Operator jemals umbenennt
-    ("Lektion"/"Erkenntnis"/...), folgt das Extraction-Script automatisch.
-    Fallback bleibt "letzte 40% des Texts".
+    The reflection format's single source of truth is `app.constants`:
+    `REFLECTION_REQUIRED_FIELDS`. The last entry is the lesson field —
+    the first "meaningful" word variant of it (plus a few synonyms) is
+    used as a regex anchor. If the operator ever renames it
+    ("Lektion"/"Erkenntnis"/...), the extraction script follows
+    automatically. The fallback remains "last 40% of the text".
     """
     import re as _re
     if not content:
         return ""
     from app.constants import REFLECTION_REQUIRED_FIELDS
-    # Keyword-Pool: erstes Wort des Lesson-Felds + englische Synonyme,
+    # Keyword pool: first word of the lesson field + English synonyms,
     # case-insensitive.
     _last_field = REFLECTION_REQUIRED_FIELDS[-1] if REFLECTION_REQUIRED_FIELDS else "Lesson"
     _primary = _re.sub(r"[^\wäöüÄÖÜ].*$", "", _last_field) or "Lesson"
     _keywords = sorted({_primary.lower(), "lesson", "erkenntnis", "learning", "lektion"})
     _kw_pattern = "|".join(_re.escape(k) for k in _keywords)
 
-    # Case 1: Markdown-Section mit Lesson-Header
+    # Case 1: Markdown section with a lesson header
     lines = content.splitlines()
     for i, line in enumerate(lines):
         if _re.match(rf"^\s*#+\s*({_kw_pattern})", line, _re.I):
@@ -478,11 +480,11 @@ def _extract_reflection_lesson(content: str) -> str:
                     break
                 tail_lines.append(tl)
             return "\n".join(tail_lines).strip()
-    # Case 2: Freitext mit "Lesson:" oder Äquivalent
+    # Case 2: free text with "Lesson:" or equivalent
     m = _re.search(rf"(?i)\*{{0,2}}({_kw_pattern})[:\s]+\*{{0,2}}([^\n#][\s\S]*?)(?:\n#|\Z)", content)
     if m:
         return m.group(2).strip()
-    # Case 3: Fallback — nimm die letzten 40% als wahrscheinliche Lesson
+    # Case 3: fallback — take the last 40% as the likely lesson
     cut = int(len(content) * 0.6)
     tail = content[cut:].strip()
     return tail if len(tail) >= 20 else ""

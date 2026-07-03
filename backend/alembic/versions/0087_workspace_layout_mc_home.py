@@ -62,9 +62,9 @@ def upgrade() -> None:
     bind = op.get_bind()
     home = _home()
     if not home:
-        # ADR-023 ultrareview: fail-loud statt silent no-op. Ein leeres $HOME
-        # waere ein silent partial-upgrade (alembic stampft 0087 als applied,
-        # aber kein Row wurde angefasst). Operator muss HOME_HOST setzen.
+        # ADR-023 ultrareview: fail loud instead of silent no-op. An empty
+        # $HOME would be a silent partial upgrade (alembic stamps 0087 as
+        # applied, but no row was touched). Operator must set HOME_HOST.
         raise RuntimeError(
             "Migration 0087: HOME_HOST/HOME nicht gesetzt. "
             "Backend-Container braucht `HOME_HOST=${HOME}` in docker-compose.yml "
@@ -74,14 +74,14 @@ def upgrade() -> None:
     mc_root = f"{home}/.mc/workspaces"
 
     # cli-bridge agents: point at their new workspace under ~/.mc/workspaces/.
-    # Only rewrite legacy ~/.openclaw/workspace-*  or Container-Path values;
+    # Only rewrite legacy ~/.openclaw/workspace-*  or container-path values;
     # leave hand-edits untouched.
     #
-    # Slug-Generator (ADR-023 ultrareview): MUSS identisch mit
-    # `slugify_project()` in services/git_service.py sein — sonst weisen
-    # dispatch-Pfad und migrations-Pfad auf verschiedene Dirs. Postgres:
-    # regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') macht das gleiche
-    # wie Python `re.sub(r'[^a-z0-9]+', '-', name.lower())`.
+    # Slug generator (ADR-023 ultrareview): MUST be identical to
+    # `slugify_project()` in services/git_service.py — otherwise the
+    # dispatch path and migration path point at different dirs. Postgres:
+    # regexp_replace(lower(name), '[^a-z0-9]+', '-', 'g') does the same
+    # thing as Python `re.sub(r'[^a-z0-9]+', '-', name.lower())`.
     bind.execute(
         sa.text(
             """

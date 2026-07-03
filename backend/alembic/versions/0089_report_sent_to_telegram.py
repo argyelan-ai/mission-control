@@ -1,21 +1,21 @@
-"""Task.report_sent_to_telegram Flag fuer Report-Back Hard-Gate
+"""Task.report_sent_to_telegram flag for report-back hard gate
 
 Revision ID: 0089
 Revises: 0088
 Create Date: 2026-04-22
 
-Neues explizites Flag auf `tasks`: wird von `mc telegram` gesetzt sobald
-der Agent einen Report an den Reports-Chat gesendet hat. Ersetzt das
-alte `report_back_status`-Lifecycle-Pattern + den 10-Min-Fallback-Timer.
+New explicit flag on `tasks`: set by `mc telegram` once the agent has
+sent a report to the reports chat. Replaces the old
+`report_back_status` lifecycle pattern + the 10-minute fallback timer.
 
 - `report_sent_to_telegram` (Boolean, default False, NOT NULL)
-- Gate-Logik: bei agent-scoped PATCH status=done mit report_back_required=true
-  und report_sent_to_telegram=false → 422
-- Auto-Draft bei status=failed analog
+- Gate logic: on agent-scoped PATCH status=done with report_back_required=true
+  and report_sent_to_telegram=false → 422
+- Auto-draft on status=failed analogously
 
-Siehe `backend/app/routers/agent_scoped.py` fuer die Gate-Implementierung.
+See `backend/app/routers/agent_scoped.py` for the gate implementation.
 
-Idempotent. Downgrade entfernt die Spalte.
+Idempotent. Downgrade removes the column.
 """
 import sqlalchemy as sa
 from alembic import op
@@ -28,8 +28,8 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # server_default=sa.false() → bestehende Rows kriegen False ohne Backfill-Query.
-    # NOT NULL weil keine dreiwertige Logik (sent/not-sent ist binär).
+    # server_default=sa.false() → existing rows get False without a backfill query.
+    # NOT NULL because there's no three-valued logic (sent/not-sent is binary).
     op.add_column(
         "tasks",
         sa.Column(
@@ -39,7 +39,7 @@ def upgrade() -> None:
             server_default=sa.false(),
         ),
     )
-    # server_default entfernen — neue Rows setzen das explizit via Model-Default
+    # remove server_default — new rows set this explicitly via the model default
     op.alter_column("tasks", "report_sent_to_telegram", server_default=None)
 
 

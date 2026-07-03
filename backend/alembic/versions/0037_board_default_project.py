@@ -1,4 +1,4 @@
-"""Board default_project_id — automatische Projekt-Zuweisung fuer Tasks.
+"""Board default_project_id — automatic project assignment for tasks.
 
 Revision ID: 0037
 Revises: 0036

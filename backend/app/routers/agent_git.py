@@ -68,7 +68,7 @@ async def handle_worktree_cleanup(
             _project = await session.get(Project, task.project_id) if task.project_id else None
             if _project and _project.github_repo_url and agent.workspace_path:
                 _main_repo = os.path.join(agent.workspace_path, slugify_project(_project.name))
-                _keep = new_status == "failed"  # failed: Dateien fuer Debug behalten
+                _keep = new_status == "failed"  # failed: keep files for debugging
                 await git_service.cleanup_worktree(_main_repo, task.workspace_path, keep_on_fail=_keep)
                 logger.info(
                     "Worktree cleanup: task=%s status=%s keep=%s path=%s",
@@ -91,7 +91,7 @@ async def handle_review_pr_creation(
 
     Pitfall H: marker string `"PR erstellt:"` is contract — DO NOT change.
     """
-    # Developer → review: Git push + PR erstellen
+    # Developer → review: git push + create PR
     pr_url = None
     if task.project_id:
         try:
@@ -119,7 +119,7 @@ async def handle_review_pr_creation(
                     title=task.title,
                     body=f"Task: {task.title}\n\nBoard: {task.board_id}\nAgent: {agent.name}",
                 )
-                # PR-URL als Kommentar speichern
+                # Store PR URL as a comment
                 pr_comment = TaskComment(
                     task_id=task.id,
                     author_type="system",
@@ -150,7 +150,7 @@ async def handle_done_pr_merge(
             from app.services.git_service import git_service, slugify_project
             project = await session.get(Project, task.project_id)
             if project and project.github_repo_url:
-                # PR-Nummer aus Kommentar extrahieren
+                # Extract PR number from comment
                 pr_result = await session.exec(
                     select(TaskComment)
                     .where(
@@ -166,14 +166,14 @@ async def handle_done_pr_merge(
                     if pr_match:
                         pr_number = int(pr_match.group(1))
                         project_slug = slugify_project(project.name)
-                        # Reviewer oder Developer Workspace nutzen
+                        # Use reviewer or developer workspace
                         reviewer_dir = os.path.join(
                             agent.workspace_path or "", project_slug,
                         )
                         if os.path.isdir(reviewer_dir):
                             await git_service.merge_pr(reviewer_dir, pr_number)
                         else:
-                            # Fallback: gh CLI ohne cwd (nutzt global auth)
+                            # Fallback: gh CLI without cwd (uses global auth)
                             await git_service._run_cmd(
                                 "gh", "pr", "merge", str(pr_number),
                                 "--repo", project.github_repo_name,
