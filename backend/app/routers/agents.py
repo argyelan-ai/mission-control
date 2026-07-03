@@ -40,7 +40,15 @@ class AgentCreate(BaseModel):
     board_id: uuid.UUID | None = None
     is_board_lead: bool = False
     context_max: int = 200000
-    agent_runtime: str = "openclaw"
+    # cli-bridge is the post-sunset mainstream (Phase 30). The old 'openclaw'
+    # default hit the CHECK constraint that forbids retired runtimes — API
+    # callers omitting the field got a 500 instead of an agent.
+    agent_runtime: str = "cli-bridge"
+    # Optional LLM-runtime binding at create time (UUID or slug, resolved
+    # server-side like the PATCH path). Set BEFORE provisioning so the
+    # one-click chain renders the right image/env from the start — the
+    # detail-page switch service stays the path for changing it later.
+    runtime_id: str | None = None
 
 
 class AgentUpdate(BaseModel):
@@ -107,6 +115,12 @@ async def create_agent(
     board_id_str = str(payload.board_id) if payload.board_id else None
     tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
 
+    # Resolve the optional LLM-runtime binding BEFORE creating the agent —
+    # a bad slug should 404 without leaving a half-created agent behind.
+    resolved_runtime_id: uuid.UUID | None = None
+    if payload.runtime_id:
+        resolved_runtime_id = await _resolve_runtime_id(session, payload.runtime_id)
+
     agent = Agent(
         name=payload.name,
         emoji=payload.emoji,
@@ -118,6 +132,7 @@ async def create_agent(
         agent_token_hash=token_hash,
         tools_md=tools_md,
         agent_runtime=payload.agent_runtime,
+        runtime_id=resolved_runtime_id,
     )
     session.add(agent)
     await session.commit()
@@ -127,12 +142,75 @@ async def create_agent(
     # write path, poll.sh crash-looped with 'MC_TOKEN is not set').
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
-    # CLI-Bridge agents are provisioned manually via /provision, no OpenClaw provisioning
-    if payload.agent_runtime not in ("cli-bridge", "free-code-bridge", "manual"):
+    if payload.agent_runtime == "cli-bridge":
+        # One-click create (Day-2 basics fix): render config via the host
+        # helper (reusing the token just returned so it stays valid), then
+        # compose + container start. Bridge down → honest provision_failed
+        # event with remediation; the agent stays 'local'.
+        background_tasks.add_task(_auto_provision_cli_bridge, agent.id, raw_token)
+    elif payload.agent_runtime not in ("free-code-bridge", "manual"):
         background_tasks.add_task(_provision_agent_background, agent.id)
     result = agent.model_dump()
     result["token"] = raw_token  # returned once, never stored in plaintext
     return result
+
+
+async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> None:
+    """One-click provisioning chain for freshly created cli-bridge agents.
+
+    1. Probe the host helper (scripts/cli-bridge.py, :18792) — if it is not
+       running, emit an actionable provision_failed event and stop; the
+       agent honestly stays 'local'.
+    2. Bridge render (~/.mc/agents/<slug>/ + worker) via provision_cli_agent,
+       reusing the create-time token — NO rotation, the token the operator
+       just saw stays valid.
+    3. Container half via provision_agent_background (compose render, file
+       sync, container start).
+
+    Best-effort: any infra error is logged, never raised — a failed
+    background provision must not crash the create request/worker. The
+    agent then honestly stays 'local' (ProvisionBadge + Provision button).
+    """
+    try:
+        from app.database import engine
+        from app.routers import cli_terminal
+        from app.services import provisioning
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            agent = await session.get(Agent, agent_id)
+            if not agent:
+                logger.error("_auto_provision_cli_bridge: Agent %s not found", agent_id)
+                return
+
+            if cli_terminal._bridge_get("/health") is None:
+                from app.config import settings as _settings
+                await emit_event(
+                    session,
+                    "agent.provision_failed",
+                    f"{agent.name}: cli-bridge host helper not reachable "
+                    f"({_settings.free_code_bridge_url}). Start it with "
+                    "`python3 scripts/cli-bridge.py`, then click Provision on "
+                    "the agent page — see docs/setup/first-agent.md.",
+                    severity="warning",
+                    agent_id=agent.id,
+                    board_id=agent.board_id,
+                )
+                return
+
+            payload = cli_terminal.CliProvisionPayload(
+                model=agent.model or "nvidia/nemotron-3-super",
+                mc_token=raw_token,
+            )
+            await cli_terminal.provision_cli_agent(agent.id, payload, session, None)
+
+        # Container half opens its own session (BackgroundTask convention).
+        await provisioning.provision_agent_background(agent_id)
+    except Exception:
+        logger.exception(
+            "_auto_provision_cli_bridge(%s): one-click provisioning failed — "
+            "agent stays 'local', provision manually from the agent page",
+            agent_id,
+        )
 
 
 @router.get("/agents")
