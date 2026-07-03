@@ -205,7 +205,7 @@ async def delete_memory(
     memory = await session.get(BoardMemory, memory_id)
     if not memory or memory.board_id != board_id:
         raise HTTPException(status_code=404, detail="Memory not found")
-    # Layer vor dem Delete bestimmen, damit der Qdrant-Cleanup zielgerichtet ist
+    # Determine layer before delete so the Qdrant cleanup is targeted
     from app.services.memory_indexing import layer_for, delete_memory_index
     _layer = layer_for(memory)
     _mem_id = str(memory.id)
@@ -314,7 +314,7 @@ async def knowledge_stats(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Knowledge-Statistiken: Eintraege pro Typ zaehlen."""
+    """Knowledge statistics: count entries per type."""
     query = select(BoardMemory.memory_type, func.count().label("count")).group_by(BoardMemory.memory_type)
     if agent_id:
         query = query.where(BoardMemory.agent_id == uuid.UUID(agent_id))
@@ -461,8 +461,8 @@ async def delete_knowledge(
 
 
 # ── Memory Query (user-auth) — Semantic Search via Qdrant ───────────────────
-# Phase 3/4, 2026-04-11: Spiegelt /api/v1/agent/memory/query aber mit user-auth
-# damit die Frontend /memory Page die Suche direkt nutzen kann.
+# Phase 3/4, 2026-04-11: Mirrors /api/v1/agent/memory/query but with user-auth
+# so the frontend /memory page can use search directly.
 
 
 class MemoryQueryPayload(BaseModel):
@@ -479,10 +479,10 @@ async def user_memory_query(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """User-scoped Hybrid Memory Query (Vektor + Keyword-Fallback).
+    """User-scoped Hybrid Memory Query (vector + keyword fallback).
 
-    Duenner Wrapper um app.services.memory_query.run_memory_query — gemeinsamer
-    Core mit dem agent-scoped Endpoint in agent_scoped.py.
+    Thin wrapper around app.services.memory_query.run_memory_query — shares
+    its core with the agent-scoped endpoint in agent_scoped.py.
     """
     from app.services.memory_query import run_memory_query, InvalidQueryError
 

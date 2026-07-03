@@ -82,8 +82,8 @@ def _from_host_row(host: Host) -> ResolvedHost:
 
 
 def resolved_host_from_row(host: Host) -> ResolvedHost:
-    """Public Row→ResolvedHost-Mapper — für Callsites die die Host-Row schon
-    geladen haben und keine Runtime im Spiel ist (z.B. GET /hosts/{id}/metrics)."""
+    """Public Row→ResolvedHost mapper — for call sites that already loaded the
+    host row and have no runtime in play (e.g. GET /hosts/{id}/metrics)."""
     return _from_host_row(host)
 
 

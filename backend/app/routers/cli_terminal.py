@@ -1,5 +1,5 @@
 # backend/app/routers/cli_terminal.py
-"""CLI Terminal Sessions — REST + WebSocket Proxy zur Bridge."""
+"""CLI Terminal Sessions — REST + WebSocket proxy to the bridge."""
 import asyncio
 import json
 import logging
@@ -26,17 +26,17 @@ from app.models.agent import Agent
 
 
 class CliProvisionPayload(BaseModel):
-    model: str = "nvidia/nemotron-3-super"  # Default — beim Provisioning explizit setzen!
-    system_prompt: str = ""   # Identity only (Name, Rolle, Faehigkeiten) — Protokoll wird auto-angehaengt
-    role: str = ""            # Convenience: Rolle fuer Default-Identity wenn system_prompt leer
-    skills: list[str] = []    # Convenience: Faehigkeiten fuer Default-Identity
+    model: str = "nvidia/nemotron-3-super"  # Default — set explicitly at provisioning time!
+    system_prompt: str = ""   # Identity only (name, role, skills) — protocol is auto-appended
+    role: str = ""            # Convenience: role for default identity when system_prompt is empty
+    skills: list[str] = []    # Convenience: skills for default identity
     extra_plugins: list[str] = []
 
 
-# ── CLI-Bridge Protokoll — Single Source of Truth ────────────────────────────
-# Dieses Protokoll wird IMMER an jeden CLI-Bridge Agent System-Prompt angehaengt.
-# Nicht konfigurierbar — gilt fuer alle CLI-Bridge Agents gleichermassen.
-# Anpassbar: nur die Identity (Name, Rolle, Faehigkeiten) via system_prompt-Payload.
+# ── CLI Bridge Protocol — Single Source of Truth ─────────────────────────────
+# This protocol is ALWAYS appended to every CLI bridge agent's system prompt.
+# Not configurable — applies equally to all CLI bridge agents.
+# Customizable: only the identity (name, role, skills) via the system_prompt payload.
 _CLI_BRIDGE_PROTOCOL = """
 ## Pflicht-Verhalten (gilt fuer jeden Task)
 1. **Sofort ACK**: PATCH status: in_progress — bevor du irgendwas anderes machst
@@ -81,7 +81,7 @@ Folge diesen Anweisungen genau."""
 
 
 def _default_identity(agent_name: str, role: str = "", skills: list | None = None) -> str:
-    """Minimale Identity fuer einen neuen CLI-Bridge Agent."""
+    """Minimal identity for a new CLI bridge agent."""
     role_text = role.strip() or "Developer Agent (Coding, Frontend, Backend, Scripts, Prototypen)"
     if skills:
         skills_text = "\n".join(f"- {s}" for s in skills)
@@ -103,10 +103,10 @@ def _default_identity(agent_name: str, role: str = "", skills: list | None = Non
 
 
 def _build_cli_system_prompt(agent_name: str, identity: str) -> str:
-    """Kombiniert Agent-Identity mit festem Protokoll.
+    """Combines agent identity with the fixed protocol.
 
-    identity: Wer der Agent ist — anpassbar pro Agent (Name, Rolle, Faehigkeiten)
-    Protokoll: Wie der Agent arbeitet — immer gleich, nicht konfigurierbar
+    identity: who the agent is — customizable per agent (name, role, skills)
+    protocol: how the agent works — always the same, not configurable
     """
     return identity.strip() + "\n\n" + _CLI_BRIDGE_PROTOCOL.strip()
 
@@ -118,7 +118,7 @@ router = APIRouter(prefix="/api/v1", tags=["cli-terminal"])
 # ── Bridge HTTP Helpers ───────────────────────────────────────────────────────
 
 def _bridge_get(path: str):
-    """Synchroner GET zur Bridge. Gibt None bei Fehler."""
+    """Synchronous GET to the bridge. Returns None on error."""
     url = f"{settings.free_code_bridge_url}{path}"
     try:
         with urllib.request.urlopen(url, timeout=5) as resp:
@@ -129,7 +129,7 @@ def _bridge_get(path: str):
 
 
 def _bridge_post(path: str, body: dict, timeout: int = 5) -> dict:
-    """Synchroner POST zur Bridge."""
+    """Synchronous POST to the bridge."""
     url = f"{settings.free_code_bridge_url}{path}"
     payload = json.dumps(body).encode()
     req = urllib.request.Request(url, data=payload,
@@ -144,7 +144,7 @@ def _bridge_post(path: str, body: dict, timeout: int = 5) -> dict:
 
 
 def _bridge_delete(path: str) -> dict:
-    """Synchroner DELETE zur Bridge."""
+    """Synchronous DELETE to the bridge."""
     url = f"{settings.free_code_bridge_url}{path}"
     req = urllib.request.Request(url, method="DELETE")
     try:
@@ -174,7 +174,7 @@ async def _get_cli_agent(
 async def list_cli_sessions(
     agent: Agent = Depends(_get_cli_agent),
 ):
-    """Alle aktiven CLI tmux-Sessions von der Bridge abrufen."""
+    """Fetch all active CLI tmux sessions from the bridge."""
     sessions = _bridge_get("/sessions")
     return sessions or []
 
@@ -184,20 +184,20 @@ async def list_all_cli_sessions(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle aktiven CLI tmux-Sessions über alle Agents (global)."""
-    # Bridge abfragen
+    """All active CLI tmux sessions across all agents (global)."""
+    # Query bridge
     sessions_raw = _bridge_get("/sessions") or []
     if not sessions_raw:
         return []
 
-    # Alle cli-bridge Agents laden (auch free-code-bridge für Transition)
+    # Load all cli-bridge agents (also free-code-bridge for transition)
     result = await session.exec(
         select(Agent).where(
             Agent.agent_runtime.in_(["cli-bridge", "free-code-bridge"])
         )
     )
     agents = result.all()
-    # Slug → Agent Mapping aufbauen
+    # Build slug → agent mapping
     slug_map = {a.name.lower().replace(" ", "-"): a for a in agents}
 
     enriched = []
@@ -209,7 +209,7 @@ async def list_all_cli_sessions(
             # Shell session: {agent_slug}-shell
             agent_slug = sname[:-6]  # strip "-shell"
         elif is_permanent:
-            # Permanent session: session name == agent_slug (z.B. "freecode")
+            # Permanent session: session name == agent_slug (e.g. "freecode")
             agent_slug = sname
         else:
             # Per-task session: {agent_slug}-{8chars}
@@ -233,7 +233,7 @@ async def send_terminal_input(
     body: dict,
     agent: Agent = Depends(_get_cli_agent),
 ):
-    """Text in eine laufende CLI-Session schicken."""
+    """Send text into a running CLI session."""
     text = body.get("text", "")
     if not text:
         raise HTTPException(400, "text darf nicht leer sein")
@@ -247,7 +247,7 @@ async def kill_terminal_session(
     task_id: str,
     agent: Agent = Depends(_get_cli_agent),
 ):
-    """CLI tmux-Session beenden."""
+    """Terminate a CLI tmux session."""
     result = _bridge_delete(f"/sessions/{task_id}")
     return result
 
@@ -261,9 +261,9 @@ async def _proxy_terminal_websocket(
     token: Optional[str],
     session: AsyncSession,
 ):
-    """Gemeinsame Logik für Terminal-WebSocket-Proxy.
+    """Shared logic for the terminal WebSocket proxy.
 
-    session_key: entweder agent_slug (permanent session) oder task_id (per-task)
+    session_key: either agent_slug (permanent session) or task_id (per-task)
     """
     # Auth check
     if not token:
@@ -347,33 +347,33 @@ async def provision_cli_agent(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """CLI Bridge Agent provisionieren — Filesystem-Setup via Bridge."""
+    """Provision a CLI bridge agent — filesystem setup via the bridge."""
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(404, "Agent not found")
     if getattr(agent, "agent_runtime", "openclaw") != "cli-bridge":
         raise HTTPException(400, "Agent ist kein CLI-Bridge-Agent")
 
-    # 1. Neuen Token generieren (format: salt_hex:dk_hex — kompatibel mit verify_agent_token)
+    # 1. Generate a new token (format: salt_hex:dk_hex — compatible with verify_agent_token)
     raw_token, token_hash = generate_agent_token()
 
-    # Token-Hash in DB speichern
+    # Store token hash in DB
     agent.agent_token_hash = token_hash
     agent.provision_status = "provisioning"
     session.add(agent)
     await session.commit()
 
-    # Vault-Rotation mc_token_{slug}: /internal/bootstrap muss den NEUEN Token
-    # liefern — sonst startet der Container mit dem alten (Fresh-Install-Fix).
+    # Vault rotation mc_token_{slug}: /internal/bootstrap must return the NEW
+    # token — otherwise the container starts with the old one (fresh-install fix).
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
 
     agent_slug = agent.name.lower().replace(" ", "-")
 
-    # 2. System-Prompt aufbauen: Identity (anpassbar) + Protokoll (fix)
-    # Prio 1: explizites system_prompt aus API-Payload
-    # Prio 2: soul_md aus DB (gerendert via setup-coordination / template instantiation)
-    # Prio 3: generischer Fallback
+    # 2. Build system prompt: identity (customizable) + protocol (fixed)
+    # Priority 1: explicit system_prompt from the API payload
+    # Priority 2: soul_md from DB (rendered via setup-coordination / template instantiation)
+    # Priority 3: generic fallback
     identity = (
         (payload and payload.system_prompt.strip())
         or (agent.soul_md and agent.soul_md.strip())
@@ -385,7 +385,7 @@ async def provision_cli_agent(
     )
     full_system_prompt = _build_cli_system_prompt(agent.name, identity)
 
-    # 3. Bridge provisionieren
+    # 3. Provision the bridge
     effective_model = (payload and payload.model) or getattr(agent, "model", None) or "nvidia/nemotron-3-super"
     is_claude_model = effective_model.startswith("claude-")
 
@@ -394,7 +394,7 @@ async def provision_cli_agent(
         "model": effective_model,
         "system_prompt": full_system_prompt,
         "extra_plugins": (payload and payload.extra_plugins) or [],
-        "cli_plugins": agent.cli_plugins,  # None = alle, [] = keine, ["x"] = nur diese
+        "cli_plugins": agent.cli_plugins,  # None = all, [] = none, ["x"] = only these
     }
     if is_claude_model:
         bridge_payload["cli_bin"] = str(Path(settings.home_host) / ".local" / "bin" / "claude")
@@ -413,10 +413,10 @@ async def provision_cli_agent(
     session.add(agent)
     await session.commit()
 
-    # 4. Docker-Agent File-Sync: SOUL.md/HEARTBEAT.md/TOOLS.md/USER.md/MEMORY.md
-    # ins claude-config Bind-Mount schreiben (ADR-006: DB -> Templates -> Files).
-    # entrypoint.sh des Containers liest SOUL.md und gibt sie via
-    # --append-system-prompt an openclaude weiter.
+    # 4. Docker agent file sync: write SOUL.md/HEARTBEAT.md/TOOLS.md/USER.md/MEMORY.md
+    # into the claude-config bind mount (ADR-006: DB -> templates -> files).
+    # The container's entrypoint.sh reads SOUL.md and passes it on to openclaude
+    # via --append-system-prompt.
     file_sync_results: dict[str, str] = {}
     if result.get("ok"):
         try:
@@ -441,7 +441,7 @@ async def get_cli_agent_provision_status(
     agent_id: uuid.UUID,
     agent: Agent = Depends(_get_cli_agent),
 ):
-    """Provisioning-Status eines CLI-Bridge Agents von der Bridge abrufen."""
+    """Fetch the provisioning status of a CLI bridge agent from the bridge."""
     agent_slug = agent.name.lower().replace(" ", "-")
     result = _bridge_get(f"/provision/{agent_slug}")
     if result is None:
@@ -454,7 +454,7 @@ async def restart_worker_session(
     agent_id: uuid.UUID,
     agent: Agent = Depends(_get_cli_agent),
 ):
-    """Worker-Session des CLI-Bridge Agents neu starten (kill + start)."""
+    """Restart the CLI bridge agent's worker session (kill + start)."""
     agent_slug = agent.name.lower().replace(" ", "-")
     result = _bridge_post(f"/worker/{agent_slug}/restart", {})
     if result is None:
@@ -466,7 +466,7 @@ async def restart_worker_session(
 async def restart_bridge(
     current_user=Depends(require_user),
 ):
-    """CLI Bridge neu starten (z.B. nach Config-Änderungen)."""
+    """Restart the CLI bridge (e.g. after config changes)."""
     result = _bridge_post("/restart", {})
     return result
 
@@ -479,10 +479,10 @@ async def terminal_websocket_permanent(
     shell: Optional[bool] = False,
     session: AsyncSession = Depends(get_session),
 ):
-    """WebSocket: verbindet mit permanenter Worker-Session oder Shell-Session.
+    """WebSocket: connects to the permanent worker session or a shell session.
 
-    Auth via ?token=<jwt> Query-Param.
-    Shell-Session via ?shell=1.
+    Auth via ?token=<jwt> query param.
+    Shell session via ?shell=1.
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
     agent = await session.get(Agent, agent_id)
@@ -499,9 +499,9 @@ async def terminal_websocket(
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """WebSocket: proxied PTY terminal via Bridge WebSocket Server (per-task, legacy).
+    """WebSocket: proxied PTY terminal via the bridge WebSocket server (per-task, legacy).
 
-    Auth via ?token=<jwt> Query-Param.
+    Auth via ?token=<jwt> query param.
     Proxies bidirectionally: browser ↔ backend ↔ bridge WS (PTY ↔ tmux attach).
     """
     await _proxy_terminal_websocket(websocket, agent_id, task_id, token, session)
@@ -523,14 +523,14 @@ async def agent_terminal_ws(
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """WebSocket PTY-Bridge: Browser xterm.js <-> Backend <-> docker exec <-> Container tmux.
+    """WebSocket PTY bridge: browser xterm.js <-> backend <-> docker exec <-> container tmux.
 
-    Direkte Verbindung via PTY (ohne Bridge). Nutzt 'docker exec -it mc-agent-{name} tmux attach'.
-    Auth: JWT via ?token=<jwt> Query-Param (WebSocket kann keine Auth-Header senden).
-    Resize: JSON {type: "resize", cols: N, rows: N} als Text-Message.
-    Input:  Bytes direkt, oder JSON {type: "input", data: "..."} als Text-Message.
+    Direct connection via PTY (no bridge). Uses 'docker exec -it mc-agent-{name} tmux attach'.
+    Auth: JWT via ?token=<jwt> query param (WebSocket can't send auth headers).
+    Resize: JSON {type: "resize", cols: N, rows: N} as a text message.
+    Input:  raw bytes, or JSON {type: "input", data: "..."} as a text message.
     """
-    # 1. Auth: JWT aus Query-Param verifizieren
+    # 1. Auth: verify JWT from the query param
     if not token:
         await websocket.close(code=4001, reason="Missing token")
         return
@@ -544,7 +544,7 @@ async def agent_terminal_ws(
         await websocket.close(code=4001, reason="Invalid token")
         return
 
-    # 2. Agent aus DB laden
+    # 2. Load agent from DB
     try:
         agent_uuid = uuid.UUID(agent_id)
     except ValueError:
@@ -561,10 +561,10 @@ async def agent_terminal_ws(
 
     await websocket.accept()
 
-    # 3. PTY öffnen
+    # 3. Open PTY
     master_fd, slave_fd = pty.openpty()
 
-    # 4. docker exec starten — tmux attach-session auf Container-Session
+    # 4. Start docker exec — tmux attach-session onto the container session
     proc = await asyncio.create_subprocess_exec(
         "docker", "exec", "-itu", "agent", container_name,
         "tmux", "attach-session", "-dt", tmux_session,
@@ -579,7 +579,7 @@ async def agent_terminal_ws(
         agent_id, container_name, tmux_session, proc.pid,
     )
 
-    # 5. Bidirektionale Bridge
+    # 5. Bidirectional bridge
     async def read_from_pty():
         loop = asyncio.get_running_loop()
         try:
@@ -602,7 +602,7 @@ async def agent_terminal_ws(
                 elif msg.get("text"):
                     text = msg["text"]
                     handled = False
-                    # JSON-Message? (resize / input)
+                    # JSON message? (resize / input)
                     try:
                         data = json.loads(text)
                         if isinstance(data, dict) and data.get("type") == "resize":
@@ -619,7 +619,7 @@ async def agent_terminal_ws(
                             handled = True
                     except (json.JSONDecodeError, ValueError):
                         pass
-                    # Kein bekanntes JSON → rohe Tastatur-Eingabe von xterm.js
+                    # Not a known JSON message → raw keyboard input from xterm.js
                     if not handled:
                         os.write(master_fd, text.encode())
         except (WebSocketDisconnect, OSError, RuntimeError):
@@ -645,13 +645,13 @@ async def list_docker_session_agents(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle Agents mit existierendem Docker-Container (laufend ODER gestoppt).
+    """All agents with an existing Docker container (running OR stopped).
 
-    Filtert:
-    - cli-bridge runtime (keine openclaw/host agents)
-    - Nur solche für die ein mc-agent-{slug} Container existiert
+    Filters:
+    - cli-bridge runtime (no openclaw/host agents)
+    - Only agents for which an mc-agent-{slug} container exists
 
-    Jeder zurückgegebene Agent bekommt container_state (running|exited|...).
+    Each returned agent gets container_state (running|exited|...).
     """
     result = await session.exec(
         select(Agent)
@@ -660,7 +660,7 @@ async def list_docker_session_agents(
     )
     agents = list(result.all())
 
-    # Alle Container (auch gestoppte) mit State abfragen
+    # Query all containers (including stopped) with their state
     container_state: dict[str, str] = {}
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -694,12 +694,12 @@ async def list_host_session_agents(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle Agents mit agent_runtime='host'.
+    """All agents with agent_runtime='host'.
 
-    Pendant zu /docker-sessions/agents, aber für host-side Agents (z.B. Boss
-    nach Migration). Liveness via agents.last_seen_at (wird vom heartbeat-
-    Endpoint alle 30s aktualisiert) — nicht via Datei-mtime, weil macOS Docker
-    Desktop bind mounts den mtime cachen und stale Werte liefern.
+    Counterpart to /docker-sessions/agents, but for host-side agents (e.g. Boss
+    after migration). Liveness via agents.last_seen_at (updated by the heartbeat
+    endpoint every 30s) — not via file mtime, because macOS Docker Desktop
+    bind mounts cache the mtime and return stale values.
     """
     from datetime import datetime, timezone
 
@@ -725,32 +725,32 @@ async def list_host_session_agents(
     return out
 
 
-# ── Host-Agent tmux Targets ─────────────────────────────────────────────────
-# Pro host-runtime Slug: an welche tmux-Session + Socket soll die Bridge
-# attachen? Boss fehlt absichtlich -> Bridge nutzt ihren eingebauten Default
-# ("boss-host:0" auf Boss-Custom-Socket), sodass das Boss-Streaming exakt
-# wie vor Phase 24 funktioniert (Backwards-Compat).
+# ── Host Agent tmux Targets ──────────────────────────────────────────────────
+# Per host-runtime slug: which tmux session + socket should the bridge
+# attach to? Boss is intentionally absent -> bridge uses its built-in default
+# ("boss-host:0" on Boss's custom socket), so Boss streaming works exactly
+# as it did before Phase 24 (backwards compat).
 #
-# Hermes (Phase 24, HERM-01): user-default tmux Socket + hermes-worker Session.
-# Der Socket wird bei jedem Request anhand $TMPDIR / UID aufgeloest, damit das
-# Backend Container-Process die Host-Datei trifft (volume-mount per
-# ${TMPDIR_HOST} oder Bridge laeuft host-seitig — siehe Plan 04 + 08).
+# Hermes (Phase 24, HERM-01): user-default tmux socket + hermes-worker session.
+# The socket is resolved on every request from $TMPDIR / UID, so the
+# backend container process hits the host file (volume-mount via
+# ${TMPDIR_HOST} or the bridge runs host-side — see Plan 04 + 08).
 def _user_default_tmux_socket() -> str:
-    """Default tmux Socket-Pfad fuer den User (typischerweise /tmp/tmux-<uid>/default)."""
+    """Default tmux socket path for the user (typically /tmp/tmux-<uid>/default)."""
     uid = os.environ.get("HOST_UID") or str(os.getuid())
     tmpdir = os.environ.get("TMUX_TMPDIR") or os.environ.get("TMPDIR") or "/tmp"
     tmpdir = tmpdir.rstrip("/")
-    # tmux schreibt per Default in /tmp/tmux-<uid>/default
+    # tmux writes to /tmp/tmux-<uid>/default by default
     if tmpdir == "/tmp":
         return f"/tmp/tmux-{uid}/default"
     return f"{tmpdir}/tmux-{uid}/default"
 
 
 _HOST_AGENT_TMUX_TARGETS: dict[str, dict[str, str]] = {
-    # Hermes: user-default tmux, Session 'hermes-worker' (siehe ADR-029)
+    # Hermes: user-default tmux, session 'hermes-worker' (see ADR-029)
     "hermes": {
         "session": "hermes-worker",
-        # Socket wird bei Bedarf rendered — Default-Wert hier reicht fuer Tests.
+        # Socket is rendered as needed — default value here is enough for tests.
         "socket": _user_default_tmux_socket(),
     },
 }
@@ -802,16 +802,16 @@ def _hermes_ws_send_keys(message: str) -> dict:
 
 
 def _build_host_upstream_url(slug: str) -> Optional[str]:
-    """Berechnet die Upstream-WebSocket-URL fuer den host-pty-bridge.
+    """Computes the upstream WebSocket URL for the host-pty-bridge.
 
     Returns:
-        - Boss (Default-Slug): URL ohne query-params -> Bridge nimmt Default
-        - Hermes / weitere registrierte Slugs: URL mit ?session=&socket=
-        - Unbekannter Slug der nicht 'boss' ist: None (-> Caller schliesst WS)
+        - Boss (default slug): URL without query params -> bridge uses its default
+        - Hermes / other registered slugs: URL with ?session=&socket=
+        - Unknown slug that isn't 'boss': None (-> caller closes the WS)
     """
     base = "ws://host.docker.internal:7682/"
     if slug == "boss" or slug == "boss-host":
-        # Backwards-Compat: keine query-params -> Bridge attached an boss-host:0
+        # Backwards compat: no query params -> bridge attaches to boss-host:0
         return base
     target = _HOST_AGENT_TMUX_TARGETS.get(slug)
     if target is None:
@@ -830,15 +830,15 @@ async def host_agent_terminal_ws(
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """WebSocket-Bridge: Browser xterm.js <-> Backend <-> Host-PTY-Bridge <-> tmux Boss-Host.
+    """WebSocket bridge: browser xterm.js <-> backend <-> host-pty-bridge <-> tmux boss-host.
 
-    Pendant zu agent_terminal_ws (docker exec Variante), aber:
-      - Kein PTY im Backend, kein docker exec
-      - Proxy zu Custom WS-PTY-Bridge auf Host (host.docker.internal:7682)
-      - Bridge attached selbst per pty an tmux-Session via ${HOME}/.mc/agents/boss-host/.tmux.sock
-      - Wire-Format: raw bytes — kein ttyd Frame-Protokoll, kein Subprotocol
+    Counterpart to agent_terminal_ws (docker exec variant), but:
+      - No PTY in the backend, no docker exec
+      - Proxies to a custom WS-PTY bridge on the host (host.docker.internal:7682)
+      - The bridge itself attaches via pty to the tmux session via ${HOME}/.mc/agents/boss-host/.tmux.sock
+      - Wire format: raw bytes — no ttyd frame protocol, no subprotocol
 
-    Voraussetzung: host-pty-bridge launchd-Job laeuft (com.openclaw.host-pty-bridge).
+    Requirement: the host-pty-bridge launchd job is running (com.openclaw.host-pty-bridge).
     """
     # 1. Auth: JWT via ?token=
     if not token:
@@ -854,7 +854,7 @@ async def host_agent_terminal_ws(
         await websocket.close(code=4001, reason="Invalid token")
         return
 
-    # 2. Agent + Host-Runtime ACL
+    # 2. Agent + host-runtime ACL
     try:
         agent_uuid = uuid.UUID(agent_id)
     except ValueError:
@@ -865,10 +865,10 @@ async def host_agent_terminal_ws(
         await websocket.close(code=4004, reason="Host agent not found")
         return
 
-    # 3. Upstream: Custom Host-PTY-Bridge (siehe docker/host-pty-bridge/) — raw bytes,
-    # kein ttyd Frame-Protokoll. Identisches Pattern zu docker-exec-PTY.
-    # Per Slug entscheiden wir, ob die Bridge ihren Default (Boss) nutzt
-    # oder eine spezifische tmux-Session ueber query-params bekommt (z.B. Hermes).
+    # 3. Upstream: custom host-pty-bridge (see docker/host-pty-bridge/) — raw bytes,
+    # no ttyd frame protocol. Identical pattern to docker-exec PTY.
+    # We decide per slug whether the bridge uses its default (Boss)
+    # or gets a specific tmux session via query params (e.g. Hermes).
     slug = agent.name.lower().replace(" ", "-")
     upstream_url = _build_host_upstream_url(slug)
     if upstream_url is None:
@@ -878,8 +878,8 @@ async def host_agent_terminal_ws(
         )
         return
 
-    # Accept browser connection — kein subprotocol gegenueber Frontend
-    # (Frontend nutzt unsere WS, nicht ttyd direkt)
+    # Accept browser connection — no subprotocol towards the frontend
+    # (frontend uses our WS, not ttyd directly)
     await websocket.accept()
 
     import websockets as ws_client
@@ -994,18 +994,18 @@ async def host_agent_terminal_ws(
 
 # ── Host Agent Lifecycle (Restart/Start/Stop via SSH) ────────────────────────
 
-# Plists die für einen Host-Agent verwaltet werden. Aktuell nur Boss; später
-# generisch über agent_runtime + Konvention. Beide werden parallel (un)loaded.
-# Pfade leiten sich vom Host-HOME ab (HOME_HOST in Docker) — nie hardcoden.
+# Plists managed for a host agent. Currently only Boss; later generic via
+# agent_runtime + convention. Both are (un)loaded in parallel.
+# Paths are derived from the host HOME (HOME_HOST in Docker) — never hardcode.
 _HOST_LAUNCH_AGENTS = Path(settings.home_host) / "Library" / "LaunchAgents"
 _HOST_AGENT_PLISTS = {
     "boss": [
         str(_HOST_LAUNCH_AGENTS / "com.openclaw.boss.plist"),
         str(_HOST_LAUNCH_AGENTS / "com.openclaw.boss-ttyd.plist"),
     ],
-    # Phase 24 / HERM-01: Hermes host-side bridge (siehe ADR-029, Plan 24-04).
-    # plist startet scripts/hermes-bridge.py, das wiederum die hermes-worker
-    # tmux-Session managed.
+    # Phase 24 / HERM-01: Hermes host-side bridge (see ADR-029, Plan 24-04).
+    # plist starts scripts/hermes-bridge.py, which in turn manages the
+    # hermes-worker tmux session.
     "hermes": [
         str(_HOST_LAUNCH_AGENTS / "com.mc.hermes-bridge.plist"),
     ],
@@ -1013,11 +1013,11 @@ _HOST_AGENT_PLISTS = {
 
 
 async def _ssh_host(command: str, timeout: int = 30) -> str:
-    """Führt einen Befehl auf dem Mac-Host via SSH aus.
+    """Runs a command on the Mac host via SSH.
 
-    Voraussetzung: Backend-Image hat openssh-client; ~/.ssh ist gemounted;
-    Mac hat sshd aktiviert (System Settings → Sharing → Remote Login) und
-    der id_rsa.pub aus dem Backend liegt in Mac's ~/.ssh/authorized_keys.
+    Requirement: backend image has openssh-client; ~/.ssh is mounted;
+    Mac has sshd enabled (System Settings → Sharing → Remote Login) and
+    the id_rsa.pub from the backend is in the Mac's ~/.ssh/authorized_keys.
     """
     proc = await asyncio.create_subprocess_exec(
         "ssh",
@@ -1045,14 +1045,15 @@ async def _ssh_host(command: str, timeout: int = 30) -> str:
 
 
 async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
-    """Generic restart|start|stop für Host-Agents via launchctl auf dem Mac.
+    """Generic restart|start|stop for host agents via launchctl on the Mac.
 
-    Hermes-Sonderfall (Phase 26 UAT-Fix): die plist managed nur die hermes-bridge
-    HTTP-Server, NICHT die hermes-worker tmux-Session in der Hermes läuft.
-    Reines `launchctl kickstart` der plist restartet daher nur die Bridge —
-    die tmux-Session (und damit der laufende Hermes-Prozess) bleibt unverändert,
-    der Operator sieht „nichts passiert". Für Hermes die bridge HTTP-Endpoints nutzen
-    (`POST /restart` killt tmux + spawnt neu, `/stop` killt tmux only).
+    Hermes special case (Phase 26 UAT fix): the plist only manages the
+    hermes-bridge HTTP server, NOT the hermes-worker tmux session Hermes runs
+    in. A plain `launchctl kickstart` of the plist therefore only restarts the
+    bridge — the tmux session (and thus the running Hermes process) stays
+    unchanged, so the operator sees "nothing happened". For Hermes, use the
+    bridge HTTP endpoints instead (`POST /restart` kills tmux + respawns it,
+    `/stop` kills tmux only).
     """
     slug = agent.name.lower().replace(" ", "-")
 
@@ -1060,8 +1061,8 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
         bridge_action = {"restart": "/restart", "start": "/start", "stop": "/stop"}.get(action)
         if not bridge_action:
             raise HTTPException(status_code=400, detail=f"Unknown action: {action}")
-        # Bridge bindet nur auf 127.0.0.1 (L-C security decision Phase 24).
-        # Backend SSH'd zum Host und ruft dort localhost-Bridge.
+        # Bridge only binds to 127.0.0.1 (L-C security decision Phase 24).
+        # Backend SSHes to the host and calls the localhost bridge there.
         out = await _ssh_host(
             f"curl -sS -X POST --max-time 20 http://127.0.0.1:18794{bridge_action} "
             f"-H 'Content-Type: application/json' -d '{{}}' || echo BRIDGE_UNREACHABLE"
@@ -1075,7 +1076,7 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
         raise HTTPException(status_code=404, detail=f"No host plists configured for {slug}")
 
     if action == "stop":
-        # Beide unload (parallel ist nicht nötig, sequenziell ist robuster)
+        # Unload both (parallel isn't necessary, sequential is more robust)
         for p in plists:
             await _ssh_host(f"launchctl unload {p} 2>&1 || true")
         return {"ok": True, "action": "stop", "agent": slug}
@@ -1086,7 +1087,7 @@ async def _host_agent_lifecycle(agent: Agent, action: str) -> dict:
         return {"ok": True, "action": "start", "agent": slug}
 
     if action == "restart":
-        # kickstart -k ist atomar (kill + relaunch); sauberer als unload+load
+        # kickstart -k is atomic (kill + relaunch); cleaner than unload+load
         labels = [
             f"gui/$(id -u {effective_host_ssh_user()})/{p.split('/')[-1].replace('.plist','')}"
             for p in plists
@@ -1148,7 +1149,7 @@ async def stop_host_agent(
 # ── Container Lifecycle (Start/Stop/Restart) ─────────────────────────────────
 
 async def _docker_action(action: str, container_name: str, timeout: int = 30):
-    """Führt docker start|stop|restart|inspect auf einem Container aus."""
+    """Runs docker start|stop|restart|inspect on a container."""
     proc = await asyncio.create_subprocess_exec(
         "docker", action, container_name,
         stdout=asyncio.subprocess.PIPE,
@@ -1172,7 +1173,7 @@ def _container_name_for(agent: Agent) -> str:
 
 
 async def _get_container_state(container_name: str) -> str:
-    """Gibt den State eines Containers zurück: running, exited, not-found."""
+    """Returns a container's state: running, exited, not-found."""
     proc = await asyncio.create_subprocess_exec(
         "docker", "inspect", "-f", "{{.State.Status}}", container_name,
         stdout=asyncio.subprocess.PIPE,
@@ -1207,7 +1208,7 @@ async def restart_agent_container(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Docker-Container des Agents neu starten."""
+    """Restart the agent's Docker container."""
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1223,7 +1224,7 @@ async def start_agent_container(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Gestoppten Docker-Container des Agents starten."""
+    """Start the agent's stopped Docker container."""
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1239,7 +1240,7 @@ async def stop_agent_container(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Laufenden Docker-Container des Agents stoppen."""
+    """Stop the agent's running Docker container."""
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1249,21 +1250,21 @@ async def stop_agent_container(
     return {"ok": True, "container": container_name, "state": "exited"}
 
 
-# ── Container Force-Recreate (Image-Update ohne kompletten Stack-Restart) ─────
+# ── Container Force-Recreate (Image Update Without a Full Stack Restart) ─────
 #
-# Use-Case (2026-05-12 Sparky-Session): der Operator hat `scripts/build-agent-images.sh`
-# laufen lassen, aber laufende Container nutzen weiter die alte Image-Version
-# (mit live-kopiertem mc CLI). Damit das neue Image gezogen wird, muss der
-# Container recreated werden — was sonst nur via Shell ging.
+# Use case (2026-05-12 Sparky session): the operator ran `scripts/build-agent-images.sh`,
+# but running containers keep using the old image version (with the live-copied
+# mc CLI). To pull the new image, the container has to be recreated — which
+# previously only worked via the shell.
 #
-# Unterschied zu /agents/{id}/restart:
-#   restart  = `docker restart` (~5s)  — gleicher Container, alter Code/Image
+# Difference from /agents/{id}/restart:
+#   restart  = `docker restart` (~5s)  — same container, old code/image
 #   recreate = `docker compose up -d --force-recreate <svc>` (~30-90s)
-#              — neuer Container vom AKTUELLEN Image, Volumes/Env neu gemountet
+#              — new container from the CURRENT image, volumes/env remounted
 #
-# Guard: blockiert, wenn der Agent gerade einen Task bearbeitet (current_task_id).
-# Mit ?force=true bypassen — z.B. wenn ein Task hängt und der Container das Heil
-# bringt.
+# Guard: blocked if the agent is currently working on a task (current_task_id).
+# Bypass with ?force=true — e.g. when a task is stuck and recreating the
+# container is the fix.
 
 @router.post("/agents/{agent_id}/force-recreate")
 async def force_recreate_agent_container(
@@ -1272,11 +1273,11 @@ async def force_recreate_agent_container(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Docker Container des Agents komplett neu erstellen (zieht neues Image).
+    """Completely recreate the agent's Docker container (pulls the new image).
 
     Args:
-        force: True überspringt den Busy-Check (Agent bearbeitet Task).
-               Default False → 409 wenn busy.
+        force: True skips the busy check (agent is working on a task).
+               Default False → 409 if busy.
 
     Returns: {"ok", "container", "state", "duration_seconds"}
     Raises: 404 (agent), 409 (busy), 504 (timeout), 500 (compose error)
@@ -1298,15 +1299,15 @@ async def force_recreate_agent_container(
     container_name = _container_name_for(agent)
     service_name = container_name  # docker-compose.agents.yml: service_name == container_name
 
-    # HOME_HOST = host-side $HOME (z.B. /Users/<login>), gesetzt in
-    # docker-compose.yml backend.environment. docker compose substituiert
-    # ${HOME} aus dem Aufrufer-Env in den Volume-Pfaden. Im Backend-Container
-    # ist HOME=/home/mcuser → falscher Mount-Pfad. Wir muessen HOME explizit
-    # auf den Host-HOME zwingen, damit Volume-Mounts den gleichen Pfad
-    # treffen wie start-all.sh.
-    # Bug 2026-05-12: ohne diese Korrektur landete Sparky auf
-    # ${HOME_HOST}/Workspace/.mc/... statt ${HOME_HOST}/.mc/...
-    # Mit Pattern aus docker_agent_sync.py:522-529.
+    # HOME_HOST = host-side $HOME (e.g. /Users/<login>), set in
+    # docker-compose.yml backend.environment. docker compose substitutes
+    # ${HOME} from the caller's env into the volume paths. In the backend
+    # container HOME=/home/mcuser → wrong mount path. We have to force HOME
+    # explicitly to the host HOME so volume mounts hit the same path as
+    # start-all.sh.
+    # Bug 2026-05-12: without this fix Sparky landed on
+    # ${HOME_HOST}/Workspace/.mc/... instead of ${HOME_HOST}/.mc/...
+    # Pattern taken from docker_agent_sync.py:522-529.
     host_home = os.environ.get("HOME_HOST", os.path.expanduser("~"))
     # Repo root from MC_REPO_PATH (settings) — checkout may have any name.
     repo_root = Path(settings.mc_repo_path)
@@ -1316,9 +1317,9 @@ async def force_recreate_agent_container(
     env_agents = repo_root / "docker" / ".env.agents"
     env_shared = repo_root / "docker" / ".env.shared"
 
-    # Multiple --env-file flags: agents-compose verweist auf ${MC_TOKEN_*},
-    # ${OPENAI_API_KEY_*} etc. — ohne diese .env.agents werden alle leer und
-    # Agent kommt ohne Token hoch (mc CLI: 'MC_AGENT_TOKEN fehlt').
+    # Multiple --env-file flags: agents-compose references ${MC_TOKEN_*},
+    # ${OPENAI_API_KEY_*} etc. — without .env.agents these are all empty and
+    # the agent comes up without a token (mc CLI: 'MC_AGENT_TOKEN missing').
     compose_args: list[str] = ["compose"]
     for env_file in (env_main, env_agents, env_shared):
         if env_file.is_file():
@@ -1365,19 +1366,19 @@ async def force_recreate_agent_container(
     }
 
 
-# ── Local Memory Files (Claude-Local-Memory inside Agent-Container) ───────────
+# ── Local Memory Files (Claude Local Memory Inside Agent Container) ──────────
 #
-# Use-Case (2026-05-12): Sparky hatte Toxic-Memories in
-# /home/agent/.claude/projects/-home-agent/memory/team/*.md die ihn zu
-# python-urllib statt mc CLI gepusht haben. MC kannte die nicht (sie sind im
-# Container, nicht in der DB), also musste der Operator sie per `docker exec rm`
-# loeschen. Dieser Endpoint macht das aus dem UI heraus moeglich.
+# Use case (2026-05-12): Sparky had toxic memories in
+# /home/agent/.claude/projects/-home-agent/memory/team/*.md that pushed it
+# towards python-urllib instead of the mc CLI. MC didn't know about them
+# (they're in the container, not the DB), so the operator had to delete them
+# via `docker exec rm`. This endpoint makes that possible from the UI.
 
 _LOCAL_MEMORY_DIR = "/home/agent/.claude/projects/-home-agent/memory/team"
 
 
 def _validate_local_memory_filename(filename: str) -> None:
-    """Path-Traversal-Schutz: nur .md-Files, kein Slash, kein Punkt-Prefix."""
+    """Path traversal protection: only .md files, no slash, no dot prefix."""
     if not filename or "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Ungueltiger Dateiname")
     if not filename.endswith(".md"):
@@ -1389,9 +1390,9 @@ def _validate_local_memory_filename(filename: str) -> None:
 async def _container_exec(container_name: str, *cmd: str, timeout: int = 10) -> tuple[int, str, str]:
     """docker exec <container> <cmd...>. Returns (rc, stdout, stderr).
 
-    Hinweis: KEIN -T flag — das ist ein docker-compose Flag, nicht docker-cli.
-    Mit -T schlaegt docker-cli mit 'unknown shorthand flag T' fehl (verifiziert
-    2026-05-12 im Backend-Container).
+    Note: NO -T flag — that's a docker-compose flag, not docker-cli.
+    With -T, docker-cli fails with 'unknown shorthand flag T' (verified
+    2026-05-12 in the backend container).
     """
     proc = await asyncio.create_subprocess_exec(
         "docker", "exec", container_name, *cmd,
@@ -1412,11 +1413,11 @@ async def list_local_memory(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Listet die .md-Memory-Files im Agent-Container.
+    """Lists the .md memory files in the agent container.
 
     Returns: {"directory", "files": [{"name", "size", "content"}]}
-    Files: nur *.md im _LOCAL_MEMORY_DIR. Hidden Files + Subdirs ignoriert.
-    Inhalt wird bis 50KB pro File mitgegeben (groessere truncated mit Hinweis).
+    Files: only *.md in _LOCAL_MEMORY_DIR. Hidden files + subdirs ignored.
+    Content is included up to 50KB per file (larger files are truncated with a note).
     """
     agent = await session.get(Agent, agent_id)
     if agent is None:
@@ -1474,11 +1475,11 @@ async def delete_local_memory(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Loescht eine einzelne .md-Memory-Datei im Agent-Container.
+    """Deletes a single .md memory file in the agent container.
 
-    Auch MEMORY.md (Index) wird aktualisiert: Zeilen die auf die geloeschte Datei
-    verweisen werden via sed entfernt. Falls MEMORY.md selbst geloescht wird,
-    bleibt sie unangetastet (Agent wuerde dann eine neue erzeugen).
+    MEMORY.md (the index) is also updated: lines referencing the deleted file
+    are removed via sed. If MEMORY.md itself is deleted, it's left untouched
+    (the agent would then generate a new one).
     """
     _validate_local_memory_filename(filename)
     agent = await session.get(Agent, agent_id)
@@ -1504,9 +1505,9 @@ async def delete_local_memory(
             detail=f"Datei {filename} nicht gefunden in {_LOCAL_MEMORY_DIR}",
         )
 
-    # MEMORY.md Index aktualisieren — Zeilen mit dem geloeschten Filename raus.
-    # Einfaches grep -v statt sed, weil filename Sonderzeichen enthalten koennte.
-    # Wir loeschen MEMORY.md NICHT selbst, falls filename == MEMORY.md.
+    # Update the MEMORY.md index — remove lines with the deleted filename.
+    # Simple grep -v instead of sed, because filename could contain special chars.
+    # We do NOT delete MEMORY.md itself if filename == MEMORY.md.
     if filename != "MEMORY.md":
         # grep -v exit code: 0 = matches found and excluded (output >0 lines)
         #                    1 = ALL lines matched (output 0 lines — also valid!)

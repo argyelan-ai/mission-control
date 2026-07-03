@@ -1,8 +1,8 @@
 """
-GitService — Zentraler Service fuer alle Git-Operationen der Agents.
+GitService — central service for all Git operations of the agents.
 
-Nutzt gh/git CLI via asyncio subprocess. Wird von Planner, Dispatch
-und Review-Handoff aufgerufen.
+Uses gh/git CLI via asyncio subprocess. Called by Planner, Dispatch
+and Review-Handoff.
 """
 
 import asyncio
@@ -30,17 +30,17 @@ ADHOC_REPO = "mc-workspace"
 
 
 def slugify_project(name: str) -> str:
-    """Projektname in URL-tauglichen Slug umwandeln."""
+    """Convert a project name into a URL-safe slug."""
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
 def slugify_workspace_slug(title: str, max_len: int = 50) -> str:
-    """Task-Titel in gecappten Workspace-Verzeichnisnamen umwandeln.
+    """Convert a task title into a capped workspace directory name.
 
-    Kurze Titel (slug <= max_len): kein Hash, direktes pass-through.
-    Lange Titel (slug > max_len): slug[:max_len-7] + "-" + sha256(title)[:6].
-    Gesamtlaenge: genau max_len Zeichen. Hash basiert auf vollem Original-Titel
-    (deterministisch, kein Filesystem-Check noetig).
+    Short titles (slug <= max_len): no hash, direct pass-through.
+    Long titles (slug > max_len): slug[:max_len-7] + "-" + sha256(title)[:6].
+    Total length: exactly max_len characters. Hash is based on the full
+    original title (deterministic, no filesystem check needed).
     """
     slug = slugify_project(title)
     if len(slug) <= max_len:
@@ -51,16 +51,16 @@ def slugify_workspace_slug(title: str, max_len: int = 50) -> str:
 
 
 class GitService:
-    """Fuehrt Git/GitHub-Operationen via CLI aus."""
+    """Executes Git/GitHub operations via CLI."""
 
     def __init__(self) -> None:
         self._configured = False
 
     async def _ensure_git_auth(self) -> None:
-        """Git HTTPS-Auth via GH_TOKEN konfigurieren (fuer Docker)."""
+        """Configure Git HTTPS auth via GH_TOKEN (for Docker)."""
         if self._configured:
             return
-        self._configured = True  # Frueh setzen um Rekursion via _run_cmd zu verhindern
+        self._configured = True  # Set early to prevent recursion via _run_cmd
         token = os.environ.get("GH_TOKEN", "")
         if not token:
             return
@@ -76,7 +76,7 @@ class GitService:
         logger.info("Git HTTPS auth konfiguriert via GH_TOKEN")
 
     async def _run_cmd(self, *args: str, cwd: str | None = None) -> str:
-        """Shell-Befehl ausfuehren, stdout zurueckgeben."""
+        """Execute a shell command, return stdout."""
         await self._ensure_git_auth()
         proc = await asyncio.create_subprocess_exec(
             *args,
@@ -90,10 +90,10 @@ class GitService:
             raise RuntimeError(f"Git command failed: {' '.join(args)} → {err}")
         return stdout.decode().strip()
 
-    # ── Repo-Erstellung ──────────────────────────────────────────────
+    # ── Repo Creation ──────────────────────────────────────────────
 
     async def create_repo(self, repo_name: str, description: str = "") -> str:
-        """GitHub-Repo erstellen (private). Returns: clone URL."""
+        """Create GitHub repo (private). Returns: clone URL."""
         full_name = f"{require_github_owner()}/{repo_name}"
         try:
             url = await self._run_cmd(
@@ -113,7 +113,7 @@ class GitService:
     async def init_repo_files(
         self, repo_name: str, project_type: str = "feature", readme_title: str = "",
     ) -> None:
-        """Initial-Commit: .gitignore + README + .mc-scratch/.gitkeep pushen."""
+        """Initial commit: push .gitignore + README + .mc-scratch/.gitkeep."""
         import tempfile
 
         full_name = f"{require_github_owner()}/{repo_name}"
@@ -146,22 +146,22 @@ class GitService:
             await self._run_cmd("git", "push", "-u", "origin", "main", cwd=tmpdir)
         logger.info("Initial-Commit gepusht: %s", full_name)
 
-    # ── Workspace-Setup ──────────────────────────────────────────────
+    # ── Workspace Setup ──────────────────────────────────────────────
 
     async def ensure_workspace(
         self, workspace_path: str, repo_url: str, project_slug: str,
     ) -> str:
-        """Repo in Agent-Workspace klonen oder updaten. Returns: project dir."""
+        """Clone or update repo in agent workspace. Returns: project dir."""
         project_dir = os.path.join(workspace_path, project_slug)
 
         if os.path.isdir(os.path.join(project_dir, ".git")):
-            # Repo existiert — auf main pullen
+            # Repo exists — pull main
             await self._run_cmd("git", "fetch", "origin", cwd=project_dir)
             await self._run_cmd("git", "checkout", "main", cwd=project_dir)
             await self._run_cmd("git", "pull", "origin", "main", cwd=project_dir)
             logger.info("Workspace aktualisiert: %s", project_dir)
         else:
-            # Klonen
+            # Clone
             os.makedirs(workspace_path, exist_ok=True)
             await self._run_cmd("git", "clone", repo_url, project_dir)
             await self._run_cmd("git", "checkout", "main", cwd=project_dir)
@@ -172,7 +172,7 @@ class GitService:
     async def create_task_branch(
         self, project_dir: str, task_slug: str,
     ) -> str:
-        """Task-Branch erstellen und auschecken. Returns: branch name."""
+        """Create and check out task branch. Returns: branch name."""
         branch = f"task/{task_slug}"
         await self._run_cmd("git", "checkout", "-b", branch, cwd=project_dir)
         logger.info("Branch erstellt: %s in %s", branch, project_dir)
@@ -181,7 +181,7 @@ class GitService:
     async def setup_git_identity(
         self, project_dir: str, agent_name: str,
     ) -> None:
-        """Git user.name und user.email im Repo setzen."""
+        """Set Git user.name and user.email in the repo."""
         await self._run_cmd(
             "git", "config", "user.name", f"{agent_name} (MC Agent)", cwd=project_dir,
         )
@@ -190,16 +190,16 @@ class GitService:
         )
 
     async def ensure_adhoc_repo(self) -> str:
-        """mc-workspace Repo erstellen falls es nicht existiert. Returns: clone URL."""
+        """Create mc-workspace repo if it doesn't exist. Returns: clone URL."""
         return await self.create_repo(
             ADHOC_REPO,
             description="Mission Control — Ad-hoc Agent Tasks",
         )
 
     async def create_project_repo(self, project_slug: str, description: str = "") -> str:
-        """Privates GitHub-Repo für ein Projekt erstellen.
+        """Create a private GitHub repo for a project.
 
-        Naming: mc-{slug}. IMMER privat — keine Ausnahme.
+        Naming: mc-{slug}. ALWAYS private — no exceptions.
         Returns: clone URL
         """
         slug = slugify_project(project_slug)
@@ -211,7 +211,7 @@ class GitService:
     async def init_repo_files_with_briefing(
         self, repo_name: str, project_slug: str,
     ) -> None:
-        """Initial-Commit: .gitignore + briefing.md ins Repo pushen."""
+        """Initial commit: push .gitignore + briefing.md to the repo."""
         import tempfile
 
         full_name = f"{require_github_owner()}/{repo_name}"
@@ -266,12 +266,12 @@ _Keine Revisionen._
     async def create_phase_branch(
         self, project_dir: str, phase_slug: str,
     ) -> str:
-        """Phase-Branch erstellen und auschecken. Returns: branch name.
+        """Create and check out phase branch. Returns: branch name.
 
         Convention: phase/{slug}
         """
         branch = f"phase/{phase_slug}"
-        # Prüfen ob Branch bereits existiert
+        # Check if branch already exists
         try:
             await self._run_cmd("git", "checkout", "-b", branch, cwd=project_dir)
         except RuntimeError as e:
@@ -291,9 +291,9 @@ _Keine Revisionen._
         task_id: str,
         title: str,
     ) -> str:
-        """Deliverable als Datei committen. Returns: commit hash.
+        """Commit deliverable as a file. Returns: commit hash.
 
-        Pfad-Convention: phases/{phase_slug}/deliverables/{filename}
+        Path convention: phases/{phase_slug}/deliverables/{filename}
         """
         rel_path = os.path.join("phases", phase_slug, "deliverables", filename)
         abs_path = os.path.join(project_dir, rel_path)
@@ -306,7 +306,7 @@ _Keine Revisionen._
         commit_msg = f"deliverable: {title} [task/{task_id[:8]}]"
         await self._run_cmd("git", "commit", "-m", commit_msg, cwd=project_dir)
 
-        # Commit-Hash lesen
+        # Read commit hash
         commit_hash = await self._run_cmd(
             "git", "rev-parse", "--short", "HEAD", cwd=project_dir,
         )
@@ -314,9 +314,9 @@ _Keine Revisionen._
         return commit_hash.strip()
 
     async def ensure_task_repo(self, task_title: str, task_id: str) -> str:
-        """Dediziertes privates Repo für einen einzelnen Task erstellen.
+        """Create a dedicated private repo for a single task.
 
-        Naming: mc-task-{slug}-{short_id} (max ~60 Zeichen).
+        Naming: mc-task-{slug}-{short_id} (max ~60 characters).
         Returns: clone URL.
         """
         slug = slugify_project(task_title)[:40]
@@ -338,22 +338,22 @@ _Keine Revisionen._
         base_branch: str = "main",
         branch_name: str | None = None,
     ) -> str:
-        """Git Worktree fuer einen Task erstellen.
+        """Create a Git worktree for a task.
 
-        Erstellt einen isolierten Worktree neben dem Hauptrepo:
+        Creates an isolated worktree next to the main repo:
         project_dir/../../worktrees/{task_slug}/
 
         Args:
-            project_dir: Pfad zum geklonten Hauptrepo
-            task_slug: Slug fuer Branch und Verzeichnisname
-            base_branch: Basis-Branch (default: main)
-            branch_name: Optionaler Branch-Name (default: task/{task_slug})
+            project_dir: Path to the cloned main repo
+            task_slug: Slug for branch and directory name
+            base_branch: Base branch (default: main)
+            branch_name: Optional branch name (default: task/{task_slug})
 
-        Returns: Absoluter Pfad zum Worktree-Verzeichnis
-        Raises: RuntimeError wenn Worktree-Erstellung scheitert
+        Returns: Absolute path to the worktree directory
+        Raises: RuntimeError if worktree creation fails
         """
         branch = branch_name or f"task/{task_slug}"
-        # Worktrees neben dem Hauptrepo: .../worktrees/task-slug/
+        # Worktrees next to the main repo: .../worktrees/task-slug/
         worktrees_dir = os.path.join(os.path.dirname(project_dir), "worktrees")
         worktree_path = os.path.join(worktrees_dir, task_slug)
 
@@ -363,14 +363,14 @@ _Keine Revisionen._
 
         os.makedirs(worktrees_dir, exist_ok=True)
 
-        # Sicherstellen dass der base_branch aktuell ist
+        # Make sure base_branch is up to date
         try:
             await self._run_cmd("git", "fetch", "origin", base_branch, cwd=project_dir)
         except RuntimeError:
-            pass  # Fetch kann scheitern wenn offline — Worktree trotzdem versuchen
+            pass  # Fetch can fail when offline — try the worktree anyway
 
-        # Branch erstellen und Worktree auschecken.
-        # Versuche origin/base_branch, Fallback auf HEAD.
+        # Create branch and check out worktree.
+        # Try origin/base_branch, fall back to HEAD.
         try:
             await self._run_cmd(
                 "git", "worktree", "add", "-b", branch,
@@ -380,13 +380,13 @@ _Keine Revisionen._
         except RuntimeError as e:
             err_str = str(e).lower()
             if "already exists" in err_str:
-                # Branch existiert schon — Worktree mit bestehendem Branch
+                # Branch already exists — worktree with existing branch
                 await self._run_cmd(
                     "git", "worktree", "add", worktree_path, branch,
                     cwd=project_dir,
                 )
             elif "invalid reference" in err_str or "not a valid" in err_str:
-                # origin/main existiert nicht — Worktree von HEAD
+                # origin/main doesn't exist — worktree from HEAD
                 await self._run_cmd(
                     "git", "worktree", "add", "-b", branch,
                     worktree_path, "HEAD",
@@ -401,29 +401,29 @@ _Keine Revisionen._
     async def cleanup_worktree(
         self, project_dir: str, worktree_path: str, *, keep_on_fail: bool = False,
     ) -> None:
-        """Worktree bereinigen.
+        """Clean up worktree.
 
         Args:
-            project_dir: Pfad zum Hauptrepo
-            worktree_path: Pfad zum Worktree
-            keep_on_fail: True bei failed Tasks — Worktree nur aus Git-Index
-                          entfernen, Dateien bleiben fuer Debug-Zwecke
+            project_dir: Path to the main repo
+            worktree_path: Path to the worktree
+            keep_on_fail: True for failed tasks — remove worktree only from
+                          the Git index, files remain for debugging purposes
         """
         if not os.path.isdir(worktree_path):
             return
 
         if keep_on_fail:
-            # Nur aus Git-Worktree-Index entfernen, Dateien bleiben
+            # Remove only from the Git worktree index, files remain
             try:
                 await self._run_cmd(
                     "git", "worktree", "remove", "--force", worktree_path,
                     cwd=project_dir,
                 )
             except RuntimeError:
-                pass  # Nicht kritisch — Dateien bleiben, Git bereinigt spaeter
+                pass  # Not critical — files remain, Git cleans up later
             logger.info("Worktree aus Index entfernt (Dateien bleiben): %s", worktree_path)
         else:
-            # Vollstaendiges Cleanup: Worktree + Dateien entfernen
+            # Full cleanup: remove worktree + files
             try:
                 await self._run_cmd(
                     "git", "worktree", "remove", "--force", worktree_path,
@@ -433,7 +433,7 @@ _Keine Revisionen._
             except RuntimeError as e:
                 logger.warning("Worktree-Cleanup fehlgeschlagen: %s — %s", worktree_path, e)
 
-        # Git Worktree prune (orphaned entries bereinigen)
+        # Git worktree prune (clean up orphaned entries)
         try:
             await self._run_cmd("git", "worktree", "prune", cwd=project_dir)
         except RuntimeError:
@@ -442,7 +442,7 @@ _Keine Revisionen._
     # ── Commit Diff ──────────────────────────────────────────────────
 
     async def get_commit_diff(self, workspace_path: str, commit_hash: str) -> dict:
-        """Strukturierter Git-Diff fuer einen Commit.
+        """Structured Git diff for a commit.
 
         Returns: {hash, message, author, date, stats, files: [{filename,
         additions, deletions, hunks: [{header, lines: [{type, content,
@@ -450,7 +450,7 @@ _Keine Revisionen._
         """
         import re
 
-        # Commit-Metadaten
+        # Commit metadata
         meta_raw = await self._run_cmd(
             "git", "log", "-1",
             "--pretty=format:%h\x1f%s\x1f%an\x1f%ar",
@@ -463,7 +463,7 @@ _Keine Revisionen._
         author = parts[2] if len(parts) > 2 else ""
         date = parts[3] if len(parts) > 3 else ""
 
-        # Unified diff — leeres --pretty=format: unterdrückt Commit-Header
+        # Unified diff — empty --pretty=format: suppresses the commit header
         diff_raw = await self._run_cmd(
             "git", "show", commit_hash,
             "--unified=3",
@@ -494,7 +494,7 @@ _Keine Revisionen._
                 current_file["filename"] = current_file.get("filename") or "(deleted)"
 
             elif raw_line.startswith(("--- ", "index ", "new file", "deleted file", "Binary files")):
-                pass  # ignorieren
+                pass  # ignore
 
             elif raw_line.startswith("@@ ") and current_file is not None:
                 if current_hunk is not None:
@@ -525,7 +525,7 @@ _Keine Revisionen._
                     old_line += 1
                     new_line += 1
 
-        # Letzte Datei/Hunk abschliessen
+        # Finalize the last file/hunk
         if current_hunk is not None and current_file is not None:
             current_file["hunks"].append(current_hunk)
         if current_file is not None:
@@ -549,7 +549,7 @@ _Keine Revisionen._
     async def create_pr(
         self, project_dir: str, title: str, body: str, base: str = "main",
     ) -> str:
-        """GitHub PR erstellen. Returns: PR URL."""
+        """Create GitHub PR. Returns: PR URL."""
         url = await self._run_cmd(
             "gh", "pr", "create",
             "--title", title,
@@ -567,9 +567,9 @@ _Keine Revisionen._
         title: str,
         body: str | None = None,
     ) -> str:
-        """PR von phase/{slug} → main öffnen. Returns: PR URL.
+        """Open PR from phase/{slug} → main. Returns: PR URL.
 
-        Pusht den Branch zuerst, erstellt dann den PR via create_pr().
+        Pushes the branch first, then creates the PR via create_pr().
         """
         branch = f"phase/{phase_slug}"
         await self._run_cmd("git", "push", "-u", "origin", branch, cwd=project_dir)
@@ -584,7 +584,7 @@ _Keine Revisionen._
         return url
 
     async def create_git_tag(self, project_dir: str, tag_name: str) -> None:
-        """Annotated Git-Tag erstellen und pushen."""
+        """Create and push an annotated Git tag."""
         await self._run_cmd(
             "git", "tag", "-a", tag_name, "-m", tag_name, cwd=project_dir,
         )
@@ -592,10 +592,10 @@ _Keine Revisionen._
         logger.info("Git-Tag erstellt und gepusht: %s", tag_name)
 
     async def get_resume_briefing(self, project_dir: str) -> str:
-        """Letzte 20 Commits als Markdown-Summary zurückgeben.
+        """Return the last 20 commits as a Markdown summary.
 
-        Nützlich als Kontext-Briefing für Agents die eine Arbeit fortsetzen.
-        Returns: Markdown-String mit Commit-Liste.
+        Useful as context briefing for agents resuming work.
+        Returns: Markdown string with commit list.
         """
         log = await self._run_cmd(
             "git", "log", "--oneline", "-20", cwd=project_dir,
@@ -607,11 +607,11 @@ _Keine Revisionen._
         return f"## Git-Verlauf (letzte {len(lines)} Commits)\n\n{items}\n"
 
     async def push_branch(self, project_dir: str, branch: str) -> None:
-        """Branch auf GitHub pushen."""
+        """Push branch to GitHub."""
         await self._run_cmd("git", "push", "-u", "origin", branch, cwd=project_dir)
 
     async def merge_pr(self, project_dir: str, pr_number: int) -> None:
-        """PR squash-mergen und Branch loeschen."""
+        """Squash-merge PR and delete branch."""
         await self._run_cmd(
             "gh", "pr", "merge", str(pr_number),
             "--squash", "--delete-branch",
@@ -671,7 +671,7 @@ _Keine Revisionen._
     # ── Helpers ──────────────────────────────────────────────────────
 
     async def has_task_commits(self, workspace_path: str) -> bool:
-        """Prüft ob es Commits im Workspace gibt (Branch hat eigene Commits)."""
+        """Check whether there are commits in the workspace (branch has its own commits)."""
         try:
             result = await self._run_cmd("git", "log", "--oneline", "-1", cwd=workspace_path)
             return bool(result.strip())
@@ -679,14 +679,14 @@ _Keine Revisionen._
             return False
 
     async def get_task_git_info(self, workspace_path: str, branch_name: str | None = None) -> dict:
-        """Git-Status für UI-Anzeige: Branch, Commits, uncommitted, ahead, PR-URL."""
+        """Git status for UI display: branch, commits, uncommitted, ahead, PR URL."""
         info: dict = {"commits": [], "pr_url": None}
         try:
             info["branch"] = (
                 await self._run_cmd("git", "branch", "--show-current", cwd=workspace_path)
             ).strip()
 
-            # Letzte 10 Commits — gefiltert nach branch_name wenn angegeben
+            # Last 10 commits — filtered by branch_name if given
             log_args = ["git", "log"]
             if branch_name:
                 log_args.append(branch_name)
@@ -720,7 +720,7 @@ _Keine Revisionen._
             ).strip()
             info["ahead"] = int(ahead_str) if ahead_str.isdigit() else 0
 
-            # PR-URL via gh CLI (non-critical, kein Fehler wenn kein PR)
+            # PR URL via gh CLI (non-critical, no error if there's no PR)
             try:
                 pr_url = (
                     await self._run_cmd(

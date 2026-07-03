@@ -1,8 +1,8 @@
 """
-API-Key und Secrets Verwaltung.
+API key and secrets management.
 
-Secrets werden Fernet-verschlüsselt in der DB gespeichert.
-Im Frontend werden Werte nur maskiert angezeigt (z.B. "****abcd").
+Secrets are Fernet-encrypted and stored in the DB.
+The frontend only ever displays masked values (e.g. "****abcd").
 """
 
 from datetime import datetime, timezone
@@ -101,7 +101,7 @@ class SecretUpdate(BaseModel):
 
 @router.get("/secrets/providers")
 async def list_provider_templates(current_user=Depends(require_user)):
-    """Provider-Templates für das UI (welche Keys gibt es)."""
+    """Provider templates for the UI (which keys exist)."""
     return PROVIDER_TEMPLATES
 
 
@@ -110,7 +110,7 @@ async def list_secrets(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle Secrets auflisten (Werte maskiert)."""
+    """List all secrets (values masked)."""
     result = await session.exec(select(Secret).order_by(Secret.key))
     secrets = result.all()
     items = []
@@ -135,8 +135,8 @@ async def create_secret(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Neues Secret anlegen (verschlüsselt)."""
-    # Prüfen ob Key schon existiert
+    """Create a new secret (encrypted)."""
+    # Check if key already exists
     result = await session.exec(select(Secret).where(Secret.key == payload.key))
     if result.first():
         raise HTTPException(status_code=409, detail=f"Secret '{payload.key}' existiert bereits")
@@ -168,7 +168,7 @@ async def update_secret(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Secret aktualisieren."""
+    """Update a secret."""
     result = await session.exec(select(Secret).where(Secret.key == key))
     secret = result.first()
     if not secret:
@@ -201,7 +201,7 @@ async def delete_secret(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Secret löschen."""
+    """Delete a secret."""
     result = await session.exec(select(Secret).where(Secret.key == key))
     secret = result.first()
     if not secret:

@@ -1,7 +1,7 @@
 """Pre-Dispatch Gating + Promote Orchestrator.
 
-Phase 1: Zentrale Promote-Logik (promote_task_to_ready)
-Phase 4A: Systemische Promote-Entscheidung (evaluate_promote_decision, process_planned_tasks)
+Phase 1: Central promote logic (promote_task_to_ready)
+Phase 4A: Systemic promote decision (evaluate_promote_decision, process_planned_tasks)
 """
 import logging
 from fastapi import HTTPException
@@ -18,24 +18,24 @@ TERMINAL_STATUSES = {"done", "failed", "aborted"}
 
 
 async def promote_task_to_ready(task: Task, session: AsyncSession) -> Task:
-    """Promote ausfuehrbaren Child-Task von planning → ready.
+    """Promote an executable child task from planning → ready.
 
-    Atomar: Nutzt UPDATE ... WHERE dispatch_phase='planning' um Race Conditions
-    zwischen konkurrierenden Requests zu verhindern. Genau ein Request gewinnt,
-    alle anderen bekommen 409.
+    Atomic: uses UPDATE ... WHERE dispatch_phase='planning' to prevent race
+    conditions between concurrent requests. Exactly one request wins,
+    all others get 409.
 
-    Guards (alle muessen erfuellt sein):
+    Guards (all must be satisfied):
     1. dispatch_phase == "planning"
-    2. parent_task_id gesetzt (kein Root-/Container-Task)
-    3. assigned_agent_id gesetzt
+    2. parent_task_id set (not a root/container task)
+    3. assigned_agent_id set
     4. status == "inbox"
     5. dispatched_at is None
-    6. Status nicht terminal
+    6. status not terminal
 
-    Returns: aktualisierter Task
-    Raises: HTTPException(409) bei Guard-Verletzung oder Race-Conflict
+    Returns: updated task
+    Raises: HTTPException(409) on guard violation or race conflict
     """
-    # Soft Guards — geben klare Fehlermeldungen VOR dem atomaren Update
+    # Soft guards — give clear error messages BEFORE the atomic update
     if task.dispatch_phase != "planning":
         raise HTTPException(409, f"Task not in planning phase (current: {task.dispatch_phase})")
 
@@ -54,14 +54,14 @@ async def promote_task_to_ready(task: Task, session: AsyncSession) -> Task:
     if task.status in TERMINAL_STATUSES:
         raise HTTPException(409, f"Task in terminal status: {task.status}")
 
-    # Dependency-Gate: Tasks mit offenen Dependencies duerfen NICHT promoted werden.
-    # Dependencies schlagen Promote/Freigabe/Approval — ein Task mit offenen
-    # Vorgaengern muss parken, egal welcher Pfad den Promote ausloest.
+    # Dependency gate: tasks with open dependencies must NOT be promoted.
+    # Dependencies override promote/release/approval — a task with open
+    # predecessors must park, regardless of which path triggers the promote.
     from app.services.dispatch import dependencies_met
     if not await dependencies_met(session, task):
         from sqlmodel import select
         from app.models.task import Task as TaskModel
-        # Baue Detail-Message mit offenen Dependencies
+        # Build detail message with open dependencies
         dep_result = await session.exec(
             select(TaskDependency).where(TaskDependency.task_id == task.id)
         )
@@ -73,10 +73,10 @@ async def promote_task_to_ready(task: Task, session: AsyncSession) -> Task:
         detail = "Dependencies nicht erfuellt: " + ", ".join(open_deps) if open_deps else "Offene Dependencies"
         raise HTTPException(409, f"Promote blockiert — {detail}")
 
-    # Atomarer Update — nur genau ein konkurrierender Request gewinnt.
-    # WHERE-Clause prueft ALLE zentralen Promote-Vorbedingungen auf DB-Ebene.
-    # Wenn ein anderer Request den Zustand zwischenzeitlich geaendert hat
-    # (promote, dispatch, status-wechsel), matcht WHERE nicht → rowcount=0.
+    # Atomic update — only exactly one concurrent request wins.
+    # WHERE clause checks ALL central promote preconditions at the DB level.
+    # If another request has changed the state in the meantime
+    # (promote, dispatch, status change), WHERE won't match → rowcount=0.
     now = utcnow()
     result = await session.execute(
         update(Task)
@@ -95,7 +95,7 @@ async def promote_task_to_ready(task: Task, session: AsyncSession) -> Task:
     if result.rowcount == 0:  # type: ignore[union-attr]
         raise HTTPException(409, "Promote conflict — task state changed between validation and commit")
 
-    # Task-Objekt aktualisieren (in-memory)
+    # Refresh task object (in-memory)
     await session.refresh(task)
 
     await emit_event(
@@ -110,8 +110,8 @@ async def promote_task_to_ready(task: Task, session: AsyncSession) -> Task:
     return task
 
 
-# evaluate_planner_need() entfernt 2026-04-11 (Phase D, Migration 0071).
-# Das planner_mode Feld ist aus dem Schema gedroppt, der Planner-Pfad existiert nicht mehr.
+# evaluate_planner_need() removed 2026-04-11 (Phase D, Migration 0071).
+# The planner_mode field has been dropped from the schema, the planner path no longer exists.
 
 
 # ── Phase 4A: Promote Orchestrator ────────────────────────────────────────────
@@ -191,23 +191,23 @@ def evaluate_promote_decision(
     if parent_kind == "mixed":
         return NEEDS_APPROVAL, "parent request_kind=mixed (unclear scope)"
 
-    # 5. Credential/Auth check — vorhandene Credentials = Operator-Consent
-    # Wenn Credentials am Task oder Root bewusst hinterlegt wurden,
-    # ist das die Zustimmung zur Nutzung fuer diesen Task-Scope.
-    # Credentials allein sind dann KEIN Approval-Grund mehr.
-    # High-risk tags und mixed parent sind OBEN bereits abgefangen.
+    # 5. Credential/auth check — existing credentials = operator consent
+    # If credentials were deliberately stored on the task or root,
+    # that is the consent to use them for this task scope.
+    # Credentials alone are then NO LONGER a reason for approval.
+    # High-risk tags and mixed parent are already handled ABOVE.
     if auth or delegation == "credential_bound":
         has_creds = bool(getattr(task, "credentials_encrypted", None))
         if not has_creds and parent_task:
             has_creds = bool(getattr(parent_task, "credentials_encrypted", None))
-        # Auch explizites credential_consent zaehlt
+        # Explicit credential_consent also counts
         consent = getattr(task, "credential_consent", None)
         if not consent and parent_task:
             consent = getattr(parent_task, "credential_consent", None)
 
         if has_creds or consent:
-            # Credentials vorhanden = Operator hat sie bewusst fuer diesen Scope gegeben.
-            # credential_bound Tasks mit bewussten Credentials → direkt auto-promote.
+            # Credentials present = operator has deliberately given them for this scope.
+            # credential_bound tasks with deliberate credentials → direct auto-promote.
             if delegation == "credential_bound":
                 return AUTO_PROMOTE, "credential_bound + credentials present (operator consent)"
         else:
@@ -269,9 +269,9 @@ async def process_planned_tasks(session: AsyncSession) -> dict:
     for task in planned_tasks:
         parent = parent_map.get(task.parent_task_id)
 
-        # Board-Lead-Delegated: Impliziter Operator-Consent fuer Standard-Tasks.
-        # Wenn Owner ein Board Lead ODER ein Planner (im Board-Lead-Auftrag) ist
-        # + keine Risk-Tags → auto execute_low_risk.
+        # Board-lead-delegated: implicit operator consent for standard tasks.
+        # If owner is a Board Lead OR a Planner (on behalf of the Board Lead)
+        # + no risk tags → auto execute_low_risk.
         if task.owner_agent_id and not task.autonomy_level:
             from app.models.agent import Agent as _Agent
             owner = await session.get(_Agent, task.owner_agent_id)
@@ -320,7 +320,7 @@ async def process_planned_tasks(session: AsyncSession) -> dict:
                 logger.warning("Auto-promote failed for %s: %s", task.id, e)
 
         elif decision == NEEDS_APPROVAL:
-            # Dedupe: kein neues Approval wenn pending ODER approved (aber Task noch planning)
+            # Dedupe: no new approval if pending OR approved (but task still planning)
             existing = await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
@@ -354,7 +354,7 @@ async def process_planned_tasks(session: AsyncSession) -> dict:
                 )
 
         elif decision == MANUAL_WAIT:
-            # Dedupe: nur einmal loggen pro Task (Redis-Key mit 1h TTL)
+            # Dedupe: log only once per task (Redis key with 1h TTL)
             from app.redis_client import get_redis
             try:
                 redis = await get_redis()

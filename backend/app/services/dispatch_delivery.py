@@ -14,7 +14,7 @@ Module-access pattern (Pitfall A safety):
     namespace via a lazy import — the patched attribute on the dispatch
     module is read by attribute access each call.
 
-Quelle: backend/app/services/dispatch.py (Phase 4 REF-01 Step 3 Bottom-Up Extraction).
+Source: backend/app/services/dispatch.py (Phase 4 REF-01 Step 3 Bottom-Up Extraction).
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ async def _check_runtime_readiness(
     board_id: uuid.UUID,
     agent_id_str: str,
 ) -> bool:
-    """Strukturierte Pruefung ob die Runtime bereit ist.
+    """Structured check whether the runtime is ready.
 
     Post Phase 29 / Gateway-Sunset: all remaining runtimes (cli-bridge, host,
     claude-code, free-code-bridge, manual) self-poll via their own runners.
@@ -101,18 +101,18 @@ async def _deliver_dispatch_message(
             logger.warning("Claude Code dispatch failed for %s: %s", agent.name, e)
     elif getattr(agent, "agent_runtime", "openclaw") == "cli-bridge":
         # ── CLI Bridge Dispatch ──
-        # Workspace-Setup only. Task bleibt inbox.
-        # poll.sh im Container holt ihn via /me/next-task.
+        # Workspace setup only. Task stays inbox.
+        # poll.sh in the container picks it up via /me/next-task.
         from app.services.cli_bridge_runner import dispatch_to_cli_bridge
         try:
             prepared = await dispatch_to_cli_bridge(agent, task, message, session)
             if prepared:
                 dispatch_mode = "cli_bridge"
-                # dispatched_at setzen damit _check_undispatched_tasks den Task
-                # nicht jede 30s nochmal per Workspace-Setup anfasst. Ohne dieses
-                # Flag findet der Watchdog dispatched_at=NULL und re-dispatcht —
-                # kombiniert mit poll.sh-Restarts (LAST_DISPATCHED_ATTEMPT_ID reset)
-                # erzeugt das den Multi-Fire-Bug (Task kommt mehrfach an Agent).
+                # Set dispatched_at so _check_undispatched_tasks doesn't touch
+                # the task again via workspace setup every 30s. Without this
+                # flag the watchdog finds dispatched_at=NULL and re-dispatches —
+                # combined with poll.sh restarts (LAST_DISPATCHED_ATTEMPT_ID reset)
+                # that produces the multi-fire bug (task arrives at the agent multiple times).
                 task.dispatched_at = utcnow()
                 task.updated_at = utcnow()
                 agent.last_dispatch_error = None
@@ -128,10 +128,10 @@ async def _deliver_dispatch_message(
             session.add(agent)
             logger.warning("CLI bridge dispatch failed for %s: %s", agent.name, e)
     elif getattr(agent, "agent_runtime", "openclaw") == "host":
-        # ── Host Runtime (z.B. Boss via launchd, ADR-014) ──
-        # Kein Workspace-Setup nötig (Orchestrator arbeitet nicht lokal).
-        # Task bleibt inbox — poll.sh auf dem Host claimt via /agent/me/poll
-        # und sendet den Prompt an die tmux-Session.
+        # ── Host Runtime (e.g. Boss via launchd, ADR-014) ──
+        # No workspace setup needed (orchestrator doesn't work locally).
+        # Task stays inbox — poll.sh on the host claims it via /agent/me/poll
+        # and sends the prompt to the tmux session.
         dispatch_mode = "host_poll"
         task.dispatched_at = utcnow()
         task.updated_at = utcnow()

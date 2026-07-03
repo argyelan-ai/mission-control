@@ -1,8 +1,8 @@
 """
-Webhook-Endpoints fuer externe Events (GitHub Push, etc.).
+Webhook endpoints for external events (GitHub push, etc.).
 
-Kein User-Auth noetig — Webhook-Secret wird stattdessen geprueft.
-Erstellt Activity Events fuer das Dashboard + optional RPC an Agent.
+No user auth needed — the webhook secret is checked instead.
+Creates activity events for the dashboard + optional RPC to the agent.
 """
 
 import hashlib
@@ -30,7 +30,7 @@ router = APIRouter(prefix="/api/v1", tags=["webhooks"])
 
 
 class GitHubPushEvent(BaseModel):
-    """Minimales GitHub Push Event — nur was wir brauchen."""
+    """Minimal GitHub push event — only what we need."""
 
     ref: str | None = None
     repository: dict | None = None
@@ -43,7 +43,7 @@ class GitHubPushEvent(BaseModel):
 
 
 def _verify_github_signature(payload: bytes, signature: str | None, secret: str) -> bool:
-    """Verifiziert GitHub HMAC-SHA256 Signatur."""
+    """Verifies GitHub HMAC-SHA256 signature."""
     if not signature:
         return False
     expected = "sha256=" + hmac.new(
@@ -53,7 +53,7 @@ def _verify_github_signature(payload: bytes, signature: str | None, secret: str)
 
 
 def _extract_push_summary(data: dict) -> dict:
-    """Extrahiert relevante Infos aus einem GitHub Push Event."""
+    """Extracts relevant info from a GitHub push event."""
     repo = data.get("repository", {})
     head = data.get("head_commit", {})
     commits = data.get("commits", [])
@@ -81,35 +81,35 @@ async def receive_github_webhook(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Empfaengt GitHub Webhook Events (Push, PR, etc.).
+    Receives GitHub webhook events (push, PR, etc.).
 
-    URL-Format: POST /api/v1/webhooks/github/{webhook_id}
-    GitHub traegt diese URL als Webhook-URL ein.
+    URL format: POST /api/v1/webhooks/github/{webhook_id}
+    GitHub is configured with this URL as the webhook URL.
     """
-    # Webhook aus DB laden
+    # Load webhook from DB
     webhook = await session.get(Webhook, webhook_id)
     if not webhook or not webhook.is_enabled:
         raise HTTPException(status_code=404, detail="Webhook not found or disabled")
 
-    # Body lesen
+    # Read body
     body = await request.body()
     headers = dict(request.headers)
     source_ip = request.client.host if request.client else None
 
-    # HMAC-Signatur pruefen (wenn Secret konfiguriert)
+    # Check HMAC signature (if secret configured)
     if webhook.secret:
         signature = headers.get("x-hub-signature-256")
         if not _verify_github_signature(body, signature, webhook.secret):
             logger.warning("Invalid webhook signature from %s for webhook %s", source_ip, webhook_id)
             raise HTTPException(status_code=403, detail="Invalid signature")
 
-    # Payload parsen
+    # Parse payload
     try:
         payload_data = json.loads(body)
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    # Payload in DB speichern
+    # Save payload to DB
     wh_payload = WebhookPayload(
         webhook_id=webhook.id,
         payload=payload_data,
@@ -121,10 +121,10 @@ async def receive_github_webhook(
     await session.commit()
     await session.refresh(wh_payload)
 
-    # Event-Typ aus GitHub Header
+    # Event type from GitHub header
     gh_event = headers.get("x-github-event", "unknown")
 
-    # Push-spezifische Verarbeitung
+    # Push-specific processing
     if gh_event == "push":
         summary = _extract_push_summary(payload_data)
         title = f"Push: {summary['author']} → {summary['branch']} ({summary['head_sha']})"
@@ -141,7 +141,7 @@ async def receive_github_webhook(
             },
         )
 
-        # Payload als verarbeitet markieren
+        # Mark payload as processed
         wh_payload.processed = True
         session.add(wh_payload)
         await session.commit()
@@ -151,7 +151,7 @@ async def receive_github_webhook(
             summary["repo"], summary["branch"], summary["commit_count"],
         )
     else:
-        # Andere Events nur loggen
+        # Just log other events
         await emit_event(
             session,
             event_type=f"webhook.github.{gh_event}",
@@ -173,12 +173,12 @@ async def receive_local_push(
     session: AsyncSession = Depends(get_session),
 ):
     """
-    Lightweight Endpoint fuer lokale git post-commit Hooks.
+    Lightweight endpoint for local git post-commit hooks.
 
-    Braucht kein Webhook-Setup — akzeptiert direkt:
+    Needs no webhook setup — accepts directly:
     { "repo", "branch", "commit_sha", "commit_message", "author" }
 
-    Kein Auth noetig da nur lokal (Docker-Netzwerk + loopback).
+    No auth needed since it's local-only (Docker network + loopback).
     """
     try:
         data = await request.json()
@@ -191,7 +191,7 @@ async def receive_local_push(
     message = data.get("commit_message", "").split("\n")[0]
     author = data.get("author", "unknown")
 
-    # Board suchen (mc-dev fuer mission-control)
+    # Find board (mc-dev for mission-control)
     board_id = None
     if "mission-control" in repo.lower():
         from app.models.board import Board

@@ -1,12 +1,12 @@
-"""Cost Collector — Budget-Warnungen (post-Gateway-Sunset).
+"""Cost Collector — budget warnings (post-Gateway-Sunset).
 
-Vor Phase 29 (OpenClaw-Gateway-Sunset): collect_session_costs() las Token-Counts
-aus Gateway-Sessions ueber die alte Sessions-List-RPC. Nach dem Sunset gibt es
-keine Gateway-Sessions mehr — die Funktion ist auf einen No-Op stubbed.
+Before Phase 29 (OpenClaw Gateway sunset): collect_session_costs() read token
+counts from Gateway sessions via the old sessions-list RPC. After the sunset
+there are no more Gateway sessions — the function is stubbed to a no-op.
 
-TODO Phase 31: Re-implementiere Cost-Extraction fuer cli-bridge-Agents (z.B.
-aus Container-Logs oder Hermes-Heartbeats). check_budget_warnings() funktioniert
-weiter, da es ausschliesslich auf CostEvent-Rows in der DB arbeitet.
+TODO Phase 31: re-implement cost extraction for cli-bridge agents (e.g. from
+container logs or Hermes heartbeats). check_budget_warnings() keeps working
+since it operates exclusively on CostEvent rows in the DB.
 """
 import logging
 
@@ -20,20 +20,20 @@ from app.utils import utcnow
 
 logger = logging.getLogger("mc.cost_collector")
 
-# Budget-Warnungen (taeglich/monatlich)
-DAILY_WARNING_TOKENS = 500_000  # 500k Tokens/Tag Warnung
-MONTHLY_WARNING_USD = 50.0  # $50/Monat Warnung
+# Budget warnings (daily/monthly)
+DAILY_WARNING_TOKENS = 500_000  # 500k tokens/day warning
+MONTHLY_WARNING_USD = 50.0  # $50/month warning
 
 
 async def collect_session_costs(session: AsyncSession) -> dict:
-    """No-op nach Gateway-Sunset (Phase 29, D-11).
+    """No-op after Gateway sunset (Phase 29, D-11).
 
-    Vor Phase 29: aggregierte Token-Deltas aus Gateway-Sessions.
-    Nach Phase 29: Gateway ist weg, keine Sessions zu pollen.
+    Before Phase 29: aggregated token deltas from Gateway sessions.
+    After Phase 29: Gateway is gone, no sessions left to poll.
 
-    TODO Phase 31: cli-bridge Cost-Extraction implementieren (Container-Logs
-    oder Hermes-Heartbeat-Tokens). Bis dahin bleibt die Funktion als
-    No-Op-Stub erhalten, damit Watchdog/Scheduler weiterhin aufrufen koennen.
+    TODO Phase 31: implement cli-bridge cost extraction (container logs
+    or Hermes heartbeat tokens). Until then the function stays a no-op
+    stub so watchdog/scheduler can keep calling it.
 
     Returns: {"collected": 0, "events_created": 0, "errors": 0}
     """
@@ -41,18 +41,18 @@ async def collect_session_costs(session: AsyncSession) -> dict:
 
 
 async def check_budget_warnings(session: AsyncSession) -> list[str]:
-    """Prueft taegl./monatl. Budget-Schwellen und emittiert Warnungen.
+    """Checks daily/monthly budget thresholds and emits warnings.
 
-    Liest ausschliesslich CostEvent-Rows aus der DB — Gateway-unabhaengig.
+    Reads exclusively CostEvent rows from the DB — Gateway-independent.
 
-    Returns: Liste von Warn-Messages (leer = alles OK).
+    Returns: list of warning messages (empty = all OK).
     """
     from sqlalchemy import func
 
     warnings: list[str] = []
     now = utcnow()
 
-    # Taegliche Tokens (alle Agents)
+    # Daily tokens (all agents)
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     daily_result = await session.exec(
         select(
@@ -64,7 +64,7 @@ async def check_budget_warnings(session: AsyncSession) -> list[str]:
         msg = f"Tagesverbrauch: {daily_tokens:,} Tokens (Warnung ab {DAILY_WARNING_TOKENS:,})"
         warnings.append(msg)
 
-    # Monatliche Kosten
+    # Monthly cost
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     monthly_result = await session.exec(
         select(func.sum(CostEvent.cost_usd)).where(
@@ -77,12 +77,12 @@ async def check_budget_warnings(session: AsyncSession) -> list[str]:
         msg = f"Monatskosten: ${monthly_usd:.2f} (Warnung ab ${MONTHLY_WARNING_USD:.2f})"
         warnings.append(msg)
 
-    # Warnungen als Events emittieren (dedupliziert via Redis)
+    # Emit warnings as events (deduplicated via Redis)
     redis = await get_redis()
     for w in warnings:
         dedup_key = f"mc:cost:warning:{hash(w) % 10**8}"
         if not await redis.get(dedup_key):
-            await redis.set(dedup_key, "1", ex=3600)  # 1h Dedup
+            await redis.set(dedup_key, "1", ex=3600)  # 1h dedup
             await emit_event(
                 session, "cost.budget_warning", w, severity="warning",
             )

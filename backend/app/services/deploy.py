@@ -1,11 +1,11 @@
 """
-Deploy-Service — Health-Monitoring und Deploy-Tracking.
+Deploy Service — health monitoring and deploy tracking.
 
-Der Deployer-Agent fuehrt Docker-Befehle direkt auf dem Host aus (via OpenClaw).
-Dieses Service stellt Monitoring + Tracking bereit:
-- Health-Checks via HTTP (Docker-Netzwerk)
-- Deploy-History in der DB
-- Service-Status Abfragen
+The deployer agent runs Docker commands directly on the host (via OpenClaw).
+This service provides monitoring + tracking:
+- Health checks via HTTP (Docker network)
+- Deploy history in the DB
+- Service status queries
 """
 import logging
 
@@ -17,11 +17,11 @@ from app.models.deploy_history import DeployHistory
 
 logger = logging.getLogger("mc.deploy")
 
-# Services die der Agent deployen darf — Allowlist
+# Services the agent is allowed to deploy — allowlist
 KNOWN_SERVICES = {"backend", "frontend", "caddy", "db", "redis", "external"}
 DEPLOYABLE_SERVICES = {"backend", "frontend", "caddy"}
 
-# Health-Check Endpoints (von innerhalb des Docker-Netzwerks)
+# Health check endpoints (from within the Docker network)
 SERVICE_HEALTH_URLS = {
     "backend": "http://localhost:8000/health",
     "frontend": "http://frontend:3000",
@@ -30,7 +30,7 @@ SERVICE_HEALTH_URLS = {
 
 
 async def check_service_health(service: str) -> dict:
-    """Health-Check fuer einen Service via HTTP."""
+    """Health check for a service via HTTP."""
     if service not in SERVICE_HEALTH_URLS:
         return {"service": service, "status": "unknown", "detail": "No health endpoint configured"}
 
@@ -49,7 +49,7 @@ async def check_service_health(service: str) -> dict:
 
 
 async def check_all_services() -> list[dict]:
-    """Health-Check fuer alle bekannten Services."""
+    """Health check for all known services."""
     results = []
     for service in SERVICE_HEALTH_URLS:
         result = await check_service_health(service)
@@ -72,7 +72,7 @@ async def record_deploy(
     error: str | None = None,
     logs_tail: str | None = None,
 ) -> DeployHistory:
-    """Deploy-Aktion in der History speichern."""
+    """Save a deploy action in the history."""
     entry = DeployHistory(
         service=service,
         action=action,
@@ -94,7 +94,7 @@ async def record_deploy(
 
 
 async def get_deploy_history(session: AsyncSession, limit: int = 20) -> list[DeployHistory]:
-    """Letzte Deploy-Eintraege abrufen."""
+    """Fetch the most recent deploy entries."""
     result = await session.exec(
         select(DeployHistory).order_by(desc(DeployHistory.created_at)).limit(limit)
     )

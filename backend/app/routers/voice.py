@@ -1,23 +1,23 @@
-"""Voice-Agent Token-Endpoint.
+"""Voice agent token endpoint.
 
-Signiert LiveKit-JWTs damit der Browser (der Operator) sich am LiveKit-Server
-anmelden und in den Voice-Room joinen kann. Der Python Voice-Worker
-(separater Docker-Service) joint denselben Room als Agent und spricht
-mit dem Operator via xAI Realtime API.
+Signs LiveKit JWTs so the browser (the operator) can authenticate against the
+LiveKit server and join the voice room. The Python voice worker (a separate
+Docker service) joins the same room as an agent and talks to the operator
+via the xAI Realtime API.
 
-Auth-Modell:
-- POST /voice/token: braucht eingeloggten User (nur der Operator soll sprechen)
-- Token-TTL: 1 Stunde
-- Room: pro Call frischer Name "voice-{user_id}-{ts}-{rand4}". Reason:
-  LiveKit dispatched seinen Worker-Job nur EINMAL pro Room (genauer: beim
-  CreateRoom-Event). Wenn der Operator einen Call beendet und reconnected mit
-  demselben Room-Namen → Browser joint zwar, aber LiveKit ruft den Worker
-  nicht erneut auf → der Operator hört nichts. Plus: xAI Realtime-Session wird im
-  Worker-Subprocess pro Job gehalten — wenn 2 Connects sich denselben
-  Subprocess teilen, kommt "failed to insert item already exists" Warning
-  (Item-IDs kollidieren). Frischer Room = frischer Subprocess = frische
-  xAI-Session. Live-Symptom reproduziert 2026-05-14 abends.
-- Identity: User-ID als display name
+Auth model:
+- POST /voice/token: requires a logged-in user (only the operator should talk)
+- Token TTL: 1 hour
+- Room: a fresh name per call, "voice-{user_id}-{ts}-{rand4}". Reason:
+  LiveKit dispatches its worker job only ONCE per room (more precisely: on the
+  CreateRoom event). If the operator ends a call and reconnects with the same
+  room name → the browser joins fine, but LiveKit doesn't invoke the worker
+  again → the operator hears nothing. Also: the xAI Realtime session is held
+  in the worker subprocess per job — if 2 connects share the same subprocess,
+  a "failed to insert item already exists" warning shows up (item IDs
+  collide). Fresh room = fresh subprocess = fresh xAI session. Live symptom
+  reproduced on the evening of 2026-05-14.
+- Identity: user ID as display name
 """
 
 import json
@@ -54,19 +54,19 @@ _VOICE_HIGHLIGHT_CHANNEL = "voice:graph-highlight"
 
 # Redis pub/sub channel for Jarvis "Display"-Cards (M.5: voice-display).
 # Card-types: memory|url|file|task. Card-payload schema validated by
-# VoiceDisplayCard below. Frontend stack lebt im VoiceDrawer (Voice-Widget).
+# VoiceDisplayCard below. Frontend stack lives in the VoiceDrawer (voice widget).
 _VOICE_DISPLAY_CHANNEL = "voice:display"
 _VOICE_DISPLAY_KINDS = {"memory", "url", "file", "task"}
 
 LIVEKIT_API_KEY = os.environ.get("LIVEKIT_API_KEY", "")
 LIVEKIT_API_SECRET = os.environ.get("LIVEKIT_API_SECRET", "")
-# Optionaler Override (z.B. wenn LiveKit hinter ganz separater Domain laeuft).
-# Default leer → URL wird dynamisch aus request derived (siehe issue_voice_token).
+# Optional override (e.g. when LiveKit runs behind a completely separate domain).
+# Default empty → URL is derived dynamically from the request (see issue_voice_token).
 LIVEKIT_PUBLIC_URL_OVERRIDE = os.environ.get("LIVEKIT_PUBLIC_URL", "")
 
-TOKEN_TTL_SECONDS = 3600  # 1 Stunde
+TOKEN_TTL_SECONDS = 3600  # 1 hour
 
-# Path den Caddy zu LiveKit-Signaling proxiert (siehe Caddyfile).
+# Path Caddy proxies to LiveKit signaling (see Caddyfile).
 LIVEKIT_SIGNAL_PATH = "/livekit-signal"
 
 
@@ -78,9 +78,9 @@ class VoiceTokenResponse(BaseModel):
 
 
 def _build_livekit_jwt(identity: str, room: str) -> str:
-    """Baut ein LiveKit-Access-Token (HS256-JWT).
+    """Builds a LiveKit access token (HS256 JWT).
 
-    LiveKit-Specification: https://docs.livekit.io/home/get-started/authentication/
+    LiveKit specification: https://docs.livekit.io/home/get-started/authentication/
     Required claims: iss (= api_key), sub (= identity), nbf, exp, video.roomJoin, video.room.
     """
     if not LIVEKIT_API_KEY or not LIVEKIT_API_SECRET:
@@ -108,16 +108,16 @@ def _build_livekit_jwt(identity: str, room: str) -> str:
 
 
 def _derive_ws_url(request: Request) -> str:
-    """LiveKit-WebSocket-URL passend zum Request-Origin.
+    """LiveKit WebSocket URL matching the request origin.
 
-    Wenn der Frontend ueber https://<your-host> kommt, brauchen wir wss://
-    (Browsers blocken Mixed-Content). Wenn ueber http://localhost kommt's,
-    reicht ws://. Caddy proxiert beides auf /livekit-signal.
+    If the frontend comes in over https://<your-host>, we need wss://
+    (browsers block mixed content). If it comes over http://localhost,
+    ws:// is enough. Caddy proxies both to /livekit-signal.
     """
     if LIVEKIT_PUBLIC_URL_OVERRIDE:
         return LIVEKIT_PUBLIC_URL_OVERRIDE
 
-    # Trust X-Forwarded-Proto (Caddy setzt es) ueber request.url.scheme.
+    # Trust X-Forwarded-Proto (Caddy sets it) over request.url.scheme.
     proto = request.headers.get("x-forwarded-proto") or request.url.scheme
     host = request.headers.get("x-forwarded-host") or request.headers.get("host", "localhost")
     ws_scheme = "wss" if proto == "https" else "ws"
@@ -129,18 +129,18 @@ async def issue_voice_token(
     request: Request,
     current_user: Annotated[User, Depends(require_user)],
 ):
-    """Gibt einen LiveKit-Access-Token + Server-URL für den Browser-Client aus.
+    """Issues a LiveKit access token + server URL for the browser client.
 
-    Pro User isolierter Room ('voice-{user_id}'). Voice-Worker joint
-    denselben Room als Agent und führt das Gespräch über xAI Realtime.
-    URL wird dynamisch aus Request-Origin gebaut (localhost vs Tailscale-Domain).
+    Room isolated per user ('voice-{user_id}'). The voice worker joins the
+    same room as an agent and carries out the conversation via xAI Realtime.
+    URL is built dynamically from the request origin (localhost vs Tailscale domain).
     """
     user_id_str = str(current_user.id)
-    # Frischer Room pro Token-Request: LiveKit dispatched den Worker-Job nur
-    # einmal pro Room. Operator-Reconnect mit gleichem Room → kein neuer Job →
-    # kein Audio. Mit Timestamp + 4-Hex-Suffix sind Rooms eindeutig auch bei
-    # parallel issued Tokens. Frontend ruft /voice/token jedes Mal beim Connect
-    # auf — also fresh room == fresh call.
+    # Fresh room per token request: LiveKit dispatches the worker job only
+    # once per room. Operator reconnect with the same room → no new job →
+    # no audio. With a timestamp + 4-hex suffix, rooms stay unique even for
+    # tokens issued in parallel. The frontend calls /voice/token every time it
+    # connects — so fresh room == fresh call.
     room = f"voice-{user_id_str}-{int(time.time())}-{uuid.uuid4().hex[:4]}"
     identity = current_user.email or user_id_str
 
@@ -225,24 +225,24 @@ async def voice_graph_highlight(
 
 
 class VoiceDisplayCard(BaseModel):
-    """Card-Push from voice worker → Redis → VoiceDrawer-Stack im Frontend.
+    """Card push from voice worker → Redis → VoiceDrawer stack in the frontend.
 
-    Wenn der Operator sagt "zeig mir das Projekt-Briefing", findet Jarvis im
-    Vault den passenden Hit und publisht eine Memory-Card. Frontend rendert
-    die Card im Drawer (zwischen BarVisualizer und Controls).
+    When the operator says "show me the project briefing", Jarvis finds the
+    matching hit in the vault and publishes a memory card. The frontend renders
+    the card in the drawer (between BarVisualizer and Controls).
 
-    Card-Schema ist absichtlich locker — `data` darf je nach Kind ganz
-    unterschiedliche Felder mitbringen (vault_path bei memory, url bei url,
-    filename + size bei file, task_id + status bei task). Frontend macht
-    discrimination per ``kind`` und rendert die passende Card-Komponente.
+    The card schema is intentionally loose — `data` can carry entirely
+    different fields depending on kind (vault_path for memory, url for url,
+    filename + size for file, task_id + status for task). The frontend
+    discriminates by ``kind`` and renders the matching card component.
 
-    Whitelist auf 4 Kinds limitiert den Angriffsraum + verhindert typo-
-    induzierte silent no-ops auf dem Frontend.
+    Whitelisting to 4 kinds limits the attack surface + prevents typo-
+    induced silent no-ops on the frontend.
     """
 
     kind: str
     data: dict
-    title: str | None = None  # Optional Anzeige-Titel (sonst aus data abgeleitet)
+    title: str | None = None  # Optional display title (otherwise derived from data)
 
     @field_validator("kind")
     @classmethod

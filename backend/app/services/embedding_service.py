@@ -1,18 +1,18 @@
 """Embedding Service — Spark LM Studio primary, Ollama fallback.
 
-Seit 2026-04-11 (Boss-Autonomy / Memory-Overhaul Phase 3): Embeddings werden
-fuer alle semantic/agent/episodic Memory-Eintraege erzeugt und in Qdrant gespeichert.
+Since 2026-04-11 (Boss-Autonomy / Memory-Overhaul Phase 3): embeddings are
+generated for all semantic/agent/episodic memory entries and stored in Qdrant.
 
 Primary: Spark DGX (192.0.2.10:1234) via LM Studio OpenAI-compat
          Model: text-embedding-nomic-embed-text-v1.5 (768-dim)
 
-Fallback: Keine automatische — wenn Spark down ist, Embedding schlaegt fehl
-         und der Caller muss das akzeptieren (Memory wird trotzdem in DB
-         gespeichert, nur ohne Vektorsuche bis zum naechsten Backfill).
+Fallback: None automatic — if Spark is down, embedding fails
+         and the caller must accept that (the memory is still saved in
+         DB, just without vector search until the next backfill).
 
 Usage:
     from app.services.embedding_service import embedding_service
-    vec = await embedding_service.embed("wie haben wir vercel deploys gehandhabt")
+    vec = await embedding_service.embed("how did we handle vercel deploys")
     assert len(vec) == 768
 """
 import logging
@@ -48,10 +48,10 @@ class EmbeddingService:
         return self._client
 
     async def embed(self, text: str) -> list[float]:
-        """Returnt einen 768-dim Vektor fuer den Input-Text.
+        """Returns a 768-dim vector for the input text.
 
-        Raises httpx.HTTPError wenn Spark nicht erreichbar. Caller entscheidet
-        ob sie den Memory-Insert abbrechen oder best-effort weitermachen.
+        Raises httpx.HTTPError if Spark is unreachable. Caller decides
+        whether to abort the memory insert or continue best-effort.
         """
         if not text or not text.strip():
             raise ValueError("Leerer Embedding-Input")
@@ -60,7 +60,7 @@ class EmbeddingService:
         try:
             resp = await client.post(
                 self.url,
-                json={"model": self.model, "input": text[:8000]},  # truncate extreme Faelle
+                json={"model": self.model, "input": text[:8000]},  # truncate extreme cases
                 headers={"Content-Type": "application/json"},
             )
             resp.raise_for_status()
@@ -77,7 +77,7 @@ class EmbeddingService:
             raise
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
-        """Batch-Embedding — Spark/LM Studio unterstuetzt Listen im input."""
+        """Batch embedding — Spark/LM Studio supports lists in input."""
         if not texts:
             return []
         client = await self._get_client()

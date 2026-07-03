@@ -1,5 +1,5 @@
 """
-Runtime Schedules API — CRUD für Runtime-Zeitpläne.
+Runtime Schedules API — CRUD for runtime schedules.
 """
 import re
 import uuid
@@ -21,7 +21,7 @@ from app.services.runtime_manager import get_runtime
 router = APIRouter(prefix="/api/v1/runtimes", tags=["runtime-schedules"])
 
 
-_VIRTUAL_RUNTIME_IDS = {"lmstudio"}  # Globale virtuelle IDs ohne runtimes.json-Eintrag
+_VIRTUAL_RUNTIME_IDS = {"lmstudio"}  # Global virtual IDs without a runtimes.json entry
 
 
 class RuntimeScheduleCreate(BaseModel):
@@ -57,7 +57,7 @@ class RuntimeSchedulePatch(BaseModel):
 
 
 def _require_runtime(runtime_id: str) -> None:
-    """Prüft ob die Runtime existiert. Virtuelle IDs (z.B. 'lmstudio') werden akzeptiert."""
+    """Checks whether the runtime exists. Virtual IDs (e.g. 'lmstudio') are accepted."""
     if runtime_id in _VIRTUAL_RUNTIME_IDS:
         return
     rt = get_runtime(runtime_id)
@@ -67,7 +67,7 @@ def _require_runtime(runtime_id: str) -> None:
 
 @router.get("/{runtime_id}/schedules")
 async def list_schedules(runtime_id: str, current_user=Depends(require_user)):
-    """Alle Schedules für eine Runtime."""
+    """All schedules for a runtime."""
     _require_runtime(runtime_id)
     return await get_schedules(runtime_id)
 
@@ -78,7 +78,7 @@ async def create_schedule_endpoint(
     body: RuntimeScheduleCreate,
     current_user=Depends(require_user),
 ):
-    """Neuen Schedule anlegen."""
+    """Create a new schedule."""
     _require_runtime(runtime_id)
     return await create_schedule(runtime_id, body.model_dump())
 
@@ -90,7 +90,7 @@ async def patch_schedule(
     body: RuntimeSchedulePatch,
     current_user=Depends(require_user),
 ):
-    """Schedule bearbeiten."""
+    """Edit a schedule."""
     _require_runtime(runtime_id)
     updated = await update_schedule(schedule_id, body.model_dump(exclude_none=True))
     if not updated:
@@ -104,7 +104,7 @@ async def delete_schedule_endpoint(
     schedule_id: uuid.UUID,
     current_user=Depends(require_user),
 ):
-    """Schedule löschen."""
+    """Delete a schedule."""
     _require_runtime(runtime_id)
     deleted = await delete_schedule(schedule_id)
     if not deleted:
@@ -117,6 +117,6 @@ async def get_schedule_runs(
     schedule_id: uuid.UUID,
     current_user=Depends(require_user),
 ):
-    """Letzte 5 Ausführungen eines Schedules."""
+    """Last 5 executions of a schedule."""
     _require_runtime(runtime_id)
     return await get_runs(schedule_id, limit=5)

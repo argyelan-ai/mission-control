@@ -1,13 +1,13 @@
 """Multi-Agent Consensus Helper.
 
-POST /api/v1/agent/consensus — Boss dispatcht dieselbe Frage an N Agents,
-wartet auf alle, aggregiert Ergebnisse.
+POST /api/v1/agent/consensus — Boss dispatches the same question to N agents,
+waits for all of them, aggregates the results.
 
-Nutzt die bestehende Subtask/Dispatch-Infrastruktur:
-1. Root-Task als Container (status=in_progress)
-2. N Subtasks — einer pro Agent (auto-dispatch)
-3. Watchdog erkennt Phase-Completion → Parent → review
-4. Caller holt Ergebnisse via GET /consensus/{id}
+Uses the existing subtask/dispatch infrastructure:
+1. Root task as a container (status=in_progress)
+2. N subtasks — one per agent (auto-dispatch)
+3. Watchdog detects phase completion → parent → review
+4. Caller fetches results via GET /consensus/{id}
 """
 
 import logging
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/api/v1/agent", tags=["consensus"])
 
 
 class ConsensusRequest(BaseModel):
-    """Anfrage fuer Multi-Agent-Konsens."""
+    """Request for multi-agent consensus."""
     question: str
     agent_ids: list[uuid.UUID]
     board_id: uuid.UUID | None = None
@@ -69,13 +69,13 @@ async def create_consensus(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_agent),
 ):
-    """Erstelle eine Konsens-Anfrage: selbe Frage an N Agents, parallele Bearbeitung.
+    """Create a consensus request: same question to N agents, parallel processing.
 
-    Der Endpoint erstellt:
-    1. Einen Root-Task als Container
-    2. N Subtasks — einen pro Agent mit assigned_agent_id
+    The endpoint creates:
+    1. A root task as a container
+    2. N subtasks — one per agent with assigned_agent_id
 
-    Watchdog erkennt Phase-Completion automatisch.
+    Watchdog detects phase completion automatically.
     """
     # Resolve board
     board_id = body.board_id
@@ -121,9 +121,9 @@ async def create_consensus(
         started_at=datetime.now(timezone.utc),
     )
     session.add(root_task)
-    await session.flush()  # ID generieren
+    await session.flush()  # generate ID
 
-    # 2. Subtasks — einer pro Agent
+    # 2. Subtasks — one per agent
     subtask_ids: list[str] = []
     for target in target_agents:
         subtask = Task(
@@ -189,18 +189,18 @@ async def get_consensus_status(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_agent),
 ):
-    """Status und Ergebnisse einer Konsens-Anfrage abrufen."""
+    """Fetch status and results of a consensus request."""
     root_task = await session.get(Task, consensus_id)
     if not root_task:
         raise HTTPException(404, "Konsens-Task nicht gefunden")
 
-    # Subtasks laden
+    # Load subtasks
     result = await session.exec(
         select(Task).where(Task.parent_task_id == consensus_id)
     )
     subtasks = result.all()
 
-    # Status berechnen
+    # Compute status
     done_count = sum(1 for s in subtasks if s.status == "done")
     total_count = len(subtasks)
 
@@ -211,10 +211,10 @@ async def get_consensus_status(
     else:
         consensus_status = "pending"
 
-    # Antworten sammeln (letzte Kommentare der done-Subtasks)
+    # Collect responses (last comments of the done subtasks)
     responses: list[dict] = []
     for subtask in subtasks:
-        # Letzten Kommentar des zugewiesenen Agents holen
+        # Fetch the last comment from the assigned agent
         comment_result = await session.exec(
             select(TaskComment)
             .where(TaskComment.task_id == subtask.id)
@@ -247,7 +247,7 @@ async def get_consensus_status(
 
 
 async def _dispatch_consensus_subtask(task_id: uuid.UUID, board_id: uuid.UUID):
-    """Background-Dispatch eines Consensus-Subtasks via auto_dispatch_task."""
+    """Background dispatch of a consensus subtask via auto_dispatch_task."""
     try:
         from app.services.dispatch import auto_dispatch_task
         await auto_dispatch_task(task_id, board_id)

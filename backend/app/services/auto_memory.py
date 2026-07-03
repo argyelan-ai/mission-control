@@ -1,12 +1,12 @@
 """
-Auto-Memory Service — MC lernt automatisch aus System-Events.
+Auto-Memory Service — MC learns automatically from system events.
 
-Generiert BoardMemory-Eintraege bei Task-Completion, Task-Failure,
-Phase-Completion und woechentlichen Digests. Alle Eintraege haben
-source="system" und auto_generated=True.
+Generates BoardMemory entries on task completion, task failure,
+phase completion, and weekly digests. All entries have
+source="system" and auto_generated=True.
 
-Jede Funktion erstellt eigene DB-Session (Background-Task-Pattern).
-Redis-Dedup verhindert doppelte Eintraege.
+Each function creates its own DB session (background-task pattern).
+Redis dedup prevents duplicate entries.
 """
 
 import hashlib
@@ -33,7 +33,7 @@ logger = logging.getLogger("mc.auto_memory")
 
 
 def _format_duration(start: datetime | None, end: datetime | None) -> str:
-    """Dauer zwischen zwei Zeitpunkten als lesbaren String formatieren."""
+    """Format the duration between two timestamps as a readable string."""
     if not start or not end:
         return "unbekannt"
     diff = end - start
@@ -42,7 +42,7 @@ def _format_duration(start: datetime | None, end: datetime | None) -> str:
 
 
 def _format_minutes(total_minutes: int) -> str:
-    """Minuten als lesbaren String formatieren."""
+    """Format minutes as a readable string."""
     if total_minutes < 1:
         return "<1 Min"
     if total_minutes < 60:
@@ -57,7 +57,7 @@ def _format_minutes(total_minutes: int) -> str:
 async def _load_recent_comments(
     session: AsyncSession, task_id: uuid.UUID, limit: int = 2
 ) -> list[TaskComment]:
-    """Letzte N Kommentare eines Tasks laden."""
+    """Load the last N comments of a task."""
     result = await session.exec(
         select(TaskComment)
         .where(TaskComment.task_id == task_id)
@@ -68,7 +68,7 @@ async def _load_recent_comments(
 
 
 async def _load_project_tags(session: AsyncSession, project_id: uuid.UUID | None) -> list[str]:
-    """Laedt Projekt-Tags als String-Liste fuer Memory-Eintraege."""
+    """Load project tags as a string list for memory entries."""
     if not project_id:
         return []
     try:
@@ -89,13 +89,13 @@ async def _load_project_tags(session: AsyncSession, project_id: uuid.UUID | None
 
 
 async def _dedup_check(key: str, ttl: int = 3600) -> bool:
-    """Redis-basierter Duplikat-Schutz. Gibt True zurueck wenn KEIN Duplikat."""
+    """Redis-based duplicate protection. Returns True if there is NO duplicate."""
     try:
         redis = await get_redis()
         acquired = await redis.set(key, "1", nx=True, ex=ttl)
         return bool(acquired)
     except Exception:
-        # Bei Redis-Fehler lieber ausfuehren als gar nicht
+        # On Redis error, prefer to proceed rather than not at all
         return True
 
 
@@ -105,11 +105,11 @@ async def _dedup_check(key: str, ttl: int = 3600) -> bool:
 async def _load_reflections_for_task(
     session: AsyncSession, task_id: uuid.UUID
 ) -> list[TaskComment]:
-    """Phase 5 MSY-01: alle Reflection-Comments eines Tasks, oldest first.
+    """Phase 5 MSY-01: all reflection comments of a task, oldest first.
 
-    Mirror der `_load_reflection_and_last_comments` Pattern aus
-    `services/report_auto_draft.py:46-72`. Nur reflection-typed Comments,
-    nicht alle.
+    Mirrors the `_load_reflection_and_last_comments` pattern from
+    `services/report_auto_draft.py:46-72`. Only reflection-typed comments,
+    not all of them.
 
     W4.2: excludes author_type='system' to avoid re-folding the auto-generated
     task-done TaskComments back into BoardMemory (would re-introduce the noise
@@ -157,7 +157,7 @@ async def _fold_reflections_into_memory(
 
     Returns count of newly-folded reflections.
     """
-    # Lazy-Import (Pitfall 1 — IMPORT, do NOT reimplement)
+    # Lazy import (Pitfall 1 — IMPORT, do NOT reimplement)
     from app.routers.agent_comments import _extract_reflection_lesson
 
     reflections = await _load_reflections_for_task(session, task_id)
@@ -167,7 +167,7 @@ async def _fold_reflections_into_memory(
         if not refl_text.strip():
             continue
         refl_key = _reflection_dedup_key(task_id, refl_text)
-        if not await _dedup_check(refl_key, ttl=86400 * 30):  # 30 Tage TTL
+        if not await _dedup_check(refl_key, ttl=86400 * 30):  # 30-day TTL
             continue
         lesson_text = _extract_reflection_lesson(refl_text)
         if not lesson_text:
@@ -201,7 +201,7 @@ async def _fold_reflections_into_memory(
 
 
 async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None) -> None:
-    """Zeichnet eine Lesson auf wenn ein Task auf 'done' gesetzt wird.
+    """Records a lesson when a task is set to 'done'.
 
     Phase 5 MSY-01 (D-04): reflections are folded UNCONDITIONALLY on every
     call (per-reflection dedup via `_reflection_dedup_key` provides
@@ -244,7 +244,7 @@ async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None)
             duration = _format_duration(task.started_at, task.completed_at)
             comments = await _load_recent_comments(session, task_id, limit=2)
 
-            # Inhalt zusammenbauen
+            # Assemble content
             lines = [
                 f"**Task erledigt:** {task.title}",
                 f"**Agent:** {agent_name}",
@@ -253,7 +253,7 @@ async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None)
             ]
             if comments:
                 lines.append("\n**Letzte Kommentare:**")
-                for c in reversed(comments):  # chronologisch
+                for c in reversed(comments):  # chronological
                     preview = c.content[:150].replace("\n", " ")
                     lines.append(f"- {preview}")
 
@@ -280,7 +280,7 @@ async def record_task_completion(task_id: uuid.UUID, agent_id: uuid.UUID | None)
 
 
 async def record_task_failure(task_id: uuid.UUID, agent_id: uuid.UUID | None) -> None:
-    """Zeichnet eine Lesson auf wenn ein Task auf 'failed' gesetzt wird."""
+    """Records a lesson when a task is set to 'failed'."""
     dedup_key = RedisKeys.auto_memory_task_failed(str(task_id))
     if not await _dedup_check(dedup_key):
         return
@@ -300,7 +300,7 @@ async def record_task_failure(task_id: uuid.UUID, agent_id: uuid.UUID | None) ->
             duration = _format_duration(task.started_at, utcnow())
             comments = await _load_recent_comments(session, task_id, limit=1)
 
-            # Fehlergrund aus letztem Kommentar
+            # Error reason from the last comment
             error_reason = "Kein Fehlergrund angegeben"
             if comments:
                 error_reason = comments[0].content[:200].replace("\n", " ")
@@ -343,7 +343,7 @@ async def record_task_failure(task_id: uuid.UUID, agent_id: uuid.UUID | None) ->
 async def record_phase_completion(
     parent_task_id: uuid.UUID, subtask_ids: list[uuid.UUID]
 ) -> None:
-    """Zeichnet Knowledge auf wenn alle Subtasks einer Phase abgeschlossen sind."""
+    """Records knowledge when all subtasks of a phase are complete."""
     dedup_key = RedisKeys.auto_memory_phase_done(str(parent_task_id))
     if not await _dedup_check(dedup_key):
         return
@@ -354,14 +354,14 @@ async def record_phase_completion(
             if not parent:
                 return
 
-            # Subtasks laden
+            # Load subtasks
             subtasks = []
             for sid in subtask_ids:
                 st = await session.get(Task, sid)
                 if st:
                     subtasks.append(st)
 
-            # Beteiligte Agents sammeln
+            # Collect involved agents
             agent_ids = {s.assigned_agent_id for s in subtasks if s.assigned_agent_id}
             agent_names = []
             for aid in agent_ids:
@@ -369,7 +369,7 @@ async def record_phase_completion(
                 if agent:
                     agent_names.append(f"{agent.emoji or ''} {agent.name}".strip())
 
-            # Gesamtdauer: fruehester Start → spaetestes Ende
+            # Total duration: earliest start → latest end
             starts = [s.started_at for s in subtasks if s.started_at]
             ends = [s.completed_at for s in subtasks if s.completed_at]
             total_duration = "unbekannt"
@@ -385,7 +385,7 @@ async def record_phase_completion(
                 f"**Gesamtdauer:** {total_duration}",
             ]
 
-            # Subtask-Uebersicht
+            # Subtask overview
             lines.append("\n**Tasks:**")
             for s in subtasks:
                 status_icon = "done" if s.status == "done" else s.status
@@ -421,16 +421,16 @@ async def record_phase_completion(
 
 
 async def generate_weekly_digest() -> None:
-    """Generiert einen woechentlichen Review — max 1x pro Woche (Redis-Dedup, 6 Tage TTL)."""
+    """Generates a weekly review — max once per week (Redis dedup, 6-day TTL)."""
     dedup_key = RedisKeys.auto_memory_weekly_digest()
-    if not await _dedup_check(dedup_key, ttl=518400):  # 6 Tage
+    if not await _dedup_check(dedup_key, ttl=518400):  # 6 days
         return
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
         try:
             week_ago = utcnow() - timedelta(days=7)
 
-            # Tasks done letzte 7 Tage
+            # Tasks done in the last 7 days
             done_result = await session.exec(
                 select(func.count()).where(
                     Task.status == "done",
@@ -439,7 +439,7 @@ async def generate_weekly_digest() -> None:
             )
             done_count = done_result.one()
 
-            # Tasks failed letzte 7 Tage
+            # Tasks failed in the last 7 days
             failed_result = await session.exec(
                 select(func.count()).where(
                     Task.status == "failed",
@@ -448,7 +448,7 @@ async def generate_weekly_digest() -> None:
             )
             failed_count = failed_result.one()
 
-            # Top-3 aktivste Agents (nach abgeschlossenen Tasks)
+            # Top 3 most active agents (by completed tasks)
             top_agents_result = await session.exec(
                 select(
                     Task.assigned_agent_id,
@@ -472,7 +472,7 @@ async def generate_weekly_digest() -> None:
                     name = f"{agent.emoji or ''} {agent.name}".strip()
                     agent_lines.append(f"- {name}: {cnt} Tasks")
 
-            # Durchschnittsdauer (nur fuer done Tasks mit started_at + completed_at)
+            # Average duration (only for done tasks with started_at + completed_at)
             avg_result = await session.exec(
                 select(
                     func.avg(
@@ -529,13 +529,13 @@ async def generate_weekly_digest() -> None:
             logger.exception("Auto-memory: failed to generate weekly_digest")
 
 
-# ── Fetch Recent Lessons (fuer Dispatch-Enhancement) ─────────────────────────
+# ── Fetch Recent Lessons (for dispatch enhancement) ─────────────────────────
 
 
 async def fetch_recent_lessons(
     session: AsyncSession, board_id: uuid.UUID | None, limit: int = 3
 ) -> list[BoardMemory]:
-    """Laedt die neuesten auto-generierten Lessons fuer ein Board."""
+    """Loads the most recent auto-generated lessons for a board."""
     if not board_id:
         return []
 
@@ -558,7 +558,7 @@ async def fetch_recent_lessons(
 async def fetch_agent_lessons(
     session: AsyncSession, agent_id: uuid.UUID, limit: int = 3
 ) -> list[BoardMemory]:
-    """Laedt die neuesten Lessons die ein Agent geschrieben hat (agent-scoped)."""
+    """Loads the most recent lessons an agent has written (agent-scoped)."""
     result = await session.exec(
         select(BoardMemory)
         .where(
@@ -571,7 +571,7 @@ async def fetch_agent_lessons(
     return list(result.all())
 
 
-# ── Fetch Relevant Lessons (Keyword-Matching) ───────────────────────────────
+# ── Fetch Relevant Lessons (keyword matching) ───────────────────────────────
 
 
 async def fetch_relevant_lessons(
@@ -581,26 +581,26 @@ async def fetch_relevant_lessons(
     board_id: uuid.UUID | None,
     limit: int = 3,
 ) -> list[BoardMemory]:
-    """Keyword-basierte Suche nach relevanten Lessons fuer einen Task.
+    """Keyword-based search for lessons relevant to a task.
 
-    Einfaches Matching: Woerter aus dem Task-Titel werden gegen
-    BoardMemory.content und .title gesucht (ILIKE).
-    Keine Vektordatenbank noetig.
+    Simple matching: words from the task title are searched against
+    BoardMemory.content and .title (ILIKE).
+    No vector database needed.
     """
     from sqlmodel import or_
 
     if not board_id:
         return []
 
-    # Stoppwoerter rausfiltern, nur Woerter mit 4+ Zeichen
+    # Filter out stop words, only words with 4+ characters
     text = f"{task_title} {task_description or ''}"
     keywords = [w.strip(".,!?:;()[]{}\"'") for w in text.split() if len(w) >= 4]
-    keywords = list(set(keywords))[:5]  # Max 5 Keywords
+    keywords = list(set(keywords))[:5]  # Max 5 keywords
 
     if not keywords:
         return []
 
-    # OR-Suche: mindestens ein Keyword muss matchen
+    # OR search: at least one keyword must match
     conditions = []
     for kw in keywords:
         pattern = f"%{kw}%"
@@ -629,9 +629,9 @@ async def record_feedback_lesson(
     feedback_type: str,
     comment: str | None = None,
 ) -> None:
-    """Zeichnet eine Lesson auf wenn der Operator einen Task genehmigt oder ablehnt.
+    """Records a lesson when the operator approves or rejects a task.
 
-    feedback_type: "approved" oder "rejected"
+    feedback_type: "approved" or "rejected"
     """
     dedup_key = RedisKeys.auto_memory_feedback(str(task_id), feedback_type)
     if not await _dedup_check(dedup_key):
@@ -667,7 +667,7 @@ async def record_feedback_lesson(
                     content_lines.append(f"\n**Feedback:** {comment}")
 
             project_tags = await _load_project_tags(session, task.project_id)
-            # "approved" = Journal (Bestaetigungslog), "rejected" = Lesson (daraus lernen)
+            # "approved" = journal (confirmation log), "rejected" = lesson (learn from it)
             mem_type = "journal" if feedback_type == "approved" else "lesson"
             memory = BoardMemory(
                 board_id=task.board_id,

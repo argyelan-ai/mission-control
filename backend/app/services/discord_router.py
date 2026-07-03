@@ -1,4 +1,4 @@
-"""Discord Channel Router — routet Events + Notifications in die richtigen Channels."""
+"""Discord Channel Router — routes events + notifications to the right channels."""
 
 import logging
 
@@ -6,18 +6,18 @@ from app.redis_client import get_redis
 
 logger = logging.getLogger("mc.discord_router")
 
-# Redis-Keys fuer Channel-IDs (gesetzt beim Setup-Script)
+# Redis keys for channel IDs (set by the setup script)
 CHANNEL_PURPOSES = ("alerts", "reviews", "briefing", "deploy", "ideas", "github", "jobs")
 
 
 async def get_channel_id(purpose: str) -> str | None:
-    """Channel-ID fuer einen bestimmten Zweck aus Redis lesen."""
+    """Read the channel ID for a given purpose from Redis."""
     r = await get_redis()
     return await r.get(f"mc:discord:channel:{purpose}")
 
 
 async def notify_user_test(task_title: str, task_id: str) -> None:
-    """Task bereit zum Testen → #mc-reviews."""
+    """Task ready for testing → #mc-reviews."""
     channel_id = await get_channel_id("reviews")
     if not channel_id:
         return
@@ -30,7 +30,7 @@ async def notify_user_test(task_title: str, task_id: str) -> None:
 
 
 async def notify_deploy(service: str, status: str, details: str) -> None:
-    """Deploy-Status → #deploy-log."""
+    """Deploy status → #deploy-log."""
     channel_id = await get_channel_id("deploy")
     if not channel_id:
         return
@@ -45,7 +45,7 @@ async def notify_deploy(service: str, status: str, details: str) -> None:
 
 
 async def notify_alert(title: str, description: str, severity: str = "warning") -> None:
-    """Warning/Error/Critical → #mc-alerts."""
+    """Warning/error/critical → #mc-alerts."""
     channel_id = await get_channel_id("alerts")
     if not channel_id:
         return

@@ -1,18 +1,18 @@
-"""CLI Bridge Runner — Workspace-Setup fuer Docker cli-bridge Agents.
+"""CLI Bridge Runner — workspace setup for Docker cli-bridge agents.
 
-Nach ADR-022 + ADR-024-Refactor ist das reine Backend-Seiten-Logik:
-- Kein HTTP-Bridge-Daemon mehr (obsolete Free-Code-Bridge-Aera).
-- Keine Pfad-Translation Docker→Host — `agent.workspace_path` ist schon
-  der Host-Pfad (z.B. `${HOME_HOST}/.mc/workspaces/<slug>`), und Backend
-  sieht ihn identisch via `${HOME}/.mc:${HOME}/.mc` Bind-Mount.
-- Dispatch-Message nutzt `_container_workspace_path()` aus dispatch.py um
-  den Host-Pfad in die Container-View (`/workspace/...`) umzurechnen.
+After ADR-022 + the ADR-024 refactor, this is pure backend-side logic:
+- No more HTTP bridge daemon (obsolete Free-Code-Bridge era).
+- No Docker→host path translation — `agent.workspace_path` is already
+  the host path (e.g. `${HOME_HOST}/.mc/workspaces/<slug>`), and the
+  backend sees it identically via the `${HOME}/.mc:${HOME}/.mc` bind mount.
+- The dispatch message uses `_container_workspace_path()` from dispatch.py
+  to convert the host path into the container view (`/workspace/...`).
 
-Workspace-Layout (ADR-022):
-- Task MIT GitHub-Repo: Git-Worktree unter
+Workspace layout (ADR-022):
+- Task WITH GitHub repo: git worktree under
   `<agent_ws>/projects/<proj_slug>/.worktrees/<task_slug>/`
-- Task mit Projekt ohne Repo: Plain-Dir unter `<agent_ws>/<task_slug>/`
-- Ad-hoc Task (kein Projekt): `<agent_ws>/<task_slug>/`
+- Task with project but no repo: plain dir under `<agent_ws>/<task_slug>/`
+- Ad-hoc task (no project): `<agent_ws>/<task_slug>/`
 """
 
 import logging
@@ -30,9 +30,9 @@ logger = logging.getLogger("mc.cli_bridge")
 
 
 def _agent_slug(agent: Agent) -> str:
-    """Leitet den Slug aus dem Agent-Namen ab.
+    """Derives the slug from the agent name.
 
-    Beispiel: "FreeCode" → "freecode", "My Agent" → "my-agent"
+    Example: "FreeCode" → "freecode", "My Agent" → "my-agent"
     """
     return agent.name.lower().replace(" ", "-")
 
@@ -43,19 +43,19 @@ async def dispatch_to_cli_bridge(
     message: str,
     session: AsyncSession,
 ) -> bool:
-    """Bereitet Workspace vor fuer Docker cli-bridge Agents.
+    """Prepares the workspace for Docker cli-bridge agents.
 
-    Task bleibt 'inbox' — poll.sh im Container holt ihn via /me/poll.
-    Kein HTTP /enqueue, kein Bridge-Poll — Completion via Agent MC-API.
+    Task stays 'inbox' — poll.sh in the container fetches it via /me/poll.
+    No HTTP /enqueue, no bridge poll — completion via Agent MC-API.
     """
     try:
         workspace, worktree_path, has_repo = await _resolve_workspace(task, agent, session)
     except Exception as e:
-        # Workspace-Setup fehlgeschlagen (z.B. git clone scheiterte weil
-        # destination existiert). Bis 2026-04-19 fiel der Code still auf einen
-        # leeren placeholder zurueck — Agent fand dann ein fremdes Repo auf dem
-        # Host-Mount und committete dort. Jetzt: Task blockieren statt
-        # versehentlich Commits ins falsche Repo zu riskieren.
+        # Workspace setup failed (e.g. git clone failed because the
+        # destination already exists). Until 2026-04-19, the code silently
+        # fell back to an empty placeholder — the agent then found a
+        # foreign repo on the host mount and committed there. Now: block
+        # the task instead of risking accidental commits to the wrong repo.
         logger.error(
             "Workspace setup failed for task %s ('%s'): %s",
             task.id, task.title, e,
@@ -78,8 +78,8 @@ async def dispatch_to_cli_bridge(
             ),
         )
         task.status = "blocked"
-        # Auto-Unassign: Workspace-Setup-Fehler ist Operator-Approval-Wait,
-        # kein Callback-Wait. Verhindert Cancel-Schleife im agent_poll.
+        # Auto-unassign: workspace setup failure is an operator-approval wait,
+        # not a callback wait. Prevents a cancel loop in agent_poll.
         from app.services.task_lifecycle import apply_terminal_unassign
         await apply_terminal_unassign(session, task, "blocked")
         session.add(task)
@@ -94,13 +94,13 @@ async def dispatch_to_cli_bridge(
         )
         return False
 
-    # `agent.workspace_path` ist schon der korrekte Host-Pfad (ADR-022).
-    # Backend sieht ihn identisch via ${HOME}/.mc Bind-Mount. Keine
-    # Docker→Host Translation mehr noetig.
+    # `agent.workspace_path` is already the correct host path (ADR-022).
+    # The backend sees it identically via the ${HOME}/.mc bind mount. No
+    # Docker→host translation needed anymore.
     host_workspace = worktree_path or workspace
 
-    # Workspace-Pfad in DB persistieren — wird von anderen Tasks (z.B. Tester)
-    # genutzt um Code-Speicherort zu finden.
+    # Persist the workspace path in the DB — used by other tasks (e.g. Tester)
+    # to find the code location.
     task.workspace_path = host_workspace
     session.add(task)
     await session.commit()
@@ -120,17 +120,17 @@ async def dispatch_to_cli_bridge(
 
 
 async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
-    """Workspace-Pfad fuer den Task aufloesen (Host-Pfad unter agent.workspace_path).
+    """Resolves the workspace path for the task (host path under agent.workspace_path).
 
-    Drei Pfade:
-    - Task + Projekt mit github_repo_url → Git-Worktree unter
+    Three paths:
+    - Task + project with github_repo_url → git worktree under
       `<agent_ws>/projects/<proj_slug>/.worktrees/<task_slug>/`
-    - Task + Projekt ohne Repo → Plain-Dir unter `<agent_ws>/<task_slug>/`
-    - Ad-hoc Task (kein Projekt) → `<agent_ws>/<task_slug>/`
+    - Task + project without repo → plain dir under `<agent_ws>/<task_slug>/`
+    - Ad-hoc task (no project) → `<agent_ws>/<task_slug>/`
 
     Returns: (workspace_path, worktree_path, has_repo)
-    - worktree_path: str wenn Git Worktree erstellt, None sonst
-    - has_repo: True wenn Git-Repo vorhanden
+    - worktree_path: str if a git worktree was created, None otherwise
+    - has_repo: True if a git repo exists
     """
     if not agent.workspace_path:
         raise RuntimeError(
@@ -147,10 +147,10 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
     if task.project_id:
         project = await session.get(Project, task.project_id)
         if project and project.github_repo_url:
-            # Code-Task mit Repo — Git-Setup MUSS erfolgreich sein (Exception
-            # propagiert, Dispatcher blockt den Task). Ohne harten Fail fiel
-            # der Code frueher auf leere Placeholder zurueck und Agents
-            # committeten ins falsche Repo (Incident 2026-04-19).
+            # Code task with repo — git setup MUST succeed (exception
+            # propagates, dispatcher blocks the task). Without a hard fail,
+            # the code used to fall back to empty placeholders and agents
+            # committed to the wrong repo (Incident 2026-04-19).
             has_repo = True
             task_slug = slugify_workspace_slug(task.title)
             main_repo = await git_service.ensure_workspace(
@@ -170,7 +170,7 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
                     task.title, worktree_path,
                 )
             except Exception as e:
-                # Worktree-Fehler non-fatal — main-repo ist funktionsfaehig.
+                # Worktree failure is non-fatal — main repo is functional.
                 logger.warning(
                     "Worktree creation failed for task '%s', falling back to main repo: %s",
                     task.title, e,
@@ -178,25 +178,25 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
                 worktree_path = None
                 workspace = main_repo
 
-            # MC pre-push guard: erwartete Remote-URL in den Workspace
-            # schreiben (Defense-in-depth vs. 2026-04-19 fremd-Repo-Bug).
+            # MC pre-push guard: write the expected remote URL into the workspace
+            # (defense-in-depth vs. the 2026-04-19 foreign-repo bug).
             _write_expected_remote(workspace, project.github_repo_url)
         elif project:
-            # Projekt ohne GitHub-Repo → Plain-Dir unter Agent-Workspace.
+            # Project without a GitHub repo → plain dir under the agent workspace.
             workspace = _create_plain_workspace(agent_base, task.title)
     else:
-        # Ad-hoc Task (kein Projekt) → eigenes Dir unter Agent-Workspace.
+        # Ad-hoc task (no project) → own dir under the agent workspace.
         workspace = _create_plain_workspace(agent_base, task.title)
 
     return workspace, worktree_path, has_repo
 
 
 def _create_plain_workspace(base_path: str, task_title: str) -> str:
-    """Plain-Verzeichnis ohne Git unter `<base_path>/<task-slug>/`.
+    """Plain directory without git under `<base_path>/<task-slug>/`.
 
-    `base_path` ist der Agent-Workspace (Host-Pfad, ADR-022), z.B.
-    `${HOME_HOST}/.mc/workspaces/sparky`. Backend sieht ihn identisch via
-    `${HOME}/.mc` Bind-Mount.
+    `base_path` is the agent workspace (host path, ADR-022), e.g.
+    `${HOME_HOST}/.mc/workspaces/sparky`. The backend sees it identically
+    via the `${HOME}/.mc` bind mount.
     """
     slug = slugify_workspace_slug(task_title)
     task_dir = os.path.join(base_path, slug)

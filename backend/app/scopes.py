@@ -1,9 +1,9 @@
 """
-Scope-based Permission System fuer Agent-Skills.
+Scope-based permission system for agent skills.
 
-Jeder Agent hat eine Liste von Scopes die bestimmen,
-welche API-Endpoints er nutzen darf und welche Sektionen
-in seiner TOOLS.md generiert werden.
+Each agent has a list of scopes that determine which API
+endpoints it may use and which sections are generated in
+its TOOLS.md.
 """
 from enum import StrEnum
 
@@ -54,7 +54,7 @@ class AgentRole(StrEnum):
     RELAY = "relay"        # Henry — OpenClaw Gateway / Telegram relay runtime
 
 
-# Rollen-Gruppen fuer Dispatch-Logik
+# Role groups for dispatch logic
 # RELAY intentionally absent: gateway/relay runtime never receives dispatched tasks
 # and has no session to watch — watchdog skips it on both sides.
 WORKER_ROLES: frozenset[AgentRole] = frozenset({AgentRole.DEVELOPER, AgentRole.DEPLOYER})
@@ -65,7 +65,7 @@ NON_WORKER_ROLES: frozenset[AgentRole] = frozenset({
 
 ALL_SCOPES: list[str] = [s.value for s in Scope]
 
-# Default-Scopes pro Rolle (AgentRole key)
+# Default scopes per role (AgentRole key)
 DEFAULT_SCOPES: dict[AgentRole, list[str]] = {
     AgentRole.LEAD: ALL_SCOPES,  # includes CREDENTIALS_READ via ALL_SCOPES
     AgentRole.DEVELOPER: [
@@ -116,10 +116,10 @@ DEFAULT_SCOPES: dict[AgentRole, list[str]] = {
         Scope.TASKS_WRITE,
         Scope.KNOWLEDGE_READ,
         Scope.KNOWLEDGE_WRITE,
-        # MEMORY_READ + MEMORY_WRITE: Researcher schreibt Lessons (Reflection-
-        # Flow) UND muss eigene frueheren Lessons wieder retrievable machen
-        # (`mc memory search`). Vor 2026-04-23 hatte Researcher nur WRITE —
-        # `mc memory search` schlug mit 403 fehl, Lesson-Loop war kaputt.
+        # MEMORY_READ + MEMORY_WRITE: the researcher writes lessons (reflection
+        # flow) AND must be able to retrieve its own earlier lessons again
+        # (`mc memory search`). Before 2026-04-23 the researcher only had WRITE —
+        # `mc memory search` failed with 403, the lesson loop was broken.
         Scope.MEMORY_READ,
         Scope.MEMORY_WRITE,
         Scope.CHAT_WRITE,
@@ -174,10 +174,10 @@ DEFAULT_SCOPES: dict[AgentRole, list[str]] = {
 
 
 def get_default_scopes(template_name: str | AgentRole) -> list[str]:
-    """Lookup Default-Scopes fuer eine Rolle oder einen Template-Namen. Fallback: ALL_SCOPES."""
+    """Look up default scopes for a role or template name. Fallback: ALL_SCOPES."""
     if isinstance(template_name, AgentRole):
         return list(DEFAULT_SCOPES.get(template_name, ALL_SCOPES))
-    # Legacy: String-basierter Lookup
+    # Legacy: string-based lookup
     try:
         role = AgentRole(template_name.lower())
         return list(DEFAULT_SCOPES.get(role, ALL_SCOPES))
@@ -186,7 +186,7 @@ def get_default_scopes(template_name: str | AgentRole) -> list[str]:
 
 
 def get_agent_effective_scopes(agent) -> list[str]:
-    """Effektive Scopes eines Agents. Leere Liste = ALL_SCOPES (backward compat)."""
+    """Effective scopes of an agent. Empty list = ALL_SCOPES (backward compat)."""
     if agent.scopes:
         return list(agent.scopes)
     return list(ALL_SCOPES)
@@ -194,8 +194,8 @@ def get_agent_effective_scopes(agent) -> list[str]:
 
 def require_scope(*scopes: Scope):
     """
-    FastAPI Dependency Factory — prueft ob der Agent die benoetigten Scopes hat.
-    Gibt 403 zurueck wenn ein Scope fehlt.
+    FastAPI dependency factory — checks whether the agent has the required scopes.
+    Returns 403 if a scope is missing.
 
     Usage:
         @router.post("/tasks")

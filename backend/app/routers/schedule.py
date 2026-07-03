@@ -1,7 +1,7 @@
 """
-Schedule Router — CRUD für Scheduled Jobs + Run History + SSE Stream.
+Schedule Router — CRUD for scheduled jobs + run history + SSE stream.
 
-Router-Reihenfolge: statische Pfade (/stream, /jobs) vor parametrisierten (/jobs/{id}).
+Router order: static paths (/stream, /jobs) before parameterized (/jobs/{id}).
 """
 import uuid
 from typing import Any, Literal
@@ -96,14 +96,14 @@ class JobUpdate(BaseModel):
     snoozed_until: str | None = None
 
 
-# ── SSE Stream — muss VOR /jobs/{job_id} stehen! ─────────────────────────────
+# ── SSE Stream — must come BEFORE /jobs/{job_id}! ────────────────────────────
 
 @router.get("/stream")
 async def schedule_stream(current_user=Depends(require_user)):
     return make_sse_response([RedisKeys.schedule_events()])
 
 
-# ── Upcoming Firings (top-level, vor /jobs/{job_id}) ─────────────────────────
+# ── Upcoming Firings (top-level, before /jobs/{job_id}) ──────────────────────
 
 @router.get("/upcoming", dependencies=[Depends(require_role("viewer"))])
 async def get_upcoming_firings(
@@ -136,7 +136,7 @@ async def get_upcoming_firings(
     return result
 
 
-# ── Preview Firings (top-level, vor /jobs/{job_id}) ──────────────────────────
+# ── Preview Firings (top-level, before /jobs/{job_id}) ───────────────────────
 
 @router.post("/preview-firings", dependencies=[Depends(require_role("viewer"))])
 async def preview_firings(body: dict) -> dict[str, Any]:

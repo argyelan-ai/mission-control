@@ -1,14 +1,14 @@
 """
-Hosts API — CRUD + Live-Metrics für die Host-Registry (ADR-048).
+Hosts API — CRUD + live metrics for the host registry (ADR-048).
 
-Ein Host beschreibt eine physische Box, auf der LLM-Runtimes laufen
-(kind ssh | flask_wol | local). Runtimes binden via runtimes.host_id;
-die Auflösung läuft über services/host_resolver.
+A host describes a physical box on which LLM runtimes run
+(kind ssh | flask_wol | local). Runtimes bind via runtimes.host_id;
+resolution goes through services/host_resolver.
 
-Writes sind admin-only — gleiche Begründung wie Runtime-Writes
-(test_runtime_readiness_gate): ssh_host/control_url bestimmen, WO
-Remote-Kommandos landen. Responses enthalten ssh_key_path (nur ein
-Pfad, kein Secret) — Key-INHALTE werden nie gelesen oder ausgeliefert.
+Writes are admin-only — same rationale as runtime writes
+(test_runtime_readiness_gate): ssh_host/control_url determine WHERE
+remote commands land. Responses include ssh_key_path (just a
+path, not a secret) — key CONTENTS are never read or served.
 """
 
 import uuid
@@ -38,17 +38,17 @@ def _validate_kind(v: str) -> str:
 
 
 def _validate_control_url(v: str | None) -> str | None:
-    # Gleiche Regel wie RuntimeCreate.control_url — verhindert dass ein
-    # Tippfehler-Schema (ftp://…) später als Control-Server angesprochen wird.
+    # Same rule as RuntimeCreate.control_url — prevents a typo'd scheme
+    # (ftp://…) from later being addressed as a control server.
     if v is not None and not (v.startswith("http://") or v.startswith("https://")):
         raise ValueError("control_url muss mit http:// oder https:// beginnen")
     return v
 
 
 class HostCreate(BaseModel):
-    # max_length spiegelt die String(N)-Spalten in models/host.py — ohne das
-    # würde ein überlanger Wert erst in Postgres als StringDataRightTruncation
-    # (500) knallen statt als sauberes 422 (SQLite-Tests erzwingen keine Länge).
+    # max_length mirrors the String(N) columns in models/host.py — without it
+    # an overlong value would only blow up in Postgres as StringDataRightTruncation
+    # (500) instead of a clean 422 (SQLite tests don't enforce the length).
     slug: str = Field(min_length=1, max_length=64)
     display_name: str = Field(min_length=1, max_length=128)
     kind: str  # ssh | flask_wol | local
@@ -99,7 +99,7 @@ class HostUpdate(BaseModel):
 
 
 async def _get_host(session: AsyncSession, host_id: str) -> Host | None:
-    """Slug-or-UUID Lookup — gleiches Pattern wie GET /runtimes/{runtime_id}."""
+    """Slug-or-UUID lookup — same pattern as GET /runtimes/{runtime_id}."""
     host = (await session.exec(select(Host).where(Host.slug == host_id))).first()
     if not host:
         try:
@@ -116,7 +116,7 @@ async def list_hosts(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle Hosts, sortiert nach ui_order (dann slug für stabile Reihenfolge)."""
+    """All hosts, sorted by ui_order (then slug for stable ordering)."""
     hosts = (await session.exec(select(Host))).all()
     return sorted(hosts, key=lambda h: (h.ui_order, h.slug))
 
@@ -145,10 +145,10 @@ async def update_host(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Update fields on a host (slug oder UUID im Pfad).
+    """Update fields on a host (slug or UUID in the path).
 
-    exclude_unset (nicht exclude_none wie beim Runtime-PATCH): nullable
-    Felder wie notes/ssh_user müssen explizit auf null zurücksetzbar sein.
+    exclude_unset (not exclude_none like the runtime PATCH): nullable
+    fields like notes/ssh_user must be explicitly resettable to null.
     """
     host = await _get_host(session, host_id)
     if not host:
@@ -174,8 +174,8 @@ async def delete_host(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Delete a host. 409 solange noch Runtimes gebunden sind — erst umbinden,
-    damit keine Runtime stumm auf die Settings-Fallback-Box zurückfällt."""
+    """Delete a host. 409 while runtimes are still bound — rebind first,
+    so no runtime silently falls back to the settings fallback box."""
     host = await _get_host(session, host_id)
     if not host:
         raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
@@ -201,11 +201,11 @@ async def host_metrics(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Live-Metrics eines Hosts (ADR-048).
+    """Live metrics for a host (ADR-048).
 
     - ssh       → nvidia-smi + free -m via SSH (get_host_metrics)
-    - flask_wol → awake/health des Control-Servers (Muster unsloth_porsche-State)
-    - local     → leeres Objekt mit kind-Feld (der MC-Host misst sich nicht selbst)
+    - flask_wol → awake/health of the control server (mirrors unsloth_porsche state)
+    - local     → empty object with kind field (the MC host doesn't measure itself)
     """
     host = await _get_host(session, host_id)
     if not host:
@@ -216,8 +216,8 @@ async def host_metrics(
 
     resolved = resolved_host_from_row(host)
     if host.kind == "flask_wol":
-        # get_host_metrics' flask_wol-Zweig probt den :5555 Control-Server —
-        # reachable == Box wach + eingeloggt (work-ready), sonst schläft sie.
+        # get_host_metrics' flask_wol branch probes the :5555 control server —
+        # reachable == box awake + logged in (work-ready), otherwise it's asleep.
         m = await runtime_manager.get_host_metrics(resolved)
         awake = bool(m.get("reachable"))
         return {

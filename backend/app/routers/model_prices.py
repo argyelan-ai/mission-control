@@ -1,14 +1,14 @@
 """Model Prices CRUD — admin-only.
 
-GET    /api/v1/model-prices                  → Liste (sortiert priority DESC, pattern)
-POST   /api/v1/model-prices                  → Erstellen
-GET    /api/v1/model-prices/unmatched        → Modelle in Events ohne passendes Pattern
-POST   /api/v1/model-prices/recompute        → cost_usd aller Events neu berechnen
-PATCH  /api/v1/model-prices/{id}             → Updaten (partielle Felder)
-DELETE /api/v1/model-prices/{id}             → Loeschen
+GET    /api/v1/model-prices                  → List (sorted by priority DESC, pattern)
+POST   /api/v1/model-prices                  → Create
+GET    /api/v1/model-prices/unmatched        → Models in events with no matching pattern
+POST   /api/v1/model-prices/recompute        → Recompute cost_usd for all events
+PATCH  /api/v1/model-prices/{id}             → Update (partial fields)
+DELETE /api/v1/model-prices/{id}             → Delete
 
-WICHTIG: /unmatched und /recompute muessen VOR /{id} definiert sein —
-FastAPI matcht Routen top-down, sonst wuerde "unmatched" als UUID geparst.
+IMPORTANT: /unmatched and /recompute must be defined BEFORE /{id} —
+FastAPI matches routes top-down, otherwise "unmatched" would get parsed as a UUID.
 """
 import uuid
 from datetime import datetime, timezone
@@ -54,11 +54,11 @@ class ModelPriceUpdate(BaseModel):
 
 
 class RecomputeRequest(BaseModel):
-    from_ts: Optional[datetime] = None  # optional: nur Events ab diesem Zeitpunkt
+    from_ts: Optional[datetime] = None  # optional: only events from this point on
 
 
 def _price_to_dict(p: ModelPrice) -> dict:
-    """Serialisiert ein ModelPrice-Objekt zu einem dict."""
+    """Serializes a ModelPrice object to a dict."""
     return {
         "id": str(p.id),
         "model_pattern": p.model_pattern,
@@ -80,7 +80,7 @@ async def list_prices(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Alle Preise auflisten (sortiert: priority DESC, model_pattern ASC)."""
+    """List all prices (sorted: priority DESC, model_pattern ASC)."""
     result = await session.exec(
         select(ModelPrice).order_by(
             desc(ModelPrice.priority),
@@ -96,7 +96,7 @@ async def create_price(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Neuen Preis erstellen."""
+    """Create a new price."""
     vf = payload.valid_from
     if vf.tzinfo is None:
         vf = vf.replace(tzinfo=timezone.utc)
@@ -124,19 +124,19 @@ async def get_unmatched_models(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Modelle in model_usage_events die kein Preis-Pattern matchen.
+    """Models in model_usage_events that don't match any price pattern.
 
-    Nutzt match_price (gleiche Logik wie Harvester) — zeigt echte Luecken.
-    Gibt pro Modell: event_count, total_input_tokens, total_output_tokens zurueck.
+    Uses match_price (same logic as the harvester) — shows real gaps.
+    Returns per model: event_count, total_input_tokens, total_output_tokens.
     """
     from app.services.token_harvester import match_price
     from app.utils import utcnow
 
-    # Alle Preise laden (fuer Matching)
+    # Load all prices (for matching)
     prices_result = await session.exec(select(ModelPrice))
     all_prices = list(prices_result.all())
 
-    # DISTINCT Modelle mit Aggregaten
+    # DISTINCT models with aggregates
     result = await session.exec(
         select(
             ModelUsageEvent.model,
@@ -158,7 +158,7 @@ async def get_unmatched_models(
                 "total_output_tokens": row.total_output or 0,
             })
 
-    # Sortiert nach event_count DESC
+    # Sorted by event_count DESC
     unmatched.sort(key=lambda x: x["event_count"], reverse=True)
     return unmatched
 
@@ -169,17 +169,17 @@ async def recompute_costs(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """cost_usd aller Events (ab from_ts wenn angegeben) mit aktueller Preistabelle neu berechnen.
+    """Recompute cost_usd for all events (from from_ts if given) using the current price table.
 
-    Gibt {"updated": N} zurueck.
+    Returns {"updated": N}.
     """
     from app.services.token_harvester import match_price, _compute_cost_usd
 
-    # Preise laden
+    # Load prices
     prices_result = await session.exec(select(ModelPrice))
     all_prices = list(prices_result.all())
 
-    # Events laden (optional ab from_ts)
+    # Load events (optionally from from_ts)
     query = select(ModelUsageEvent)
     if payload.from_ts:
         from_ts = payload.from_ts
@@ -216,7 +216,7 @@ async def update_price(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Preis partiell updaten."""
+    """Partially update a price."""
     price = await session.get(ModelPrice, price_id)
     if not price:
         raise HTTPException(status_code=404, detail="Price not found")
@@ -236,7 +236,7 @@ async def delete_price(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Preis loeschen."""
+    """Delete a price."""
     price = await session.get(ModelPrice, price_id)
     if not price:
         raise HTTPException(status_code=404, detail="Price not found")

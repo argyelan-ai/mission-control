@@ -1,7 +1,7 @@
-"""Credentials Vault — verschluesselte Zugangsdaten fuer Agent-Tasks.
+"""Credentials Vault — encrypted credentials for agent tasks.
 
-Gleiche Fernet-Verschluesselung wie System-Secrets.
-Credentials werden bei Task-Dispatch entschluesselt und an Agents uebergeben.
+Same Fernet encryption as system secrets.
+Credentials are decrypted at task dispatch time and handed to agents.
 """
 import json
 import uuid
@@ -144,9 +144,9 @@ async def update_credential(
     if payload.notes is not None:
         credential.notes = payload.notes
 
-    # State-aware Validation: nach Merge muss login-Credential eine url haben.
-    # Greift z.B. wenn jemand credential_type von "token" auf "login" updated
-    # ohne url mitzuschicken.
+    # State-aware validation: after merge, a login credential must have a url.
+    # Applies e.g. when someone updates credential_type from "token" to "login"
+    # without sending a url.
     if credential.credential_type == "login" and not (credential.url and credential.url.strip()):
         raise HTTPException(status_code=422, detail=_LOGIN_NEEDS_URL_MSG)
 
@@ -169,7 +169,7 @@ async def delete_credential(
     credential = await session.get(Credential, credential_id)
     if not credential:
         raise HTTPException(404, "Credential not found")
-    # Explizit NULL setzen (ON DELETE SET NULL ist DB-Ebene, klappt nicht in SQLite-Tests)
+    # Explicitly set NULL (ON DELETE SET NULL is DB-level, doesn't work in SQLite tests)
     from sqlmodel import select, update
     from app.models.task import Task
     await session.exec(

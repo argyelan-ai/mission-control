@@ -26,7 +26,7 @@ from app.database import get_session
 from app.models.agent import Agent
 from app.services.activity import emit_event
 
-# Skills-Verzeichnis finden (Host-Pfad via HOME_HOST env, Container-Fallback)
+# Find skills directory (host path via HOME_HOST env, container fallback)
 def _skill_dirs() -> list[Path]:
     dirs = []
     for home in filter(None, [os.environ.get("HOME_HOST"), os.path.expanduser("~")]):
@@ -54,10 +54,10 @@ class SkillUpdateRequest(BaseModel):
 
 class AgentSkillsUpdateRequest(BaseModel):
     skills: list[str] | None = None        # OpenClaw skill_filter
-    cli_plugins: list[str] | None = None   # CLI Plugins
-    update_cli_plugins: bool = False       # True = cli_plugins Feld anwenden
-    cli_skills: list[str] | None = None    # Custom Skills Allowlist
-    update_cli_skills: bool = False        # True = cli_skills Feld anwenden
+    cli_plugins: list[str] | None = None   # CLI plugins
+    update_cli_plugins: bool = False       # True = apply cli_plugins field
+    cli_skills: list[str] | None = None    # Custom skills allowlist
+    update_cli_skills: bool = False        # True = apply cli_skills field
 
 
 # ── 410 Gone helper ─────────────────────────────────────────────────────────
@@ -125,8 +125,8 @@ async def get_skill_content(
     skill_name: str,
     current_user=Depends(require_user),
 ):
-    """Liest die SKILL.md Datei eines Custom Skills aus dem lokalen Verzeichnis."""
-    # Sicherheits-Check: keine Path-Traversal
+    """Reads the SKILL.md file of a custom skill from the local directory."""
+    # Security check: no path traversal
     if ".." in skill_name or "/" in skill_name or "\\" in skill_name:
         raise HTTPException(400, "Ungültiger Skill-Name")
 
@@ -154,11 +154,11 @@ async def update_skill_content(
     request: "SkillContentUpdateRequest",
     current_user=Depends(require_user),
 ):
-    """Schreibt den Inhalt einer SKILL.md Datei (erstellt sie falls nötig)."""
+    """Writes the content of a SKILL.md file (creates it if necessary)."""
     if ".." in skill_name or "/" in skill_name or "\\" in skill_name:
         raise HTTPException(400, "Ungültiger Skill-Name")
 
-    # Verzeichnis finden — bevorzugt HOME_HOST
+    # Find directory — prefers HOME_HOST
     skill_dirs = _skill_dirs()
     target_dir: Path | None = None
 
@@ -215,7 +215,7 @@ async def get_agent_skills(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Skills fuer einen bestimmten Agent (was er nutzen kann).
+    """Skills for a given agent (what it can use).
 
     Phase 29: gateway-side skill listing removed. Returns local plugins +
     custom skills only. `skills` is empty until Phase 31 frontend rebuild
@@ -226,7 +226,7 @@ async def get_agent_skills(
     if not agent:
         raise HTTPException(404, "Agent nicht gefunden")
 
-    # CLI Plugins aus shared cache
+    # CLI plugins from shared cache
     from app.services.plugin_manager import list_available_plugins, list_custom_skills
     cli_plugins_available = [p.model_dump() for p in list_available_plugins()]
     custom_skills_available = [s.model_dump() for s in list_custom_skills()]
@@ -249,7 +249,7 @@ async def update_agent_skills(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Agent Skill-Filter setzen (welche Skills der Agent nutzen darf).
+    """Set the agent skill filter (which skills the agent may use).
 
     skill_filter semantics: None = all skills, [] = no skills, ["x"] = only these.
 
@@ -262,11 +262,11 @@ async def update_agent_skills(
     if not agent:
         raise HTTPException(404, "Agent nicht gefunden")
 
-    # skill_filter in DB speichern (None = all, [] = none)
+    # Save skill_filter in DB (None = all, [] = none)
     old_filter = set(agent.skill_filter or []) if agent.skill_filter is not None else None
     new_filter = body.skills  # None = all skills, [] = no skills, ["x"] = only x
     agent.skill_filter = new_filter
-    agent.skills = list(new_filter or [])  # UI-Tags synchron halten
+    agent.skills = list(new_filter or [])  # Keep UI tags in sync
     session.add(agent)
     await session.commit()
     await session.refresh(agent)
@@ -279,7 +279,7 @@ async def update_agent_skills(
     else:
         changed = old_filter != new_filter_set
 
-    # Bei Aenderungen: Activity Event (gateway sync removed Phase 29)
+    # On changes: activity event (gateway sync removed Phase 29)
     if changed:
         desc = "alle" if new_filter is None else (", ".join(sorted(new_filter)) if new_filter else "keine")
 
@@ -295,7 +295,7 @@ async def update_agent_skills(
             },
         )
 
-    # CLI Plugins Update
+    # CLI plugins update
     cli_synced = False
     worker_restarted = False
     if body.update_cli_plugins:
@@ -304,7 +304,7 @@ async def update_agent_skills(
         await session.commit()
         await session.refresh(agent)
 
-        # settings.json + installed_plugins.json auf Disk rendern
+        # Render settings.json + installed_plugins.json to disk
         if agent.agent_runtime == "cli-bridge":
             agent_slug = agent.name.lower().replace(" ", "-")
             from app.services.plugin_manager import sync_agent_plugins_to_disk
@@ -313,7 +313,7 @@ async def update_agent_skills(
             import os
             home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
             settings_path = Path(home) / ".mc" / "agents" / agent_slug / "settings.json"
-            # soul_md aus DB ist Source of Truth für systemPrompt
+            # soul_md from DB is the source of truth for systemPrompt
             current_prompt = (agent.soul_md and agent.soul_md.strip()) or ""
             current_model = agent.model or "minimax-m2.7"
             if not current_prompt and settings_path.exists():
@@ -326,7 +326,7 @@ async def update_agent_skills(
             written = sync_agent_plugins_to_disk(agent_slug, current_prompt, current_model, body.cli_plugins)
             cli_synced = all(written.values())
 
-            # Worker/Container neu starten damit neue Plugin-Dateien greifen
+            # Restart worker/container so new plugin files take effect
             worker_restarted = False
             if cli_synced:
                 try:
@@ -338,7 +338,7 @@ async def update_agent_skills(
                 except Exception as e:
                     logger.warning("Worker restart nach Plugin-Update fehlgeschlagen: %s", e)
 
-                # Docker-Container Restart (fuer V2 Docker-Agents)
+                # Docker container restart (for V2 Docker agents)
                 try:
                     from app.services.docker_agent_sync import restart_docker_agent_container
                     container_result = restart_docker_agent_container(agent)
@@ -358,7 +358,7 @@ async def update_agent_skills(
             board_id=agent.board_id,
         )
 
-    # Custom Skills Update (cli_skills → claude-config/skills/ Kopien)
+    # Custom skills update (cli_skills → claude-config/skills/ copies)
     skills_synced = False
     if body.update_cli_skills:
         agent.cli_skills = body.cli_skills
@@ -372,7 +372,7 @@ async def update_agent_skills(
             result = sync_agent_skills_to_disk(agent_slug, body.cli_skills)
             skills_synced = all(result.values()) if result else True
 
-            # Container neustarten wenn Skills sich geaendert haben
+            # Restart container if skills have changed
             if skills_synced and not worker_restarted:
                 try:
                     from app.services.docker_agent_sync import restart_docker_agent_container

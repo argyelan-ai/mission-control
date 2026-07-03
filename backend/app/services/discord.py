@@ -101,7 +101,7 @@ async def send_discord_notification(
     severity: str = "warning",
     fields: list[dict] | None = None,
 ) -> None:
-    """Ops-Webhook fuer warning/error/critical Events."""
+    """Ops webhook for warning/error/critical events."""
     webhook_url = settings.discord_webhook_ops
     if not webhook_url:
         return
@@ -129,7 +129,7 @@ async def send_to_discord_channel(
     content: str | None = None,
     embed: dict | None = None,
 ) -> None:
-    """Nachricht in einen spezifischen Discord-Channel posten via Bot Token."""
+    """Post a message to a specific Discord channel via bot token."""
     bot_token = settings.discord_bot_token
     if not bot_token:
         return

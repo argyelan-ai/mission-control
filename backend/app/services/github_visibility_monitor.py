@@ -1,12 +1,12 @@
-"""Defense-in-Depth: Periodischer Check + Auto-Privat-Setzung fuer MC-GitHub-Repos.
+"""Defense-in-depth: periodic check + auto-privatization for MC GitHub repos.
 
-Hintergrund: Agents rufen manchmal `gh repo create` direkt auf ohne `--private`.
-GitHub-Default ist public → Code leakt. Dieser Monitor scanned alle 5 Minuten
-die Repos des Operators und setzt MC-Tasks-Repos (Prefix `mc-task-`, `mc-`,
-`t2-`, etc. — siehe MC_OWNED_REPO_PREFIXES) die public sind auf private —
-ausser sie sind ein Fork.
+Background: agents sometimes call `gh repo create` directly without
+`--private`. GitHub's default is public → code leaks. This monitor scans
+the operator's repos every 5 minutes and sets MC task repos (prefix
+`mc-task-`, `mc-`, `t2-`, etc. — see MC_OWNED_REPO_PREFIXES) that are
+public to private — unless they are a fork.
 
-Fallback wenn SOUL-Regeln nicht greifen oder Agent sich nicht dran haelt.
+Fallback for when SOUL rules don't apply or the agent doesn't follow them.
 """
 
 from __future__ import annotations
@@ -20,16 +20,16 @@ from app.services.git_service import GITHUB_OWNER
 
 logger = logging.getLogger("mc.github_visibility_monitor")
 
-# Repo-Namen die als MC-owned gelten und privat sein sollten.
-# Fork-Repos werden NIE angefasst (GitHub blockiert private forks of public repos).
-# Erweiterbar via MC_OWNED_REPO_PREFIXES (comma-separated) in .env.
+# Repo names that count as MC-owned and should be private.
+# Fork repos are NEVER touched (GitHub blocks private forks of public repos).
+# Extensible via MC_OWNED_REPO_PREFIXES (comma-separated) in .env.
 MC_OWNED_PREFIXES = tuple(
     p.strip()
     for p in os.environ.get("MC_OWNED_REPO_PREFIXES", "mc-,mc-task-,t2-").split(",")
     if p.strip()
 )
 
-CHECK_INTERVAL_SECONDS = 300  # 5 Minuten
+CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
 
 async def _run(*args: str) -> tuple[int, str, str]:
@@ -43,7 +43,7 @@ async def _run(*args: str) -> tuple[int, str, str]:
 
 
 async def _list_public_mc_repos(owner: str = GITHUB_OWNER) -> list[dict]:
-    """Listet alle public non-fork Repos die MC-owned-Prefix matchen."""
+    """Lists all public non-fork repos that match an MC-owned prefix."""
     rc, out, err = await _run(
         "gh", "repo", "list", owner,
         "--limit", "200",
@@ -83,7 +83,7 @@ async def _set_private(owner: str, repo_name: str) -> bool:
 
 
 async def check_once() -> int:
-    """Einmaliger Check. Returns: Anzahl auto-privatisierter Repos."""
+    """One-off check. Returns: number of auto-privatized repos."""
     public = await _list_public_mc_repos()
     if not public:
         return 0
@@ -92,7 +92,7 @@ async def check_once() -> int:
         ok = await _set_private(GITHUB_OWNER, repo["name"])
         if ok:
             count += 1
-            # Optional: Telegram-Alert senden damit der Operator es mitbekommt
+            # Optional: send a Telegram alert so the operator notices
             try:
                 from app.services.telegram_reports import telegram_reports
                 if telegram_reports.configured:
@@ -109,10 +109,10 @@ async def check_once() -> int:
 
 
 async def run_forever() -> None:
-    """Background-Loop der periodisch prueft. Gestartet aus app/main.py lifespan."""
+    """Background loop that checks periodically. Started from app/main.py lifespan."""
     if not GITHUB_OWNER:
-        # Security-Monitor kann ohne Owner nichts pruefen — einmalig sichtbar
-        # machen statt alle 5 Minuten still zu failen (gh repo list "").
+        # Security monitor can't check anything without an owner — make this
+        # visible once instead of silently failing every 5 minutes (gh repo list "").
         logger.warning(
             "github_visibility_monitor: GITHUB_OWNER nicht gesetzt — "
             "Monitor pausiert (Defense-in-Depth fuer public Repos inaktiv)."

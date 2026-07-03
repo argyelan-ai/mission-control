@@ -16,20 +16,20 @@ from app.utils import ensure_aware, utcnow
 
 router = APIRouter()
 
-# "online" im Produktsinn = der Agent lebt (heartbeatet). idle/busy/working
-# sind Lebenszeichen — nur das woertliche "online" zu zaehlen liess die UI
-# "0/N online" zeigen, waehrend die ganze Flotte lief (2. Instanz des
-# A2-Bugs vom 2026-07-02; Fix an der Quelle statt pro Frontend-Komponente).
+# "online" in the product sense = the agent is alive (heartbeating). idle/busy/working
+# are all signs of life — counting only the literal "online" made the UI
+# show "0/N online" while the whole fleet was running (2nd instance of
+# the A2 bug from 2026-07-02; fixed at the source instead of per frontend component).
 ALIVE_AGENT_STATUSES = ("online", "busy", "idle", "working")
 _start_time = utcnow()
 
 
 @router.get("/health")
 async def health(request: Request, session: AsyncSession = Depends(get_session)):
-    """Liefert den Health-Status mit allgemeinem Status, App-Version und Review-Monitoring-Daten.
+    """Returns the health status with general status, app version, and review monitoring data.
 
-    Die Antwort enthaelt `status`, `version` sowie `review_monitoring` mit Anzahl der
-    Review-Tasks und dem Alter des aeltesten Review-Tasks in Minuten.
+    The response contains `status`, `version`, and `review_monitoring` with the count of
+    review tasks and the age of the oldest review task in minutes.
     """
     from app.models.task import Task
     from sqlmodel import func, select
@@ -59,7 +59,7 @@ async def health(request: Request, session: AsyncSession = Depends(get_session))
 
 @router.get("/api/v1/system/version")
 async def system_version(current_user = Depends(require_user)):
-    """Aktuelle Version + Update-Hinweis (GitHub-Releases, 24h-Cache)."""
+    """Current version + update hint (GitHub releases, 24h cache)."""
     from app.services.update_check import get_latest_release, is_newer
 
     latest = await get_latest_release()
@@ -158,11 +158,11 @@ async def system_status(
 async def system_metrics_history(
     current_user=Depends(require_user),
 ):
-    """Letzte 60 System-Metriken Snapshots (aelteste zuerst) fuer Sparklines."""
+    """Last 60 system metrics snapshots (oldest first) for sparklines."""
     try:
         redis = await get_redis()
         raw_list = await redis.lrange(RedisKeys.system_metrics_history(), 0, 59)
-        # Redis List ist LIFO (neueste zuerst), reversed fuer chronologisch
+        # Redis list is LIFO (newest first), reversed for chronological order
         snapshots = [json.loads(item) for item in reversed(raw_list)]
     except Exception:
         snapshots = []
@@ -205,7 +205,7 @@ async def system_metrics(
 async def intelligence_insights(
     current_user=Depends(require_user),
 ):
-    """Aktuelle Intelligence-Analyse aus Redis-Cache."""
+    """Current intelligence analysis from Redis cache."""
     try:
         redis = await get_redis()
         raw = await redis.get(RedisKeys.intelligence_insights())
@@ -239,7 +239,7 @@ class IntelligenceConfig(BaseModel):
 async def get_intelligence_config(
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Intelligence-Config aus Redis lesen (Defaults wenn nicht vorhanden)."""
+    """Read intelligence config from Redis (defaults if not present)."""
     try:
         redis = await get_redis()
         raw = await redis.get(RedisKeys.intelligence_config())
@@ -255,7 +255,7 @@ async def update_intelligence_config(
     config: IntelligenceConfig,
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Intelligence-Config in Redis speichern (kein TTL)."""
+    """Save intelligence config to Redis (no TTL)."""
     redis = await get_redis()
     await redis.set(
         RedisKeys.intelligence_config(),
@@ -268,7 +268,7 @@ async def update_intelligence_config(
 async def trigger_intelligence(
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Sofort Intelligence-Analyse ausloesen."""
+    """Trigger intelligence analysis immediately."""
     from app.services.intelligence import intelligence
 
     analyzed_at = await intelligence.trigger_analysis()
@@ -281,7 +281,7 @@ async def intelligence_reports(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Taegliche LLM-generierte Intelligence Reports aus BoardMemory."""
+    """Daily LLM-generated intelligence reports from BoardMemory."""
     from app.models.memory import BoardMemory
     from sqlmodel import select
 
@@ -307,12 +307,12 @@ async def intelligence_costs(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Kosten-Uebersicht: pro Agent + Gesamt fuer die letzten N Tage.
+    """Cost overview: per agent + total for the last N days.
 
-    Datenquelle: model_usage_events (Token Harvester — Phase 31).
-    Response-Schema: CostOverview / CostAgentSummary / CostSessionSummary
-    (kompatibel zu frontend-v2/src/lib/types.ts).
-    Mit include_sessions=true auch Session-Level Breakdown (Top-100).
+    Data source: model_usage_events (Token Harvester — Phase 31).
+    Response schema: CostOverview / CostAgentSummary / CostSessionSummary
+    (compatible with frontend-v2/src/lib/types.ts).
+    With include_sessions=true also includes session-level breakdown (top 100).
     """
     import datetime
     from sqlalchemy import func
@@ -322,7 +322,7 @@ async def intelligence_costs(
 
     cutoff = utcnow() - datetime.timedelta(days=days)
 
-    # Pro Agent aggregieren (agent_id NULL = Boss ohne Attribution / unbekannt)
+    # Aggregate per agent (agent_id NULL = Boss without attribution / unknown)
     agent_result = await session.exec(
         select(
             ModelUsageEvent.agent_id,
@@ -335,7 +335,7 @@ async def intelligence_costs(
         .group_by(ModelUsageEvent.agent_id)
     )
 
-    # Agent-Namen einmal laden (Batch)
+    # Load agent names once (batch)
     agent_name_cache: dict = {}
     agent_rows = agent_result.all()
     for row in agent_rows:
@@ -354,8 +354,8 @@ async def intelligence_costs(
         total_out += a_out
         total_cost += a_cost
 
-        # agent_id NULL → "Unattributiert" (Boss-Zeilen ohne cwd-Match etc.)
-        # Das UI-Schema benoetigt agent_id als String → leeren String fuer NULL.
+        # agent_id NULL → "Unattributiert" (Boss rows without cwd match, etc.)
+        # The UI schema needs agent_id as a string → empty string for NULL.
         aid_str = str(row.agent_id) if row.agent_id else ""
         aname = agent_name_cache.get(aid_str, "Unattributiert") if aid_str else "Unattributiert"
 
@@ -376,7 +376,7 @@ async def intelligence_costs(
         "agents": sorted(agent_costs, key=lambda x: x["cost_usd"], reverse=True),
     }
 
-    # Optional: Session-Level Breakdown (Top-100, nach Kosten sortiert)
+    # Optional: session-level breakdown (top 100, sorted by cost)
     if include_sessions:
         session_result = await session.exec(
             select(
@@ -400,7 +400,7 @@ async def intelligence_costs(
             sessions.append({
                 "agent_id": aid_str,
                 "agent_name": aname,
-                # session_key ist im neuen Schema session_id (JSONL sessionId)
+                # session_key is session_id in the new schema (JSONL sessionId)
                 "session_key": row.session_id or "",
                 "tokens_in": row.total_in or 0,
                 "tokens_out": row.total_out or 0,
@@ -419,11 +419,11 @@ async def costs_by_model(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Token- und Kostenaufschluesselung pro Modell.
+    """Token and cost breakdown per model.
 
-    Response: Liste von {model, harness_list, event_count, input_tokens,
+    Response: list of {model, harness_list, event_count, input_tokens,
     output_tokens, cache_read_tokens, cache_write_tokens, cost_usd}
-    Sortiert nach cost_usd DESC.
+    Sorted by cost_usd DESC.
     """
     import datetime as dt
     from sqlalchemy import func
@@ -447,7 +447,7 @@ async def costs_by_model(
         .order_by(func.sum(ModelUsageEvent.cost_usd).desc())
     )
 
-    # Harness-Liste pro Modell (separate Query)
+    # Harness list per model (separate query)
     harness_result = await session.exec(
         select(ModelUsageEvent.model, ModelUsageEvent.harness)
         .where(ModelUsageEvent.ts >= cutoff)
@@ -478,10 +478,10 @@ async def costs_timeseries(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Kosten-Zeitreihe — pro Tag: tokens_in, tokens_out, cost_usd.
+    """Cost time series — per day: tokens_in, tokens_out, cost_usd.
 
     Response: [{date: "YYYY-MM-DD", tokens_in, tokens_out, cost_usd}]
-    Sortiert chronologisch.
+    Sorted chronologically.
     """
     import datetime as dt
     from sqlalchemy import func, cast, Date
@@ -490,8 +490,8 @@ async def costs_timeseries(
 
     cutoff = utcnow() - dt.timedelta(days=days)
 
-    # func.date() funktioniert in SQLite (gibt "YYYY-MM-DD" String) und
-    # PostgreSQL (gibt date-Objekt). str() macht beides einheitlich zum String.
+    # func.date() works in SQLite (returns "YYYY-MM-DD" string) and
+    # PostgreSQL (returns a date object). str() normalizes both to a string.
     date_expr = func.date(ModelUsageEvent.ts)
 
     result = await session.exec(
@@ -524,10 +524,10 @@ async def costs_by_task(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Teuerste Tasks — Top N nach cost_usd.
+    """Most expensive tasks — top N by cost_usd.
 
     Response: [{task_id, task_title, event_count, input_tokens, output_tokens, cost_usd}]
-    Nur Events mit task_id != NULL.
+    Only events with task_id != NULL.
     """
     import datetime as dt
     from sqlalchemy import func
@@ -556,7 +556,7 @@ async def costs_by_task(
 
     rows = result.all()
 
-    # Task-Titel laden (Batch)
+    # Load task titles (batch)
     task_cache: dict = {}
     for row in rows:
         if row.task_id and str(row.task_id) not in task_cache:
@@ -587,7 +587,7 @@ class SystemModeUpdate(BaseModel):
 async def get_system_mode_endpoint(
     current_user=Depends(require_user),
 ):
-    """Aktuellen System Mode und Meta-Daten lesen."""
+    """Read the current system mode and metadata."""
     from app.services.operations import get_system_mode_meta
     return await get_system_mode_meta()
 
@@ -598,7 +598,7 @@ async def set_system_mode_endpoint(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """System Mode ändern (Admin only)."""
+    """Change system mode (admin only)."""
     from app.services.operations import set_system_mode
     from app.services.activity import emit_event
 
@@ -620,7 +620,7 @@ async def set_system_mode_endpoint(
 async def get_autonomy_settings(
     current_user=Depends(require_user),
 ):
-    """Autonomy levels fuer alle Action-Types."""
+    """Autonomy levels for all action types."""
     from app.services.autonomy import get_autonomy_config, AUTONOMY_DEFAULTS
     config = await get_autonomy_config()
     return {"levels": config, "defaults": AUTONOMY_DEFAULTS}
@@ -635,7 +635,7 @@ async def update_autonomy_settings(
     payload: AutonomyUpdate,
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Autonomy levels anpassen (Admin only)."""
+    """Adjust autonomy levels (admin only)."""
     from app.services.autonomy import set_autonomy_config
     config = await set_autonomy_config(payload.levels)
     return {"levels": config}
@@ -643,16 +643,16 @@ async def update_autonomy_settings(
 
 # ── Usage / Model Tracking V1 (Theme 4: Wave 2) ──────────────────
 #
-# Ehrliches V1: Zeigt nur was wirklich messbar ist.
-# - Welcher Agent nutzt welches Modell (aus agent.model DB-Feld)
-# - Context-Snapshot pro Agent (Momentanwert, kein kumulierter Counter)
-# - Tasks completed pro Agent (aus agent.total_tasks_completed)
-# - Heartbeat model_id zeigt aktives Modell (Redis-Snapshot, kein Counter)
+# Honest V1: shows only what's actually measurable.
+# - Which agent uses which model (from the agent.model DB field)
+# - Context snapshot per agent (point-in-time value, not a cumulative counter)
+# - Tasks completed per agent (from agent.total_tasks_completed)
+# - Heartbeat model_id shows the active model (Redis snapshot, not a counter)
 #
-# Was NICHT gemessen wird (V2):
-# - Token In/Out pro Request (braucht Gateway-Integration)
-# - Kosten (braucht Token-Messung)
-# - Zeitfenster-basierte Aggregation (braucht periodische Snapshots)
+# What is NOT measured (V2):
+# - Token in/out per request (needs gateway integration)
+# - Cost (needs token measurement)
+# - Time-window-based aggregation (needs periodic snapshots)
 
 
 @router.get("/api/v1/analytics/usage")
@@ -661,10 +661,10 @@ async def get_usage_analytics(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Agent & Model Usage — ehrliche Momentaufnahme.
+    """Agent & Model Usage — honest snapshot.
 
-    Zeigt: Welcher Agent nutzt welches Modell, Context-Stand, Tasks erledigt.
-    Zeigt NICHT: Token-Verbrauch, Kosten (nicht messbar ohne Gateway-Integration).
+    Shows: which agent uses which model, context state, tasks completed.
+    Does NOT show: token consumption, cost (not measurable without gateway integration).
     """
     import uuid as _uuid
     from app.models.agent import Agent
@@ -677,13 +677,13 @@ async def get_usage_analytics(
     result = await session.exec(query)
     agents = result.all()
 
-    # Redis: aktuelles Modell aus letztem Heartbeat
+    # Redis: current model from the last heartbeat
     redis = await get_redis()
     agents_data = []
     model_summary: dict[str, int] = {}  # model_id -> agent_count
 
     for agent in agents:
-        # Heartbeat model_id aus Redis (Snapshot, nicht Counter)
+        # Heartbeat model_id from Redis (snapshot, not a counter)
         heartbeat_model = None
         try:
             raw = await redis.get(f"mc:agent:{agent.id}:heartbeat_model")

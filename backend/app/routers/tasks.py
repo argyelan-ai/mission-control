@@ -26,7 +26,7 @@ from app.services.dispatch import auto_dispatch_task
 from app.services.sse import broadcast, make_sse_response
 
 
-# Single Source of Truth — importiert aus task_status.py
+# Single Source of Truth — imported from task_status.py
 from app.task_status import VALID_TRANSITIONS, STATUS_LABELS, check_children_complete
 
 
@@ -38,21 +38,21 @@ async def _enforce_board_rules(
     *,
     agent: "Agent | None" = None,
 ):
-    """Board Workflow Rules + Status-Transitions pruefen.
+    """Check board workflow rules + status transitions.
 
-    ADR-023 Note: Reflection-Pflicht wird hier NICHT enforced. Das ist die
-    User/UI-Auth-Variante — der Operator kann via UI manuell einen Task schliessen
-    (z.B. wenn er die Arbeit uebernimmt oder einen abgebrochenen Task aufraeumt).
-    Die Pflicht-Reflexion ist Agent-Verantwortung und wird nur in
-    `agent_scoped._enforce_board_rules` geprueft (PATCH via Agent-Token).
-    Wenn der Operator einen Task manuell schliesst, ist das bewusstes Opt-out aus
-    dem Learning-Loop.
+    ADR-023 Note: The mandatory reflection is NOT enforced here. This is the
+    User/UI-auth variant — the operator can manually close a task via the UI
+    (e.g. when taking over the work or cleaning up an aborted task).
+    The mandatory reflection is an agent responsibility and is only checked in
+    `agent_scoped._enforce_board_rules` (PATCH via agent token).
+    If the operator manually closes a task, that's a deliberate opt-out of
+    the learning loop.
     """
     board = await session.get(Board, board_id)
     if not board:
         return
 
-    # Rule 1: Gueltige Status-Uebergaenge pruefen
+    # Rule 1: check valid status transitions
     current = task.status
     allowed = VALID_TRANSITIONS.get(current, set())
     if new_status not in allowed:
@@ -63,14 +63,14 @@ async def _enforce_board_rules(
             detail=f"Ungültiger Status-Übergang: {from_label} → {to_label}",
         )
 
-    # Rule 2: Parent/Child Integritaet — Parent darf nicht done werden wenn Children offen
+    # Rule 2: parent/child integrity — parent must not become done while children are open
     if new_status == "done":
         children_ok, children_detail = await check_children_complete(task.id, session)
         if not children_ok:
             raise HTTPException(status_code=400, detail=children_detail)
 
-    # Rule 3: Task muss durch Review bevor es auf Done gesetzt werden kann
-    # Ausnahme: Parent-Tasks mit allen Subtasks done (Review lief auf Subtask-Ebene)
+    # Rule 3: task must go through review before it can be set to done
+    # Exception: parent tasks with all subtasks done (review happened at subtask level)
     if board.require_review_before_done:
         if new_status == "done" and task.status not in ("review", "user_test"):
             subtask_result = await session.exec(
@@ -84,7 +84,7 @@ async def _enforce_board_rules(
                     detail="Task muss zuerst durch Review bevor es auf Done gesetzt werden kann",
                 )
 
-    # Rule 3: Blocker-Approval Guard — blocked → in_progress nur wenn kein Approval pending
+    # Rule 3: blocker approval guard — blocked → in_progress only if no approval pending
     if new_status == "in_progress" and task.status == "blocked":
         from app.models.approval import Approval
         pending_approval = (await session.exec(
@@ -100,7 +100,7 @@ async def _enforce_board_rules(
                 detail="Task hat ein offenes Blocker-Approval. Warte auf die Entscheidung des Operators.",
             )
 
-    # Rule 4: Nur der Board Lead darf den Status aendern (nur fuer Agents relevant)
+    # Rule 4: only the board lead may change the status (only relevant for agents)
     if board.only_lead_can_change_status and agent is not None:
         if not agent.is_board_lead:
             raise HTTPException(
@@ -121,9 +121,9 @@ class TaskCreate(BaseModel):
     parent_task_id: uuid.UUID | None = None
     assigned_agent_id: uuid.UUID | None = None
     due_at: datetime | None = None
-    # Pre-Dispatch Gating (Phase 1 Systemic Orchestration)
+    # Pre-dispatch gating (Phase 1 systemic orchestration)
     dispatch_phase: Literal["planning", "ready"] | None = None
-    # Delegation Contract (Phase 1.5)
+    # Delegation contract (Phase 1.5)
     delegation_type: str | None = None
     branch_name: str | None = None
     target_url: str | None = None
@@ -132,18 +132,18 @@ class TaskCreate(BaseModel):
     source_task_id: uuid.UUID | None = None
     triggered_by_deliverable_id: uuid.UUID | None = None
     expected_content: str | None = None
-    # Completion Contract
+    # Completion contract
     report_back_required: bool = False
     report_back_channel: str | None = None
     report_back_chat_id: str | None = None
     report_back_requirements: str | None = None
-    # Credentials (Klartext rein → wird verschluesselt gespeichert)
+    # Credentials (plaintext in → stored encrypted)
     credentials: str | None = None
     credential_id: uuid.UUID | None = None
-    # Requester / Origin Tracking
+    # Requester / origin tracking
     requester_channel: str | None = None  # "telegram" | "discord" | "web" | "agent"
-    requester_id: str | None = None       # Chat-ID, User-ID, oder Agent-UUID
-    # Operator-Intake (Phase 2 — primaer fuer Root-/Intake-Tasks)
+    requester_id: str | None = None       # chat ID, user ID, or agent UUID
+    # Operator intake (Phase 2 — primarily for root/intake tasks)
     intake_mode: Literal["quick", "structured"] | None = None
     request_kind: Literal["code_change", "content_create", "research", "browser_task", "credential_task", "mixed"] | None = None
     desired_output: str | None = None
@@ -188,10 +188,10 @@ class CommentCreate(BaseModel):
     content: str
     author_type: str = "user"
     author_agent_id: uuid.UUID | None = None
-    # Bug 4 (2026-05-13): comment_type war hier nicht deklariert — Pydantic
-    # droppte das Feld silent und der DB-Default "message" griff, auch wenn
-    # der User explizit feedback/handoff/etc. senden wollte. Validator nutzt
-    # die gleiche SoT wie der agent-scoped POST (REL-01 Pattern).
+    # Bug 4 (2026-05-13): comment_type was not declared here — Pydantic
+    # silently dropped the field and the DB default "message" took over, even
+    # when the user explicitly wanted to send feedback/handoff/etc. The
+    # validator uses the same SoT as the agent-scoped POST (REL-01 pattern).
     comment_type: str = "message"
 
     @field_validator("comment_type")
@@ -225,7 +225,7 @@ async def get_task_hierarchy(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Task-Hierarchie: Parent, Children, Report-Back, Credentials, Requester."""
+    """Task hierarchy: parent, children, report-back, credentials, requester."""
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -289,8 +289,8 @@ async def get_pipeline(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Pipeline-Ansicht: Tasks gruppiert nach Status mit Agent-Info."""
-    # Alle aktiven Tasks laden (nicht done)
+    """Pipeline view: tasks grouped by status with agent info."""
+    # Load all active tasks (not done)
     active_result = await session.exec(
         select(Task).where(
             Task.board_id == board_id,
@@ -299,7 +299,7 @@ async def get_pipeline(
     )
     active_tasks = active_result.all()
 
-    # Done nur zaehlen
+    # Just count done
     done_result = await session.exec(
         select(Task).where(Task.board_id == board_id, Task.status == "done")
     )
@@ -307,7 +307,7 @@ async def get_pipeline(
 
     failed_count = sum(1 for t in active_tasks if t.status == "failed")
 
-    # Agent-Map aufbauen
+    # Build agent map
     agent_ids = {t.assigned_agent_id for t in active_tasks if t.assigned_agent_id}
     agent_map: dict[str, dict] = {}
     if agent_ids:
@@ -317,7 +317,7 @@ async def get_pipeline(
         for a in agents_result.all():
             agent_map[str(a.id)] = {"name": a.name, "emoji": a.emoji or "🤖"}
 
-    # Dependencies pruefen: welche Tasks haben unerfuellte deps?
+    # Check dependencies: which tasks have unfulfilled deps?
     blocked_dep_tasks: set[str] = set()
     if active_tasks:
         from app.models.task import TaskDependency
@@ -332,7 +332,7 @@ async def get_pipeline(
             if dep_task and dep_task.status != "done":
                 blocked_dep_tasks.add(str(dep.task_id))
 
-    # Tags fuer alle aktiven Tasks laden
+    # Load tags for all active tasks
     tag_map: dict[str, list[dict]] = {}
     if active_tasks:
         tag_result = await session.exec(
@@ -346,7 +346,7 @@ async def get_pipeline(
             tid = str(row[2])
             tag_map.setdefault(tid, []).append({"name": row[0], "color": row[1]})
 
-    # Nach Status gruppieren und sortieren (prio desc, updated desc)
+    # Group and sort by status (prio desc, updated desc)
     def sort_key(t: Task) -> tuple:
         return (-PRIORITY_ORDER.get(t.priority, 2), -(t.updated_at.timestamp() if t.updated_at else 0))
 
@@ -393,13 +393,13 @@ async def list_tasks(
     if project_id:
         query = query.where(Task.project_id == project_id)
     if parent_task_id:
-        # Subtasks eines bestimmten Tasks laden
+        # Load subtasks of a specific task
         query = query.where(Task.parent_task_id == parent_task_id)
     query = query.order_by(Task.sort_order, Task.created_at)
     result = await session.exec(query)
     tasks = result.all()
 
-    # last_activity_at berechnen: max(started_at, updated_at, letzter Kommentar)
+    # Compute last_activity_at: max(started_at, updated_at, last comment)
     task_ids = [t.id for t in tasks if t.status == "in_progress"]
     last_comment_map: dict[uuid.UUID, datetime] = {}
     if task_ids:
@@ -413,7 +413,7 @@ async def list_tasks(
         for row in comment_result.all():
             last_comment_map[row[0]] = row[1]
 
-    # Tags fuer alle Tasks laden
+    # Load tags for all tasks
     list_tag_map: dict[str, list[dict]] = {}
     if tasks:
         tag_result = await session.exec(
@@ -459,8 +459,8 @@ async def create_task(
     if payload.task_type not in ("story", "bug", "revision", "chore"):
         raise HTTPException(status_code=422, detail=f"Invalid task_type: {payload.task_type}")
 
-    # Closed-Parent-Guard: keine neuen Children unter done/failed Root.
-    # Parent auf review wird reopened (siehe unten), nicht blockiert.
+    # Closed-parent guard: no new children under a done/failed root.
+    # A parent on review gets reopened (see below), not blocked.
     if payload.parent_task_id:
         parent_for_guard = await session.get(Task, payload.parent_task_id)
         if parent_for_guard and parent_for_guard.status in ("done", "failed"):
@@ -469,16 +469,16 @@ async def create_task(
                 f"Parent-Task ist bereits {parent_for_guard.status}. "
                 "Neue Arbeit muss als eigener Task geplant werden.",
             )
-        # Parent-Reopen: wenn Parent auf review wartet und neuer Subtask dazukommt,
-        # muss Parent zurueck auf in_progress — sonst haengt er in review waehrend
-        # unten neue Arbeit laeuft (Phase-Approval-Deadlock).
+        # Parent reopen: if the parent is waiting on review and a new subtask is
+        # added, the parent must go back to in_progress — otherwise it stays stuck
+        # in review while new work runs below (phase-approval deadlock).
         if parent_for_guard and parent_for_guard.status == "review":
             from app.services.task_lifecycle import reopen_parent_for_new_subtask
             await reopen_parent_for_new_subtask(
                 session, payload.parent_task_id, new_subtask_title=payload.title,
             )
 
-    # ── Delegation Contract Guard (Phase 1.5) — gilt auch fuer Dashboard/API ──
+    # ── Delegation contract guard (Phase 1.5) — also applies to dashboard/API ──
     if payload.delegation_type:
         from app.services.delegation_contracts import validate_delegation_contract
         _inherited_creds_user = False
@@ -508,16 +508,16 @@ async def create_task(
     # and flow through normally.
     task_data = payload.model_dump(exclude={"credentials", "credential_id", "planner_mode"})
 
-    # Credentials verschluesseln wenn vorhanden
+    # Encrypt credentials if present
     if payload.credentials:
         from app.services.encryption import encrypt
         task_data["credentials_encrypted"] = encrypt(payload.credentials)
 
-    # Vault-Credential referenzieren
+    # Reference vault credential
     if payload.credential_id:
         task_data["credential_id"] = payload.credential_id
 
-    # project_id Zuweisung (Prioritaet: explizit > Parent > Board-Default)
+    # project_id assignment (priority: explicit > parent > board default)
     if not payload.project_id:
         if payload.parent_task_id:
             parent = await session.get(Task, payload.parent_task_id)
@@ -530,8 +530,8 @@ async def create_task(
 
     task = Task(board_id=board_id, created_by_user_id=current_user.id, **task_data)
 
-    # Pre-Dispatch Gating: ausfuehrbare Child-Work-Items starten in planning,
-    # Root-/Container-Tasks bleiben ohne aktives Gating.
+    # Pre-dispatch gating: executable child work items start in planning,
+    # root/container tasks remain without active gating.
     from app.config import settings as _settings
     if _settings.enable_dispatch_gating:
         is_work_item = task.parent_task_id is not None and task.assigned_agent_id is not None
@@ -552,8 +552,8 @@ async def create_task(
         task_id=task.id,
     )
 
-    # Auto-Dispatch: Task zuweisen und via PUSH senden
-    # Auch bei pre-assigned Tasks (assigned_agent_id gesetzt) — damit der Push ausgeloest wird
+    # Auto-dispatch: assign task and send via PUSH
+    # Also for pre-assigned tasks (assigned_agent_id set) — so the push gets triggered
     skip_dispatch = _settings.enable_dispatch_gating and task.dispatch_phase == "planning"
     board_obj = await session.get(Board, board_id)
     if board_obj and board_obj.auto_dispatch_enabled and not skip_dispatch:
@@ -590,7 +590,7 @@ async def reorder_tasks(
 
 
 # ── Task Run Control (Stop/Resume) ──────────────────────────────────────────
-# WICHTIG: Vor {task_id} Catch-All registriert (Router Ordering)
+# IMPORTANT: registered before the {task_id} catch-all (router ordering)
 
 
 # ── Review Decision (User-scoped) ─────────────────────────────────────────
@@ -615,7 +615,7 @@ async def user_review_decision(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Explizite Review-Entscheidung durch Operator."""
+    """Explicit review decision by operator."""
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -659,7 +659,7 @@ async def promote_task(
     from app.services.dispatch_gating import promote_task_to_ready
     task = await promote_task_to_ready(task, session)
 
-    # Dispatch ausloesen
+    # Trigger dispatch
     create_tracked_task(auto_dispatch_task(task.id, task.board_id))
 
     return task
@@ -680,7 +680,7 @@ async def stop_task_run_endpoint(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Aktiven Task-Run stoppen. Nur für Tasks mit aktivem Run (Admin only)."""
+    """Stop an active task run. Only for tasks with an active run (admin only)."""
     from app.services.operations import stop_task_run
     task = await stop_task_run(session, task_id, str(current_user.id), payload.reason)
     return task
@@ -693,7 +693,7 @@ async def resume_task_run_endpoint(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.ADMIN)),
 ):
-    """Gestoppten Task wieder freigeben (Admin only)."""
+    """Release a stopped task again (admin only)."""
     from app.services.operations import resume_task_run
     task = await resume_task_run(session, task_id, str(current_user.id))
     return task
@@ -710,16 +710,16 @@ async def list_task_deliverables(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """User-facing: Alle Deliverables eines Tasks.
+    """User-facing: all deliverables of a task.
 
-    Query-Params:
-      include_subtasks: Wenn true, Deliverables aller Descendant-Subtasks
-          (rekursiv bis `depth`) werden inkludiert — jedes bekommt
-          `source_task_id`, `source_task_title`, `source_depth` fuer UI-
-          Gruppierung. Orchestrator-Parent-Tasks sehen damit den ganzen
-          Tree auf einen Blick.
-      depth: Max Subtask-Tiefe (1=direkte Kinder, 2=Enkel). Default 2,
-          max 5 als Response-Size-Schutz.
+    Query params:
+      include_subtasks: If true, deliverables of all descendant subtasks
+          (recursive up to `depth`) are included — each gets
+          `source_task_id`, `source_task_title`, `source_depth` for UI
+          grouping. This lets orchestrator parent tasks see the whole
+          tree at a glance.
+      depth: Max subtask depth (1=direct children, 2=grandchildren). Default 2,
+          max 5 as a response-size guard.
     """
     from app.models.deliverable import TaskDeliverable
     from sqlmodel import col as _col
@@ -755,7 +755,7 @@ async def list_task_deliverables(
     )
     deliverables = result.all()
 
-    # Agent-Namen aufloesen
+    # Resolve agent names
     agent_ids = {d.agent_id for d in deliverables}
     agent_map: dict[str, str] = {}
     if agent_ids:
@@ -933,7 +933,7 @@ async def get_deliverable_image(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Bild-Datei eines Screenshot-Deliverables ausliefern."""
+    """Serve the image file of a screenshot deliverable."""
     import os
     from fastapi.responses import FileResponse
     from app.models.deliverable import TaskDeliverable
@@ -966,7 +966,7 @@ async def get_deliverable_image(
     )
 
 
-# Pydantic-Model fuer open-Endpoint (wird in Task 3 benutzt)
+# Pydantic model for the open endpoint (used in Task 3)
 class _OpenDeliverableBody(BaseModel):
     reveal: bool = False
     subpath: str | None = None
@@ -981,7 +981,7 @@ async def get_deliverable_file(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Beliebige Datei eines Deliverables ausliefern (mit optionalem subpath fuer Dir-Deliverables)."""
+    """Serve any file of a deliverable (with optional subpath for dir deliverables)."""
     import mimetypes
     import os
     from fastapi.responses import FileResponse
@@ -1035,7 +1035,7 @@ async def open_deliverable(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Datei oder Verzeichnis mit nativer macOS-App oeffnen (open -R = Finder reveal)."""
+    """Open a file or directory with the native macOS app (open -R = Finder reveal)."""
     import os
     import subprocess
     from app.models.deliverable import TaskDeliverable
@@ -1048,7 +1048,7 @@ async def open_deliverable(
     if not deliverable or deliverable.task_id != task_id:
         raise HTTPException(status_code=404, detail="Deliverable not found")
 
-    # Existenz-Pruefung im Backend-Container (wo wir lesen koennen).
+    # Existence check in the backend container (where we can read).
     resolved_container = await _resolve_deliverable_fs_path(deliverable, session, target="container")
     if not resolved_container:
         raise HTTPException(status_code=404, detail="No path set or unresolvable")
@@ -1069,11 +1069,11 @@ async def open_deliverable(
     if not os.path.exists(target):
         raise HTTPException(status_code=404, detail="Path not found on disk")
 
-    # Fuer den Host-Helper (macOS `open`) brauchen wir den ECHTEN Host-Pfad,
-    # nicht den Container-Mount-Pfad. Mapping /deliverables/ → ${HOME}/.mc-deliverables.
+    # For the host helper (macOS `open`) we need the REAL host path,
+    # not the container mount path. Mapping /deliverables/ → ${HOME}/.mc-deliverables.
     resolved_host = await _resolve_deliverable_fs_path(deliverable, session, target="host")
     if not resolved_host:
-        # Legacy/absolute Host-Pfade: fallback auf Container-Pfad
+        # Legacy/absolute host paths: fall back to container path
         resolved_host = resolved_container
     host_root_real = os.path.realpath(resolved_host) if resolved_host.startswith(("/Users/", "/tmp/", "/var/")) else resolved_host
     if body.subpath is not None:
@@ -1081,9 +1081,9 @@ async def open_deliverable(
     else:
         host_target = host_root_real
 
-    # Im Docker-Container läuft kein macOS `open` — Host-Helper via host.docker.internal aufrufen.
-    # sys ist am Modul-Ende importiert (fuer Test-Monkeypatching via patch("app.routers.tasks.sys.platform")).
-    # WICHTIG: Dem Host-Helper den HOST-Pfad schicken, nicht den Container-Mount-Pfad.
+    # macOS `open` doesn't run inside the Docker container — call the host helper via host.docker.internal.
+    # sys is imported at the end of the module (for test monkeypatching via patch("app.routers.tasks.sys.platform")).
+    # IMPORTANT: send the host helper the HOST path, not the container mount path.
     in_docker = os.path.exists("/.dockerenv") or sys.platform.startswith("linux")
     if in_docker:
         import httpx
@@ -1095,7 +1095,7 @@ async def open_deliverable(
                     timeout=3.0,
                 )
         except Exception:
-            pass  # Helper nicht erreichbar — open silently fails
+            pass  # Helper unreachable — open silently fails
     else:
         cmd = ["open", "-R", host_target] if body.reveal else ["open", host_target]
         subprocess.Popen(cmd)
@@ -1111,7 +1111,7 @@ async def list_deliverable_directory(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Verzeichnisinhalt eines Deliverables auflisten (fuer den Directory-Browser)."""
+    """List the directory contents of a deliverable (for the directory browser)."""
     import os
     from app.models.deliverable import TaskDeliverable
 
@@ -1179,7 +1179,7 @@ async def get_task_checklist(
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """User liest Checklist eines Tasks (read-only, für UI)."""
+    """User reads a task's checklist (read-only, for UI)."""
     from app.models.checklist import TaskChecklistItem
 
     task = await session.get(Task, task_id)
@@ -1201,7 +1201,7 @@ async def get_task_git_info_endpoint(
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Git-Status eines Tasks für UI-Anzeige."""
+    """Git status of a task for UI display."""
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
@@ -1219,7 +1219,7 @@ async def get_task_git_info_endpoint(
     info = await git_service.get_task_git_info(task.workspace_path, branch_name=task.branch_name)
     info["workspace_path"] = task.workspace_path
 
-    # Repo-Metadaten aus dem Projekt anfügen
+    # Attach repo metadata from the project
     if task.project_id:
         from app.models.board import Project as ProjectModel
         project = await session.get(ProjectModel, task.project_id)
@@ -1238,7 +1238,7 @@ async def get_task_git_diff_endpoint(
     current_user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Git-Diff fuer einen einzelnen Commit aus dem Task-Workspace."""
+    """Git diff for a single commit from the task workspace."""
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
@@ -1288,7 +1288,7 @@ async def update_task(
     if "task_type" in updates and updates["task_type"] not in ("story", "bug", "revision", "chore"):
         raise HTTPException(status_code=422, detail=f"Invalid task_type: {updates['task_type']}")
 
-    # Board Rules pruefen bevor Status geaendert wird
+    # Check board rules before status is changed
     if "status" in updates:
         await _enforce_board_rules(session, board_id, task, updates["status"])
 
@@ -1299,13 +1299,13 @@ async def update_task(
     if "status" in updates:
         new_status = updates["status"]
         if new_status == "inbox":
-            # Zurück auf inbox = Dispatch-Zyklus zurücksetzen
+            # Back to inbox = reset the dispatch cycle
             task.dispatched_at = None
             task.ack_at = None
             task.started_at = None
-            # run_control zuruecksetzen: sonst bleibt ein alter 'stopped'-Flag
-            # haengen, Task wird erneut dispatched, Agent arbeitet, darf aber
-            # nicht auf review wechseln -> Deadlock.
+            # Reset run_control: otherwise an old 'stopped' flag stays stuck,
+            # the task gets dispatched again, the agent works, but isn't
+            # allowed to switch to review -> deadlock.
             task.run_control = None
         elif new_status == "in_progress" and old_status != "in_progress":
             # F2 fix (Plan 26-03): first-set-wins. Re-opens (review→in_progress,
@@ -1313,18 +1313,18 @@ async def update_task(
             # Cycle Time analytics. Only set when currently NULL.
             if task.started_at is None:
                 task.started_at = utcnow()
-            task.ack_at = utcnow()  # ACK — manuell oder via UI
+            task.ack_at = utcnow()  # ACK — manual or via UI
         elif new_status == "done" and old_status != "done":
             task.completed_at = utcnow()
 
-    # Task-Event loggen (Event Sourcing)
+    # Log task event (event sourcing)
     if "status" in updates:
         from app.services.task_lifecycle import record_task_event, clear_spawn_tracking
         await record_task_event(
             session, task.id, old_status, updates["status"],
             changed_by="user", reason="manual_update",
         )
-        # Spawn-Tracking loeschen bei terminalem/inaktivem Status
+        # Clear spawn tracking on terminal/inactive status
         if updates["status"] in ("done", "failed", "blocked", "inbox"):
             clear_spawn_tracking(task)
             from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
@@ -1334,16 +1334,16 @@ async def update_task(
                 reason=f"status_to_{updates['status']}",
             )
 
-        # Port freigeben bei done/failed
+        # Free the port on done/failed
         if updates["status"] in ("done", "failed") and task.workspace_port:
             task.workspace_port = None
 
-        # Auto-Unassign bei failed/blocked → verhindert Cancel-Schleife im
-        # agent_poll. Siehe apply_terminal_unassign() docs.
+        # Auto-unassign on failed/blocked → prevents a cancel loop in
+        # agent_poll. See apply_terminal_unassign() docs.
         from app.services.task_lifecycle import apply_terminal_unassign
         await apply_terminal_unassign(session, task, updates["status"])
 
-    # ── Approval Cleanup: Obsolete Approvals superseden ────
+    # ── Approval cleanup: supersede obsolete approvals ────
     if "status" in updates:
         from app.services.approval_cleanup import cleanup_obsolete_approvals
         await cleanup_obsolete_approvals(session, task.id, updates["status"], board_id)
@@ -1353,17 +1353,17 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
 
-    # Vertical-Hooks (z.B. News-Studio Pipeline-Stage auto-advance) — no-op
-    # wenn kein Vertical registriert ist (gestrippter Public-Release).
+    # Vertical hooks (e.g. News-Studio pipeline-stage auto-advance) — no-op
+    # if no vertical is registered (stripped public release).
     if "status" in updates and updates["status"] == "done" and task.pipeline_id:
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_task_done_hooks(session, task)
         await session.commit()
         await session.refresh(task)
 
-    # Auto-Trigger: Agent benachrichtigen wenn Task zugewiesen wird
+    # Auto-trigger: notify agent when a task is assigned
     if "assigned_agent_id" in updates and task.assigned_agent_id != old_assigned:
-        # Alten Agent benachrichtigen: Task entzogen (Phase 29: via TaskComment)
+        # Notify the old agent: task withdrawn (Phase 29: via TaskComment)
         if old_assigned:
             old_agent = await session.get(Agent, old_assigned)
             if old_agent:
@@ -1381,7 +1381,7 @@ async def update_task(
                     comment_type="reassignment_notice",
                 ))
 
-        # Neuer Agent = neuer Dispatch-Zyklus → alte Tracking-Daten zuruecksetzen
+        # New agent = new dispatch cycle → reset old tracking data
         task.dispatched_at = None
         task.ack_at = None
         task.dispatch_intent = "manual_redispatch"
@@ -1394,7 +1394,7 @@ async def update_task(
         )
         agent = await session.get(Agent, task.assigned_agent_id)
 
-        # Operational Controls Guard
+        # Operational controls guard
         from app.services.operations import check_dispatch_allowed
         _dispatch_allowed = True
         if agent:
@@ -1421,7 +1421,7 @@ async def update_task(
         detail={"old_status": old_status, "new_status": task.status} if "status" in updates else None,
     )
 
-    # ── Status-Transition Side-Effects (via TaskLifecycleService) ────────
+    # ── Status-transition side effects (via TaskLifecycleService) ────────
     if "status" in updates:
         from app.services.task_lifecycle import (
             handle_review_handoff, handle_review_rejection,
@@ -1429,16 +1429,16 @@ async def update_task(
         )
         new_status = updates["status"]
 
-        # User setzt Task auf review → Reviewer finden und per Push benachrichtigen
+        # User sets task to review → find reviewer and notify via push
         if new_status == "review" and old_status == "in_progress":
             await handle_review_handoff(session, task, board_id)
 
-        # User rejects review → zurueck an Original-Developer
-        # Auch done→in_progress abfangen (Re-Open nach versehentlichem done)
+        # User rejects review → back to original developer
+        # Also catch done→in_progress (re-open after accidental done)
         if new_status == "in_progress" and old_status in ("review", "done", "user_test"):
             await handle_review_rejection(session, task, board_id)
 
-        # User Test: den Operator via Telegram benachrichtigen (Phase 29: direct HTTPS path)
+        # User test: notify the operator via Telegram (Phase 29: direct HTTPS path)
         if new_status == "user_test":
             from app.services.telegram_bot import telegram_bot
             from app.config import phone_test_url
@@ -1449,7 +1449,7 @@ async def update_task(
                 f"Task-ID: {task.id}"
             )
 
-        # User/Operator entblockt Task → assigned Agent benachrichtigen (Phase 29: TaskComment)
+        # User/operator unblocks task → notify assigned agent (Phase 29: TaskComment)
         if new_status == "in_progress" and old_status == "blocked":
             if task.assigned_agent_id:
                 target = await session.get(Agent, task.assigned_agent_id)
@@ -1468,11 +1468,11 @@ async def update_task(
                         comment_type="system_notify",
                     ))
 
-        # Auto-Memory + Feedback-Lessons
+        # Auto-memory + feedback lessons
         trigger_auto_memory(task, new_status, old_status)
         await trigger_feedback_lesson(session, task, new_status, old_status)
 
-    # Phase-Start: wenn Parent-Task auf in_progress geht → alle inbox Subtasks dispatchen
+    # Phase start: when a parent task goes to in_progress → dispatch all inbox subtasks
     new_status = updates.get("status")
     if new_status == "in_progress" and task.parent_task_id is None:
         subtask_result = await session.exec(
@@ -1493,9 +1493,9 @@ async def update_task(
                     task.title,
                 )
 
-    # Phase done → Auto-advance zur naechsten Phase + Projekt-Progress
+    # Phase done → auto-advance to the next phase + project progress
     if new_status == "done" and task.parent_task_id is None and task.project_id:
-        # Naechste Phase finden und starten
+        # Find and start the next phase
         next_phase = (await session.exec(
             select(Task).where(
                 Task.project_id == task.project_id,
@@ -1522,7 +1522,7 @@ async def update_task(
                 f"Phase auto-gestartet: '{next_phase.title}'",
                 board_id=board_id, task_id=next_phase.id,
             )
-            # Subtasks der neuen Phase dispatchen
+            # Dispatch subtasks of the new phase
             sub_result = await session.exec(
                 select(Task).where(Task.parent_task_id == next_phase.id, Task.status == "inbox")
             )
@@ -1542,7 +1542,7 @@ async def get_task_events(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Task-Status-Event-History (Event Sourcing) — chronologisch."""
+    """Task status event history (event sourcing) — chronological."""
     from app.models.task import TaskEvent
 
     task = await session.get(Task, task_id)
@@ -1557,7 +1557,7 @@ async def get_task_events(
     )
     events = result.all()
 
-    # Agent-Namen anreichern
+    # Enrich with agent names
     agent_ids = {e.agent_id for e in events if e.agent_id}
     agent_name_map: dict[uuid.UUID, str] = {}
     if agent_ids:
@@ -1580,7 +1580,7 @@ async def get_task_dependencies(
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
-    """Dependencies einer Task laden mit Status der abhaengigen Tasks."""
+    """Load a task's dependencies with the status of the dependent tasks."""
     task = await session.get(Task, task_id)
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1616,7 +1616,7 @@ async def delete_task(
     from app.models.approval import Approval
     from app.models.activity import ActivityEvent
 
-    # 1. Subtasks: parent_task_id loesen
+    # 1. Subtasks: clear parent_task_id
     subtask_result = await session.exec(
         select(Task).where(Task.parent_task_id == task_id)
     )
@@ -1624,14 +1624,14 @@ async def delete_task(
         sub.parent_task_id = None
         session.add(sub)
 
-    # 2. Comments loeschen
+    # 2. Delete comments
     comment_result = await session.exec(
         select(TaskComment).where(TaskComment.task_id == task_id)
     )
     for c in comment_result.all():
         await session.delete(c)
 
-    # 3. Dependencies loeschen (beide Richtungen)
+    # 3. Delete dependencies (both directions)
     dep_result = await session.exec(
         select(TaskDependency).where(
             (TaskDependency.task_id == task_id) | (TaskDependency.depends_on_task_id == task_id)
@@ -1640,28 +1640,28 @@ async def delete_task(
     for d in dep_result.all():
         await session.delete(d)
 
-    # 4. Tag-Zuordnungen loeschen
+    # 4. Delete tag assignments
     tag_result = await session.exec(
         select(TagAssignment).where(TagAssignment.task_id == task_id)
     )
     for t in tag_result.all():
         await session.delete(t)
 
-    # 5. Approvals loeschen
+    # 5. Delete approvals
     approval_result = await session.exec(
         select(Approval).where(Approval.task_id == task_id)
     )
     for a in approval_result.all():
         await session.delete(a)
 
-    # 6. Activity Events loeschen
+    # 6. Delete activity events
     event_result = await session.exec(
         select(ActivityEvent).where(ActivityEvent.task_id == task_id)
     )
     for e in event_result.all():
         await session.delete(e)
 
-    # 6b. Task Events (Event Sourcing) loeschen
+    # 6b. Delete task events (event sourcing)
     from app.models.task import TaskEvent
     task_event_result = await session.exec(
         select(TaskEvent).where(TaskEvent.task_id == task_id)
@@ -1669,7 +1669,7 @@ async def delete_task(
     for te in task_event_result.all():
         await session.delete(te)
 
-    # 6c. Task Checkpoints loeschen (non-nullable FK — verhindert sonst das Delete)
+    # 6c. Delete task checkpoints (non-nullable FK — would otherwise block the delete)
     from app.models.checkpoint import TaskCheckpoint
     checkpoint_result = await session.exec(
         select(TaskCheckpoint).where(TaskCheckpoint.task_id == task_id)
@@ -1677,7 +1677,7 @@ async def delete_task(
     for cp in checkpoint_result.all():
         await session.delete(cp)
 
-    # 6d. Cost Events: task_id auf null setzen (nullable FK)
+    # 6d. Cost events: set task_id to null (nullable FK)
     from app.models.cost_event import CostEvent
     cost_result = await session.exec(
         select(CostEvent).where(CostEvent.task_id == task_id)
@@ -1686,7 +1686,7 @@ async def delete_task(
         ce.task_id = None
         session.add(ce)
 
-    # 6e. Task Deliverables loeschen (non-nullable FK → RESTRICT)
+    # 6e. Delete task deliverables (non-nullable FK → RESTRICT)
     from app.models.deliverable import TaskDeliverable
     del_result = await session.exec(
         select(TaskDeliverable).where(TaskDeliverable.task_id == task_id)
@@ -1694,7 +1694,7 @@ async def delete_task(
     for d in del_result.all():
         await session.delete(d)
 
-    # 6f. Task Checklist Items loeschen (non-nullable FK → RESTRICT)
+    # 6f. Delete task checklist items (non-nullable FK → RESTRICT)
     from app.models.checklist import TaskChecklistItem
     checklist_result = await session.exec(
         select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
@@ -1702,7 +1702,7 @@ async def delete_task(
     for item in checklist_result.all():
         await session.delete(item)
 
-    # 7. Agent current_task_id loesen
+    # 7. Clear agent current_task_id
     agent_result = await session.exec(
         select(Agent).where(Agent.current_task_id == task_id)
     )
@@ -1710,7 +1710,7 @@ async def delete_task(
         ag.current_task_id = None
         session.add(ag)
 
-    # 8. Redis-Queue aufraeuemen (task_id aus Agent-Queues entfernen)
+    # 8. Clean up Redis queue (remove task_id from agent queues)
     if task.assigned_agent_id:
         try:
             from app.redis_client import get_redis
@@ -1720,7 +1720,7 @@ async def delete_task(
         except Exception:
             logger.warning("Redis cleanup failed for task %s", task_id)
 
-    # 8b. FreeCode tmux-Session killen falls Agent ein FreeCode-Agent ist
+    # 8b. Kill FreeCode tmux session if the agent is a FreeCode agent
     if task.assigned_agent_id:
         try:
             assigned_agent = await session.get(Agent, task.assigned_agent_id)
@@ -1734,9 +1734,9 @@ async def delete_task(
                 urllib.request.urlopen(req, timeout=3)
                 logger.info("FreeCode tmux session killed for deleted task %s", task_id)
         except Exception:
-            pass  # Bridge nicht erreichbar oder Session existiert nicht — kein Problem
+            pass  # Bridge unreachable or session doesn't exist — not a problem
 
-    # 9. Task selbst loeschen
+    # 9. Delete the task itself
     await session.delete(task)
     await session.commit()
 
@@ -1751,7 +1751,7 @@ async def get_task_transcript(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Task-Transcript: Session-Messages des Agents bei der Bearbeitung."""
+    """Task transcript: agent session messages during processing."""
     task = await session.get(Task, task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1761,7 +1761,7 @@ async def get_task_transcript(
     session_key = task.spawn_session_key
 
     if not session_key:
-        # Rekonstruktion: letzten TaskEvent pruefen um Rolle abzuleiten
+        # Reconstruction: check the last TaskEvent to derive the role
         transcript_mode = "reconstructed"
         last_event = (await session.exec(
             select(TaskEvent)
@@ -1849,7 +1849,7 @@ async def list_comments(
     )
     comments = result.all()
 
-    # Agent-Namen anreichern
+    # Enrich with agent names
     agent_ids = {c.author_agent_id for c in comments if c.author_agent_id}
     agent_map: dict[uuid.UUID, tuple[str, str]] = {}
     if agent_ids:

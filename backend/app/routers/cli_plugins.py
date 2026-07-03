@@ -1,7 +1,7 @@
-"""CLI Plugins Router — CRUD fuer den zentralen Plugin-Store.
+"""CLI Plugins Router — CRUD for the central plugin store.
 
-Kommuniziert mit der CLI-Bridge fuer Install/Update/Remove Operationen.
-Liest den shared cache fuer Plugin-Listen.
+Communicates with the CLI bridge for install/update/remove operations.
+Reads the shared cache for plugin lists.
 """
 
 import asyncio
@@ -32,7 +32,7 @@ class PluginInstallRequest(BaseModel):
 
 @router.get("/plugins")
 async def get_plugins(current_user=Depends(require_user)):
-    """Alle im shared cache installierten CLI Plugins auflisten."""
+    """List all CLI plugins installed in the shared cache."""
     plugins = list_available_plugins()
     return {
         "plugins": [p.model_dump() for p in plugins],
@@ -42,7 +42,7 @@ async def get_plugins(current_user=Depends(require_user)):
 
 @router.get("/plugins/custom-skills")
 async def get_custom_skills(current_user=Depends(require_user)):
-    """Custom Skills aus ~/.mc/skills/ auflisten (fuer SkillMatrix)."""
+    """List custom skills from ~/.mc/skills/ (for SkillMatrix)."""
     skills = list_custom_skills()
     return {
         "skills": [s.model_dump() for s in skills],
@@ -52,7 +52,7 @@ async def get_custom_skills(current_user=Depends(require_user)):
 
 @router.get("/plugins/github-skills")
 async def get_github_skills(current_user=Depends(require_user)):
-    """Installierte GitHub Skill-Repos aus skills-lock.json auflisten."""
+    """List installed GitHub skill repos from skills-lock.json."""
     repos = list_github_skill_repos()
     return {"repos": [r.model_dump() for r in repos], "total": len(repos)}
 
@@ -62,7 +62,7 @@ async def install_plugin(
     body: PluginInstallRequest,
     current_user=Depends(require_user),
 ):
-    """Plugin im shared cache installieren via CLI-Bridge."""
+    """Install a plugin in the shared cache via the CLI bridge."""
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post("/plugins/install", {"plugin_key": body.plugin_key}, timeout=130)
     if not result.get("ok"):
@@ -75,7 +75,7 @@ async def update_plugin(
     plugin_key: str,
     current_user=Depends(require_user),
 ):
-    """Plugin im shared cache updaten via CLI-Bridge."""
+    """Update a plugin in the shared cache via the CLI bridge."""
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post(f"/plugins/{plugin_key}/update", {}, timeout=130)
     if not result.get("ok"):
@@ -89,13 +89,13 @@ async def remove_plugin(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Plugin deinstallieren + aus allen Agents cli_plugins entfernen."""
+    """Uninstall a plugin and remove it from all agents' cli_plugins."""
     from app.routers.cli_terminal import _bridge_delete
     result = _bridge_delete(f"/plugins/{plugin_key}")
     if not result.get("ok"):
         raise HTTPException(400, result.get("error", "Deinstallation fehlgeschlagen"))
 
-    # Aus allen Agents entfernen die das Plugin haben
+    # Remove from all agents that have this plugin
     agents_result = await session.exec(
         select(Agent).where(Agent.agent_runtime == "cli-bridge")
     )
@@ -118,7 +118,7 @@ async def remove_plugin(
 
 
 # ---------------------------------------------------------------------------
-# Plugin Audit Trail — wann hat wer welche Plugins geaendert
+# Plugin Audit Trail — who changed which plugins when
 # ---------------------------------------------------------------------------
 
 
@@ -129,9 +129,9 @@ async def get_plugins_audit(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Audit-Trail aller Plugin-Aenderungen (agent.plugins_updated Events).
+    """Audit trail of all plugin changes (agent.plugins_updated events).
 
-    Beinhaltet auch install/update/remove Events (agent.skill_filter_updated).
+    Also includes install/update/remove events (agent.skill_filter_updated).
     """
     event_types = ("agent.plugins_updated", "agent.skill_filter_updated")
     stmt = (
@@ -147,13 +147,13 @@ async def get_plugins_audit(
 
 
 # ---------------------------------------------------------------------------
-# Plugins Shell — tmux-Session im shared Plugin-Verzeichnis
+# Plugins Shell — tmux session in the shared plugin directory
 # ---------------------------------------------------------------------------
 
 
 @router.post("/plugins/shell")
 async def start_plugins_shell(current_user=Depends(require_user)):
-    """Plugin-Shell starten (tmux-Session in ~/.mc/plugins/)."""
+    """Start the plugin shell (tmux session in ~/.mc/plugins/)."""
     from app.routers.cli_terminal import _bridge_post
     result = _bridge_post("/plugins/shell", {})
     return result
@@ -161,7 +161,7 @@ async def start_plugins_shell(current_user=Depends(require_user)):
 
 @router.delete("/plugins/shell")
 async def stop_plugins_shell(current_user=Depends(require_user)):
-    """Plugin-Shell beenden."""
+    """Stop the plugin shell."""
     from app.routers.cli_terminal import _bridge_delete
     result = _bridge_delete("/plugins/shell")
     return result
@@ -173,7 +173,7 @@ async def plugins_shell_websocket(
     token: Optional[str] = None,
     session: AsyncSession = Depends(get_session),
 ):
-    """WebSocket-Proxy fuer die Plugin-Shell."""
+    """WebSocket proxy for the plugin shell."""
     # Auth check
     if not token:
         await websocket.close(code=4001)

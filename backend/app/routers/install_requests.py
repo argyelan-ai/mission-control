@@ -40,10 +40,10 @@ class InstallRequestCreate(BaseModel):
     reason: str = Field(..., min_length=5, max_length=2000)
     autonomy_level: Literal["L1", "L2", "L3"] | None = "L2"
     proposed_config: dict | None = None
-    # Callback-Koppelung: wenn der Requester den Request im Kontext einer
-    # laufenden Task stellt, posten wir nach erfolgreicher Installation einen
-    # install_completed-Comment auf diese Task (mirror zum subtask_completed-
-    # Pattern). Ohne task_id kein Auto-Callback — Requester muss selbst pollen.
+    # Callback coupling: if the requester makes the request in the context of
+    # a running task, we post an install_completed comment on that task after
+    # successful installation (mirrors the subtask_completed pattern).
+    # Without task_id there's no auto-callback — requester must poll manually.
     task_id: uuid.UUID | None = None
 
 

@@ -1,12 +1,12 @@
-"""Approval Cleanup — Task-Status ist Source of Truth.
+"""Approval Cleanup — task status is the source of truth.
 
-Wenn ein Task den Zustand verlaesst der die Approval ausgeloest hat,
-wird die Approval auf 'superseded' gesetzt (nicht resolved/approved —
-das ist die explizite Entscheidung des Operators).
+When a task leaves the state that triggered the approval, the
+approval is set to 'superseded' (not resolved/approved — that is
+the operator's explicit decision).
 
-Zwei Mechanismen:
-1. Sofort-Cleanup bei Task-Statuswechsel (aufgerufen aus agent_scoped/tasks)
-2. Watchdog-Reconciliation als Sicherheitsnetz (periodisch)
+Two mechanisms:
+1. Immediate cleanup on task status change (called from agent_scoped/tasks)
+2. Watchdog reconciliation as a safety net (periodic)
 """
 
 import logging
@@ -21,8 +21,8 @@ from app.utils import utcnow
 
 logger = logging.getLogger("mc.approval_cleanup")
 
-# Wann ist welcher Approval-Typ obsolet?
-# Key: action_type -> Value: Set von Task-Status bei denen die Approval NOCH gueltig ist
+# When does which approval type become obsolete?
+# Key: action_type -> Value: set of task statuses for which the approval is STILL valid
 APPROVAL_VALID_STATES: dict[str, set[str]] = {
     "blocker_decision": {"blocked"},
     "spawn_timeout": {"inbox"},
@@ -36,7 +36,7 @@ async def cleanup_obsolete_approvals(
     new_status: str,
     board_id: uuid.UUID | None = None,
 ) -> int:
-    """Sofort-Cleanup: Offene Approvals superseden wenn Task-Status sie obsolet macht."""
+    """Immediate cleanup: supersede open approvals when task status makes them obsolete."""
     result = await session.exec(
         select(Approval).where(
             Approval.task_id == task_id,
@@ -83,7 +83,7 @@ async def cleanup_obsolete_approvals(
 
 
 async def reconcile_stale_approvals(session: AsyncSession) -> int:
-    """Watchdog-Reconciliation: Alle pending Approvals pruefen und obsolete superseden."""
+    """Watchdog reconciliation: check all pending approvals and supersede obsolete ones."""
     from app.models.task import Task
 
     result = await session.exec(

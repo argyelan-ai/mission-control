@@ -168,16 +168,16 @@ async def get_note(request: Request, path: str):
     return {"frontmatter": post.metadata, "content": post.content}
 
 
-# ── Task-Klammer (Phase E) ──────────────────────────────────────────────────
+# ── Task Bracket (Phase E) ───────────────────────────────────────────────────
 
 
 @router.get("/related/{task_id}", dependencies=[Depends(require_role(Role.ADMIN))])
 async def list_task_related(request: Request, task_id: str):
     """List all vault notes/wrappers that share a `task` frontmatter field.
 
-    Used by the Reading-Panel "Verwandt"-Sektion: opening a wrapper for
+    Used by the Reading-Panel "Verwandt" section: opening a wrapper for
     deliverable X surfaces every other note/file/lesson from the same task
-    so the operator can see the full thread (recherche markdown + PDF report +
+    so the operator can see the full thread (research markdown + PDF report +
     researcher lesson + decision notes) without searching.
 
     The task field is filled on:
@@ -227,10 +227,10 @@ class VaultNoteUpdate(BaseModel):
 # agent endpoint where it filters telemetry noise.
 _ADMIN_NOTE_TYPES = frozenset({
     "note", "knowledge", "lesson", "reference", "journal",
-    # "deliverable" sind die Wrapper für Files aus dem TaskDeliverables-Bestand
-    # (Phase A vault-as-brain). User-erstellte Notes wählen normalerweise einen
-    # anderen Type, aber wir lassen "deliverable" zu damit der Operator falls nötig
-    # einen Wrapper editieren oder manuell erstellen kann.
+    # "deliverable" are the wrappers for files from the TaskDeliverables inventory
+    # (Phase A vault-as-brain). User-created notes normally pick a
+    # different type, but we allow "deliverable" so the operator can, if needed,
+    # edit or manually create a wrapper.
     "deliverable",
 })
 
@@ -246,7 +246,7 @@ class VaultNoteCreateAdmin(BaseModel):
     type: str = Field(default="note")
     tags: list[str] = Field(default_factory=list, max_length=12)
     agent: str = Field(default="mark", min_length=1, max_length=40)
-    # Phase E task-klammer — optional originating task. When set, the note's
+    # Phase E task bracket — optional originating task. When set, the note's
     # frontmatter carries `task: <uuid>` and GET /vault/related/{task_id}
     # surfaces it alongside the deliverable wrappers from the same task.
     task_id: str | None = Field(default=None)
@@ -816,7 +816,7 @@ async def purge_trash_item(request: Request, filename: str):
     try:
         redis = await get_redis()
         # No version bump needed — trash content doesn't affect the live
-        # graph. We only publish so the Papierkorb tab updates in real time.
+        # graph. We only publish so the Trash tab updates in real time.
         await redis.publish(
             "vault:stream",
             json.dumps({"type": "trash_purged", "filename": filename}),
@@ -1274,7 +1274,7 @@ async def agent_list_task_related(
     task_id: str,
     current_agent=Depends(require_agent),
 ):
-    """Agent-scoped task-klammer (Phase E).
+    """Agent-scoped task bracket (Phase E).
 
     Returns every vault note that carries the same `task: <uuid>` frontmatter
     field. The expected agentic usage: search_notes(...) → if the top hit
@@ -1335,7 +1335,7 @@ class VaultNoteCreate(BaseModel):
             "supersedes | contradicts | refines | example-of | depends-on | related-to"
         ),
     )
-    # Phase E task-klammer — optional originating task UUID. Voice + Worker
+    # Phase E task bracket — optional originating task UUID. Voice + Worker
     # agents set this when writing a memory during an active task; the field
     # is what GET /related/{task_id} joins on. Old envelopes without it stay
     # valid (validate_frontmatter treats `task` as optional).

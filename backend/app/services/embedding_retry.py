@@ -1,20 +1,20 @@
-"""Embedding-Retry-Loop — Background-Singleton fuer MSY-04 (Phase 5).
+"""Embedding retry loop — background singleton for MSY-04 (Phase 5).
 
-Wenn ``embedding_service.embed(...)`` fehlschlaegt (Spark / LM Studio offline),
-landet die ``BoardMemory``-Zeile trotzdem in Postgres (fail-soft). Der dazu-
-gehoerige Embedding-Auftrag wird in eine Redis-LIST gepusht
-(``mc:embeddings:retry``); diese Klasse drained die Queue im Hintergrund,
-sobald der Embedding-Service wieder erreichbar ist.
+When ``embedding_service.embed(...)`` fails (Spark / LM Studio offline),
+the ``BoardMemory`` row still lands in Postgres (fail-soft). The corresponding
+embedding job is pushed onto a Redis LIST
+(``mc:embeddings:retry``); this class drains the queue in the background
+once the embedding service is reachable again.
 
-Mirror der Singleton-Pattern aus ``intelligence.py`` (3-fach im Codebase
-verwendet: intelligence, watchdog, task_runner). Lifespan-Registrierung
-erfolgt in ``main.py`` analog zu ``intelligence.start()`` /
+Mirrors the singleton pattern from ``intelligence.py`` (used 3x in the
+codebase: intelligence, watchdog, task_runner). Lifespan registration
+happens in ``main.py`` analogous to ``intelligence.start()`` /
 ``intelligence.stop()``.
 
-Backoff: 60s, 5min, 15min, 1h, 6h × 4 (Summe ~24h, max 8 Versuche).
-Queue-Cap: 1000 Eintraege (Pitfall 3, RESEARCH.md). Bei Cap → WARN +
-skip enqueue (die BoardMemory-Zeile bleibt erhalten — sie wird halt nicht
-weiter retried).
+Backoff: 60s, 5min, 15min, 1h, 6h × 4 (sum ~24h, max 8 attempts).
+Queue cap: 1000 entries (Pitfall 3, RESEARCH.md). At cap → WARN +
+skip enqueue (the BoardMemory row stays intact — it just won't be
+retried further).
 
 Acceptance contract (Plan 05-02):
 - Dispatch never blocks on embedding (D-17). ``index_memory`` fail-soft +
@@ -39,15 +39,15 @@ from app.redis_client import RedisKeys, get_redis
 
 logger = logging.getLogger("mc.embedding_retry")
 
-# Backoff schedule pro Attempt-Zaehler (1-basiert).
-# Index 0 = nach 1. Fehlversuch.  Tuple sums to ~24h cumulative.
+# Backoff schedule per attempt counter (1-based).
+# Index 0 = after the 1st failed attempt.  Tuple sums to ~24h cumulative.
 RETRY_BACKOFFS_SEC: tuple[int, ...] = (60, 300, 900, 3600, 21600, 21600, 21600, 21600)
 MAX_ATTEMPTS = len(RETRY_BACKOFFS_SEC)  # 8
-MAX_QUEUE_LEN = 1000  # Pitfall 3: harter Cap gegen unbegrenztes Wachstum
-DRAIN_BATCH_SIZE = 50  # max Items pro Tick — bounded recovery work per tick
+MAX_QUEUE_LEN = 1000  # Pitfall 3: hard cap against unbounded growth
+DRAIN_BATCH_SIZE = 50  # max items per tick — bounded recovery work per tick
 
-# In-process Drop-Counter (fuer Observability — D-21).
-# Gelesen via get_dropped_total() — wird nach jedem max-attempts Drop incremented.
+# In-process drop counter (for observability — D-21).
+# Read via get_dropped_total() — incremented after every max-attempts drop.
 _dropped_total = 0
 
 
@@ -62,10 +62,10 @@ def get_dropped_total() -> int:
 
 
 async def enqueue(memory_id: uuid.UUID, attempt: int = 1) -> bool:
-    """Push einen Retry-Payload auf ``mc:embeddings:retry``.
+    """Push a retry payload onto ``mc:embeddings:retry``.
 
-    Returns ``True`` wenn enqueued, ``False`` wenn Queue-Cap voll oder Redis-
-    Fehler. Caller (memory_indexing._enqueue_embedding_retry) wraps this and
+    Returns ``True`` if enqueued, ``False`` if the queue cap is full or a Redis
+    error occurred. Caller (memory_indexing._enqueue_embedding_retry) wraps this and
     treats False as "BoardMemory still lands; just no retry tracking".
 
     Pitfall 3 (RESEARCH.md): when ``LLEN >= MAX_QUEUE_LEN`` the enqueue is
@@ -100,7 +100,7 @@ async def enqueue(memory_id: uuid.UUID, attempt: int = 1) -> bool:
 
 
 class EmbeddingRetryLoop:
-    """Singleton Background-Loop. Mirror von ``IntelligenceService``.
+    """Singleton background loop. Mirror of ``IntelligenceService``.
 
     Lifecycle::
 
@@ -139,8 +139,8 @@ class EmbeddingRetryLoop:
         logger.info("EmbeddingRetry stopped")
 
     async def _run_loop(self) -> None:
-        # Grace Period — Lifespan haengt sich noch an Qdrant + DB
-        # (Mirror intelligence.py:100 — same 20s window).
+        # Grace period — lifespan is still attaching to Qdrant + DB
+        # (mirrors intelligence.py:100 — same 20s window).
         await asyncio.sleep(20)
         while self._running:
             try:
@@ -152,18 +152,18 @@ class EmbeddingRetryLoop:
             await asyncio.sleep(self._interval)
 
     async def _drain_once(self) -> int:
-        """Eine Drain-Iteration. Returnt Anzahl erfolgreich verarbeiteter Items.
+        """One drain iteration. Returns the number of successfully processed items.
 
-        Direkt aufrufbar aus Tests (umgeht ``_run_loop`` + grace period).
+        Directly callable from tests (bypasses ``_run_loop`` + grace period).
 
-        Strategie:
-        1. Probe ``embedding_service.is_available()`` (2s timeout). Wenn down:
-           skip — kein Sinn die Queue zu leeren wenn jeder embed() wieder fail't.
-        2. Pop bis zu DRAIN_BATCH_SIZE Items. Fuer jedes:
-           - next_at noch in Zukunft → zurueck an die TAIL und break (Items
-             im LIST sind FIFO + monoton wachsend in der Praxis).
-           - sonst: process_one() → success → done; failure → re-enqueue mit
-             attempt+1, oder drop wenn attempt >= MAX_ATTEMPTS.
+        Strategy:
+        1. Probe ``embedding_service.is_available()`` (2s timeout). If down:
+           skip — no point draining the queue if every embed() will fail again.
+        2. Pop up to DRAIN_BATCH_SIZE items. For each:
+           - next_at still in the future → push back to the TAIL and break (items
+             in the LIST are FIFO + monotonically increasing in practice).
+           - otherwise: process_one() → success → done; failure → re-enqueue with
+             attempt+1, or drop if attempt >= MAX_ATTEMPTS.
         """
         global _dropped_total
 
@@ -173,7 +173,7 @@ class EmbeddingRetryLoop:
             logger.warning("EmbeddingRetry: Redis unavailable: %s", e)
             return 0
 
-        # Probe vor dem Drain — kein Sinn zu drainen wenn Service down ist.
+        # Probe before draining — no point draining if the service is down.
         from app.services.embedding_service import embedding_service
         if not await embedding_service.is_available():
             logger.debug("EmbeddingRetry: embedding service still unavailable, skipping cycle")
@@ -192,18 +192,18 @@ class EmbeddingRetryLoop:
 
             now = int(time.time())
             if item.get("next_at", 0) > now:
-                # noch nicht reif — zurueck an die TAIL der LIST
+                # not ready yet — push back to the TAIL of the LIST
                 await redis.rpush(RedisKeys.embedding_retry(), raw)
-                # Heuristik: alle weiteren Items duerften aehnliche oder
-                # spaetere next_at-Werte tragen — break statt jedes einzeln zu
-                # popen+rpushen.
+                # Heuristic: all further items likely carry similar or
+                # later next_at values — break instead of popping+pushing
+                # each one individually.
                 break
 
             success = await self._process_one(item)
             if success:
                 processed += 1
             else:
-                # erneut enqueuen mit naechstem Attempt
+                # re-enqueue with the next attempt
                 attempt = int(item.get("attempt", 1))
                 if attempt >= MAX_ATTEMPTS:
                     _dropped_total += 1
@@ -216,18 +216,18 @@ class EmbeddingRetryLoop:
         return processed
 
     async def _process_one(self, item: dict) -> bool:
-        """Versucht das Embedding fuer einen Memory-Eintrag zu generieren +
-        Qdrant-Upsert.
+        """Attempts to generate the embedding for a memory entry +
+        Qdrant upsert.
 
-        Returnt ``True`` bei Erfolg (Item bleibt entfernt), ``False`` bei
-        transienten Fehlern (Item wird re-enqueued oder gedropt vom Caller).
+        Returns ``True`` on success (item stays removed), ``False`` on
+        transient errors (item gets re-enqueued or dropped by the caller).
 
-        "Erfolg ohne Embedding" Edge-Cases (Memory geloescht, layer=None, leerer
-        Text) returnen ebenfalls True — es gibt nichts mehr zu tun und ein
-        Re-Enqueue waere sinnlos.
+        "Success without embedding" edge cases (memory deleted, layer=None, empty
+        text) also return True — there's nothing left to do and a
+        re-enqueue would be pointless.
         """
-        # Lazy-Imports analog memory_indexing.py — qdrant + DB nur im
-        # Container voll verfuegbar.
+        # Lazy imports analogous to memory_indexing.py — qdrant + DB are only
+        # fully available in the container.
         from app.database import engine
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.models.memory import BoardMemory
@@ -239,7 +239,7 @@ class EmbeddingRetryLoop:
             memory_id = uuid.UUID(item["memory_id"])
         except (KeyError, ValueError):
             logger.warning("EmbeddingRetry: malformed memory_id in payload: %r", item)
-            return True  # nichts zu tun, "Erfolg" damit es nicht erneut enqueued wird
+            return True  # nothing to do, "success" so it isn't re-enqueued
 
         async with AsyncSession(engine, expire_on_commit=False) as session:
             memory = await session.get(BoardMemory, memory_id)
@@ -288,6 +288,6 @@ class EmbeddingRetryLoop:
         return True
 
 
-# Modul-level Singleton — analog zu intelligence.py:720 / watchdog / task_runner.
-# Lifespan in main.py ruft .start() / .stop() — kein auto-start hier (Pitfall 4).
+# Module-level singleton — analogous to intelligence.py:720 / watchdog / task_runner.
+# Lifespan in main.py calls .start() / .stop() — no auto-start here (Pitfall 4).
 embedding_retry = EmbeddingRetryLoop()

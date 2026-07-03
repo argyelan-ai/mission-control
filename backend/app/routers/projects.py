@@ -1,12 +1,12 @@
-"""Projects router — ProjectPhase CRUD und Projekt-Kontext.
+"""Projects router — ProjectPhase CRUD and project context.
 
-Endpunkte:
-  GET  /projects/{project_id}                           — Projekt + Phasen
-  GET  /projects/{project_id}/phases                    — Phasen auflisten
-  POST /projects/{project_id}/phases                    — Phase erstellen
-  PATCH /projects/{project_id}/phases/{phase_id}        — Phase updaten
-  DELETE /projects/{project_id}/phases/{phase_id}       — Phase löschen
-  POST /projects/{project_id}/phases/{phase_id}/complete — Phase abschliessen
+Endpoints:
+  GET  /projects/{project_id}                           — Project + phases
+  GET  /projects/{project_id}/phases                    — List phases
+  POST /projects/{project_id}/phases                    — Create phase
+  PATCH /projects/{project_id}/phases/{phase_id}        — Update phase
+  DELETE /projects/{project_id}/phases/{phase_id}       — Delete phase
+  POST /projects/{project_id}/phases/{phase_id}/complete — Complete phase
 """
 import logging
 import uuid
@@ -53,7 +53,7 @@ async def get_project_with_phases(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Projekt + alle Phasen zurückgeben."""
+    """Return project + all phases."""
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -154,12 +154,12 @@ async def complete_phase(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Phase als abgeschlossen markieren.
+    """Mark phase as completed.
 
-    1. Phase status → completed, completed_at gesetzt
-    2. Wenn Projekt ein Git-Repo hat: Phase-PR öffnen + Git-Tag
-    3. Alle Phasen des Projekts prüfen: können neue aktiviert werden?
-    4. project.last_active_phase_id + briefing_doc updaten
+    1. Phase status → completed, completed_at set
+    2. If project has a Git repo: open phase PR + Git tag
+    3. Check all phases of the project: can new ones be activated?
+    4. Update project.last_active_phase_id + briefing_doc
     """
     from datetime import datetime, timezone
     from app.services.phase_engine import can_activate_phase
@@ -176,12 +176,12 @@ async def complete_phase(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 1. Phase abschliessen
+    # 1. Complete phase
     phase.status = "completed"
     phase.completed_at = datetime.now(timezone.utc)
     session.add(phase)
 
-    # 2. Git: PR + Tag (nur wenn workspace_path und Repo vorhanden)
+    # 2. Git: PR + tag (only if workspace_path and repo exist)
     pr_url: str | None = None
     if project.workspace_path and project.github_repo_url:
         try:
@@ -197,7 +197,7 @@ async def complete_phase(
         except Exception as e:
             logger.warning("Git-Operationen bei Phase-Abschluss fehlgeschlagen: %s", e)
 
-    # 3. Nächste Phasen aktivieren
+    # 3. Activate next phases
     all_phases_result = await session.exec(
         select(ProjectPhase).where(ProjectPhase.project_id == project_id)
     )
@@ -218,7 +218,7 @@ async def complete_phase(
                 p.status = "awaiting_approval"
                 session.add(p)
 
-    # 4. Projekt updaten
+    # 4. Update project
     project.last_active_phase_id = phase_id
     briefing_update = f"\n\n## Phase abgeschlossen: {phase.title}\n\nDatum: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n"
     if pr_url:

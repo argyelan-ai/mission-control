@@ -1,10 +1,10 @@
 """
-Fernet-basierte Verschlüsselung für MC-eigene Secrets.
+Fernet-based encryption for MC's own secrets.
 
-Secrets werden symmetrisch verschlüsselt in der DB gespeichert.
-Der Encryption Key kommt aus der ENV-Variable SECRETS_ENCRYPTION_KEY.
+Secrets are stored symmetrically encrypted in the DB.
+The encryption key comes from the ENV variable SECRETS_ENCRYPTION_KEY.
 
-Key generieren:
+Generate a key:
   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 """
 
@@ -22,7 +22,7 @@ _fernet: Fernet | None = None
 
 
 def _get_fernet() -> Fernet:
-    """Lazy-init Fernet Instance."""
+    """Lazy-init Fernet instance."""
     global _fernet
     if _fernet is not None:
         return _fernet
@@ -35,7 +35,7 @@ def _get_fernet() -> Fernet:
             "and add it to your .env file."
         )
 
-    # Key muss ein gültiger Fernet-Key sein (URL-safe base64, 32 Bytes)
+    # Key must be a valid Fernet key (URL-safe base64, 32 bytes)
     try:
         _fernet = Fernet(key.encode() if isinstance(key, str) else key)
     except Exception:
@@ -55,26 +55,26 @@ def _get_fernet() -> Fernet:
 
 
 def encrypt(plaintext: str) -> str:
-    """Verschlüsselt Plaintext mit Fernet und gibt einen base64-Ciphertext zurück.
+    """Encrypts plaintext with Fernet and returns a base64 ciphertext.
 
     Args:
-        plaintext: Der zu verschlüsselnde Klartext-String.
+        plaintext: The plaintext string to encrypt.
 
     Returns:
-        Ein von Fernet erzeugter, base64-encodierter Ciphertext als String.
+        A Fernet-generated, base64-encoded ciphertext as a string.
     """
     f = _get_fernet()
     return f.encrypt(plaintext.encode()).decode()
 
 
 def decrypt(ciphertext: str) -> str:
-    """Ciphertext entschlüsseln → Plaintext."""
+    """Decrypt ciphertext → plaintext."""
     f = _get_fernet()
     return f.decrypt(ciphertext.encode()).decode()
 
 
 def safe_decrypt(ciphertext: str) -> str | None:
-    """Decrypt mit Fehlerbehandlung — gibt None zurück bei Fehlern."""
+    """Decrypt with error handling — returns None on errors."""
     try:
         return decrypt(ciphertext)
     except (InvalidToken, RuntimeError, Exception) as e:
@@ -83,7 +83,7 @@ def safe_decrypt(ciphertext: str) -> str | None:
 
 
 def mask(value: str, visible_chars: int = 4) -> str:
-    """Secret für Frontend maskieren: nur letzte N Zeichen sichtbar."""
+    """Mask a secret for the frontend: only the last N characters are visible."""
     if len(value) <= visible_chars:
         return "*" * len(value)
     return "*" * (len(value) - visible_chars) + value[-visible_chars:]

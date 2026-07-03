@@ -1,21 +1,21 @@
 """
-Auto-Dispatch Service — weist neue Tasks automatisch dem passenden Agent zu.
+Auto-Dispatch Service — automatically assigns new tasks to the matching agent.
 
-Board Lead hat immer Prioritaet (Orchestrator-Prinzip).
-Fallback: Erster Agent mit Gateway-Anbindung.
-Structured Dispatch Messages geben dem Agent klaren Kontext + Callback-Protokoll.
+Board Lead always has priority (orchestrator principle).
+Fallback: first agent with a gateway connection.
+Structured dispatch messages give the agent clear context + callback protocol.
 
-Session-Reset Semantik (WICHTIG — hier zentral dokumentiert):
+Session-reset semantics (IMPORTANT — documented centrally here):
 ─────────────────────────────────────────────────────────────
-- trigger   = normaler Arbeitsimpuls, KEIN Session-Reset (reset_session=False)
-- dispatch  = neuer Task an Agent, Session-Reset (reset_session=True) → frischer Kontext
-- resume    = denselben Task fortsetzen nach Recovery, KEIN Reset (reset_session=False)
-- redispatch = Re-Dispatch nach Review-Rejection, KEIN Reset (reset_session=False)
-              Developer behaelt bisherigen Kontext
-- reset     = expliziter Sonderfall, nur via POST /agents/{id}/reset oder Watchdog-Eskalation
+- trigger   = normal work impulse, NO session reset (reset_session=False)
+- dispatch  = new task to agent, session reset (reset_session=True) → fresh context
+- resume    = continue the same task after recovery, NO reset (reset_session=False)
+- redispatch = re-dispatch after review rejection, NO reset (reset_session=False)
+              developer keeps its existing context
+- reset     = explicit special case, only via POST /agents/{id}/reset or watchdog escalation
 
-Kein normaler Trigger/Redispatch darf laufende Sessions resetten.
-Reset ist immer explizit, auditierbar und getrennt.
+No normal trigger/redispatch may reset running sessions.
+Reset is always explicit, auditable, and separate.
 """
 
 from __future__ import annotations
@@ -41,15 +41,15 @@ from app.services.runtime_context import get_session_context_for_runtime
 
 logger = logging.getLogger(__name__)
 
-# API Base fuer Agent-Callbacks — als Shell-Variable, wird im Agent-Context expandiert
-# Docker-Agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
-# Host/Gateway-Agents: MC_API_URL=http://localhost (via agent.env / workspace/.env)
+# API base for agent callbacks — as a shell variable, expanded in the agent context
+# Docker agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
+# Host/gateway agents: MC_API_URL=http://localhost (via agent.env / workspace/.env)
 
-# Runtimes die keine Gateway-Session brauchen — Agents pollen aktiv per HTTP.
-# Single source of truth: wenn ein neuer Poll-based Runtime hinzukommt, hier ergaenzen.
-# "host"        — Boss auf macOS launchd (ADR-014)
-# "cli-bridge"  — Docker-Agent via poll.sh (ADR-003)
-# "free-code-bridge", "claude-code", "manual" — Legacy-Varianten, siehe auto_dispatch_task
+# Runtimes that don't need a gateway session — agents actively poll via HTTP.
+# Single source of truth: add here when a new poll-based runtime is introduced.
+# "host"        — Boss on macOS launchd (ADR-014)
+# "cli-bridge"  — Docker agent via poll.sh (ADR-003)
+# "free-code-bridge", "claude-code", "manual" — legacy variants, see auto_dispatch_task
 NON_GATEWAY_RUNTIMES = frozenset({
     "cli-bridge",
     "host",
@@ -59,40 +59,40 @@ NON_GATEWAY_RUNTIMES = frozenset({
 })
 
 
-# Host-Pfade die der Backend-Container als Volume gemountet hat (siehe
-# docker-compose.yml backend.volumes). Andere Host-Pfade (z.B.
-# ${HOME_HOST}/Workspace/) sind im Backend NICHT sichtbar — jeder Schreib-
-# Versuch dort fuehrt zu `PermissionError: [Errno 13]`. Incident-Context
-# 2026-04-23 (DNA-Task fuer Boss): Boss hatte workspace_path=
-# ${HOME_HOST}/Workspace statt des standardisierten ${HOME_HOST}/.mc/...
-# Pattern. Dispatch-Git-Clone-Call crashte, Task blockierte mit kryptischer
-# Meldung. Dieser Check fangt das frueh ab mit klarer Error-Message.
+# Host paths that the backend container has mounted as a volume (see
+# docker-compose.yml backend.volumes). Other host paths (e.g.
+# ${HOME_HOST}/Workspace/) are NOT visible in the backend — any write
+# attempt there results in `PermissionError: [Errno 13]`. Incident context
+# 2026-04-23 (DNA task for Boss): Boss had workspace_path=
+# ${HOME_HOST}/Workspace instead of the standardized ${HOME_HOST}/.mc/...
+# pattern. The dispatch git-clone call crashed, task blocked with a cryptic
+# message. This check catches that early with a clear error message.
 # Derived from settings.home_host (not hardcoded) so this works on any
 # deployer's machine, not just the original host.
 _BACKEND_MOUNTED_ROOTS: tuple[str, ...] = (
     f"{settings.home_host}/.mc/",
-    # ~/.openclaw Mount in Stage-2-Entkopplung entfernt (2026-06-01) —
-    # aller Code referenziert jetzt direkt ~/.mc/...
+    # ~/.openclaw mount removed in Stage-2 decoupling (2026-06-01) —
+    # all code now references ~/.mc/... directly.
     f"{settings.home_host}/FreeCode/",
-    "/tmp/",  # immer im Container beschreibbar (in-memory)
+    "/tmp/",  # always writable in the container (in-memory)
 )
 
 
 def is_backend_writable_path(path: str | None) -> bool:
-    """Prueft ob ein Host-Pfad vom Backend-Container beschreibbar ist.
+    """Checks whether a host path is writable by the backend container.
 
-    True, wenn der Pfad unter einem der in docker-compose.yml gemounteten
-    Backend-Volumes liegt. Sonst False (→ mkdir/clone/write schlaegt fehl).
+    True if the path lies under one of the backend volumes mounted in
+    docker-compose.yml. Otherwise False (→ mkdir/clone/write fails).
 
-    Normalisiert per os.path.normpath um `..` Traversal-Tricks abzufangen
-    — ein Pfad der nach Normalisierung nicht mehr unter einem mounted root
-    liegt ist nicht beschreibbar.
+    Normalized via os.path.normpath to catch `..` traversal tricks —
+    a path that no longer lies under a mounted root after normalization
+    is not writable.
     """
     if not path:
         return False
     normalized = os.path.normpath(path)
-    # Trailing-Slash anhaengen damit `${HOME_HOST}/.mc` unter
-    # `${HOME_HOST}/.mc/` matched aber `${HOME_HOST}/.mcfoo/` nicht.
+    # Append a trailing slash so `${HOME_HOST}/.mc` matches under
+    # `${HOME_HOST}/.mc/` but `${HOME_HOST}/.mcfoo/` does not.
     if not normalized.endswith(os.sep):
         normalized += os.sep
     return any(normalized.startswith(root) for root in _BACKEND_MOUNTED_ROOTS)
@@ -155,7 +155,7 @@ def _container_workspace_path(host_path: str | None, agent: "Agent | None") -> s
 
 
 async def dependencies_met(session: AsyncSession, task: Task) -> bool:
-    """Pruefen ob alle Dependencies einer Task erfuellt (done) sind."""
+    """Check whether all dependencies of a task are satisfied (done)."""
     dep_result = await session.exec(
         select(TaskDependency).where(TaskDependency.task_id == task.id)
     )
@@ -175,9 +175,9 @@ async def find_agent_by_role(
     role: "AgentRole",
     exclude_agent_id: uuid.UUID | None = None,
 ) -> "Agent | None":
-    """Agent mit bestimmter Rolle im Board finden (Least-Busy-Strategie).
+    """Find an agent with a given role on the board (least-busy strategy).
 
-    Bei mehreren Kandidaten: Agent mit wenigsten aktiven Tasks bevorzugen.
+    With multiple candidates: prefer the agent with the fewest active tasks.
     Fallback: Board Lead.
     """
     from app.scopes import AgentRole
@@ -212,7 +212,7 @@ async def find_agent_by_role(
     if len(candidates) == 1:
         return candidates[0]
 
-    # Least-Busy: Agent mit wenigsten aktiven Tasks (in_progress + dispatched inbox)
+    # Least-busy: agent with the fewest active tasks (in_progress + dispatched inbox)
     busy_counts: dict[uuid.UUID, int] = {}
     for agent in candidates:
         active_result = await session.exec(
@@ -235,14 +235,14 @@ async def find_dispatch_target(
     task: Task,
     board_id: uuid.UUID,
 ) -> tuple[Agent | None, str]:
-    """Explizite Zuweisung hat Vorrang. Danach Board Lead. Fallback: erster Agent mit Gateway.
+    """Explicit assignment takes priority. Then Board Lead. Fallback: first agent with a gateway.
 
-    Prueft ob der Agent eine aktive Gateway-Session hat (Online-Check).
-    Offline-Agents werden uebersprungen — Watchdog greift spaeter.
+    Checks whether the agent has an active gateway session (online check).
+    Offline agents are skipped — the watchdog picks them up later.
 
-    Returns: (agent, decision_reason) — reason ist ein kurzer String fuer Logging.
+    Returns: (agent, decision_reason) — reason is a short string for logging.
     """
-    # Explizite Zuweisung via assigned_agent_id hat immer Vorrang vor Board-Lead-First
+    # Explicit assignment via assigned_agent_id always takes priority over board-lead-first
     if task.assigned_agent_id:
         assigned = await session.get(Agent, task.assigned_agent_id)
         if assigned:
@@ -256,30 +256,30 @@ async def find_dispatch_target(
     if not agents:
         return None, "no_agents_on_board"
 
-    # Online-Check (post Phase 30 / Gateway-Sunset):
-    # "Online" bedeutet schlicht: Agent laeuft auf einem Poll-based Runtime
-    # (cli-bridge / host / claude-code / free-code-bridge / manual). Diese
-    # liefern Tasks aktiv via poll.sh / launchd ab. Gateway-Session-Filter
-    # ist mit Phase 30 entfallen — Agent-Runtime ist die einzige Wahrheit.
+    # Online check (post Phase 30 / Gateway-Sunset):
+    # "Online" simply means: agent runs on a poll-based runtime
+    # (cli-bridge / host / claude-code / free-code-bridge / manual). These
+    # actively pick up tasks via poll.sh / launchd. The gateway-session filter
+    # was dropped with Phase 30 — agent runtime is the sole source of truth.
     def _is_online(agent: Agent) -> bool:
         return getattr(agent, "agent_runtime", None) in NON_GATEWAY_RUNTIMES
 
-    # Orchestrator hat hoechste Prioritaet (Boss via CLI-bridge)
+    # Orchestrator has the highest priority (Boss via CLI-bridge)
     for agent in agents:
         if agent.role == AgentRole.ORCHESTRATOR and _is_online(agent):
             return agent, "orchestrator"
 
-    # Board Lead als zweite Prioritaet — online bevorzugt
+    # Board Lead as second priority — online preferred
     for agent in agents:
         if agent.is_board_lead and _is_online(agent):
             return agent, "board_lead"
 
-    # Fallback: erster ONLINE Agent (Runtime hat ein Poll-Channel)
+    # Fallback: first ONLINE agent (runtime has a poll channel)
     for agent in agents:
         if _is_online(agent):
             return agent, f"fallback_runtime_agent:{agent.name}"
 
-    # Kein Agent online — Board Lead (auch offline) als letzte Option (Watchdog retry spaeter)
+    # No agent online — Board Lead (even offline) as last resort (watchdog retries later)
     for agent in agents:
         if agent.is_board_lead:
             return agent, "board_lead_offline_fallback"
@@ -288,7 +288,7 @@ async def find_dispatch_target(
 
 
 async def _allocate_port(session: AsyncSession) -> int | None:
-    """Ersten freien Port aus Range 4200-4299 allokieren."""
+    """Allocate the first free port from the range 4200-4299."""
     result = await session.exec(
         select(Task.workspace_port).where(
             Task.workspace_port.isnot(None),  # type: ignore[union-attr]
@@ -299,36 +299,36 @@ async def _allocate_port(session: AsyncSession) -> int | None:
     for port in range(4200, 4300):
         if port not in used_ports:
             return port
-    return None  # Alle 100 Ports belegt
+    return None  # All 100 ports taken
 
 
 async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
-    """Background Task: Board pruefen, Task laden, besten Agent finden, zuweisen.
+    """Background task: check board, load task, find best agent, assign.
 
-    UNIFIED PUSH: Alle Agents bekommen Tasks via chat_send().
-    3 Fallback-Stufen: chat_send → chat_send_isolated → pending_dispatch Queue.
-    Watchdog liefert pending Tasks nach, sobald Agent eine Session hat.
+    UNIFIED PUSH: all agents receive tasks via chat_send().
+    3 fallback tiers: chat_send → chat_send_isolated → pending_dispatch queue.
+    Watchdog redelivers pending tasks once the agent has a session.
     """
     from app.services.task_queue import enqueue_task
 
-    # Kurz warten damit die Request-Session committed hat
+    # Wait briefly so the request session has committed
     await asyncio.sleep(0.1)
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
         try:
-            # Board pruefen
+            # Check board
             board = await session.get(Board, board_id)
             if not board or not board.auto_dispatch_enabled:
                 return
 
-            # Task laden
+            # Load task
             task = await session.get(Task, task_id)
             if not task:
                 return
 
-            # Planner-Modus Aufloesung entfernt (Phase 6, 2026-04-11).
-            # Boss plant selbst via openclaude-Subagents, kein Planner-Zwischenschritt.
-            # planner_mode Feld bleibt im Schema fuer Backward-Compat, wird nicht mehr gelesen.
+            # Planner-mode resolution removed (Phase 6, 2026-04-11).
+            # Boss plans on its own via openclaude subagents, no planner intermediate step.
+            # planner_mode field stays in the schema for backward compat, no longer read.
 
             # ── Operational Controls Guard ─────────────────────────────
             from app.services.operations import check_dispatch_allowed
@@ -340,7 +340,7 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                 logger.info("Dispatch blocked: '%s' — %s", task.title, reason)
                 return
 
-            # Dependency-Check — nicht dispatchen wenn Vorgaenger nicht fertig
+            # Dependency check — don't dispatch if predecessors aren't done
             if not await dependencies_met(session, task):
                 logger.info("Dispatch blocked: '%s' — Dependencies nicht erfuellt", task.title)
                 await emit_event(
@@ -348,9 +348,9 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     f"Task '{task.title}' wartet auf Vorgaenger-Tasks",
                     board_id=board_id, task_id=task.id,
                 )
-                return  # Wird via Auto-Trigger dispatcht wenn deps erfuellt
+                return  # Gets dispatched via auto-trigger once deps are satisfied
 
-            # Task bereits zugewiesen? Direkt an diesen Agent pushen
+            # Task already assigned? Push directly to that agent
             dispatch_reason = "unknown"
             if task.assigned_agent_id is not None:
                 pre_assigned = await session.get(Agent, task.assigned_agent_id)
@@ -361,9 +361,9 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     best_agent = pre_assigned
                     dispatch_reason = "pre_assigned"
                 else:
-                    return  # Zugewiesener Agent existiert nicht mehr
+                    return  # Assigned agent no longer exists
             else:
-                # Besten Agent finden (Board Lead hat Prioritaet)
+                # Find best agent (Board Lead has priority)
                 best_agent, dispatch_reason = await find_dispatch_target(session, task, board_id)
                 if not best_agent:
                     logger.warning("Auto-dispatch: Kein Agent mit Gateway fuer '%s'", task.title)
@@ -378,7 +378,7 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     )
                     return
 
-                # Warning wenn Fallback-Agent statt Board Lead
+                # Warning when using a fallback agent instead of Board Lead
                 if not best_agent.is_board_lead:
                     await emit_event(
                         session,
@@ -391,7 +391,7 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                         detail={"reason": "board_lead_unavailable", "fallback_agent": best_agent.name},
                     )
 
-                # Task dem Agent zuweisen
+                # Assign the task to the agent
                 task.assigned_agent_id = best_agent.id
                 session.add(task)
                 await session.commit()
@@ -405,7 +405,7 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
             if not await setup_git_workspace_for_dispatch(task, best_agent, session):
                 return
 
-            # Phase C (T-1): Workspace auch fuer Non-Code-Tasks erstellen
+            # Phase C (T-1): also create workspace for non-code tasks
             if not task.workspace_path:
                 _proj = await session.get(Project, task.project_id) if task.project_id else None
                 _agent_ws = best_agent.workspace_path if best_agent else None
@@ -423,17 +423,17 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     session.add(task)
                     await session.commit()
 
-            # ── Dispatch Lock (Race-Condition-Schutz) ────────────────
+            # ── Dispatch Lock (race-condition protection) ────────────────
             from app.services.task_queue import acquire_dispatch_lock, release_dispatch_lock
 
             agent_id_str = str(best_agent.id)
 
-            # Workers mit isolierten Sessions: parallele Dispatches erlaubt → kein Lock noetig.
-            # WICHTIG: Isolierte Sessions via chat_send_isolated gibt's NUR fuer Gateway-Agents
-            # (openclaw). cli-bridge / host / claude-code haben single-tmux-session — busy-check
-            # MUSS aktiv bleiben, sonst ueberschreiben wir deren Context mit dem neuen Task
-            # (poll.sh sieht neue task_id → /clear → Worker verliert Arbeit am aktuellen Task).
-            # Bug beobachtet 2026-04-22: Tester verlor Kontext als 2 Tasks pre-assigned kamen.
+            # Workers with isolated sessions: parallel dispatches allowed → no lock needed.
+            # IMPORTANT: isolated sessions via chat_send_isolated exist ONLY for gateway agents
+            # (openclaw). cli-bridge / host / claude-code have a single tmux session — the busy
+            # check MUST stay active, otherwise we'd overwrite their context with the new task
+            # (poll.sh sees a new task_id → /clear → worker loses progress on the current task).
+            # Bug observed 2026-04-22: Tester lost context when 2 tasks arrived pre-assigned.
             _runtime = getattr(best_agent, "agent_runtime", "openclaw")
             _has_isolated_sessions = _runtime not in NON_GATEWAY_RUNTIMES
             _skip_busy = (
@@ -444,17 +444,17 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
 
             if not _skip_busy:
                 if not await acquire_dispatch_lock(agent_id_str, ttl=30):
-                    # Lock belegt → Task in Queue statt droppen
+                    # Lock held → queue task instead of dropping it
                     await enqueue_task(agent_id_str, str(task.id))
                     logger.info("Dispatch lock busy: '%s' -> %s (queued)", task.title, best_agent.name)
                     return
 
             try:
-                # ── UNIFIED PUSH MODE (alle Agents) ─────────────────────
+                # ── UNIFIED PUSH MODE (all agents) ─────────────────────
 
                 if not _skip_busy:
-                    # Pruefen ob Agent beschaeftigt → Queue
-                    # Guard 1: current_task_id (atomares Lock)
+                    # Check whether agent is busy → queue
+                    # Guard 1: current_task_id (atomic lock)
                     if best_agent.current_task_id and best_agent.current_task_id != task.id:
                         await enqueue_task(agent_id_str, str(task.id))
                         logger.info(
@@ -468,7 +468,7 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                         )
                         return
 
-                    # Guard 2: Busy = in_progress ODER dispatched-but-not-acked (DB-basiert)
+                    # Guard 2: busy = in_progress OR dispatched-but-not-acked (DB-based)
                     from sqlalchemy import or_
                     active_result = await session.exec(
                         select(Task).where(
@@ -490,11 +490,11 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                         )
                         return
 
-                # Status bleibt inbox — Agent muss selbst ACKen (PATCH status: in_progress)
-                # Runtime-Readiness + Auslieferung (claude-code / cli-bridge / host /
-                # openclaw) — extrahiert nach dispatch_delivery.py (REF-01 Step 3).
-                # Pitfall A: Helper liest rpc + settings via dispatch-namespace damit
-                # test_dispatch_race + test_subagent_dispatch Patches durchschlagen.
+                # Status stays inbox — agent must ACK itself (PATCH status: in_progress)
+                # Runtime readiness + delivery (claude-code / cli-bridge / host /
+                # openclaw) — extracted to dispatch_delivery.py (REF-01 Step 3).
+                # Pitfall A: helper reads rpc + settings via the dispatch namespace so
+                # test_dispatch_race + test_subagent_dispatch patches flow through.
                 from app.services.dispatch_delivery import (
                     _check_runtime_readiness, _deliver_dispatch_message,
                 )
@@ -503,18 +503,18 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                 ):
                     dispatch_mode = "push_pending"
                 else:
-                    # dispatch_attempt_id VOR Message-Build generieren,
-                    # damit sie in der Message an den Agent mitgegeben werden kann.
+                    # Generate dispatch_attempt_id BEFORE building the message,
+                    # so it can be included in the message sent to the agent.
                     #
-                    # Race-Fix (2026-05-15, post doppelter-dispatch incident):
-                    # die alte "if not task.dispatch_attempt_id: set" Logik war
-                    # nicht atomar — bei git-clone Race (5s Fenster) konnten
-                    # /agent/me/poll und auto_dispatch_task beide gleichzeitig
-                    # NULL sehen und beide eine UUID setzen, letzter Commit
-                    # gewann. set_dispatch_attempt_id(only_if_null=True) macht
-                    # einen conditional UPDATE … WHERE attempt_id IS NULL —
-                    # first-writer-wins, race-frei. Plus Audit-Trail in
-                    # task_attempt_audit für künftige Forensik.
+                    # Race fix (2026-05-15, post double-dispatch incident):
+                    # the old "if not task.dispatch_attempt_id: set" logic was
+                    # not atomic — during the git-clone race (5s window),
+                    # /agent/me/poll and auto_dispatch_task could both see
+                    # NULL at the same time and both set a UUID, with the last
+                    # commit winning. set_dispatch_attempt_id(only_if_null=True)
+                    # does a conditional UPDATE … WHERE attempt_id IS NULL —
+                    # first-writer-wins, race-free. Plus an audit trail in
+                    # task_attempt_audit for future forensics.
                     from app.services.dispatch_attempt_audit import (
                         set_dispatch_attempt_id,
                     )
@@ -525,9 +525,9 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                         only_if_null=True,
                     )
 
-                    # Recovery-Kontext: wenn der Task bereits Kommentare hat
-                    # (z.B. nach Blocker-Re-Dispatch), vorherigen Fortschritt
-                    # + Operator-Antwort in die Dispatch-Message einbauen.
+                    # Recovery context: if the task already has comments
+                    # (e.g. after a blocker re-dispatch), include prior progress
+                    # + operator response in the dispatch message.
                     _recovery_ctx = await build_recovery_context(session, task)
                     message = await _build_dispatch_message(
                         task, best_agent, session, recovery_context=_recovery_ctx,
@@ -553,15 +553,15 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
 
 
 async def build_agent_task_prompt(task: Task, agent: Agent, session: AsyncSession) -> str:
-    """Public function for HTTP-Poll Queue — returns prompt string for agent.
+    """Public function for HTTP-poll queue — returns prompt string for agent.
 
-    Laedt Recovery-Context wenn der Task bereits bearbeitet wurde (via Comments
-    oder Checklist-Items). So bekommt der Agent beim Re-Dispatch nach einem
-    Container-/Host-Restart nicht den Original-Prompt wieder (→ neu anfangen),
-    sondern einen "Du hast hier aufgehoert, setze fort" Kontext.
+    Loads recovery context if the task has already been worked on (via comments
+    or checklist items). This way the agent doesn't get the original prompt again
+    on re-dispatch after a container/host restart (→ starting over), but instead
+    a "you left off here, continue" context.
 
-    build_recovery_context returned None fuer frische Tasks ohne History —
-    dann ist das Verhalten identisch zum alten Poll-Pfad (nur Task-Prompt).
+    build_recovery_context returns None for fresh tasks without history —
+    in that case behavior is identical to the old poll path (task prompt only).
     """
     _recovery_ctx = await build_recovery_context(session, task)
     return await _build_dispatch_message(

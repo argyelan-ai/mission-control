@@ -1,11 +1,11 @@
 """
-Deploy-Router — Monitoring und Tracking Endpoints.
+Deploy router — monitoring and tracking endpoints.
 
-Agent-scoped Endpoints (mit deploy:execute Scope):
-- Health-Checks, Deploy-History schreiben
+Agent-scoped endpoints (with deploy:execute scope):
+- Write health checks, deploy history
 
-User-scoped Endpoints:
-- Service-Status, Deploy-History lesen
+User-scoped endpoints:
+- Read service status, deploy history
 """
 import uuid
 from datetime import datetime
@@ -66,7 +66,7 @@ class DeployHistoryResponse(BaseModel):
 async def agent_list_services(
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Alle Services mit Health-Status (Agent-Endpoint)."""
+    """All services with health status (agent endpoint)."""
     results = await check_all_services()
     return {
         "services": results,
@@ -79,7 +79,7 @@ async def agent_service_health(
     name: str,
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Health-Check fuer einen einzelnen Service."""
+    """Health check for a single service."""
     if name not in KNOWN_SERVICES:
         raise HTTPException(404, f"Unknown service: {name}")
     return await check_service_health(name)
@@ -90,7 +90,7 @@ async def agent_get_credentials(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Deployment-Credentials fuer externe Services abrufen."""
+    """Fetch deployment credentials for external services."""
     from app.models.secret import Secret
     from app.services.encryption import safe_decrypt
 
@@ -110,7 +110,7 @@ async def agent_record_deploy(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Deploy-Aktion in der History speichern."""
+    """Record a deploy action in the history."""
     if body.service not in KNOWN_SERVICES and body.action != "backup":
         raise HTTPException(400, f"Unknown service: {body.service}")
 
@@ -137,7 +137,7 @@ async def agent_deploy_history(
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.DEPLOY_EXECUTE)),
 ):
-    """Deploy-History abrufen (Agent-Endpoint)."""
+    """Fetch deploy history (agent endpoint)."""
     entries = await get_deploy_history(session, limit=limit)
     return [
         DeployHistoryResponse(
@@ -158,13 +158,13 @@ async def agent_deploy_history(
     ]
 
 
-# ── User-Scoped Endpoints (fuer Dashboard) ────────────────────────────
+# ── User-Scoped Endpoints (for Dashboard) ────────────────────────────
 
 @router.get("/api/v1/deploy/services")
 async def user_list_services(
     _user=Depends(require_user),
 ):
-    """Alle Services mit Health-Status (User-Endpoint)."""
+    """All services with health status (user endpoint)."""
     results = await check_all_services()
     return {
         "services": results,
@@ -178,7 +178,7 @@ async def user_deploy_history(
     session: AsyncSession = Depends(get_session),
     _user=Depends(require_user),
 ):
-    """Deploy-History (User-Endpoint)."""
+    """Deploy history (user endpoint)."""
     entries = await get_deploy_history(session, limit=limit)
     return [
         DeployHistoryResponse(

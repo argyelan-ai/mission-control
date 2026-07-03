@@ -1,19 +1,19 @@
-"""Single Source of Truth fuer Deliverable-Path-Validation.
+"""Single source of truth for deliverable path validation.
 
-Wird genutzt von:
+Used by:
   - backend/app/routers/agent_scoped.py  (agent_create_deliverable)
   - backend/app/routers/tasks.py         (admin POST /boards/.../deliverables)
 
-Backend-interne Schreiber (pdf_generator, visual_verifier) umgehen diese
-Validation bewusst (Sidecar-Output -> direkter DB-Insert ohne Router-Call).
+Backend-internal writers (pdf_generator, visual_verifier) deliberately bypass
+this validation (sidecar output -> direct DB insert without router call).
 
-Akzeptierte Prefixe (task-scoped):
-  /deliverables/<task_id>/            Docker-Worker Agent-Container
-  /shared-deliverables/<task_id>/     mc-playwright Sidecar (PDF, Screenshots)
-  /shared-mcp/<task_id>/              Microsoft Playwright MCP Sidecar
-  ~/.mc/deliverables/<task_id>/       Host-Worker (tilde-Form, z.B. Hermes)
-  $HOME_HOST/.mc/deliverables/<task_id>/  Host-Worker (resolved, z.B. /Users/<login>/...)
-  http(s)://...                       URL-Deliverables (deliverable_type=url)
+Accepted prefixes (task-scoped):
+  /deliverables/<task_id>/            Docker worker agent container
+  /shared-deliverables/<task_id>/     mc-playwright sidecar (PDF, screenshots)
+  /shared-mcp/<task_id>/              Microsoft Playwright MCP sidecar
+  ~/.mc/deliverables/<task_id>/       Host worker (tilde form, e.g. Hermes)
+  $HOME_HOST/.mc/deliverables/<task_id>/  Host worker (resolved, e.g. /Users/<login>/...)
+  http(s)://...                       URL deliverables (deliverable_type=url)
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ from fastapi import HTTPException
 
 
 def accepted_path_prefixes(task_id: uuid.UUID) -> tuple[str, ...]:
-    """Liefert alle gueltigen lokalen Pfad-Prefixe fuer Deliverables einer Task."""
+    """Returns all valid local path prefixes for deliverables of a task."""
     from app.config import settings
 
     home_host = settings.home_host
@@ -42,16 +42,16 @@ def validate_deliverable_path(
     content: str | None,
     task_id: uuid.UUID,
 ) -> None:
-    """Validiert path-Feld eines Deliverables. Wirft HTTPException 422 bei Verstoss.
+    """Validates the path field of a deliverable. Raises HTTPException 422 on violation.
 
-    Akzeptiert:
-      - Einen der task-scoped lokalen Prefixe (accepted_path_prefixes)
-      - http/https URL (fuer deliverable_type=url)
-      - None, wenn content inline gesetzt ist
+    Accepts:
+      - One of the task-scoped local prefixes (accepted_path_prefixes)
+      - http/https URL (for deliverable_type=url)
+      - None, if content is set inline
 
     Security:
-      - NUL-Byte Reject
-      - Path-Traversal Reject via os.path.normpath Recheck
+      - NUL byte reject
+      - Path traversal reject via os.path.normpath recheck
     """
     if path is None:
         if not (content and content.strip()):

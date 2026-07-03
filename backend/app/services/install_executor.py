@@ -273,19 +273,19 @@ class InstallExecutor:
             return InstallResult(result="rolled_back", error=str(e),
                                  install_log_id=log.id)
 
-        # Registry-Cleanup: wenn der MCP nach dem Unassign verwaist ist
-        # (kein Agent referenziert ihn mehr, und kein Agent hat mcp_servers=None
-        # = „alle installierten MCPs aktiv"), loeschen wir das Registry-
-        # Verzeichnis. Rollback wenn das fehlschlaegt — Agent-Allowlist-Cleanup
-        # war erfolgreich, aber orphaned dir lassen ist explizit gewollt: der
-        # User hat nur fuer diesen Agent un-assigned.
+        # Registry cleanup: if the MCP is orphaned after the unassign (no agent
+        # references it anymore, and no agent has mcp_servers=None = "all
+        # installed MCPs active"), we delete the registry directory. No rollback
+        # if this fails — the agent allowlist cleanup already succeeded, but
+        # leaving an orphaned dir is explicitly fine: the user only un-assigned
+        # for this one agent.
         registry_cleanup_error: str | None = None
         try:
             if await self._mcp_is_orphaned(name):
                 await _call_mcp_uninstall(name)
         except Exception as e:
-            # Non-fatal: Allowlist-Update + sync sind bereits durch.
-            # Registry-Verzeichnis bleibt liegen, wird im Log vermerkt.
+            # Non-fatal: allowlist update + sync already went through.
+            # Registry directory stays put, noted in the log.
             registry_cleanup_error = f"{type(e).__name__}: {e}" if str(e) else type(e).__name__
             logger.warning(
                 "MCP %r registry cleanup failed after un-assign from agent %s: %s",
@@ -299,12 +299,12 @@ class InstallExecutor:
         return InstallResult(result="success", install_log_id=log.id)
 
     async def _mcp_is_orphaned(self, name: str) -> bool:
-        """True wenn kein Agent den MCP mehr referenziert.
+        """True if no agent references the MCP anymore.
 
-        `mcp_servers = None` bedeutet „alle installierten MCPs aktiv" — in
-        diesem Fall ist der MCP NICHT verwaist, irgendein Agent nutzt ihn
-        implizit weiter. Nur wenn alle Agents explizite Allowlists haben und
-        `name` in keiner vorkommt, ist der MCP wirklich frei.
+        `mcp_servers = None` means "all installed MCPs active" — in this
+        case the MCP is NOT orphaned, some agent still uses it implicitly.
+        Only when all agents have explicit allowlists and `name` appears in
+        none of them is the MCP truly free.
         """
         from app.models.agent import Agent
         result = await self.session.exec(select(Agent))
@@ -369,22 +369,22 @@ _HANDLERS: dict[str, Any] = {
 async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
     """Install a skill from source. Supports github: clone and local ref.
 
-    Repo-Layout-Handling:
-    - Single-Skill-Repo (z.B. obra/skill-foo): `<repo>/SKILL.md` im Root →
-      clone direkt nach `~/.mc/skills/<name>/`.
-    - Multi-Skill-Monorepo (z.B. google-labs-code/stitch-skills mit
-      `skills/<name>/SKILL.md`): clone nach temp, extract nur den gewuenschten
-      Sub-Skill (`skills/<name>/` oder `skill-<name>/`) nach
-      `~/.mc/skills/<name>/`, Rest verwerfen.
+    Repo layout handling:
+    - Single-skill repo (e.g. obra/skill-foo): `<repo>/SKILL.md` at the root →
+      clone directly to `~/.mc/skills/<name>/`.
+    - Multi-skill monorepo (e.g. google-labs-code/stitch-skills with
+      `skills/<name>/SKILL.md`): clone to temp, extract only the requested
+      sub-skill (`skills/<name>/` or `skill-<name>/`) to
+      `~/.mc/skills/<name>/`, discard the rest.
 
-    Live-Bug 2026-04-24: Install von shadcn-ui aus google-labs-code/stitch-skills
-    clonete das GANZE Repo nach ~/.mc/skills/shadcn-ui/. Die echte SKILL.md
-    lag unter skills/shadcn-ui/SKILL.md. sync_agent_skills_to_disk fand kein
-    SKILL.md im Root → skipped den Skill → Worker-Container sah den Skill nicht.
+    Live bug 2026-04-24: installing shadcn-ui from google-labs-code/stitch-skills
+    cloned the WHOLE repo to ~/.mc/skills/shadcn-ui/. The real SKILL.md
+    lived under skills/shadcn-ui/SKILL.md. sync_agent_skills_to_disk found no
+    SKILL.md at the root → skipped the skill → the worker container didn't see it.
 
-    WICHTIG: `~/.mc/skills` gegen den HOST-Pfad aufloesen, nicht gegen
-    das Container-User-Home (Backend laeuft als mcuser). HOME_HOST env-var
-    ist explizit im Backend-Container gesetzt.
+    IMPORTANT: resolve `~/.mc/skills` against the HOST path, not against
+    the container user's home (the backend runs as mcuser). The HOME_HOST
+    env var is set explicitly in the backend container.
     """
     import asyncio
     import os
@@ -400,9 +400,9 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
         repo = source.removeprefix("github:")
         url = f"https://github.com/{repo}.git"
 
-        # Clone in temp location, dann den richtigen Pfad extrahieren.
-        # Das vermeidet dass ein falsch-strukturiertes Repo die Skills-
-        # Bibliothek verschmutzt.
+        # Clone into a temp location, then extract the right path.
+        # This avoids a wrongly-structured repo polluting the skills
+        # library.
         with tempfile.TemporaryDirectory() as tmp:
             tmp_clone = Path(tmp) / "clone"
             proc = await asyncio.create_subprocess_exec(
@@ -413,11 +413,11 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
             if proc.returncode != 0:
                 raise RuntimeError(f"git clone failed: {stderr.decode()}")
 
-            # Repo-Layout erkennen:
-            # a) <repo>/SKILL.md        → Single-Skill-Repo
-            # b) <repo>/skills/<name>/  → Multi-Skill-Monorepo (gängig bei
-            #    google-labs-code/stitch-skills, anthropic/agent-skills usw.)
-            # c) <repo>/<name>/SKILL.md → manche orgs legen ein Sub-Dir pro Skill
+            # Detect repo layout:
+            # a) <repo>/SKILL.md        → single-skill repo
+            # b) <repo>/skills/<name>/  → multi-skill monorepo (common with
+            #    google-labs-code/stitch-skills, anthropic/agent-skills etc.)
+            # c) <repo>/<name>/SKILL.md → some orgs use a sub-dir per skill
             if (tmp_clone / "SKILL.md").exists():
                 source_dir = tmp_clone
             elif (tmp_clone / "skills" / name / "SKILL.md").exists():
@@ -425,7 +425,7 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
             elif (tmp_clone / name / "SKILL.md").exists():
                 source_dir = tmp_clone / name
             else:
-                # Layout unklar — sinnvolle Fehlermeldung mit gefundenem Dir-Inhalt
+                # Layout unclear — give a useful error with the found dir contents
                 top = ", ".join(sorted(p.name for p in tmp_clone.iterdir()))[:200]
                 raise RuntimeError(
                     f"Repo {url} hat kein erkennbares Skill-Layout: weder "
@@ -433,12 +433,12 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
                     f"Top-Level Inhalt: {top}"
                 )
 
-            # Existing install-dir ueberschreiben
+            # Overwrite existing install dir
             if skills_dir.exists():
                 shutil.rmtree(skills_dir)
             shutil.copytree(source_dir, skills_dir)
 
-        # Version aus SKILL.md frontmatter (optional)
+        # Version from SKILL.md frontmatter (optional)
         skill_md = skills_dir / "SKILL.md"
         version = None
         if skill_md.exists():
@@ -458,16 +458,16 @@ async def _call_skill_install(source: str, name: str) -> dict[str, Any]:
 async def _call_plugin_install(source: str, name: str) -> dict[str, Any]:
     """Delegate plugin install to CLI-Bridge via HTTP.
 
-    MC hat keine lokale Install-Logik fuer Plugins — der shared cache
-    (~/.mc/plugins/) wird ausschliesslich ueber die CLI-Bridge
-    verwaltet (cli-bridge.py POST /plugins/install).
+    MC has no local install logic for plugins — the shared cache
+    (~/.mc/plugins/) is managed exclusively through the CLI Bridge
+    (cli-bridge.py POST /plugins/install).
 
-    source: Marketplace-Name (z.B. "claude-plugins-official") — wird
-            als Kontext mitgegeben, aber der plugin_key (name) bestimmt
-            welches Plugin installiert wird.
+    source: marketplace name (e.g. "claude-plugins-official") — passed
+            along as context, but the plugin_key (name) determines
+            which plugin gets installed.
 
-    Returns {"installed_version": str | None} — version aus dem
-    shared cache nach Installation, oder None wenn nicht ermittelbar.
+    Returns {"installed_version": str | None} — version from the
+    shared cache after installation, or None if it can't be determined.
     """
     import asyncio
 
@@ -482,7 +482,7 @@ async def _call_plugin_install(source: str, name: str) -> dict[str, Any]:
 
     result = await asyncio.get_event_loop().run_in_executor(None, _sync_install)
 
-    # Versuche Version aus shared cache zu lesen
+    # Try to read version from shared cache
     from app.services.plugin_manager import list_available_plugins
     installed_version: str | None = None
     for plugin in list_available_plugins():
@@ -528,7 +528,7 @@ async def _call_mcp_uninstall(name: str) -> None:
 async def _trigger_sync_config(agent_id: uuid.UUID) -> None:
     """Fire sync-config for the agent with Redis-lock.
 
-    Runtime-Weiche:
+    Runtime branch:
     - cli-bridge agents: calls sync_docker_agent_files() directly (service layer).
       This renders templates into the claude-config bind-mount that the Docker
       container reads — no HTTP auth required, pure service call.

@@ -33,9 +33,9 @@ from app.services.task_context_builder import DispatchContext, _load_dispatch_co
 
 logger = logging.getLogger(__name__)
 
-# API Base fuer Agent-Callbacks — als Shell-Variable, wird im Agent-Context expandiert
-# Docker-Agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
-# Host/Gateway-Agents: MC_API_URL=http://localhost (via agent.env / workspace/.env)
+# API base for agent callbacks — as a shell variable, expanded in the agent context
+# Docker agents: MC_API_URL=http://backend:8000 (via docker-compose.agents.yml)
+# Host/Gateway agents: MC_API_URL=http://localhost (via agent.env / workspace/.env)
 _API_BASE = "$MC_API_URL"
 
 # Dedup set for size warnings — keyed by (task_id, dispatch_attempt_id). The
@@ -165,21 +165,21 @@ def _assemble_with_budget(
 
 
 def _extract_auth_token(agent: Agent) -> str | None:
-    """Bearer-Token-Placeholder fuer Dispatch-Curl-Befehle.
+    """Bearer token placeholder for dispatch curl commands.
 
-    Nach ADR-023 Ultrareview (Security-Finding): NIEMALS Plaintext-Tokens in
-    Dispatch-Messages einbauen — die landen in Redis-Pubsub, Recovery-Recaps,
-    Discord-Logs, SSE-Streams.
-    Alle Runtimes (cli-bridge, host, openclaw) bekommen `$MC_AGENT_TOKEN` als
-    Shell-Variable. OpenClaw Gateway injiziert den Token pro Session in die
-    Env-Variable, cli-bridge/host liest ihn aus agent.env.
+    Per ADR-023 Ultrareview (security finding): NEVER embed plaintext tokens
+    in dispatch messages — they end up in Redis pubsub, recovery recaps,
+    Discord logs, SSE streams.
+    All runtimes (cli-bridge, host, openclaw) get `$MC_AGENT_TOKEN` as a
+    shell variable. The OpenClaw Gateway injects the token per session into
+    the env variable; cli-bridge/host read it from agent.env.
     """
     return "$MC_AGENT_TOKEN"
 
 
 def _curl(method: str, path: str, token: str | None, body: str | None = None,
           dispatch_attempt_id: str | None = None) -> str:
-    """Vollstaendigen curl-Befehl bauen — self-contained, kein TOOLS.md-Lookup noetig."""
+    """Build a complete curl command — self-contained, no TOOLS.md lookup needed."""
     parts = [f'curl -X {method} "{_API_BASE}{path}"']
     if token:
         parts.append(f'  -H "Authorization: Bearer {token}"')
@@ -197,27 +197,27 @@ async def _build_review_message(
     session: AsyncSession,
     developer: Agent | None = None,
 ) -> str:
-    """Review-Nachricht fuer Reviewer-Agents — mit Developer-Code-Kontext.
+    """Review message for reviewer agents — with developer code context.
 
-    Laedt die letzten Developer-Kommentare (progress/resolution) und den
-    Workspace-Pfad, damit der Reviewer weiss WO und WAS zu pruefen ist.
+    Loads the latest developer comments (progress/resolution) and the
+    workspace path, so the reviewer knows WHERE and WHAT to check.
 
-    Alle API-Aufrufe als vollstaendige curl-Befehle — self-contained.
+    All API calls as complete curl commands — self-contained.
     """
     token = _extract_auth_token(reviewer)
     task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
     review_path = f"{task_path}/review"
 
-    # curl-Befehle vorberechnen — neuer Review-Endpoint (1 Aktion statt 2)
+    # Precompute curl commands — new review endpoint (1 action instead of 2)
     approve_curl = _curl("POST", review_path, token,
                          '{"decision": "approve", "comment": "Update — Approved: [Grund]"}')
     reject_curl = _curl("POST", review_path, token,
                         '{"decision": "request_changes", "comment": "Problem — ... / Erwartung — ... / Action — ..."}')
 
-    # ── Developer ermitteln (fuer Workspace-Pfad + Name) ──
+    # ── Determine developer (for workspace path + name) ──
     if not developer and task.assigned_agent_id:
-        # Beim Review-Handoff wurde assigned_agent_id schon auf Reviewer gesetzt.
-        # Developer ueber letzten progress-Kommentar finden.
+        # At review handoff, assigned_agent_id was already set to the reviewer.
+        # Find the developer via the last progress comment.
         dev_comment_result = await session.exec(
             select(TaskComment)
             .where(
@@ -232,7 +232,7 @@ async def _build_review_message(
         if last_dev_comment and last_dev_comment.author_agent_id:
             developer = await session.get(Agent, last_dev_comment.author_agent_id)
 
-    # ── Developer-Kommentare laden (progress + resolution) ──
+    # ── Load developer comments (progress + resolution) ──
     dev_comments_text = ""
     try:
         comments_result = await session.exec(
@@ -247,8 +247,8 @@ async def _build_review_message(
         dev_comments = comments_result.all()
         if dev_comments:
             comment_lines = []
-            for c in dev_comments[-3:]:  # Maximal 3 neueste
-                # Auf 800 Zeichen begrenzen damit die Message nicht explodiert
+            for c in dev_comments[-3:]:  # At most the 3 most recent
+                # Cap at 800 characters so the message doesn't explode
                 content = c.content[:800]
                 if len(c.content) > 800:
                     content += "\n[...gekuerzt]"
@@ -257,17 +257,17 @@ async def _build_review_message(
     except Exception:
         pass  # best-effort
 
-    # ── Phase-Review vs Code-Review unterscheiden ──
+    # ── Distinguish phase review vs code review ──
     _child_result = await session.exec(
         select(Task).where(Task.parent_task_id == task.id).limit(1)
     )
     _is_phase_review = _child_result.first() is not None
 
-    # ── Message zusammenbauen ──
+    # ── Assemble message ──
     dev_name = developer.name if developer else "Unbekannt"
 
     if _is_phase_review:
-        # Phase-/Root-Review: Gesamtergebnis pruefen, nicht einzelnen Code
+        # Phase/root review: check the overall result, not individual code
         msg = f"# Phase-Review: {task.title}\n\n"
         msg += f"**Task-ID:** {task.id}\n"
         msg += f"**Board:** {task.board_id}\n\n"
@@ -288,8 +288,8 @@ async def _build_review_message(
     if task.description:
         msg += f"## Beschreibung\n{task.description}\n\n"
 
-    # Code-Speicherort: Task.workspace_path (Source of Truth, Bundle 4)
-    # Fallback: Projekt-Workspace > mc_repo_path > Agent-Workspace
+    # Code location: Task.workspace_path (source of truth, Bundle 4)
+    # Fallback: project workspace > mc_repo_path > agent workspace
     _code_path = getattr(task, "workspace_path", None)
     _project: Project | None = None
     if task.project_id:
@@ -314,7 +314,7 @@ async def _build_review_message(
         msg += f"Wechsle ZUERST in dieses Verzeichnis: `cd {_agent_path}`\n"
         msg += f"Durchsuche dort nach den relevanten Dateien.\n\n"
 
-    # T-1 Phase D: Projekt-Config-Sektion aus project_config
+    # T-1 Phase D: project config section from project_config
     if _project and _project.project_config:
         from app.services.work_context import resolve_project_config, build_config_dispatch_section
         _resolved = resolve_project_config(
@@ -329,13 +329,13 @@ async def _build_review_message(
         msg += f"**Ziel-URL:** {task.target_url}\n"
         msg += "Oeffne diese URL im Browser um das Ergebnis visuell zu pruefen.\n\n"
 
-    # Developer-Kommentare (Evidence was gemacht wurde)
+    # Developer comments (evidence of what was done)
     if dev_comments_text:
         msg += f"## Was der Entwickler gemacht hat\n{dev_comments_text}\n\n"
 
-    # ── Subtask-Evidenz (nur bei Phase-/Root-Reviews) ──
-    # Subtasks sind nach Abschluss `done` und im Board-Kontext nicht mehr sichtbar.
-    # Wir laden sie hier explizit damit der Reviewer die geleistete Arbeit sehen kann.
+    # ── Subtask evidence (only for phase/root reviews) ──
+    # Subtasks are `done` after completion and no longer visible in the board context.
+    # We load them explicitly here so the reviewer can see the work that was done.
     if _is_phase_review:
         subtasks_result = await session.exec(
             select(Task).where(Task.parent_task_id == task.id)
@@ -345,7 +345,7 @@ async def _build_review_message(
             agent_id_map: dict = {}
             subtask_sections = []
             for sub in subtasks:
-                # Agent-Name cachen
+                # Cache agent name
                 if sub.assigned_agent_id and sub.assigned_agent_id not in agent_id_map:
                     sub_agent = await session.get(Agent, sub.assigned_agent_id)
                     agent_id_map[sub.assigned_agent_id] = sub_agent.name if sub_agent else "?"
@@ -354,7 +354,7 @@ async def _build_review_message(
                 section = f"### [{sub.status}] {sub.title} ({sub_agent_name})\n"
                 section += f"ID: `{sub.id}`\n"
 
-                # Kommentare des Subtasks (progress + resolution, max 3 neueste)
+                # Subtask comments (progress + resolution, max 3 most recent)
                 sub_comments_result = await session.exec(
                     select(TaskComment)
                     .where(
@@ -373,7 +373,7 @@ async def _build_review_message(
                             content += "\n[...gekuerzt]"
                         section += f"\n**{c.comment_type.title()}** ({c.created_at.strftime('%H:%M')}):\n{content}\n"
 
-                # Deliverables des Subtasks
+                # Deliverables of the subtask
                 sub_deliverables_result = await session.exec(
                     select(TaskDeliverable).where(TaskDeliverable.task_id == sub.id)
                 )
@@ -390,7 +390,7 @@ async def _build_review_message(
             msg += "*(Subtasks sind nach Abschluss `done` und im Board-Kontext nicht mehr sichtbar — hier explizit geladen)*\n\n"
             msg += "\n---\n".join(subtask_sections) + "\n\n"
 
-    # PR-Link laden (wenn vorhanden)
+    # Load PR link (if present)
     pr_comment = None
     try:
         pr_result = await session.exec(
@@ -410,7 +410,7 @@ async def _build_review_message(
         msg += f"## Pull Request\n{pr_comment.content}\n\n"
         msg += f"Nutze `gh pr diff` oder die GitHub-UI um die Aenderungen zu pruefen.\n\n"
 
-    # Prozess-Regeln des Reviewers (aus rules_md)
+    # Reviewer's process rules (from rules_md)
     if reviewer.rules_md:
         msg += f"## Prozess-Regeln (PFLICHT)\n\n{reviewer.rules_md}\n\n"
 
@@ -456,7 +456,7 @@ async def _build_test_message(
     tester: Agent,
     session: AsyncSession,
 ) -> str:
-    """Test-Message fuer Tester-Agent — Browser-basierte QA."""
+    """Test message for tester agent — browser-based QA."""
     token = _extract_auth_token(tester)
     task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
 
@@ -470,7 +470,7 @@ async def _build_test_message(
     msg += f"**Task-ID:** {task.id}\n"
     msg += f"**Board:** {task.board_id}\n\n"
 
-    # ── Test-URL bestimmen: target_url > workspace_port > localhost ──
+    # ── Determine test URL: target_url > workspace_port > localhost ──
     if task.target_url:
         _test_url = task.target_url
     elif getattr(task, "workspace_port", None):
@@ -595,10 +595,10 @@ async def _build_dispatch_message(
     session: AsyncSession,
     recovery_context: str | None = None,
 ) -> str:
-    """Strukturierte Dispatch-Message mit Kontext + Callback-Protokoll.
+    """Structured dispatch message with context + callback protocol.
 
-    Fuer Review-Tasks (status='review') wird automatisch _build_review_message genutzt.
-    Nutzt DispatchContext fuer parallele DB-Queries (asyncio.gather).
+    For review tasks (status='review'), _build_review_message is used automatically.
+    Uses DispatchContext for parallel DB queries (asyncio.gather).
     """
     if task.status == "review":
         return await _build_review_message(task, agent, session)
@@ -606,12 +606,12 @@ async def _build_dispatch_message(
     if task.parent_task_id and (not task.credentials_encrypted or not task.credential_id):
         parent_task = await session.get(Task, task.parent_task_id)
         if parent_task is not None:
-            # Inline-Credentials vom Parent erben (bestehend)
+            # Inherit inline credentials from the parent (existing behavior)
             if not task.credentials_encrypted and parent_task.credentials_encrypted:
                 setattr(task, "_inherited_credentials_encrypted", parent_task.credentials_encrypted)
-            # Vault-Credential-ID vom Parent erben — symmetrisch zur Inline-Vererbung.
-            # Ohne diesen Block bleibt credential_id auf root-task isoliert; Subtasks
-            # bekommen die Vault-Credentials nicht in ihren Dispatch-Kontext.
+            # Inherit the vault credential ID from the parent — symmetric to the inline
+            # inheritance. Without this block, credential_id stays isolated on the root
+            # task; subtasks wouldn't get the vault credentials in their dispatch context.
             if not task.credential_id and parent_task.credential_id:
                 setattr(task, "_inherited_credential_id", parent_task.credential_id)
 
@@ -620,10 +620,10 @@ async def _build_dispatch_message(
 
 
 def build_planning_brief(task: Task) -> str | None:
-    """Baut strukturierten Planning-Brief aus Operator-Intake-Feldern.
+    """Builds a structured planning brief from operator-intake fields.
 
-    Nur fuer Root-/Intake-Tasks mit intake_mode gesetzt.
-    Workers bekommen diesen Brief NICHT — nur Henry (Board Lead).
+    Only for root/intake tasks with intake_mode set.
+    Workers do NOT get this brief — only Henry (Board Lead).
     """
     if not getattr(task, "intake_mode", None):
         return None
@@ -665,9 +665,9 @@ def _format_dispatch_message(
     ctx: DispatchContext,
     recovery_context: str | None = None,
 ) -> str:
-    """Pure function — baut die Dispatch-Message aus vorgeladenem Kontext.
+    """Pure function — builds the dispatch message from preloaded context.
 
-    Keine DB-Abhaengigkeit, damit unit-testbar.
+    No DB dependency, so it's unit-testable.
     """
     is_redispatch = bool(ctx.feedback_context)
 
@@ -691,7 +691,7 @@ def _format_dispatch_message(
         f"**Board-ID:** {task.board_id}",
     ]))
 
-    # Bei Re-Dispatch: Reviewer-Feedback prominent anzeigen (mandatory)
+    # On re-dispatch: show reviewer feedback prominently (mandatory)
     if ctx.feedback_context:
         _add("feedback", f"\n## ⚠ Review-Feedback — das musst du korrigieren\n{ctx.feedback_context}")
 
@@ -701,7 +701,7 @@ def _format_dispatch_message(
     if task.target_url:
         _add("target_url", f"**Ziel-URL:** {task.target_url}")
 
-    # Help Request Kontext (mandatory)
+    # Help request context (mandatory)
     if task.help_request_from:
         requester_info = task.auto_reason or "ein anderer Agent"
         _add("help_request", f"""
@@ -726,12 +726,12 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         if brief:
             _add("planning_brief", brief, priority=3)
 
-    # Verschluesselte Credentials entschluesseln und mitgeben
-    # Prioritaet: 1) Vault-Credential (vorgeladen in ctx), 2) Inline (credentials_encrypted), 3) Parent-Inherited
+    # Decrypt encrypted credentials and include them
+    # Priority: 1) vault credential (preloaded in ctx), 2) inline (credentials_encrypted), 3) parent-inherited
     creds_text = ctx.credentials_text
 
     if not creds_text:
-        # Inline-Credentials oder Parent-Inherited (wie bisher)
+        # Inline credentials or parent-inherited (as before)
         creds_encrypted = task.credentials_encrypted or getattr(task, "_inherited_credentials_encrypted", None)
         if creds_encrypted:
             from app.services.encryption import safe_decrypt
@@ -743,7 +743,7 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         # Credentials are mandatory — agent literally cannot do the task without them
         _add("credentials", f"\n## Zugangsdaten\n{creds_text}")
 
-    # Projekt-Kontext (optional priority=1 — agent can read project via API if needed)
+    # Project context (optional priority=1 — agent can read project via API if needed)
     if ctx.project:
         project_parts = ["\n## Projekt-Kontext", f"**Projekt:** {ctx.project.name}"]
         if ctx.project_tags:
@@ -776,20 +776,20 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
     if ctx.agent_lessons_context:
         _lessons_section = render_agent_lessons_section(ctx.agent_lessons_context)
 
-    # Prozess-Regeln des Agents (mandatory — agent-specific extra rules from DB)
+    # Agent's process rules (mandatory — agent-specific extra rules from DB)
     if agent.rules_md:
         _add("agent_rules", f"\n## Prozess-Regeln (PFLICHT)\n\n{agent.rules_md}")
 
-    # Auth-Token aus TOOLS.md fuer self-contained curl-Befehle — Board-Lead /
+    # Auth token from TOOLS.md for self-contained curl commands — Board-Lead /
     # Planner blocks below still render curl (their orchestration workflow
     # needs create_task payloads that `mc` does not yet cover).
     token = _extract_auth_token(agent)
     task_path = f"/api/v1/agent/boards/{task.board_id}/tasks/{task.id}"
     comment_path = f"{task_path}/comments"
     attempt_id = getattr(task, "dispatch_attempt_id", None)
-    # Subtasks → `mc done` (Phase-Review laeuft auf Parent-Ebene).
-    # Roots → Dev entscheidet selbst (ADR-023): `mc review` wenn Code/API/Security,
-    # sonst `mc done` direkt. Policy-Details in SOUL.md (## Review-Policy).
+    # Subtasks → `mc done` (phase review runs at the parent level).
+    # Roots → dev decides on their own (ADR-023): `mc review` if code/API/security,
+    # otherwise `mc done` directly. Policy details in SOUL.md (## Review-Policy).
     _is_subtask = task.parent_task_id is not None
 
     # ── ACK-Reminder (Lifecycle moved to SOUL.md.j2 — Phase 2/2.2) ───────
@@ -819,7 +819,7 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
     #    read by agents). Only role-specific task-content (orchestrator
     #    delegation block / worker arbeitsweise+git_section) stays here. ──
 
-    # ── Aktive Subtasks (optional priority=2 — Board Lead overview, informational;
+    # ── Active subtasks (optional priority=2 — Board Lead overview, informational;
     #    re-queryable via mc tasks list) ──
     if agent.is_board_lead and ctx.child_tasks:
         agent_name_map = {a.id: a.name for a in ctx.team_agents}
@@ -831,7 +831,7 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         _add("child_tasks", "\n## Aktive Subtasks\n" + "\n".join(child_lines), priority=2)
 
     if agent.is_board_lead:
-        # ── Board Lead: Delegierungs-Anweisungen statt Implementierung ──
+        # ── Board Lead: delegation instructions instead of implementation ──
         create_task_path = f"/api/v1/agent/boards/{task.board_id}/tasks"
 
         team_lines = []
@@ -867,9 +867,9 @@ Der anfragende Agent wird automatisch mit deinem Ergebnis fortgesetzt.
         )
         delegate_curl = _curl("POST", create_task_path, token, subtask_body)
 
-        # Planner-Modus-Instruktion entfernt (Phase 6, 2026-04-11).
-        # Boss plant selbst via openclaude-Subagents, delegiert direkt an Worker.
-        _planner_instruction = ""  # leer — wird im Template-String unten nicht mehr gerendert
+        # Planner-mode instruction removed (Phase 6, 2026-04-11).
+        # Boss plans on its own via openclaude subagents, delegates directly to workers.
+        _planner_instruction = ""  # empty — no longer rendered in the template string below
 
         _add("orchestrator_instructions", f"""
 ## Orchestrator-Anweisungen
@@ -938,15 +938,15 @@ Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
     # or an agent with "planner" in role falls through to the regular
     # worker branch; Boss re-assigns via his standard orchestration flow.
     else:
-        # ── Regulaerer Agent: Implementierungs-Anweisungen ──
+        # ── Regular agent: implementation instructions ──
         project = ctx.project
 
-        # Zwei-Zonen-Konvention moved to SOUL.md.j2 (common header Zone 1/Zone 2
+        # Two-zone convention moved to SOUL.md.j2 (common header Zone 1/Zone 2
         # + per-role blocks). Was duplicated per task; now lives only in SOUL.
 
-        # ── Git-Sektion: dynamisch basierend auf Projekt-Repo ──
+        # ── Git section: dynamic based on project repo ──
         if not getattr(agent, 'requires_git_workflow', True):
-            git_section = ""  # Non-Coder Agent — keine Git-Instruktionen
+            git_section = ""  # Non-coder agent — no git instructions
         elif project and project.github_repo_url and agent.workspace_path:
             from app.services.git_service import slugify_project
             _proj_slug = slugify_project(project.name)
@@ -980,7 +980,7 @@ Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
                     f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
                 )
         elif getattr(task, "workspace_path", None):
-            # Task hat eigenen Workspace (Worktree, Bundle 4) aber kein Projekt-Repo
+            # Task has its own workspace (worktree, Bundle 4) but no project repo
             _ws_host = task.workspace_path
             _ws_view = workspace_path_for_runtime(agent, _ws_host) or _ws_host
             git_section = (
@@ -995,7 +995,7 @@ Bei grossen Aufgaben (Website, App, Feature mit mehreren Schritten):
                     f"Starte Dev-Server: `npm run dev -- -p {task.workspace_port}` oder `python -m http.server {task.workspace_port}`"
                 )
         else:
-            # Fallback: mc_repo_path Config (greift nur bei Tasks ohne Projekt und ohne Git-Repo)
+            # Fallback: mc_repo_path config (applies only to tasks without a project and without a git repo)
             _mc_repo_path = getattr(settings, 'mc_repo_path', None)
             if _mc_repo_path:
                 git_section = (

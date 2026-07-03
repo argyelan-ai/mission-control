@@ -237,8 +237,8 @@ async def bootstrap_hermes_agent(
     await session.commit()
     await session.refresh(agent)
 
-    # Vault-Rotation mc_token_{slug}: haelt /internal/bootstrap konsistent zum
-    # frisch geschriebenen agent.env (sonst liefert der Vault einen stale Token).
+    # Vault rotation mc_token_{slug}: keeps /internal/bootstrap consistent with
+    # the freshly written agent.env (otherwise the vault would serve a stale token).
     from app.services.secrets_helper import upsert_agent_token_secret
     await upsert_agent_token_secret(session, agent.name, raw_token)
 

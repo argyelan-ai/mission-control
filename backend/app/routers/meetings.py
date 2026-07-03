@@ -1,7 +1,7 @@
 """
-Meetings Router — Agent Meetings + Direktnachrichten.
+Meetings router — agent meetings + direct messages.
 
-Statische Pfade (/stream, /messages) vor parametrisierten (/{id}).
+Static paths (/stream, /messages) before parameterized ones (/{id}).
 """
 import uuid
 from datetime import datetime
@@ -74,14 +74,14 @@ class MeetingMessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
-# ── SSE Stream (statisch — vor parametrisierten Routen) ─────────────────
+# ── SSE Stream (static — before parameterized routes) ─────────────────
 
 
 @router.get("/stream")
 async def meeting_stream(
     _user=Depends(require_user),
 ):
-    """SSE-Stream fuer Meeting-Live-Updates."""
+    """SSE stream for live meeting updates."""
     return make_sse_response([RedisKeys.meeting_events()])
 
 
@@ -96,7 +96,7 @@ async def list_meetings(
     _user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Meetings auflisten — optional nach Board und Status filtern."""
+    """List meetings — optionally filter by board and status."""
     stmt = select(AgentMeeting).order_by(AgentMeeting.created_at.desc()).limit(limit)
     if board_id:
         stmt = stmt.where(AgentMeeting.board_id == board_id)
@@ -112,7 +112,7 @@ async def create_meeting(
     _user=Depends(require_role("operator")),
     session: AsyncSession = Depends(get_session),
 ):
-    """Meeting erstellen und sofort starten."""
+    """Create a meeting and start it immediately."""
     try:
         meeting = await start_meeting(
             session,
@@ -135,7 +135,7 @@ async def get_meeting(
     _user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Meeting-Details abrufen."""
+    """Fetch meeting details."""
     meeting = await session.get(AgentMeeting, meeting_id)
     if not meeting:
         raise HTTPException(status_code=404, detail="Meeting nicht gefunden")
@@ -150,7 +150,7 @@ async def get_meeting_messages(
     _user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Meeting-Nachrichten abrufen (paginiert)."""
+    """Fetch meeting messages (paginated)."""
     stmt = (
         select(AgentMeetingMessage)
         .where(AgentMeetingMessage.meeting_id == meeting_id)
@@ -168,7 +168,7 @@ async def cancel_meeting_endpoint(
     _user=Depends(require_role("operator")),
     session: AsyncSession = Depends(get_session),
 ):
-    """Laufendes Meeting abbrechen."""
+    """Cancel a running meeting."""
     try:
         meeting = await cancel_meeting(session, meeting_id)
         return meeting
@@ -178,7 +178,7 @@ async def cancel_meeting_endpoint(
         raise HTTPException(status_code=409, detail=str(e))
 
 
-# ── Agent-Direktnachrichten ──────────────────────────────────────────────
+# ── Agent Direct Messages ──────────────────────────────────────────────
 
 
 class AgentMessageCreate(BaseModel):
@@ -209,7 +209,7 @@ async def list_agent_messages(
     _user=Depends(require_user),
     session: AsyncSession = Depends(get_session),
 ):
-    """Alle Agent-Direktnachrichten auflisten (User-Auth)."""
+    """List all agent direct messages (user auth)."""
     stmt = select(AgentMessage).order_by(AgentMessage.created_at.desc()).limit(limit)
     if from_agent_id:
         stmt = stmt.where(AgentMessage.from_agent_id == from_agent_id)

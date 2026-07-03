@@ -28,30 +28,30 @@ router = APIRouter(prefix="/api/v1/clawhub", tags=["clawhub"])
 
 # Simple in-memory cache: sort → (timestamp, items)
 _skills_cache: dict[str, tuple[float, list]] = {}
-CACHE_TTL = 300.0  # 5 Minuten
+CACHE_TTL = 300.0  # 5 minutes
 
 
 # ── Helper ──────────────────────────────────────────────────────────────────────
 
 def _skill_install_dir() -> str:
-    """Zielverzeichnis für Skill-Installation (HOST_HOME bevorzugt)."""
+    """Target directory for skill installation (HOST_HOME preferred)."""
     home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
     import pathlib
     return str(pathlib.Path(home) / ".mc" / "skills")
 
 
 def _normalize(item: dict) -> dict:
-    """Convex listPublicPageV4 record → einheitliches Format.
-    Unterstützt sowohl das neue nested Format {skill, owner, latestVersion}
-    als auch das alte flache Format (skills:list).
+    """Convex listPublicPageV4 record → unified format.
+    Supports both the new nested format {skill, owner, latestVersion}
+    and the old flat format (skills:list).
     """
-    # Neues Format: {skill: {...}, owner: {...}, latestVersion: {...}}
+    # New format: {skill: {...}, owner: {...}, latestVersion: {...}}
     if "skill" in item:
         skill = item["skill"]
         owner = item.get("owner") or {}
         latest = item.get("latestVersion") or {}
     else:
-        # Altes flaches Format
+        # Old flat format
         skill = item
         owner = {}
         latest = {}
@@ -75,7 +75,7 @@ def _normalize(item: dict) -> dict:
 
 
 async def _convex_query_raw(path: str, args: dict | None = None) -> dict:
-    """Convex public query — gibt das rohe value-Objekt zurück."""
+    """Convex public query — returns the raw value object."""
     payload = {
         "path": path,
         "format": "convex_encoded_json",
@@ -96,7 +96,7 @@ async def _convex_query_raw(path: str, args: dict | None = None) -> dict:
 
 
 def _matches_query(item: dict, ql: str) -> bool:
-    """Prüft ob ein skill-item den Suchbegriff enthält."""
+    """Checks whether a skill item matches the search term."""
     skill = item.get("skill") or item
     owner = item.get("owner") or {}
     return (
@@ -110,8 +110,8 @@ def _matches_query(item: dict, ql: str) -> bool:
 
 
 async def _fetch_all_skills(sort: str = "downloads", max_pages: int = 20) -> list:
-    """Alle Skills via cursor-basierter Pagination von skills:listPublicPageV4 laden.
-    Ergebnis wird 5 Minuten gecacht (pro sort-Wert).
+    """Load all skills via cursor-based pagination from skills:listPublicPageV4.
+    Result is cached for 5 minutes (per sort value).
     """
     now = time.monotonic()
     cached = _skills_cache.get(sort)
@@ -173,7 +173,7 @@ async def list_skills(
     limit: int = Query(default=24, ge=1, le=50),
     current_user=Depends(require_user),
 ):
-    """Skills vom ClawHub Marketplace (via Convex API — skills:listPublicPageV4)."""
+    """Skills from the ClawHub marketplace (via Convex API — skills:listPublicPageV4)."""
     try:
         raw = await _fetch_all_skills(sort=sort)
 
@@ -208,7 +208,7 @@ async def get_skill(
     slug: str,
     current_user=Depends(require_user),
 ):
-    """Skill-Details vom ClawHub."""
+    """Skill details from ClawHub."""
     try:
         raw = await _fetch_all_skills()
         for item in raw:
@@ -227,7 +227,7 @@ async def get_skill_readme(
     slug: str,
     current_user=Depends(require_user),
 ):
-    """SKILL.md Inhalt eines ClawHub Skills (via HTTP API)."""
+    """SKILL.md content of a ClawHub skill (via HTTP API)."""
     try:
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
             r = await client.get(
@@ -251,7 +251,7 @@ async def install_skill(
     body: InstallRequest,
     current_user=Depends(require_user),
 ):
-    """Skill von ClawHub herunterladen und in ~/.mc/skills/ installieren."""
+    """Download a skill from ClawHub and install it into ~/.mc/skills/."""
     import pathlib
     slug = body.slug
 
@@ -293,7 +293,7 @@ async def install_skill(
                             target.parent.mkdir(parents=True, exist_ok=True)
                             target.write_bytes(zf.read(member.filename))
 
-            # Nur SKILL.md (plain text/markdown)
+            # Only SKILL.md (plain text/markdown)
             elif "text" in content_type or "markdown" in content_type:
                 skill_dir.mkdir(parents=True, exist_ok=True)
                 (skill_dir / "SKILL.md").write_bytes(r.content)

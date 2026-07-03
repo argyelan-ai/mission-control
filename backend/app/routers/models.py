@@ -1,14 +1,14 @@
 """
-Modellkatalog — zentrale Übersicht aller verfügbaren AI-Models.
+Model catalogue — central overview of all available AI models.
 
 Phase 29 (Gateway sunset): static MODEL_METADATA catalogue is the single
 source of truth. The runtimes DB table (Phase 16, ADR-028) carries
 per-runtime model bindings. Frontend should consume this list + the
 runtimes endpoints; Phase 31 rebuild will reshape the response.
 
-Kombiniert:
-1. Statische Metadaten (Kosten, Context Window, Capabilities)
-2. Nutzungsstatistiken aus MC (welche Agents nutzen welches Model)
+Combines:
+1. Static metadata (cost, context window, capabilities)
+2. Usage statistics from MC (which agents use which model)
 """
 
 from fastapi import APIRouter, Depends
@@ -22,10 +22,10 @@ from app.models.agent import Agent
 router = APIRouter(prefix="/api/v1", tags=["models"])
 
 
-# ── Statische Model-Metadaten ────────────────────────────────────────────────
-# Handkuratiert — wird erweitert wenn neue Models dazukommen.
-# Kosten in USD pro 1M Tokens (Input/Output).
-# params: Parametergrösse als String für die UI.
+# ── Static model metadata ────────────────────────────────────────────────────
+# Hand-curated — extended as new models come along.
+# Cost in USD per 1M tokens (input/output).
+# params: parameter size as a string for the UI.
 
 MODEL_METADATA: dict[str, dict] = {
     # ── OpenAI ────────────────────────────────────────────────────────────────
@@ -314,7 +314,7 @@ MODEL_METADATA: dict[str, dict] = {
     },
 }
 
-# Provider-Info für UI-Gruppierung
+# Provider info for UI grouping
 PROVIDERS = {
     "openai": {"name": "OpenAI", "color": "#10A37F"},
     "openai-codex": {"name": "OpenAI Codex (Ollama)", "color": "#10A37F"},
@@ -328,13 +328,13 @@ async def list_models(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Modellkatalog: alle verfügbaren Models mit Metadaten + Nutzungsinfo.
+    """Model catalogue: all available models with metadata + usage info.
 
     Phase 29: source = static MODEL_METADATA + agents.model DB-column.
     Gateway-merge dropped (no gateway anymore). Frontend will be reshaped
     in Phase 31 to consume the runtimes table directly for live data.
     """
-    # 1. Agent-Nutzung aus DB holen (welches Model nutzt wer)
+    # 1. Fetch agent usage from DB (which model is used by whom)
     result = await session.exec(select(Agent).where(Agent.model.isnot(None)))
     agents = result.all()
     model_usage: dict[str, list[dict]] = {}
@@ -346,9 +346,9 @@ async def list_models(
                 "emoji": a.emoji,
             })
 
-    # 2. Katalog aus statischer Metadaten-Map — alle als available markieren
-    # input_cost/output_cost werden aus der API-Response entfernt (veraltet, zweite
-    # Wahrheitsquelle). Kosten kommen kuenftig aus model_prices DB-Tabelle.
+    # 2. Catalogue from the static metadata map — mark all as available
+    # input_cost/output_cost are stripped from the API response (stale, a second
+    # source of truth). Cost will come from the model_prices DB table going forward.
     _COST_FIELDS = {"input_cost", "output_cost"}
     catalog: list[dict] = []
     for model_id, meta in MODEL_METADATA.items():
@@ -373,7 +373,7 @@ async def get_model(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Detail-Infos für ein einzelnes Model.
+    """Detail info for a single model.
 
     Phase 29: availability is now derived solely from MODEL_METADATA. Models
     not in the static catalogue return 404. (Phase 31 will fetch live model
@@ -385,7 +385,7 @@ async def get_model(
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found")
 
-    # Agents die dieses Model nutzen
+    # Agents using this model
     result = await session.exec(select(Agent).where(Agent.model == model_id))
     agents = result.all()
     used_by = [{"id": str(a.id), "name": a.name, "emoji": a.emoji} for a in agents]

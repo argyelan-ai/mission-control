@@ -79,16 +79,16 @@ async def seed_hosts(session: AsyncSession) -> tuple[int, int]:
     porsche_rt = rt_result.scalars().first()
     if (
         porsche_rt is not None
-        # enabled-Guard: der Beispiel-Seed aus runtimes.json ist disabled —
-        # ein OSS-Fresh-Install ohne echte PORSCHE darf keinen Phantom-Host
-        # bekommen, den die Metrics-Bar dann dauerhaft als offline probt.
+        # enabled-guard: the example seed from runtimes.json is disabled —
+        # an OSS fresh install without a real PORSCHE must not get a
+        # phantom host that the metrics bar then permanently probes as offline.
         and porsche_rt.enabled
         and porsche_rt.control_url
         and "porsche" not in existing_slugs
-        # Dedupe analog Schritt 1: derselbe Host unter anderem Slug (z.B.
-        # nach PATCH slug='workstation') darf keinen Duplikat-Row erzeugen —
-        # zwei Rows mit gleicher ssh_host machen das by_ssh_host-Linking
-        # unten nichtdeterministisch.
+        # Dedupe analogous to step 1: the same host under a different slug
+        # (e.g. after PATCH slug='workstation') must not create a duplicate
+        # row — two rows with the same ssh_host would make the
+        # by_ssh_host linking below nondeterministic.
         and porsche_rt.control_url not in existing_control_urls
     ):
         porsche_ip = porsche_rt.host or _endpoint_host(porsche_rt.endpoint)

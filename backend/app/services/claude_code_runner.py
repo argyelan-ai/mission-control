@@ -1,8 +1,8 @@
-"""Claude Code CLI Runner — Spawnt Claude Code als Subprocess fuer Tasks.
+"""Claude Code CLI Runner — spawns Claude Code as a subprocess for tasks.
 
-Claude Code (Opus 4.6) arbeitet direkt im Filesystem statt ueber den
-OpenClaw Gateway. Ideal fuer komplexe Coding-Tasks die vollen
-Dateisystemzugriff brauchen.
+Claude Code (Opus 4.6) works directly in the filesystem instead of
+via the OpenClaw Gateway. Ideal for complex coding tasks that need
+full filesystem access.
 """
 
 import asyncio
@@ -27,9 +27,9 @@ async def dispatch_to_claude_code(
     message: str,
     session: AsyncSession,
 ) -> bool:
-    """Spawnt Claude Code CLI als Subprocess fuer einen Task.
+    """Spawns the Claude Code CLI as a subprocess for a task.
 
-    Returns True wenn der Prozess erfolgreich gestartet wurde.
+    Returns True if the process was started successfully.
     """
     prompt = _build_claude_code_prompt(task, agent, message)
     workspace = agent.workspace_path or str(Path(settings.home_host) / "Workspace")
@@ -56,7 +56,7 @@ async def dispatch_to_claude_code(
         task.title, proc.pid, workspace,
     )
 
-    # Workspace-Pfad in DB persistieren
+    # Persist workspace path in DB
     task.workspace_path = workspace
     session.add(task)
     await session.commit()
@@ -67,20 +67,20 @@ async def dispatch_to_claude_code(
         board_id=task.board_id, task_id=task.id, agent_id=agent.id,
     )
 
-    # Monitoring im Hintergrund
+    # Monitoring in the background
     create_tracked_task(_monitor_claude_code(proc, task, agent))
     return True
 
 
 def _build_claude_code_prompt(task: Task, agent: Agent, dispatch_message: str) -> str:
-    """Baut den Self-Contained Prompt fuer Claude Code.
+    """Builds the self-contained prompt for Claude Code.
 
-    Enthaelt Task-Details, API-Curls fuer Status-Updates, und Kontext.
+    Contains task details, API curl commands for status updates, and context.
     """
     board_id = task.board_id
     task_id = task.id
 
-    # API-Token aus agent.tools_md extrahieren (steht dort als Bearer Token)
+    # Extract API token from agent.tools_md (stored there as a Bearer token)
     api_token = _extract_token_from_tools_md(agent.tools_md or "")
 
     return f"""# Task: {task.title}
@@ -135,7 +135,7 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{task_id}/comm
 
 
 def _extract_token_from_tools_md(tools_md: str) -> str:
-    """Extrahiert den Bearer-Token aus TOOLS.md."""
+    """Extracts the Bearer token from TOOLS.md."""
     import re
     match = re.search(r'Bearer\s+([A-Za-z0-9_-]+)', tools_md)
     return match.group(1) if match else "TOKEN-NICHT-GEFUNDEN"
@@ -146,11 +146,11 @@ async def _monitor_claude_code(
     task: Task,
     agent: Agent,
 ) -> None:
-    """Ueberwacht den Claude Code Subprocess bis er beendet ist."""
+    """Monitors the Claude Code subprocess until it finishes."""
     try:
         stdout, stderr = await asyncio.wait_for(
             proc.communicate(),
-            timeout=1800,  # 30 Minuten max
+            timeout=1800,  # 30 minutes max
         )
     except asyncio.TimeoutError:
         logger.warning(

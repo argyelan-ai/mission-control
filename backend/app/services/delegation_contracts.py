@@ -1,13 +1,13 @@
-"""Delegation Contracts — strukturierte Pflichtfelder pro Task-Typ.
+"""Delegation Contracts — structured required fields per task type.
 
-Jeder delegation_type definiert welche Felder gesetzt sein muessen.
-Die Validierung ist die primaere Source of Truth (nicht Freitext-Heuristiken).
+Each delegation_type defines which fields must be set.
+Validation is the primary source of truth (not free-text heuristics).
 
-Contract-Typen:
-- code_change: Branch + Akzeptanzkriterien
-- visual_proof: URL + Akzeptanzkriterien + optional Auth
-- credential_bound: Credentials + URL + Akzeptanzkriterien
-- review: source_task_id (strukturelle Referenz zum reviewten Task)
+Contract types:
+- code_change: branch + acceptance criteria
+- visual_proof: URL + acceptance criteria + optional auth
+- credential_bound: credentials + URL + acceptance criteria
+- review: source_task_id (structural reference to the reviewed task)
 """
 
 import logging
@@ -17,7 +17,7 @@ logger = logging.getLogger("mc.delegation_contracts")
 
 VALID_DELEGATION_TYPES = {"code_change", "visual_proof", "credential_bound", "review", "planning"}
 
-# Contract-Definitionen: required = harter Block (422), recommended = Warning
+# Contract definitions: required = hard block (422), recommended = warning
 DELEGATION_CONTRACTS: dict[str, dict] = {
     "code_change": {
         "required": ["branch_name", "acceptance_criteria"],
@@ -51,7 +51,7 @@ DELEGATION_CONTRACTS: dict[str, dict] = {
     },
 }
 
-# Felder die lesbare Namen fuer Fehlermeldungen brauchen
+# Fields that need human-readable names for error messages
 FIELD_LABELS = {
     "branch_name": "Branch-Name (z.B. feature/xyz)",
     "acceptance_criteria": "Akzeptanzkriterien",
@@ -66,43 +66,43 @@ def validate_delegation_contract(
     delegation_type: str | None,
     fields: dict,
 ) -> tuple[list[str], list[str]]:
-    """Prueft Contract-Felder basierend auf delegation_type.
+    """Checks contract fields based on delegation_type.
 
     Args:
-        delegation_type: Der Contract-Typ (code_change, visual_proof, etc.)
-        fields: Dict mit den Task-Feldern (branch_name, target_url, etc.)
+        delegation_type: The contract type (code_change, visual_proof, etc.)
+        fields: dict with the task fields (branch_name, target_url, etc.)
 
     Returns:
         (hard_errors, warnings):
-        - hard_errors: Task wird NICHT erstellt (422)
-        - warnings: Task wird erstellt, aber Activity Event emittiert
+        - hard_errors: task is NOT created (422)
+        - warnings: task is created, but an activity event is emitted
     """
     hard_errors: list[str] = []
     warnings: list[str] = []
 
-    # Kein delegation_type → kein Contract-Check (Legacy/Fallback)
+    # No delegation_type → no contract check (legacy/fallback)
     if not delegation_type:
-        # Fallback-Heuristik: Nur Warnings wenn Description Login-Keywords enthaelt
+        # Fallback heuristic: only warnings if description contains login keywords
         description = (fields.get("description") or "").lower()
         if re.search(r"login|anmelden|eingeloggt|passwort", description) and not fields.get("credentials"):
             warnings.append("missing_credentials_hint: Description enthaelt Login-Keywords aber kein credentials-Feld gesetzt")
         return hard_errors, warnings
 
-    # Unbekannter delegation_type
+    # Unknown delegation_type
     if delegation_type not in VALID_DELEGATION_TYPES:
         hard_errors.append(f"Unbekannter delegation_type: '{delegation_type}'. Erlaubt: {', '.join(sorted(VALID_DELEGATION_TYPES))}")
         return hard_errors, warnings
 
     contract = DELEGATION_CONTRACTS[delegation_type]
 
-    # Required-Felder pruefen → harter Block
+    # Check required fields → hard block
     for field in contract.get("required", []):
         value = fields.get(field)
         if not value:
             label = FIELD_LABELS.get(field, field)
             hard_errors.append(f"missing_{field}: {delegation_type} braucht {label}")
 
-    # Conditional-Felder pruefen → harter Block wenn Bedingung erfuellt
+    # Check conditional fields → hard block if condition is met
     for condition_field, required_field in contract.get("conditional", []):
         if fields.get(condition_field) and not fields.get(required_field):
             label = FIELD_LABELS.get(required_field, required_field)
@@ -110,7 +110,7 @@ def validate_delegation_contract(
                 f"missing_{required_field}: {condition_field} ist gesetzt aber {label} fehlt"
             )
 
-    # Recommended-Felder pruefen → Warning
+    # Check recommended fields → warning
     for field in contract.get("recommended", []):
         value = fields.get(field)
         if not value:

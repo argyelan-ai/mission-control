@@ -1,8 +1,8 @@
 """
-Research Router — Task-basierte Recherche mit AI Agent.
+Research Router — task-based research with AI agent.
 
-User beschreibt Thema → Research-Task wird erstellt + an Agent dispatcht →
-Agent schreibt Antwort via TaskComment → User speichert Ergebnis in Knowledge Base.
+User describes a topic → a research task is created + dispatched to an agent →
+agent writes the reply via TaskComment → user saves the result to the knowledge base.
 
 Phase 29 breaking change: research/content task creation is now ASYNC.
 Callers must poll GET /api/v1/tasks/{id} to check completion (status `done`)
@@ -71,9 +71,9 @@ class ResearchMessageRequest(BaseModel):
 
 class ResearchSaveRequest(BaseModel):
     title: str | None = None
-    content: str | None = None  # Override: eigener Content statt letzte Agent-Nachricht
+    content: str | None = None  # Override: custom content instead of the last agent message
     tags: list[str] = []
-    agent_id: str | None = None  # Optional: Agent-scoped speichern
+    agent_id: str | None = None  # Optional: save as agent-scoped
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
@@ -84,7 +84,7 @@ async def list_research(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Alle Research-Projekte auflisten."""
+    """List all research projects."""
     query = (
         select(Project)
         .where(Project.project_type == "research")
@@ -103,8 +103,8 @@ async def start_research(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Neue Recherche starten: Projekt + Chat-Session erstellen."""
-    # Projekt als Research-Typ erstellen
+    """Start new research: create project + chat session."""
+    # Create project as research type
     project = Project(
         board_id=uuid.UUID(body.board_id),
         name=body.title,
@@ -117,7 +117,7 @@ async def start_research(
     await session.commit()
     await session.refresh(project)
 
-    # System-Prompt speichern
+    # Save system prompt
     system_msg = PlannerMessage(
         project_id=project.id,
         role="system",
@@ -125,7 +125,7 @@ async def start_research(
     )
     session.add(system_msg)
 
-    # Initiale User-Nachricht
+    # Initial user message
     initial_content = body.initial_message or body.description or body.title
     user_msg = PlannerMessage(
         project_id=project.id,
@@ -144,9 +144,9 @@ async def start_research(
         detail={"project_id": str(project.id)},
     )
 
-    # Phase 29: Research-Task erstellen und via auto_dispatch_task ausliefern.
-    # Vorher: gateway chat send + poll reply (synchron). Jetzt asynchron —
-    # Agent schreibt Antwort als TaskComment, Caller pollt GET /tasks/{id}.
+    # Phase 29: create a research task and deliver it via auto_dispatch_task.
+    # Previously: gateway chat send + poll reply (synchronous). Now asynchronous —
+    # agent writes the reply as a TaskComment, caller polls GET /tasks/{id}.
     research_agent = await _find_research_agent(session, uuid.UUID(body.board_id))
 
     research_board_task = None
@@ -192,7 +192,7 @@ async def get_research_chat(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Chat-History einer Recherche."""
+    """Chat history of a research session."""
     result = await session.exec(
         select(PlannerMessage)
         .where(PlannerMessage.project_id == project_id)
@@ -210,12 +210,12 @@ async def send_research_message(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """User-Nachricht an den Research-Agent senden."""
+    """Send a user message to the research agent."""
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Recherche nicht gefunden")
 
-    # User-Nachricht speichern
+    # Save user message
     user_msg = PlannerMessage(
         project_id=project_id,
         role="user",
@@ -225,8 +225,8 @@ async def send_research_message(
     await session.commit()
     await session.refresh(user_msg)
 
-    # Phase 29: Folge-Nachricht als neuer Research-Task an den Research-Agent.
-    # Async dispatch — Caller pollt /tasks/{id}.
+    # Phase 29: follow-up message as a new research task to the research agent.
+    # Async dispatch — caller polls /tasks/{id}.
     research_agent = await _find_research_agent(session, project.board_id)
     if research_agent:
         followup_task = TaskModel(
@@ -257,12 +257,12 @@ async def save_research(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Recherche-Ergebnis in Knowledge Base speichern."""
+    """Save research result to the knowledge base."""
     project = await session.get(Project, project_id)
     if not project:
         raise HTTPException(404, "Recherche nicht gefunden")
 
-    # Content: entweder manuell oder letzte Agent-Nachricht
+    # Content: either manual or the last agent message
     save_content = body.content
     if not save_content:
         result = await session.exec(
@@ -278,7 +278,7 @@ async def save_research(
     if not save_content:
         raise HTTPException(400, "Kein Recherche-Ergebnis vorhanden. Bitte zuerst mit dem Agent chatten.")
 
-    # In Knowledge Base speichern
+    # Save to knowledge base
     save_title = body.title or project.name
     entry = BoardMemory(
         board_id=project.board_id,
@@ -293,7 +293,7 @@ async def save_research(
     )
     session.add(entry)
 
-    # Projekt als "done" markieren und Plan-Summary speichern
+    # Mark project as "done" and save plan summary
     project.plan_summary = save_content
     project.status = "done"
     session.add(project)
@@ -343,12 +343,12 @@ async def delete_research(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Recherche und zugehoerige Chat-Messages loeschen."""
+    """Delete research and its associated chat messages."""
     project = await session.get(Project, project_id)
     if not project or project.project_type != "research":
         raise HTTPException(404, "Recherche nicht gefunden")
 
-    # Chat-Messages löschen
+    # Delete chat messages
     messages = await session.exec(
         select(PlannerMessage).where(PlannerMessage.project_id == project_id)
     )
@@ -362,25 +362,25 @@ async def delete_research(
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 async def _find_research_agent(session: AsyncSession, board_id: uuid.UUID) -> Agent | None:
-    """Research-Agent finden: Researcher-named bevorzugt, dann Board Lead, dann erster Agent.
+    """Find research agent: researcher-named preferred, then board lead, then first agent.
 
-    Phase 29: gateway_agent_id ist nicht mehr erforderlich — auto_dispatch_task
-    routet runtime-agnostisch (cli-bridge / host / claude-code).
+    Phase 29: gateway_agent_id is no longer required — auto_dispatch_task
+    routes runtime-agnostically (cli-bridge / host / claude-code).
     """
     result = await session.exec(
         select(Agent).where(Agent.board_id == board_id)
     )
     agents = list(result.all())
 
-    # Researcher-named bevorzugen
+    # Prefer researcher-named
     for agent in agents:
         if "research" in (agent.name or "").lower():
             return agent
 
-    # Board Lead bevorzugen
+    # Prefer board lead
     for agent in agents:
         if agent.is_board_lead:
             return agent
 
-    # Fallback: erster Agent
+    # Fallback: first agent
     return agents[0] if agents else None

@@ -1,33 +1,33 @@
 """
-Docker-Agent File Sync — rendert MC-Config-Files aus den Jinja2-Templates,
-synchronisiert sie in die DB UND schreibt sie ins claude-config Bind-Mount.
+Docker Agent File Sync — renders MC config files from the Jinja2 templates,
+syncs them into the DB AND writes them into the claude-config bind mount.
 
-Siehe ADR-006 (Single Source of Truth: Templates -> DB -> Files).
+See ADR-006 (single source of truth: templates -> DB -> files).
 
-Fuer Docker-V2 Agents ist das der Transport-Mechanismus zwischen MC und dem
-openclaude-Subprocess im Container. Die Files werden in
-$HOME_HOST/.mc/agents/{slug}/claude-config/ geschrieben und sind im
-Container unter /home/agent/.claude/ sichtbar (via docker-compose volume-mount).
+For Docker V2 agents, this is the transport mechanism between MC and the
+openclaude subprocess in the container. The files are written to
+$HOME_HOST/.mc/agents/{slug}/claude-config/ and are visible in the
+container under /home/agent/.claude/ (via docker-compose volume mount).
 
-Der entrypoint.sh des Containers liest SOUL.md und reicht sie als
---append-system-prompt an openclaude weiter. TOOLS.md/HEARTBEAT.md/USER.md/
-MEMORY.md sind im selben dir verfuegbar und koennen vom LLM referenziert werden.
+The container's entrypoint.sh reads SOUL.md and passes it as
+--append-system-prompt to openclaude. TOOLS.md/HEARTBEAT.md/USER.md/
+MEMORY.md are available in the same dir and can be referenced by the LLM.
 
-WICHTIG zur DB-Konsistenz:
-Damit die UI (GET /agents/{id}/config liest agent.soul_md/...) und
-der Agent (liest die *.md Files im Container) IMMER dasselbe sehen, schreibt
-diese Funktion bei jedem Lauf:
-  Template -> DB-Feld -> File
+IMPORTANT regarding DB consistency:
+So that the UI (GET /agents/{id}/config reads agent.soul_md/...) and
+the agent (reads the *.md files in the container) ALWAYS see the same thing,
+this function writes on every run:
+  Template -> DB field -> File
 
-So sind UI und Agent garantiert in Sync nach jedem sync-config Call.
-Konsequenz: Direkte UI-Edits an agent.soul_md werden beim naechsten Sync
-ueberschrieben. Aenderungen muessen am TEMPLATE erfolgen (siehe mc-agent-soul-edit).
+This guarantees UI and agent stay in sync after every sync-config call.
+Consequence: direct UI edits to agent.soul_md get overwritten on the next
+sync. Changes must be made in the TEMPLATE (see mc-agent-soul-edit).
 
-Ausnahmen:
-- TOOLS.md kommt aus agent.tools_md (von tools_md_builder mit raw_token gefuellt).
-  Wird hier nicht ueberschrieben — nur ins File gespiegelt.
-- MEMORY.md wird vom Agent selbst gepflegt (knowledge updates). Initial aus
-  Template, danach respect agent updates (nicht ueberschreiben wenn DB voll).
+Exceptions:
+- TOOLS.md comes from agent.tools_md (filled by tools_md_builder with raw_token).
+  Not overwritten here — only mirrored into the file.
+- MEMORY.md is maintained by the agent itself (knowledge updates). Initially
+  from the template, afterwards respects agent updates (not overwritten when DB is populated).
 """
 import logging
 import os
@@ -45,19 +45,19 @@ from app.services.template_renderer import build_agent_context, render_agent_fil
 
 logger = logging.getLogger("mc.docker_agent_sync")
 
-# Host-Pfad aus dem Backend-Container-Context (bind-mounted via docker-compose).
-# HOME_HOST ist explizit im Backend-Container gesetzt (=Host-$HOME, z.B.
-# /Users/<login>); HOME gibt nur das container-eigene home (/home/mcuser)
-# und waere falsch.
+# Host path from the backend container context (bind-mounted via docker-compose).
+# HOME_HOST is set explicitly in the backend container (=host $HOME, e.g.
+# /Users/<login>); HOME only gives the container's own home (/home/mcuser)
+# and would be wrong.
 _HOME_HOST = os.environ.get("HOME_HOST", os.path.expanduser("~"))
 AGENTS_DIR = Path(_HOME_HOST) / ".mc" / "agents"
 
 
 def _agent_slug(agent: Agent) -> str:
-    """Slug zum Lookup des Agent-Verzeichnisses.
+    """Slug used to look up the agent directory.
 
-    Konvention (aus cli-bridge.py): kleinbuchstabig, Leerzeichen durch '-',
-    keine Sonderzeichen. Wir nehmen den Namen als Basis.
+    Convention (from cli-bridge.py): lowercase, spaces replaced by '-',
+    no special characters. We use the name as the base.
     """
     return agent.name.lower().replace(" ", "-")
 
@@ -87,30 +87,30 @@ async def sync_docker_agent_files(
     session: AsyncSession,
     agent: Agent,
 ) -> dict[str, str]:
-    """Rendert Templates, schreibt in DB und in den claude-config Bind-Mount.
+    """Renders templates, writes to the DB, and to the claude-config bind mount.
 
-    Flow pro Datei (Template -> DB -> File):
-      1. Template aus backend/templates/ rendern mit Agent-Context
-      2. agent.<feld> in der DB updaten
-      3. File im claude-config Verzeichnis schreiben
-      4. session.commit() am Ende
+    Flow per file (Template -> DB -> File):
+      1. Render the template from backend/templates/ with the agent context
+      2. Update agent.<field> in the DB
+      3. Write the file in the claude-config directory
+      4. session.commit() at the end
 
     Args:
-        session: DB-Session (wird fuer Team-Query und commit genutzt).
-        agent: Der Agent dessen Files gesynct werden sollen.
+        session: DB session (used for the team query and commit).
+        agent: The agent whose files should be synced.
 
     Returns:
-        dict mit dateiname -> status. status ist:
-        - "written"          (File + DB erfolgreich)
-        - "respected (agent-managed)" (Memory: vorhanden, nicht ueberschrieben)
-        - "skipped (empty)"  (Quelle leer)
-        - "error: msg"       (Exception beim Rendern oder Schreiben)
-        - "_error: msg"      (Globaler Fehler, z.B. Verzeichnis nicht gefunden)
-        - "_skipped: host runtime" (Agent ist Host-Runtime, kein Docker-Sync noetig)
+        dict of filename -> status. status is one of:
+        - "written"          (file + DB succeeded)
+        - "respected (agent-managed)" (memory: present, not overwritten)
+        - "skipped (empty)"  (source empty)
+        - "error: msg"       (exception while rendering or writing)
+        - "_error: msg"      (global error, e.g. directory not found)
+        - "_skipped: host runtime" (agent is host runtime, no Docker sync needed)
     """
     # Host agents (e.g. Boss) manage their own claude-config under
-    # ~/.mc/agents/{slug}-host/, not the container path. Skip Docker-Sync
-    # damit der Host-Boss seine eigene Config nicht ueberschrieben bekommt.
+    # ~/.mc/agents/{slug}-host/, not the container path. Skip Docker sync
+    # so the host Boss doesn't get its own config overwritten.
     if getattr(agent, "agent_runtime", None) == "host":
         logger.debug(
             "Skipping host agent %s (runtime=%s)", agent.name, agent.agent_runtime
@@ -125,7 +125,7 @@ async def sync_docker_agent_files(
         logger.warning("sync_docker_agent_files(%s): %s", agent.name, msg)
         return {"_error": msg}
 
-    # Team-Context: andere Agents im gleichen Board (fuer Jinja2-Team-Liste)
+    # Team context: other agents on the same board (for Jinja2 team list)
     agents_on_board: list[Agent] = []
     if agent.board_id:
         result = await session.exec(
@@ -142,7 +142,7 @@ async def sync_docker_agent_files(
     results: dict[str, str] = {}
 
     # 1. SOUL.md: Template -> DB -> File (always overwrite)
-    #    Orchestriert von MC, der Operator editiert via Template.
+    #    Orchestrated by MC, the operator edits via the template.
     #    HEARTBEAT.md removed in migration 0125 — was rendered but never read
     #    by agents (only SOUL.md is injected via --append-system-prompt).
     for filename, template_name, db_field in [
@@ -157,7 +157,7 @@ async def sync_docker_agent_files(
             logger.error("sync_docker_agent_files(%s) %s: %s", agent.name, filename, e)
             results[filename] = f"error: {e}"
 
-    # 2. USER.md: kein DB-Feld, immer aus Template (Persona des Operators)
+    # 2. USER.md: no DB field, always from template (operator persona)
     try:
         user_md = render_agent_file("USER.md.j2", context)
         (claude_config_dir / "USER.md").write_text(user_md, encoding="utf-8")
@@ -166,8 +166,8 @@ async def sync_docker_agent_files(
         logger.error("sync_docker_agent_files(%s) USER.md: %s", agent.name, e)
         results["USER.md"] = f"error: {e}"
 
-    # 3. MEMORY.md: agent-managed. Initial aus Template wenn DB leer,
-    #    sonst respect agent updates (Knowledge waechst im Lauf der Zeit).
+    # 3. MEMORY.md: agent-managed. Initially from template when DB is empty,
+    #    otherwise respect agent updates (knowledge grows over time).
     if not agent.memory_md:
         try:
             content = render_agent_file("MEMORY.md.j2", context)
@@ -184,8 +184,8 @@ async def sync_docker_agent_files(
         except Exception as e:
             results["MEMORY.md"] = f"error writing: {e}"
 
-    # 4. TOOLS.md: aus agent.tools_md (von tools_md_builder mit raw_token gefuellt).
-    #    Wird hier nicht ueberschrieben — nur ins File gespiegelt.
+    # 4. TOOLS.md: from agent.tools_md (filled by tools_md_builder with raw_token).
+    #    Not overwritten here — only mirrored into the file.
     if agent.tools_md:
         try:
             (claude_config_dir / "TOOLS.md").write_text(agent.tools_md, encoding="utf-8")
@@ -196,43 +196,43 @@ async def sync_docker_agent_files(
     else:
         results["TOOLS.md"] = "skipped (empty in DB — run reset-token)"
 
-    # 5. Runtime-Config (settings.json + .env) — runtime-abhängig rendern.
+    # 5. Runtime config (settings.json + .env) — rendered depending on runtime.
     #
-    # Zwei Pfade:
-    #   - anthropic-claude-* runtime: schreibt `model` in settings.json;
-    #     kein .env-File (claude-code nutzt CLAUDE_CODE_OAUTH_TOKEN aus
-    #     Bootstrap-Response, kein shim).
-    #   - alle anderen cli-bridge runtimes (ollama-cloud, qwen-coder-lms,
+    # Two paths:
+    #   - anthropic-claude-* runtime: writes `model` into settings.json;
+    #     no .env file (claude-code uses CLAUDE_CODE_OAUTH_TOKEN from the
+    #     bootstrap response, no shim).
+    #   - all other cli-bridge runtimes (ollama-cloud, qwen-coder-lms,
     #     vllm): OPENAI_BASE_URL / OPENAI_MODEL / OPENAI_API_KEY in .env
-    #     (openclaude liest sie via start-claude.sh).
+    #     (openclaude reads them via start-claude.sh).
     #
-    # settings.json wird immer aktualisiert (falls schon vorhanden — komplettes
-    # Re-Render via plugin_manager.sync_agent_plugins_to_disk, siehe unten).
+    # settings.json is always updated (if already present — full re-render
+    # via plugin_manager.sync_agent_plugins_to_disk, see below).
     runtime: Runtime | None = None
     if agent.runtime_id:
         runtime = await session.get(Runtime, agent.runtime_id)
 
     is_anthropic = runtime and runtime.enabled and runtime.slug.startswith("anthropic-claude-")
 
-    # settings.json synchronisieren — Bug 5 permanent fix (2026-05-13).
+    # Sync settings.json — Bug 5 permanent fix (2026-05-13).
     #
-    # Vorher: nur das `model`-Feld in eine existierende settings.json gemerged.
-    # Resultat: `systemPrompt` driftete von `agent.soul_md` weg sobald die DB
-    # gefuellt wurde, nachdem das File initial leer entstanden war. Sparky +
-    # FreeCode liefen wochenlang mit systemPrompt="" -> keine Identity, keine
-    # MC-Tool-Awareness, Scope-Creep.
+    # Before: only the `model` field was merged into an existing settings.json.
+    # Result: `systemPrompt` drifted away from `agent.soul_md` as soon as the DB
+    # was populated, after the file had initially been created empty. Sparky +
+    # FreeCode ran for weeks with systemPrompt="" -> no identity, no
+    # MC tool awareness, scope creep.
     #
-    # Jetzt: bei vorhandener settings.json + aktiver Runtime + plausibler
-    # soul_md delegieren wir das komplette Render an
-    # plugin_manager.sync_agent_plugins_to_disk(). Das ist der Single-Source-
-    # of-Truth Path (ADR-006): Template `cli_agent_settings.json.j2` + DB-State
-    # -> Datei. Schreibt parent settings.json + claude-config mirror +
-    # installed_plugins.json + known_marketplaces.json — alles konsistent.
+    # Now: when settings.json exists + runtime is active + soul_md is plausible,
+    # we delegate the complete render to
+    # plugin_manager.sync_agent_plugins_to_disk(). That's the single-source-
+    # of-truth path (ADR-006): template `cli_agent_settings.json.j2` + DB state
+    # -> file. Writes parent settings.json + claude-config mirror +
+    # installed_plugins.json + known_marketplaces.json — all consistent.
     #
-    # Self-check: wenn soul_md < 1000 Zeichen ist die DB-Row vermutlich
-    # unvollstaendig (frisch geseedet, Template-Fail). In dem Fall NICHT
-    # rendern -- sonst wird ein evtl. bereits korrekt gefuelltes settings.json
-    # mit einem leeren systemPrompt ueberschrieben (genau der Bug-Modus).
+    # Self-check: if soul_md < 1000 characters, the DB row is probably
+    # incomplete (freshly seeded, template fail). In that case do NOT
+    # render -- otherwise a possibly already correctly filled settings.json
+    # would get overwritten with an empty systemPrompt (exactly the bug mode).
     settings_path = claude_config_dir / "settings.json"
     soul_len = len(agent.soul_md or "")
     if not settings_path.exists():
@@ -298,11 +298,11 @@ async def sync_docker_agent_files(
     env_notes.append(f"recycler={'on' if recycler_effective else 'off'}")
 
     if is_anthropic:
-        # Claude-Agent: kein OPENAI-Shim, OAuth kommt via Bootstrap. Phase 3
-        # (Plan 03-04): wir schreiben NUR die recycler-line statt vorher .env
-        # zu unlinken — der Recycler in Window 2 muss wissen ob er laufen soll.
-        # Fallthrough — env_lines hat bereits den recycler-Eintrag, der write
-        # block unten persistiert ihn.
+        # Claude agent: no OPENAI shim, OAuth comes via bootstrap. Phase 3
+        # (Plan 03-04): we write ONLY the recycler line instead of previously
+        # unlinking .env — the recycler in Window 2 needs to know whether it
+        # should run. Fallthrough — env_lines already has the recycler entry,
+        # the write block below persists it.
         pass
     else:
         try:
@@ -323,12 +323,12 @@ async def sync_docker_agent_files(
                     env_lines.append(f"OPENAI_API_KEY={_sanitize_env_val(plaintext)}")
                     env_notes.append("secret=set")
                 else:
-                    # Secret-Decryption-Fehler — wir schreiben trotzdem die
-                    # recycler-line + ggf. runtime-keys, aber loggen den Fehler
-                    # explizit als ".env_secret_error" damit das Render-Result
-                    # sichtbar ist. Vorher wurde env_lines auf None gesetzt und
-                    # der ganze Write uebersprungen — das wuerde die recycler-
-                    # line schlucken (Phase-3-Regression).
+                    # Secret decryption error — we still write the
+                    # recycler line + any runtime keys, but log the error
+                    # explicitly as ".env_secret_error" so the render result
+                    # is visible. Previously env_lines was set to None and
+                    # the whole write was skipped — that would swallow the
+                    # recycler line (Phase-3 regression).
                     results[".env_secret_error"] = "secret not found or decryption failed"
         except ValueError as e:
             # Newline injection detected in a runtime field — log and surface,
@@ -340,7 +340,7 @@ async def sync_docker_agent_files(
             # Skip the write entirely — do not persist potentially unsafe content.
             return results
 
-    # Unconditional write — env_lines enthaelt mindestens die recycler-line.
+    # Unconditional write — env_lines contains at least the recycler line.
     try:
         env_path.write_text("\n".join(env_lines) + "\n", encoding="utf-8")
         os.chmod(env_path, 0o600)
@@ -349,10 +349,10 @@ async def sync_docker_agent_files(
         logger.error("sync_docker_agent_files(%s) .env: %s", agent.name, e)
         results[".env"] = f"error writing: {e}"
 
-    # 6. Custom-Skills aus ~/.mc/skills/ in claude-config/skills/ kopieren
-    # (Vorher: Skill-Files landeten nie im Container trotz cli_skills in DB.
-    #  Boss-Reflection 2026-04-24: Shakespeare musste skill via
-    #  WebFetch rekonstruieren statt aus /home/agent/.claude/skills/ zu lesen.)
+    # 6. Copy custom skills from ~/.mc/skills/ into claude-config/skills/
+    # (Before: skill files never landed in the container despite cli_skills in DB.
+    #  Boss reflection 2026-04-24: Shakespeare had to reconstruct a skill via
+    #  WebFetch instead of reading it from /home/agent/.claude/skills/.)
     try:
         from app.services.plugin_manager import sync_agent_skills_to_disk
         skill_sync = sync_agent_skills_to_disk(slug, agent.cli_skills)
@@ -361,7 +361,7 @@ async def sync_docker_agent_files(
         logger.error("Skills-Sync fuer %s fehlgeschlagen: %s", agent.name, e)
         results["skills"] = f"error: {e}"
 
-    # 7. DB-Updates persistieren (SOUL.md/HEARTBEAT.md/MEMORY.md koennten in DB aktualisiert sein)
+    # 7. Persist DB updates (SOUL.md/HEARTBEAT.md/MEMORY.md may have been updated in DB)
     session.add(agent)
     await session.commit()
 
@@ -500,18 +500,18 @@ async def sync_agent_files(
 
 
 def _respawn_agent_window(agent: Agent) -> dict[str, str]:
-    """Respawnt tmux Window 0 im laufenden Container ohne Container-Neustart.
+    """Respawns tmux Window 0 in the running container without restarting the container.
 
-    D-11: Same-image runtime switches sollen NICHT den ganzen Container
-    rebooten — das würde poll.sh (Window 1) und den Recycler (Window 2)
-    mit-killen und 15-30s kosten. Stattdessen: nur Window 0 respawn.
+    D-11: Same-image runtime switches should NOT reboot the whole container
+    — that would kill poll.sh (Window 1) and the recycler (Window 2) along
+    with it and cost 15-30s. Instead: respawn only Window 0.
 
-    WICHTIG: session_name = slug. entrypoint.sh setzt
-    `SESSION="${AGENT_NAME:-agent}"`. AGENT_NAME wird in
-    docker-compose.agents.yml auf den lowercase slug gesetzt
-    (z.B. `AGENT_NAME=sparky`), nicht auf den Original-DB-Namen.
-    Live-Verifiziert 2026-04-29 (Phase 16 D-13): Pitfall-3 aus RESEARCH.md
-    war falsch — slug ist korrekt.
+    IMPORTANT: session_name = slug. entrypoint.sh sets
+    `SESSION="${AGENT_NAME:-agent}"`. AGENT_NAME is set in
+    docker-compose.agents.yml to the lowercase slug
+    (e.g. `AGENT_NAME=sparky`), not to the original DB name.
+    Live-verified 2026-04-29 (Phase 16 D-13): Pitfall 3 from RESEARCH.md
+    was wrong — slug is correct.
     """
     import subprocess
 
@@ -553,11 +553,11 @@ async def _wait_for_window_ready(
     poll_interval: float = 3.0,
     ready_signals: tuple[str, ...] | None = None,
 ) -> dict[str, str | bool]:
-    """Wartet bis tmux Window 0 ein Ready-Signal anzeigt (D-12).
+    """Waits until tmux Window 0 shows a ready signal (D-12).
 
-    Polls `tmux capture-pane -p -t {session_name}:0` und sucht nach
-    Ready-Signalen: openclaude `╭─` Header, claude `> ` Prompt, oder
-    bash-Fallback `$ `.
+    Polls `tmux capture-pane -p -t {session_name}:0` and looks for
+    ready signals: openclaude `╭─` header, claude `> ` prompt, or
+    bash fallback `$ `.
 
     ADR-045: `ready_signals` REPLACES the default glyph tuple when provided
     (it is not additive). The omp headless runtime emits no interactive glyph;
@@ -631,12 +631,12 @@ def restart_docker_agent_container(
     force_recreate: bool = False,
     respawn_window_only: bool = False,
 ) -> dict[str, str]:
-    """Startet den Docker-Container des Agents neu.
+    """Restarts the agent's Docker container.
 
     respawn_window_only=True (Phase 16, D-11):
-        Ruft `_respawn_agent_window(agent)` auf — startet nur tmux Window 0
-        neu. poll.sh (Window 1) und Recycler (Window 2) bleiben unangetastet.
-        Gewinnt über force_recreate falls beide gesetzt.
+        Calls `_respawn_agent_window(agent)` — restarts only tmux Window 0.
+        poll.sh (Window 1) and the recycler (Window 2) are left untouched.
+        Wins over force_recreate if both are set.
 
     force_recreate=False (default):
         `docker restart -t 5 mc-agent-<slug>` — picks up env/config but keeps
@@ -653,7 +653,7 @@ def restart_docker_agent_container(
     """
     import subprocess
 
-    # Host agents (e.g. Boss) haben keinen Docker-Container — skip restart.
+    # Host agents (e.g. Boss) have no Docker container — skip restart.
     if getattr(agent, "agent_runtime", None) == "host":
         logger.debug(
             "Skipping host agent restart %s (runtime=%s)",
@@ -681,7 +681,7 @@ def restart_docker_agent_container(
         # Compose v2 supports multiple `--env-file` flags. The agents compose
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come
-        # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN fehlt').
+        # up with no auth token (mc CLI then dies with 'MC_AGENT_TOKEN missing').
         cmd = ["docker", "compose"]
         for env_file in (env_main, env_agents, env_shared):
             if env_file.is_file():
@@ -696,10 +696,10 @@ def restart_docker_agent_container(
             "--force-recreate",
             container_name,
         ])
-        # docker compose substituiert ${HOME} aus dem Aufrufer-Env. Im
-        # Backend-Container ist $HOME=/home/mcuser → docker daemon kriegt
-        # einen falschen Pfad. HOME_HOST mountet den Host-Home an gleichen
-        # Pfad — wir muessen HOME explizit darauf zwingen.
+        # docker compose substitutes ${HOME} from the caller's env. In the
+        # backend container, $HOME=/home/mcuser → the docker daemon gets
+        # the wrong path. HOME_HOST mounts the host home at the same
+        # path — we have to force HOME to it explicitly.
         run_env = dict(os.environ)
         host_home = os.environ.get("HOME_HOST")
         if host_home:
@@ -773,7 +773,7 @@ def restart_docker_agent_container(
 
 
 def _agent_container_running(container_name: str) -> bool | None:
-    """True/False = Container-Run-State, None = Container existiert nicht / inspect-Fehler."""
+    """True/False = container run state, None = container doesn't exist / inspect error."""
     import subprocess
 
     try:
@@ -792,13 +792,13 @@ def _agent_container_running(container_name: str) -> bool | None:
 
 
 def ensure_agent_container_started(agent: Agent) -> dict[str, str]:
-    """Provision-Autostart: startet den Agent-Container, falls er nicht läuft.
+    """Provision autostart: starts the agent container if it isn't running.
 
-    Läuft der Container bereits, wird bewusst NICHT recreated — ein Re-Provision
-    darf einen Agent mitten im Task nicht abschiessen. Fehlt der Container oder
-    ist er gestoppt, bringt force_recreate=True ihn aus dem frisch gerenderten
-    Compose hoch (Caller muss write_compose_agents() vorher ausgeführt haben,
-    gleiche Precondition wie restart_docker_agent_container).
+    If the container is already running, it is deliberately NOT recreated — a
+    re-provision must not kill an agent mid-task. If the container is missing or
+    stopped, force_recreate=True brings it up from the freshly rendered
+    compose (caller must have run write_compose_agents() beforehand,
+    same precondition as restart_docker_agent_container).
     """
     if getattr(agent, "agent_runtime", None) == "host":
         return {"status": "skipped (host runtime)", "container": "", "mode": "skip"}

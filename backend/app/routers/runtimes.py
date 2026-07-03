@@ -1,5 +1,5 @@
 """
-Runtimes API — Start/Stop/Restart/Status für lokale Modell-Runtimes.
+Runtimes API — start/stop/restart/status for local model runtimes.
 """
 
 import re as _re
@@ -33,12 +33,12 @@ router = APIRouter(prefix="/api/v1/runtimes", tags=["runtimes"])
 async def _resolve_runtime_dict(
     session: AsyncSession, runtime_id: str
 ) -> dict | None:
-    """Slug-or-UUID DB-Lookup → model_dump() dict für runtime_manager.* calls.
+    """Slug-or-UUID DB lookup → model_dump() dict for runtime_manager.* calls.
 
-    Phase 16 (ADR-028) macht Registry DB-only. start/stop/restart/health
-    nutzten noch den alten `runtime_manager.get_runtime()` (JSON-Lookup),
-    der bei UUID aus DB (z.B. nemotron-super hatte slug in JSON aber
-    UUID aus DB) 404'te. Dieser Helper macht das gleiche Pattern wie der
+    Phase 16 (ADR-028) makes the registry DB-only. start/stop/restart/health
+    still used the old `runtime_manager.get_runtime()` (JSON lookup), which
+    404'd on a UUID from the DB (e.g. nemotron-super had a slug in the JSON
+    but a UUID in the DB). This helper mirrors the same pattern as the
     GET /{runtime_id} endpoint.
     """
     rt = (await session.exec(select(Runtime).where(Runtime.slug == runtime_id))).first()
@@ -55,11 +55,11 @@ async def _resolve_runtime_dict(
 async def _resolve_runtime_and_host(
     session: AsyncSession, runtime_id: str
 ) -> tuple[dict | None, ResolvedHost | None]:
-    """Wie _resolve_runtime_dict, aber inkl. aufgelöstem Host (ADR-048).
+    """Like _resolve_runtime_dict, but includes the resolved host (ADR-048).
 
-    Lifecycle-Endpoints reichen den Host an runtime_manager durch, damit
-    SSH-/Control-Ops auf der Box der jeweiligen Runtime laufen — nicht mehr
-    implizit auf settings.dgx_ssh_host.
+    Lifecycle endpoints pass the host through to runtime_manager so
+    SSH/control ops run on the box of the respective runtime — no longer
+    implicitly on settings.dgx_ssh_host.
     """
     rt = (await session.exec(select(Runtime).where(Runtime.slug == runtime_id))).first()
     if not rt:
@@ -76,9 +76,9 @@ async def _resolve_runtime_and_host(
 
 
 def _host_ref(host: ResolvedHost | None) -> dict | None:
-    """Kompakte Host-Referenz {id, slug, display_name} für Runtime-Payloads
-    (ADR-048). Nur echte Registry-Bindings (runtime.host_id) zählen — Legacy-
-    String- und Settings-Fallback liefern None (UI zeigt keinen Host-Chip)."""
+    """Compact host reference {id, slug, display_name} for runtime payloads
+    (ADR-048). Only real registry bindings (runtime.host_id) count — legacy
+    string and settings fallback return None (UI shows no host chip)."""
     if host is None or host.source != "registry":
         return None
     return {
@@ -103,8 +103,8 @@ class RuntimeCreate(BaseModel):
     lms_identifier: str | None = None
     lms_cli_path: str | None = None
     launch_command: str | None = None
-    host: str | None = None  # DEPRECATED Legacy-String — Registry-Binding via host_id
-    host_id: uuid.UUID | None = None  # Host-Registry-Bindung (ADR-048)
+    host: str | None = None  # DEPRECATED legacy string — registry binding via host_id
+    host_id: uuid.UUID | None = None  # Host registry binding (ADR-048)
     control_url: str | None = None  # power_managed: Flask :5555 control plane
     wol_mac_address: str | None = None  # power_managed: Wake-on-LAN target MAC
     power_managed: bool = False
@@ -138,11 +138,11 @@ class RuntimeUpdate(BaseModel):
     lms_identifier: str | None = None
     lms_cli_path: str | None = None
     launch_command: str | None = None
-    host: str | None = None  # DEPRECATED Legacy-String — Registry-Binding via host_id
-    # Host-Registry-Bindung (ADR-048). PATCH nutzt exclude_none, darum wird
-    # host_id im Endpoint separat via model_fields_set behandelt: nur so ist
-    # explizites host_id=null (Unbind — Voraussetzung für den Host-Delete-
-    # Guard in routers/hosts.py) vom Weglassen unterscheidbar.
+    host: str | None = None  # DEPRECATED legacy string — registry binding via host_id
+    # Host registry binding (ADR-048). PATCH uses exclude_none, so host_id
+    # is handled separately in the endpoint via model_fields_set: only this
+    # way is explicit host_id=null (unbind — prerequisite for the host
+    # delete guard in routers/hosts.py) distinguishable from omission.
     host_id: uuid.UUID | None = None
     control_url: str | None = None
     wol_mac_address: str | None = None
@@ -187,14 +187,14 @@ class LMStudioModelAction(BaseModel):
 
 @router.get("/lmstudio/models")
 async def list_lmstudio_models(current_user=Depends(require_user)):
-    """Gibt alle in LM Studio installierten LLM-Modelle zurück."""
+    """Returns all LLM models installed in LM Studio."""
     models = await runtime_manager.list_lms_models()
     return {"models": models, "reachable": True}
 
 
 @router.post("/lmstudio/load")
 async def load_lmstudio_model(body: LMStudioModelAction, current_user=Depends(require_user)):
-    """Lädt ein Modell in LM Studio (lms load)."""
+    """Loads a model in LM Studio (lms load)."""
     rt = {
         "id": body.model_id,
         "display_name": body.model_id,
@@ -211,7 +211,7 @@ async def load_lmstudio_model(body: LMStudioModelAction, current_user=Depends(re
 
 @router.post("/lmstudio/unload")
 async def unload_lmstudio_model(body: LMStudioModelAction, current_user=Depends(require_user)):
-    """Entlädt ein Modell aus LM Studio (lms unload)."""
+    """Unloads a model from LM Studio (lms unload)."""
     rt = {
         "id": body.model_id,
         "display_name": body.model_id,
@@ -227,7 +227,7 @@ async def unload_lmstudio_model(body: LMStudioModelAction, current_user=Depends(
 
 @router.post("/lmstudio/kv-reset")
 async def trigger_kv_reset(current_user=Depends(require_user)):
-    """Führt einen manuellen KV Reset aus: aktive Modelle merken → unload all → reload."""
+    """Performs a manual KV reset: remember active models → unload all → reload."""
     import asyncio
     loaded = await runtime_manager.lms_get_loaded_models()
     if not loaded:
@@ -248,7 +248,7 @@ async def trigger_kv_reset(current_user=Depends(require_user)):
 
 @router.post("/lmstudio/download")
 async def download_lmstudio_model(body: LMStudioModelAction, current_user=Depends(require_user)):
-    """Startet einen Modell-Download via lms get (Hintergrund)."""
+    """Starts a model download via lms get (background)."""
     result = await runtime_manager.lms_download_model(body.model_id, body.quantization)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
@@ -257,7 +257,7 @@ async def download_lmstudio_model(body: LMStudioModelAction, current_user=Depend
 
 @router.post("/lmstudio/delete")
 async def delete_lmstudio_model(body: LMStudioModelAction, current_user=Depends(require_user)):
-    """Löscht ein Modell aus LM Studio (lms rm)."""
+    """Deletes a model from LM Studio (lms rm)."""
     result = await runtime_manager.lms_delete_model(body.model_id)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
@@ -280,7 +280,7 @@ class HFDownloadAction(BaseModel):
 
 @router.get("/lmstudio/downloads")
 async def list_active_downloads(current_user=Depends(require_user)):
-    """Gibt aktive Downloads zurück (lms get + HF curl)."""
+    """Returns active downloads (lms get + HF curl)."""
     downloads = await runtime_manager.get_active_downloads()
     return {"downloads": downloads}
 
@@ -291,7 +291,7 @@ class CancelDownloadBody(BaseModel):
 
 @router.post("/lmstudio/downloads/cancel")
 async def cancel_download(body: CancelDownloadBody, current_user=Depends(require_user)):
-    """Bricht einen laufenden Download ab."""
+    """Cancels a running download."""
     result = await runtime_manager.cancel_download(body.model_name)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
@@ -300,14 +300,14 @@ async def cancel_download(body: CancelDownloadBody, current_user=Depends(require
 
 @router.get("/lmstudio/catalog/search")
 async def search_lmstudio_catalog(q: str = "", current_user=Depends(require_user)):
-    """Sucht Modelle im LM Studio Catalog (lmstudio-community auf HuggingFace)."""
+    """Searches for models in the LM Studio catalog (lmstudio-community on HuggingFace)."""
     models = await runtime_manager.search_lmstudio_catalog(q)
     return {"models": models}
 
 
 @router.get("/lmstudio/hf/files")
 async def get_hf_repo_files(repo: str, current_user=Depends(require_user)):
-    """Gibt alle GGUF-Dateien eines HuggingFace Repos zurück."""
+    """Returns all GGUF files of a HuggingFace repo."""
     if not _MODEL_ID_PATTERN.match(repo):
         raise HTTPException(status_code=400, detail="Ungültige Repo-ID")
     return await runtime_manager.get_hf_repo_files(repo)
@@ -315,7 +315,7 @@ async def get_hf_repo_files(repo: str, current_user=Depends(require_user)):
 
 @router.post("/lmstudio/download-hf")
 async def download_hf_file(body: HFDownloadAction, current_user=Depends(require_user)):
-    """Startet Download einer GGUF-Datei von HuggingFace auf den DGX Spark."""
+    """Starts a download of a GGUF file from HuggingFace onto the DGX Spark."""
     result = await runtime_manager.download_hf_file(body.repo_id, body.filename)
     if not result["ok"]:
         raise HTTPException(status_code=400, detail=result["message"])
@@ -327,11 +327,11 @@ async def spark_metrics(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Live Hardware-Metriken des DGX Spark (GPU, VRAM, RAM, Temp).
+    """Live hardware metrics of the DGX Spark (GPU, VRAM, RAM, temp).
 
-    Back-Compat-Alias (ADR-048): delegiert an den Registry-Host mit slug
-    `dgx-spark` (wird vom host_seeder aus settings.dgx_ssh_* angelegt).
-    Statischer Pfad — muss VOR den /{runtime_id}-Routen definiert bleiben.
+    Back-compat alias (ADR-048): delegates to the registry host with slug
+    `dgx-spark` (created by the host_seeder from settings.dgx_ssh_*).
+    Static path — must stay defined BEFORE the /{runtime_id} routes.
     """
     host = await resolve_host_by_slug(session, "dgx-spark")
     if host is None:
@@ -349,7 +349,7 @@ async def spark_metrics(
 
 @router.get("/vllm/discover")
 async def discover_vllm_containers(current_user=Depends(require_user)):
-    """Listet laufende vLLM-Container auf der DGX (mit is_registered Flag)."""
+    """Lists running vLLM containers on the DGX (with is_registered flag)."""
     containers = await runtime_manager.list_vllm_containers()
     return {"containers": containers}
 
@@ -372,7 +372,7 @@ class AddVllmRuntimeBody(BaseModel):
 
 @router.post("/vllm")
 async def create_vllm_runtime(body: AddVllmRuntimeBody, current_user=Depends(require_user)):
-    """Fügt eine neue vLLM Docker Runtime zu runtimes.json hinzu."""
+    """Adds a new vLLM Docker runtime to runtimes.json."""
     new_rt = runtime_manager.add_vllm_runtime(
         container_name=body.container_name,
         display_name=body.display_name,
@@ -391,7 +391,7 @@ class AddLMStudioRuntimeBody(BaseModel):
 
 @router.post("")
 async def create_lmstudio_runtime(body: AddLMStudioRuntimeBody, current_user=Depends(require_user)):
-    """Fügt eine neue LM Studio Runtime zu runtimes.json hinzu."""
+    """Adds a new LM Studio runtime to runtimes.json."""
     new_rt = add_lmstudio_runtime(
         lms_identifier=body.lms_identifier,
         display_name=body.display_name,
@@ -406,23 +406,23 @@ async def list_runtimes(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Gibt alle enabled Runtimes mit ihrem aktuellen State zurück.
+    """Returns all enabled runtimes with their current state.
 
-    Phase 16 (D-01/D-03): Liest ausschliesslich aus der DB-Tabelle `runtimes`.
-    Die JSON-Datei `backend/config/runtimes.json` ist nur noch Bootstrap-Seed.
+    Phase 16 (D-01/D-03): Reads exclusively from the DB table `runtimes`.
+    The JSON file `backend/config/runtimes.json` is now only a bootstrap seed.
     """
     runtimes = await runtime_manager.list_db_runtimes(session)
     result = []
     for rt in runtimes:
         if not rt.enabled:
             continue
-        # Pitfall 1 (RESEARCH.md): get_runtime_state erwartet dict.
+        # Pitfall 1 (RESEARCH.md): get_runtime_state expects a dict.
         rt_dict = rt.model_dump()
         host = await resolve_host_for_runtime(session, rt)
         state_info = await runtime_manager.get_runtime_state(rt_dict, host=host)
-        # ADR-048: `host` im Payload = {id, slug, display_name} | null.
-        # Überschreibt bewusst das DEPRECATED Legacy-String-Feld gleichen
-        # Namens aus model_dump() — Frontend-Typ ist `host?: HostRef | null`.
+        # ADR-048: `host` in the payload = {id, slug, display_name} | null.
+        # Deliberately overwrites the DEPRECATED legacy string field of the
+        # same name from model_dump() — frontend type is `host?: HostRef | null`.
         result.append({**rt_dict, **state_info, "host": _host_ref(host)})
     result.sort(key=lambda x: x.get("ui_order", 99))
     return {"runtimes": result}
@@ -434,7 +434,7 @@ async def get_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Gibt eine einzelne Runtime aus DB zurück (slug oder UUID)."""
+    """Returns a single runtime from the DB (slug or UUID)."""
     rt = (await session.exec(select(Runtime).where(Runtime.slug == runtime_id))).first()
     if not rt:
         try:
@@ -448,7 +448,7 @@ async def get_runtime(
     rt_dict = rt.model_dump()
     host = await resolve_host_for_runtime(session, rt)
     state_info = await runtime_manager.get_runtime_state(rt_dict, host=host)
-    # Gleiche Host-Referenz wie GET /runtimes (Liste) — ein Frontend-Typ.
+    # Same host reference as GET /runtimes (list) — one frontend type.
     return {**rt_dict, **state_info, "host": _host_ref(host)}
 
 
@@ -458,7 +458,7 @@ async def runtime_health(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Live Health-Probe für eine Runtime."""
+    """Live health probe for a runtime."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -477,7 +477,7 @@ async def start_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Startet eine Runtime."""
+    """Starts a runtime."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -496,7 +496,7 @@ async def stop_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Stoppt eine Runtime (nur vllm_docker)."""
+    """Stops a runtime (vllm_docker only)."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -513,7 +513,7 @@ async def restart_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Startet eine Runtime neu (nur vllm_docker)."""
+    """Restarts a runtime (vllm_docker only)."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -552,14 +552,14 @@ async def probe_model_endpoint(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Probet das `/v1/models` Endpoint einer OpenAI-kompatiblen Runtime und
-    persistiert das Ergebnis in `runtimes.model_identifier`.
+    """Probes the `/v1/models` endpoint of an OpenAI-compatible runtime and
+    persists the result in `runtimes.model_identifier`.
 
-    Phase 16 (D-18/D-19/D-21): Re-uses Phase-15 `probe_runtime_model` Helper.
-    Idempotent — zweiter Call mit identischem Probe-Result liefert
-    `changed=false` und schreibt nicht.
+    Phase 16 (D-18/D-19/D-21): Re-uses Phase-15 `probe_runtime_model` helper.
+    Idempotent — a second call with an identical probe result returns
+    `changed=false` and does not write.
     """
-    # Slug-or-UUID Lookup (Pattern aus GET /{runtime_id})
+    # Slug-or-UUID lookup (pattern from GET /{runtime_id})
     rt = (await session.exec(select(Runtime).where(Runtime.slug == runtime_id))).first()
     if not rt:
         try:
@@ -716,10 +716,10 @@ async def switch_sparkrun_recipe(
 
 
 async def _validate_host_id(session: AsyncSession, host_id: uuid.UUID) -> None:
-    """422 wenn die Host-UUID auf keine Registry-Row zeigt (ADR-048).
+    """422 if the host UUID doesn't point to a registry row (ADR-048).
 
-    Ohne den Check würde SQLite (Tests, kein FK-Enforcement) eine tote
-    Bindung akzeptieren, die der Resolver dann nur wegloggt."""
+    Without this check, SQLite (tests, no FK enforcement) would accept a
+    dead binding that the resolver would then just log away."""
     from app.models.host import Host
 
     if await session.get(Host, host_id) is None:
@@ -730,10 +730,10 @@ async def _validate_host_id(session: AsyncSession, host_id: uuid.UUID) -> None:
 
 
 async def _runtime_row_response(session: AsyncSession, rt: Runtime) -> dict:
-    """CRUD-Response mit gleicher host-Shape wie GET /runtimes (HostRef|null).
+    """CRUD response with the same host shape as GET /runtimes (HostRef|null).
 
-    Ohne das würde POST/PATCH das DEPRECATED Legacy-String-Feld `host`
-    zurückgeben, während GET ein Objekt liefert — ein Feldname, zwei Shapes."""
+    Without this, POST/PATCH would return the DEPRECATED legacy string field
+    `host`, while GET returns an object — one field name, two shapes."""
     host = await resolve_host_for_runtime(session, rt)
     return {**rt.model_dump(), "host": _host_ref(host)}
 
@@ -766,9 +766,9 @@ async def update_runtime_db(
 ):
     """Update fields on a DB-backed runtime.
 
-    host_id (ADR-048) läuft über model_fields_set statt exclude_none:
-    explizites null bindet die Runtime vom Host los (Voraussetzung für
-    DELETE /api/v1/hosts/{id}, dessen 409-Guard erst nach Unbind freigibt).
+    host_id (ADR-048) goes through model_fields_set instead of exclude_none:
+    an explicit null unbinds the runtime from the host (prerequisite for
+    DELETE /api/v1/hosts/{id}, whose 409 guard only clears after unbind).
     """
     rt = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
     if not rt:
