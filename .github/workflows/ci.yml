@@ -16,10 +16,11 @@ jobs:
         run: |
           FOUND=$(find . \( -name ".env" -o -name ".env.local" -o -name ".env.production" -o -name "*.pem" -o -name "id_rsa*" -o -name "*.p12" \) -not -path "./.git/*")
           if [ -n "$FOUND" ]; then echo "Forbidden files:"; echo "$FOUND"; exit 1; fi
-      - name: gitleaks
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: gitleaks (CLI direkt — die Action verlangt fuer Orgs einen Lizenz-Key)
+        run: |
+          docker run --rm -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks@sha256:b109bc5f8f76a38196a3e413704fc5b9e3c32360bce4e4b603bd6f45b3721dbb \
+            dir /repo --no-banner --exit-code 1
 
   backend:
     name: Backend Tests
@@ -28,9 +29,9 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -48,9 +49,9 @@ jobs:
       run:
         working-directory: frontend-v2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "22"  # muss zum Runtime-Image passen (frontend Dockerfile: node:22)
           cache: npm
@@ -69,7 +70,7 @@ jobs:
     name: Fresh-boot E2E (setup.sh → migrations → register)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - name: Prepare ~/.mc for the container user
         # Runner-UID (1001) != Container-UID (mcuser 1000): das ${HOME}/.mc
         # Bind-Mount muss fuer den Containernutzer beschreibbar sein
@@ -102,7 +103,7 @@ jobs:
     name: Docker Build Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
       - name: Build backend image
         run: docker build -t mc-backend-test ./backend
