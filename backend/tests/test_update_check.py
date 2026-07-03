@@ -16,6 +16,14 @@ def test_is_newer_semver_compare():
     assert is_newer("v1.0.0", None) is False
 
 
+def test_is_newer_two_component_tags():
+    # A release tagged e.g. "v0.5" (no patch part) must still be recognized —
+    # the old regex required MAJOR.MINOR.PATCH and silently never fired.
+    assert is_newer("v0.5", "0.1.1") is True
+    assert is_newer("0.2", "0.1.1") is True
+    assert is_newer("v0.1", "0.1.1") is False  # 0.1 == 0.1.0 < 0.1.1
+
+
 @pytest.fixture
 def _patched_redis(fake_redis, monkeypatch):
     """update_check calls get_redis() directly (not via Depends)."""

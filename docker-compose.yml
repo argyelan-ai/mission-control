@@ -222,7 +222,6 @@ services:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: ""
-      NEXT_PUBLIC_APP_VERSION: "2.0.0"
       PUBLIC_HOST: ${PUBLIC_HOST:-}
     ports:
       - "127.0.0.1:3000:3000"
