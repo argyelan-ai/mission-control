@@ -184,6 +184,20 @@ register endpoint only works while no user exists).
 That's a full working core: UI, task boards, knowledge base, API. Everything
 below is optional and off by default.
 
+### Install from a self-hosting catalog
+
+- **Runtipi** — add our custom app store under *Settings → App Stores*:
+  `https://github.com/argyelan-ai/tipi-store`, then install Mission
+  Control from your app store.
+- **Portainer** — add the raw URL of
+  [`deploy/catalogs/portainer-template.json`](deploy/catalogs/portainer-template.json)
+  as an App Template source (*Settings → App Templates*).
+- CasaOS and Umbrel submissions are prepared in
+  [`deploy/catalogs/`](deploy/catalogs/).
+
+Catalog installs run the core stack (boards, API runtimes, vault,
+sessions); host-level fleet extras need the manual install above.
+
 ### Optional integrations
 
 | Feature | What you set in `.env` |
