@@ -4,6 +4,17 @@ All notable changes to Mission Control are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
+## [Unreleased]
+
+### Changed
+
+- **BREAKING (security): Caddy now binds to `127.0.0.1` by default** instead
+  of all interfaces. Nothing is reachable from the LAN until you opt in —
+  previously anyone on a shared network could reach the app and, before the
+  first admin registered, even claim the admin account. If you access MC
+  from other devices (e.g. phone via Tailscale), set `MC_BIND_ADDRESS=0.0.0.0`
+  in `.env` and run `docker compose up -d caddy`.
+
 ## [0.1.1] — 2026-07-03
 
 ### Added

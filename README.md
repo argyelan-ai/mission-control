@@ -267,14 +267,19 @@ and contributions are welcome.
 
 ## Access from your phone, anywhere (Tailscale)
 
-MC binds to localhost by design — the recommended way to reach it from your
-phone, laptop or office is [Tailscale](https://tailscale.com) (free for
-personal use, zero config):
+MC binds to localhost by default — nothing is reachable from other machines
+until you opt in. The recommended way to reach it from your phone, laptop or
+office is [Tailscale](https://tailscale.com) (free for personal use, zero
+config):
 
 1. Install Tailscale on the machine running MC and on your phone (same account).
-2. Put the machine's Tailscale name into `.env`:
-   `PUBLIC_HOST=your-machine.tailnet-name.ts.net` (adds it to the CORS allowlist).
-3. Open `http://your-machine.tailnet-name.ts.net` on the phone. Done — the
+2. In `.env`, open the front door and allow the origin:
+   - `MC_BIND_ADDRESS=0.0.0.0` (lets Caddy accept non-localhost connections —
+     do this only after the first admin account is registered, or on a
+     network you trust)
+   - `PUBLIC_HOST=your-machine.tailnet-name.ts.net` (adds it to the CORS allowlist)
+3. Apply with `docker compose up -d caddy backend`.
+4. Open `http://your-machine.tailnet-name.ts.net` on the phone. Done — the
    full control room, task approvals and live agent terminals, from anywhere.
 
 For HTTPS on the tailnet, see `caddy/Caddyfile.tls.example`. This setup keeps
@@ -288,7 +293,10 @@ to run.
   [ADR-047](docs/decisions/047-docker-socket-proxy.md)). Container lifecycle
   control is still powerful: run MC only on hosts you trust end-to-end, and
   never expose the stack directly to the internet.
-- All service ports except Caddy (:80/:443) bind to `127.0.0.1`.
+- All service ports — including Caddy (:80/:443) — bind to `127.0.0.1` by
+  default. Set `MC_BIND_ADDRESS=0.0.0.0` in `.env` to opt in to LAN/VPN
+  access (do it after registering the first admin: registration is open
+  until one exists).
 - Secrets live in the encrypted `secrets` table (Fernet) or in `.env` —
   see [SECURITY.md](SECURITY.md) for reporting vulnerabilities.
 

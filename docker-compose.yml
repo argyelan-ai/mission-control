@@ -241,9 +241,14 @@ services:
     depends_on:
       - frontend
       - backend
+    # Secure by default: Caddy (the front door) binds to localhost only.
+    # Anyone on a shared LAN could otherwise reach the app — and before the
+    # first admin registers, even claim the admin account. To reach MC from
+    # other devices (phone via Tailscale, LAN), set MC_BIND_ADDRESS=0.0.0.0
+    # in .env — see README "Access from your phone".
     ports:
-      - "80:80"
-      - "443:443"
+      - "${MC_BIND_ADDRESS:-127.0.0.1}:80:80"
+      - "${MC_BIND_ADDRESS:-127.0.0.1}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/certs:/etc/caddy/certs:ro
