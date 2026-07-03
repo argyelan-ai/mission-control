@@ -1,8 +1,8 @@
-"""Heartbeat setzt agent.status — wichtig fuer Non-Gateway-Agents (cli-bridge, host).
+"""Heartbeat sets agent.status — important for non-gateway agents (cli-bridge, host).
 
-Bug vor dem Fix: /agent/me/heartbeat hat nur last_seen_at + run_state gesetzt,
-aber NICHT agent.status. Dadurch blieben Docker-cli-bridge-Agents fuer immer
-'offline', obwohl sie alle 30s einen Heartbeat senden.
+Bug before the fix: /agent/me/heartbeat only set last_seen_at + run_state,
+but NOT agent.status. As a result, Docker cli-bridge agents stayed
+'offline' forever, even though they send a heartbeat every 30s.
 """
 
 import uuid
@@ -36,7 +36,7 @@ async def _create_agent(session: AsyncSession, *, status="offline", gateway_id=N
 
 @pytest.mark.asyncio
 async def test_heartbeat_sets_status_idle(client: AsyncClient):
-    """Heartbeat mit status='idle' setzt agent.status=idle."""
+    """Heartbeat with status='idle' sets agent.status=idle."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, token = await _create_agent(s, status="offline")
 
@@ -56,14 +56,15 @@ async def test_heartbeat_sets_status_idle(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_heartbeat_sets_status_working_only_with_active_task(client: AsyncClient):
-    """Bug 18 fix (2026-05-14): 'working' ohne in_progress Task wird auf 'idle'
-    gezwungen. Sparky-Symptom: agent.status='working' + current_task_id=None
-    nach Voice-Foundation Review weil claude im Pane noch Memories rendert →
-    detect_turn_state='working' → Heartbeat sendet 'working' → Backend hat
-    aber keine active Task → war vorher: status bleibt 'working' forever.
+    """Bug 18 fix (2026-05-14): 'working' without an in_progress task is forced
+    to 'idle'. Sparky symptom: agent.status='working' + current_task_id=None
+    after Voice-Foundation review because claude in the pane is still
+    rendering memories → detect_turn_state='working' → heartbeat sends
+    'working' → but backend has no active task → previously: status stayed
+    'working' forever.
 
-    Korrektes Verhalten: ohne in_progress Task ist 'working' ein invalides
-    Self-Report — coerce zu 'idle'.
+    Correct behavior: without an in_progress task, 'working' is an invalid
+    self-report — coerce to 'idle'.
     """
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, token = await _create_agent(s, status="idle")
@@ -78,7 +79,7 @@ async def test_heartbeat_sets_status_working_only_with_active_task(client: Async
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
-    # Bug 18: ohne Task assigned → 'working' wird zu 'idle' coerced
+    # Bug 18: without a task assigned → 'working' is coerced to 'idle'
     assert fresh.status == "idle"
     assert fresh.run_state == "idle"
     assert fresh.current_task_id is None
@@ -86,7 +87,7 @@ async def test_heartbeat_sets_status_working_only_with_active_task(client: Async
 
 @pytest.mark.asyncio
 async def test_heartbeat_ignores_unknown_status(client: AsyncClient):
-    """status='restarting' via Heartbeat wird ignoriert (nur idle/working/online erlaubt)."""
+    """status='restarting' via heartbeat is ignored (only idle/working/online allowed)."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, token = await _create_agent(s, status="idle")
 
@@ -100,7 +101,7 @@ async def test_heartbeat_ignores_unknown_status(client: AsyncClient):
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
-    # Status darf nicht ueberschrieben werden
+    # Status must not be overwritten
     assert fresh.status == "idle"
 
 
@@ -108,7 +109,7 @@ async def test_heartbeat_ignores_unknown_status(client: AsyncClient):
 
 
 async def _agent_with_active_task(session, *, task_status="in_progress", agent_status="idle"):
-    """Helper: erstellt Agent + assigned Task im gewuenschten Status."""
+    """Helper: creates agent + assigned task in the desired status."""
     from app.models.agent import Agent
     from app.models.board import Board
     from app.models.task import Task
@@ -125,7 +126,7 @@ async def _agent_with_active_task(session, *, task_status="in_progress", agent_s
         agent_runtime="cli-bridge",
         status=agent_status,
         run_state="idle",
-        current_task_id=None,  # die Stale-Konstellation, die Bug 2 ausloest
+        current_task_id=None,  # the stale constellation that triggers Bug 2
         agent_token_hash=token_hash,
         scopes=["heartbeat", "tasks:read"],
     )
@@ -149,14 +150,14 @@ async def _agent_with_active_task(session, *, task_status="in_progress", agent_s
 
 @pytest.mark.asyncio
 async def test_heartbeat_idle_with_active_task_syncs_current_task_id(client: AsyncClient):
-    """Bug 2 (refined 2026-05-13): Agent hat in_progress Task assigned, poll.sh
-    sendet `status: idle`. current_task_id MUSS aus der Task-Tabelle gesynct
-    werden (Drift-Fix), ABER agent.status/run_state spiegeln den Payload —
-    NICHT pauschal auf "working" maskieren. Sonst sieht der Operator im UI fake-
-    activity wenn Sparky am Prompt steht ohne zu cooken.
+    """Bug 2 (refined 2026-05-13): agent has an in_progress task assigned,
+    poll.sh sends `status: idle`. current_task_id MUST be synced from the
+    task table (drift fix), BUT agent.status/run_state mirror the payload —
+    NOT blanket-masked to "working". Otherwise the operator sees fake
+    activity in the UI when Sparky is sitting at the prompt without cooking.
 
-    poll.sh ist verantwortlich dafuer `heartbeat "working"` zu senden wenn
-    claude wirklich aktiv ist (siehe Bug 13: detect_turn_state-based).
+    poll.sh is responsible for sending `heartbeat "working"` when claude is
+    actually active (see Bug 13: detect_turn_state-based).
     """
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, task, token = await _agent_with_active_task(s)
@@ -171,9 +172,9 @@ async def test_heartbeat_idle_with_active_task_syncs_current_task_id(client: Asy
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
-    # current_task_id self-heal: aus Task-Tabelle abgeleitet
+    # current_task_id self-heal: derived from the task table
     assert fresh.current_task_id == task.id, "current_task_id muss aus Task-Tabelle abgeleitet werden"
-    # Status spiegelt payload, nicht maskiert
+    # Status mirrors payload, not masked
     assert fresh.status == "idle", (
         "Bug 2 refined: payload=idle bei active task → status=idle. "
         "Operator erkennt damit dass Task assigned ist aber Agent nicht aktiv."
@@ -183,8 +184,8 @@ async def test_heartbeat_idle_with_active_task_syncs_current_task_id(client: Asy
 
 @pytest.mark.asyncio
 async def test_heartbeat_working_with_active_task_stamps_activity(client: AsyncClient):
-    """Bug 2 refined: bei payload=working + active task → status=working,
-    current_task_id gesynct, last_task_activity_at gestempelt."""
+    """Bug 2 refined: with payload=working + active task → status=working,
+    current_task_id synced, last_task_activity_at stamped."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, task, token = await _agent_with_active_task(s)
 
@@ -206,9 +207,9 @@ async def test_heartbeat_working_with_active_task_stamps_activity(client: AsyncC
 
 @pytest.mark.asyncio
 async def test_heartbeat_idle_without_active_task_stays_idle(client: AsyncClient):
-    """Backward-compat: kein in_progress Task → heartbeat=idle setzt idle wie bisher."""
+    """Backward-compat: no in_progress task → heartbeat=idle sets idle as before."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        # task_status=done -> kein aktiver Task fuer den Agent
+        # task_status=done -> no active task for the agent
         agent, task, token = await _agent_with_active_task(s, task_status="done")
 
     resp = await client.post(
@@ -227,8 +228,8 @@ async def test_heartbeat_idle_without_active_task_stays_idle(client: AsyncClient
 
 @pytest.mark.asyncio
 async def test_heartbeat_idle_with_blocked_task_stays_idle(client: AsyncClient):
-    """blocked Task ist nicht 'aktiv arbeitend' — Agent darf idle bleiben.
-    Sonst zeigt UI ihn als working obwohl er auf den Operator wartet."""
+    """A blocked task is not 'actively working' — the agent may stay idle.
+    Otherwise the UI shows it as working even though it's waiting on the operator."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, task, token = await _agent_with_active_task(s, task_status="blocked")
 
@@ -247,14 +248,15 @@ async def test_heartbeat_idle_with_blocked_task_stays_idle(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_heartbeat_working_without_task_coerces_to_idle(client: AsyncClient):
-    """Bug 18 (2026-05-14): heartbeat=working OHNE in_progress Task → coerce zu
-    idle. Vorher: status=working blieb stale forever (Sparky-Live-Symptom).
+    """Bug 18 (2026-05-14): heartbeat=working WITHOUT an in_progress task →
+    coerce to idle. Previously: status=working stayed stale forever (Sparky
+    live symptom).
 
-    Begruendung: poll.sh sollte nur `working` senden wenn CURRENT_TASK_ID
-    lokal gesetzt UND detect_turn_state='working' (siehe poll.sh:651-660).
-    Wenn Backend keinen in_progress Task hat, ist der Self-Report inkonsistent.
-    Wahrscheinlich Race: Task done → poll.sh CURRENT_TASK_ID noch gesetzt →
-    claude rendert Memory-Save → working-Heartbeat ohne assigned Task.
+    Rationale: poll.sh should only send `working` when CURRENT_TASK_ID is
+    set locally AND detect_turn_state='working' (see poll.sh:651-660). If
+    the backend has no in_progress task, the self-report is inconsistent.
+    Likely race: task done → poll.sh CURRENT_TASK_ID still set → claude
+    renders memory save → working heartbeat without an assigned task.
     """
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, _token = await _create_agent(s, status="idle")
@@ -284,15 +286,16 @@ async def test_heartbeat_working_without_task_coerces_to_idle(client: AsyncClien
 
 @pytest.mark.asyncio
 async def test_heartbeat_clears_stale_current_task_id_path_b(client: AsyncClient):
-    """Bug 18 (2026-05-14): Path B (kein active task) clearet current_task_id
-    explizit. Schutz gegen Pointer der nach Task done/failed haengen bleibt
-    (Sparky-Symptom 2026-05-14: war agent.current_task_id = alter Task-Pointer
-    bevor Task done geclearet, Heartbeat lief vorher).
+    """Bug 18 (2026-05-14): Path B (no active task) explicitly clears
+    current_task_id. Guard against a pointer that lingers after a task is
+    done/failed (Sparky symptom 2026-05-14: agent.current_task_id was the
+    old task pointer before the task was cleared as done, heartbeat ran
+    before that).
     """
     import uuid as _uuid
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent, _token = await _create_agent(s, status="idle")
-        # Re-fetch fresh token + stale current_task_id setzen
+        # Re-fetch fresh token + set stale current_task_id
         from app.models.agent import Agent
         from app.auth import generate_agent_token
 
@@ -313,4 +316,4 @@ async def test_heartbeat_clears_stale_current_task_id_path_b(client: AsyncClient
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
-    assert fresh.current_task_id is None  # Stale pointer geclearet
+    assert fresh.current_task_id is None  # Stale pointer cleared

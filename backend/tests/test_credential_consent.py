@@ -1,6 +1,6 @@
-"""Tests fuer task-scoped credential consent.
+"""Tests for task-scoped credential consent.
 
-Testmatrix:
+Test matrix:
 - Root consent + non-destructive auth → skip approval
 - Root consent + credential_bound → still approval
 - No consent + auth → approval
@@ -33,7 +33,7 @@ def _task(**kw):
 # ── Positive: consent skips auth-approval ───────────────
 
 def test_consent_visual_proof_skips_auth_approval():
-    """Root consent + visual_proof + auth → kein Extra-Approval."""
+    """Root consent + visual_proof + auth → no extra approval."""
     child = _task(requires_auth=True, delegation_type="visual_proof")
     parent = _task(credential_consent=True)
     decision, reason = evaluate_promote_decision(child, parent_task=parent)
@@ -41,7 +41,7 @@ def test_consent_visual_proof_skips_auth_approval():
 
 
 def test_consent_code_change_skips_auth_approval():
-    """Root consent + code_change + auth → kein Extra-Approval."""
+    """Root consent + code_change + auth → no extra approval."""
     child = _task(requires_auth=True, delegation_type="code_change")
     parent = _task(credential_consent=True)
     decision, _ = evaluate_promote_decision(child, parent_task=parent)
@@ -49,7 +49,7 @@ def test_consent_code_change_skips_auth_approval():
 
 
 def test_consent_review_skips_auth_approval():
-    """Root consent + review + auth → kein Extra-Approval."""
+    """Root consent + review + auth → no extra approval."""
     child = _task(requires_auth=True, delegation_type="review")
     parent = _task(credential_consent=True)
     decision, _ = evaluate_promote_decision(child, parent_task=parent)
@@ -61,7 +61,7 @@ def test_consent_review_skips_auth_approval():
 
 
 def test_no_creds_no_consent_auth_needs_approval():
-    """Ohne Credentials und ohne consent → auth braucht Approval."""
+    """No credentials and no consent → auth needs approval."""
     child = _task(requires_auth=True, delegation_type="visual_proof")
     parent = _task(credential_consent=None)
     decision, reason = evaluate_promote_decision(child, parent_task=parent)
@@ -70,7 +70,7 @@ def test_no_creds_no_consent_auth_needs_approval():
 
 
 def test_consent_with_infra_tags_still_approval():
-    """consent schützt nicht vor high-risk tags."""
+    """consent does not protect against high-risk tags."""
     child = _task(requires_auth=True, delegation_type="code_change", tags=["infra"])
     parent = _task(credential_consent=True)
     decision, reason = evaluate_promote_decision(child, parent_task=parent)
@@ -79,7 +79,7 @@ def test_consent_with_infra_tags_still_approval():
 
 
 def test_consent_with_mixed_parent_still_approval():
-    """consent schützt nicht vor mixed parent."""
+    """consent does not protect against a mixed parent."""
     child = _task(requires_auth=True, delegation_type="code_change")
     parent = _task(credential_consent=True, request_kind="mixed")
     decision, reason = evaluate_promote_decision(child, parent_task=parent)
@@ -88,7 +88,7 @@ def test_consent_with_mixed_parent_still_approval():
 
 
 def test_consent_with_explicit_approval_policy():
-    """Explizite approval_policy gewinnt ueber consent."""
+    """Explicit approval_policy wins over consent."""
     child = _task(requires_auth=True, approval_policy="on_plan")
     parent = _task(credential_consent=True)
     decision, _ = evaluate_promote_decision(child, parent_task=parent)
@@ -98,7 +98,7 @@ def test_consent_with_explicit_approval_policy():
 # ── Regression: no-auth tasks unaffected ────────────────
 
 def test_no_auth_task_unaffected_by_consent():
-    """Tasks ohne auth bleiben vom consent-Feature unberuehrt."""
+    """Tasks without auth remain unaffected by the consent feature."""
     child = _task(requires_auth=False, delegation_type="code_change")
     parent = _task(credential_consent=True)
     decision, _ = evaluate_promote_decision(child, parent_task=parent)
@@ -106,7 +106,7 @@ def test_no_auth_task_unaffected_by_consent():
 
 
 def test_no_auth_no_consent_normal():
-    """Standard-Fall ohne auth → normal wie bisher."""
+    """Standard case without auth → behaves as before."""
     child = _task(requires_auth=False)
     decision, _ = evaluate_promote_decision(child)
     assert decision == AUTO_PROMOTE

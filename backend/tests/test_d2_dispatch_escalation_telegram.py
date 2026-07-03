@@ -1,10 +1,11 @@
-"""Tests fuer D-2: Telegram-Direct-Push bei dispatch_escalation Approval.
+"""Tests for D-2: Telegram direct push on dispatch_escalation approval.
 
-Hintergrund: Sparky's Frontend-Audit hatte 09:43 eine dispatch_escalation
-Approval erstellt — der Operator sah sie erst 12:00 lokal (2h 17min). Activity-Event
-mit severity=warning landet im UI Inbox-Badge, aber kein Push wenn der Operator
-nicht aktiv im UI ist. D-2 fix ruft telegram_bot.send_approval_telegram
-direkt auf damit der Operator einen Push-Kanal mit Inline-Buttons hat.
+Background: Sparky's frontend audit created a dispatch_escalation approval
+at 09:43 — the operator only saw it at 12:00 local time (2h 17min). Activity
+events with severity=warning land in the UI inbox badge, but there's no push
+when the operator isn't actively in the UI. The D-2 fix calls
+telegram_bot.send_approval_telegram directly so the operator has a push
+channel with inline buttons.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ def _now() -> datetime:
 
 @pytest.mark.asyncio
 async def test_dispatch_escalation_pushes_telegram(make_board, make_agent, make_task):
-    """_create_dispatch_approval ruft telegram_bot.send_approval_telegram auf."""
+    """_create_dispatch_approval calls telegram_bot.send_approval_telegram."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from app.models.approval import Approval
@@ -58,7 +59,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
                     s, await s.get(Task, task.id), agent, 20.0, "kein ACK nach Dispatch",
                 )
 
-    # Approval entstanden
+    # Approval was created
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(
             select(Approval).where(Approval.task_id == task.id)
@@ -66,7 +67,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
     assert len(approvals) == 1
     assert approvals[0].action_type == "dispatch_escalation"
 
-    # Telegram push wurde aufgerufen
+    # Telegram push was called
     assert len(captured_calls) == 1
     call = captured_calls[0]
     assert call["approval_id"] == approvals[0].id
@@ -78,8 +79,8 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
 @pytest.mark.asyncio
 async def test_telegram_failure_does_not_block_approval(make_board, make_agent, make_task):
-    """Wenn Telegram fehlschlaegt (kein bot configured / Netzwerk weg) →
-    Approval entsteht trotzdem, Backend logged Warning. Resilient design."""
+    """If Telegram fails (no bot configured / network down) → the approval
+    is still created, backend logs a warning. Resilient design."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from app.models.approval import Approval
@@ -102,7 +103,7 @@ scopes=["tasks:read", "tasks:write"],
                new=AsyncMock(side_effect=RuntimeError("Telegram API down"))):
         with patch("app.services.activity.broadcast", new_callable=AsyncMock):
             async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                # MUSS NICHT raisen
+                # MUST NOT raise
                 await task_runner._create_dispatch_approval(
                     s, await s.get(Task, task.id), agent, 20.0, "kein ACK",
                 )
@@ -111,4 +112,4 @@ scopes=["tasks:read", "tasks:write"],
         approvals = (await s.exec(
             select(Approval).where(Approval.task_id == task.id)
         )).all()
-    assert len(approvals) == 1  # Approval trotzdem da
+    assert len(approvals) == 1  # approval created anyway

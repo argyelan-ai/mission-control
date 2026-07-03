@@ -1,4 +1,4 @@
-"""Tests: target_url wird in Dispatch-Messages angezeigt."""
+"""Tests: target_url is shown in dispatch messages."""
 import uuid
 import pytest
 from app.models.task import Task
@@ -90,7 +90,7 @@ class TestTargetUrlInTestMessage:
 
     @pytest.mark.anyio
     async def test_tester_uses_target_url(self, session):
-        """Tester-Message nutzt target_url statt hardcoded localhost."""
+        """Tester message uses target_url instead of hardcoded localhost."""
         from app.services.dispatch import _build_test_message
         task = _make_task(target_url="http://localhost:4200/dashboard")
         agent = _make_agent(name="Tester")
@@ -100,7 +100,7 @@ class TestTargetUrlInTestMessage:
 
     @pytest.mark.anyio
     async def test_tester_uses_workspace_port_fallback(self, session):
-        """Ohne target_url aber mit workspace_port: http://localhost:{port}."""
+        """Without target_url but with workspace_port: http://localhost:{port}."""
         from app.services.dispatch import _build_test_message
         task = _make_task(target_url=None, workspace_port=4200)
         agent = _make_agent(name="Tester")
@@ -109,7 +109,7 @@ class TestTargetUrlInTestMessage:
 
     @pytest.mark.anyio
     async def test_tester_fallback_localhost(self, session):
-        """Ohne target_url und ohne workspace_port: http://localhost."""
+        """Without target_url and without workspace_port: http://localhost."""
         from app.services.dispatch import _build_test_message
         task = _make_task(target_url=None, workspace_port=None)
         agent = _make_agent(name="Tester")

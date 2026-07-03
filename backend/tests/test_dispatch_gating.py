@@ -1,22 +1,22 @@
-"""Tests fuer dispatch_phase Pre-Dispatch-Gating.
+"""Tests for dispatch_phase pre-dispatch gating.
 
-Testmatrix:
-- Guard-Tests: planning blockiert, ready erlaubt, null=Legacy, Flag-off
-- Dispatch-Reset: nach Dispatch → null
-- Promote-Guards: alle 6 Preconditions
-- Agent-Bypass: Work Items erzwungen auf planning
-- Update-Backdoor: PATCH kann dispatch_phase nicht aendern
-- Root-vs-Child: Root-Tasks kein Gating
-- Feature-Flag: Promote bei Flag-off → 409
-- Doppel-Promote: zweiter Aufruf → 409 (ready != planning)
-- Regression: bestehende Guards intakt
+Test matrix:
+- Guard tests: planning blocks, ready allows, null=legacy, flag off
+- Dispatch reset: after dispatch → null
+- Promote guards: all 6 preconditions
+- Agent bypass: work items forced to planning
+- Update backdoor: PATCH cannot change dispatch_phase
+- Root vs child: root tasks have no gating
+- Feature flag: promote with flag off → 409
+- Double promote: second call → 409 (ready != planning)
+- Regression: existing guards remain intact
 """
 from unittest.mock import AsyncMock, patch, MagicMock
 import pytest
 from app.services.operations import check_dispatch_allowed
 
-# Mock dependencies_met: promote_task_to_ready() importiert es lazy aus dispatch.
-# Patch auf der Quelle damit der lazy import den Mock bekommt.
+# Mock dependencies_met: promote_task_to_ready() imports it lazily from dispatch.
+# Patch at the source so the lazy import picks up the mock.
 @pytest.fixture(autouse=True)
 def _mock_deps_met_global():
     with patch("app.services.dispatch.dependencies_met",
@@ -47,11 +47,11 @@ def _active():
         yield
 
 
-# ── Guard-Tests ──────────────────────────────────────────
+# ── Guard tests ──────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_planning_blocks_dispatch(_active):
-    """dispatch_phase='planning' blockiert Dispatch."""
+    """dispatch_phase='planning' blocks dispatch."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, reason = await check_dispatch_allowed(_task("planning"), _agent())
@@ -61,7 +61,7 @@ async def test_planning_blocks_dispatch(_active):
 
 @pytest.mark.asyncio
 async def test_ready_allows_dispatch(_active):
-    """dispatch_phase='ready' erlaubt Dispatch."""
+    """dispatch_phase='ready' allows dispatch."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, _ = await check_dispatch_allowed(_task("ready"), _agent())
@@ -70,7 +70,7 @@ async def test_ready_allows_dispatch(_active):
 
 @pytest.mark.asyncio
 async def test_null_phase_legacy(_active):
-    """dispatch_phase=None = Legacy, kein Gating."""
+    """dispatch_phase=None = legacy, no gating."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, _ = await check_dispatch_allowed(_task(None), _agent())
@@ -79,18 +79,18 @@ async def test_null_phase_legacy(_active):
 
 @pytest.mark.asyncio
 async def test_flag_off_ignores_planning(_active):
-    """Feature-Flag aus: planning wird ignoriert."""
+    """Feature flag off: planning is ignored."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = False
         ok, _ = await check_dispatch_allowed(_task("planning"), _agent())
     assert ok is True
 
 
-# ── Review-Handoff darf durch Planning-Gate passieren ────
+# ── Review handoff must pass through the planning gate ────
 
 @pytest.mark.asyncio
 async def test_review_handoff_passes_planning_gate(_active):
-    """Review-Handoff (Continuation) darf trotz dispatch_phase=planning passieren."""
+    """Review handoff (continuation) must pass despite dispatch_phase=planning."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, _ = await check_dispatch_allowed(
@@ -101,7 +101,7 @@ async def test_review_handoff_passes_planning_gate(_active):
 
 @pytest.mark.asyncio
 async def test_review_rework_passes_planning_gate(_active):
-    """Review-Rework (Continuation) darf trotz dispatch_phase=planning passieren."""
+    """Review rework (continuation) must pass despite dispatch_phase=planning."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, _ = await check_dispatch_allowed(
@@ -112,7 +112,7 @@ async def test_review_rework_passes_planning_gate(_active):
 
 @pytest.mark.asyncio
 async def test_subtask_still_blocked_by_planning(_active):
-    """Normale Subtasks bleiben bei dispatch_phase=planning blockiert."""
+    """Normal subtasks stay blocked at dispatch_phase=planning."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, reason = await check_dispatch_allowed(
@@ -126,7 +126,7 @@ async def test_subtask_still_blocked_by_planning(_active):
 
 @pytest.mark.asyncio
 async def test_run_control_still_works(_active):
-    """Bestehender run_control Guard bleibt intakt."""
+    """Existing run_control guard remains intact."""
     with patch("app.services.operations.settings") as s:
         s.enable_dispatch_gating = True
         ok, reason = await check_dispatch_allowed(
@@ -136,10 +136,10 @@ async def test_run_control_still_works(_active):
     assert "stopped" in reason.lower()
 
 
-# ── Dispatch-Reset ───────────────────────────────────────
+# ── Dispatch reset ───────────────────────────────────────
 
 def test_dispatch_resets_phase_to_null():
-    """Nach Dispatch wird dispatch_phase auf null zurueckgesetzt."""
+    """After dispatch, dispatch_phase is reset to null."""
     task = MagicMock()
     task.dispatch_phase = "ready"
 
@@ -151,7 +151,7 @@ def test_dispatch_resets_phase_to_null():
 
 
 def test_dispatch_reset_skips_null():
-    """Legacy-Tasks (dispatch_phase=None) bleiben None."""
+    """Legacy tasks (dispatch_phase=None) stay None."""
     task = MagicMock()
     task.dispatch_phase = None
 
@@ -162,11 +162,11 @@ def test_dispatch_reset_skips_null():
     assert task.dispatch_phase is None
 
 
-# ── Promote Service Guards ───────────────────────────────
+# ── Promote service guards ───────────────────────────────
 
 @pytest.mark.asyncio
 async def test_promote_non_planning_fails():
-    """Promote auf nicht-planning Task gibt 409."""
+    """Promote on a non-planning task returns 409."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
     task.dispatch_phase = None
@@ -179,7 +179,7 @@ async def test_promote_non_planning_fails():
 
 @pytest.mark.asyncio
 async def test_promote_root_task_fails():
-    """Root-Task kann nicht promoted werden."""
+    """A root task cannot be promoted."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
     task.dispatch_phase = "planning"
@@ -193,7 +193,7 @@ async def test_promote_root_task_fails():
 
 @pytest.mark.asyncio
 async def test_promote_no_assigned_agent_fails():
-    """Task ohne assigned_agent_id kann nicht promoted werden."""
+    """A task without assigned_agent_id cannot be promoted."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
     task.dispatch_phase = "planning"
@@ -208,7 +208,7 @@ async def test_promote_no_assigned_agent_fails():
 
 @pytest.mark.asyncio
 async def test_promote_wrong_status_fails():
-    """Task mit status != inbox kann nicht promoted werden."""
+    """A task with status != inbox cannot be promoted."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
     task.dispatch_phase = "planning"
@@ -224,7 +224,7 @@ async def test_promote_wrong_status_fails():
 
 @pytest.mark.asyncio
 async def test_promote_already_dispatched_fails():
-    """Bereits dispatchter Task kann nicht promoted werden."""
+    """A task that was already dispatched cannot be promoted."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
     task.dispatch_phase = "planning"
@@ -239,14 +239,14 @@ async def test_promote_already_dispatched_fails():
     assert exc_info.value.status_code == 409
 
 
-# ── Doppel-Promote ──────────────────────────────────────
+# ── Double promote ──────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_double_promote_fails():
-    """Zweiter Promote auf ready-Task gibt 409 (kein Doppel-Dispatch)."""
+    """Second promote on a ready task returns 409 (no double dispatch)."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = MagicMock()
-    task.dispatch_phase = "ready"  # bereits promoted
+    task.dispatch_phase = "ready"  # already promoted
     task.parent_task_id = "parent-id"
     task.assigned_agent_id = "agent-id"
     task.status = "inbox"
@@ -261,16 +261,16 @@ async def test_double_promote_fails():
 
 @pytest.mark.asyncio
 async def test_promote_atomic_conflict():
-    """Atomarer Guard: rowcount=0 wenn ein anderer Request schon promoted hat.
+    """Atomic guard: rowcount=0 when another request already promoted.
 
-    Simuliert Race Condition: Soft-Guards passieren (dispatch_phase=planning
-    im in-memory Objekt), aber der atomare UPDATE ... WHERE dispatch_phase='planning'
-    matcht keine Zeile (weil anderer Request schon auf 'ready' gesetzt hat).
+    Simulates a race condition: soft guards pass (dispatch_phase=planning
+    on the in-memory object), but the atomic UPDATE ... WHERE dispatch_phase='planning'
+    matches no row (because another request already set it to 'ready').
     """
     from app.services.dispatch_gating import promote_task_to_ready
 
     task = MagicMock()
-    task.dispatch_phase = "planning"  # Soft-Guard sieht planning
+    task.dispatch_phase = "planning"  # soft guard sees planning
     task.parent_task_id = "parent-id"
     task.assigned_agent_id = "agent-id"
     task.status = "inbox"
@@ -279,7 +279,7 @@ async def test_promote_atomic_conflict():
 
     session = AsyncMock()
 
-    # Simuliere: atomarer UPDATE matcht 0 Zeilen (anderer Request war schneller)
+    # Simulate: atomic UPDATE matches 0 rows (another request was faster)
     mock_result = MagicMock()
     mock_result.rowcount = 0
     session.execute = AsyncMock(return_value=mock_result)
@@ -292,7 +292,7 @@ async def test_promote_atomic_conflict():
 
 @pytest.mark.asyncio
 async def test_promote_atomic_success():
-    """Atomarer Guard: rowcount=1 bei erfolgreichem Promote."""
+    """Atomic guard: rowcount=1 on successful promote."""
     from app.services.dispatch_gating import promote_task_to_ready
 
     task = MagicMock()
@@ -310,22 +310,22 @@ async def test_promote_atomic_success():
     mock_result.rowcount = 1
     session.execute = AsyncMock(return_value=mock_result)
 
-    # emit_event braucht broadcast Mock
+    # emit_event needs a broadcast mock
     with patch("app.services.dispatch_gating.emit_event", new_callable=AsyncMock):
         result = await promote_task_to_ready(task, session)
 
-    # Session.execute wurde mit UPDATE aufgerufen
+    # session.execute was called with UPDATE
     session.execute.assert_called_once()
     session.commit.assert_called()
     session.refresh.assert_called_once_with(task)
 
 
-# ── TOCTOU-Tests: Zustand aendert sich zwischen Soft-Guard und atomarem UPDATE ──
-# In allen Faellen passieren die Soft-Guards (in-memory Task sieht gueltig aus),
-# aber die DB hat sich zwischenzeitlich geaendert → rowcount=0 → 409.
+# ── TOCTOU tests: state changes between the soft guard and the atomic UPDATE ──
+# In all cases the soft guards pass (in-memory task looks valid), but the DB
+# has changed in the meantime → rowcount=0 → 409.
 
 def _promotable_task(**overrides):
-    """Task der alle Soft-Guards besteht."""
+    """A task that passes all soft guards."""
     t = MagicMock()
     t.dispatch_phase = "planning"
     t.parent_task_id = "parent-id"
@@ -339,7 +339,7 @@ def _promotable_task(**overrides):
 
 
 def _session_rowcount(n):
-    """AsyncMock Session deren execute rowcount=n zurueckgibt."""
+    """AsyncMock session whose execute returns rowcount=n."""
     s = AsyncMock()
     r = MagicMock()
     r.rowcount = n
@@ -349,9 +349,9 @@ def _session_rowcount(n):
 
 @pytest.mark.asyncio
 async def test_atomic_conflict_status_changed():
-    """TOCTOU: status wechselt von inbox zu in_progress zwischen Guard und UPDATE."""
+    """TOCTOU: status changes from inbox to in_progress between guard and UPDATE."""
     from app.services.dispatch_gating import promote_task_to_ready
-    # Soft-Guard sieht inbox (in-memory), DB hat jetzt in_progress → rowcount=0
+    # soft guard sees inbox (in-memory), DB now has in_progress → rowcount=0
     task = _promotable_task()
     session = _session_rowcount(0)
 
@@ -362,9 +362,9 @@ async def test_atomic_conflict_status_changed():
 
 @pytest.mark.asyncio
 async def test_atomic_conflict_already_dispatched():
-    """TOCTOU: dispatched_at wird gesetzt zwischen Guard und UPDATE."""
+    """TOCTOU: dispatched_at gets set between guard and UPDATE."""
     from app.services.dispatch_gating import promote_task_to_ready
-    # Soft-Guard sieht dispatched_at=None (in-memory), DB hat jetzt einen Wert → rowcount=0
+    # soft guard sees dispatched_at=None (in-memory), DB now has a value → rowcount=0
     task = _promotable_task()
     session = _session_rowcount(0)
 
@@ -375,7 +375,7 @@ async def test_atomic_conflict_already_dispatched():
 
 @pytest.mark.asyncio
 async def test_atomic_conflict_agent_unassigned():
-    """TOCTOU: assigned_agent_id wird NULL zwischen Guard und UPDATE."""
+    """TOCTOU: assigned_agent_id becomes NULL between guard and UPDATE."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = _promotable_task()
     session = _session_rowcount(0)
@@ -387,7 +387,7 @@ async def test_atomic_conflict_agent_unassigned():
 
 @pytest.mark.asyncio
 async def test_atomic_conflict_parent_removed():
-    """TOCTOU: parent_task_id wird NULL zwischen Guard und UPDATE."""
+    """TOCTOU: parent_task_id becomes NULL between guard and UPDATE."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = _promotable_task()
     session = _session_rowcount(0)
@@ -399,7 +399,7 @@ async def test_atomic_conflict_parent_removed():
 
 @pytest.mark.asyncio
 async def test_atomic_success_with_full_where():
-    """Vollstaendige WHERE-Clause: rowcount=1 bei gueltigem Zustand."""
+    """Full WHERE clause: rowcount=1 in a valid state."""
     from app.services.dispatch_gating import promote_task_to_ready
     task = _promotable_task(title="Full WHERE Test", board_id="board-1")
     session = _session_rowcount(1)
@@ -411,10 +411,10 @@ async def test_atomic_success_with_full_where():
     session.commit.assert_called()
 
 
-# ── Root-vs-Child bei User-Create ───────────────────────
+# ── Root vs child on user-create ───────────────────────
 
 def test_user_create_root_task_clears_dispatch_phase():
-    """User-Route: Root-Task (kein parent) → dispatch_phase auf null."""
+    """User route: root task (no parent) → dispatch_phase set to null."""
     task = MagicMock()
     task.dispatch_phase = "planning"
     task.parent_task_id = None
@@ -428,7 +428,7 @@ def test_user_create_root_task_clears_dispatch_phase():
 
 
 def test_user_create_child_task_keeps_planning():
-    """User-Route: Child-Task mit parent+agent → dispatch_phase bleibt."""
+    """User route: child task with parent+agent → dispatch_phase stays."""
     task = MagicMock()
     task.dispatch_phase = "planning"
     task.parent_task_id = "parent-123"
@@ -441,10 +441,10 @@ def test_user_create_child_task_keeps_planning():
     assert task.dispatch_phase == "planning"
 
 
-# ── Agent-Bypass ────────────────────────────────────────
+# ── Agent bypass ────────────────────────────────────────
 
 def test_agent_bypass_null_overridden_to_planning():
-    """Agent sendet dispatch_phase=null fuer Work Item → Server erzwingt planning."""
+    """Agent sends dispatch_phase=null for a work item → server forces planning."""
     task = MagicMock()
     task.parent_task_id = "parent-id"
     task.assigned_agent_id = "other-agent-id"
@@ -463,7 +463,7 @@ def test_agent_bypass_null_overridden_to_planning():
 
 
 def test_agent_bypass_ready_overridden_to_planning():
-    """Agent sendet dispatch_phase=ready fuer Work Item → Server erzwingt planning."""
+    """Agent sends dispatch_phase=ready for a work item → server forces planning."""
     task = MagicMock()
     task.parent_task_id = "parent-id"
     task.assigned_agent_id = "other-agent-id"
@@ -482,7 +482,7 @@ def test_agent_bypass_ready_overridden_to_planning():
 
 
 def test_agent_self_assigned_no_gating():
-    """Agent assigned an sich selbst → dispatch_phase bleibt null."""
+    """Agent assigned to itself → dispatch_phase stays null."""
     task = MagicMock()
     task.parent_task_id = "parent-id"
     task.assigned_agent_id = "creator-agent-id"
@@ -503,7 +503,7 @@ def test_agent_self_assigned_no_gating():
 
 
 def test_agent_root_task_no_gating():
-    """Agent erstellt Root-Task → dispatch_phase bleibt null."""
+    """Agent creates a root task → dispatch_phase stays null."""
     task = MagicMock()
     task.parent_task_id = None
     task.assigned_agent_id = "other-agent-id"
@@ -523,15 +523,15 @@ def test_agent_root_task_no_gating():
     assert task.dispatch_phase is None
 
 
-# ── Update-Backdoor ─────────────────────────────────────
+# ── Update backdoor ─────────────────────────────────────
 
 def test_task_update_model_has_no_dispatch_phase():
-    """TaskUpdate Model enthaelt KEIN dispatch_phase Feld."""
+    """TaskUpdate model contains NO dispatch_phase field."""
     from app.routers.tasks import TaskUpdate
     assert "dispatch_phase" not in TaskUpdate.model_fields
 
 
 def test_agent_task_update_model_has_no_dispatch_phase():
-    """AgentTaskUpdate Model enthaelt KEIN dispatch_phase Feld."""
+    """AgentTaskUpdate model contains NO dispatch_phase field."""
     from app.routers.agent_scoped import AgentTaskUpdate
     assert "dispatch_phase" not in AgentTaskUpdate.model_fields

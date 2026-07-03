@@ -1,7 +1,7 @@
-"""Closeout-Tests: Credential-Flows die bisher nicht explizit bewiesen waren.
+"""Closeout tests: credential flows that were not explicitly proven before.
 
-1. credential_bound + Credentials → auto-promote (NICHT manual_wait)
-2. Blocker-Re-Dispatch erhaelt Parent-Credentials
+1. credential_bound + credentials → auto-promote (NOT manual_wait)
+2. blocker re-dispatch retains parent credentials
 """
 import uuid
 from unittest.mock import MagicMock, patch
@@ -31,14 +31,14 @@ def _task(**kw):
     return t
 
 
-# ── B: manual_wait Fix — credential_bound + Credentials = auto-promote ────
+# ── B: manual_wait fix — credential_bound + credentials = auto-promote ────
 
 class TestCredentialBoundAutoPromote:
-    """credential_bound Tasks mit bewussten Credentials sollen auto-promoten,
-    nicht auf manual_wait fallen."""
+    """credential_bound tasks with deliberate credentials should auto-promote,
+    not fall back to manual_wait."""
 
     def test_credential_bound_with_own_creds_auto_promotes(self):
-        """credential_bound + eigene Credentials + kein autonomy → auto-promote."""
+        """credential_bound + own credentials + no autonomy → auto-promote."""
         task = _task(
             delegation_type="credential_bound",
             credentials_encrypted="encrypted-data",
@@ -49,7 +49,7 @@ class TestCredentialBoundAutoPromote:
         assert "operator consent" in reason.lower()
 
     def test_credential_bound_with_parent_creds_auto_promotes(self):
-        """credential_bound Child + Parent-Credentials → auto-promote."""
+        """credential_bound child + parent credentials → auto-promote."""
         child = _task(delegation_type="credential_bound")
         parent = _task(credentials_encrypted="parent-encrypted")
         decision, reason = evaluate_promote_decision(child, parent_task=parent)
@@ -57,7 +57,7 @@ class TestCredentialBoundAutoPromote:
         assert "credential_bound" in reason
 
     def test_credential_bound_with_consent_auto_promotes(self):
-        """credential_bound + credential_consent (ohne enc) → auto-promote."""
+        """credential_bound + credential_consent (without enc) → auto-promote."""
         task = _task(
             delegation_type="credential_bound",
             credential_consent=True,
@@ -66,13 +66,13 @@ class TestCredentialBoundAutoPromote:
         assert decision == AUTO_PROMOTE
 
     def test_credential_bound_without_creds_still_needs_approval(self):
-        """credential_bound OHNE Credentials → weiterhin NEEDS_APPROVAL."""
+        """credential_bound WITHOUT credentials → still NEEDS_APPROVAL."""
         task = _task(delegation_type="credential_bound")
         decision, _ = evaluate_promote_decision(task)
         assert decision == NEEDS_APPROVAL
 
     def test_credential_bound_high_risk_tag_still_approval(self):
-        """credential_bound + Credentials + infra-Tag → Approval (Tags gewinnen)."""
+        """credential_bound + credentials + infra tag → approval (tags win)."""
         task = _task(
             delegation_type="credential_bound",
             credentials_encrypted="enc",
@@ -83,7 +83,7 @@ class TestCredentialBoundAutoPromote:
         assert "infra" in reason
 
     def test_credential_bound_manual_dispatch_still_waits(self):
-        """credential_bound + Credentials + manual_dispatch → MANUAL_WAIT."""
+        """credential_bound + credentials + manual_dispatch → MANUAL_WAIT."""
         task = _task(
             delegation_type="credential_bound",
             credentials_encrypted="enc",
@@ -93,7 +93,7 @@ class TestCredentialBoundAutoPromote:
         assert decision == MANUAL_WAIT
 
     def test_credential_bound_approval_policy_still_wins(self):
-        """credential_bound + Credentials + approval_policy=always → NEEDS_APPROVAL."""
+        """credential_bound + credentials + approval_policy=always → NEEDS_APPROVAL."""
         task = _task(
             delegation_type="credential_bound",
             credentials_encrypted="enc",
@@ -103,8 +103,8 @@ class TestCredentialBoundAutoPromote:
         assert decision == NEEDS_APPROVAL
 
     def test_requires_auth_with_creds_no_autonomy_falls_through(self):
-        """requires_auth + Credentials + kein autonomy + code_change → MANUAL_WAIT.
-        (Nur credential_bound bekommt den neuen auto-promote Pfad.)"""
+        """requires_auth + credentials + no autonomy + code_change → MANUAL_WAIT.
+        (Only credential_bound gets the new auto-promote path.)"""
         task = _task(
             requires_auth=True,
             credentials_encrypted="enc",
@@ -115,16 +115,16 @@ class TestCredentialBoundAutoPromote:
         assert decision == MANUAL_WAIT
 
 
-# ── C: Credential-Re-Dispatch Regressionstest ─────────────────────────────
+# ── C: credential re-dispatch regression test ─────────────────────────────
 
 class TestCredentialReDispatch:
-    """Beweist dass Parent-Credentials bei Re-Dispatch erhalten bleiben."""
+    """Proves that parent credentials are retained on re-dispatch."""
 
     @pytest.mark.asyncio
     async def test_child_inherits_parent_creds_on_initial_dispatch(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Initial-Dispatch: Child ohne Credentials erbt von Parent."""
+        """Initial dispatch: child without credentials inherits from parent."""
         from app.services.dispatch import _build_dispatch_message
 
         board_id = uuid.uuid4()
@@ -156,8 +156,8 @@ class TestCredentialReDispatch:
     async def test_child_still_inherits_after_simulated_redispatch(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Simulated Re-Dispatch (wie nach Blocker-Resolution):
-        Child wird zurueckgesetzt, dann neu dispatcht — Credentials kommen vom Parent."""
+        """Simulated re-dispatch (as after blocker resolution):
+        child is reset, then re-dispatched — credentials come from the parent."""
         from app.services.dispatch import _build_dispatch_message
 
         board_id = uuid.uuid4()
@@ -179,7 +179,7 @@ class TestCredentialReDispatch:
             status="inbox",
         )
 
-        # Simuliere Blocker-Reset (wie in approvals.py Zeile 114-122)
+        # Simulate blocker reset (as in approvals.py lines 114-122)
         child.status = "inbox"
         child.dispatched_at = None
         child.ack_at = None
@@ -189,10 +189,10 @@ class TestCredentialReDispatch:
         await session.commit()
         await session.refresh(child)
 
-        # Verify: child hat KEINE eigenen Credentials
+        # Verify: child has NO credentials of its own
         assert child.credentials_encrypted is None
 
-        # Re-Dispatch — muss Parent-Credentials erben
+        # Re-dispatch — must inherit parent credentials
         with patch("app.services.encryption.safe_decrypt", return_value="user:geheim456"):
             msg = await _build_dispatch_message(child, agent, session)
 
@@ -203,7 +203,7 @@ class TestCredentialReDispatch:
     async def test_child_with_own_creds_uses_own(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Child mit eigenen Credentials nutzt seine eigenen, nicht die des Parents."""
+        """Child with its own credentials uses those, not the parent's."""
         from app.services.dispatch import _build_dispatch_message
 
         board_id = uuid.uuid4()
@@ -234,15 +234,15 @@ class TestCredentialReDispatch:
 
 
 class TestVaultCredentialInheritance:
-    """Vererbung von Vault-Credentials (credential_id) — symmetrisch zu Inline."""
+    """Inheritance of vault credentials (credential_id) — symmetric to inline."""
 
     @pytest.mark.asyncio
     async def test_child_inherits_parent_vault_credential_id(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Bug 6 (Live-Test 2026-04-22): Child ohne credential_id erbt Parent's Vault-
-        Referenz. Vorher: Vault-Vererbung war asymmetrisch — nur credentials_encrypted
-        (Inline) wurde vererbt, credential_id (Vault) nicht.
+        """Bug 6 (live test 2026-04-22): child without credential_id inherits the
+        parent's vault reference. Before: vault inheritance was asymmetric — only
+        credentials_encrypted (inline) was inherited, not credential_id (vault).
         """
         from app.models.credential import Credential
         from app.services.encryption import encrypt
@@ -250,7 +250,7 @@ class TestVaultCredentialInheritance:
         import json
 
         board_id = uuid.uuid4()
-        # Vault-Eintrag anlegen mit echten Encrypted-Daten
+        # Create vault entry with real encrypted data
         cred_payload = json.dumps({"username": "marius", "password": "geheim42"})
         cred = Credential(
             id=uuid.uuid4(),
@@ -279,13 +279,13 @@ class TestVaultCredentialInheritance:
             status="inbox",
         )
 
-        # Sanity: Child hat KEIN eigenes credential_id
+        # Sanity: child has NO credential_id of its own
         assert child.credential_id is None
         assert child.credentials_encrypted is None
 
         msg = await _build_dispatch_message(child, agent, session)
 
-        # Username + Password aus Vault-Referenz müssen im Dispatch landen
+        # Username + password from the vault reference must land in the dispatch
         assert "## Zugangsdaten" in msg
         assert "marius" in msg
         assert "geheim42" in msg
@@ -294,7 +294,7 @@ class TestVaultCredentialInheritance:
     async def test_child_with_own_credential_id_does_not_inherit(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Wenn Child eigenes credential_id hat, wird Parent's NICHT genutzt."""
+        """If the child has its own credential_id, the parent's is NOT used."""
         from app.models.credential import Credential
         from app.services.encryption import encrypt
         from app.services.dispatch import _build_dispatch_message
@@ -326,7 +326,7 @@ class TestVaultCredentialInheritance:
 
         msg = await _build_dispatch_message(child, agent, session)
 
-        # Eigenes Credential gewinnt — kein Parent-Leak
+        # Own credential wins — no parent leak
         assert "child" in msg
         assert "cpw" in msg
         assert "parent" not in msg
@@ -336,16 +336,16 @@ class TestVaultCredentialInheritance:
     async def test_inline_takes_precedence_over_inherited_vault(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Wenn Child eigenes Inline-Credential hat, gewinnt Inline ueber Parent-Vault.
+        """If the child has its own inline credential, inline wins over parent vault.
 
-        Priority laut dispatch.py:
-          1. ctx.credentials_text (eigenes Vault, hier nicht gesetzt)
-          2. task.credentials_encrypted (eigenes Inline ✓ — hier gesetzt)
-          3. _inherited_credentials_encrypted (Parent-Inline)
-          → _inherited_credential_id (Parent-Vault) wird via ctx.credentials_text
-            geladen, gewinnt also über _inherited_credentials_encrypted.
+        Priority per dispatch.py:
+          1. ctx.credentials_text (own vault, not set here)
+          2. task.credentials_encrypted (own inline ✓ — set here)
+          3. _inherited_credentials_encrypted (parent inline)
+          → _inherited_credential_id (parent vault) is loaded via ctx.credentials_text,
+            so it wins over _inherited_credentials_encrypted.
 
-        Dieser Test verifiziert: eigenes Inline schlaegt vererbtes Vault.
+        This test verifies: own inline beats inherited vault.
         """
         from app.models.credential import Credential
         from app.services.encryption import encrypt
@@ -374,8 +374,8 @@ class TestVaultCredentialInheritance:
 
         msg = await _build_dispatch_message(child, agent, session)
 
-        # Vault-Vererbung greift weil child kein credential_id hat → ctx.credentials_text
-        # wird vom Parent-Vault geladen → gewinnt vor Inline
+        # Vault inheritance kicks in because child has no credential_id → ctx.credentials_text
+        # gets loaded from the parent vault → wins over inline
         assert "parent_v" in msg or "inline-only-secret" in msg
-        # Mindestens irgendwas im Zugangsdaten-Block
+        # At least something in the credentials block
         assert "## Zugangsdaten" in msg

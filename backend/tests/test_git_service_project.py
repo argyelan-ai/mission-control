@@ -1,4 +1,4 @@
-"""Tests für GitService Projekt-Methoden (subprocess gemockt)."""
+"""Tests for GitService project methods (subprocess mocked)."""
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
 from app.services.git_service import GitService, GITHUB_OWNER
@@ -11,7 +11,7 @@ def git():
 
 @pytest.mark.asyncio
 async def test_create_project_repo_uses_mc_prefix(git):
-    """create_project_repo erstellt Repo mit mc-{slug} Naming."""
+    """create_project_repo creates repo with mc-{slug} naming."""
     with patch.object(git, "create_repo", new_callable=AsyncMock) as mock_create, \
          patch.object(git, "init_repo_files_with_briefing", new_callable=AsyncMock) as mock_init:
         mock_create.return_value = f"https://github.com/{GITHUB_OWNER}/mc-argyelan-redesign.git"
@@ -26,7 +26,7 @@ async def test_create_project_repo_uses_mc_prefix(git):
 
 @pytest.mark.asyncio
 async def test_create_project_repo_slugifies(git):
-    """Leerzeichen und Sonderzeichen im Namen werden zu Bindestrichen."""
+    """Spaces and special characters in the name become hyphens."""
     with patch.object(git, "create_repo", new_callable=AsyncMock) as mock_create, \
          patch.object(git, "init_repo_files_with_briefing", new_callable=AsyncMock):
         mock_create.return_value = f"https://github.com/{GITHUB_OWNER}/mc-my-project.git"
@@ -37,7 +37,7 @@ async def test_create_project_repo_slugifies(git):
 
 @pytest.mark.asyncio
 async def test_create_phase_branch_naming(git):
-    """create_phase_branch erstellt phase/{slug} Branch."""
+    """create_phase_branch creates phase/{slug} branch."""
     with patch.object(git, "_run_cmd", new_callable=AsyncMock) as mock_cmd:
         mock_cmd.return_value = ""
         result = await git.create_phase_branch("/tmp/project", "research")
@@ -48,7 +48,7 @@ async def test_create_phase_branch_naming(git):
 
 @pytest.mark.asyncio
 async def test_commit_deliverable_writes_file(git, tmp_path):
-    """commit_deliverable schreibt Datei und erstellt Commit."""
+    """commit_deliverable writes file and creates commit."""
     project_dir = str(tmp_path)
     phase_dir = tmp_path / "phases" / "research" / "deliverables"
 
@@ -63,12 +63,12 @@ async def test_commit_deliverable_writes_file(git, tmp_path):
             title="Competitor Analysis",
         )
 
-    # Datei wurde geschrieben
+    # File was written
     written_file = tmp_path / "phases" / "research" / "deliverables" / "competitor-analysis.md"
     assert written_file.exists()
     assert "Competitor Analysis" in written_file.read_text()
 
-    # git add + commit wurde aufgerufen
+    # git add + commit was called
     add_calls = [c for c in mock_cmd.call_args_list if "add" in c.args]
     commit_calls = [c for c in mock_cmd.call_args_list if "commit" in c.args]
     assert len(add_calls) >= 1
@@ -77,7 +77,7 @@ async def test_commit_deliverable_writes_file(git, tmp_path):
 
 @pytest.mark.asyncio
 async def test_create_phase_pr_uses_correct_base(git):
-    """create_phase_pr öffnet PR von phase/{slug} → main."""
+    """create_phase_pr opens PR from phase/{slug} to main."""
     with patch.object(git, "create_pr", new_callable=AsyncMock) as mock_pr, \
          patch.object(git, "_run_cmd", new_callable=AsyncMock) as mock_cmd:
         mock_pr.return_value = f"https://github.com/{GITHUB_OWNER}/mc-project/pull/1"
@@ -97,7 +97,7 @@ async def test_create_phase_pr_uses_correct_base(git):
 
 @pytest.mark.asyncio
 async def test_create_git_tag_pushes(git):
-    """create_git_tag erstellt und pusht Tag."""
+    """create_git_tag creates and pushes tag."""
     with patch.object(git, "_run_cmd", new_callable=AsyncMock) as mock_cmd:
         mock_cmd.return_value = ""
         await git.create_git_tag("/tmp/project", "project/argyelan/phase-1-done")
@@ -109,7 +109,7 @@ async def test_create_git_tag_pushes(git):
 
 @pytest.mark.asyncio
 async def test_get_resume_briefing_returns_string(git):
-    """get_resume_briefing liest git log und gibt Summary zurück."""
+    """get_resume_briefing reads git log and returns a summary."""
     fake_log = "abc1234 deliverable: Font Research [task/abc12345]\ndef5678 deliverable: Colors [task/def56789]"
     with patch.object(git, "_run_cmd", new_callable=AsyncMock) as mock_cmd:
         mock_cmd.return_value = fake_log

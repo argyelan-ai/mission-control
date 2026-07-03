@@ -13,12 +13,12 @@ from httpx import AsyncClient
 
 @pytest.mark.asyncio
 async def test_agent_token_on_user_route_returns_helpful_hint(client: AsyncClient):
-    """Davinci hat /api/v1/storyboards/{id} mit Agent-Token aufgerufen,
-    bekam 401 'Invalid token' → musste raten dass es /api/v1/agent/storyboards/{id}
-    sein muss. Backend gibt jetzt klaren Hinweis."""
-    # Kernroute statt Vertical-Route (storyboards): der Hint-Mechanismus lebt
-    # in auth.py (core); im Public-Export existieren Vertical-Routen nicht ->
-    # der Test lief dort auf 404 (Public-CI-Fund 2026-07-02).
+    """Davinci called /api/v1/storyboards/{id} with an agent token, got a
+    401 'Invalid token' → had to guess that it should be
+    /api/v1/agent/storyboards/{id}. Backend now gives a clear hint."""
+    # Core route instead of vertical route (storyboards): the hint mechanism
+    # lives in auth.py (core); vertical routes don't exist in the public
+    # export -> the test hit 404 there (public CI finding 2026-07-02).
     fake_agent_token = "a" * 64  # 64-char hex = agent-token shape
     r = await client.get(
         "/api/v1/boards",
@@ -32,8 +32,8 @@ async def test_agent_token_on_user_route_returns_helpful_hint(client: AsyncClien
 
 @pytest.mark.asyncio
 async def test_non_hex_token_keeps_generic_message(client: AsyncClient):
-    """Token der weder JWT noch agent-shape ist → generischer 401, kein
-    false-positive Agent-Hinweis."""
+    """Token that is neither JWT nor agent-shape → generic 401, no
+    false-positive agent hint."""
     r = await client.get(
         "/api/v1/boards",
         headers={"Authorization": "Bearer this-is-not-a-token"},
@@ -45,8 +45,8 @@ async def test_non_hex_token_keeps_generic_message(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_short_hex_token_keeps_generic_message(client: AsyncClient):
-    """Kürzeres hex-Token (32 chars) → kein Agent-Hint (Agent-Tokens sind
-    immer 64 hex chars)."""
+    """Shorter hex token (32 chars) → no agent hint (agent tokens are
+    always 64 hex chars)."""
     r = await client.get(
         "/api/v1/boards",
         headers={"Authorization": f"Bearer {'a' * 32}"},

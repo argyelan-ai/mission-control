@@ -1,4 +1,4 @@
-"""Tests fuer Clarification Endpoint — Agent stellt dem Operator Klaerungsfragen."""
+"""Tests for the clarification endpoint — agent asks the operator clarifying questions."""
 
 import uuid
 
@@ -17,7 +17,7 @@ from .conftest import test_engine
 
 
 async def _setup_board(session: AsyncSession):
-    """Board erstellen."""
+    """Create board."""
     from app.models.board import Board
 
     board = Board(id=uuid.uuid4(), name="Test Board", slug="test-board-clar")
@@ -35,7 +35,7 @@ async def _setup_agent_with_token(
     provision_status: str = "provisioned",
     current_task_id: uuid.UUID | None = None,
 ):
-    """Agent erstellen + Token-Hash setzen. Gibt (agent, raw_token) zurueck."""
+    """Create agent + set token hash. Returns (agent, raw_token)."""
     raw_token, token_hash = generate_agent_token()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent = Agent(
@@ -61,7 +61,7 @@ async def _setup_task(
     assigned_agent_id: uuid.UUID | None = None,
     **kwargs,
 ):
-    """Task erstellen."""
+    """Create task."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = Task(
             id=uuid.uuid4(),
@@ -82,7 +82,7 @@ class TestClarification:
     """POST /api/v1/agent/boards/{board_id}/clarification"""
 
     async def test_clarification_creates_approval_and_blocks_agent(self, client: AsyncClient):
-        """201: Approval erstellt, Task blockiert."""
+        """201: approval created, task blocked."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 
@@ -136,11 +136,11 @@ class TestClarification:
             assert approval.payload["agent_name"] == "Cody"
 
     async def test_clarification_requires_in_progress(self, client: AsyncClient):
-        """409: Agent hat keinen aktiven in_progress Task."""
+        """409: agent has no active in_progress task."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 
-        # Agent ohne current_task_id
+        # Agent without current_task_id
         agent, token = await _setup_agent_with_token(
             name="Idle Agent",
             role="developer",

@@ -1,4 +1,4 @@
-"""Tests fuer Help Request Endpoint — Agent-zu-Agent Kollaboration."""
+"""Tests for the help request endpoint — agent-to-agent collaboration."""
 
 import uuid
 
@@ -16,7 +16,7 @@ from .conftest import test_engine
 
 
 async def _setup_board(session: AsyncSession):
-    """Board erstellen."""
+    """Create a board."""
     from app.models.board import Board
 
     board = Board(id=uuid.uuid4(), name="Test Board", slug="test-board")
@@ -34,7 +34,7 @@ async def _setup_agent_with_token(
     provision_status: str = "provisioned",
     current_task_id: uuid.UUID | None = None,
 ):
-    """Agent erstellen + Token-Hash setzen. Gibt (agent, raw_token) zurueck."""
+    """Create an agent + set token hash. Returns (agent, raw_token)."""
     raw_token, token_hash = generate_agent_token()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent = Agent(
@@ -60,7 +60,7 @@ async def _setup_task(
     assigned_agent_id: uuid.UUID | None = None,
     **kwargs,
 ):
-    """Task erstellen."""
+    """Create a task."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = Task(
             id=uuid.uuid4(),
@@ -81,11 +81,11 @@ class TestHelpRequest:
     """POST /api/v1/agent/boards/{board_id}/help-request"""
 
     async def test_successful_help_request(self, client: AsyncClient):
-        """201: Subtask erstellt, Sender blockiert."""
+        """201: subtask created, sender blocked."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 
-        # Writer: hat aktiven in_progress Task
+        # Writer: has an active in_progress task
         task = await _setup_task(board.id, title="Write article", status="in_progress")
         writer, writer_token = await _setup_agent_with_token(
             name="Writer",
@@ -94,7 +94,7 @@ class TestHelpRequest:
             scopes=["tasks:help"],
             current_task_id=task.id,
         )
-        # Researcher: provisioniert, frei
+        # Researcher: provisioned, free
         researcher, _ = await _setup_agent_with_token(
             name="Researcher",
             role="researcher",
@@ -141,11 +141,11 @@ class TestHelpRequest:
             assert subtask.assigned_agent_id == researcher.id
 
     async def test_depth_limit_rejects_nested_help(self, client: AsyncClient):
-        """403: Task ist bereits ein Help Request — keine Verschachtelung."""
+        """403: task is already a help request — no nesting allowed."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 
-        # Task der selbst ein help_request ist
+        # Task that is itself a help_request
         dummy_agent_id = uuid.uuid4()
         task = await _setup_task(
             board.id,
@@ -177,11 +177,11 @@ class TestHelpRequest:
         assert "verschachtelt" in resp.json()["detail"].lower()
 
     async def test_agent_must_be_in_progress(self, client: AsyncClient):
-        """409: Agent hat keinen aktiven in_progress Task."""
+        """409: agent has no active in_progress task."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 
-        # Agent ohne current_task_id
+        # Agent without current_task_id
         agent, token = await _setup_agent_with_token(
             name="Idle Agent",
             role="writer",
@@ -204,7 +204,7 @@ class TestHelpRequest:
         assert resp.status_code == 409
 
     async def test_no_agent_with_needed_role(self, client: AsyncClient):
-        """404: Kein provisionierter Agent mit der benoetigten Rolle."""
+        """404: no provisioned agent with the needed role."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             board = await _setup_board(s)
 

@@ -144,7 +144,7 @@ async def handle_done_pr_merge(
     Greps the PR URL out of TaskComment with `PR erstellt:` marker, then
     `gh pr merge --squash --delete-branch`. Worktree cleanup is best-effort.
     """
-    # PR mergen bei echtem Abschluss (nach Review oder nach Test Gate)
+    # Merge the PR on real completion (after review or after the test gate)
     if task.project_id:
         try:
             from app.services.git_service import git_service, slugify_project

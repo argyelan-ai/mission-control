@@ -1,8 +1,8 @@
-"""Tests: `?include_subtasks=true` Query-Param fuer Deliverable-LIST Endpoints.
+"""Tests: `?include_subtasks=true` query param for deliverable LIST endpoints.
 
-Use-Case: Orchestrator-Parent-Tasks (z.B. Boss DNA+Skill) zeigen im UI alle
-Deliverables der Subtasks mit — damit Operator/Reviewer alle Endprodukte des
-Task-Trees auf einen Blick sieht ohne jeden Subtask einzeln zu oeffnen.
+Use case: orchestrator parent tasks (e.g. Boss DNA+Skill) show all
+deliverables of subtasks in the UI — so operator/reviewer can see all
+end products of the task tree at a glance without opening every subtask.
 """
 
 import uuid
@@ -13,13 +13,13 @@ from tests.conftest import test_engine
 
 
 async def _setup_tree():
-    """Baut eine 3-Ebenen-Hierarchie:
+    """Builds a 3-level hierarchy:
     root
       ├─ child_a (with deliverable D_A)
       │    └─ grand_a (with deliverable D_GA)
       ├─ child_b (with deliverable D_B)
-      └─ child_c (KEIN deliverable)
-    plus: root hat eigenes deliverable D_ROOT.
+      └─ child_c (NO deliverable)
+    plus: root has its own deliverable D_ROOT.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -67,12 +67,12 @@ async def _setup_tree():
     }
 
 
-# ── Agent-scoped Endpoint (include_subtasks) ───────────────────────────────
+# ── Agent-scoped endpoint (include_subtasks) ────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_agent_list_without_include_subtasks_returns_only_self(client, fake_redis):
-    """Default-Behavior: nur eigene Deliverables, keine Subtask-Entries."""
+    """Default behavior: only own deliverables, no subtask entries."""
     ctx = await _setup_tree()
     resp = await client.get(
         f"/api/v1/agent/boards/{ctx['board_id']}/tasks/{ctx['root_id']}/deliverables",
@@ -82,13 +82,13 @@ async def test_agent_list_without_include_subtasks_returns_only_self(client, fak
     data = resp.json()
     assert len(data) == 1
     assert data[0]["title"] == "D_ROOT"
-    # Keine source_* Felder wenn include_subtasks=false (Backward-Compat)
+    # No source_* fields when include_subtasks=false (backward compat)
     assert "source_task_id" not in data[0]
 
 
 @pytest.mark.asyncio
 async def test_agent_list_include_subtasks_default_depth_2(client, fake_redis):
-    """Mit include_subtasks=true + default depth=2: root + direct + grand."""
+    """With include_subtasks=true + default depth=2: root + direct + grand."""
     ctx = await _setup_tree()
     resp = await client.get(
         f"/api/v1/agent/boards/{ctx['board_id']}/tasks/{ctx['root_id']}/deliverables?include_subtasks=true",
@@ -108,7 +108,7 @@ async def test_agent_list_include_subtasks_default_depth_2(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_agent_list_include_subtasks_depth_1_skips_grandchildren(client, fake_redis):
-    """depth=1 — nur direkte Kinder, Enkel werden ausgelassen."""
+    """depth=1 — only direct children, grandchildren are skipped."""
     ctx = await _setup_tree()
     resp = await client.get(
         f"/api/v1/agent/boards/{ctx['board_id']}/tasks/{ctx['root_id']}/deliverables?include_subtasks=true&depth=1",
@@ -116,25 +116,25 @@ async def test_agent_list_include_subtasks_depth_1_skips_grandchildren(client, f
     )
     assert resp.status_code == 200
     titles = sorted(d["title"] for d in resp.json())
-    assert titles == ["D_A", "D_B", "D_ROOT"]  # D_GA fehlt (wäre depth=2)
+    assert titles == ["D_A", "D_B", "D_ROOT"]  # D_GA is missing (would be depth=2)
 
 
 @pytest.mark.asyncio
 async def test_agent_list_include_subtasks_depth_clamped_to_max_5(client, fake_redis):
-    """depth=999 wird auf Server-Max=5 geclampt."""
+    """depth=999 gets clamped to server max=5."""
     ctx = await _setup_tree()
     resp = await client.get(
         f"/api/v1/agent/boards/{ctx['board_id']}/tasks/{ctx['root_id']}/deliverables?include_subtasks=true&depth=999",
         headers={"Authorization": f"Bearer {ctx['token']}"},
     )
     assert resp.status_code == 200
-    # Unsere Tree-Tiefe ist nur 2, also clamp passiert unsichtbar.
-    # Aber: kein 422, kein Error.
+    # Our tree depth is only 2, so the clamp happens invisibly.
+    # But: no 422, no error.
 
 
 @pytest.mark.asyncio
 async def test_agent_list_include_subtasks_populates_source_task_title(client, fake_redis):
-    """Jedes Subtask-Deliverable hat source_task_title fuer UI-Gruppierung."""
+    """Every subtask deliverable has source_task_title for UI grouping."""
     ctx = await _setup_tree()
     resp = await client.get(
         f"/api/v1/agent/boards/{ctx['board_id']}/tasks/{ctx['root_id']}/deliverables?include_subtasks=true",
@@ -148,12 +148,12 @@ async def test_agent_list_include_subtasks_populates_source_task_title(client, f
     assert title_by_deliv["D_GA"] == "Grandchild A"
 
 
-# ── User-facing Endpoint (tasks.py) ─────────────────────────────────────────
+# ── User-facing endpoint (tasks.py) ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_user_list_include_subtasks(auth_client, make_board, make_task, make_agent, session):
-    """User-Endpoint (frontend) — gleiche Semantik."""
+    """User endpoint (frontend) — same semantics."""
     from app.models.deliverable import TaskDeliverable
     board = await make_board()
     agent = await make_agent(board_id=board.id)
@@ -170,7 +170,7 @@ async def test_user_list_include_subtasks(auth_client, make_board, make_task, ma
     ))
     await session.commit()
 
-    # Default: nur Root
+    # Default: only root
     r1 = await auth_client.get(
         f"/api/v1/boards/{board.id}/tasks/{root.id}/deliverables"
     )
@@ -178,14 +178,14 @@ async def test_user_list_include_subtasks(auth_client, make_board, make_task, ma
     assert len(r1.json()) == 1
     assert r1.json()[0]["title"] == "Root Doc"
 
-    # Mit include_subtasks
+    # With include_subtasks
     r2 = await auth_client.get(
         f"/api/v1/boards/{board.id}/tasks/{root.id}/deliverables?include_subtasks=true"
     )
     assert r2.status_code == 200
     titles = sorted(d["title"] for d in r2.json())
     assert titles == ["Child Doc", "Root Doc"]
-    # Source-Info present
+    # Source info present
     for d in r2.json():
         assert "source_task_title" in d
         assert "source_depth" in d

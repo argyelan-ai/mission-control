@@ -1,7 +1,7 @@
-"""Tests fuer Phase 1.5 Delegation Contracts.
+"""Tests for Phase 1.5 delegation contracts.
 
-Strukturierte Pflichtfelder pro delegation_type.
-Guards greifen bei Task-Erstellung (Agent + Dashboard).
+Structured required fields per delegation_type.
+Guards apply at task creation (agent + dashboard).
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -18,7 +18,7 @@ _ENCRYPT_PATCH = patch("app.services.encryption.encrypt", return_value="encrypte
 
 
 async def _setup_contract_scenario():
-    """Board + Lead + Developer erstellen."""
+    """Create board + lead + developer."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -53,14 +53,14 @@ async def _setup_contract_scenario():
         )
         s.add(dev)
 
-        # Source-Task fuer Review-Tests
+        # Source task for review tests
         source_task = Task(
             id=source_task_id, board_id=board_id,
             title="Source Task fuer Review", status="review",
         )
         s.add(source_task)
 
-        # Parent-Task mit branch_name fuer Vererbungs-Test
+        # Parent task with branch_name for the inheritance test
         parent_with_branch = Task(
             id=uuid.uuid4(), board_id=board_id,
             title="Parent mit Branch", status="in_progress",
@@ -163,12 +163,12 @@ def test_unit_conditional_requires_auth():
 
 
 # ────────────────────────────────────────────────────────────
-# Integration Tests: API-Ebene
+# Integration Tests: API level
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_api_code_change_without_branch_blocked(client):
-    """code_change ohne branch_name → 422."""
+    """code_change without branch_name → 422."""
     ids = await _setup_contract_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH:
@@ -190,7 +190,7 @@ async def test_api_code_change_without_branch_blocked(client):
 
 @pytest.mark.asyncio
 async def test_api_code_change_complete_passes(client):
-    """code_change mit allen Feldern → 201."""
+    """code_change with all fields → 201."""
     ids = await _setup_contract_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH:
@@ -215,7 +215,7 @@ async def test_api_code_change_complete_passes(client):
 
 @pytest.mark.asyncio
 async def test_api_credential_bound_without_creds_blocked(client):
-    """credential_bound ohne credentials → 422."""
+    """credential_bound without credentials → 422."""
     ids = await _setup_contract_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH:
@@ -238,7 +238,7 @@ async def test_api_credential_bound_without_creds_blocked(client):
 
 @pytest.mark.asyncio
 async def test_api_no_delegation_type_legacy_passes(client):
-    """Ohne delegation_type → Legacy, kein Contract-Check → 201."""
+    """Without delegation_type → legacy, no contract check → 201."""
     ids = await _setup_contract_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH:
@@ -257,7 +257,7 @@ async def test_api_no_delegation_type_legacy_passes(client):
 
 @pytest.mark.asyncio
 async def test_api_branch_inherited_from_parent(client):
-    """code_change Child erbt branch_name vom Parent."""
+    """code_change child inherits branch_name from the parent."""
     ids = await _setup_contract_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH, _ENCRYPT_PATCH:
@@ -271,8 +271,8 @@ async def test_api_branch_inherited_from_parent(client):
                 "delegation_type": "code_change",
                 "acceptance_criteria": "Tests gruen",
                 "parent_task_id": str(ids["parent_with_branch_id"]),
-                "credentials": "test:pass",  # Parent hat requires_auth=True → wird vererbt → Credentials noetig
-                # branch_name NICHT gesetzt → soll vom Parent erben
+                "credentials": "test:pass",  # Parent has requires_auth=True → inherited → credentials needed
+                # branch_name NOT set → should inherit from the parent
             },
         )
 

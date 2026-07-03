@@ -1,13 +1,13 @@
-"""Tests fuer Task Deliverables — Agent-registrierte Ergebnisse pro Task.
+"""Tests for task deliverables — agent-registered results per task.
 
-Testet:
-1. Deliverable erstellen (Agent-scoped POST)
-2. Ungueltige deliverable_type → 422
-3. Leerer Titel → 422
-4. Leere Liste bei Task ohne Deliverables
-5. Mehrere Deliverables erstellen + auflisten (neuestes zuerst)
-6. Agent postet auf falsches Board → 403
-7. User-facing GET liefert Deliverables mit agent_name
+Tests:
+1. Create deliverable (agent-scoped POST)
+2. Invalid deliverable_type → 422
+3. Empty title → 422
+4. Empty list for task without deliverables
+5. Create + list multiple deliverables (newest first)
+6. Agent posts to wrong board → 403
+7. User-facing GET returns deliverables with agent_name
 """
 import uuid
 
@@ -22,7 +22,7 @@ from app.models.deliverable import TaskDeliverable
 class TestDeliverableValidation:
 
     def test_invalid_type_rejected(self):
-        """deliverable_type ausserhalb der erlaubten Werte → Validation Error."""
+        """deliverable_type outside allowed values → validation error."""
         from app.routers.agent_scoped import DeliverableCreate
 
         with pytest.raises(Exception):
@@ -32,7 +32,7 @@ class TestDeliverableValidation:
             )
 
     def test_empty_title_rejected(self):
-        """Leerer Titel → Validation Error."""
+        """Empty title → validation error."""
         from app.routers.agent_scoped import DeliverableCreate
 
         with pytest.raises(Exception):
@@ -42,7 +42,7 @@ class TestDeliverableValidation:
             )
 
     def test_valid_deliverable_create(self):
-        """Gueltige Eingabe → OK."""
+        """Valid input → OK."""
         from app.routers.agent_scoped import DeliverableCreate
 
         d = DeliverableCreate(
@@ -61,7 +61,7 @@ class TestDeliverableModel:
 
     @pytest.mark.asyncio
     async def test_create_deliverable(self, session: AsyncSession, make_agent, make_task):
-        """Deliverable kann erstellt werden und hat id + created_at."""
+        """Deliverable can be created and has id + created_at."""
         board_id = uuid.uuid4()
         agent = await make_agent("DelivAgent", board_id=board_id, role="developer")
         task = await make_task(board_id, title="Deliverable Task", assigned_agent_id=agent.id)
@@ -86,7 +86,7 @@ class TestDeliverableModel:
 
     @pytest.mark.asyncio
     async def test_list_deliverables_empty(self, session: AsyncSession, make_task):
-        """Task ohne Deliverables → leere Liste."""
+        """Task without deliverables → empty list."""
         from sqlmodel import select
 
         board_id = uuid.uuid4()
@@ -100,7 +100,7 @@ class TestDeliverableModel:
 
     @pytest.mark.asyncio
     async def test_list_deliverables_ordered(self, session: AsyncSession, make_agent, make_task):
-        """Mehrere Deliverables werden nach created_at desc sortiert."""
+        """Multiple deliverables are sorted by created_at desc."""
         from datetime import datetime, timedelta
         from sqlmodel import select
 
@@ -140,7 +140,7 @@ class TestDeliverableUserAPI:
 
     @pytest.mark.asyncio
     async def test_user_list_deliverables_empty(self, auth_client, make_board, make_task):
-        """User-facing GET auf Task ohne Deliverables → leere Liste."""
+        """User-facing GET on a task without deliverables → empty list."""
         board = await make_board("Deliv Board", slug="deliv-board")
         task = await make_task(board.id, title="No Deliverables")
 
@@ -154,12 +154,12 @@ class TestDeliverableUserAPI:
     async def test_user_list_deliverables_with_agent_name(
         self, auth_client, session: AsyncSession, make_board, make_agent, make_task,
     ):
-        """User-facing GET liefert Deliverables mit aufgeloestem agent_name."""
+        """User-facing GET returns deliverables with resolved agent_name."""
         board = await make_board("Deliv Board 2", slug="deliv-board-2")
         agent = await make_agent("Cody", board_id=board.id, role="developer")
         task = await make_task(board.id, title="Deliv Task", assigned_agent_id=agent.id)
 
-        # Deliverable direkt in DB anlegen
+        # Create deliverable directly in the DB
         deliverable = TaskDeliverable(
             task_id=task.id,
             agent_id=agent.id,
@@ -186,7 +186,7 @@ class TestDeliverableUserAPI:
     async def test_user_list_deliverables_multiple(
         self, auth_client, session: AsyncSession, make_board, make_agent, make_task,
     ):
-        """User-facing GET liefert mehrere Deliverables, neuestes zuerst."""
+        """User-facing GET returns multiple deliverables, newest first."""
         from datetime import datetime, timedelta
 
         board = await make_board("Deliv Board 3", slug="deliv-board-3")
@@ -214,13 +214,13 @@ class TestDeliverableUserAPI:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data) == 2
-        # Neuestes zuerst
+        # Newest first
         assert data[0]["title"] == "Newer URL"
         assert data[1]["title"] == "Older Screenshot"
 
     @pytest.mark.asyncio
     async def test_user_list_deliverables_wrong_task(self, auth_client, make_board):
-        """User-facing GET mit nicht-existierender Task-ID → 404."""
+        """User-facing GET with a non-existent task ID → 404."""
         board = await make_board("Deliv Board 4", slug="deliv-board-4")
         fake_task_id = uuid.uuid4()
 
@@ -230,10 +230,10 @@ class TestDeliverableUserAPI:
         assert resp.status_code == 404
 
 
-# ── Agent-facing POST: Content-Required für document/data ─────────────────
+# ── Agent-facing POST: content required for document/data ─────────────────
 
 class TestDeliverableContentRequired:
-    """document/data Deliverables müssen inline content haben — path allein ist Container-intern."""
+    """document/data deliverables must have inline content — path alone is container-internal."""
 
     @pytest.mark.asyncio
     async def test_document_without_content_rejected(self, client, make_agent, make_task):

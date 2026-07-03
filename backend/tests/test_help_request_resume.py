@@ -1,4 +1,4 @@
-"""Tests fuer Help Request Auto-Resume bei Subtask Completion."""
+"""Tests for help request auto-resume on subtask completion."""
 
 import uuid
 
@@ -58,10 +58,10 @@ async def make_task(session: AsyncSession, board_id: uuid.UUID, **kwargs) -> Tas
 
 @pytest.mark.asyncio
 class TestHelpRequestResume:
-    """_handle_help_request_resume — direkte Unit-Tests."""
+    """_handle_help_request_resume — direct unit tests."""
 
     async def test_subtask_done_resumes_blocked_parent(self):
-        """Parent geht von blocked → in_progress wenn Help-Request-Subtask done wird."""
+        """Parent goes from blocked → in_progress when a help-request subtask becomes done."""
         from app.routers.agent_scoped import _handle_help_request_resume
 
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
@@ -80,7 +80,7 @@ class TestHelpRequestResume:
                 parent_task_id=parent.id,
             )
 
-            # parent.blocked_by_task_id → subtask.id (damit Resume greift)
+            # parent.blocked_by_task_id → subtask.id (so resume kicks in)
             parent.blocked_by_task_id = subtask.id
             session.add(parent)
             await session.commit()
@@ -96,18 +96,18 @@ class TestHelpRequestResume:
                 ) as mock_emit:
                     await _handle_help_request_resume(session, subtask)
 
-            # Parent muss jetzt in_progress sein und blocked_by_task_id geleert
+            # Parent must now be in_progress with blocked_by_task_id cleared
             await session.refresh(parent)
             assert parent.status == "in_progress"
             assert parent.blocked_by_task_id is None
 
-            # Resolved-Event muss emittiert worden sein
+            # Resolved event must have been emitted
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["event_type"] == "task.help_request.resolved"
 
     async def test_subtask_failed_keeps_parent_blocked(self):
-        """Parent bleibt blocked wenn Help-Request-Subtask fehlschlaegt."""
+        """Parent stays blocked when a help-request subtask fails."""
         from app.routers.agent_scoped import _handle_help_request_resume
 
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
@@ -135,12 +135,12 @@ class TestHelpRequestResume:
             ) as mock_emit:
                 await _handle_help_request_resume(session, subtask)
 
-            # Parent darf sich NICHT veraendert haben
+            # Parent must NOT have changed
             await session.refresh(parent)
             assert parent.status == "blocked"
             assert parent.blocked_by_task_id == subtask.id
 
-            # Failed-Event muss emittiert worden sein
+            # Failed event must have been emitted
             mock_emit.assert_called_once()
             call_kwargs = mock_emit.call_args.kwargs
             assert call_kwargs["event_type"] == "task.help_request.failed"

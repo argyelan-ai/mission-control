@@ -1,4 +1,4 @@
-"""Tests fuer /api/v1/agents/{id}/cli-sessions, /api/v1/cli-sessions und terminal endpoints."""
+"""Tests for /api/v1/agents/{id}/cli-sessions, /api/v1/cli-sessions and terminal endpoints."""
 import uuid
 from unittest.mock import patch
 
@@ -25,7 +25,7 @@ _FAKE_AGENT = Agent(
 
 @pytest.mark.anyio
 async def test_cli_sessions_returns_list(auth_client: AsyncClient):
-    """GET /cli-sessions gibt Bridge-Sessions zurueck."""
+    """GET /cli-sessions returns bridge sessions."""
     from app.main import app as fastapi_app
 
     async def override_cli_agent():
@@ -50,7 +50,7 @@ async def test_cli_sessions_returns_list(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_cli_sessions_requires_auth(client: AsyncClient):
-    """GET /cli-sessions ohne Token -> 401."""
+    """GET /cli-sessions without token -> 401."""
     resp = await client.get(
         f"/api/v1/agents/{_FAKE_AGENT.id}/cli-sessions"
     )
@@ -59,7 +59,7 @@ async def test_cli_sessions_requires_auth(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_cli_input_sends_to_bridge(auth_client: AsyncClient):
-    """POST /terminal/{task_id}/input sendet Text an Bridge."""
+    """POST /terminal/{task_id}/input sends text to bridge."""
     from app.main import app as fastapi_app
 
     task_id = str(uuid.uuid4())
@@ -85,7 +85,7 @@ async def test_cli_input_sends_to_bridge(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_cli_kill_session(auth_client: AsyncClient):
-    """DELETE /terminal/{task_id} beendet Bridge-Session."""
+    """DELETE /terminal/{task_id} ends bridge session."""
     from app.main import app as fastapi_app
 
     task_id = str(uuid.uuid4())
@@ -110,7 +110,7 @@ async def test_cli_kill_session(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_cli_input_requires_text(auth_client: AsyncClient):
-    """POST /terminal/{task_id}/input mit leerem text -> 400."""
+    """POST /terminal/{task_id}/input with empty text -> 400."""
     from app.main import app as fastapi_app
 
     task_id = str(uuid.uuid4())
@@ -131,13 +131,13 @@ async def test_cli_input_requires_text(auth_client: AsyncClient):
     assert resp.status_code == 400
 
 
-# ── Tests fuer GET /api/v1/cli-sessions (globaler Endpoint) ──────────────────
+# ── Tests for GET /api/v1/cli-sessions (global endpoint) ─────────────────────
 
 
 @pytest.mark.anyio
 async def test_global_cli_sessions_happy_path(auth_client: AsyncClient):
-    """GET /cli-sessions: Bridge gibt Sessions zurueck, Agent in DB → enriched Response mit agent_id und agent_name."""
-    # Agent in DB anlegen — Name ergibt Slug "freecode-agent"
+    """GET /cli-sessions: bridge returns sessions, agent in DB → enriched response with agent_id and agent_name."""
+    # Create agent in DB — name resolves to slug "freecode-agent"
     agent_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         agent = Agent(id=agent_id, name="Freecode Agent", agent_runtime="cli-bridge")
@@ -163,7 +163,7 @@ async def test_global_cli_sessions_happy_path(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_global_cli_sessions_null_agent(auth_client: AsyncClient):
-    """GET /cli-sessions: Slug passt zu keinem Agent → agent_id=null, agent_name=Slug."""
+    """GET /cli-sessions: slug doesn't match any agent → agent_id=null, agent_name=slug."""
     bridge_sessions = [
         {"task_id": "xyz99999", "session": "unknown-agent-xyz99999", "elapsed_seconds": 10}
     ]
@@ -181,14 +181,14 @@ async def test_global_cli_sessions_null_agent(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_global_cli_sessions_requires_auth(client: AsyncClient):
-    """GET /cli-sessions ohne Token -> 401."""
+    """GET /cli-sessions without token -> 401."""
     resp = await client.get("/api/v1/cli-sessions")
     assert resp.status_code == 401
 
 
 @pytest.mark.anyio
 async def test_global_cli_sessions_bridge_down(auth_client: AsyncClient):
-    """GET /cli-sessions: Bridge gibt None zurueck → leere Liste."""
+    """GET /cli-sessions: bridge returns None → empty list."""
     with patch("app.routers.cli_terminal._bridge_get") as mock_get:
         mock_get.return_value = None
         resp = await auth_client.get("/api/v1/cli-sessions")
@@ -197,12 +197,12 @@ async def test_global_cli_sessions_bridge_down(auth_client: AsyncClient):
     assert resp.json() == []
 
 
-# ── Tests fuer GET /api/v1/agents/{id}/cli-sessions (agent-scoped) ────────────
+# ── Tests for GET /api/v1/agents/{id}/cli-sessions (agent-scoped) ────────────
 
 
 @pytest.mark.anyio
 async def test_cli_sessions_bridge_unavailable(auth_client: AsyncClient):
-    """GET /cli-sessions gibt [] zurueck wenn Bridge nicht erreichbar."""
+    """GET /cli-sessions returns [] when bridge is unreachable."""
     from app.main import app as fastapi_app
 
     async def override_cli_agent():

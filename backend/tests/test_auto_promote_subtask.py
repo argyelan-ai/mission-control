@@ -1,8 +1,8 @@
-"""Tests: Auto-Promote bei resolution-Kommentar respektiert Subtask-Exemption.
+"""Tests: auto-promote on resolution comment respects subtask exemption.
 
-Subtasks gehen bei resolution direkt auf done (Review laeuft auf Phase-Ebene).
-Root-Tasks gehen weiterhin auf review.
-dispatch_attempt_id wird in beiden Faellen resettet.
+Subtasks go straight to done on resolution (review happens at phase level).
+Root tasks still go to review.
+dispatch_attempt_id is reset in both cases.
 """
 
 import uuid
@@ -23,7 +23,7 @@ async def _create_test_data(
     parent_task_id=None,
     dispatch_attempt_id=None,
 ):
-    """Board + Agent + Task erstellen. Gibt (board, agent, task, token) zurueck."""
+    """Create board + agent + task. Returns (board, agent, task, token)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -46,7 +46,7 @@ async def _create_test_data(
     )
     session.add(agent)
 
-    # Parent-Task erstellen falls parent_task_id gewuenscht
+    # Create parent task if parent_task_id is desired
     parent = None
     if parent_task_id is True:
         parent = Task(
@@ -82,7 +82,7 @@ async def _create_test_data(
 
 @pytest.mark.asyncio
 async def test_subtask_resolution_promotes_to_done(client, fake_redis):
-    """Subtask mit resolution-Kommentar → status wird done (nicht review)."""
+    """Subtask with resolution comment → status becomes done (not review)."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(
             s, task_status="in_progress", parent_task_id=True,
@@ -99,20 +99,20 @@ async def test_subtask_resolution_promotes_to_done(client, fake_redis):
 
     assert resp.status_code == 201, resp.text
 
-    # Task muss auf done stehen (Subtask-Exemption)
+    # Task must be done (subtask exemption)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
         updated = await s.get(Task, task.id)
         assert updated.status == "done", f"Expected done, got {updated.status}"
         assert updated.completed_at is not None, "completed_at muss gesetzt sein"
 
-    # Review-Handoff darf NICHT aufgerufen worden sein
+    # Review handoff must NOT have been called
     mock_handoff.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_root_task_resolution_promotes_to_review(client, fake_redis):
-    """Root-Task mit resolution-Kommentar → status wird review (wie bisher)."""
+    """Root task with resolution comment → status becomes review (as before)."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(
             s, task_status="in_progress", parent_task_id=None,
@@ -134,13 +134,13 @@ async def test_root_task_resolution_promotes_to_review(client, fake_redis):
         updated = await s.get(Task, task.id)
         assert updated.status == "review", f"Expected review, got {updated.status}"
 
-    # Review-Handoff muss aufgerufen worden sein
+    # Review handoff must have been called
     mock_handoff.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_dispatch_attempt_id_reset_on_subtask_promote(client, fake_redis):
-    """dispatch_attempt_id wird bei Subtask Auto-Promote resettet."""
+    """dispatch_attempt_id is reset on subtask auto-promote."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(
             s,
@@ -170,7 +170,7 @@ async def test_dispatch_attempt_id_reset_on_subtask_promote(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_dispatch_attempt_id_reset_on_root_promote(client, fake_redis):
-    """dispatch_attempt_id wird bei Root-Task Auto-Promote resettet."""
+    """dispatch_attempt_id is reset on root task auto-promote."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(
             s,

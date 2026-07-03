@@ -1,11 +1,11 @@
 """Bundle 1 — Checkpoint / Crash Recovery Tests.
 
-Testet:
-1. Checkpoint schreiben + lesen (DB)
-2. Letzter Checkpoint korrekt gewaehlt
-3. Recovery-Kontext enthaelt Checkpoint
-4. Recovery ohne Checkpoint bleibt intakt
-5. Keine Secrets im Checkpoint
+Covers:
+1. Write + read checkpoint (DB)
+2. Latest checkpoint correctly selected
+3. Recovery context includes checkpoint
+4. Recovery without checkpoint stays intact
+5. No secrets in checkpoint
 """
 import uuid
 
@@ -22,7 +22,7 @@ class TestCheckpointModel:
 
     @pytest.mark.asyncio
     async def test_create_and_read_checkpoint(self, session: AsyncSession, make_agent, make_task):
-        """Checkpoint kann erstellt und gelesen werden."""
+        """Checkpoint can be created and read."""
         board_id = uuid.uuid4()
         agent = await make_agent("TestAgent", board_id=board_id, role="developer")
         task = await make_task(board_id, title="Test Task", assigned_agent_id=agent.id)
@@ -49,7 +49,7 @@ class TestCheckpointModel:
 
     @pytest.mark.asyncio
     async def test_latest_checkpoint_selected(self, session: AsyncSession, make_agent, make_task):
-        """Bei mehreren Checkpoints wird der neueste zurueckgegeben."""
+        """With multiple checkpoints, the newest one is returned."""
         from datetime import datetime, timedelta
 
         board_id = uuid.uuid4()
@@ -84,7 +84,7 @@ class TestCheckpointModel:
 
     @pytest.mark.asyncio
     async def test_checkpoint_without_context_data(self, session: AsyncSession, make_agent, make_task):
-        """Checkpoint ohne context_data ist gueltig."""
+        """Checkpoint without context_data is valid."""
         board_id = uuid.uuid4()
         agent = await make_agent("MinimalAgent", board_id=board_id, role="developer")
         task = await make_task(board_id, title="Minimal CP", assigned_agent_id=agent.id)
@@ -115,7 +115,7 @@ class TestCheckpointRecovery:
     async def test_recovery_without_checkpoint_still_works(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Recovery ohne Checkpoint funktioniert weiterhin (nur Comments)."""
+        """Recovery without checkpoint still works (comments only)."""
         from app.services.dispatch import build_recovery_context
         from app.models.task import TaskComment
 
@@ -143,7 +143,7 @@ class TestCheckpointRecovery:
     async def test_recovery_no_comments_no_checkpoint_returns_none(
         self, session: AsyncSession, make_agent, make_task,
     ):
-        """Weder Comments noch Checkpoint → None."""
+        """Neither comments nor checkpoint → None."""
         from app.services.dispatch import build_recovery_context
 
         board_id = uuid.uuid4()
@@ -161,7 +161,7 @@ class TestCheckpointRecovery:
 class TestCheckpointSecurity:
 
     def test_secrets_blocked_in_context_data(self):
-        """context_data mit offensichtlichen Secrets → Validation Error."""
+        """context_data with obvious secrets → validation error."""
         from app.routers.agent_scoped import CheckpointCreate
 
         with pytest.raises(Exception):
@@ -171,7 +171,7 @@ class TestCheckpointSecurity:
             )
 
     def test_clean_context_data_allowed(self):
-        """Normaler context_data ohne Secrets → OK."""
+        """Normal context_data without secrets → OK."""
         from app.routers.agent_scoped import CheckpointCreate
 
         cp = CheckpointCreate(
@@ -184,14 +184,14 @@ class TestCheckpointSecurity:
         assert cp.context_data is not None
 
     def test_empty_summary_rejected(self):
-        """Leeres state_summary → Validation Error."""
+        """Empty state_summary → validation error."""
         from app.routers.agent_scoped import CheckpointCreate
 
         with pytest.raises(Exception):
             CheckpointCreate(state_summary="   ")
 
     def test_long_summary_rejected(self):
-        """state_summary > 2000 Zeichen → Validation Error."""
+        """state_summary > 2000 characters → validation error."""
         from app.routers.agent_scoped import CheckpointCreate
 
         with pytest.raises(Exception):

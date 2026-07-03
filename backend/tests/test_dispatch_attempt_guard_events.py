@@ -1,17 +1,17 @@
-"""Tests fuer die Differenzierung von missing_header vs stale_value im
-Dispatch-Attempt-Guard (agent_task_status.py).
+"""Tests for the differentiation of missing_header vs stale_value in the
+dispatch attempt guard (agent_task_status.py).
 
-Bug 2026-05-18: Bei `missing_header` (Agent sendet PATCH ohne Header — typisch
-weil er raw curl statt `mc done` benutzt) wurde ein
-`task.missing_dispatch_attempt_id` Event emittiert + per-Agent-Discord-Channel
-gepusht. Auf jedem 409 — d.h. der Agent recoverte sich (mc CLI im naechsten
-Versuch), aber der Operator sah ein Discord-Event pro 409.
+Bug 2026-05-18: On `missing_header` (agent sends PATCH without header —
+typically because it uses raw curl instead of `mc done`), a
+`task.missing_dispatch_attempt_id` event was emitted + pushed to the
+per-agent Discord channel. On every 409 — i.e. the agent recovered itself
+(mc CLI on the next attempt), but the operator saw a Discord event per 409.
 
-Neue Semantik:
-- missing_header → 409, KEIN Event (nur log.warning). Self-Healing reicht.
-- stale_value → 409 + Event (severity=warning), weil ein echter Run-Konflikt.
+New semantics:
+- missing_header → 409, NO event (only log.warning). Self-healing is enough.
+- stale_value → 409 + event (severity=warning), because it's a real run conflict.
 
-Tests pinnen beide Pfade.
+Tests pin both paths.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ from tests.conftest import test_engine
 
 
 async def _setup_dispatched_task() -> dict:
-    """Erstellt Board + Worker (own task) + Task mit gesetzter dispatch_attempt_id."""
+    """Creates board + worker (own task) + task with dispatch_attempt_id set."""
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.board import Board
@@ -65,7 +65,7 @@ async def _setup_dispatched_task() -> dict:
 
 
 async def _count_guard_events(event_type: str, task_id: uuid.UUID) -> int:
-    """Zaehlt activity_events fuer einen task + event_type."""
+    """Counts activity_events for a task + event_type."""
     from app.models.activity import ActivityEvent
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -78,12 +78,12 @@ async def _count_guard_events(event_type: str, task_id: uuid.UUID) -> int:
 
 
 # ────────────────────────────────────────────────────────────────────
-# 1. missing_header → 409, kein Event (nur Logs)
+# 1. missing_header → 409, no event (only logs)
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_missing_header_returns_409_without_event(client, fake_redis):
-    """Agent sendet PATCH ohne X-Dispatch-Attempt-Id → 409, kein Discord-Spam."""
+    """Agent sends PATCH without X-Dispatch-Attempt-Id → 409, no Discord spam."""
     data = await _setup_dispatched_task()
 
     r = await client.patch(
@@ -94,11 +94,11 @@ async def test_missing_header_returns_409_without_event(client, fake_redis):
 
     assert r.status_code == 409, r.text
     body = r.json()
-    # Hint nennt mc-CLI explizit (vorher nur curl-Snippet)
+    # Hint explicitly names mc CLI (previously only a curl snippet)
     assert "mc done" in body["detail"]
     assert "mc-CLI" in body["detail"] or "mc-cli" in body["detail"].lower()
 
-    # KEIN Event in der DB
+    # NO event in the DB
     n = await _count_guard_events("task.missing_dispatch_attempt_id", data["task_id"])
     assert n == 0, "missing_header darf kein activity_event emittieren"
 
@@ -109,7 +109,7 @@ async def test_missing_header_returns_409_without_event(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_stale_value_returns_409_and_emits_event(client, fake_redis):
-    """Agent sendet alten attempt_id-Wert → 409 + Event (echter Konflikt)."""
+    """Agent sends an old attempt_id value → 409 + event (real conflict)."""
     data = await _setup_dispatched_task()
     wrong_id = str(uuid.uuid4())
 
@@ -126,22 +126,22 @@ async def test_stale_value_returns_409_and_emits_event(client, fake_redis):
     body = r.json()
     assert "Stale" in body["detail"] or "veraltet" in body["detail"]
 
-    # Event emittiert
+    # Event emitted
     n = await _count_guard_events("task.stale_update_rejected", data["task_id"])
     assert n == 1, "stale_value MUSS ein activity_event emittieren"
 
 
 # ────────────────────────────────────────────────────────────────────
-# 3. korrekter Header → 200, kein Event
+# 3. correct header → 200, no event
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_correct_header_passes_without_event(client, fake_redis):
-    """Happy-Path: korrekter Header → PATCH durch, keine Guard-Events.
+    """Happy path: correct header → PATCH goes through, no guard events.
 
-    Update auf `priority` (statt `status`) um die Status-Lifecycle-Guards
-    (Reflection-Pflicht etc.) zu umgehen — wir testen hier nur den
-    Dispatch-Attempt-Header-Guard.
+    Updates `priority` (instead of `status`) to bypass the status lifecycle
+    guards (reflection requirement etc.) — here we only test the
+    dispatch-attempt header guard.
     """
     data = await _setup_dispatched_task()
 

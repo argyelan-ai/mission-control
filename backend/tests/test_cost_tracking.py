@@ -1,10 +1,10 @@
 """Bundle 2 — Cost Tracking Tests.
 
-1. CostEvent Model erstellen + lesen
-2. estimate_cost Berechnung
-3. Delta-Berechnung (Collector simuliert)
-4. Budget-Warnungen
-5. Bestehende Watchdog-Logik nicht gebrochen
+1. Create + read CostEvent model
+2. estimate_cost calculation
+3. Delta calculation (collector simulated)
+4. Budget warnings
+5. Existing watchdog logic not broken
 """
 import uuid
 from datetime import datetime, timedelta
@@ -23,7 +23,7 @@ class TestCostEventModel:
 
     @pytest.mark.asyncio
     async def test_create_cost_event(self, session: AsyncSession, make_agent, make_task):
-        """CostEvent kann erstellt und gelesen werden."""
+        """CostEvent can be created and read."""
         board_id = uuid.uuid4()
         agent = await make_agent("CostAgent", board_id=board_id, role="developer")
         task = await make_task(board_id, title="Cost Test")
@@ -49,7 +49,7 @@ class TestCostEventModel:
 
     @pytest.mark.asyncio
     async def test_cost_event_without_task(self, session: AsyncSession, make_agent):
-        """CostEvent ohne task_id (z.B. Main-Session) ist gueltig."""
+        """CostEvent without task_id (e.g. main session) is valid."""
         board_id = uuid.uuid4()
         agent = await make_agent("NoTaskAgent", board_id=board_id, role="developer")
 
@@ -66,7 +66,7 @@ class TestCostEventModel:
 
     @pytest.mark.asyncio
     async def test_aggregate_by_agent(self, session: AsyncSession, make_agent, make_task):
-        """Aggregation pro Agent funktioniert."""
+        """Aggregation per agent works."""
         board_id = uuid.uuid4()
         agent = await make_agent("AggAgent", board_id=board_id, role="developer")
         task = await make_task(board_id, title="Agg Test")
@@ -104,18 +104,18 @@ class TestEstimateCost:
         assert abs(cost - 0.35) < 0.01  # 0.25 + 0.10
 
     def test_gpt54_with_provider_prefix(self):
-        """Provider-Prefix wird entfernt."""
+        """Provider prefix gets stripped."""
         cost = estimate_cost("openai-codex/gpt-5.4", 100_000, 10_000)
         assert cost is not None
         assert abs(cost - 0.35) < 0.01
 
     def test_local_model_free(self):
-        """Lokale Modelle kosten $0."""
+        """Local models cost $0."""
         cost = estimate_cost("nemotron-3-super", 500_000, 50_000)
         assert cost == 0.0
 
     def test_unknown_model_returns_none(self):
-        """Unbekanntes Modell → None."""
+        """Unknown model → None."""
         cost = estimate_cost("some-unknown-model", 100_000, 10_000)
         assert cost is None
 
@@ -125,18 +125,18 @@ class TestEstimateCost:
         assert cost is None
 
     def test_zero_tokens(self):
-        """0 Tokens → $0."""
+        """0 tokens → $0."""
         cost = estimate_cost("gpt-5.4", 0, 0)
         assert cost == 0.0
 
 
-# ── Budget-Warnungen ─────────────────────────────────────────────────────
+# ── Budget warnings ──────────────────────────────────────────────────────
 
 class TestBudgetWarnings:
 
     @pytest.mark.asyncio
     async def test_no_warning_below_threshold(self, session: AsyncSession, make_agent):
-        """Unter Schwelle → keine Warnung."""
+        """Below threshold → no warning."""
         from app.services.cost_collector import check_budget_warnings
 
         board_id = uuid.uuid4()
@@ -156,7 +156,7 @@ class TestBudgetWarnings:
 
     @pytest.mark.asyncio
     async def test_daily_token_warning(self, session: AsyncSession, make_agent, fake_redis):
-        """Ueber 500k Tokens/Tag → Warnung."""
+        """Over 500k tokens/day → warning."""
         from unittest.mock import patch, AsyncMock
         from app.services.cost_collector import check_budget_warnings
 
@@ -187,7 +187,7 @@ class TestCostSecurity:
 
     @pytest.mark.asyncio
     async def test_no_credential_leaks_in_cost_events(self, session: AsyncSession, make_agent):
-        """CostEvent enthaelt keine Credential-Felder."""
+        """CostEvent contains no credential fields."""
         board_id = uuid.uuid4()
         agent = await make_agent("SecAgent", board_id=board_id, role="developer")
 
@@ -202,7 +202,7 @@ class TestCostSecurity:
         await session.commit()
         await session.refresh(event)
 
-        # Kein Feld sollte Credentials enthalten
+        # No field should contain credentials
         for field_name in ["session_key", "model", "provider", "event_type"]:
             value = getattr(event, field_name, None)
             if value:

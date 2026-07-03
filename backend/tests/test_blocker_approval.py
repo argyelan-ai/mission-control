@@ -1,17 +1,17 @@
-"""Tests fuer das Blocker-Approval-System.
+"""Tests for the blocker approval system.
 
-Deckt ab:
-- blocker_decision Approval wird erstellt wenn Agent → blocked setzt
-- Approval-Payload enthält korrekte Daten (Agent-Name, Blocker-Kommentar, Task-Titel)
-- Blocker-Kommentar aus TaskComment wird in Payload erfasst
-- Lead bekommt Info-RPC OHNE Handlungsoptionen
-- Guard: Agent bekommt 403 bei blocked → in_progress mit pending Approval
-- Guard gilt auch fuer den blockierten Developer selbst
-- Guard greift NICHT bei bereits resolved Approval
-- User-API (Operator) kann trotz pending Approval entblocken
-- Resolution: Operator approved → Task in_progress, Agent bekommt UNBLOCKED-RPC
-- Resolution: Operator rejected → Task failed
-- Zweiter Block nach Entblockung erstellt neues Approval
+Covers:
+- blocker_decision approval is created when agent sets → blocked
+- approval payload contains correct data (agent name, blocker comment, task title)
+- blocker comment from TaskComment is captured in the payload
+- lead gets an info RPC WITHOUT action options
+- guard: agent gets 403 on blocked → in_progress with a pending approval
+- guard also applies to the blocked developer themselves
+- guard does NOT apply to an already resolved approval
+- user API (operator) can unblock despite a pending approval
+- resolution: operator approved → task in_progress, agent gets UNBLOCKED RPC
+- resolution: operator rejected → task failed
+- a second block after unblocking creates a new approval
 """
 
 import uuid
@@ -28,7 +28,7 @@ from tests.conftest import test_engine
 
 
 async def _create_blocker_data(*, task_status="in_progress"):
-    """Board + Developer (Worker) + Lead + Task erstellen."""
+    """Create board + developer (worker) + lead + task."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -89,12 +89,12 @@ async def _create_blocker_data(*, task_status="in_progress"):
     }
 
 
-# ── Test: Approval wird erstellt bei blocked ──────────────────────────
+# ── Test: approval is created on blocked ──────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_blocked_creates_approval(client, fake_redis):
-    """Wenn Agent Task auf blocked setzt, wird ein blocker_decision Approval erstellt."""
+    """When agent sets task to blocked, a blocker_decision approval is created."""
     data = await _create_blocker_data(task_status="in_progress")
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -111,7 +111,7 @@ async def test_blocked_creates_approval(client, fake_redis):
     assert resp.status_code == 200
     assert resp.json()["status"] == "blocked"
 
-    # Approval in DB pruefen
+    # Check approval in DB
     from app.models.approval import Approval
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
@@ -127,15 +127,15 @@ async def test_blocked_creates_approval(client, fake_redis):
         assert approval.payload["blocked_agent_name"] == "Cody"
 
 
-# ── Test: Guard — Agent kann nicht entblocken mit pending Approval ────
+# ── Test: guard — agent cannot unblock with a pending approval ────
 
 
 @pytest.mark.asyncio
 async def test_guard_blocks_unblock_with_pending_approval(client, fake_redis):
-    """Board Lead bekommt 403 wenn er blocked → in_progress setzt und Approval pending ist."""
+    """Board lead gets 403 when setting blocked → in_progress while approval is pending."""
     data = await _create_blocker_data(task_status="blocked")
 
-    # Approval manuell erstellen (simuliert was bei blocked passiert)
+    # Manually create approval (simulates what happens on blocked)
     from app.models.approval import Approval
     from app.utils import utcnow
     from datetime import timedelta
@@ -166,7 +166,7 @@ async def test_guard_blocks_unblock_with_pending_approval(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_unblock_allowed_without_pending_approval(client, fake_redis):
-    """Agent kann entblocken wenn kein pending Approval existiert (Altlast)."""
+    """Agent can unblock when there is no pending approval (legacy)."""
     data = await _create_blocker_data(task_status="blocked")
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -183,12 +183,12 @@ async def test_unblock_allowed_without_pending_approval(client, fake_redis):
     assert resp.json()["status"] == "in_progress"
 
 
-# ── Test: Resolution — Operator approved → Task in_progress ──────────
+# ── Test: resolution — operator approved → task in_progress ──────────
 
 
 @pytest.mark.asyncio
 async def test_resolution_approved_unblocks_task(auth_client, fake_redis):
-    """Operator approved blocker_decision → Task geht auf in_progress."""
+    """Operator approved blocker_decision → task goes to in_progress."""
     data = await _create_blocker_data(task_status="blocked")
 
     from app.models.approval import Approval
@@ -224,19 +224,19 @@ async def test_resolution_approved_unblocks_task(auth_client, fake_redis):
     assert resp.status_code == 200
     assert resp.json()["status"] == "approved"
 
-    # Task geht auf inbox (Blocker → inbox → auto_dispatch als Background-Task)
+    # Task goes to inbox (blocker → inbox → auto_dispatch as a background task)
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, data["task"].id)
         assert task.status == "inbox"
 
 
-# ── Test: Resolution — Operator rejected → Task failed ───────────────
+# ── Test: resolution — operator rejected → task failed ───────────────
 
 
 @pytest.mark.asyncio
 async def test_resolution_rejected_fails_task(auth_client, fake_redis):
-    """Operator rejected blocker_decision → Task geht auf failed."""
+    """Operator rejected blocker_decision → task goes to failed."""
     data = await _create_blocker_data(task_status="blocked")
 
     from app.models.approval import Approval
@@ -269,22 +269,22 @@ async def test_resolution_rejected_fails_task(auth_client, fake_redis):
     assert resp.status_code == 200
     assert resp.json()["status"] == "rejected"
 
-    # Task muss failed sein
+    # Task must be failed
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, data["task"].id)
         assert task.status == "failed"
 
 
-# ── Test: Blocker-Kommentar wird in Payload erfasst ──────────────────
+# ── Test: blocker comment is captured in the payload ──────────────────
 
 
 @pytest.mark.asyncio
 async def test_blocker_comment_captured_in_payload(client, fake_redis):
-    """Wenn Agent vor dem blocked-Status einen Kommentar postet, wird er im Approval-Payload gespeichert."""
+    """When agent posts a comment before the blocked status, it is stored in the approval payload."""
     data = await _create_blocker_data(task_status="in_progress")
 
-    # Kommentar vor blocked setzen
+    # Set comment before blocked
     from app.models.task import TaskComment
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         comment = TaskComment(
@@ -325,17 +325,17 @@ async def test_blocker_comment_captured_in_payload(client, fake_redis):
         assert approval.payload["blocked_agent_id"] == str(data["developer"].id)
 
 
-# ── Test: Lead bekommt RPC OHNE Handlungsoptionen ────────────────────
+# ── Test: lead gets RPC WITHOUT action options ────────────────────
 
 
 @pytest.mark.asyncio
 async def test_lead_gets_info_rpc_without_options(client, fake_redis):
-    """Lead bekommt Info-TaskComment aber OHNE 'Optionen: 1. loesen, 2. zuweisen, 3. Operator fragen'.
+    """Lead gets an info TaskComment but WITHOUT 'options: 1. resolve, 2. assign, 3. ask operator'.
 
-    Phase 29 (Gateway sunset): die ehemalige rpc.chat_send-Nachricht an den
-    Lead wird jetzt als TaskComment (`comment_type="blocker_lead_notify"`)
-    auf den Task geschrieben. cli-bridge poll.sh des Lead picks die Notify
-    auf den naechsten Tick.
+    Phase 29 (gateway sunset): the former rpc.chat_send message to the
+    lead is now written as a TaskComment (`comment_type="blocker_lead_notify"`)
+    on the task. The lead's cli-bridge poll.sh picks up the notification
+    on the next tick.
     """
     from app.models.task import TaskComment
     data = await _create_blocker_data(task_status="in_progress")
@@ -347,7 +347,7 @@ async def test_lead_gets_info_rpc_without_options(client, fake_redis):
             headers={"Authorization": f"Bearer {data['dev_token']}"},
         )
 
-    # TaskComment-Notify an den Lead pruefen
+    # Check TaskComment notification to the lead
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
             select(TaskComment).where(
@@ -360,21 +360,21 @@ async def test_lead_gets_info_rpc_without_options(client, fake_redis):
     assert len(notifies) == 1, f"Erwartet: 1 blocker_lead_notify Kommentar. Gefunden: {len(notifies)}"
     msg = notifies[0].content
 
-    # MUSS enthalten: Info dass Approval erstellt wurde
+    # MUST contain: info that an approval was created
     assert "Approval" in msg
     assert "Operator entscheidet" in msg
-    # DARF NICHT enthalten: Handlungsoptionen
+    # MUST NOT contain: action options
     assert "Optionen:" not in msg
     assert "Task einem anderen Agent zuweisen" not in msg
     assert "Blocker loesen" not in msg
 
 
-# ── Test: Guard gilt auch fuer den blockierten Developer ──────────────
+# ── Test: guard also applies to the blocked developer ──────────────
 
 
 @pytest.mark.asyncio
 async def test_guard_blocks_developer_self_unblock(client, fake_redis):
-    """Auch der blockierte Developer selbst bekommt 403 beim Entblocken."""
+    """Even the blocked developer themselves gets 403 when unblocking."""
     data = await _create_blocker_data(task_status="blocked")
 
     from app.models.approval import Approval
@@ -404,12 +404,12 @@ async def test_guard_blocks_developer_self_unblock(client, fake_redis):
     assert resp.status_code == 403
 
 
-# ── Test: Guard greift NICHT bei resolved Approval ────────────────────
+# ── Test: guard does NOT apply to a resolved approval ────────────────────
 
 
 @pytest.mark.asyncio
 async def test_guard_allows_unblock_after_approval_resolved(client, fake_redis):
-    """Wenn Approval bereits resolved ist, kann Agent entblocken."""
+    """When approval is already resolved, agent can unblock."""
     data = await _create_blocker_data(task_status="blocked")
 
     from app.models.approval import Approval
@@ -423,7 +423,7 @@ async def test_guard_allows_unblock_after_approval_resolved(client, fake_redis):
             agent_id=data["developer"].id,
             action_type="blocker_decision",
             description="Test blocker",
-            status="approved",  # bereits resolved
+            status="approved",  # already resolved
             resolved_at=utcnow(),
             expires_at=utcnow() + timedelta(hours=24),
         )
@@ -444,15 +444,15 @@ async def test_guard_allows_unblock_after_approval_resolved(client, fake_redis):
     assert resp.json()["status"] == "in_progress"
 
 
-# ── Test: User-API kann trotz pending Approval entblocken ─────────────
+# ── Test: user API can unblock despite a pending approval ─────────────
 
 
 @pytest.mark.asyncio
 async def test_user_api_blocked_by_pending_approval(auth_client, fake_redis):
-    """Der Operator ueber die User-API kann NICHT entblocken wenn Approval pending ist.
+    """The operator via the user API can NOT unblock while an approval is pending.
 
-    Seit Phase 2A: Blocker-Approval Guard greift auch in der User-Route.
-    Der Operator muss ueber die Approval-Resolution entblocken, nicht ueber direkten PATCH.
+    Since phase 2A: the blocker approval guard also applies to the user route.
+    The operator must unblock via approval resolution, not via a direct PATCH.
     """
     data = await _create_blocker_data(task_status="blocked")
 
@@ -482,12 +482,12 @@ async def test_user_api_blocked_by_pending_approval(auth_client, fake_redis):
     assert "Blocker-Approval" in resp.json()["detail"]
 
 
-# ── Test: Approved Resolution sendet UNBLOCKED-RPC an Agent ───────────
+# ── Test: approved resolution sends UNBLOCKED RPC to agent ───────────
 
 
 @pytest.mark.asyncio
 async def test_approved_sends_unblocked_rpc_to_agent(auth_client, fake_redis):
-    """Operator approved → Agent bekommt UNBLOCKED-RPC mit der Anweisung des Operators."""
+    """Operator approved → agent gets UNBLOCKED RPC with the operator's instruction."""
     data = await _create_blocker_data(task_status="blocked")
 
     from app.models.approval import Approval
@@ -520,19 +520,19 @@ async def test_approved_sends_unblocked_rpc_to_agent(auth_client, fake_redis):
                 json={"status": "approved", "resolver_note": "Go via Homebrew installieren"},
             )
 
-    # Blocker-Resolution setzt Task auf inbox, auto_dispatch laeuft als Background
+    # Blocker resolution sets task to inbox, auto_dispatch runs in the background
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, data["task"].id)
-        assert task.status == "inbox"  # Bereit fuer Re-Dispatch
+        assert task.status == "inbox"  # Ready for re-dispatch
 
 
-# ── Test: Zweiter Block erstellt neues Approval ───────────────────────
+# ── Test: second block creates a new approval ───────────────────────
 
 
 @pytest.mark.asyncio
 async def test_second_block_creates_new_approval(client, fake_redis):
-    """Nach Entblockung und erneutem Block wird ein neues Approval erstellt."""
+    """After unblocking and blocking again, a new approval is created."""
     data = await _create_blocker_data(task_status="in_progress")
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -540,7 +540,7 @@ async def test_second_block_creates_new_approval(client, fake_redis):
             mock_rpc.connected = True
             mock_rpc.chat_send = AsyncMock()
 
-            # Erster Block
+            # First block
             resp = await client.patch(
                 f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
                 json={"status": "blocked", "blocker_type": "missing_info", "blocker_question": "Was soll ich tun?"},
@@ -548,7 +548,7 @@ async def test_second_block_creates_new_approval(client, fake_redis):
             )
             assert resp.status_code == 200
 
-    # Erstes Approval resolved machen + Task auf in_progress + last_seen_at resetten
+    # Resolve the first approval + set task to in_progress + reset last_seen_at
     from app.models.approval import Approval
     from app.models.task import Task
     from app.models.agent import Agent
@@ -565,12 +565,12 @@ async def test_second_block_creates_new_approval(client, fake_redis):
         s.add(first_approval)
         task = await s.get(Task, data["task"].id)
         task.status = "in_progress"
-        # Re-Assign nach Auto-Unassign vom ersten blocked. In Production
-        # macht das auto_dispatch_task() nach Approval-Resolution; hier
-        # simulieren wir den Endzustand.
+        # Re-assign after auto-unassign from the first blocked. In production
+        # this is done by auto_dispatch_task() after approval resolution;
+        # here we simulate the end state.
         task.assigned_agent_id = data["developer"].id
         s.add(task)
-        # last_seen_at resetten (SQLite timezone mismatch bei mehreren PATCH-Calls)
+        # Reset last_seen_at (SQLite timezone mismatch across multiple PATCH calls)
         dev = await s.get(Agent, data["developer"].id)
         dev.last_seen_at = None
         s.add(dev)
@@ -581,7 +581,7 @@ async def test_second_block_creates_new_approval(client, fake_redis):
             mock_rpc.connected = True
             mock_rpc.chat_send = AsyncMock()
 
-            # Zweiter Block
+            # Second block
             resp = await client.patch(
                 f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
                 json={"status": "blocked", "blocker_type": "missing_info", "blocker_question": "Was soll ich tun?"},
@@ -589,7 +589,7 @@ async def test_second_block_creates_new_approval(client, fake_redis):
             )
             assert resp.status_code == 200
 
-    # Zwei Approvals in DB (eins approved, eins pending)
+    # Two approvals in DB (one approved, one pending)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
             select(Approval).where(

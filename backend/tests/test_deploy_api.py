@@ -1,4 +1,4 @@
-"""Tests fuer Deploy-API — Health-Checks und History-Tracking."""
+"""Tests for the deploy API — health checks and history tracking."""
 
 import pytest
 from httpx import AsyncClient
@@ -10,7 +10,7 @@ from .conftest import test_engine
 
 @pytest.mark.asyncio
 class TestDeployServicesUserEndpoint:
-    """User-Endpoint: GET /api/v1/deploy/services"""
+    """User endpoint: GET /api/v1/deploy/services"""
 
     async def test_returns_401_without_auth(self, client: AsyncClient):
         resp = await client.get("/api/v1/deploy/services")
@@ -33,7 +33,7 @@ class TestDeployServicesUserEndpoint:
 
 @pytest.mark.asyncio
 class TestDeployHistoryUserEndpoint:
-    """User-Endpoint: GET /api/v1/deploy/history"""
+    """User endpoint: GET /api/v1/deploy/history"""
 
     async def test_returns_401_without_auth(self, client: AsyncClient):
         resp = await client.get("/api/v1/deploy/history")
@@ -52,7 +52,7 @@ class TestDeployAgentEndpoints:
     async def test_agent_services_returns_403_without_scope(
         self, client: AsyncClient, make_agent
     ):
-        """Agent ohne deploy:execute Scope wird abgelehnt."""
+        """Agent without deploy:execute scope is rejected."""
         from app.auth import generate_agent_token
 
         agent = await make_agent(
@@ -77,7 +77,7 @@ class TestDeployAgentEndpoints:
         assert resp.status_code == 403
 
     async def test_agent_record_deploy(self, client: AsyncClient, make_agent):
-        """Agent mit deploy:execute kann Deploys aufzeichnen."""
+        """Agent with deploy:execute can record deploys."""
         from app.auth import generate_agent_token
 
         agent = await make_agent(
@@ -113,7 +113,7 @@ class TestDeployAgentEndpoints:
 
 @pytest.mark.asyncio
 class TestDeployServiceHealth:
-    """Unit-Tests fuer den Health-Check Service."""
+    """Unit tests for the health check service."""
 
     async def test_check_unknown_service(self):
         from app.services.deploy import check_service_health
@@ -124,6 +124,6 @@ class TestDeployServiceHealth:
     async def test_check_service_unreachable(self):
         from app.services.deploy import check_service_health
 
-        # Frontend ist im Test-Environment nicht erreichbar
+        # Frontend is unreachable in the test environment
         result = await check_service_health("frontend")
         assert result["status"] in ("unreachable", "error", "timeout")

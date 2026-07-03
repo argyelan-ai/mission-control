@@ -1,11 +1,11 @@
-"""Duplicate Root Guard — Idempotency fuer Root-Tasks.
+"""Duplicate Root Guard — idempotency for root tasks.
 
-1. Gleicher Root innerhalb Fenster → 409 + existing_task_id
-2. Gleicher Root ausserhalb Fenster → erlaubt
-3. Gleicher Titel, anderer requester_id → erlaubt
-4. Child-Task → nicht betroffen
-5. in_progress + Children → nicht blockieren
-6. Response enthaelt existing_task_id
+1. Same root within the window → 409 + existing_task_id
+2. Same root outside the window → allowed
+3. Same title, different requester_id → allowed
+4. Child task → not affected
+5. in_progress + children → do not block
+6. Response contains existing_task_id
 """
 import re
 import uuid
@@ -27,7 +27,7 @@ class TestDuplicateRootGuard:
 
     @pytest.mark.asyncio
     async def test_duplicate_inbox_root_blocked(self, session: AsyncSession, make_agent, make_task):
-        """Gleicher Root (inbox) innerhalb 60s → blockiert."""
+        """Same root (inbox) within 60s → blocked."""
         board_id = uuid.uuid4()
         agent = await make_agent("H", board_id=board_id, is_board_lead=True)
 
@@ -39,7 +39,7 @@ class TestDuplicateRootGuard:
             requester_id="123",
         )
 
-        # Gleiche Prueflogik wie der Guard
+        # Same check logic as the guard
         _new_title = _normalize_title("Wetter-CLI bauen")
         result = await session.exec(
             select(Task).where(
@@ -60,7 +60,7 @@ class TestDuplicateRootGuard:
 
     @pytest.mark.asyncio
     async def test_old_root_not_blocked(self, session: AsyncSession, make_agent, make_task):
-        """Gleicher Root aber aelter als 60s → erlaubt."""
+        """Same root but older than 60s → allowed."""
         board_id = uuid.uuid4()
         agent = await make_agent("H2", board_id=board_id, is_board_lead=True)
 
@@ -79,11 +79,11 @@ class TestDuplicateRootGuard:
                 Task.created_at > utcnow() - timedelta(seconds=60),
             )
         )
-        assert result.first() is None  # Kein Match → erlaubt
+        assert result.first() is None  # No match → allowed
 
     @pytest.mark.asyncio
     async def test_different_requester_not_blocked(self, session: AsyncSession, make_agent, make_task):
-        """Gleicher Titel, anderer requester_id → erlaubt."""
+        """Same title, different requester_id → allowed."""
         board_id = uuid.uuid4()
         agent = await make_agent("H3", board_id=board_id, is_board_lead=True)
 
@@ -95,21 +95,21 @@ class TestDuplicateRootGuard:
             requester_id="user-A",
         )
 
-        # Neuer Task mit anderem requester_id
+        # New task with a different requester_id
         result = await session.exec(
             select(Task).where(
                 Task.parent_task_id.is_(None),  # type: ignore[union-attr]
                 Task.board_id == board_id,
                 Task.owner_agent_id == agent.id,
-                Task.requester_id == "user-B",  # Anderer Absender
+                Task.requester_id == "user-B",  # different sender
                 Task.created_at > utcnow() - timedelta(seconds=60),
             )
         )
-        assert result.first() is None  # Kein Match → erlaubt
+        assert result.first() is None  # No match → allowed
 
     @pytest.mark.asyncio
     async def test_child_task_not_affected(self, session: AsyncSession, make_agent, make_task):
-        """Child-Task → Guard greift nicht (nur Roots)."""
+        """Child task → guard does not apply (roots only)."""
         board_id = uuid.uuid4()
         agent = await make_agent("H4", board_id=board_id, is_board_lead=True)
 
@@ -120,7 +120,7 @@ class TestDuplicateRootGuard:
             owner_agent_id=agent.id,
         )
 
-        # Guard prueft parent_task_id IS NULL — Child hat parent → wird ignoriert
+        # Guard checks parent_task_id IS NULL — child has a parent → ignored
         result = await session.exec(
             select(Task).where(
                 Task.parent_task_id.is_(None),  # type: ignore[union-attr]
@@ -129,13 +129,13 @@ class TestDuplicateRootGuard:
                 Task.created_at > utcnow() - timedelta(seconds=60),
             )
         )
-        # Nur der Root matcht, nicht das Child
+        # Only the root matches, not the child
         tasks = result.all()
         assert all(t.parent_task_id is None for t in tasks)
 
     @pytest.mark.asyncio
     async def test_in_progress_with_children_not_blocked(self, session: AsyncSession, make_agent, make_task):
-        """in_progress Root MIT Children → nicht blockieren."""
+        """in_progress root WITH children → do not block."""
         board_id = uuid.uuid4()
         agent = await make_agent("H5", board_id=board_id, is_board_lead=True)
 
@@ -144,19 +144,19 @@ class TestDuplicateRootGuard:
             status="in_progress",
             owner_agent_id=agent.id,
         )
-        # Child existiert
+        # Child exists
         await make_task(board_id, title="Plan", parent_task_id=root.id, owner_agent_id=agent.id)
 
-        # Guard: in_progress + Children → NICHT blockieren
+        # Guard: in_progress + children → do NOT block
         _children = await session.exec(
             select(Task.id).where(Task.parent_task_id == root.id).limit(1)
         )
         has_children = _children.first() is not None
-        assert has_children  # Hat Children → Guard blockiert NICHT
+        assert has_children  # Has children → guard does NOT block
 
     @pytest.mark.asyncio
     async def test_in_progress_without_children_blocked(self, session: AsyncSession, make_agent, make_task):
-        """in_progress Root OHNE Children → blockieren."""
+        """in_progress root WITHOUT children → block."""
         board_id = uuid.uuid4()
         agent = await make_agent("H6", board_id=board_id, is_board_lead=True)
 
@@ -170,11 +170,11 @@ class TestDuplicateRootGuard:
             select(Task.id).where(Task.parent_task_id == root.id).limit(1)
         )
         has_children = _children.first() is not None
-        assert not has_children  # Keine Children → Guard blockiert
+        assert not has_children  # No children → guard blocks
 
     @pytest.mark.asyncio
     async def test_title_normalization(self, session: AsyncSession):
-        """Title-Normalisierung: Whitespace, Case, Trim."""
+        """Title normalization: whitespace, case, trim."""
         assert _normalize_title("  Wetter-CLI   bauen  ") == "wetter-cli bauen"
         assert _normalize_title("WETTER-CLI BAUEN") == "wetter-cli bauen"
         assert _normalize_title("Wetter-CLI\n\tbauen") == "wetter-cli bauen"

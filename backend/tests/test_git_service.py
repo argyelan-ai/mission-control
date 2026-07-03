@@ -1,4 +1,4 @@
-"""Tests fuer GitService — Git-Operationen fuer Agent-Projekte."""
+"""Tests for GitService — git operations for agent projects."""
 import pytest
 
 from app.services.git_service import GitService, slugify_project, slugify_workspace_slug

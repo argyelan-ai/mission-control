@@ -1,16 +1,16 @@
-"""Tests fuer Auto-Unassign bei Status-Uebergang nach failed/blocked.
+"""Tests for auto-unassign on status transition to failed/blocked.
 
-Bug-Hintergrund (2026-04-23): Wenn ein Task auf failed/blocked gesetzt wird
-ohne assigned_agent_id zu loeschen, geraet der Agent in eine stille
-Cancel-Schleife: agent_poll prueft als ERSTES ob es einen failed Task fuer
-den Agent gibt → liefert state="cancelled" → poll.sh sendet ESC → naechster
-Poll: gleiche Antwort. Endlos. Neue Tasks werden NIE delivered weil der
-failed Task immer Vorrang hat.
+Bug background (2026-04-23): When a task is set to failed/blocked without
+clearing assigned_agent_id, the agent gets stuck in a silent cancel loop:
+agent_poll FIRST checks whether there's a failed task for the agent →
+returns state="cancelled" → poll.sh sends ESC → next poll: same response.
+Endless. New tasks are NEVER delivered because the failed task always
+takes precedence.
 
-Fix: zentralen Helper apply_terminal_unassign() der bei jedem Uebergang nach
-failed/blocked das assigned_agent_id auf NULL setzt. Ausnahme: blocked mit
-blocked_by_task_id (Callback-Wait) — der Parent-Agent muss assigned bleiben
-damit das Resume zurueckrouten kann.
+Fix: central helper apply_terminal_unassign() that sets assigned_agent_id
+to NULL on every transition to failed/blocked. Exception: blocked with
+blocked_by_task_id (callback wait) — the parent agent must stay assigned
+so the resume can route back.
 """
 
 import uuid
@@ -28,12 +28,12 @@ from app.services.task_lifecycle import apply_terminal_unassign
 from .conftest import test_engine
 
 
-# ── Unit-Tests fuer apply_terminal_unassign ──────────────────────────────
+# ── Unit tests for apply_terminal_unassign ──────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_apply_terminal_unassign_failed_clears_assignment():
-    """Uebergang → failed: assigned_agent_id wird auf None gesetzt."""
+    """Transition → failed: assigned_agent_id is set to None."""
     board_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     task_id = uuid.uuid4()
@@ -62,14 +62,14 @@ async def test_apply_terminal_unassign_failed_clears_assignment():
 
 @pytest.mark.asyncio
 async def test_apply_terminal_unassign_blocked_without_callback_preserves_assignment():
-    """Uebergang → blocked OHNE blocked_by_task_id: assigned_agent_id BLEIBT erhalten.
+    """Transition → blocked WITHOUT blocked_by_task_id: assigned_agent_id STAYS intact.
 
-    Geaendert am 2026-04-24 (PR #111): Frueher wurde assigned_agent_id gecleaned,
-    was dazu fuehrte dass nach mc blocked + Operator-Approval der Task zum Board-Lead
-    eskalierte statt zum Original-Worker zurueck. Jetzt:
-    - Task.assigned_agent_id bleibt (Worker bekommt Task beim Resume zurueck)
-    - Agent.current_task_id wird freigegeben (Lock) damit der Worker andere Tasks nehmen kann
-    - Agent.run_state → "blocked" zur Info
+    Changed on 2026-04-24 (PR #111): Previously assigned_agent_id was cleared,
+    which caused the task to escalate to the board lead instead of back to the
+    original worker after mc blocked + operator approval. Now:
+    - Task.assigned_agent_id stays (worker gets the task back on resume)
+    - Agent.current_task_id is released (lock) so the worker can pick up other tasks
+    - Agent.run_state → "blocked" for info
     """
     board_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -93,22 +93,22 @@ async def test_apply_terminal_unassign_blocked_without_callback_preserves_assign
         await s.refresh(task)
         await s.refresh(agent)
 
-    # Post-PR-#111: assignment bleibt, nur Lock wird gelöst
+    # Post-PR-#111: assignment stays, only the lock is released
     assert changed is False, "blocked darf nicht mehr unassignen"
     assert task.assigned_agent_id == agent_id, "Worker bleibt assigned fuer Resume"
     assert agent.current_task_id is None, "Lock wird trotzdem freigegeben"
-    # run_state Wechsel passiert nur wenn der alte state "running" oder None war
-    # (sonst bleibt idle/offline unveraendert). Im Test hatten wir keinen expliziten
-    # run_state, default ist "idle" in agents.py — kein Wechsel erwartet.
+    # run_state change only happens if the old state was "running" or None
+    # (otherwise idle/offline stays unchanged). In this test we had no explicit
+    # run_state, default is "idle" in agents.py — no change expected.
 
 
 @pytest.mark.asyncio
 async def test_apply_terminal_unassign_blocked_with_callback_keeps_assignment():
-    """Uebergang → blocked MIT blocked_by_task_id: assigned_agent_id BLEIBT.
+    """Transition → blocked WITH blocked_by_task_id: assigned_agent_id STAYS.
 
-    Struktureller Callback-Wait (help_request, delegate). Der Parent-Agent
-    muss assigned bleiben, sonst kann der Resume nach Subtask-done nicht
-    zum richtigen Agent zurueckrouten.
+    Structural callback wait (help_request, delegate). The parent agent
+    must stay assigned, otherwise the resume after subtask-done can't
+    route back to the right agent.
     """
     board_id = uuid.uuid4()
     agent_id = uuid.uuid4()
@@ -135,14 +135,14 @@ async def test_apply_terminal_unassign_blocked_with_callback_keeps_assignment():
 
     assert changed is False, "Callback-Wait darf nicht unassignen"
     assert task.assigned_agent_id == agent_id
-    # current_task_id darf hier nicht angefasst werden (Worker arbeitet noch
-    # weiter wenn der Subtask zurueckkommt)
+    # current_task_id must not be touched here (worker keeps working
+    # while the subtask is pending)
     assert agent.current_task_id == task_id
 
 
 @pytest.mark.asyncio
 async def test_apply_terminal_unassign_no_op_for_other_status():
-    """Uebergang → done/in_progress/review: keine Aktion."""
+    """Transition → done/in_progress/review: no action."""
     board_id = uuid.uuid4()
     agent_id = uuid.uuid4()
     task_id = uuid.uuid4()
@@ -166,7 +166,7 @@ async def test_apply_terminal_unassign_no_op_for_other_status():
 
 @pytest.mark.asyncio
 async def test_apply_terminal_unassign_already_unassigned_safe():
-    """Defensive: wenn assigned_agent_id bereits None ist, kein Crash."""
+    """Defensive: if assigned_agent_id is already None, no crash."""
     board_id = uuid.uuid4()
     task_id = uuid.uuid4()
 
@@ -180,17 +180,17 @@ async def test_apply_terminal_unassign_already_unassigned_safe():
         await s.commit()
         await s.refresh(task)
 
-        # Watchdog hat Task schon unassignt → Helper darf nichts brechen
+        # Watchdog already unassigned the task → helper must not break anything
         changed = await apply_terminal_unassign(s, task, "failed")
         assert changed is False
         assert task.assigned_agent_id is None
 
 
-# ── Integrationstests via PATCH-Endpoints ────────────────────────────────
+# ── Integration tests via PATCH endpoints ────────────────────────────────
 
 
 async def _setup_basic(*, task_status: str = "in_progress", blocked_by: uuid.UUID | None = None):
-    """Board + Worker + Task fuer Integration-Tests."""
+    """Board + worker + task for integration tests."""
     board_id = uuid.uuid4()
     worker_id = uuid.uuid4()
     task_id = uuid.uuid4()
@@ -227,8 +227,8 @@ async def _setup_basic(*, task_status: str = "in_progress", blocked_by: uuid.UUI
 
 
 def _start_user_patch_mocks():
-    """Mocks fuer alle externen Side-Effects beim User-PATCH starten.
-    Returns Liste von Patcher-Objekten — Caller muss am Ende stop() aufrufen.
+    """Start mocks for all external side effects during the user PATCH.
+    Returns a list of patcher objects — caller must call stop() at the end.
     """
     mocks = [
         patch("app.routers.tasks.create_tracked_task"),
@@ -249,11 +249,11 @@ def _stop_mocks(mocks):
 
 @pytest.mark.asyncio
 async def test_user_patch_to_failed_auto_unassigns(auth_client):
-    """User PATCH status: failed → assigned_agent_id wird geloescht.
+    """User PATCH status: failed → assigned_agent_id is cleared.
 
-    Reproduziert den Live-Bug: ohne Auto-Unassign wuerde der Agent in
-    Cancel-Schleife haengen weil agent_poll den failed Task immer
-    priorisiert.
+    Reproduces the live bug: without auto-unassign the agent would get
+    stuck in a cancel loop because agent_poll always prioritizes the
+    failed task.
     """
     data = await _setup_basic(task_status="in_progress")
 
@@ -282,12 +282,12 @@ async def test_user_patch_to_failed_auto_unassigns(auth_client):
 
 @pytest.mark.asyncio
 async def test_user_patch_to_blocked_preserves_assignment(auth_client):
-    """User PATCH status: blocked (ohne blocked_by_task_id) → assignment bleibt (PR #111).
+    """User PATCH status: blocked (without blocked_by_task_id) → assignment stays (PR #111).
 
-    Frueher (vor 2026-04-24) wurde assigned_agent_id geloescht. Das fuehrte zu
-    Worker-Orphaning bei mc blocked: nach der Operator-Resolution landete der Task
-    beim Board-Lead statt zurueck beim Worker. Jetzt bleibt assigned_agent_id
-    erhalten; nur Lock (current_task_id) wird freigegeben.
+    Previously (before 2026-04-24) assigned_agent_id was cleared. That caused
+    worker orphaning on mc blocked: after operator resolution the task ended up
+    with the board lead instead of back with the worker. Now assigned_agent_id
+    stays intact; only the lock (current_task_id) is released.
     """
     data = await _setup_basic(task_status="in_progress")
 
@@ -308,19 +308,19 @@ async def test_user_patch_to_blocked_preserves_assignment(auth_client):
         worker = await s.get(Agent, data["worker"].id)
 
     assert task.status == "blocked"
-    # Post-PR-#111: assignment bleibt, Worker bekommt Task beim Resume zurueck
+    # Post-PR-#111: assignment stays, worker gets the task back on resume
     assert task.assigned_agent_id == data["worker"].id
-    # Lock wird trotzdem freigegeben damit Worker andere Tasks nehmen kann
+    # Lock is still released so the worker can pick up other tasks
     assert worker.current_task_id is None
 
 
 @pytest.mark.asyncio
 async def test_user_patch_to_blocked_with_callback_keeps_assignment(auth_client):
-    """User PATCH status: blocked MIT blocked_by_task_id → assigned bleibt.
+    """User PATCH status: blocked WITH blocked_by_task_id → assignment stays.
 
-    Edge-Case: Der Operator setzt manuell einen Task auf blocked der schon einen
-    Subtask-Callback hat (z.B. nach delegate). Das ist struktureller
-    Wartezustand, KEIN Operator-Approval — nicht unassignen.
+    Edge case: the operator manually sets a task to blocked that already has
+    a subtask callback (e.g. after delegate). This is a structural wait
+    state, NOT operator approval — must not unassign.
     """
     sub_id = uuid.uuid4()
     data = await _setup_basic(task_status="in_progress", blocked_by=sub_id)
@@ -348,7 +348,7 @@ async def test_user_patch_to_blocked_with_callback_keeps_assignment(auth_client)
 
 @pytest.mark.asyncio
 async def test_worker_patch_to_failed_auto_unassigns(client):
-    """Worker PATCH status: failed (eigener Task) → assigned wird geloescht."""
+    """Worker PATCH status: failed (own task) → assigned is cleared."""
     data = await _setup_basic(task_status="in_progress")
 
     mocks = _start_user_patch_mocks()
@@ -379,11 +379,11 @@ async def test_worker_patch_to_failed_auto_unassigns(client):
 
 @pytest.mark.asyncio
 async def test_worker_patch_to_blocked_with_callback_keeps_assignment(client):
-    """Worker PATCH blocked + blocked_by_task_id (delegate-Pattern) → assigned bleibt."""
+    """Worker PATCH blocked + blocked_by_task_id (delegate pattern) → assignment stays."""
     sub_id = uuid.uuid4()
     data = await _setup_basic(task_status="in_progress")
 
-    # Subtask anlegen damit blocked_by_task_id-Validierung passt
+    # Create subtask so blocked_by_task_id validation passes
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         sub = Task(
             id=sub_id,
@@ -424,7 +424,7 @@ async def test_worker_patch_to_blocked_with_callback_keeps_assignment(client):
 
 @pytest.mark.asyncio
 async def test_help_request_self_block_keeps_assignment(client):
-    """help_request Endpoint setzt blocked_by_task_id → Original-Agent bleibt assigned."""
+    """help_request endpoint sets blocked_by_task_id → original agent stays assigned."""
     board_id = uuid.uuid4()
     requester_id = uuid.uuid4()
     helper_id = uuid.uuid4()
@@ -481,7 +481,7 @@ async def test_help_request_self_block_keeps_assignment(client):
 
 @pytest.mark.asyncio
 async def test_user_patch_failed_does_not_break_already_unassigned(auth_client):
-    """Defensive: Watchdog hat Task schon unassignt → User-PATCH crasht nicht."""
+    """Defensive: watchdog already unassigned the task → user PATCH does not crash."""
     board_id = uuid.uuid4()
     task_id = uuid.uuid4()
 
@@ -490,7 +490,7 @@ async def test_user_patch_failed_does_not_break_already_unassigned(auth_client):
         s.add(board)
         task = Task(
             id=task_id, board_id=board_id, title="Stale",
-            status="in_progress", assigned_agent_id=None,  # bereits unassignt
+            status="in_progress", assigned_agent_id=None,  # already unassigned
         )
         s.add(task)
         await s.commit()

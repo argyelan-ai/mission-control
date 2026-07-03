@@ -1,14 +1,14 @@
-"""Tests fuer Clarification-Callback via TaskComment (runtime-agnostic).
+"""Tests for clarification callback via TaskComment (runtime-agnostic).
 
-Bug-Repro 2026-04-24: Der Operator beantwortete Boss's Klaerungsfrage zum stitch-skills
-Install. Approval → approved + resolver_note. Task → in_progress. Aber:
-- rpc.chat_send_isolated checkt agent.gateway_agent_id
-- Boss ist agent_runtime='host' → keine gateway_agent_id → Callback skipped
-- task_comments Tabelle blieb leer, Boss erfuhr die Antwort nie
+Bug repro 2026-04-24: the operator answered Boss's clarification question about
+the stitch-skills install. Approval → approved + resolver_note. Task → in_progress. But:
+- rpc.chat_send_isolated checks agent.gateway_agent_id
+- Boss is agent_runtime='host' → no gateway_agent_id → callback skipped
+- task_comments table stayed empty, Boss never learned the answer
 
-Fix: IMMER TaskComment mit der Antwort posten (comment_type=resolution).
-poll.sh deliver_comments liefert das im naechsten Cycle an Boss — funktioniert
-fuer host, cli-bridge und openclaw gleichermassen.
+Fix: ALWAYS post a TaskComment with the answer (comment_type=resolution).
+poll.sh deliver_comments delivers it to Boss on the next cycle — works
+the same for host, cli-bridge, and openclaw.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -21,7 +21,7 @@ from tests.conftest import test_engine
 
 
 async def _make_clarification_setup(*, agent_runtime: str = "host", has_gateway_id: bool = False):
-    """Board + Agent + Task (blocked) + Clarification-Approval."""
+    """Board + agent + task (blocked) + clarification approval."""
     from app.auth import generate_agent_token
     from app.models.agent import Agent
     from app.models.approval import Approval
@@ -77,7 +77,7 @@ async def _make_clarification_setup(*, agent_runtime: str = "host", has_gateway_
 async def test_clarification_resolved_posts_comment_for_host_runtime(
     auth_client: AsyncClient, fake_redis,
 ):
-    """Boss (host-runtime, keine gateway_agent_id) bekommt Antwort via TaskComment."""
+    """Boss (host runtime, no gateway_agent_id) gets the answer via TaskComment."""
     agent, task, approval, board_id = await _make_clarification_setup(
         agent_runtime="host", has_gateway_id=False,
     )
@@ -91,7 +91,7 @@ async def test_clarification_resolved_posts_comment_for_host_runtime(
     )
     assert resp.status_code == 200, resp.text
 
-    # TaskComment mit der Antwort sollte existieren
+    # TaskComment with the answer should exist
     from app.models.task import TaskComment
     from sqlmodel import select
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -104,7 +104,7 @@ async def test_clarification_resolved_posts_comment_for_host_runtime(
         )
         c = resolution_comments[0]
         assert "Allowlist erweitern" in c.content
-        assert "Wie soll ich die stitch-skills installieren" in c.content  # Frage zitiert
+        assert "Wie soll ich die stitch-skills installieren" in c.content  # question quoted
         assert c.author_type == "user"
 
 
@@ -112,7 +112,7 @@ async def test_clarification_resolved_posts_comment_for_host_runtime(
 async def test_clarification_resolved_also_posts_comment_for_cli_bridge(
     auth_client: AsyncClient, fake_redis,
 ):
-    """cli-bridge Worker ohne gateway_agent_id bekommt Antwort via TaskComment."""
+    """cli-bridge worker without gateway_agent_id gets the answer via TaskComment."""
     agent, task, approval, board_id = await _make_clarification_setup(
         agent_runtime="cli-bridge", has_gateway_id=False,
     )
@@ -140,7 +140,7 @@ async def test_clarification_resolved_also_posts_comment_for_cli_bridge(
 async def test_clarification_task_goes_to_in_progress(
     auth_client: AsyncClient, fake_redis,
 ):
-    """Nach Approval ist der Task status=in_progress (nicht mehr blocked)."""
+    """After approval the task status is in_progress (no longer blocked)."""
     agent, task, approval, board_id = await _make_clarification_setup(
         agent_runtime="host", has_gateway_id=False,
     )
@@ -160,9 +160,9 @@ async def test_clarification_task_goes_to_in_progress(
 async def test_clarification_comment_also_for_openclaw_gateway_agent(
     auth_client: AsyncClient, fake_redis,
 ):
-    """Openclaw-Gateway-Agent bekommt TaskComment wie alle anderen Runtimes
-    (belt-and-braces). Zusaetzlich wird rpc.chat_send_isolated via fire-and-
-    forget getriggert — das testen wir hier nicht (asyncio.create_task Timing)."""
+    """Openclaw gateway agent gets a TaskComment like all other runtimes
+    (belt-and-braces). Additionally rpc.chat_send_isolated is triggered via
+    fire-and-forget — we don't test that here (asyncio.create_task timing)."""
     agent, task, approval, board_id = await _make_clarification_setup(
         agent_runtime="openclaw", has_gateway_id=True,
     )
@@ -173,8 +173,8 @@ async def test_clarification_comment_also_for_openclaw_gateway_agent(
     )
     assert resp.status_code == 200
 
-    # Comment sollte auch fuer openclaw-Agents da sein (der garantierte Pfad,
-    # RPC ist nur best-effort live-delivery zusaetzlich)
+    # Comment should also exist for openclaw agents (the guaranteed path,
+    # RPC is only an additional best-effort live delivery)
     from app.models.task import TaskComment
     from sqlmodel import select
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -190,8 +190,8 @@ async def test_clarification_comment_also_for_openclaw_gateway_agent(
 
 @pytest.mark.asyncio
 async def test_clarification_rejected_no_comment(auth_client: AsyncClient, fake_redis):
-    """Bei status=rejected → kein Resolution-Comment (der Operator hat nicht geantwortet,
-    nur abgelehnt). Task bleibt moeglicherweise blocked (andere Logik)."""
+    """With status=rejected → no resolution comment (the operator didn't answer,
+    just rejected). Task may remain blocked (different logic)."""
     agent, task, approval, board_id = await _make_clarification_setup(
         agent_runtime="host", has_gateway_id=False,
     )

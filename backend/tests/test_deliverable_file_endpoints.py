@@ -1,4 +1,4 @@
-"""Tests fuer die neuen Deliverable-File-Endpoints."""
+"""Tests for the new deliverable file endpoints."""
 import os
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -10,12 +10,12 @@ from tests.conftest import test_engine  # noqa: F401 — needed for SQLite engin
 
 
 async def _make_board_task_deliverable(deliverable_type="file", path=None):
-    """Hilfsfunktion: Board + Task + Agent + Deliverable in DB anlegen.
+    """Helper: create Board + Task + Agent + Deliverable in the DB.
 
-    Der Agent-Record wird mitangelegt, weil `_resolve_deliverable_fs_path`
-    (in routers/tasks.py, ab bc9087d) den Agent via `deliverable.agent_id`
-    lookupt um den Slug-basierten Dateipfad zu derivieren. Ohne Agent-Eintrag
-    würde der Resolver None zurueckgeben und alle Endpoints 404 liefern.
+    The Agent record is created alongside because `_resolve_deliverable_fs_path`
+    (in routers/tasks.py, since bc9087d) looks up the agent via `deliverable.agent_id`
+    to derive the slug-based file path. Without an Agent entry, the resolver
+    would return None and all endpoints would return 404.
     """
     from sqlmodel.ext.asyncio.session import AsyncSession as _AsyncSession
     from app.models.agent import Agent
@@ -30,10 +30,10 @@ async def _make_board_task_deliverable(deliverable_type="file", path=None):
 
     board = Board(id=board_id, name="Test", slug="test")
     task = Task(id=task_id, board_id=board_id, title="T")
-    # Agent-Name "test" → Slug "test" → Pfad ~/.mc-deliverables/test/...
-    # Fuer File-Tests uebergeben wir absolute Pfade (kein /deliverables/
-    # Prefix), der Slug-Pfad ist dann irrelevant, aber der Agent-Lookup
-    # muss trotzdem erfolgreich sein.
+    # Agent name "test" → slug "test" → path ~/.mc-deliverables/test/...
+    # For file tests we pass absolute paths (no /deliverables/ prefix), so
+    # the slug-based path is irrelevant, but the agent lookup still needs
+    # to succeed.
     agent = Agent(id=agent_id, name="test", role="test")
     deliverable = TaskDeliverable(
         id=deliverable_id,
@@ -54,7 +54,7 @@ async def _make_board_task_deliverable(deliverable_type="file", path=None):
 
 @pytest.mark.asyncio
 async def test_file_endpoint_serves_file(auth_client: AsyncClient, session, tmp_path):
-    """GET /file liefert Dateiinhalt mit korrektem Content-Type."""
+    """GET /file returns file content with the correct content type."""
     f = tmp_path / "hello.txt"
     f.write_text("Hello MC")
 
@@ -70,7 +70,7 @@ async def test_file_endpoint_serves_file(auth_client: AsyncClient, session, tmp_
 
 @pytest.mark.asyncio
 async def test_file_endpoint_path_traversal_rejected(auth_client: AsyncClient, session, tmp_path):
-    """GET /file lehnt Pfade mit .. ab."""
+    """GET /file rejects paths containing .."""
     board_id, task_id, del_id = await _make_board_task_deliverable(path="/etc/../etc/passwd")
 
     resp = await auth_client.get(
@@ -81,7 +81,7 @@ async def test_file_endpoint_path_traversal_rejected(auth_client: AsyncClient, s
 
 @pytest.mark.asyncio
 async def test_file_endpoint_missing_file_returns_404(auth_client: AsyncClient, session):
-    """GET /file gibt 404 wenn Datei nicht existiert."""
+    """GET /file returns 404 when the file doesn't exist."""
     board_id, task_id, del_id = await _make_board_task_deliverable(path="/tmp/does_not_exist_mc_test_12345.txt")
 
     resp = await auth_client.get(
@@ -92,7 +92,7 @@ async def test_file_endpoint_missing_file_returns_404(auth_client: AsyncClient, 
 
 @pytest.mark.asyncio
 async def test_file_endpoint_subpath(auth_client: AsyncClient, session, tmp_path):
-    """GET /file?subpath= liefert Datei innerhalb eines Verzeichnis-Deliverables."""
+    """GET /file?subpath= returns a file inside a directory deliverable."""
     d = tmp_path / "src"
     d.mkdir()
     (d / "main.py").write_text("print('hi')")
@@ -109,7 +109,7 @@ async def test_file_endpoint_subpath(auth_client: AsyncClient, session, tmp_path
 
 @pytest.mark.asyncio
 async def test_file_endpoint_subpath_traversal_rejected(auth_client: AsyncClient, session, tmp_path):
-    """GET /file?subpath= lehnt Traversal aus dem Root ab."""
+    """GET /file?subpath= rejects traversal out of the root."""
     d = tmp_path / "src"
     d.mkdir()
 
@@ -123,7 +123,7 @@ async def test_file_endpoint_subpath_traversal_rejected(auth_client: AsyncClient
 
 
 def _make_httpx_mock():
-    """Erstellt einen AsyncMock der httpx.AsyncClient.post Methode."""
+    """Creates an AsyncMock of the httpx.AsyncClient.post method."""
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_post = AsyncMock(return_value=mock_response)
@@ -135,19 +135,19 @@ def _make_httpx_mock():
 
 
 def _force_docker_env():
-    """Patch context manager: erzwingt in_docker=True im open_deliverable handler.
+    """Patch context manager: forces in_docker=True in the open_deliverable handler.
 
-    Der handler prueft `os.path.exists('/.dockerenv') or sys.platform.startswith('linux')`.
-    Im pytest-Lauf (macOS) ist beides False → Code nimmt den subprocess.Popen Pfad
-    und httpx wird nie aufgerufen. Fuer die Tests forcen wir den Docker-Pfad
-    indem wir sys.platform auf 'linux' patchen.
+    The handler checks `os.path.exists('/.dockerenv') or sys.platform.startswith('linux')`.
+    In the pytest run (macOS) both are False → code takes the subprocess.Popen path
+    and httpx is never called. For the tests we force the Docker path
+    by patching sys.platform to 'linux'.
     """
     return patch("app.routers.tasks.sys.platform", "linux")
 
 
 @pytest.mark.asyncio
 async def test_open_endpoint_reveal(auth_client: AsyncClient, session, tmp_path):
-    """POST /open mit reveal=true ruft host-helper mit reveal=True auf (Docker-Pfad)."""
+    """POST /open with reveal=true calls the host helper with reveal=True (Docker path)."""
     f = tmp_path / "report.pdf"
     f.write_bytes(b"%PDF")
 
@@ -171,7 +171,7 @@ async def test_open_endpoint_reveal(auth_client: AsyncClient, session, tmp_path)
 
 @pytest.mark.asyncio
 async def test_open_endpoint_default_app(auth_client: AsyncClient, session, tmp_path):
-    """POST /open mit reveal=false ruft host-helper mit reveal=False auf (Docker-Pfad)."""
+    """POST /open with reveal=false calls the host helper with reveal=False (Docker path)."""
     f = tmp_path / "video.mp4"
     f.write_bytes(b"\x00")
 
@@ -194,7 +194,7 @@ async def test_open_endpoint_default_app(auth_client: AsyncClient, session, tmp_
 
 @pytest.mark.asyncio
 async def test_open_endpoint_with_subpath(auth_client: AsyncClient, session, tmp_path):
-    """POST /open mit subpath oeffnet Datei innerhalb des Deliverable-Verzeichnisses."""
+    """POST /open with subpath opens a file inside the deliverable directory."""
     d = tmp_path / "project"
     d.mkdir()
     (d / "main.py").write_text("x")
@@ -219,7 +219,7 @@ async def test_open_endpoint_with_subpath(auth_client: AsyncClient, session, tmp
 
 @pytest.mark.asyncio
 async def test_open_endpoint_subpath_traversal_rejected(auth_client: AsyncClient, session, tmp_path):
-    """POST /open lehnt Traversal aus dem Root ab."""
+    """POST /open rejects traversal out of the root."""
     d = tmp_path / "project"
     d.mkdir()
 
@@ -234,7 +234,7 @@ async def test_open_endpoint_subpath_traversal_rejected(auth_client: AsyncClient
 
 @pytest.mark.asyncio
 async def test_directory_endpoint_lists_entries(auth_client: AsyncClient, session, tmp_path):
-    """GET /directory listet Dateien und Ordner auf."""
+    """GET /directory lists files and folders."""
     d = tmp_path / "src"
     d.mkdir()
     (d / "main.py").write_text("x" * 100)
@@ -261,7 +261,7 @@ async def test_directory_endpoint_lists_entries(auth_client: AsyncClient, sessio
 
 @pytest.mark.asyncio
 async def test_directory_endpoint_subpath(auth_client: AsyncClient, session, tmp_path):
-    """GET /directory?subpath= navigiert in Unterordner."""
+    """GET /directory?subpath= navigates into a subfolder."""
     d = tmp_path / "src"
     d.mkdir()
     (d / "components").mkdir()
@@ -282,7 +282,7 @@ async def test_directory_endpoint_subpath(auth_client: AsyncClient, session, tmp
 
 @pytest.mark.asyncio
 async def test_directory_endpoint_traversal_rejected(auth_client: AsyncClient, session, tmp_path):
-    """GET /directory lehnt Traversal-Subpath ab."""
+    """GET /directory rejects a traversal subpath."""
     d = tmp_path / "src"
     d.mkdir()
 
@@ -297,7 +297,7 @@ async def test_directory_endpoint_traversal_rejected(auth_client: AsyncClient, s
 
 @pytest.mark.asyncio
 async def test_directory_endpoint_requires_directory(auth_client: AsyncClient, session, tmp_path):
-    """GET /directory gibt 400 wenn Deliverable-Pfad keine Directory ist."""
+    """GET /directory returns 400 when the deliverable path is not a directory."""
     f = tmp_path / "file.txt"
     f.write_text("hello")
 

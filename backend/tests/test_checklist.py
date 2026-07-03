@@ -8,7 +8,7 @@ from tests.conftest import test_engine
 
 
 async def _setup_checklist_scenario():
-    """Board + Agent (mit tasks:read/write Scopes) + Task anlegen."""
+    """Create board + agent (with tasks:read/write scopes) + task."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -57,7 +57,7 @@ async def _setup_checklist_scenario():
 
 @pytest.mark.asyncio
 async def test_agent_can_create_checklist_items(client):
-    """Agent kann Checklist-Items für seinen Task anlegen."""
+    """Agent can create checklist items for its task."""
     ids = await _setup_checklist_scenario()
 
     resp = await client.post(
@@ -77,7 +77,7 @@ async def test_agent_can_create_checklist_items(client):
 
 @pytest.mark.asyncio
 async def test_agent_can_update_checklist_item(client):
-    """Agent kann ein Item auf done setzen."""
+    """Agent can set an item to done."""
     ids = await _setup_checklist_scenario()
 
     create_resp = await client.post(
@@ -100,10 +100,10 @@ async def test_agent_can_update_checklist_item(client):
 
 @pytest.mark.asyncio
 async def test_checklist_counter_increments_on_done(auth_client):
-    """checklist_done auf Task wird erhöht wenn Item auf done gesetzt.
+    """checklist_done on task is incremented when item is set to done.
 
-    auth_client wird für den User-GET genutzt.
-    Für den Agent-Aufruf überschreiben wir den Authorization-Header per-Request.
+    auth_client is used for the user GET.
+    For the agent call we override the Authorization header per-request.
     """
     ids = await _setup_checklist_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
@@ -122,7 +122,7 @@ async def test_checklist_counter_increments_on_done(auth_client):
         json={"status": "done"},
     )
 
-    # User-GET — kein explizites Authorization-Header, auth_client nutzt sein JWT
+    # User GET — no explicit Authorization header, auth_client uses its JWT
     task_resp = await auth_client.get(
         f"/api/v1/boards/{ids['board_id']}/tasks/{ids['task_id']}",
     )
@@ -133,7 +133,7 @@ async def test_checklist_counter_increments_on_done(auth_client):
 
 @pytest.mark.asyncio
 async def test_user_can_read_checklist(auth_client):
-    """User kann Checklist eines Tasks lesen."""
+    """User can read a task's checklist."""
     ids = await _setup_checklist_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
 
@@ -152,7 +152,7 @@ async def test_user_can_read_checklist(auth_client):
 
 @pytest.mark.asyncio
 async def test_agent_can_read_checklist(client):
-    """Agent kann Checklist lesen (für Recovery)."""
+    """Agent can read checklist (for recovery)."""
     ids = await _setup_checklist_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
 
@@ -175,11 +175,11 @@ async def test_agent_can_read_checklist(client):
 
 @pytest.mark.asyncio
 async def test_checklist_total_counter_increments_on_create(client):
-    """checklist_total auf Task wird korrekt hochgezählt."""
+    """checklist_total on task is correctly incremented."""
     ids = await _setup_checklist_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
 
-    # Ersten Batch anlegen
+    # Create first batch
     resp1 = await client.post(
         f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist",
         headers=agent_headers,
@@ -190,7 +190,7 @@ async def test_checklist_total_counter_increments_on_create(client):
     )
     assert resp1.status_code == 201
 
-    # Zweiten Batch anlegen
+    # Create second batch
     resp2 = await client.post(
         f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist",
         headers=agent_headers,
@@ -208,7 +208,7 @@ async def test_checklist_total_counter_increments_on_create(client):
 
 @pytest.mark.asyncio
 async def test_completed_at_cleared_on_reopen(client):
-    """completed_at wird auf None gesetzt wenn Item von done zurück auf pending gesetzt wird."""
+    """completed_at is set to None when item is moved from done back to pending."""
     ids = await _setup_checklist_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
 
@@ -219,14 +219,14 @@ async def test_completed_at_cleared_on_reopen(client):
     )
     item_id = create_resp.json()[0]["id"]
 
-    # Auf done setzen
+    # Set to done
     await client.patch(
         f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist/{item_id}",
         headers=agent_headers,
         json={"status": "done"},
     )
 
-    # Zurück auf pending setzen
+    # Set back to pending
     resp = await client.patch(
         f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist/{item_id}",
         headers=agent_headers,

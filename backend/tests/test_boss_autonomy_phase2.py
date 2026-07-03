@@ -1,10 +1,10 @@
-"""Tests fuer Phase 2/3/5 Features — Boss Autonomy & Memory (2026-04-11).
+"""Tests for Phase 2/3/5 features — Boss Autonomy & Memory (2026-04-11).
 
 Coverage:
-- Spawn-Approval Endpoint (happy + dedupe + non-lead 403)
-- Plugin-PATCH Privilege-Guard (C4: Board-Leads koennen einander nichts setzen)
-- Memory-Query Helper + Keyword-Fallback
-- Memory-Indexing Layer-Mapping
+- Spawn-approval endpoint (happy + dedupe + non-lead 403)
+- Plugin-PATCH privilege guard (C4: board leads cannot set anything on each other)
+- Memory-query helper + keyword fallback
+- Memory-indexing layer mapping
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -28,13 +28,13 @@ async def _make_board_lead(
     is_board_lead: bool = True,
     token: str = "test-token-raw",
 ) -> tuple[Agent, str]:
-    """Erstellt einen Board-Lead-Agent + Token, returnt (agent, raw_token)."""
+    """Creates a board-lead agent + token, returns (agent, raw_token)."""
     from app.auth import generate_agent_token
 
     raw_token, token_hash = generate_agent_token()
     bid = board_id or uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        # Board muss existieren damit die FK geht
+        # Board must exist for the FK to work
         existing_board = await s.get(Board, bid)
         if not existing_board:
             board = Board(
@@ -66,7 +66,7 @@ async def _make_board_lead(
 
 @pytest.mark.asyncio
 async def test_spawn_request_board_lead_creates_approval(client):
-    """Happy Path: Board-Lead → POST request-spawn → Approval angelegt."""
+    """Happy path: board lead → POST request-spawn → approval created."""
     agent, token = await _make_board_lead(name="BossRL1")
 
     resp = await client.post(
@@ -95,7 +95,7 @@ async def test_spawn_request_board_lead_creates_approval(client):
 
 @pytest.mark.asyncio
 async def test_spawn_request_non_lead_forbidden(client):
-    """Non-Board-Lead bekommt 403, auch mit agents:manage Scope."""
+    """Non-board-lead gets 403, even with the agents:manage scope."""
     agent, token = await _make_board_lead(name="FakeLead", is_board_lead=False)
 
     resp = await client.post(
@@ -109,7 +109,7 @@ async def test_spawn_request_non_lead_forbidden(client):
 
 @pytest.mark.asyncio
 async def test_spawn_request_dedupe_by_name(client):
-    """Zweiter Spawn-Request mit selbem Namen wird als 409 abgelehnt."""
+    """Second spawn request with the same name is rejected with 409."""
     agent, token = await _make_board_lead(name="BossRL3")
 
     r1 = await client.post(
@@ -130,7 +130,7 @@ async def test_spawn_request_dedupe_by_name(client):
 
 @pytest.mark.asyncio
 async def test_spawn_request_missing_required_fields(client):
-    """Pflicht-Felder name/role/reason fehlen → 400."""
+    """Required fields name/role/reason missing → 400."""
     agent, token = await _make_board_lead(name="BossRL4")
 
     resp = await client.post(
@@ -146,7 +146,7 @@ async def test_spawn_request_missing_required_fields(client):
 
 @pytest.mark.asyncio
 async def test_plugin_patch_board_lead_cannot_set_other_lead(client):
-    """C4: Board-Lead darf einen ANDEREN Board-Lead nicht modifizieren."""
+    """C4: a board lead may not modify ANOTHER board lead."""
     bid = uuid.uuid4()
     boss, boss_token = await _make_board_lead(name="BossPL1", board_id=bid, is_board_lead=True)
     henry, _ = await _make_board_lead(name="HenryPL1", board_id=bid, is_board_lead=True)
@@ -162,7 +162,7 @@ async def test_plugin_patch_board_lead_cannot_set_other_lead(client):
 
 @pytest.mark.asyncio
 async def test_plugin_patch_self_allowed(client):
-    """Board-Lead darf eigene Plugins setzen."""
+    """Board lead may set their own plugins."""
     boss, boss_token = await _make_board_lead(name="BossPL2")
 
     resp = await client.patch(
@@ -170,13 +170,13 @@ async def test_plugin_patch_self_allowed(client):
         headers={"Authorization": f"Bearer {boss_token}"},
         json={"cli_plugins": ["superpowers@claude-plugins-official"]},
     )
-    # Kann 200 oder evtl 500 bei disk-sync fail (fail-soft), aber nicht 403
+    # Can be 200 or possibly 500 on disk-sync fail (fail-soft), but not 403
     assert resp.status_code in (200, 201), resp.text
 
 
 @pytest.mark.asyncio
 async def test_plugin_patch_other_board_forbidden(client):
-    """Cross-Board Plugin-Edit blockiert."""
+    """Cross-board plugin edit is blocked."""
     boss, boss_token = await _make_board_lead(name="BossPL3", board_id=uuid.uuid4())
     other, _ = await _make_board_lead(name="OtherWorker", board_id=uuid.uuid4(), is_board_lead=False)
 
@@ -193,7 +193,7 @@ async def test_plugin_patch_other_board_forbidden(client):
 
 @pytest.mark.asyncio
 async def test_agent_list_plugins_board_lead_ok(client, monkeypatch):
-    """Board-Lead darf shared-cache auflisten."""
+    """Board lead may list the shared cache."""
     from app.services.plugin_manager import CliPlugin
 
     mock_plugins = [
@@ -220,7 +220,7 @@ async def test_agent_list_plugins_board_lead_ok(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_agent_list_plugins_non_lead_forbidden(client):
-    """Worker ohne is_board_lead bekommt 403 selbst mit agents:manage scope."""
+    """Worker without is_board_lead gets 403 even with the agents:manage scope."""
     worker, token = await _make_board_lead(name="FakePLIST", is_board_lead=False)
 
     resp = await client.get(
@@ -235,7 +235,7 @@ async def test_agent_list_plugins_non_lead_forbidden(client):
 
 @pytest.mark.asyncio
 async def test_agent_get_plugins_same_board_ok(client):
-    """Board-Lead liest Plugin-Zuweisung eines Worker im selben Board."""
+    """Board lead reads a worker's plugin assignment in the same board."""
     bid = uuid.uuid4()
     boss, boss_token = await _make_board_lead(name="BossGP1", board_id=bid)
 
@@ -265,13 +265,13 @@ async def test_agent_get_plugins_same_board_ok(client):
 
 @pytest.mark.asyncio
 async def test_agent_get_plugins_cross_board_forbidden(client):
-    """Cross-Board GET blockiert analog zu PATCH."""
+    """Cross-board GET is blocked analogous to PATCH."""
     bid_a = uuid.uuid4()
     bid_b = uuid.uuid4()
     boss, boss_token = await _make_board_lead(name="BossGPX", board_id=bid_a)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        # Board B als FK-Satisfaction
+        # Board B to satisfy the FK
         s.add(Board(id=bid_b, name="OtherBoardGPX", slug="other-gpx"))
         await s.commit()
         from app.auth import generate_agent_token
@@ -292,12 +292,12 @@ async def test_agent_get_plugins_cross_board_forbidden(client):
     assert resp.status_code == 403
 
 
-# ── PATCH mit restart_worker ─────────────────────────────────────────────
+# ── PATCH with restart_worker ─────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_plugin_patch_restart_worker_cli_bridge(client, monkeypatch):
-    """restart_worker=true triggert bridge-Call fuer cli-bridge agents."""
+    """restart_worker=true triggers a bridge call for cli-bridge agents."""
     bid = uuid.uuid4()
     boss, boss_token = await _make_board_lead(name="BossRW1", board_id=bid)
 
@@ -336,9 +336,9 @@ async def test_plugin_patch_restart_worker_cli_bridge(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_plugin_patch_restart_worker_host_runtime_skipped(client, monkeypatch):
-    """restart_worker=true wird fuer host-runtime ignoriert (kein Bridge-Call)."""
+    """restart_worker=true is ignored for host runtime (no bridge call)."""
     boss, boss_token = await _make_board_lead(name="BossRW2")
-    # Boss ist host-runtime by default (kein Worker-Process)
+    # Boss is host-runtime by default (no worker process)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         fresh = await s.get(Agent, boss.id)
         fresh.agent_runtime = "host"
@@ -358,7 +358,7 @@ async def test_plugin_patch_restart_worker_host_runtime_skipped(client, monkeypa
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["worker_restarted"] is False
-    assert calls == []  # Bridge wurde NICHT gerufen
+    assert calls == []  # Bridge was NOT called
 
 
 # ── POST /agents/{id}/worker/restart ─────────────────────────────────────
@@ -399,7 +399,7 @@ async def test_worker_restart_cli_bridge_ok(client, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_worker_restart_host_runtime_rejected(client):
-    """Host-runtime Agents haben keinen Worker → 400."""
+    """Host-runtime agents have no worker → 400."""
     boss, boss_token = await _make_board_lead(name="BossWRH")
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         fresh = await s.get(Agent, boss.id)
@@ -435,10 +435,10 @@ async def test_memory_query_invalid_raises(client):
 
 @pytest.mark.asyncio
 async def test_memory_query_keyword_fallback_on_embedding_fail():
-    """Wenn embedding_service.embed() wirft, Keyword-Fallback liefert Ergebnisse."""
+    """When embedding_service.embed() raises, keyword fallback returns results."""
     from app.services.memory_query import run_memory_query
 
-    # Testdaten: 1 semantic memory (knowledge) mit matchenden keyword
+    # Test data: 1 semantic memory (knowledge) with a matching keyword
     mem_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         mem = BoardMemory(
@@ -451,7 +451,7 @@ async def test_memory_query_keyword_fallback_on_embedding_fail():
         s.add(mem)
         await s.commit()
 
-    # Patch embedding_service.embed um Fehler zu werfen
+    # Patch embedding_service.embed to raise an error
     with patch(
         "app.services.embedding_service.embedding_service.embed",
         new=AsyncMock(side_effect=RuntimeError("Spark down")),
@@ -499,7 +499,7 @@ def test_layer_for_agent_lesson_needs_agent_id():
     from app.services.memory_indexing import layer_for
 
     m_no_agent = BoardMemory(memory_type="lesson", content="x", source="t", agent_id=None)
-    assert layer_for(m_no_agent) is None  # lesson ohne agent_id fällt raus
+    assert layer_for(m_no_agent) is None  # lesson without agent_id falls out
 
     m_with_agent = BoardMemory(
         memory_type="lesson", content="x", source="t", agent_id=uuid.uuid4(),

@@ -1,21 +1,21 @@
-"""Tests fuer Bug-Fix 2026-04-25: mc delegate --callback FK-Race.
+"""Tests for bug fix 2026-04-25: mc delegate --callback FK race.
 
-Live-Bug Boss 2026-04-25: HTTP 500 ForeignKeyViolationError auf
-fk_tasks_blocked_by_task_id beim `mc delegate` mit callback. Root cause:
-emit_event() macht intern session.commit() (activity.py:41) — flushed alle
-pending changes mid-function. SQLAlchemys topological sort fuer reflexive
-FKs (tasks → tasks) ordnet manchmal falsch: current_task UPDATE mit
-blocked_by_task_id wird vor INSERT subtask ausgefuehrt → FK violation
-(constraint nicht deferrable, IMMEDIATE check).
+Live bug on Boss 2026-04-25: HTTP 500 ForeignKeyViolationError on
+fk_tasks_blocked_by_task_id during `mc delegate` with callback. Root cause:
+emit_event() internally does session.commit() (activity.py:41) — flushes all
+pending changes mid-function. SQLAlchemy's topological sort for reflexive
+FKs (tasks → tasks) sometimes orders things wrong: the current_task UPDATE
+with blocked_by_task_id runs before the subtask INSERT → FK violation
+(constraint isn't deferrable, IMMEDIATE check).
 
-Fix: explicit `await session.flush()` zwischen `session.add(subtask)` und
-dem current_task UPDATE. Garantiert dass subtask in DB ist bevor FK
-gesetzt wird.
+Fix: explicit `await session.flush()` between `session.add(subtask)` and
+the current_task UPDATE. Guarantees the subtask is in the DB before the FK
+is set.
 
-NOTE: SQLite (in-memory test-DB) hat FK enforcement OFF (conftest.py:71).
-Der echte FK-Race kann hier nicht reproduziert werden — diese Tests
-verifizieren das happy-path Verhalten und stellen sicher dass der flush
-nicht regressed wird (call-order via patching beobachtet).
+NOTE: SQLite (in-memory test DB) has FK enforcement OFF (conftest.py:71).
+The real FK race can't be reproduced here — these tests verify the
+happy-path behavior and make sure the flush doesn't regress (call order
+observed via patching).
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -27,8 +27,8 @@ from tests.conftest import test_engine
 
 
 async def _setup_real_emit_scenario():
-    """Setup: Boss + Researcher + Boss-active-task — wie test_delegate_endpoint
-    aber OHNE den emit_event mock, damit das interne session.commit() greift.
+    """Setup: Boss + Researcher + Boss active task — like test_delegate_endpoint
+    but WITHOUT the emit_event mock, so the internal session.commit() kicks in.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -83,14 +83,14 @@ async def _setup_real_emit_scenario():
 
 @pytest.mark.asyncio
 async def test_delegate_with_callback_real_emit_event(client, fake_redis):
-    """End-to-end mit unmocked emit_event — verifiziert dass mid-function
-    commit den Flow nicht bricht. Vor dem flush-Fix wuerde dies in
-    Production (Postgres) mit FK violation 500 enden — in Tests (SQLite mit
-    FK off) nur als Konsistenz-Check.
+    """End-to-end with unmocked emit_event — verifies the mid-function
+    commit doesn't break the flow. Before the flush fix, this would end
+    in production (Postgres) with an FK violation 500 — in tests (SQLite
+    with FK off) it's only a consistency check.
     """
     data = await _setup_real_emit_scenario()
 
-    # Nur dispatch + check_dispatch_allowed mocken — emit_event NICHT
+    # Only mock dispatch + check_dispatch_allowed — NOT emit_event
     with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock):
         with patch(
             "app.services.operations.check_dispatch_allowed",
@@ -127,13 +127,13 @@ async def test_delegate_with_callback_real_emit_event(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_delegate_with_callback_flushes_before_fk_update(client, fake_redis):
-    """Verifiziert via session.flush() spy dass flush AUFGERUFEN wird vor
-    dem current_task UPDATE. Wenn jemand den flush rausnimmt, faengt dieser
-    Test es ab — bevor es in Production (mit aktivem FK) zu HTTP 500 kommt.
+    """Verifies via a session.flush() spy that flush IS CALLED before
+    the current_task UPDATE. If someone removes the flush, this test
+    catches it — before it turns into HTTP 500 in production (with FK active).
     """
     data = await _setup_real_emit_scenario()
 
-    # Track flush calls — wir wollen mindestens einen sehen vor dem commit
+    # Track flush calls — we want to see at least one before the commit
     flush_call_count = 0
     original_flush = AsyncSession.flush
 
@@ -172,8 +172,8 @@ async def test_delegate_with_callback_flushes_before_fk_update(client, fake_redi
 
 @pytest.mark.asyncio
 async def test_delegate_without_callback_no_flush_needed(client, fake_redis):
-    """Fire-and-forget delegate (callback=False) braucht keinen extra flush
-    — current_task wird nicht modifiziert, kein FK-Race moeglich.
+    """Fire-and-forget delegate (callback=False) needs no extra flush
+    — current_task isn't modified, so no FK race is possible.
     """
     data = await _setup_real_emit_scenario()
 

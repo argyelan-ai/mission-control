@@ -1,4 +1,4 @@
-"""Tests fuer Credentials Vault CRUD Router."""
+"""Tests for the Credentials Vault CRUD router."""
 import pytest
 from httpx import AsyncClient
 
@@ -124,15 +124,15 @@ async def test_delete_credential_sets_null_on_task(auth_client: AsyncClient, mak
 
 @pytest.mark.asyncio
 async def test_login_credential_without_url_rejected_at_create(auth_client: AsyncClient):
-    """credential_type='login' ohne url muss 422 werfen — verhindert silent
-    422 beim spaeteren mc verify --login-as Vault-Resolve."""
+    """credential_type='login' without url must raise 422 — prevents a silent
+    422 during a later mc verify --login-as vault resolve."""
     resp = await auth_client.post(
         "/api/v1/credentials",
         json={
             "name": "No URL Login",
             "credential_type": "login",
             "data": {"username": "x", "password": "y"},
-            # url fehlt absichtlich
+            # url intentionally missing
         },
     )
     assert resp.status_code == 422
@@ -141,7 +141,7 @@ async def test_login_credential_without_url_rejected_at_create(auth_client: Asyn
 
 @pytest.mark.asyncio
 async def test_login_credential_with_blank_url_rejected(auth_client: AsyncClient):
-    """Whitespace-only url darf nicht durchschluepfen."""
+    """Whitespace-only url must not slip through."""
     resp = await auth_client.post(
         "/api/v1/credentials",
         json={
@@ -156,7 +156,7 @@ async def test_login_credential_with_blank_url_rejected(auth_client: AsyncClient
 
 @pytest.mark.asyncio
 async def test_token_credential_without_url_still_ok(auth_client: AsyncClient):
-    """Nur 'login' braucht url — 'token' und 'custom' bleiben unangetastet."""
+    """Only 'login' needs a url — 'token' and 'custom' remain untouched."""
     resp = await auth_client.post(
         "/api/v1/credentials",
         json={
@@ -170,9 +170,9 @@ async def test_token_credential_without_url_still_ok(auth_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_update_credential_type_to_login_requires_url(auth_client: AsyncClient):
-    """State-aware Validation: credential_type von 'token' auf 'login' ohne
-    url updaten muss 422 werfen — sonst entsteht ein orphaned Login-Credential
-    ohne url, das beim Vault-Resolve scheitert."""
+    """State-aware validation: updating credential_type from 'token' to 'login'
+    without a url must raise 422 — otherwise an orphaned login credential
+    without a url is created, which fails at vault resolve."""
     create_resp = await auth_client.post(
         "/api/v1/credentials",
         json={"name": "Will Become Login", "credential_type": "token", "data": {"token": "x"}},
@@ -189,9 +189,9 @@ async def test_update_credential_type_to_login_requires_url(auth_client: AsyncCl
 
 @pytest.mark.asyncio
 async def test_update_login_credential_url_to_blank_rejected(auth_client: AsyncClient):
-    """Ein Login-Credential das eine gueltige url hat, darf per PATCH nicht
-    auf leere/whitespace url gesetzt werden — sonst entsteht ein orphaned
-    Login ohne url das beim Vault-Resolve scheitert."""
+    """A login credential that has a valid url must not be set to an
+    empty/whitespace url via PATCH — otherwise an orphaned login without
+    a url is created, which fails at vault resolve."""
     create_resp = await auth_client.post(
         "/api/v1/credentials",
         json={
@@ -213,8 +213,8 @@ async def test_update_login_credential_url_to_blank_rejected(auth_client: AsyncC
 
 @pytest.mark.asyncio
 async def test_update_existing_login_credential_with_url_passes(auth_client: AsyncClient):
-    """Update eines bereits validen Login-Credentials (mit url) ohne url-Feld
-    in der Patch-Payload bleibt OK — die existierende url wird nicht angefasst."""
+    """Updating an already-valid login credential (with url) without a url
+    field in the patch payload stays OK — the existing url is left untouched."""
     create_resp = await auth_client.post(
         "/api/v1/credentials",
         json={

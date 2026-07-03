@@ -6,8 +6,8 @@ Imported by:
 
 No other place is allowed to define its own comment-type sets.
 
-Live-Bug-Regression: 2026-04-23 (Tester-blocked) und 2026-04-24
-(install_completed silent-drop, PR #110). Fix-PR: REL-01 dieser Phase.
+Live-Bug-Regression: 2026-04-23 (Tester-blocked) and 2026-04-24
+(install_completed silent-drop, PR #110). Fix PR: REL-01 of that phase.
 """
 from __future__ import annotations
 from typing import Final

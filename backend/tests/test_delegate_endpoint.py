@@ -1,12 +1,12 @@
-"""Tests fuer `mc delegate` — atomarer Subtask + Parent-Block ohne Operator-Approval.
+"""Tests for `mc delegate` — atomic subtask + parent block without operator approval.
 
-Deckt ab:
-- Delegate erstellt Subtask + setzt Parent auf blocked mit blocked_by_task_id
-- KEINE blocker_decision Approval entsteht (Orchestration, nicht Operator-Decision)
-- Fire-and-Forget (--no-callback): Parent bleibt in_progress
-- Defense-in-depth: PATCH status=blocked mit blocked_by_task_id → keine Approval
-- Watchdog-Fallback: Subtask done ohne blocked_by_task_id-Link → Parent via
-  parent_task_id + callback_agent_id auto-resumed
+Covers:
+- Delegate creates a subtask + sets parent to blocked with blocked_by_task_id
+- NO blocker_decision approval is created (orchestration, not an operator decision)
+- Fire-and-forget (--no-callback): parent stays in_progress
+- Defense-in-depth: PATCH status=blocked with blocked_by_task_id → no approval
+- Watchdog fallback: subtask done without a blocked_by_task_id link → parent
+  auto-resumed via parent_task_id + callback_agent_id
 """
 
 import uuid
@@ -20,7 +20,7 @@ from tests.conftest import test_engine
 
 
 async def _setup_delegate_scenario():
-    """Board + Orchestrator (Boss) + Worker (Researcher) + aktiver Parent-Task."""
+    """Board + orchestrator (Boss) + worker (Researcher) + active parent task."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -82,7 +82,7 @@ async def _setup_delegate_scenario():
 
 @pytest.mark.asyncio
 async def test_delegate_creates_subtask_and_blocks_parent(client, fake_redis):
-    """Boss delegiert an Researcher → Subtask entsteht, Parent → blocked, KEINE Approval."""
+    """Boss delegates to Researcher → subtask is created, parent → blocked, NO approval."""
     data = await _setup_delegate_scenario()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -124,7 +124,7 @@ async def test_delegate_creates_subtask_and_blocks_parent(client, fake_redis):
         assert subtask.callback_agent_id == data["boss_id"]
         assert subtask.status == "inbox"
 
-        # KEINE blocker_decision Approval — das ist Orchestration, nicht Operator-Decision
+        # NO blocker_decision approval — this is orchestration, not an operator decision
         result = await s.exec(
             select(Approval).where(
                 Approval.task_id == data["parent_id"],
@@ -136,7 +136,7 @@ async def test_delegate_creates_subtask_and_blocks_parent(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_delegate_fire_and_forget_keeps_parent_in_progress(client, fake_redis):
-    """--no-callback: Parent bleibt in_progress, Subtask ohne callback_agent_id."""
+    """--no-callback: parent stays in_progress, subtask has no callback_agent_id."""
     data = await _setup_delegate_scenario()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -172,10 +172,10 @@ async def test_delegate_fire_and_forget_keeps_parent_in_progress(client, fake_re
 
 @pytest.mark.asyncio
 async def test_blocked_with_blocked_by_task_id_skips_approval(client, fake_redis):
-    """Defense-in-depth: Agent setzt status=blocked mit blocked_by_task_id im Payload → keine Approval."""
+    """Defense-in-depth: agent sets status=blocked with blocked_by_task_id in the payload → no approval."""
     data = await _setup_delegate_scenario()
 
-    # Zusaetzlichen Subtask erstellen, auf den der Parent wartet
+    # Create an additional subtask that the parent waits on
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         sub = Task(
@@ -205,7 +205,7 @@ async def test_blocked_with_blocked_by_task_id_skips_approval(client, fake_redis
 
     assert resp.status_code == 200
 
-    # KEINE blocker_decision Approval
+    # NO blocker_decision approval
     from app.models.approval import Approval
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(
@@ -216,10 +216,10 @@ async def test_blocked_with_blocked_by_task_id_skips_approval(client, fake_redis
 
 @pytest.mark.asyncio
 async def test_approval_bypass_via_random_blocked_by_task_id_rejected(client, fake_redis):
-    """C1-Regression: PATCH status=blocked mit random UUID in blocked_by_task_id → 422.
+    """C1 regression: PATCH status=blocked with a random UUID in blocked_by_task_id → 422.
 
-    Ohne diesen Guard koennte jeder Agent mit tasks:write den Operator-Approval-Flow
-    umgehen indem er eine beliebige UUID in blocked_by_task_id setzt.
+    Without this guard, any agent with tasks:write could bypass the operator
+    approval flow by setting an arbitrary UUID in blocked_by_task_id.
     """
     data = await _setup_delegate_scenario()
     random_uuid = str(uuid.uuid4())
@@ -242,14 +242,14 @@ async def test_approval_bypass_via_random_blocked_by_task_id_rejected(client, fa
 
 @pytest.mark.asyncio
 async def test_delegate_rejects_cross_board_target(client, fake_redis):
-    """C2-Regression: Target-Agent auf anderem Board → 422."""
+    """C2 regression: target agent on a different board → 422."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
     data = await _setup_delegate_scenario()
 
-    # Fremder Agent auf anderem Board
+    # Unrelated agent on a different board
     other_board_id = uuid.uuid4()
     other_agent_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -277,7 +277,7 @@ async def test_delegate_rejects_cross_board_target(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_delegate_rejects_not_provisioned_target(client, fake_redis):
-    """M4-Regression: Target-Agent mit provision_status != 'provisioned' → 422."""
+    """M4 regression: target agent with provision_status != 'provisioned' → 422."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
@@ -308,13 +308,13 @@ async def test_delegate_rejects_not_provisioned_target(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_delegate_503_when_dispatch_disallowed(client, fake_redis):
-    """C3-Regression: wenn check_dispatch_allowed False → 503 + KEIN Subtask in DB."""
+    """C3 regression: when check_dispatch_allowed is False → 503 + NO subtask in DB."""
     from app.models.task import Task
     from sqlmodel import func
 
     data = await _setup_delegate_scenario()
 
-    # Anzahl Tasks vor Aufruf
+    # Task count before the call
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(select(func.count()).select_from(Task))
         tasks_before = result.one()
@@ -338,7 +338,7 @@ async def test_delegate_503_when_dispatch_disallowed(client, fake_redis):
     assert resp.status_code == 503
     assert "HALTED" in resp.json()["detail"]
 
-    # Kein Zombie-Subtask in DB
+    # No zombie subtask in DB
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         result = await s.exec(select(func.count()).select_from(Task))
         tasks_after = result.one()
@@ -347,7 +347,7 @@ async def test_delegate_503_when_dispatch_disallowed(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_fallback_resume_skips_when_pending_approval():
-    """H2-Regression: Fallback-Resume darf Parent mit pending blocker_decision NICHT aufwecken."""
+    """H2 regression: fallback resume must NOT wake a parent with a pending blocker_decision."""
     from app.routers.agent_scoped import _handle_callback_resume
     from app.models.board import Board
     from app.models.agent import Agent
@@ -369,7 +369,7 @@ async def test_fallback_resume_skips_when_pending_approval():
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             is_board_lead=True, scopes=["tasks:read"],
         ))
-        # Parent blocked, blocked_by_task_id=NULL, aber PENDING Operator-Approval
+        # Parent blocked, blocked_by_task_id=NULL, but PENDING operator approval
         s.add(Task(
             id=parent_id, board_id=board_id, title="Parent with pending approval",
             status="blocked", assigned_agent_id=boss_id,
@@ -379,7 +379,7 @@ async def test_fallback_resume_skips_when_pending_approval():
             status="done", parent_task_id=parent_id,
             callback_agent_id=boss_id,
         ))
-        # Echter Operator-Blocker pending
+        # Real operator blocker pending
         s.add(Approval(
             id=uuid.uuid4(), board_id=board_id, task_id=parent_id,
             agent_id=boss_id, action_type="blocker_decision",
@@ -404,8 +404,8 @@ async def test_fallback_resume_skips_when_pending_approval():
 
 @pytest.mark.asyncio
 async def test_callback_resume_fallback_via_parent_task_id():
-    """Watchdog-Fallback: Subtask done, Parent blocked aber blocked_by_task_id=NULL
-    (Agent hat `mc delegate` umgangen) → Resume via parent_task_id + callback_agent_id.
+    """Watchdog fallback: subtask done, parent blocked but blocked_by_task_id=NULL
+    (agent bypassed `mc delegate`) → resume via parent_task_id + callback_agent_id.
     """
     from app.routers.agent_scoped import _handle_callback_resume
     from app.models.board import Board
@@ -425,13 +425,13 @@ async def test_callback_resume_fallback_via_parent_task_id():
             board_id=board_id, agent_token_hash=generate_agent_token()[1],
             is_board_lead=True, scopes=["tasks:read"],
         ))
-        # Parent ist blocked ABER blocked_by_task_id ist NULL (vergessener Link)
+        # Parent is blocked BUT blocked_by_task_id is NULL (forgotten link)
         s.add(Task(
             id=parent_id, board_id=board_id, title="Parent",
             status="blocked", assigned_agent_id=boss_id,
             blocked_by_task_id=None,
         ))
-        # Subtask ist done, zeigt via parent_task_id + callback_agent_id auf Boss
+        # Subtask is done, points to Boss via parent_task_id + callback_agent_id
         s.add(Task(
             id=subtask_id, board_id=board_id, title="Subtask",
             status="done", parent_task_id=parent_id,

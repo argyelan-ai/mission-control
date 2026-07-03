@@ -1,13 +1,13 @@
-"""Tests fuer die Blocker-Pflichtfelder-Validierung.
+"""Tests for the blocker required-fields validation.
 
-Deckt ab:
-- 422 wenn blocker_type fehlt bei status=blocked
-- 422 wenn blocker_question fehlt bei status=blocked
-- 422 wenn blocker_type ungueltig (nicht im Enum)
-- blocker_description wird auf 300 Zeichen getrimmt
-- blocker_question wird auf 150 Zeichen getrimmt
-- Erfolg wenn beide Pflichtfelder gesetzt
-- Felder koennen weiterhin fehlen bei anderen Status-Wechseln
+Covers:
+- 422 if blocker_type is missing on status=blocked
+- 422 if blocker_question is missing on status=blocked
+- 422 if blocker_type is invalid (not in the enum)
+- blocker_description is trimmed to 300 characters
+- blocker_question is trimmed to 150 characters
+- success when both required fields are set
+- fields may still be missing on other status changes
 """
 
 import uuid
@@ -17,7 +17,7 @@ from tests.conftest import test_engine
 
 
 async def _setup(*, task_status="in_progress"):
-    """Board + Developer + Task erstellen, Token zurueckgeben."""
+    """Create board + developer + task, return the token."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -166,13 +166,13 @@ async def test_blocked_with_all_required_fields_succeeds(client):
 
 @pytest.mark.asyncio
 async def test_other_status_change_does_not_require_blocker_fields(client):
-    """review-Wechsel braucht keine Blocker-Felder."""
+    """review transition doesn't require blocker fields."""
     board_id, _, task_id, token = await _setup()
     resp = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
         json={"status": "review"},
         headers={"Authorization": f"Bearer {token}"},
     )
-    # Darf nicht 422 sein (kein Blocker-Validierungsfehler) — andere Guards (z.B. Evidence-Guard)
-    # koennen noch andere Codes zurueckgeben, das ist unabhaengig von der Blocker-Validierung.
+    # Must not be 422 (no blocker validation error) — other guards (e.g. evidence guard)
+    # may still return other codes, that's independent of blocker validation.
     assert resp.status_code != 422

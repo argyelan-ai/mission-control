@@ -1,16 +1,16 @@
-"""Tests fuer Dispatch Race Conditions (REL-02..04 + TST-02).
+"""Tests for dispatch race conditions (REL-02..04 + TST-02).
 
-Drei deterministische Tests die die bekannten Races abdecken:
+Three deterministic tests covering the known races:
   1. test_concurrent_dispatch_same_agent_queues  (REL-02)
   2. test_ack_while_reassignment_pending          (REL-03)
   3. test_redispatch_after_rejection_clears_old_dispatch  (REL-04)
 
-Determinismus: asyncio.Event als Barrier, KEIN asyncio.sleep im Test-Code
-(CONTEXT.md D-05). Mock-Pattern: test_subagent_dispatch.py:22-33
+Determinism: asyncio.Event as barrier, NO asyncio.sleep in test code
+(CONTEXT.md D-05). Mock pattern: test_subagent_dispatch.py:22-33
 (with patch("app.services.dispatch.rpc"), with patch("app.services.dispatch.engine", test_engine)).
 
-Phase-1 Plan 02: STUBS ONLY — Bodies werden in Plan 06 implementiert.
-Bis dahin xfail. CI bleibt gruen weil xfail ein erwarteter Failure ist.
+Phase 1 Plan 02: STUBS ONLY — bodies get implemented in Plan 06.
+Until then xfail. CI stays green because xfail is an expected failure.
 """
 import asyncio
 import uuid
@@ -31,16 +31,16 @@ import pytest
 async def test_ack_while_reassignment_pending(
     client, fake_redis, make_board, make_agent, make_task,
 ):
-    """ACK kommt waehrend Approval-Eskalation laeuft → invariant: kein Doppel-
-    Dispatch, ack_at wird gesetzt, assigned_agent_id bleibt konsistent.
+    """ACK arrives while approval escalation is running → invariant: no double
+    dispatch, ack_at gets set, assigned_agent_id stays consistent.
 
-    Production-Realitaet (siehe task_runner._handle_ack_timeout):
-      - Bei ACK-Timeout wird KEIN auto-reassign + chat_send mehr gemacht;
-        stattdessen wird ein Approval erstellt (der Operator entscheidet manuell).
-      - Cooldown-Key (mc:dispatch:ack_check:{task_id}) verhindert Doppel-Approvals.
-      - REL-03 verifiziert: wenn der Agent waehrend des _create_dispatch_approval-
-        Aufrufs ACKt (status: in_progress + ack_at), bleibt assigned_agent_id
-        unveraendert UND der ACK gewinnt das Rennen.
+    Production reality (see task_runner._handle_ack_timeout):
+      - On ACK timeout, auto-reassign + chat_send are NO LONGER done;
+        instead an approval is created (the operator decides manually).
+      - Cooldown key (mc:dispatch:ack_check:{task_id}) prevents double approvals.
+      - REL-03 verifies: if the agent ACKs (status: in_progress + ack_at) while
+        the _create_dispatch_approval call is in flight, assigned_agent_id stays
+        unchanged AND the ACK wins the race.
     """
     from datetime import timedelta
     from app.utils import utcnow
@@ -76,7 +76,7 @@ async def test_ack_while_reassignment_pending(
 
         async def _run_check():
             async with AsyncSession(test_engine, expire_on_commit=False) as s:
-                # skip_pending=False → ACK-Timeout-Pfad wird auch ausgewertet
+                # skip_pending=False → the ACK-timeout path is also evaluated
                 await task_runner._check_dispatch_ack(s, skip_pending=False)
 
         # Spawn the escalation; it'll enter _create_dispatch_approval and park.

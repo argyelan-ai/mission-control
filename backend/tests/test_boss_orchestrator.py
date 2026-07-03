@@ -1,4 +1,4 @@
-"""Tests fuer Boss Orchestrator Agent — Scopes, Dispatch-Prioritaet, CLI-Bridge."""
+"""Tests for Boss Orchestrator Agent — scopes, dispatch priority, CLI bridge."""
 from app.scopes import AgentRole, DEFAULT_SCOPES, NON_WORKER_ROLES, ALL_SCOPES
 
 
@@ -40,7 +40,7 @@ def _mk_task():
 
 @pytest.mark.asyncio
 async def test_cli_bridge_agent_is_always_online():
-    """CLI-Bridge Agents haben keine Gateway-Session → trotzdem als online gelten."""
+    """CLI-bridge agents have no gateway session → should still count as online."""
     from app.services.dispatch import find_dispatch_target
     board_id = uuid.uuid4()
     boss = _mk_agent("boss", is_board_lead=True, role="orchestrator", runtime="cli-bridge")
@@ -60,7 +60,7 @@ async def test_cli_bridge_agent_is_always_online():
 
 @pytest.mark.asyncio
 async def test_orchestrator_takes_priority_over_gateway_board_lead():
-    """ORCHESTRATOR (CLI-bridge) hat Prioritaet ueber is_board_lead Gateway-Agent."""
+    """ORCHESTRATOR (CLI-bridge) takes priority over is_board_lead gateway agent."""
     from app.services.dispatch import find_dispatch_target
     board_id = uuid.uuid4()
     boss = _mk_agent("boss", is_board_lead=True, role="orchestrator", runtime="cli-bridge")
@@ -83,15 +83,16 @@ async def test_orchestrator_takes_priority_over_gateway_board_lead():
 @pytest.mark.skip(reason="Planner-Pfad seit 2026-04-11 (Phase 6) komplett entfernt — Boss plant selbst")
 @pytest.mark.asyncio
 async def test_orchestrator_not_selected_as_planning_agent():
-    """Obsolete: _find_planning_agent existiert nicht mehr."""
+    """Obsolete: _find_planning_agent no longer exists."""
     pass
 
 
 @pytest.mark.asyncio
 async def test_host_runtime_orchestrator_wins_over_gateway_worker():
-    """Regression (ADR-014): Boss mit agent_runtime=host MUSS als Orchestrator
-    gewählt werden, auch ohne gateway_agent_id. Vor dem Fix fiel host durch den
-    _is_online-Check und ein Gateway-Worker (z.B. Sparky) wurde stattdessen genommen.
+    """Regression (ADR-014): Boss with agent_runtime=host MUST be selected as
+    orchestrator, even without gateway_agent_id. Before the fix, host fell
+    through the _is_online check and a gateway worker (e.g. Sparky) was
+    picked instead.
     """
     from app.services.dispatch import find_dispatch_target
     board_id = uuid.uuid4()
@@ -102,7 +103,7 @@ async def test_host_runtime_orchestrator_wins_over_gateway_worker():
     mock_session = AsyncMock()
     mock_session.get = AsyncMock(return_value=None)
     mock_result = MagicMock()
-    mock_result.all.return_value = [sparky, boss]  # Sparky zuerst → Fallback-Risiko
+    mock_result.all.return_value = [sparky, boss]  # Sparky first → fallback risk
     mock_session.exec = AsyncMock(return_value=mock_result)
 
     if True:  # Phase 29: gateway rpc patch removed
@@ -114,8 +115,8 @@ async def test_host_runtime_orchestrator_wins_over_gateway_worker():
 
 @pytest.mark.asyncio
 async def test_host_runtime_board_lead_without_orchestrator_role():
-    """Edge case: host-Agent ist nur Board Lead (nicht Orchestrator). Muss trotzdem
-    über den board_lead-Pfad gefunden werden, auch ohne gateway_agent_id."""
+    """Edge case: host agent is only board lead (not orchestrator). Must still
+    be found via the board_lead path, even without gateway_agent_id."""
     from app.services.dispatch import find_dispatch_target
     board_id = uuid.uuid4()
     host_lead = _mk_agent("host_lead", is_board_lead=True, role="lead", runtime="host")
@@ -137,7 +138,7 @@ async def test_host_runtime_board_lead_without_orchestrator_role():
 
 @pytest.mark.asyncio
 async def test_non_gateway_runtimes_constant_covers_host():
-    """NON_GATEWAY_RUNTIMES ist die Single Source of Truth für Poll-basierte Runtimes."""
+    """NON_GATEWAY_RUNTIMES is the single source of truth for poll-based runtimes."""
     from app.services.dispatch import NON_GATEWAY_RUNTIMES
     assert "host" in NON_GATEWAY_RUNTIMES
     assert "cli-bridge" in NON_GATEWAY_RUNTIMES

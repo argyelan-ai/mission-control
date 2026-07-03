@@ -1,6 +1,6 @@
-"""Tests fuer Deliverable-Endpoint:
-- Pfad-Validation: nur /deliverables/<task_id>/ oder content-only
-- Auto-Memory-Write: jedes Deliverable erzeugt BoardMemory-Eintrag
+"""Tests for the deliverable endpoint:
+- Path validation: only /deliverables/<task_id>/ or content-only
+- Auto memory write: every deliverable creates a BoardMemory entry
 """
 
 import uuid
@@ -15,7 +15,7 @@ from tests.conftest import test_engine
 
 
 async def _create_test_data(session: AsyncSession):
-    """Board + Agent (mit tasks:write scope) + Task mit in_progress."""
+    """Board + agent (with tasks:write scope) + task with in_progress."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -53,7 +53,7 @@ async def _create_test_data(session: AsyncSession):
     return board, agent, task, raw_token
 
 
-# ── Pfad-Validation ──────────────────────────────────────────────────────
+# ── Path validation ──────────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -145,7 +145,7 @@ async def test_deliverable_empty_without_path_or_content_rejected(client: AsyncC
 
 @pytest.mark.asyncio
 async def test_deliverable_url_type_accepts_https(client: AsyncClient):
-    """URL-Deliverables duerfen weiterhin https://... im path haben."""
+    """URL deliverables may still have https://... in the path."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s)
 
@@ -162,7 +162,7 @@ async def test_deliverable_url_type_accepts_https(client: AsyncClient):
     assert resp.status_code == 201, resp.text
 
 
-# ── Auto-Memory-Write ───────────────────────────────────────────────────
+# ── Auto memory write ───────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
@@ -183,7 +183,7 @@ async def test_deliverable_creates_board_memory_entry(client: AsyncClient):
         )
     assert resp.status_code == 201, resp.text
 
-    # BoardMemory-Eintrag pruefen
+    # Check BoardMemory entry
     from app.models.memory import BoardMemory
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         r = await s.exec(select(BoardMemory).where(BoardMemory.board_id == board.id))

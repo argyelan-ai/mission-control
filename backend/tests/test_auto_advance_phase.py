@@ -1,4 +1,4 @@
-"""Tests fuer Watchdog Auto-Advance: Phase done → naechste Phase startet automatisch."""
+"""Tests for watchdog auto-advance: phase done → next phase starts automatically."""
 
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -13,7 +13,7 @@ from tests.conftest import test_engine
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def _make_fake_redis():
-    """Frische fakeredis-Instanz fuer jeden Test."""
+    """Fresh fakeredis instance for each test."""
     server = fakeredis.aioredis.FakeServer()
     return fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
 
@@ -83,7 +83,7 @@ async def _create_subtask(
 
 
 def _patch_redis():
-    """Patch get_redis in task_monitor Modul."""
+    """Patch get_redis in the task_monitor module."""
     fake = _make_fake_redis()
 
     async def _get():
@@ -97,18 +97,18 @@ def _patch_redis():
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_auto_advance_next_phase(mock_emit, session, make_board):
-    """Phase 1 done → Parent bleibt in_progress, Phase 2 startet automatisch."""
+    """Phase 1 done → parent stays in_progress, phase 2 starts automatically."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="Auto Board", slug="auto-board", auto_dispatch_enabled=True)
     project = await _create_project(session, board.id)
 
-    # Phase 1: in_progress mit allen Subtasks done
+    # Phase 1: in_progress with all subtasks done
     phase1 = await _create_phase(session, board.id, project.id, "Phase 1", sort_order=1, status="in_progress")
     await _create_subtask(session, board.id, phase1.id, "Sub 1.1", status="done", project_id=project.id)
     await _create_subtask(session, board.id, phase1.id, "Sub 1.2", status="done", project_id=project.id)
 
-    # Phase 2: inbox, wartet
+    # Phase 2: inbox, waiting
     phase2 = await _create_phase(session, board.id, project.id, "Phase 2", sort_order=2, status="inbox")
 
     monitor = TaskMonitorMixin()
@@ -116,11 +116,11 @@ async def test_auto_advance_next_phase(mock_emit, session, make_board):
         with patch("app.services.task_lifecycle.handle_review_handoff", new_callable=AsyncMock):
             await monitor._check_phase_completions(session)
 
-    # Phase 1 geht auf review (Phase-Review vor Auto-Advance)
+    # Phase 1 goes to review (phase review before auto-advance)
     await session.refresh(phase1)
     assert phase1.status == "review"
 
-    # Phase 2 bleibt inbox (Auto-Advance erst nach Phase 1 done)
+    # Phase 2 stays inbox (auto-advance only after phase 1 done)
     await session.refresh(phase2)
     assert phase2.status == "inbox"
 
@@ -128,13 +128,13 @@ async def test_auto_advance_next_phase(mock_emit, session, make_board):
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_auto_advance_no_next_phase(mock_emit, session, make_board):
-    """Letzte Phase done → kein Crash, kein Advance."""
+    """Last phase done → no crash, no advance."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="Last Board", slug="last-board")
     project = await _create_project(session, board.id)
 
-    # Nur eine Phase
+    # Only one phase
     phase1 = await _create_phase(session, board.id, project.id, "Einzige Phase", sort_order=1, status="in_progress")
     await _create_subtask(session, board.id, phase1.id, "Sub 1", status="done", project_id=project.id)
 
@@ -143,7 +143,7 @@ async def test_auto_advance_no_next_phase(mock_emit, session, make_board):
         with patch("app.services.task_lifecycle.handle_review_handoff", new_callable=AsyncMock):
             await monitor._check_phase_completions(session)
 
-    # Phase 1 geht auf review (Phase-Review)
+    # Phase 1 goes to review (phase review)
     await session.refresh(phase1)
     assert phase1.status == "review"
 
@@ -151,7 +151,7 @@ async def test_auto_advance_no_next_phase(mock_emit, session, make_board):
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_auto_advance_skips_done_phases(mock_emit, session, make_board):
-    """Ueberspringe Phasen die schon done sind, nimm naechste inbox."""
+    """Skip phases that are already done, take the next inbox one."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="Skip Board", slug="skip-board")
@@ -160,10 +160,10 @@ async def test_auto_advance_skips_done_phases(mock_emit, session, make_board):
     phase1 = await _create_phase(session, board.id, project.id, "Phase 1", sort_order=1, status="in_progress")
     await _create_subtask(session, board.id, phase1.id, "Sub 1", status="done", project_id=project.id)
 
-    # Phase 2 schon done
+    # Phase 2 already done
     await _create_phase(session, board.id, project.id, "Phase 2", sort_order=2, status="done")
 
-    # Phase 3 inbox → soll gestartet werden
+    # Phase 3 inbox → should be started
     phase3 = await _create_phase(session, board.id, project.id, "Phase 3", sort_order=3, status="inbox")
 
     monitor = TaskMonitorMixin()
@@ -171,11 +171,11 @@ async def test_auto_advance_skips_done_phases(mock_emit, session, make_board):
         with patch("app.services.task_lifecycle.handle_review_handoff", new_callable=AsyncMock):
             await monitor._check_phase_completions(session)
 
-    # Phase 1 geht auf review (Phase-Review)
+    # Phase 1 goes to review (phase review)
     await session.refresh(phase1)
     assert phase1.status == "review"
 
-    # Phase 3 bleibt inbox (Auto-Advance erst nach Phase 1 done)
+    # Phase 3 stays inbox (auto-advance only after phase 1 done)
     await session.refresh(phase3)
     assert phase3.status == "inbox"
 
@@ -183,12 +183,12 @@ async def test_auto_advance_skips_done_phases(mock_emit, session, make_board):
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_auto_advance_without_project(mock_emit, session, make_board):
-    """Standalone Parent ohne project_id → kein Auto-Advance (kein Crash)."""
+    """Standalone parent without project_id → no auto-advance (no crash)."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="No Proj Board", slug="no-proj-board")
 
-    # Parent ohne project_id
+    # Parent without project_id
     from app.models.task import Task
     parent = Task(
         id=uuid.uuid4(),
@@ -208,7 +208,7 @@ async def test_auto_advance_without_project(mock_emit, session, make_board):
         with patch("app.services.task_lifecycle.handle_review_handoff", new_callable=AsyncMock):
             await monitor._check_phase_completions(session)
 
-    # Standalone Parent geht auf review (Phase-Review)
+    # Standalone parent goes to review (phase review)
     await session.refresh(parent)
     assert parent.status == "review"
 
@@ -216,7 +216,7 @@ async def test_auto_advance_without_project(mock_emit, session, make_board):
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_auto_advance_dispatches_subtasks(mock_emit, session, make_board, make_agent):
-    """Auto-advance dispatcht inbox-Subtasks der neuen Phase."""
+    """Auto-advance dispatches inbox subtasks of the new phase."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="Dispatch Board", slug="dispatch-board", auto_dispatch_enabled=True)
@@ -232,7 +232,7 @@ async def test_auto_advance_dispatches_subtasks(mock_emit, session, make_board, 
         project_id=project.id, assigned_agent_id=agent.id,
     )
 
-    # auto_dispatch_task und dependencies_met werden lazy importiert
+    # auto_dispatch_task and dependencies_met are lazily imported
     with patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock) as mock_dispatch, \
          patch("app.services.dispatch.dependencies_met", new_callable=AsyncMock, return_value=True), \
          patch("app.services.watchdog.core._create_background_task") as mock_bg, \
@@ -242,11 +242,11 @@ async def test_auto_advance_dispatches_subtasks(mock_emit, session, make_board, 
         monitor = TaskMonitorMixin()
         await monitor._check_phase_completions(session)
 
-        # Phase 1 geht auf review (Auto-Advance erst nach done)
+        # Phase 1 goes to review (auto-advance only after done)
         await session.refresh(phase1)
         assert phase1.status == "review"
 
-        # Phase 2 bleibt inbox
+        # Phase 2 stays inbox
         await session.refresh(phase2)
         assert phase2.status == "inbox"
 
@@ -254,7 +254,7 @@ async def test_auto_advance_dispatches_subtasks(mock_emit, session, make_board, 
 @pytest.mark.asyncio
 @patch("app.services.watchdog.task_monitor.emit_event", new_callable=AsyncMock)
 async def test_phase_completion_dedup(mock_emit, session, make_board):
-    """Phase-Completion feuert nur einmal (Redis-Dedup)."""
+    """Phase completion fires only once (Redis dedup)."""
     from app.services.watchdog.task_monitor import TaskMonitorMixin
 
     board = await make_board(name="Dedup Board", slug="dedup-board")
@@ -265,13 +265,13 @@ async def test_phase_completion_dedup(mock_emit, session, make_board):
 
     monitor = TaskMonitorMixin()
     with _patch_redis():
-        # Erster Aufruf → feuert
+        # First call → fires
         await monitor._check_phase_completions(session)
         call_count_1 = mock_emit.call_count
 
-        # Zweiter Aufruf → Dedup verhindert erneutes Feuern
+        # Second call → dedup prevents firing again
         await monitor._check_phase_completions(session)
         call_count_2 = mock_emit.call_count
 
     assert call_count_1 > 0
-    assert call_count_2 == call_count_1  # Kein neuer Event
+    assert call_count_2 == call_count_1  # No new event

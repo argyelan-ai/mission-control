@@ -3099,7 +3099,7 @@ async def agent_send_telegram_report(
         claimed = upd.rowcount == 1
 
     async def _rollback_claim() -> None:
-        """Flag zuruecknehmen damit Agent retryen kann. Best-effort, nie werfen."""
+        """Take back the flag so the agent can retry. Best-effort, never raises."""
         if not claimed or resolved_task is None:
             return
         try:

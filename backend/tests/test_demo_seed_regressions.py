@@ -1,13 +1,13 @@
-"""Regressionen aus dem Demo-Seed-Testlauf (2026-07-02, Migration 0132).
+"""Regressions from the demo-seed test run (2026-07-02, migration 0132).
 
-1. approvals.agent_id muss nullable sein — der Watchdog erstellt
-   review_stuck-Approvals fuer Tasks OHNE zugewiesenen Agent. Mit NOT NULL
-   crashte jeder Watchdog-Tick (Commit-Fehler -> Redis-Dedup nie gesetzt
-   -> Endlos-Retry).
+1. approvals.agent_id must be nullable — the watchdog creates
+   review_stuck approvals for tasks WITHOUT an assigned agent. With NOT NULL
+   every watchdog tick crashed (commit error -> Redis dedup never set
+   -> infinite retry).
 
-2. delete_board() ist Soft-Delete, boards.slug ist UNIQUE — ohne
-   Slug-Umbenennung blockiert ein geloeschtes Board seinen Slug fuer
-   immer (Neuanlage -> 500 UniqueViolation).
+2. delete_board() is a soft delete, boards.slug is UNIQUE — without
+   renaming the slug, a deleted board blocks its slug forever
+   (re-creation -> 500 UniqueViolation).
 """
 import uuid
 
@@ -21,7 +21,7 @@ from tests.conftest import test_engine
 
 @pytest.mark.asyncio
 async def test_approval_without_agent_persists(make_board, make_task):
-    """review_stuck-Approval fuer unassigned Task darf nicht crashen."""
+    """review_stuck approval for an unassigned task must not crash."""
     from app.models.approval import Approval
 
     board = await make_board(slug="approval-null-agent")
@@ -31,7 +31,7 @@ async def test_approval_without_agent_persists(make_board, make_task):
         s.add(Approval(
             board_id=board.id,
             task_id=task.id,
-            agent_id=None,  # Task hat keinen Agent — genau der Crash-Fall
+            agent_id=None,  # Task has no agent — exactly the crash case
             action_type="review_stuck",
             description="Review haengt seit 185 Min.",
         ))
@@ -46,7 +46,7 @@ async def test_approval_without_agent_persists(make_board, make_task):
 
 @pytest.mark.asyncio
 async def test_deleted_board_frees_its_slug(auth_client: AsyncClient):
-    """Archivieren benennt den Slug um — Neuanlage mit gleichem Slug geht."""
+    """Archiving renames the slug — re-creation with the same slug works."""
     payload = {"name": "Demo", "slug": "demo-slug-reuse"}
 
     first = await auth_client.post("/api/v1/boards", json=payload)
@@ -60,7 +60,7 @@ async def test_deleted_board_frees_its_slug(auth_client: AsyncClient):
     assert second.status_code in (200, 201), second.text
     assert second.json()["id"] != board_id
 
-    # Das archivierte Board traegt den umbenannten Slug
+    # The archived board carries the renamed slug
     from app.models.board import Board
     async with AsyncSession(test_engine) as s:
         old = await s.get(Board, uuid.UUID(board_id))

@@ -1,13 +1,13 @@
-"""Tests fuer D-1: dispatch_attempt_id Self-Heal-Rotation in task_runner.
+"""Tests for D-1: dispatch_attempt_id self-heal rotation in task_runner.
 
-Hintergrund: Wenn der erste paste-and-submit eines Dispatch verloren geht
-(false-negative paste-verify, Bug 16-style), bleibt poll.sh haengen ohne ACK
-weil LAST_DISPATCHED_ATTEMPT_ID == aktuelle attempt_id. Backend Self-Heal:
-nach ack_timeout/2 → dispatch_attempt_id rotieren → poll.sh sieht neue
+Background: If the first paste-and-submit of a dispatch gets lost
+(false-negative paste-verify, Bug 16-style), poll.sh hangs without an ACK
+because LAST_DISPATCHED_ATTEMPT_ID == current attempt_id. Backend self-heal:
+after ack_timeout/2 → rotate dispatch_attempt_id → poll.sh sees the new
 attempt_id → re-paste.
 
-Sparky-Live-Symptom 2026-05-14: Task 1c67428e haengt 2.7h ohne ACK, weil
-poll.sh dachte attempt sei gesendet, aber LLM-Pane hat ihn nie gesehen.
+Sparky live symptom 2026-05-14: task 1c67428e hangs 2.7h without ACK, because
+poll.sh thought the attempt was sent, but the LLM pane never saw it.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def _now() -> datetime:
 
 @pytest.mark.asyncio
 async def test_rotation_skipped_before_threshold(fake_redis, make_board, make_agent, make_task):
-    """Dispatch <= ack_timeout/2 min alt → KEINE Rotation."""
+    """Dispatch <= ack_timeout/2 min old → NO rotation."""
     from app.services.task_runner import task_runner
     from sqlmodel.ext.asyncio.session import AsyncSession
     from tests.conftest import test_engine
@@ -35,7 +35,7 @@ async def test_rotation_skipped_before_threshold(fake_redis, make_board, make_ag
 scopes=["tasks:read", "tasks:write", "heartbeat"],
     )
 
-    # ack_timeout for host = 5min, threshold = 2.5min, dispatch vor 1min
+    # ack_timeout for host = 5min, threshold = 2.5min, dispatch 1min ago
     one_min_ago = _now() - timedelta(minutes=1)
     original_attempt = str(uuid.uuid4())
     task = await make_task(
@@ -59,7 +59,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
 @pytest.mark.asyncio
 async def test_rotation_happens_at_threshold(fake_redis, make_board, make_agent, make_task):
-    """Dispatch >= ack_timeout/2 → Rotation, neue attempt_id, Redis-Marker, Event."""
+    """Dispatch >= ack_timeout/2 → rotation, new attempt_id, Redis marker, event."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from app.models.activity import ActivityEvent
@@ -111,7 +111,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
 @pytest.mark.asyncio
 async def test_rotation_dedup_via_redis(fake_redis, make_board, make_agent, make_task):
-    """Wenn Redis-Marker existiert → KEINE zweite Rotation."""
+    """If the Redis marker exists → NO second rotation."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from sqlmodel.ext.asyncio.session import AsyncSession
@@ -131,7 +131,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
         dispatch_attempt_id=original_attempt,
     )
 
-    # Marker schon gesetzt (vorherige Rotation)
+    # Marker already set (previous rotation)
     await fake_redis.set(f"mc:task:{task.id}:attempt_rotated", "1")
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -149,7 +149,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
 @pytest.mark.asyncio
 async def test_handle_ack_timeout_uses_rotation_first(fake_redis, make_board, make_agent, make_task):
-    """Integration: _handle_ack_timeout ruft Rotation auf vor full timeout."""
+    """Integration: _handle_ack_timeout calls rotation before full timeout."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from app.models.approval import Approval
@@ -163,7 +163,7 @@ async def test_handle_ack_timeout_uses_rotation_first(fake_redis, make_board, ma
 scopes=["tasks:read", "tasks:write", "heartbeat"],
     )
 
-    # host ack_timeout = 5min, threshold = 2.5min. dispatch vor 3min → rotation
+    # host ack_timeout = 5min, threshold = 2.5min. dispatch 3min ago → rotation
     three_min_ago = _now() - timedelta(minutes=3)
     task = await make_task(
         board_id=board.id, status="inbox",
@@ -177,9 +177,9 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
                 s, await s.get(Task, task.id), agent, _now(), fake_redis,
             )
 
-    # Rotation Marker im Redis (Rotation hat gegriffen, nicht Escalation)
+    # Rotation marker in Redis (rotation kicked in, not escalation)
     assert await fake_redis.get(f"mc:task:{task.id}:attempt_rotated") == "1"
-    # KEINE Approval (Rotation hat early-returned)
+    # NO approval (rotation returned early)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(
             select(Approval).where(Approval.task_id == task.id)
@@ -189,7 +189,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
 @pytest.mark.asyncio
 async def test_handle_ack_timeout_escalates_after_full_timeout(fake_redis, make_board, make_agent, make_task):
-    """Nach full ack_timeout → Approval (selbst wenn Rotation schon lief)."""
+    """After full ack_timeout → approval (even if rotation already ran)."""
     from app.services.task_runner import task_runner
     from app.models.task import Task
     from app.models.approval import Approval
@@ -203,14 +203,14 @@ async def test_handle_ack_timeout_escalates_after_full_timeout(fake_redis, make_
 scopes=["tasks:read", "tasks:write", "heartbeat"],
     )
 
-    # dispatch vor 10min — weit ueber ack_timeout=5min
+    # dispatch 10min ago — well beyond ack_timeout=5min
     ten_min_ago = _now() - timedelta(minutes=10)
     task = await make_task(
         board_id=board.id, status="inbox",
         assigned_agent_id=agent.id, dispatched_at=ten_min_ago,
         dispatch_attempt_id=str(uuid.uuid4()),
     )
-    # Rotation schon gelaufen — markiert via Redis
+    # Rotation already ran — marked via Redis
     await fake_redis.set(f"mc:task:{task.id}:attempt_rotated", "1")
 
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
@@ -219,7 +219,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
                 s, await s.get(Task, task.id), agent, _now(), fake_redis,
             )
 
-    # Approval entstanden
+    # Approval created
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(
             select(Approval).where(

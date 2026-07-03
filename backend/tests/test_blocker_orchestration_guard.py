@@ -1,14 +1,15 @@
-"""Tests: `status=blocked` Approval-Guard fuer Orchestrations-Waits.
+"""Tests: `status=blocked` approval guard for orchestration waits.
 
-Incident-Context 2026-04-23: Boss ohne mc CLI auf Host machte manual curl
-POST /tasks + PATCH status=blocked (Anti-Pattern). Das setzte blocked_by_task_id
-NICHT — Guard 1 in agent_scoped.py greift nur wenn blocked_by_task_id gesetzt.
-Resultat: System erstellt blocker_decision-Approval fuer den Operator → Inbox-Spam +
-Watchdog-Fallback geblockt durch pending-approval → Parent stuck.
+Incident context 2026-04-23: Boss without mc CLI on host made a manual curl
+POST /tasks + PATCH status=blocked (anti-pattern). That did NOT set
+blocked_by_task_id — Guard 1 in agent_scoped.py only triggers when
+blocked_by_task_id is set.
+Result: system creates a blocker_decision approval for the operator → inbox
+spam + watchdog fallback blocked by pending approval → parent stuck.
 
-Fix: Guard 2 — wenn Agent mindestens einen aktiven Child-Subtask hat mit
-callback_agent_id = blockender Agent, dann ist das auch orchestration-wait
-und KEINE Approval sollte erstellt werden.
+Fix: Guard 2 — if the agent has at least one active child subtask with
+callback_agent_id = the blocking agent, that's also an orchestration wait
+and NO approval should be created.
 """
 
 import uuid
@@ -50,15 +51,15 @@ async def _setup_board_agent_task():
 
 @pytest.mark.asyncio
 async def test_blocked_without_blocked_by_but_with_callback_subtask_skips_approval(client, fake_redis):
-    """Primary test: Agent macht PATCH status=blocked ohne blocked_by_task_id,
-    aber ein aktives Child-Subtask mit callback existiert → KEINE Approval."""
+    """Primary test: agent does PATCH status=blocked without blocked_by_task_id,
+    but an active child subtask with callback exists → NO approval."""
     from app.models.task import Task
     from app.models.approval import Approval
     from sqlmodel import select
 
     board_id, agent_id, task_id, token = await _setup_board_agent_task()
 
-    # Child-Subtask mit callback erstellen (simuliert raw-curl-Anti-Pattern)
+    # Create child subtask with callback (simulates the raw-curl anti-pattern)
     child_id = uuid.uuid4()
     worker_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -75,11 +76,11 @@ async def test_blocked_without_blocked_by_but_with_callback_subtask_skips_approv
             status="in_progress",
             parent_task_id=task_id,
             assigned_agent_id=worker_id,
-            callback_agent_id=agent_id,  # callback auf orchestrator
+            callback_agent_id=agent_id,  # callback to orchestrator
         ))
         await s.commit()
 
-    # Orchestrator blockiert sich selbst (OHNE blocked_by_task_id — Anti-Pattern)
+    # Orchestrator blocks itself (WITHOUT blocked_by_task_id — anti-pattern)
     # Commenting first (block status requires a prior comment)
     await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
@@ -95,9 +96,9 @@ async def test_blocked_without_blocked_by_but_with_callback_subtask_skips_approv
         },
         headers={"Authorization": f"Bearer {token}"},
     )
-    assert resp.status_code in (200, 409), resp.text  # 409 ok wenn dispatch_attempt_id check greift
+    assert resp.status_code in (200, 409), resp.text  # 409 ok if dispatch_attempt_id check triggers
 
-    # Key assertion: KEINE blocker_decision-Approval erstellt
+    # Key assertion: NO blocker_decision approval created
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = list((await s.exec(
             select(Approval).where(
@@ -113,8 +114,8 @@ async def test_blocked_without_blocked_by_but_with_callback_subtask_skips_approv
 
 @pytest.mark.asyncio
 async def test_blocked_without_any_callback_creates_approval(client, fake_redis):
-    """Control-test: Agent blockiert ohne blocked_by_task_id UND ohne Child-Callback
-    → Approval WIRD erstellt (echter Human-Decision-Block)."""
+    """Control test: agent blocks without blocked_by_task_id AND without a child
+    callback → approval WILL be created (a real human-decision block)."""
     from app.models.approval import Approval
     from sqlmodel import select
 
@@ -144,7 +145,7 @@ async def test_blocked_without_any_callback_creates_approval(client, fake_redis)
                 Approval.action_type == "blocker_decision",
             )
         )).all())
-    # Echter Blocker ohne Callback → Approval soll weiter erstellt werden
+    # Real blocker without callback → approval should still be created
     assert len(approvals) >= 1, (
         "Control-test fehlgeschlagen — Approval sollte existieren fuer echte Operator-Decision-Blocker"
     )
@@ -152,15 +153,15 @@ async def test_blocked_without_any_callback_creates_approval(client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_blocked_with_done_child_still_creates_approval(client, fake_redis):
-    """Edge-case: Child ist `done` (nicht aktiv) → kein orchestration-wait mehr,
-    Approval sollte erstellt werden wenn Parent-Agent blockiert."""
+    """Edge case: child is `done` (not active) → no orchestration wait anymore,
+    approval should be created when the parent agent blocks."""
     from app.models.task import Task
     from app.models.approval import Approval
     from sqlmodel import select
 
     board_id, agent_id, task_id, token = await _setup_board_agent_task()
 
-    # Done Child — kein aktiver Callback-Wait
+    # Done child — no active callback wait
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(Task(
             id=uuid.uuid4(), board_id=board_id, title="Done Child",
@@ -194,7 +195,7 @@ async def test_blocked_with_done_child_still_creates_approval(client, fake_redis
                 Approval.action_type == "blocker_decision",
             )
         )).all())
-    # Done Child — Guard 2 greift NICHT (keine aktiven Callback-Subtasks)
+    # Done child — Guard 2 does NOT trigger (no active callback subtasks)
     assert len(approvals) >= 1, (
         "Done-Child sollte nicht als orchestration-wait zaehlen — Approval muss erstellt werden"
     )

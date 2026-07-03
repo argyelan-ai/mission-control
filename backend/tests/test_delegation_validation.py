@@ -1,6 +1,6 @@
-"""Tests fuer Board Lead Delegations-Validierung.
+"""Tests for Board Lead delegation validation.
 
-Stellt sicher dass Board Leads keine unvollstaendigen Tasks delegieren koennen.
+Ensures Board Leads cannot delegate incomplete tasks.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -12,7 +12,7 @@ from tests.conftest import test_engine
 
 
 async def _setup_delegation_scenario():
-    """Board + Board Lead + Developer erstellen mit Agent-Auth-Tokens."""
+    """Create Board + Board Lead + Developer with agent auth tokens."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.auth import generate_agent_token
@@ -56,7 +56,7 @@ async def _setup_delegation_scenario():
 
 @pytest.mark.asyncio
 async def test_board_lead_delegation_requires_description(client):
-    """Board Lead muss bei Delegation an anderen Agent eine Beschreibung angeben."""
+    """Board Lead must provide a description when delegating to another agent."""
     board_id, lead_id, dev_id, lead_token, _ = await _setup_delegation_scenario()
 
     resp = await client.post(
@@ -73,7 +73,7 @@ async def test_board_lead_delegation_requires_description(client):
 
 @pytest.mark.asyncio
 async def test_board_lead_delegation_rejects_short_description(client):
-    """Zu kurze Beschreibung wird abgelehnt."""
+    """Description that is too short is rejected."""
     board_id, lead_id, dev_id, lead_token, _ = await _setup_delegation_scenario()
 
     resp = await client.post(
@@ -91,7 +91,7 @@ async def test_board_lead_delegation_rejects_short_description(client):
 
 @pytest.mark.asyncio
 async def test_board_lead_delegation_accepts_detailed_description(client):
-    """Ausfuehrliche Beschreibung wird akzeptiert."""
+    """Detailed description is accepted."""
     board_id, lead_id, dev_id, lead_token, _ = await _setup_delegation_scenario()
 
     with patch('app.services.dispatch.logger') as mock_rpc, \
@@ -117,7 +117,7 @@ async def test_board_lead_delegation_accepts_detailed_description(client):
 
 @pytest.mark.asyncio
 async def test_non_lead_can_create_task_without_description(client):
-    """Normaler Agent darf Tasks ohne Beschreibung erstellen (kein Board Lead Check)."""
+    """Regular agent may create tasks without a description (no Board Lead check)."""
     board_id, lead_id, dev_id, _, dev_token = await _setup_delegation_scenario()
 
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
@@ -133,7 +133,7 @@ async def test_non_lead_can_create_task_without_description(client):
 
 @pytest.mark.asyncio
 async def test_board_lead_self_assign_no_description_needed(client):
-    """Board Lead kann sich selbst Tasks ohne Beschreibung zuweisen."""
+    """Board Lead can self-assign tasks without a description."""
     board_id, lead_id, dev_id, lead_token, _ = await _setup_delegation_scenario()
 
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
@@ -142,7 +142,7 @@ async def test_board_lead_self_assign_no_description_needed(client):
             headers={"Authorization": f"Bearer {lead_token}"},
             json={
                 "title": "Eigene Notiz",
-                # Kein assigned_agent_id → wird Lead selbst zugewiesen
+                # No assigned_agent_id → gets assigned to the Lead itself
             },
         )
     assert resp.status_code == 201

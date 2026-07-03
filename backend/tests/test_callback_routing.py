@@ -1,11 +1,11 @@
-"""Tests fuer callback_agent_id Routing-Logik.
+"""Tests for callback_agent_id routing logic.
 
-Prueft:
-1. Auto-set: Nicht-Board-Lead erstellt Task → callback_agent_id = Board Lead
-2. Explicit override: payload.callback_agent_id wird respektiert
-3. Board Lead erstellt Task → callback_agent_id bleibt null
-4. task_lifecycle Routing: callback_agent_id hat Vorrang vor owner_agent_id
-5. task_lifecycle Routing: owner_agent_id greift nur wenn Board Lead
+Checks:
+1. Auto-set: non-board-lead creates task → callback_agent_id = board lead
+2. Explicit override: payload.callback_agent_id is respected
+3. Board lead creates task → callback_agent_id stays null
+4. task_lifecycle routing: callback_agent_id takes priority over owner_agent_id
+5. task_lifecycle routing: owner_agent_id only applies when board lead
 """
 import uuid
 import pytest
@@ -17,7 +17,7 @@ from app.models.board import Board
 
 @pytest.fixture
 async def board_with_agents(session: AsyncSession):
-    """Erstellt: Board + Board Lead (Henry) + Planner."""
+    """Creates: board + board lead (Henry) + planner."""
     board = Board(id=uuid.uuid4(), name="Test Board", slug="test-board")
     session.add(board)
 
@@ -46,7 +46,7 @@ async def board_with_agents(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_callback_agent_id_takes_priority_over_owner(session: AsyncSession, board_with_agents):
-    """callback_agent_id wird bevorzugt, auch wenn owner_agent_id gesetzt ist."""
+    """callback_agent_id is preferred, even when owner_agent_id is set."""
     board, henry, planner = board_with_agents
 
     task = Task(
@@ -66,7 +66,7 @@ async def test_callback_agent_id_takes_priority_over_owner(session: AsyncSession
 
 @pytest.mark.asyncio
 async def test_owner_as_board_lead_is_fallback(session: AsyncSession, board_with_agents):
-    """owner_agent_id greift als Fallback wenn er ein Board Lead ist."""
+    """owner_agent_id applies as fallback when it is a board lead."""
     board, henry, planner = board_with_agents
 
     task = Task(
@@ -86,7 +86,7 @@ async def test_owner_as_board_lead_is_fallback(session: AsyncSession, board_with
 
 @pytest.mark.asyncio
 async def test_planner_owner_without_callback_agent(session: AsyncSession, board_with_agents):
-    """Wenn owner = Planner und kein callback_agent_id → Fallback auf Board Lead nötig."""
+    """When owner = planner and no callback_agent_id → fallback to board lead needed."""
     board, henry, planner = board_with_agents
 
     task = Task(
@@ -105,7 +105,7 @@ async def test_planner_owner_without_callback_agent(session: AsyncSession, board
 
 @pytest.mark.asyncio
 async def test_callback_agent_id_persisted(session: AsyncSession, board_with_agents):
-    """callback_agent_id wird korrekt in DB gespeichert und geladen."""
+    """callback_agent_id is correctly stored and loaded from the DB."""
     board, henry, planner = board_with_agents
 
     task = Task(
@@ -125,7 +125,7 @@ async def test_callback_agent_id_persisted(session: AsyncSession, board_with_age
 
 @pytest.mark.asyncio
 async def test_callback_agent_id_nullable(session: AsyncSession, board_with_agents):
-    """callback_agent_id ist nullable — bestehende Tasks ohne das Feld funktionieren."""
+    """callback_agent_id is nullable — existing tasks without the field still work."""
     board, henry, planner = board_with_agents
 
     task = Task(

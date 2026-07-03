@@ -1,4 +1,4 @@
-"""Tests fuer deliverable_paths.validate_deliverable_path."""
+"""Tests for deliverable_paths.validate_deliverable_path."""
 import uuid
 from pathlib import Path
 

@@ -1,9 +1,9 @@
-"""Tests fuer Blocker-Approval Guard — PRE-COMMIT Position.
+"""Tests for the blocker approval guard — pre-commit position.
 
-Root Cause: Guard stand NACH session.commit(), dadurch wurde der Status
-in der DB geaendert bevor der Guard 403 zurueckgeben konnte.
-Fix: Guard steht jetzt VOR setattr/commit in agent_scoped.py
-und in _enforce_board_rules() in tasks.py.
+Root cause: the guard was positioned AFTER session.commit(), so the status
+in the DB was changed before the guard could return 403.
+Fix: the guard is now positioned BEFORE setattr/commit in agent_scoped.py
+and in _enforce_board_rules() in tasks.py.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -73,7 +73,7 @@ async def _setup_blocker_scenario():
 
 @pytest.mark.asyncio
 async def test_agent_cannot_unblock_with_pending_approval(client):
-    """Agent PATCH blocked→in_progress mit pending Approval → 403, DB bleibt blocked."""
+    """Agent PATCH blocked→in_progress with a pending approval → 403, DB stays blocked."""
     ids = await _setup_blocker_scenario()
 
     with _BROADCAST_PATCH:
@@ -86,7 +86,7 @@ async def test_agent_cannot_unblock_with_pending_approval(client):
     assert resp.status_code == 403, f"Expected 403, got {resp.status_code}: {resp.text}"
     assert "Blocker-Approval" in resp.json()["detail"]
 
-    # DB-Check: Status muss blocked bleiben
+    # DB check: status must stay blocked
     async with AsyncSession(test_engine) as s:
         from app.models.task import Task
         task = await s.get(Task, ids["task_id"])
@@ -95,7 +95,7 @@ async def test_agent_cannot_unblock_with_pending_approval(client):
 
 @pytest.mark.asyncio
 async def test_agent_cannot_unblock_with_pending_approval_no_event(client):
-    """Kein TaskEvent und kein Activity Event bei blockiertem Entblocken."""
+    """No TaskEvent and no activity event on a blocked unblock attempt."""
     ids = await _setup_blocker_scenario()
 
     with _BROADCAST_PATCH:
@@ -107,7 +107,7 @@ async def test_agent_cannot_unblock_with_pending_approval_no_event(client):
 
     assert resp.status_code == 403
 
-    # Kein TaskEvent geschrieben
+    # No TaskEvent written
     async with AsyncSession(test_engine) as s:
         from app.models.task import TaskEvent
         from sqlmodel import select
@@ -119,10 +119,10 @@ async def test_agent_cannot_unblock_with_pending_approval_no_event(client):
 
 @pytest.mark.asyncio
 async def test_agent_can_unblock_after_approval_resolved(client):
-    """Nach Approval-Auflösung kann Agent normal entblocken."""
+    """After approval resolution, agent can unblock normally."""
     ids = await _setup_blocker_scenario()
 
-    # Approval resolven
+    # Resolve approval
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.approval import Approval
         approval = await s.get(Approval, ids["approval_id"])
@@ -144,7 +144,7 @@ async def test_agent_can_unblock_after_approval_resolved(client):
 
 @pytest.mark.asyncio
 async def test_normal_unblock_without_approval_allowed(client):
-    """blocked→in_progress ohne pending Approval → erlaubt."""
+    """blocked→in_progress without a pending approval → allowed."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -181,7 +181,7 @@ async def test_normal_unblock_without_approval_allowed(client):
 
 @pytest.mark.asyncio
 async def test_user_route_also_blocked_by_pending_approval(auth_client):
-    """Dashboard-Route blocked→in_progress mit pending Approval → 403."""
+    """Dashboard route blocked→in_progress with a pending approval → 403."""
     ids = await _setup_blocker_scenario()
 
     resp = await auth_client.patch(
