@@ -1,6 +1,6 @@
 """Phase 16 — Tests for DB-backed runtime registry.
 
-D-01/D-03: GET /runtimes liest aus DB (nicht JSON).
+D-01/D-03: GET /runtimes reads from the DB (not JSON).
 """
 from unittest.mock import patch
 
@@ -19,7 +19,7 @@ async def _stub_state(*_args, **_kwargs):
 
 @pytest.mark.asyncio
 async def test_list_db_runtimes_empty(async_session):
-    """Leere DB → leere Liste."""
+    """Empty DB → empty list."""
     from app.services.runtime_manager import list_db_runtimes
 
     result = await list_db_runtimes(async_session)
@@ -28,7 +28,7 @@ async def test_list_db_runtimes_empty(async_session):
 
 @pytest.mark.asyncio
 async def test_list_db_runtimes_sorted_by_ui_order(async_session):
-    """Zwei Runtimes → beide zurück, nach ui_order sortiert."""
+    """Two runtimes → both returned, sorted by ui_order."""
     from app.services.runtime_manager import list_db_runtimes
 
     rt2 = Runtime(
@@ -60,7 +60,7 @@ async def test_list_db_runtimes_sorted_by_ui_order(async_session):
 
 @pytest.mark.asyncio
 async def test_list_db_runtimes_includes_disabled(async_session):
-    """Disabled Runtimes auch zurück (Filterung passiert im Router)."""
+    """Disabled runtimes are returned too (filtering happens in the router)."""
     from app.services.runtime_manager import list_db_runtimes
 
     rt_enabled = Runtime(
@@ -93,7 +93,7 @@ async def test_list_db_runtimes_includes_disabled(async_session):
 
 @pytest.mark.asyncio
 async def test_get_runtimes_returns_enabled_from_db(async_session, auth_client):
-    """GET /api/v1/runtimes liefert nur enabled Runtimes aus der DB."""
+    """GET /api/v1/runtimes returns only enabled runtimes from the DB."""
     rt = Runtime(
         slug="db-only-rt",
         display_name="DB Only Runtime",
@@ -129,8 +129,8 @@ async def test_get_runtimes_returns_enabled_from_db(async_session, auth_client):
 
 @pytest.mark.asyncio
 async def test_get_runtimes_uses_db_not_json(async_session, auth_client):
-    """Eine Runtime die NUR in DB existiert (Slug nicht in JSON) erscheint
-    in GET /runtimes — Beweis dass DB die Quelle ist, nicht runtimes.json."""
+    """A runtime that exists ONLY in the DB (slug not in JSON) shows up
+    in GET /runtimes — proof that the DB is the source, not runtimes.json."""
     rt = Runtime(
         slug="phase-16-fresh-runtime",
         display_name="Phase 16 Fresh",
@@ -155,7 +155,7 @@ async def test_get_runtimes_uses_db_not_json(async_session, auth_client):
 
 @pytest.mark.asyncio
 async def test_get_runtime_by_slug_from_db(async_session, auth_client):
-    """GET /api/v1/runtimes/{slug} liefert 200 für existierenden Slug."""
+    """GET /api/v1/runtimes/{slug} returns 200 for an existing slug."""
     rt = Runtime(
         slug="single-rt",
         display_name="Single",
@@ -181,7 +181,7 @@ async def test_get_runtime_by_slug_from_db(async_session, auth_client):
 
 @pytest.mark.asyncio
 async def test_get_runtime_unknown_returns_404(async_session, auth_client):
-    """GET /api/v1/runtimes/{unknown} liefert 404."""
+    """GET /api/v1/runtimes/{unknown} returns 404."""
     with patch(
         "app.services.runtime_manager.get_runtime_state",
         side_effect=_stub_state,

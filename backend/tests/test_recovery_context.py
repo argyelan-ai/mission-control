@@ -1,7 +1,7 @@
 """
-Tests fuer build_recovery_context() — reichhaltiger Recovery-Kontext aus Task-Kommentaren.
+Tests for build_recovery_context() — rich recovery context from task comments.
 
-TDD: Tests zuerst, Implementierung danach.
+TDD: tests first, implementation after.
 """
 
 import uuid
@@ -15,7 +15,7 @@ from app.models.board import Board
 from app.models.task import Task, TaskComment
 
 
-# ── Hilfsfunktion: Kommentar erstellen ─────────────────────────────────
+# ── Helper function: create comment ─────────────────────────────────
 
 
 async def _create_comment(
@@ -25,7 +25,7 @@ async def _create_comment(
     content: str = "Test comment",
     created_at: datetime | None = None,
 ) -> TaskComment:
-    """TaskComment in DB anlegen und zurueckgeben."""
+    """Create a TaskComment in the DB and return it."""
     comment = TaskComment(
         id=uuid.uuid4(),
         task_id=task_id,
@@ -40,14 +40,14 @@ async def _create_comment(
     return comment
 
 
-# ── Hilfsfunktion: Board + Task Setup ──────────────────────────────────
+# ── Helper function: board + task setup ──────────────────────────────────
 
 
 async def _setup_board_and_task(
     session: AsyncSession,
     assigned_agent_id: uuid.UUID | None = None,
 ) -> Task:
-    """Board + Task erstellen und Task zurueckgeben."""
+    """Create board + task and return the task."""
     board = Board(id=uuid.uuid4(), name="Test Board", slug=f"test-{uuid.uuid4().hex[:8]}")
     session.add(board)
     await session.commit()
@@ -69,7 +69,7 @@ async def _setup_board_and_task(
 
 @pytest.mark.asyncio
 async def test_recovery_context_returns_none_without_comments(session: AsyncSession):
-    """Ohne Kommentare → None zurueckgeben."""
+    """Without comments → return None."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -79,7 +79,7 @@ async def test_recovery_context_returns_none_without_comments(session: AsyncSess
 
 @pytest.mark.asyncio
 async def test_recovery_context_includes_progress_comments(session: AsyncSession):
-    """Progress-Kommentare erscheinen unter 'Letzter Fortschritt'.
+    """Progress comments appear under 'Latest Progress'.
 
     Workstream A4: `checkpoint` comments no longer exist — migration 0082
     moved them into `progress`, and new code posts `progress` via
@@ -106,7 +106,7 @@ async def test_recovery_context_includes_progress_comments(session: AsyncSession
 
 @pytest.mark.asyncio
 async def test_recovery_context_includes_blocker(session: AsyncSession):
-    """Blocker-Kommentar wird mit Label BLOCKER angezeigt."""
+    """Blocker comment is shown with the BLOCKER label."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -121,7 +121,7 @@ async def test_recovery_context_includes_blocker(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_recovery_context_includes_feedback(session: AsyncSession):
-    """Reviewer-Feedback wird mit Label REVIEWER-FEEDBACK angezeigt."""
+    """Reviewer feedback is shown with the REVIEWER-FEEDBACK label."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -136,7 +136,7 @@ async def test_recovery_context_includes_feedback(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_recovery_context_limits_to_5_comments(session: AsyncSession):
-    """10 Kommentare → nur die neuesten 5 erscheinen (Workstream A4 cap)."""
+    """10 comments → only the newest 5 appear (Workstream A4 cap)."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -155,17 +155,17 @@ async def test_recovery_context_limits_to_5_comments(session: AsyncSession):
     result = await build_recovery_context(session, task)
 
     assert result is not None
-    # Die aeltesten 5 (OLD-00 bis OLD-04) sollten NICHT enthalten sein
+    # The oldest 5 (OLD-00 through OLD-04) should NOT be included
     for i in range(5):
         assert f"Fortschritt OLD-{i:02d}" not in result
-    # Die neuesten 5 (NEW-05 bis NEW-09) sollten enthalten sein
+    # The newest 5 (NEW-05 through NEW-09) should be included
     for i in range(5, 10):
         assert f"Fortschritt NEW-{i:02d}" in result
 
 
 @pytest.mark.asyncio
 async def test_recovery_context_includes_workspace_info(session: AsyncSession):
-    """Agent mit workspace_path → Pfad im Ergebnis."""
+    """Agent with workspace_path → path in the result."""
     from app.services.dispatch import build_recovery_context
 
     agent = Agent(
@@ -188,7 +188,7 @@ async def test_recovery_context_includes_workspace_info(session: AsyncSession):
 
 @pytest.mark.asyncio
 async def test_recovery_context_ignores_message_type(session: AsyncSession):
-    """Kommentare vom Typ 'message' werden NICHT einbezogen."""
+    """Comments of type 'message' are NOT included."""
     from app.services.dispatch import build_recovery_context
 
     task = await _setup_board_and_task(session)
@@ -196,7 +196,7 @@ async def test_recovery_context_ignores_message_type(session: AsyncSession):
 
     result = await build_recovery_context(session, task)
 
-    # Nur message-Kommentare → kein Recovery-Kontext
+    # Only message comments → no recovery context
     assert result is None
 
 
@@ -211,11 +211,11 @@ async def test_agent_dispatch_config_defaults(session: AsyncSession):
     assert loaded.dispatch_config == {}
 
 
-# ── Tests fuer _get_agent_timeout ─────────────────────────────────────
+# ── Tests for _get_agent_timeout ─────────────────────────────────────
 
 
 def test_get_agent_timeout_returns_default():
-    """Ohne dispatch_config wird der globale Default zurueckgegeben."""
+    """Without dispatch_config, the global default is returned."""
     from app.services.task_runner import _get_agent_timeout
 
     agent = Agent(name="TestAgent")
@@ -223,7 +223,7 @@ def test_get_agent_timeout_returns_default():
 
 
 def test_get_agent_timeout_returns_agent_value():
-    """Mit dispatch_config wird der Agent-Wert zurueckgegeben."""
+    """With dispatch_config, the agent value is returned."""
     from app.services.task_runner import _get_agent_timeout
 
     agent = Agent(name="Cody", dispatch_config={"stale_progress_minutes": 45})
@@ -231,7 +231,7 @@ def test_get_agent_timeout_returns_agent_value():
 
 
 def test_get_agent_timeout_falls_back_on_missing_key():
-    """Fehlender Key im dispatch_config faellt auf Default zurueck."""
+    """Missing key in dispatch_config falls back to the default."""
     from app.services.task_runner import _get_agent_timeout
 
     agent = Agent(name="Cody", dispatch_config={"stale_progress_minutes": 45})

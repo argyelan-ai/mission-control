@@ -1,4 +1,4 @@
-"""Tests fuer Resilient Agent Recovery (Layered Recovery System)."""
+"""Tests for Resilient Agent Recovery (Layered Recovery System)."""
 import uuid
 
 import pytest
@@ -7,7 +7,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.services.watchdog import WatchdogService
 
 
-# ── Task 1: Error-Recovery in rules_md + Dispatch-Message ──
+# ── Task 1: Error recovery in rules_md + dispatch message ──
 
 
 @pytest.mark.asyncio
@@ -36,7 +36,7 @@ async def test_dispatch_message_contains_blocked_hint(
 
 @pytest.mark.asyncio
 async def test_cody_rules_contain_error_recovery():
-    """Cody rules_md muss Error-Recovery Block haben."""
+    """Cody rules_md must have an error recovery block."""
     from app.routers.agents import AGENT_CONFIGS
 
     cody_config = AGENT_CONFIGS["cody"]
@@ -49,7 +49,7 @@ async def test_cody_rules_contain_error_recovery():
 
 @pytest.mark.asyncio
 async def test_rex_rules_contain_error_recovery():
-    """Rex rules_md muss Error-Recovery Block haben."""
+    """Rex rules_md must have an error recovery block."""
     from app.routers.agents import AGENT_CONFIGS
 
     rex_config = AGENT_CONFIGS["rex"]
@@ -61,7 +61,7 @@ async def test_rex_rules_contain_error_recovery():
 
 @pytest.mark.asyncio
 async def test_henry_rules_contain_error_recovery():
-    """Henry rules_md muss Error-Recovery Block haben."""
+    """Henry rules_md must have an error recovery block."""
     from app.routers.agents import AGENT_CONFIGS
 
     henry_config = AGENT_CONFIGS["henry"]
@@ -74,7 +74,7 @@ async def test_henry_rules_contain_error_recovery():
 
 @pytest.mark.asyncio
 async def test_all_specialized_agents_have_error_recovery():
-    """Alle SPECIALIZED_AGENTS_SPECS muessen Error-Recovery haben."""
+    """All SPECIALIZED_AGENTS_SPECS must have error recovery."""
     from app.routers.agents import SPECIALIZED_AGENTS_SPECS
 
     for spec in SPECIALIZED_AGENTS_SPECS:
@@ -85,20 +85,20 @@ async def test_all_specialized_agents_have_error_recovery():
 
 
 def test_rules_md_in_config_file_types_after_gateway_sunset():
-    """Phase 29: _GATEWAY_SYNC_FILE_TYPES wurde aus agents.py entfernt (Gateway-Pfad weg).
-    rules_md bleibt aber in CONFIG_FILE_TYPES fuer UI-Zugriff verfuegbar.
+    """Phase 29: _GATEWAY_SYNC_FILE_TYPES was removed from agents.py (gateway path gone).
+    rules_md remains available in CONFIG_FILE_TYPES for UI access, though.
     """
     from app.routers.agents import CONFIG_FILE_TYPES
 
-    assert "rules_md" in CONFIG_FILE_TYPES  # in CONFIG_FILE_TYPES fuer UI-Zugriff
+    assert "rules_md" in CONFIG_FILE_TYPES  # in CONFIG_FILE_TYPES for UI access
 
 
-# ── Task 2: Session Health Monitor ──
+# ── Task 2: Session health monitor ──
 
 
 @pytest.mark.asyncio
 async def test_build_recovery_recap(session: AsyncSession, make_agent, make_task):
-    """Recovery-Recap muss Task-ID, Titel und Anweisungen enthalten."""
+    """Recovery recap must contain task ID, title, and instructions."""
     board_id = uuid.uuid4()
     agent = await make_agent("Cody", board_id=board_id, role="developer")
     task = await make_task(
@@ -118,7 +118,7 @@ async def test_build_recovery_recap(session: AsyncSession, make_agent, make_task
 async def test_build_recovery_recap_with_workspace(
     session: AsyncSession, make_agent, make_task,
 ):
-    """Recovery-Recap mit Workspace-Pfad muss diesen enthalten."""
+    """Recovery recap with a workspace path must include it."""
     board_id = uuid.uuid4()
     agent = await make_agent(
         "Cody", board_id=board_id, role="developer",
@@ -140,7 +140,7 @@ async def test_build_recovery_recap_with_workspace(
 async def test_build_recovery_recap_uses_project_workspace(
     session: AsyncSession, make_agent, make_task,
 ):
-    """Recovery-Recap bevorzugt project.workspace_path ueber agent.workspace_path."""
+    """Recovery recap prefers project.workspace_path over agent.workspace_path."""
     from app.models.board import Project
 
     board_id = uuid.uuid4()
@@ -164,21 +164,21 @@ async def test_build_recovery_recap_uses_project_workspace(
     wd = WatchdogService()
     recap = await wd._build_recovery_recap(task, agent, session)
 
-    # Projekt-Workspace muss drin sein, NICHT Agent-Workspace
+    # Project workspace must be included, NOT agent workspace
     assert "demo-portfolio" in recap
     assert "workspace-cody" not in recap
 
 
-# ── Task 2/3 entfallen (Phase 29): _check_session_health + _escalate_to_lead
-# waren gateway-only und wurden mit dem Gateway-Sunset entfernt. Stale-Task-
-# Ownership liegt jetzt bei task_runner._check_dispatch_ack (Phase 26).
+# ── Task 2/3 dropped (Phase 29): _check_session_health + _escalate_to_lead
+# were gateway-only and were removed with the gateway sunset. Stale-task
+# ownership now lives in task_runner._check_dispatch_ack (Phase 26).
 
 
-# ── Task 4: Verbessertes Approval-Format ──
+# ── Task 4: Improved approval format ──
 
 
 def test_agent_stuck_approval_format():
-    """agent_stuck Approval-Beschreibung muss human-readable sein."""
+    """agent_stuck approval description must be human-readable."""
     from app.services.task_runner import _build_agent_stuck_description
 
     desc = _build_agent_stuck_description(
@@ -199,10 +199,10 @@ def test_agent_stuck_approval_format():
     assert "zuweisen" in desc
 
 
-# ── Task 5: Telegram-Push ──
-# test_send_agent_stuck_telegram entfernt (Phase 29 / Wave 4 cleanup):
-# `app.services.telegram` und `send_telegram_notification` existieren nicht
-# mehr — Telegram-Push laeuft jetzt direkt via `telegram_bot.send_telegram_*`
-# in `task_runner._create_dispatch_approval` (siehe Bug 18 / D-2 commit
-# 3da66c22). Der Test deckte ein Gateway-RPC-Bridge-Pattern ab, das mit dem
-# Openclaw-Sunset (Phase 29) gestorben ist.
+# ── Task 5: Telegram push ──
+# test_send_agent_stuck_telegram removed (Phase 29 / Wave 4 cleanup):
+# `app.services.telegram` and `send_telegram_notification` no longer
+# exist — Telegram push now runs directly via `telegram_bot.send_telegram_*`
+# in `task_runner._create_dispatch_approval` (see Bug 18 / D-2 commit
+# 3da66c22). The test covered a gateway RPC bridge pattern that died with
+# the Openclaw sunset (Phase 29).

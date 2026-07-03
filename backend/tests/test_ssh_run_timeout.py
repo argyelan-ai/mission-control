@@ -15,8 +15,8 @@ import pytest
 from app.services import runtime_manager
 from app.services.host_resolver import ResolvedHost
 
-# ADR-048: _ssh_run verlangt einen aufgelösten Host (klarer Fehler statt
-# Connect gegen ""). asyncssh.connect ist gemockt — die Werte sind inert.
+# ADR-048: _ssh_run requires a resolved host (a clear error instead of
+# connecting against ""). asyncssh.connect is mocked — the values are inert.
 _TEST_HOST = ResolvedHost(ssh_host="192.0.2.10", ssh_user="test", source="settings")
 
 

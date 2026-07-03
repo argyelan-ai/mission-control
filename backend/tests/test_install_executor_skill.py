@@ -131,22 +131,22 @@ async def test_install_skill_rollback_on_sync_failure(async_session: AsyncSessio
     assert "sync fail" in result.error
 
 
-# ── Local-Skill Pfad-Resolution (HOME_HOST Fix) ──────────────────────────
+# ── Local-skill path resolution (HOME_HOST fix) ───────────────────────────
 
 
 def test_call_skill_install_uses_home_host_for_local_path(tmp_path, monkeypatch):
-    """Local source ~/.mc/skills/<name> muss HOME_HOST aufloesen,
-    nicht das Container-User-Home.
+    """Local source ~/.mc/skills/<name> must resolve HOME_HOST,
+    not the container user's home.
 
-    Bug 2026-04-23: Backend-Container hat ~ = /home/mcuser/, aber der Mount
-    liegt unter /Users/testuser/.mc/. Vorher wurde os.path.expanduser('~')
-    benutzt → FileNotFoundError trotz vorhandenem Skill.
+    Bug 2026-04-23: backend container has ~ = /home/mcuser/, but the mount
+    lives under /Users/testuser/.mc/. Previously os.path.expanduser('~')
+    was used → FileNotFoundError despite the skill being present.
     """
     import asyncio
     from app.services.install_executor import _call_skill_install
 
-    # Simuliere: HOME_HOST zeigt auf ein tmp_path, Skill liegt dort.
-    # ~ (in dieser Test-Subprocess-Env) zeigt woanders hin.
+    # Simulate: HOME_HOST points to a tmp_path, the skill lives there.
+    # ~ (in this test subprocess env) points somewhere else.
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
     skills_dir = tmp_path / ".mc" / "skills" / "my-skill"
     skills_dir.mkdir(parents=True)
@@ -158,32 +158,32 @@ def test_call_skill_install_uses_home_host_for_local_path(tmp_path, monkeypatch)
 
 
 def test_call_skill_install_local_missing_raises(tmp_path, monkeypatch):
-    """Wenn Skill-Pfad NICHT existiert → FileNotFoundError mit aufgeloestem Pfad."""
+    """If the skill path does NOT exist → FileNotFoundError with the resolved path."""
     import asyncio
     from app.services.install_executor import _call_skill_install
 
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
-    # Skills-Verzeichnis NICHT angelegt → FileNotFoundError erwartet
+    # Skills directory NOT created → FileNotFoundError expected
     with pytest.raises(FileNotFoundError) as exc_info:
         asyncio.run(_call_skill_install("~/.mc/skills/missing", "missing"))
-    # Fehler-Text muss den AUFGELOESTEN Pfad enthalten (nicht ~)
+    # Error text must contain the RESOLVED path (not ~)
     assert str(tmp_path) in str(exc_info.value)
     assert "missing" in str(exc_info.value)
 
 
-# ── Multi-Skill-Repo Handling (Live-Bug 2026-04-24 stitch-skills) ───────────
+# ── Multi-skill repo handling (live bug 2026-04-24 stitch-skills) ──────────
 
 
 def test_github_clone_extracts_from_multi_skill_monorepo(tmp_path, monkeypatch):
-    """Monorepo mit skills/<name>/SKILL.md → nur Sub-Skill wird extrahiert,
-    nicht das ganze Repo."""
+    """Monorepo with skills/<name>/SKILL.md → only the sub-skill is extracted,
+    not the whole repo."""
     import asyncio
     from app.services.install_executor import _call_skill_install
 
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
 
-    # Fake git clone: mock subprocess_exec um ein Multi-Skill-Repo-Layout
-    # lokal anzulegen statt echt zu klonen.
+    # Fake git clone: mock subprocess_exec to create a multi-skill repo layout
+    # locally instead of actually cloning.
     fake_repo = tmp_path / "fake_upstream_repo"
     (fake_repo / "skills" / "shadcn-ui").mkdir(parents=True)
     (fake_repo / "skills" / "shadcn-ui" / "SKILL.md").write_text(
@@ -215,7 +215,7 @@ def test_github_clone_extracts_from_multi_skill_monorepo(tmp_path, monkeypatch):
 
     installed = tmp_path / ".mc" / "skills" / "shadcn-ui"
     assert installed.exists()
-    # NUR shadcn-ui-Inhalt, NICHT das ganze Repo (kein README, kein LICENSE)
+    # ONLY shadcn-ui content, NOT the whole repo (no README, no LICENSE)
     assert (installed / "SKILL.md").exists()
     assert "shadcn-ui" in (installed / "SKILL.md").read_text()
     assert not (installed / "README.md").exists(), (
@@ -227,7 +227,7 @@ def test_github_clone_extracts_from_multi_skill_monorepo(tmp_path, monkeypatch):
 
 
 def test_github_clone_single_skill_repo(tmp_path, monkeypatch):
-    """Single-Skill-Repo (SKILL.md im Root) → ganzer Inhalt wird installiert."""
+    """Single-skill repo (SKILL.md at root) → the whole content gets installed."""
     import asyncio
     from app.services.install_executor import _call_skill_install
 
@@ -261,7 +261,7 @@ def test_github_clone_single_skill_repo(tmp_path, monkeypatch):
 
 
 def test_github_clone_unknown_layout_raises(tmp_path, monkeypatch):
-    """Repo ohne erkennbares Skill-Layout → RuntimeError mit hilfreichem Hint."""
+    """Repo without a recognizable skill layout → RuntimeError with a helpful hint."""
     import asyncio
     from app.services.install_executor import _call_skill_install
 
@@ -287,6 +287,6 @@ def test_github_clone_unknown_layout_raises(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError) as exc_info:
         asyncio.run(_call_skill_install("github:fake/weird", "weird"))
-    # Fehler soll Top-Level-Inhalt zeigen fuer Debugging
+    # Error should show top-level content for debugging
     assert "kein erkennbares Skill-Layout" in str(exc_info.value)
     assert "src" in str(exc_info.value)

@@ -1,20 +1,20 @@
-"""Tests fuer Report-Back Hard-Gate + Auto-Draft.
+"""Tests for the report-back hard gate + auto-draft.
 
-Szenario-Matrix (Bezug: feat/report-back-hard-gate):
+Scenario matrix (context: feat/report-back-hard-gate):
 
-| # | Szenario                               | Verhalten                              |
+| # | Scenario                               | Behavior                               |
 |---|----------------------------------------|----------------------------------------|
-| 1 | Happy-path: telegram → done            | OK                                     |
-| 2 | Ohne report_back_required              | done ohne telegram: OK                 |
-| 3 | Gate greift (required, kein telegram)  | done → 422                             |
-| 4 | Retry nach 422                         | 422 → telegram → done: OK              |
-| 5 | Idempotenz mehrfach telegram           | Flag bleibt True                       |
-| 6 | Failure → Auto-Draft                   | failed ohne telegram: Draft gesendet   |
-| 7 | Failure nach telegram (schon sent)     | kein zweiter Draft                     |
-| 9 | Review-Pfad mit Report                 | Dev: telegram+review, Rex: done OK     |
-|10 | Review-Pfad ohne Report                | Rex: done → 422                        |
-|11 | Bot unconfigured bei failed            | Draft skipped, failed trotzdem durch   |
-|12 | Subtask (parent_task_id gesetzt)       | Kein Gate — Subtask kein Reports-Case  |
+| 1 | Happy path: telegram → done            | OK                                     |
+| 2 | Without report_back_required           | done without telegram: OK              |
+| 3 | Gate kicks in (required, no telegram)  | done → 422                             |
+| 4 | Retry after 422                        | 422 → telegram → done: OK              |
+| 5 | Idempotency, telegram multiple times   | Flag stays True                        |
+| 6 | Failure → auto-draft                   | failed without telegram: draft sent    |
+| 7 | Failure after telegram (already sent)  | no second draft                        |
+| 9 | Review path with report                | Dev: telegram+review, Rex: done OK     |
+|10 | Review path without report             | Rex: done → 422                        |
+|11 | Bot unconfigured on failed             | Draft skipped, failed still goes through |
+|12 | Subtask (parent_task_id set)           | No gate — subtask isn't a reports case |
 """
 
 import uuid
@@ -37,7 +37,7 @@ async def _setup_root_task_with_report_required(
     task_status: str = "in_progress",
     parent_id: uuid.UUID | None = None,
 ):
-    """Erstellt Board + Developer + Root-Task (optional als Subtask) + gibt Token zurueck."""
+    """Creates board + developer + root task (optionally as subtask) + returns token."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -79,8 +79,8 @@ async def _setup_root_task_with_report_required(
 
 
 def _mock_configured_reports_service(send_return={"ok": True, "result": {"message_id": 1}}):
-    """Hilft beim Patchen — gibt einen Mock zurueck der bei `configured` True ist
-    und `send` mit dem gegebenen Return-Wert beantwortet."""
+    """Helps with patching — returns a mock where `configured` is True
+    and `send` responds with the given return value."""
     mock = MagicMock()
     mock.configured = True
     mock.send = AsyncMock(return_value=send_return)
@@ -88,7 +88,7 @@ def _mock_configured_reports_service(send_return={"ok": True, "result": {"messag
 
 
 async def _add_reflection_comment(task_id: uuid.UUID, agent_id: uuid.UUID):
-    """Posted eine Pflicht-Reflexion damit der Closing-Transition-Gate passiert."""
+    """Posts a mandatory reflection so the closing transition gate passes."""
     from app.models.task import TaskComment
     content = (
         "## Was wurde gemacht\nTask fertig.\n\n"
@@ -108,12 +108,12 @@ async def _add_reflection_comment(task_id: uuid.UUID, agent_id: uuid.UUID):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 1: Happy-Path
+# Scenario 1: Happy Path
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_happy_path_telegram_then_done(client, fake_redis):
-    """1. telegram senden → Flag gesetzt → done OK."""
+    """1. Send telegram → flag set → done OK."""
     data = await _setup_root_task_with_report_required()
 
     mock_reports = _mock_configured_reports_service()
@@ -125,16 +125,16 @@ async def test_happy_path_telegram_then_done(client, fake_redis):
         )
         assert r1.status_code == 200
 
-    # Flag muss in DB gesetzt sein
+    # Flag must be set in the DB
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
         assert t.report_sent_to_telegram is True
 
-    # Reflection noetig vor done
+    # Reflection needed before done
     await _add_reflection_comment(data["task_id"], data["agent_id"])
 
-    # done geht jetzt durch
+    # done now goes through
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
         r2 = await client.patch(
             f"/api/v1/agent/boards/{data['board_id']}/tasks/{data['task_id']}",
@@ -146,12 +146,12 @@ async def test_happy_path_telegram_then_done(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 2: Ohne report_back_required
+# Scenario 2: Without report_back_required
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_done_without_report_back_required_passes(client, fake_redis):
-    """2. kein report_back_required → done ohne telegram ist OK, kein Gate."""
+    """2. No report_back_required → done without telegram is OK, no gate."""
     data = await _setup_root_task_with_report_required(report_back_required=False)
     await _add_reflection_comment(data["task_id"], data["agent_id"])
 
@@ -165,14 +165,14 @@ async def test_done_without_report_back_required_passes(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 3: Gate greift
+# Scenario 3: Gate kicks in
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_gate_blocks_done_when_required_and_not_sent(client, fake_redis):
-    """3. done mit Reflection aber ohne telegram → 422 Gate-Message."""
+    """3. done with reflection but without telegram → 422 gate message."""
     data = await _setup_root_task_with_report_required()
-    # Reflection ist da, aber Flag nicht gesetzt — Gate muss greifen
+    # Reflection is there, but flag not set — gate must kick in
     await _add_reflection_comment(data["task_id"], data["agent_id"])
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -186,7 +186,7 @@ async def test_gate_blocks_done_when_required_and_not_sent(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 4: Retry nach 422
+# Scenario 4: Retry after 422
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -221,12 +221,12 @@ async def test_retry_after_422_works(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 5: Idempotenz
+# Scenario 5: Idempotency
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_multiple_telegram_calls_idempotent(client, fake_redis):
-    """5. telegram × 3 → Flag bleibt true, kein Side-Effect."""
+    """5. telegram × 3 → flag stays true, no side effect."""
     data = await _setup_root_task_with_report_required()
 
     mock_reports = _mock_configured_reports_service()
@@ -244,20 +244,20 @@ async def test_multiple_telegram_calls_idempotent(client, fake_redis):
         t = await s.get(Task, data["task_id"])
         assert t.report_sent_to_telegram is True
 
-    # Service wurde 3x aufgerufen (kein early-return bei bereits gesetztem Flag)
+    # Service was called 3x (no early return when the flag is already set)
     assert mock_reports.send.await_count == 3
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 6: Failure → Auto-Draft
+# Scenario 6: Failure → Auto-Draft
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_failed_triggers_auto_draft(client, fake_redis):
-    """6. failed ohne telegram → Auto-Draft gesendet, Flag gesetzt, failed durch."""
+    """6. failed without telegram → auto-draft sent, flag set, failed goes through."""
     data = await _setup_root_task_with_report_required()
 
-    # Reflection-Comment hinzufuegen damit Draft Inhalt hat
+    # Add reflection comment so the draft has content
     from app.models.task import TaskComment
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(TaskComment(
@@ -283,7 +283,7 @@ async def test_failed_triggers_auto_draft(client, fake_redis):
         )
 
     assert r.status_code == 200
-    mock_reports.send.assert_awaited()  # Auto-Draft wurde gesendet
+    mock_reports.send.assert_awaited()  # Auto-draft was sent
 
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -293,12 +293,12 @@ async def test_failed_triggers_auto_draft(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 7: Failure mit bereits gesendetem Telegram
+# Scenario 7: Failure with telegram already sent
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_failed_after_telegram_skips_auto_draft(client, fake_redis):
-    """7. telegram gesendet → failed → kein zweiter Draft (Flag schon true)."""
+    """7. telegram sent → failed → no second draft (flag already true)."""
     data = await _setup_root_task_with_report_required()
 
     mock_reports = _mock_configured_reports_service()
@@ -309,7 +309,7 @@ async def test_failed_after_telegram_skips_auto_draft(client, fake_redis):
             headers={"Authorization": f"Bearer {data['token']}"},
         )
 
-    # Reset call count — nach dem telegram-Send
+    # Reset call count — after the telegram send
     mock_reports.send.reset_mock()
 
     with patch("app.services.telegram_reports.telegram_reports", mock_reports), \
@@ -325,22 +325,22 @@ async def test_failed_after_telegram_skips_auto_draft(client, fake_redis):
         )
 
     assert r.status_code == 200
-    # Kein zweiter send-Call — Flag war schon true, Auto-Draft-Block uebersprungen
+    # No second send call — flag was already true, auto-draft block skipped
     mock_reports.send.assert_not_awaited()
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 11: Bot unconfigured bei failed
+# Scenario 11: Bot unconfigured on failed
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_failed_with_unconfigured_bot_still_transitions(client, fake_redis):
-    """11. failed + Bot nicht konfiguriert → Auto-Draft skipped, failed trotzdem durch, Flag nicht gesetzt."""
+    """11. failed + bot not configured → auto-draft skipped, failed still goes through, flag not set."""
     data = await _setup_root_task_with_report_required()
 
     unconfigured_mock = MagicMock()
     unconfigured_mock.configured = False
-    unconfigured_mock.send = AsyncMock()  # wird nicht aufgerufen
+    unconfigured_mock.send = AsyncMock()  # not called
 
     with patch("app.services.telegram_reports.telegram_reports", unconfigured_mock), \
          patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
@@ -354,24 +354,24 @@ async def test_failed_with_unconfigured_bot_still_transitions(client, fake_redis
             headers={"Authorization": f"Bearer {data['token']}"},
         )
 
-    assert r.status_code == 200  # Failed trotzdem durch — Task darf nicht haengen bleiben
+    assert r.status_code == 200  # Failed still goes through — task must not get stuck
     unconfigured_mock.send.assert_not_awaited()
 
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
         assert t.status == "failed"
-        assert t.report_sent_to_telegram is False  # Flag NICHT gesetzt
+        assert t.report_sent_to_telegram is False  # Flag NOT set
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 12: Subtask (parent_task_id gesetzt)
+# Scenario 12: Subtask (parent_task_id set)
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_subtask_done_without_telegram_passes(client, fake_redis):
-    """12. Subtask (parent_task_id gesetzt) → Gate greift NICHT, done OK ohne telegram."""
-    # Erstmal Parent erstellen
+    """12. Subtask (parent_task_id set) → gate does NOT kick in, done OK without telegram."""
+    # First create the parent
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -400,7 +400,7 @@ async def test_subtask_done_without_telegram_passes(client, fake_redis):
             id=subtask_id, board_id=board_id, title="Subtask",
             status="in_progress", assigned_agent_id=agent_id,
             parent_task_id=parent_id,
-            report_back_required=True,  # selbst wenn true — Subtask hat kein Gate
+            report_back_required=True,  # even if true — subtask has no gate
         ))
         await s.commit()
 
@@ -417,15 +417,15 @@ async def test_subtask_done_without_telegram_passes(client, fake_redis):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Szenario 10: Review-Pfad ohne Report → Gate greift
+# Scenario 10: Review path without report → gate kicks in
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_review_path_without_report_blocks_rex_done(client, fake_redis):
-    """10. Dev → review (kein telegram), Rex → done → 422.
+    """10. Dev → review (no telegram), Rex → done → 422.
 
-    Gate ist status-basiert, nicht agent-basiert: egal wer done setzt,
-    wenn Flag nicht gesetzt ist, blockiert das Backend.
+    Gate is status-based, not agent-based: no matter who sets done,
+    if the flag isn't set, the backend blocks.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -457,7 +457,7 @@ provision_status="provisioned",
         ))
         s.add(Task(
             id=task_id, board_id=board_id, title="Reviewed Feature",
-            status="review",  # Dev hat schon auf review gesetzt ohne telegram
+            status="review",  # Dev already set review without telegram
             assigned_agent_id=rex_id, owner_agent_id=dev_id,
             report_back_required=True,
         ))
@@ -475,12 +475,12 @@ provision_status="provisioned",
 
 
 # ────────────────────────────────────────────────────────────────────
-# Direct-Unit-Tests fuer render_and_send_failure_draft
+# Direct unit tests for render_and_send_failure_draft
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_auto_draft_includes_reflection_and_escapes_html():
-    """Der Auto-Draft enthaelt Reflection + HTML-Escape bei user content."""
+    """The auto-draft contains reflection + HTML escaping for user content."""
     from app.services.report_auto_draft import _render_draft
 
     text = _render_draft(
@@ -492,24 +492,24 @@ async def test_auto_draft_includes_reflection_and_escapes_html():
         recent_comments=["Comment 1 & stuff", "Comment 2"],
     )
 
-    # HTML-Escape: & wird zu &amp;, < wird zu &lt;
+    # HTML escape: & becomes &amp;, < becomes &lt;
     assert "&lt;weird&gt;" in text
     assert "&lt;tags&gt;" in text
     assert "&amp; symbols" in text
-    assert "&lt;script&gt;" in text  # Reflection-Content escaped
+    assert "&lt;script&gt;" in text  # Reflection content escaped
 
-    # Header-Struktur
+    # Header structure
     assert text.startswith("🔍 <b>Researcher &lt;weird&gt;</b>")
     assert "❌" in text
     assert "<b>Reflexion des Agenten</b>" in text
     assert "<b>Letzte Kommentare</b>" in text
-    assert "abc12345" in text  # Kurz-ID
+    assert "abc12345" in text  # Short ID
 
 
 @pytest.mark.asyncio
 async def test_worker_without_current_task_id_can_set_flag_via_task_id(client, fake_redis):
-    """C1-Regression: Subagent-Dispatch-Worker (kein current_task_id) kann das Flag
-    setzen indem er task_id im /telegram/send Body mitschickt.
+    """C1 regression: subagent dispatch worker (no current_task_id) can set the
+    flag by sending task_id in the /telegram/send body.
     """
     from app.models.board import Board
     from app.models.agent import Agent
@@ -528,7 +528,7 @@ async def test_worker_without_current_task_id_can_set_flag_via_task_id(client, f
             board_id=board_id, agent_token_hash=token_hash,
             scopes=["tasks:read", "tasks:write", "chat:write"],
             provision_status="provisioned",
-            current_task_id=None,  # Subagent-Dispatch hat keinen Agent-Level-Tracker
+            current_task_id=None,  # Subagent dispatch has no agent-level tracker
         ))
         s.add(Task(
             id=task_id, board_id=board_id, title="Worker-Task", status="in_progress",
@@ -547,7 +547,7 @@ async def test_worker_without_current_task_id_can_set_flag_via_task_id(client, f
 
     assert r.status_code == 200, r.text
 
-    # Flag muss gesetzt sein auch ohne current_task_id
+    # Flag must be set even without current_task_id
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task_id)
         assert t.report_sent_to_telegram is True
@@ -555,7 +555,7 @@ async def test_worker_without_current_task_id_can_set_flag_via_task_id(client, f
 
 @pytest.mark.asyncio
 async def test_task_id_ownership_check_rejects_foreign_agent(client, fake_redis):
-    """Ownership-Check: Agent darf nur Flag auf seinen eigenen Tasks setzen."""
+    """Ownership check: agent may only set the flag on their own tasks."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -602,7 +602,7 @@ provision_status="provisioned",
 
 @pytest.mark.asyncio
 async def test_review_approve_blocked_when_report_not_sent(client, fake_redis):
-    """C2-Regression: POST /review mit decision=approve respektiert den Gate."""
+    """C2 regression: POST /review with decision=approve respects the gate."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -634,11 +634,11 @@ provision_status="provisioned",
             status="review",
             assigned_agent_id=rex_id, owner_agent_id=dev_id,
             report_back_required=True,
-            # Kein Report gesendet — Flag bleibt False
+            # No report sent — flag stays False
         ))
         await s.commit()
 
-    # /review approve sollte 422 werfen
+    # /review approve should throw 422
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
         r = await client.post(
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
@@ -652,9 +652,9 @@ provision_status="provisioned",
 
 @pytest.mark.asyncio
 async def test_discord_channel_task_bypasses_gate(client, fake_redis):
-    """C3-Regression: Tasks mit report_back_channel='discord' werden nicht blockiert."""
+    """C3 regression: tasks with report_back_channel='discord' are not blocked."""
     data = await _setup_root_task_with_report_required()
-    # Channel auf discord umstellen
+    # Switch channel to discord
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
@@ -664,7 +664,7 @@ async def test_discord_channel_task_bypasses_gate(client, fake_redis):
 
     await _add_reflection_comment(data["task_id"], data["agent_id"])
 
-    # done ohne mc telegram MUSS durchgehen — Discord-Delivery ist anderer Kanal
+    # done without mc telegram MUST go through — Discord delivery is a different channel
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
         r = await client.patch(
             f"/api/v1/agent/boards/{data['board_id']}/tasks/{data['task_id']}",
@@ -676,9 +676,9 @@ async def test_discord_channel_task_bypasses_gate(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_atomic_claim_update_prevents_double_send():
-    """C4-Regression: Atomic UPDATE-Claim garantiert exakt einen rowcount=1
-    bei simuliertem Race. Direkter DB-Level-Test statt HTTP (SQLite-Limits
-    bei concurrent HTTP).
+    """C4 regression: atomic UPDATE claim guarantees exactly one rowcount=1
+    under a simulated race. Direct DB-level test instead of HTTP (SQLite
+    limits with concurrent HTTP).
     """
     from sqlalchemy import update as _sa_update
     from app.models.board import Board
@@ -706,7 +706,7 @@ async def test_atomic_claim_update_prevents_double_send():
         ))
         await s.commit()
 
-        # Erster Claim — sollte rowcount=1 ergeben
+        # First claim — should result in rowcount=1
         r1 = await s.exec(
             _sa_update(Task)
             .where(Task.id == task_id, Task.report_sent_to_telegram == False)  # noqa: E712
@@ -715,7 +715,7 @@ async def test_atomic_claim_update_prevents_double_send():
         await s.commit()
         assert r1.rowcount == 1, "Erster Claim muss erfolgreich sein"
 
-        # Zweiter Claim (simuliert parallelen Request) — sollte rowcount=0 ergeben
+        # Second claim (simulates a parallel request) — should result in rowcount=0
         r2 = await s.exec(
             _sa_update(Task)
             .where(Task.id == task_id, Task.report_sent_to_telegram == False)  # noqa: E712
@@ -730,12 +730,12 @@ async def test_atomic_claim_update_prevents_double_send():
 
 @pytest.mark.asyncio
 async def test_telegram_send_http_exception_rolls_back_claim(client, fake_redis):
-    """B1-Regression: httpx/network Exception in telegram_reports.send() → Flag
-    wird zurueckgerollt, Agent kann retryen (sonst permanenter Lock).
+    """B1 regression: httpx/network exception in telegram_reports.send() → flag
+    is rolled back, agent can retry (otherwise permanent lock).
     """
     data = await _setup_root_task_with_report_required()
 
-    # Mock: configured=True aber send() wirft httpx.ConnectTimeout
+    # Mock: configured=True but send() raises httpx.ConnectTimeout
     import httpx
     failing_mock = MagicMock()
     failing_mock.configured = True
@@ -751,7 +751,7 @@ async def test_telegram_send_http_exception_rolls_back_claim(client, fake_redis)
     assert r.status_code == 503
     assert "Retry" in r.json()["detail"] or "fehlgeschlagen" in r.json()["detail"]
 
-    # Kritisch: Flag NICHT gesetzt, Agent kann retryen
+    # Critical: flag NOT set, agent can retry
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
@@ -762,7 +762,7 @@ async def test_telegram_send_http_exception_rolls_back_claim(client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_board_lead_cannot_set_flag_on_foreign_board_task(client, fake_redis):
-    """H1-Regression: Board Lead von Board A darf Flag nicht auf Task von Board B setzen."""
+    """H1 regression: board lead of board A may not set the flag on a task of board B."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -787,7 +787,7 @@ provision_status="provisioned",
         s.add(Task(
             id=foreign_task_id, board_id=board_b, title="Board B Task",
             status="in_progress",
-            # Nicht assigned an lead, nicht owner — Lead gehört zu anderem Board
+            # Not assigned to lead, not owner — lead belongs to a different board
             report_back_required=True,
         ))
         await s.commit()
@@ -805,7 +805,7 @@ provision_status="provisioned",
 
 @pytest.mark.asyncio
 async def test_auto_draft_handles_missing_reflection_and_comments():
-    """Wenn keine Reflection + keine Kommentare, Draft ist trotzdem valide."""
+    """If there's no reflection + no comments, the draft is still valid."""
     from app.services.report_auto_draft import _render_draft
 
     text = _render_draft(
@@ -817,10 +817,10 @@ async def test_auto_draft_handles_missing_reflection_and_comments():
         recent_comments=[],
     )
 
-    # Muss mindestens Header + Footer haben
+    # Must have at least header + footer
     assert "🤖" in text
     assert "Task ❌" in text
     assert "abc12345" in text
-    # Reflection/Comments Sektionen fehlen
+    # Reflection/comments sections are missing
     assert "<b>Reflexion des Agenten</b>" not in text
     assert "<b>Letzte Kommentare</b>" not in text

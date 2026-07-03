@@ -1,15 +1,15 @@
-"""Tests fuer Bug-Fix 2026-04-25: mc-CLI status-commands akzeptieren task-id
-als optional positional arg.
+"""Tests for bug fix 2026-04-25: mc CLI status commands accept task-id
+as an optional positional arg.
 
-Live-Bug Boss 2026-04-25: Boss versuchte `mc ack 9a6d898e-...` und
-`mc ack 00dd72aa-...` (intuitives Bedien-Muster: subcommand <id>).
-argparse warf: 'mc: error: unrecognized arguments: 9a6d898e-...'.
-Boss verbrachte mehrere Minuten im Loop weil die CLI-error-message
-unklar war (kein Hinweis dass task-id als env-var erwartet wird).
+Live bug, Boss, 2026-04-25: Boss tried `mc ack 9a6d898e-...` and
+`mc ack 00dd72aa-...` (intuitive usage pattern: subcommand <id>).
+argparse raised: 'mc: error: unrecognized arguments: 9a6d898e-...'.
+Boss spent several minutes stuck in a loop because the CLI error message
+was unclear (no hint that task-id is expected as an env var).
 
-Fix: optional positional `task_id` arg fuer ack/done/review/blocked/failed.
-Wenn uebergeben → cfg.task_id wird ueberschrieben (immutable replace).
-Env-Quelle bleibt default (poll.sh injection funktioniert weiterhin).
+Fix: optional positional `task_id` arg for ack/done/review/blocked/failed.
+When passed → cfg.task_id gets overridden (immutable replace).
+Env source stays the default (poll.sh injection still works).
 """
 from __future__ import annotations
 
@@ -36,21 +36,21 @@ def _make_cfg(task_id=None, board_id=None):
 
 
 class TestParserAcceptsPositionalTaskId:
-    """Smoke: argparse soll task-id als positional fuer status-commands annehmen
-    (ohne 'unrecognized arguments' zu werfen)."""
+    """Smoke: argparse should accept task-id as positional for status commands
+    (without raising 'unrecognized arguments')."""
 
     @pytest.mark.parametrize("subcmd", ["ack", "done", "review"])
     def test_simple_status_with_positional_task_id(self, subcmd):
         from mc_cli.__main__ import build_parser
         parser = build_parser()
-        # Sollte nicht raisen — vor dem Fix: SystemExit(2) 'unrecognized arguments'
+        # Should not raise — before the fix: SystemExit(2) 'unrecognized arguments'
         args = parser.parse_args([subcmd, "9a6d898e-ad1f-425b-8a16-1e93f8a6aee2"])
         assert args.command == subcmd
         assert args.task_id == "9a6d898e-ad1f-425b-8a16-1e93f8a6aee2"
 
     @pytest.mark.parametrize("subcmd", ["ack", "done", "review"])
     def test_simple_status_without_task_id_still_works(self, subcmd):
-        """Backward-compat: env-only Aufruf bleibt erhalten."""
+        """Backward-compat: env-only invocation keeps working."""
         from mc_cli.__main__ import build_parser
         parser = build_parser()
         args = parser.parse_args([subcmd])
@@ -79,7 +79,7 @@ class TestParserAcceptsPositionalTaskId:
 
 
 class TestConfigOverride:
-    """Config.with_task_id() ueberschreibt task_id immutable."""
+    """Config.with_task_id() overrides task_id immutably."""
 
     def test_with_task_id_replaces_only_task_id(self):
         cfg = _make_cfg(task_id="old", board_id="board-a")
@@ -90,7 +90,7 @@ class TestConfigOverride:
         assert cfg.task_id == "old"  # original immutable
 
     def test_with_task_id_none_env_then_override_provides_context(self):
-        """Hauptfall: env hat KEINE task_id, positional uebergibt sie."""
+        """Main case: env has NO task_id, positional arg supplies it."""
         cfg = _make_cfg(task_id=None, board_id="board-a")
         new = cfg.with_task_id("provided-id")
         board, task = new.require_task_context()
@@ -99,10 +99,10 @@ class TestConfigOverride:
 
 
 class TestEndToEndDispatch:
-    """__main__.main wendet override an bevor handler aufgerufen wird."""
+    """__main__.main applies the override before the handler is invoked."""
 
     def test_main_overrides_cfg_task_id_when_positional_present(self, monkeypatch):
-        """Smoke: positional task-id im argv ueberschreibt env task-id."""
+        """Smoke: positional task-id in argv overrides env task-id."""
         import mc_cli.__main__ as main_mod
         from mc_cli.commands import CommandSpec, REGISTRY
 
@@ -150,7 +150,7 @@ class TestEndToEndDispatch:
         )
 
     def test_main_keeps_env_task_id_when_no_positional(self, monkeypatch):
-        """Backward-compat: ohne positional bleibt env-Quelle."""
+        """Backward-compat: without positional, env source is kept."""
         import mc_cli.__main__ as main_mod
         from mc_cli.commands import CommandSpec, REGISTRY
 

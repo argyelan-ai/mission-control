@@ -1,4 +1,4 @@
-"""Tests fuer Security Hardening: Ownership, Board-Check, Comment-Type, Dispatch Lock, Rejection Counter."""
+"""Tests for security hardening: ownership, board check, comment type, dispatch lock, rejection counter."""
 import uuid
 from unittest.mock import patch
 
@@ -14,12 +14,12 @@ from app.services.task_queue import (
 from app.routers.agent_scoped import VALID_COMMENT_TYPES, AgentCommentCreate
 
 
-# ── Comment-Type Validierung Tests ───────────────────────────────────
+# ── Comment-Type Validation Tests ───────────────────────────────────
 
 
 def test_valid_comment_types():
-    """Alle erwarteten Types sind definiert (inkl. reflection + waiting_on_callback ab 2026-04-11,
-    phase approval workflow types ab 2026-04-13, install callback types ab 2026-04-19)."""
+    """All expected types are defined (incl. reflection + waiting_on_callback since 2026-04-11,
+    phase approval workflow types since 2026-04-13, install callback types since 2026-04-19)."""
     assert VALID_COMMENT_TYPES == {
         "message", "handoff", "blocker", "progress", "resolution", "feedback", "checkpoint",
         "report_back", "reflection", "waiting_on_callback",
@@ -58,13 +58,13 @@ async def test_dispatch_lock_acquire_release(fake_redis):
     with patch("app.services.task_queue.get_redis", return_value=fake_redis):
         agent_id = str(uuid.uuid4())
 
-        # Lock erwerben
+        # Acquire lock
         assert await acquire_dispatch_lock(agent_id, ttl=30) is True
 
-        # Doppelter Acquire schlaegt fehl
+        # Second acquire fails
         assert await acquire_dispatch_lock(agent_id, ttl=30) is False
 
-        # Release + erneuter Acquire
+        # Release + acquire again
         await release_dispatch_lock(agent_id)
         assert await acquire_dispatch_lock(agent_id, ttl=30) is True
 
@@ -75,7 +75,7 @@ async def test_dispatch_lock_different_agents(fake_redis):
         agent1 = str(uuid.uuid4())
         agent2 = str(uuid.uuid4())
 
-        # Zwei verschiedene Agents koennen gleichzeitig Locks halten
+        # Two different agents can hold locks at the same time
         assert await acquire_dispatch_lock(agent1) is True
         assert await acquire_dispatch_lock(agent2) is True
 

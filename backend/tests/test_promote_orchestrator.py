@@ -1,6 +1,6 @@
-"""Tests fuer Phase 4A Promote-Orchestrator (mit 4A.1 Hardening).
+"""Tests for the Phase 4A Promote Orchestrator (with 4A.1 hardening).
 
-Testmatrix:
+Test matrix:
 - Auto-Promote: ONLY for explicit execute_low_risk or approval_policy=never
 - Approval: credentials, high-risk tags, approval_policy, mixed parent
 - Manual Wait: manual_dispatch, advise_only, draft_only, INSUFFICIENT CLASSIFICATION
@@ -211,7 +211,7 @@ def test_child_own_fields_override_parent():
 # ── Edge Cases ──────────────────────────────────────────
 
 def test_string_tags_handled():
-    """Tags als Strings werden korrekt verarbeitet."""
+    """Tags as strings are handled correctly."""
     decision, _ = evaluate_promote_decision(_task(tags=["infra"]))
     assert decision == NEEDS_APPROVAL
 
@@ -225,7 +225,7 @@ def test_priority_order_manual_beats_approval():
 
 
 def test_credential_bound_with_auth_beats_execute_low_risk():
-    """credential_bound + Auth darf trotz execute_low_risk nicht auto-promoten."""
+    """credential_bound + auth must not auto-promote despite execute_low_risk."""
     decision, reason = evaluate_promote_decision(
         _task(
             autonomy_level="execute_low_risk",

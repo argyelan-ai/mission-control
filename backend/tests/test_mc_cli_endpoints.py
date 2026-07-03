@@ -61,8 +61,8 @@ SKIP_CLI: dict[str, str] = {
     "GET /config/soul_md": "debug-only, not part of worker lifecycle",
 }
 
-# Content-Pipeline lebt im News-Studio-Vertical (optional, im Public-Release
-# gestrippt) — SKIP_CLI-Eintrag + Endpoint-Sammlung sind konditional.
+# Content pipeline lives in the News-Studio vertical (optional, stripped in
+# the public release) — SKIP_CLI entry + endpoint collection are conditional.
 try:
     from app.verticals.news_studio.routers.content_agent import (
         router as _content_agent_router,
@@ -132,12 +132,12 @@ def test_cli_commands_point_at_real_endpoints():
     """No `mc` command references a non-existent endpoint."""
     backend = _agent_scoped_endpoints()
     cli = _cli_endpoints()
-    # Endpoints die NICHT im agent_scoped router leben aber trotzdem von der
-    # CLI legitim genutzt werden — z.B. Poll-Infrastructure-Endpunkte die
-    # `routers/agents.py` nicht `routers/agent_scoped.py` bereitstellt.
+    # Endpoints that do NOT live in the agent_scoped router but are still
+    # legitimately used by the CLI — e.g. poll-infrastructure endpoints
+    # served by `routers/agents.py`, not `routers/agent_scoped.py`.
     known_upcoming = {
         "GET /me/memory/search",              # added in A3 within same PR
-        "GET /me/active-task-recovery",       # ADR-024 — lebt in routers/agents.py
+        "GET /me/active-task-recovery",       # ADR-024 — lives in routers/agents.py
     }
     orphans = cli - backend
     real_orphans = orphans - known_upcoming

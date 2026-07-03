@@ -1,4 +1,4 @@
-"""Tests fuer die Schedule REST API (CRUD + Trigger)."""
+"""Tests for the Schedule REST API (CRUD + trigger)."""
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +8,7 @@ from httpx import AsyncClient
 
 class TestListJobs:
     async def test_returns_empty_list_initially(self, auth_client: AsyncClient):
-        """GET /api/v1/schedule/jobs — gibt leere Liste zurück wenn keine Jobs."""
+        """GET /api/v1/schedule/jobs — returns an empty list when there are no jobs."""
         resp = await auth_client.get("/api/v1/schedule/jobs")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
@@ -20,7 +20,7 @@ class TestListJobs:
 
 class TestCreateJob:
     async def test_create_daily_chat_job(self, auth_client: AsyncClient):
-        """POST — täglicher Chat-Job wird erstellt."""
+        """POST — a daily chat job gets created."""
         with patch("app.routers.schedule.scheduler") as mock_svc:
             mock_svc.add_job = AsyncMock()
             resp = await auth_client.post("/api/v1/schedule/jobs", json={
@@ -156,7 +156,7 @@ class TestTriggerJob:
 
 class TestSkipReviewField:
     async def test_create_task_job_with_skip_review(self, auth_client: AsyncClient):
-        """POST — task_skip_review wird gespeichert und zurückgegeben."""
+        """POST — task_skip_review is stored and returned."""
         with patch("app.routers.schedule.scheduler") as mock_svc:
             mock_svc.add_job = AsyncMock()
             resp = await auth_client.post("/api/v1/schedule/jobs", json={
@@ -174,7 +174,7 @@ class TestSkipReviewField:
         assert resp.json()["task_skip_review"] is True
 
     async def test_update_task_job_skip_review(self, auth_client: AsyncClient):
-        """PATCH — task_skip_review kann per Update geändert werden."""
+        """PATCH — task_skip_review can be changed via update."""
         with patch("app.routers.schedule.scheduler") as mock_svc:
             mock_svc.add_job = AsyncMock()
             mock_svc.update_job = AsyncMock()

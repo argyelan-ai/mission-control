@@ -1,12 +1,12 @@
-"""Phase 16 Plan 03 — Tests fuer POST /api/v1/runtimes/{id}/probe-model.
+"""Phase 16 Plan 03 — Tests for POST /api/v1/runtimes/{id}/probe-model.
 
 D-18/D-19/D-21:
   - Endpoint re-uses Phase-15 probe_runtime_model + ensure_runtime_model_identifier.
   - Response schema: {slug, old_model_identifier, new_model_identifier, changed}.
-  - Idempotent: zweiter Call mit gleichem Probe-Result liefert changed=false.
-  - Multi-Model-Antworten reduzieren auf data[0].id.
-  - Nicht-probeable runtime_types (z.B. "cloud") → 422.
-  - Slug-or-UUID-Lookup, 404 fuer unbekannte IDs.
+  - Idempotent: a second call with the same probe result returns changed=false.
+  - Multi-model responses are reduced to data[0].id.
+  - Non-probeable runtime_types (e.g. "cloud") → 422.
+  - Slug-or-UUID lookup, 404 for unknown IDs.
 """
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ async def test_probe_model_changes_identifier(async_session, auth_client):
     assert rt.model_identifier == "qwen-3-coder-next"
 
 
-# ── Test 2: Probe identical → changed=false, DB unverändert ──────────────
+# ── Test 2: Probe identical → changed=false, DB unchanged ────────────────
 
 
 @pytest.mark.asyncio
@@ -155,7 +155,7 @@ async def test_probe_model_works_with_uuid(async_session, auth_client):
     assert body["changed"] is True
 
 
-# ── Test 6: Idempotent — zweiter Call → changed=false ───────────────────
+# ── Test 6: Idempotent — second call → changed=false ────────────────────
 
 
 @pytest.mark.asyncio

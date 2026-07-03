@@ -1,4 +1,4 @@
-"""Tests fuer Operational Controls — Guards, Stop/Resume, System Mode."""
+"""Tests for Operational Controls — Guards, Stop/Resume, System Mode."""
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, patch
@@ -7,12 +7,12 @@ import pytest
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 
-# ── Test 1: Normalbetrieb erlaubt ──────────────────────────────────────
+# ── Test 1: Normal operation allowed ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_allowed_active(make_board, make_agent, make_task):
-    """Im ACTIVE-Modus wird alles durchgelassen."""
+    """In ACTIVE mode everything is let through."""
     board = await make_board(name="Ops Board", slug="ops-board")
     agent = await make_agent(name="Cody", board_id=board.id)
     task = await make_task(board_id=board.id, title="Normal Task")
@@ -25,12 +25,12 @@ async def test_check_dispatch_allowed_active(make_board, make_agent, make_task):
     assert reason == ""
 
 
-# ── Test 2: HALTED blockiert alles ─────────────────────────────────────
+# ── Test 2: HALTED blocks everything ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_halted_blocks_all(make_board, make_agent, make_task):
-    """HALTED blockiert jeglichen Dispatch."""
+    """HALTED blocks any dispatch."""
     board = await make_board(name="Halted Board", slug="halted-board")
     agent = await make_agent(name="Cody", board_id=board.id)
     task = await make_task(board_id=board.id, title="Halted Task", dispatch_intent="subtask")
@@ -43,12 +43,12 @@ async def test_check_dispatch_halted_blocks_all(make_board, make_agent, make_tas
     assert "HALTED" in reason
 
 
-# ── Test 3: DRAINING blockiert root ────────────────────────────────────
+# ── Test 3: DRAINING blocks root ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_draining_blocks_root(make_board, make_agent, make_task):
-    """DRAINING blockiert neue Root-Tasks."""
+    """DRAINING blocks new root tasks."""
     board = await make_board(name="Drain Board", slug="drain-board")
     agent = await make_agent(name="Cody", board_id=board.id)
     task = await make_task(board_id=board.id, title="Root Task", dispatch_intent="root")
@@ -61,12 +61,12 @@ async def test_check_dispatch_draining_blocks_root(make_board, make_agent, make_
     assert "DRAINING" in reason
 
 
-# ── Test 4: DRAINING blockiert manual_redispatch ───────────────────────
+# ── Test 4: DRAINING blocks manual_redispatch ───────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_draining_blocks_manual_redispatch(make_board, make_agent, make_task):
-    """DRAINING blockiert manual_redispatch (keine Continuation)."""
+    """DRAINING blocks manual_redispatch (not a continuation)."""
     board = await make_board(name="Drain2 Board", slug="drain2-board")
     agent = await make_agent(name="Cody", board_id=board.id)
     task = await make_task(board_id=board.id, title="Redispatch Task", dispatch_intent="manual_redispatch")
@@ -79,13 +79,13 @@ async def test_check_dispatch_draining_blocks_manual_redispatch(make_board, make
     assert "DRAINING" in reason
 
 
-# ── Test 5-7: DRAINING erlaubt Continuation Flows ──────────────────────
+# ── Test 5-7: DRAINING allows continuation flows ────────────────────────
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("intent", ["subtask", "review_handoff", "review_rework"])
 async def test_check_dispatch_draining_allows_continuation(intent, make_board, make_agent, make_task):
-    """DRAINING erlaubt automatische Continuation Flows."""
+    """DRAINING allows automatic continuation flows."""
     board = await make_board(name=f"Cont-{intent}", slug=f"cont-{intent}")
     agent = await make_agent(name="Agent", board_id=board.id)
     task = await make_task(board_id=board.id, title=f"Cont Task {intent}", dispatch_intent=intent)
@@ -98,12 +98,12 @@ async def test_check_dispatch_draining_allows_continuation(intent, make_board, m
     assert reason == ""
 
 
-# ── Test 8: Agent PAUSED blockiert ─────────────────────────────────────
+# ── Test 8: Agent PAUSED blocks ─────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_agent_paused(make_board, make_agent, make_task):
-    """Agent mit operational_mode=paused wird nicht dispatcht."""
+    """Agent with operational_mode=paused is not dispatched."""
     board = await make_board(name="Paused Board", slug="paused-board")
     agent = await make_agent(name="PausedAgent", board_id=board.id, operational_mode="paused")
     task = await make_task(board_id=board.id, title="Paused Agent Task")
@@ -116,12 +116,12 @@ async def test_check_dispatch_agent_paused(make_board, make_agent, make_task):
     assert "PAUSED" in reason
 
 
-# ── Test 9: run_control stopped blockiert ──────────────────────────────
+# ── Test 9: run_control stopped blocks ──────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_run_control_stopped(make_board, make_agent, make_task):
-    """Tasks mit run_control=stopped werden nicht dispatcht."""
+    """Tasks with run_control=stopped are not dispatched."""
     board = await make_board(name="Stopped Board", slug="stopped-board")
     agent = await make_agent(name="Agent", board_id=board.id)
     task = await make_task(board_id=board.id, title="Stopped Task", run_control="stopped")
@@ -134,12 +134,12 @@ async def test_check_dispatch_run_control_stopped(make_board, make_agent, make_t
     assert "run_control" in reason
 
 
-# ── Test 10: run_control manual_hold blockiert ─────────────────────────
+# ── Test 10: run_control manual_hold blocks ─────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_check_dispatch_run_control_manual_hold(make_board, make_agent, make_task):
-    """Tasks mit run_control=manual_hold werden nicht dispatcht."""
+    """Tasks with run_control=manual_hold are not dispatched."""
     board = await make_board(name="Hold Board", slug="hold-board")
     agent = await make_agent(name="Agent", board_id=board.id)
     task = await make_task(board_id=board.id, title="Held Task", run_control="manual_hold")
@@ -152,12 +152,12 @@ async def test_check_dispatch_run_control_manual_hold(make_board, make_agent, ma
     assert "run_control" in reason
 
 
-# ── Test 11: Stop Run bei aktivem Task ─────────────────────────────────
+# ── Test 11: Stop Run on active task ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_stop_task_run_active(client, make_board, make_agent, make_task):
-    """Stop Run setzt status=blocked, run_control=stopped, gibt Agent frei."""
+    """Stop Run sets status=blocked, run_control=stopped, frees the agent."""
     from tests.conftest import test_engine
 
     board = await make_board(name="Stop Board", slug="stop-board")
@@ -185,19 +185,19 @@ async def test_stop_task_run_active(client, make_board, make_agent, make_task):
     assert result.dispatched_at is None
     assert result.ack_at is None
 
-    # Agent freigegeben
+    # Agent released
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         refreshed_agent = await s.get(type(agent), agent.id)
         assert refreshed_agent.run_state == "idle"
         assert refreshed_agent.current_task_id is None
 
 
-# ── Test 12: Stop Run bei inbox ohne dispatch → 409 ────────────────────
+# ── Test 12: Stop Run on inbox without dispatch → 409 ──────────────────
 
 
 @pytest.mark.asyncio
 async def test_stop_task_run_inbox_no_dispatch_rejected(client, make_board, make_task):
-    """Stop Run auf inbox-Task ohne dispatched_at gibt 409."""
+    """Stop Run on an inbox task without dispatched_at returns 409."""
     board = await make_board(name="No-Run Board", slug="no-run-board")
     task = await make_task(board_id=board.id, title="Idle Task", status="inbox")
 
@@ -212,12 +212,12 @@ async def test_stop_task_run_inbox_no_dispatch_rejected(client, make_board, make
             assert exc_info.value.status_code == 409
 
 
-# ── Test 13: Resume Task Run ──────────────────────────────────────────
+# ── Test 13: Resume Task Run ────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_resume_task_run(client, make_board, make_task):
-    """Resume setzt run_control=null, status=inbox, dispatched_at=null, ack_at=null."""
+    """Resume sets run_control=null, status=inbox, dispatched_at=null, ack_at=null."""
     from tests.conftest import test_engine
 
     board = await make_board(name="Resume Board", slug="resume-board")
@@ -237,12 +237,12 @@ async def test_resume_task_run(client, make_board, make_task):
     assert result.ack_at is None
 
 
-# ── Test 14: Late Agent Update → 409 ──────────────────────────────────
+# ── Test 14: Late Agent Update → 409 ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_late_agent_update_rejected(client, make_board, make_agent, make_task):
-    """Agent Update auf gestoppten Task wird mit 409 abgelehnt."""
+    """Agent update on a stopped task is rejected with 409."""
     from tests.conftest import test_engine
     from fastapi import HTTPException
 
@@ -255,7 +255,7 @@ async def test_late_agent_update_rejected(client, make_board, make_agent, make_t
         assigned_agent_id=agent.id,
     )
 
-    # Direkt den Router-Handler testen (vermeidet Agent-Auth-Komplexitaet)
+    # Test the router handler directly (avoids agent-auth complexity)
     from pydantic import BaseModel
 
     class FakePayload(BaseModel):
@@ -266,9 +266,9 @@ async def test_late_agent_update_rejected(client, make_board, make_agent, make_t
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             t = await s.get(type(task), task.id)
-            # Simuliere den Run-Control Guard Check direkt
+            # Simulate the run-control guard check directly
             assert t.run_control == "stopped"
-            # Der Guard wuerde HTTPException(409) werfen
+            # The guard would raise HTTPException(409)
             with pytest.raises(HTTPException) as exc_info:
                 if t.run_control in ("stopped", "manual_hold"):
                     raise HTTPException(
@@ -279,12 +279,12 @@ async def test_late_agent_update_rejected(client, make_board, make_agent, make_t
             assert "run_control" in exc_info.value.detail
 
 
-# ── Test 15: System Mode Set/Get ──────────────────────────────────────
+# ── Test 15: System Mode Set/Get ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_system_mode_set_and_get(fake_redis):
-    """System Mode setzen und lesen via operations.py."""
+    """Set and read System Mode via operations.py."""
     with patch("app.services.operations.get_redis", new_callable=AsyncMock, return_value=fake_redis):
         from app.services.operations import set_system_mode, get_system_mode, get_system_mode_meta
 
@@ -302,7 +302,7 @@ async def test_system_mode_set_and_get(fake_redis):
         mode = await get_system_mode()
         assert mode == "draining"
 
-        # Meta-Daten lesen
+        # Read metadata
         meta2 = await get_system_mode_meta()
         assert meta2["mode"] == "draining"
         assert meta2["changed_by"] == "user-123"
@@ -312,12 +312,12 @@ async def test_system_mode_set_and_get(fake_redis):
         assert await get_system_mode() == "active"
 
 
-# ── Test 16: Guard Priority Order ─────────────────────────────────────
+# ── Test 16: Guard Priority Order ───────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_guard_priority_order(make_board, make_agent, make_task):
-    """HALTED hat Prioritaet ueber run_control ueber agent_paused ueber draining."""
+    """HALTED takes priority over run_control over agent_paused over draining."""
     board = await make_board(name="Priority Board", slug="priority-board")
     agent = await make_agent(name="PausedAgent", board_id=board.id, operational_mode="paused")
     task = await make_task(
@@ -353,12 +353,12 @@ async def test_guard_priority_order(make_board, make_agent, make_task):
     assert allowed  # subtask is continuation → allowed in draining
 
 
-# ── Test 17: Stop Run invalidiert dispatch_attempt_id ────────────────
+# ── Test 17: Stop Run invalidates dispatch_attempt_id ───────────────────
 
 
 @pytest.mark.asyncio
 async def test_stop_run_clears_dispatch_attempt_id(client, make_board, make_agent, make_task):
-    """Stop Run setzt dispatch_attempt_id auf None."""
+    """Stop Run sets dispatch_attempt_id to None."""
     from tests.conftest import test_engine
 
     board = await make_board(name="AttemptStop Board", slug="attempt-stop-board")
@@ -385,14 +385,14 @@ async def test_stop_run_clears_dispatch_attempt_id(client, make_board, make_agen
     assert result.run_control == "stopped"
 
 
-# ── Test 18: Resume rotiert dispatch_attempt_id auf frische UUID ─────
+# ── Test 18: Resume rotates dispatch_attempt_id to a fresh UUID ────────
 
 
 @pytest.mark.asyncio
 async def test_resume_rotates_dispatch_attempt_id(client, make_board, make_task):
-    """Resume generiert eine FRISCHE dispatch_attempt_id (NICHT None) damit
-    poll.sh sie im Response lesen kann. Alte stale-IDs duerfen nicht
-    ueberleben.
+    """Resume generates a FRESH dispatch_attempt_id (NOT None) so
+    poll.sh can read it in the response. Old stale IDs must not
+    survive.
     """
     from tests.conftest import test_engine
 
@@ -414,12 +414,12 @@ async def test_resume_rotates_dispatch_attempt_id(client, make_board, make_task)
     assert result.status == "inbox"
 
 
-# ── Test 19: Dispatch Attempt Guard — match erlaubt ──────────────────
+# ── Test 19: Dispatch Attempt Guard — match allowed ─────────────────────
 
 
 @pytest.mark.asyncio
 async def test_dispatch_attempt_guard_match_allowed(make_board, make_agent, make_task):
-    """Matching dispatch_attempt_id wird durchgelassen."""
+    """Matching dispatch_attempt_id is let through."""
     board = await make_board(name="Match Board", slug="match-board")
     agent = await make_agent(name="Agent", board_id=board.id)
     task = await make_task(
@@ -428,23 +428,23 @@ async def test_dispatch_attempt_guard_match_allowed(make_board, make_agent, make
         dispatch_attempt_id="correct-id-789",
     )
 
-    # Simuliere Guard-Logik direkt
+    # Simulate guard logic directly
     req_attempt_id = "correct-id-789"
-    assert task.dispatch_attempt_id == req_attempt_id  # Match → kein Reject
+    assert task.dispatch_attempt_id == req_attempt_id  # Match → no reject
 
 
-# ── Test 20: Dispatch Attempt Guard — mismatch Phase B rejected ──────
+# ── Test 20: Dispatch Attempt Guard — mismatch Phase B rejected ─────────
 
 
 @pytest.mark.asyncio
 async def test_dispatch_attempt_guard_mismatch_rejected():
-    """Falsche dispatch_attempt_id wird in Phase B mit 409 rejected."""
+    """Wrong dispatch_attempt_id is rejected with 409 in Phase B."""
     from fastapi import HTTPException
 
     task_attempt_id = "current-run-abc"
     req_attempt_id = "old-run-xyz"
 
-    # Simuliere Phase B Guard-Logik
+    # Simulate Phase B guard logic
     assert task_attempt_id != req_attempt_id
     with pytest.raises(HTTPException) as exc_info:
         if task_attempt_id and req_attempt_id != task_attempt_id:

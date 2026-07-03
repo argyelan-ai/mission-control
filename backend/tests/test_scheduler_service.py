@@ -1,4 +1,4 @@
-"""Tests fuer den SchedulerService (Unit-Tests mit gemocktem APScheduler)."""
+"""Tests for the SchedulerService (unit tests with mocked APScheduler)."""
 import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -11,7 +11,7 @@ class TestSchedulerService:
 
     @pytest.fixture
     def mock_apscheduler(self):
-        """APScheduler mocken damit kein echter Timer laeuft."""
+        """Mock APScheduler so no real timer runs."""
         with patch("app.services.scheduler.AsyncIOScheduler") as mock_cls:
             mock_instance = MagicMock()
             mock_instance.get_job.return_value = None
@@ -19,7 +19,7 @@ class TestSchedulerService:
             yield mock_instance
 
     async def test_build_trigger_daily(self):
-        """Daily-Job Trigger hat korrekte Hour/Minute."""
+        """Daily job trigger has correct hour/minute."""
         from app.services.scheduler import SchedulerService
         svc = SchedulerService.__new__(SchedulerService)
         svc._scheduler = MagicMock()
@@ -36,7 +36,7 @@ class TestSchedulerService:
         assert trigger_kwargs["minute"] == 30
 
     async def test_build_trigger_interval(self):
-        """Interval-Job Trigger hat korrekte Stunden."""
+        """Interval job trigger has correct hours."""
         from app.services.scheduler import SchedulerService
         svc = SchedulerService.__new__(SchedulerService)
         svc._scheduler = MagicMock()
@@ -52,7 +52,7 @@ class TestSchedulerService:
         assert trigger_kwargs["hours"] == 6
 
     async def test_build_workflow_trigger_weekly(self):
-        """Weekly-Workflow Trigger nutzt Wochentag + Uhrzeit."""
+        """Weekly workflow trigger uses weekday + time."""
         from app.services.scheduler import SchedulerService
         from app.models.workflow import WorkflowTemplate
 
@@ -79,7 +79,7 @@ class TestSchedulerService:
         assert trigger_kwargs["minute"] == 30
 
     async def test_build_trigger_invalid_raises(self):
-        """Ungueltige Schedule-Config → ValueError."""
+        """Invalid schedule config → ValueError."""
         from app.services.scheduler import SchedulerService
         svc = SchedulerService.__new__(SchedulerService)
         svc._scheduler = MagicMock()
@@ -87,14 +87,14 @@ class TestSchedulerService:
             id=uuid.uuid4(),
             name="Bad",
             schedule_type="daily",
-            schedule_time=None,  # fehlt!
+            schedule_time=None,  # missing!
             action_type="chat_send",
         )
         with pytest.raises(ValueError):
             svc._build_trigger(job)
 
     async def test_resolve_agent_id_uses_agent_id_directly(self, session):
-        """Wenn agent_id gesetzt → direkt zurückgeben."""
+        """If agent_id is set → return it directly."""
         from app.models.agent import Agent
         from app.services.scheduler import SchedulerService
 
@@ -118,7 +118,7 @@ class TestSchedulerService:
         assert result == str(agent_id)
 
     async def test_resolve_agent_id_falls_back_to_name(self, session):
-        """Kein agent_id → Lookup by agent_name."""
+        """No agent_id → lookup by agent_name."""
         from app.models.agent import Agent
         from app.services.scheduler import SchedulerService
 
@@ -141,7 +141,7 @@ class TestSchedulerService:
         assert result == str(agent.id)
 
     async def test_resolve_agent_id_returns_none_if_not_found(self, session):
-        """Unbekannter Agent-Name → None."""
+        """Unknown agent name → None."""
         from app.services.scheduler import SchedulerService
 
         job = ScheduledJob(
@@ -274,10 +274,10 @@ class TestSchedulerV2Features:
 
 
 class TestSchedulerLockLifecycle:
-    """Tests fuer die Lock-Strategie in start()/stop()/_acquire_lock/_refresh_lock_loop.
+    """Tests for the lock strategy in start()/stop()/_acquire_lock/_refresh_lock_loop.
 
-    Schuetzt vor dem 2026-05-19 Regress: hängender Redis-Lock blockierte den Boot
-    permanent, der Scheduler startete nie und Daily-Jobs liefen nicht.
+    Guards against the 2026-05-19 regression: a stuck Redis lock permanently
+    blocked boot, the scheduler never started, and daily jobs didn't run.
     """
 
     @pytest.mark.asyncio
@@ -292,22 +292,22 @@ class TestSchedulerLockLifecycle:
             result = await svc._acquire_lock()
 
         assert result is True
-        # Lock-Acquire mit nx=True + kurzem TTL
+        # Lock acquire with nx=True + short TTL
         call_kwargs = mock_redis.set.call_args.kwargs
         assert call_kwargs["nx"] is True
         from app.services.scheduler import LOCK_TTL_SECONDS
         assert call_kwargs["ex"] == LOCK_TTL_SECONDS
-        # Single attempt — kein sleep
+        # Single attempt — no sleep
         assert mock_redis.set.call_count == 1
 
     @pytest.mark.asyncio
     async def test_acquire_lock_retries_then_succeeds(self):
-        """Lock zuerst besetzt → 3 retries → erfolgreich."""
+        """Lock initially held → 3 retries → succeeds."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
         mock_redis = AsyncMock()
-        # 3x None (= besetzt), dann True
+        # 3x None (= held), then True
         mock_redis.set = AsyncMock(side_effect=[None, None, None, True])
 
         with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
@@ -316,12 +316,12 @@ class TestSchedulerLockLifecycle:
 
         assert result is True
         assert mock_redis.set.call_count == 4
-        # 3 sleeps zwischen den 4 Versuchen
+        # 3 sleeps between the 4 attempts
         assert mock_sleep.call_count == 3
 
     @pytest.mark.asyncio
     async def test_acquire_lock_gives_up_after_max_attempts(self):
-        """Lock bleibt besetzt → nach MAX_ATTEMPTS Versuchen False."""
+        """Lock stays held → False after MAX_ATTEMPTS tries."""
         from app.services.scheduler import (
             SchedulerService,
             LOCK_ACQUIRE_MAX_ATTEMPTS,
@@ -329,7 +329,7 @@ class TestSchedulerLockLifecycle:
 
         svc = SchedulerService.__new__(SchedulerService)
         mock_redis = AsyncMock()
-        mock_redis.set = AsyncMock(return_value=None)  # immer besetzt
+        mock_redis.set = AsyncMock(return_value=None)  # always held
 
         with patch("app.redis_client.get_redis", new=AsyncMock(return_value=mock_redis)), \
              patch("app.services.scheduler.asyncio.sleep", new=AsyncMock()):
@@ -340,7 +340,7 @@ class TestSchedulerLockLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_skips_when_lock_unavailable(self):
-        """Wenn _acquire_lock False → start() returnt ohne APScheduler zu starten."""
+        """If _acquire_lock is False → start() returns without starting APScheduler."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
@@ -357,7 +357,7 @@ class TestSchedulerLockLifecycle:
 
     @pytest.mark.asyncio
     async def test_start_launches_refresh_task_on_success(self):
-        """Lock acquired → APScheduler gestartet + Refresh-Task läuft."""
+        """Lock acquired → APScheduler started + refresh task running."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
@@ -368,7 +368,7 @@ class TestSchedulerLockLifecycle:
         fake_task = MagicMock()
 
         def fake_create_tracked_task(coro):
-            coro.close()  # ungeplante coroutine sauber schliessen → keine Warning
+            coro.close()  # cleanly close the unscheduled coroutine → no warning
             return fake_task
 
         with patch.object(svc, "_acquire_lock", new=AsyncMock(return_value=True)), \
@@ -410,7 +410,7 @@ class TestSchedulerLockLifecycle:
 
     @pytest.mark.asyncio
     async def test_refresh_loop_calls_expire_until_stopped(self):
-        """Refresh-Loop ruft EXPIRE wiederholt und stoppt sauber bei _running=False."""
+        """Refresh loop calls EXPIRE repeatedly and stops cleanly at _running=False."""
         import asyncio as _asyncio
         from app.services.scheduler import SchedulerService, LOCK_TTL_SECONDS
 
@@ -423,7 +423,7 @@ class TestSchedulerLockLifecycle:
         async def fake_expire(key, ttl):
             expire_calls.append((key, ttl))
             if len(expire_calls) >= 2:
-                svc._running = False  # nach 2 Refreshes Schleife beenden
+                svc._running = False  # end loop after 2 refreshes
 
         mock_redis.expire = AsyncMock(side_effect=fake_expire)
 
@@ -437,7 +437,7 @@ class TestSchedulerLockLifecycle:
 
     @pytest.mark.asyncio
     async def test_refresh_loop_survives_transient_redis_error(self):
-        """Wenn Redis kurz fehlschlägt, loggt der Loop und versucht beim nächsten Tick erneut."""
+        """If Redis briefly fails, the loop logs it and retries on the next tick."""
         from app.services.scheduler import SchedulerService
 
         svc = SchedulerService.__new__(SchedulerService)
@@ -450,7 +450,7 @@ class TestSchedulerLockLifecycle:
             call_log.append(ttl)
             if len(call_log) == 1:
                 raise RuntimeError("redis hiccup")
-            svc._running = False  # zweiter Aufruf beendet den Loop
+            svc._running = False  # second call ends the loop
 
         mock_redis.expire = AsyncMock(side_effect=flaky_expire)
 
@@ -463,11 +463,11 @@ class TestSchedulerLockLifecycle:
 
 @pytest.mark.asyncio
 async def test_seed_builtin_jobs_uses_session_execute():
-    """Regress-Guard: seed_builtin_jobs muss session.execute() nutzen.
+    """Regression guard: seed_builtin_jobs must use session.execute().
 
-    SQLModel.AsyncSession.exec() akzeptiert nur 1 Argument. Nutzt der Code
-    fälschlicherweise exec(stmt, params) → TypeError beim Boot
-    (Bug bis 2026-05-19, geheilt mit Wechsel auf execute()).
+    SQLModel.AsyncSession.exec() only accepts 1 argument. If the code
+    mistakenly uses exec(stmt, params) → TypeError at boot
+    (bug until 2026-05-19, fixed by switching to execute()).
     """
     from app.services import schedule_seeder
 
@@ -483,7 +483,7 @@ async def test_seed_builtin_jobs_uses_session_execute():
 
 @pytest.mark.asyncio
 async def test_create_task_with_skip_review_flag():
-    """Wenn Job.task_skip_review=True → create_task_internal wird mit skip_review=True aufgerufen."""
+    """If Job.task_skip_review=True → create_task_internal is called with skip_review=True."""
     import uuid
     from unittest.mock import AsyncMock, MagicMock, patch
     from app.models.scheduled_job import ScheduledJob

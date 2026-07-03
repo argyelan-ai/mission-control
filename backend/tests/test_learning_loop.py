@@ -1,12 +1,12 @@
 """
-Tests fuer den Learning Loop — Stufe 2 des Masterplans.
+Tests for the Learning Loop — stage 2 of the master plan.
 
-Testet:
+Tests:
 - record_feedback_lesson (approved/rejected)
 - fetch_agent_lessons
 - fetch_relevant_lessons
-- Dispatch-Message enthält Lessons
-- Knowledge Stats Endpoint
+- Dispatch message includes lessons
+- Knowledge Stats endpoint
 """
 
 import uuid
@@ -89,7 +89,7 @@ async def _create_memory(session: AsyncSession, **kwargs):
 
 @pytest.mark.asyncio
 async def test_fetch_agent_lessons_returns_agent_scoped(session):
-    """fetch_agent_lessons gibt nur Lessons zurueck die der Agent geschrieben hat."""
+    """fetch_agent_lessons only returns lessons the agent has written."""
     from app.services.auto_memory import fetch_agent_lessons
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -97,7 +97,7 @@ async def test_fetch_agent_lessons_returns_agent_scoped(session):
         agent = await _create_agent(s, name="Cody", board_id=board.id)
         other = await _create_agent(s, name="Rex", board_id=board.id)
 
-        # Codys Lesson (agent-scoped)
+        # Cody's lesson (agent-scoped)
         await _create_memory(s, agent_id=agent.id, content="Cody learned something", title="Cody Lesson")
         # Rex's Lesson (should not appear)
         await _create_memory(s, agent_id=other.id, content="Rex learned something")
@@ -109,7 +109,7 @@ async def test_fetch_agent_lessons_returns_agent_scoped(session):
 
 @pytest.mark.asyncio
 async def test_fetch_agent_lessons_respects_limit(session):
-    """fetch_agent_lessons gibt max N Eintraege zurueck."""
+    """fetch_agent_lessons returns at most N entries."""
     from app.services.auto_memory import fetch_agent_lessons
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -128,19 +128,19 @@ async def test_fetch_agent_lessons_respects_limit(session):
 
 @pytest.mark.asyncio
 async def test_fetch_relevant_lessons_keyword_match(session):
-    """fetch_relevant_lessons findet Lessons anhand von Keywords aus dem Task-Titel."""
+    """fetch_relevant_lessons finds lessons based on keywords from the task title."""
     from app.services.auto_memory import fetch_relevant_lessons
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board = await _create_board(s)
 
-        # Relevante Lesson (enthaelt "Authentication")
+        # Relevant lesson (contains "Authentication")
         await _create_memory(
             s, board_id=board.id,
             content="Authentication braucht JWT mit HS256 Signierung",
             title="Login Pattern",
         )
-        # Nicht relevante Lesson
+        # Not relevant lesson
         await _create_memory(
             s, board_id=board.id,
             content="Docker Compose Setup Guide",
@@ -156,7 +156,7 @@ async def test_fetch_relevant_lessons_keyword_match(session):
 
 @pytest.mark.asyncio
 async def test_fetch_relevant_lessons_empty_for_no_match(session):
-    """fetch_relevant_lessons gibt leere Liste zurueck wenn nichts passt."""
+    """fetch_relevant_lessons returns an empty list when nothing matches."""
     from app.services.auto_memory import fetch_relevant_lessons
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -177,7 +177,7 @@ async def test_fetch_relevant_lessons_empty_for_no_match(session):
 
 @pytest.mark.asyncio
 async def test_record_feedback_approved(session, fake_redis):
-    """record_feedback_lesson erstellt eine Lesson bei Genehmigung."""
+    """record_feedback_lesson creates a lesson on approval."""
     from app.services.auto_memory import record_feedback_lesson
     from app.models.memory import BoardMemory
     from sqlmodel import select
@@ -187,7 +187,7 @@ async def test_record_feedback_approved(session, fake_redis):
         agent = await _create_agent(s, name="Cody", board_id=board.id, emoji="🧑‍💻")
         task = await _create_task(s, board_id=board.id, title="Login Feature", assigned_agent_id=agent.id)
 
-    # Patch engine und redis fuer Background-Task-Pattern
+    # Patch engine and redis for the background-task pattern
     with patch("app.services.auto_memory.engine", test_engine), \
          patch("app.services.auto_memory.get_redis", AsyncMock(return_value=fake_redis)):
         await record_feedback_lesson(task.id, agent.id, "approved")
@@ -207,7 +207,7 @@ async def test_record_feedback_approved(session, fake_redis):
 
 @pytest.mark.asyncio
 async def test_record_feedback_rejected_with_comment(session, fake_redis):
-    """record_feedback_lesson erstellt eine Lesson bei Ablehnung mit Feedback-Kommentar."""
+    """record_feedback_lesson creates a lesson on rejection with a feedback comment."""
     from app.services.auto_memory import record_feedback_lesson
     from app.models.memory import BoardMemory
     from sqlmodel import select
@@ -295,7 +295,7 @@ async def test_dispatch_message_does_not_inline_keyword_lessons(session):
 
 @pytest.mark.asyncio
 async def test_knowledge_stats_endpoint(auth_client, session):
-    """GET /knowledge/stats gibt Stats pro memory_type zurueck."""
+    """GET /knowledge/stats returns stats per memory_type."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         await _create_memory(s, content="A", memory_type="lesson")
         await _create_memory(s, content="B", memory_type="lesson")
@@ -311,7 +311,7 @@ async def test_knowledge_stats_endpoint(auth_client, session):
 
 @pytest.mark.asyncio
 async def test_knowledge_stats_filtered_by_agent(auth_client, session):
-    """GET /knowledge/stats?agent_id=... filtert nach Agent."""
+    """GET /knowledge/stats?agent_id=... filters by agent."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board = await _create_board(s)
         agent = await _create_agent(s, board_id=board.id)

@@ -1,8 +1,8 @@
 """
-Tests fuer die Intelligence API-Endpoints.
+Tests for the Intelligence API endpoints.
 
-GET /api/v1/intelligence/insights — Redis-Cache basiert
-GET /api/v1/intelligence/reports  — DB-basiert (BoardMemory)
+GET /api/v1/intelligence/insights — Redis cache based
+GET /api/v1/intelligence/reports  — DB based (BoardMemory)
 """
 
 import json
@@ -16,7 +16,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.models.memory import BoardMemory
 from app.redis_client import RedisKeys
 
-# Shared engine fuer direkte DB-Zugriffe in Tests
+# Shared engine for direct DB access in tests
 from tests.conftest import test_engine
 
 
@@ -24,7 +24,7 @@ class TestIntelligenceInsights:
     """GET /api/v1/intelligence/insights"""
 
     async def test_returns_empty_structure_when_no_cache(self, auth_client: AsyncClient):
-        """Kein Redis-Cache → leere Struktur mit analyzed_at=null."""
+        """No Redis cache → empty structure with analyzed_at=null."""
         resp = await auth_client.get("/api/v1/intelligence/insights")
         assert resp.status_code == 200
         data = resp.json()
@@ -36,10 +36,10 @@ class TestIntelligenceInsights:
         assert data["anomalies"] == []
 
     async def test_returns_cached_insights(self, fake_redis, auth_client: AsyncClient):
-        """Redis mit Daten → exakte JSON-Rueckgabe.
+        """Redis with data → exact JSON response.
 
-        Hinweis: fake_redis muss VOR auth_client stehen damit der Client
-        dieselbe Redis-Instanz nutzt (wird via client → dependency_overrides injiziert).
+        Note: fake_redis must come BEFORE auth_client so the client
+        uses the same Redis instance (injected via client → dependency_overrides).
         """
         insights = {
             "task_durations": {"avg_minutes": 15.5, "total": 8, "outliers": [], "per_agent": {"Cody": 12.3}},
@@ -63,7 +63,7 @@ class TestIntelligenceInsights:
         assert data["agent_performance"][0]["name"] == "Cody"
 
     async def test_requires_auth(self, client: AsyncClient):
-        """Ohne Auth-Token → 401."""
+        """No auth token → 401."""
         resp = await client.get("/api/v1/intelligence/insights")
         assert resp.status_code == 401
 
@@ -77,19 +77,19 @@ class TestIntelligenceReports:
         assert resp.json() == []
 
     async def test_only_returns_auto_generated_insights(self, auth_client: AsyncClient):
-        """Nur memory_type='insight' + auto_generated=True."""
+        """Only memory_type='insight' + auto_generated=True."""
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            # Insight (sollte auftauchen)
+            # Insight (should show up)
             s.add(BoardMemory(
                 id=uuid.uuid4(), content="Auto insight", memory_type="insight",
                 source="system", auto_generated=True,
             ))
-            # Manuelles Knowledge (sollte NICHT auftauchen)
+            # Manual knowledge (should NOT show up)
             s.add(BoardMemory(
                 id=uuid.uuid4(), content="Manual knowledge", memory_type="knowledge",
                 source="user", auto_generated=False,
             ))
-            # Insight aber nicht auto-generated (sollte NICHT auftauchen)
+            # Insight but not auto-generated (should NOT show up)
             s.add(BoardMemory(
                 id=uuid.uuid4(), content="Manual insight", memory_type="insight",
                 source="user", auto_generated=False,

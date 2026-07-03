@@ -1,5 +1,5 @@
-"""Tests fuer MC-Hardening: Auth-Matrix, Active-Task-Locking, Readiness Gates,
-Trigger/Reset-Semantik, Aborted-Recovery, Runtime Observability."""
+"""Tests for MC hardening: auth matrix, active-task locking, readiness gates,
+trigger/reset semantics, aborted recovery, runtime observability."""
 
 import uuid
 from datetime import datetime, timezone
@@ -15,7 +15,7 @@ from tests.conftest import test_engine
 
 @pytest.mark.anyio
 async def test_trigger_requires_auth(client):
-    """Trigger-Endpoint ohne Auth → 401/403."""
+    """Trigger endpoint without auth → 401/403."""
     agent_id = str(uuid.uuid4())
     resp = await client.post(
         f"/api/v1/agents/{agent_id}/trigger",
@@ -26,7 +26,7 @@ async def test_trigger_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_reset_requires_auth(client):
-    """Reset-Endpoint ohne Auth → 401/403."""
+    """Reset endpoint without auth → 401/403."""
     agent_id = str(uuid.uuid4())
     resp = await client.post(f"/api/v1/agents/{agent_id}/reset")
     assert resp.status_code in (401, 403)
@@ -34,7 +34,7 @@ async def test_reset_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_heartbeat_trigger_requires_auth(client):
-    """Heartbeat-Trigger ohne Auth → 401/403."""
+    """Heartbeat trigger without auth → 401/403."""
     agent_id = str(uuid.uuid4())
     resp = await client.post(f"/api/v1/agents/{agent_id}/heartbeat")
     assert resp.status_code in (401, 403)
@@ -42,7 +42,7 @@ async def test_heartbeat_trigger_requires_auth(client):
 
 @pytest.mark.anyio
 async def test_trigger_with_user_auth(auth_client, make_board, make_agent):
-    """Trigger mit User-Auth auf echtem Agent → 410 Gone (Phase 29 sunset), nicht 401."""
+    """Trigger with user auth on a real agent → 410 Gone (Phase 29 sunset), not 401."""
     board = await make_board()
     agent = await make_agent(name="TestBot", board_id=board.id)
     resp = await auth_client.post(
@@ -56,7 +56,7 @@ async def test_trigger_with_user_auth(auth_client, make_board, make_agent):
 
 @pytest.mark.anyio
 async def test_active_task_set_on_in_progress(session, make_board, make_agent, make_task):
-    """current_task_id wird gesetzt wenn Task auf in_progress wechselt."""
+    """current_task_id gets set when a task transitions to in_progress."""
     from app.services.task_lifecycle import update_agent_active_task
 
     board = await make_board()
@@ -73,7 +73,7 @@ async def test_active_task_set_on_in_progress(session, make_board, make_agent, m
 
 @pytest.mark.anyio
 async def test_active_task_cleared_on_done(session, make_board, make_agent, make_task):
-    """current_task_id wird geloescht wenn Task auf done wechselt."""
+    """current_task_id gets cleared when a task transitions to done."""
     from app.services.task_lifecycle import update_agent_active_task
     from app.models.agent import Agent
 
@@ -81,9 +81,9 @@ async def test_active_task_cleared_on_done(session, make_board, make_agent, make
     agent = await make_agent(name="Cody", board_id=board.id)
     task = await make_task(board_id=board.id, title="Test Task", assigned_agent_id=agent.id)
 
-    # Erst in_progress → setzt Lock
+    # First in_progress → sets lock
     await update_agent_active_task(session, agent.id, task, "in_progress", "inbox")
-    # Dann done → loescht Lock
+    # Then done → clears lock
     await update_agent_active_task(session, agent.id, task, "done", "in_progress")
 
     refreshed = await session.get(Agent, agent.id)
@@ -93,7 +93,7 @@ async def test_active_task_cleared_on_done(session, make_board, make_agent, make
 
 @pytest.mark.anyio
 async def test_active_task_blocked_sets_run_state(session, make_board, make_agent, make_task):
-    """run_state wird 'blocked' wenn Task auf blocked wechselt."""
+    """run_state becomes 'blocked' when a task transitions to blocked."""
     from app.services.task_lifecycle import update_agent_active_task
     from app.models.agent import Agent
 
@@ -111,7 +111,7 @@ async def test_active_task_blocked_sets_run_state(session, make_board, make_agen
 
 @pytest.mark.anyio
 async def test_active_task_aborted_sets_run_state(session, make_board, make_agent, make_task):
-    """run_state wird 'aborted' wenn Task auf aborted wechselt."""
+    """run_state becomes 'aborted' when a task transitions to aborted."""
     from app.services.task_lifecycle import update_agent_active_task
     from app.models.agent import Agent
 
@@ -131,8 +131,8 @@ async def test_active_task_aborted_sets_run_state(session, make_board, make_agen
 
 @pytest.mark.anyio
 async def test_aborted_status_in_valid_transitions():
-    """TaskStatusSelect zeigt aborted mit korrekten Transitions."""
-    # Teste die Backend-seitige Transition-Logik
+    """TaskStatusSelect shows aborted with correct transitions."""
+    # Test the backend-side transition logic
     from app.models.task import Task
 
     task = Task(
@@ -144,11 +144,11 @@ async def test_aborted_status_in_valid_transitions():
     assert task.status == "aborted"
 
 
-# ── Pipeline API mit aborted ─────────────────────────────────────────────
+# ── Pipeline API with aborted ────────────────────────────────────────────
 
 @pytest.mark.anyio
 async def test_pipeline_includes_aborted(auth_client, make_board, make_task):
-    """Pipeline-API liefert aborted-Lane."""
+    """Pipeline API returns the aborted lane."""
     board = await make_board()
     await make_task(board_id=board.id, title="Aborted Task", status="aborted")
 
@@ -164,7 +164,7 @@ async def test_pipeline_includes_aborted(auth_client, make_board, make_task):
 
 @pytest.mark.anyio
 async def test_agent_has_runtime_fields(make_board, make_agent):
-    """Neue Felder: last_trigger_at, last_dispatch_error, run_state."""
+    """New fields: last_trigger_at, last_dispatch_error, run_state."""
     board = await make_board()
     agent = await make_agent(name="TestBot", board_id=board.id)
 
@@ -175,7 +175,7 @@ async def test_agent_has_runtime_fields(make_board, make_agent):
 
 @pytest.mark.anyio
 async def test_runtime_status_endpoint(auth_client, make_board, make_agent):
-    """GET /agents/runtime-status liefert kompakte Runtime-Infos."""
+    """GET /agents/runtime-status returns compact runtime info."""
     board = await make_board()
     agent = await make_agent(name="TestBot", board_id=board.id)
 

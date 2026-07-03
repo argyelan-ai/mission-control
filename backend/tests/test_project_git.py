@@ -1,4 +1,4 @@
-"""Tests fuer Project Git-Info Endpoint."""
+"""Tests for the Project Git-Info endpoint."""
 
 import uuid
 
@@ -16,7 +16,7 @@ class TestProjectGitInfo:
     """GET /api/v1/boards/{board_id}/projects/{project_id}/git-info"""
 
     async def _create_board_and_project(self, **project_kwargs) -> tuple[uuid.UUID, uuid.UUID]:
-        """Helper: Board + Project in DB anlegen."""
+        """Helper: create board + project in DB."""
         board_id = uuid.uuid4()
         project_id = uuid.uuid4()
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -46,7 +46,7 @@ class TestProjectGitInfo:
         assert resp.status_code == 404
 
     async def test_project_without_repo(self, auth_client: AsyncClient):
-        """Project ohne github_repo_name gibt has_repo=False zurueck."""
+        """Project without github_repo_name returns has_repo=False."""
         board_id, project_id = await self._create_board_and_project()
         resp = await auth_client.get(f"/api/v1/boards/{board_id}/projects/{project_id}/git-info")
         assert resp.status_code == 200
@@ -57,7 +57,7 @@ class TestProjectGitInfo:
         assert data["branches"] == []
 
     async def test_project_with_repo(self, auth_client: AsyncClient):
-        """Project mit github_repo_name gibt Repo-Info + Branches zurueck."""
+        """Project with github_repo_name returns repo info + branches."""
         board_id, project_id = await self._create_board_and_project(
             github_repo_name="test-owner/test-repo",
             github_repo_url="https://github.com/test-owner/test-repo.git",

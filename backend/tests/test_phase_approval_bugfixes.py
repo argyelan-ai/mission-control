@@ -1,14 +1,14 @@
-"""Regression-Tests fuer 2 Bugs entdeckt am 2026-04-22:
+"""Regression tests for 2 bugs discovered on 2026-04-22:
 
-Bug 1: create_phase_approval_task erzeugte Duplikate
-  — Push-Pfad (agent_scoped) hatte Idempotenz, Watchdog-Sweep + die Funktion
-    selbst nicht. Zwei parallele Aufrufe erzeugten zwei Phase-Approvals die
-    beide Boss bearbeiten musste.
+Bug 1: create_phase_approval_task created duplicates
+  — Push path (agent_scoped) had idempotency, but the watchdog sweep and the
+    function itself did not. Two parallel calls created two phase approvals
+    that Boss both had to work through.
 
-Bug 2: handle_phase_approval_decision setzte Parent IMMER auf review
-  — Auf Trust-by-Default-Boards (mc-dev: require_review_before_done=false)
-    bleibt review liegen weil kein Reviewer kommt. Parent hängt ewig.
-    Fix: Parent bleibt in_progress, Orchestrator schliesst via Hard-Gate ab.
+Bug 2: handle_phase_approval_decision ALWAYS set the parent to review
+  — On trust-by-default boards (mc-dev: require_review_before_done=false)
+    review sits idle because no reviewer comes along. Parent hangs forever.
+    Fix: parent stays in_progress, orchestrator closes it via hard gate.
 """
 
 import uuid
@@ -21,7 +21,7 @@ from tests.conftest import test_engine
 
 
 async def _setup_board_lead_parent(require_review: bool = False):
-    """Board + Board Lead + Root-Task im Status in_progress."""
+    """Board + board lead + root task in status in_progress."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -54,12 +54,12 @@ async def _setup_board_lead_parent(require_review: bool = False):
 
 
 # ────────────────────────────────────────────────────────────────────
-# Bug 1: Idempotenz
+# Bug 1: Idempotency
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_create_phase_approval_task_is_idempotent():
-    """Zweiter Aufruf fuer denselben Parent gibt den existierenden zurueck, erstellt keinen neuen."""
+    """Second call for the same parent returns the existing one, creates no new one."""
     from app.services.task_lifecycle import create_phase_approval_task
     from app.models.agent import Agent
     from app.models.task import Task
@@ -70,17 +70,17 @@ async def test_create_phase_approval_task_is_idempotent():
         lead = await s.get(Agent, data["lead_id"])
         parent = await s.get(Task, data["parent_id"])
 
-        # Erster Call — erzeugt einen
+        # First call — creates one
         a1 = await create_phase_approval_task(s, parent, lead)
         assert a1 is not None
         assert a1.delegation_type == "phase_approval"
 
-        # Zweiter Call — MUSS denselben zurueckgeben, kein Duplikat
+        # Second call — MUST return the same one, no duplicate
         a2 = await create_phase_approval_task(s, parent, lead)
         assert a2 is not None
         assert a2.id == a1.id, "Idempotenz verletzt — zweiter Approval-Task erstellt"
 
-        # Genau 1 Phase-Approval-Task in DB
+        # Exactly 1 phase approval task in DB
         approvals = (await s.exec(
             select(Task).where(
                 Task.parent_task_id == parent.id,
@@ -91,13 +91,13 @@ async def test_create_phase_approval_task_is_idempotent():
 
 
 # ────────────────────────────────────────────────────────────────────
-# Bug 2: Trust-by-Default Board
+# Bug 2: Trust-by-default board
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_phase_approved_trust_by_default_keeps_parent_in_progress():
-    """Auf Trust-by-Default-Board (require_review_before_done=false) bleibt
-    Parent nach phase_approved auf in_progress — nicht auf review.
+    """On a trust-by-default board (require_review_before_done=false), the
+    parent stays in_progress after phase_approved — not review.
     """
     from app.services.task_lifecycle import (
         create_phase_approval_task, handle_phase_approval_decision,
@@ -128,7 +128,7 @@ async def test_phase_approved_trust_by_default_keeps_parent_in_progress():
 
 @pytest.mark.asyncio
 async def test_phase_approved_with_required_review_promotes_to_review():
-    """Auf Boards mit require_review_before_done=true: alter Pfad — Parent geht auf review."""
+    """On boards with require_review_before_done=true: old path — parent goes to review."""
     from app.services.task_lifecycle import (
         create_phase_approval_task, handle_phase_approval_decision,
     )
@@ -153,11 +153,11 @@ async def test_phase_approved_with_required_review_promotes_to_review():
 
 
 # ────────────────────────────────────────────────────────────────────
-# Bug 3: Orchestrator-Nudge nach phase_approved (entdeckt 2026-04-22)
+# Bug 3: Orchestrator nudge after phase_approved (discovered 2026-04-22)
 #
-# Folgebug zu Bug 2 Fix: Parent bleibt in_progress, aber Orchestrator
-# uebersieht das (Approval-Task ist done, in seiner Sicht erscheint
-# nichts mehr). Fix: aktiver Re-Dispatch-Nudge + Watchdog-Safety-Net
+# Follow-up bug to the Bug 2 fix: parent stays in_progress, but the
+# orchestrator misses it (approval task is done, nothing more shows up
+# from its view). Fix: active re-dispatch nudge + watchdog safety net
 # ────────────────────────────────────────────────────────────────────
 
 
@@ -181,10 +181,10 @@ async def test_phase_approved_with_required_review_promotes_to_review():
 
 @pytest.mark.asyncio
 async def test_send_orchestrator_close_nudge_host_runtime_posts_system_comment():
-    """Host-Runtime Boss (kein gateway_agent_id, agent_runtime='host'): Nudge geht
-    NICHT via rpc.chat_send sondern als TaskComment(comment_type='system') auf
-    den Parent. Der wird ueber /agent/me/poll → poll.sh → tmux paste-buffer in
-    Boss's Claude-Session zugestellt.
+    """Host-runtime Boss (no gateway_agent_id, agent_runtime='host'): the nudge
+    goes NOT via rpc.chat_send but as a TaskComment(comment_type='system') on
+    the parent. It gets delivered to Boss's Claude session via
+    /agent/me/poll → poll.sh → tmux paste-buffer.
     """
     from app.services.task_lifecycle import send_orchestrator_close_nudge, ORCH_CLOSE_REMINDER_MARKER
     from app.models.agent import Agent
@@ -201,15 +201,15 @@ async def test_send_orchestrator_close_nudge_host_runtime_posts_system_comment()
         s.add(parent)
         await s.commit()
 
-        # Phase 29 / Gateway-Sunset: kein rpc-Modul mehr im task_lifecycle —
-        # die Funktion postet ausschliesslich einen TaskComment + Poll-Pfad.
+        # Phase 29 / gateway sunset: no more rpc module in task_lifecycle —
+        # the function exclusively posts a TaskComment + poll path.
         sent = await send_orchestrator_close_nudge(
             s, parent, lead, reason="phase_approved",
         )
 
         assert sent is True, "Host-Runtime-Pfad muss einen Nudge zustellen"
 
-        # System-Comment auf Parent erstellt mit Marker + Hard-Gate-Sequenz
+        # System comment created on parent with marker + hard-gate sequence
         comments = (await s.exec(
             select(TaskComment).where(TaskComment.task_id == parent.id)
         )).all()
@@ -217,7 +217,7 @@ async def test_send_orchestrator_close_nudge_host_runtime_posts_system_comment()
         c = comments[0]
         assert c.comment_type == "system"
         assert c.author_type == "system"
-        assert c.author_agent_id is None  # kein Echo-Loop bei _is_deliverable_for
+        assert c.author_agent_id is None  # no echo loop in _is_deliverable_for
         assert ORCH_CLOSE_REMINDER_MARKER in c.content
         assert "mc telegram" in c.content
         assert "mc done" in c.content
@@ -226,8 +226,8 @@ async def test_send_orchestrator_close_nudge_host_runtime_posts_system_comment()
 
 @pytest.mark.asyncio
 async def test_send_orchestrator_close_nudge_host_runtime_idempotent_within_window():
-    """Zweiter Aufruf innerhalb 10 Min postet keinen zweiten System-Comment
-    (verhindert Spam in Boss's tmux-Session bei Watchdog-Re-Fires)."""
+    """Second call within 10 min does not post a second system comment
+    (prevents spam in Boss's tmux session on watchdog re-fires)."""
     from app.services.task_lifecycle import send_orchestrator_close_nudge
     from app.models.agent import Agent
     from app.models.task import Task, TaskComment
@@ -257,8 +257,8 @@ async def test_send_orchestrator_close_nudge_host_runtime_idempotent_within_wind
 
 @pytest.mark.asyncio
 async def test_send_orchestrator_close_nudge_host_runtime_discord_skips_telegram_hint():
-    """Host-Runtime + report_back_channel='discord': Reminder kommt trotzdem,
-    aber OHNE `mc telegram`-Hinweis (Hard-Gate gilt nur fuer telegram-routed)."""
+    """Host runtime + report_back_channel='discord': the reminder still comes,
+    but WITHOUT the `mc telegram` hint (hard gate only applies to telegram-routed)."""
     from app.services.task_lifecycle import send_orchestrator_close_nudge
     from app.models.agent import Agent
     from app.models.task import Task, TaskComment
@@ -297,9 +297,9 @@ async def test_send_orchestrator_close_nudge_host_runtime_discord_skips_telegram
 
 @pytest.mark.asyncio
 async def test_check_phase_completions_skips_recreation_when_done_approval_exists():
-    """Bug 4 (Live-Test 2026-04-22): Wenn bereits ein DONE phase_approval existiert
-    und das Child-Set seit Approval unveraendert ist, darf _check_phase_completions
-    KEINEN neuen Approval-Task erstellen. stuck_orchestrator_close kuemmert sich.
+    """Bug 4 (live test 2026-04-22): if a DONE phase_approval already exists
+    and the child set is unchanged since approval, _check_phase_completions must
+    NOT create a new approval task. stuck_orchestrator_close handles it.
     """
     from datetime import timedelta
     from app.services.watchdog.core import WatchdogService
@@ -310,10 +310,10 @@ async def test_check_phase_completions_skips_recreation_when_done_approval_exist
 
     data = await _setup_board_lead_parent(require_review=False)
 
-    # Realistic stuck scenario: Subtask wurde BEFORE approval modifiziert → Phase
-    # ist stabil approved, keine neue Phase-Arbeit danach.
+    # Realistic stuck scenario: subtask was modified BEFORE approval → phase
+    # is stably approved, no new phase work afterward.
     sub_done_at = strip_tz(utcnow() - timedelta(hours=1))
-    approval_done_at = strip_tz(utcnow() - timedelta(minutes=50))  # NACH subtask
+    approval_done_at = strip_tz(utcnow() - timedelta(minutes=50))  # AFTER subtask
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(Task(
@@ -344,7 +344,7 @@ async def test_check_phase_completions_skips_recreation_when_done_approval_exist
             monitor = WatchdogService()
             await monitor._check_phase_completions(s)
 
-    # Verify: GENAU 1 Phase-Approval (der alte done) — kein neuer
+    # Verify: EXACTLY 1 phase approval (the old done one) — no new one
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(
             select(Task)
@@ -355,18 +355,18 @@ async def test_check_phase_completions_skips_recreation_when_done_approval_exist
             f"Erwarte 1 Approval (alter done), bekam {len(approvals)}: {[(a.id, a.status) for a in approvals]}"
         assert approvals[0].status == "done"
 
-    # Dedup-Key wurde gesetzt damit naechster Watchdog-Tick nicht wieder versucht
+    # Dedup key was set so the next watchdog tick doesn't retry
     mock_redis.set.assert_called()
 
 
 @pytest.mark.asyncio
 async def test_check_phase_completions_creates_new_approval_after_rewrite():
-    """Bug 5 (Rewrite-Edge-Case, identifiziert 2026-04-22):
-    Boss macht phase_rewrite_request → Approval1=done, Subtasks zurueck auf inbox →
-    re-worked → wieder done. Das aktuelle Child-Set ist NEU seit Approval1 (subtask
-    updated_at > approval.completed_at). _check_phase_completions darf nicht faelsch-
-    licherweise skippen — neuer Approval muss entstehen (via create_phase_approval_task
-    Push-Pfad ODER Watchdog-Durchlauf).
+    """Bug 5 (rewrite edge case, identified 2026-04-22):
+    Boss does a phase_rewrite_request → Approval1=done, subtasks go back to inbox →
+    re-worked → done again. The current child set is NEW since Approval1 (subtask
+    updated_at > approval.completed_at). _check_phase_completions must not
+    incorrectly skip — a new approval must be created (via create_phase_approval_task
+    push path OR watchdog run).
     """
     from datetime import timedelta
     from unittest.mock import MagicMock
@@ -376,9 +376,9 @@ async def test_check_phase_completions_creates_new_approval_after_rewrite():
 
     data = await _setup_board_lead_parent(require_review=False)
 
-    # Approval1 wurde done VOR aktueller Subtask-Bearbeitung (Rewrite-Szenario)
+    # Approval1 was done BEFORE current subtask work (rewrite scenario)
     approval_done_at = strip_tz(utcnow() - timedelta(hours=2))
-    # Subtasks wurden nach Rewrite aktualisiert → neuer als approval
+    # Subtasks were updated after the rewrite → newer than approval
     subtask_recent = strip_tz(utcnow() - timedelta(minutes=5))
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -410,7 +410,7 @@ async def test_check_phase_completions_creates_new_approval_after_rewrite():
             monitor = WatchdogService()
             await monitor._check_phase_completions(s)
 
-    # Verify: NEUER Approval wurde erstellt (2 insgesamt jetzt — alter done + neuer inbox)
+    # Verify: NEW approval was created (2 total now — old done + new inbox)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approvals = (await s.exec(
             select(Task)
@@ -427,8 +427,8 @@ async def test_check_phase_completions_creates_new_approval_after_rewrite():
 
 @pytest.mark.asyncio
 async def test_orchestrator_close_nudge_escalates_to_mark_after_threshold():
-    """Eskalation-Tests: nach N ergebnislosen Close-Nudges wird der Operator via Reports-Bot
-    benachrichtigt.
+    """Escalation test: after N unsuccessful close nudges, the operator gets
+    notified via the reports bot.
     """
     from app.services.task_lifecycle import (
         send_orchestrator_close_nudge,
@@ -448,8 +448,8 @@ async def test_orchestrator_close_nudge_escalates_to_mark_after_threshold():
         s.add(parent)
         await s.commit()
 
-    # Mock redis: counter incrementiert sich, get gibt None (nicht eskaliert), set OK.
-    # Wir nutzen echtes fakeredis-mock via dict-Semantik.
+    # Mock redis: counter increments, get returns None (not escalated), set OK.
+    # We use a real fakeredis-mock via dict semantics.
     redis_state = {}
 
     async def _fake_get(key):
@@ -484,19 +484,19 @@ async def test_orchestrator_close_nudge_escalates_to_mark_after_threshold():
          patch("app.redis_client.get_redis", side_effect=_mock_get_redis), \
          patch("app.services.task_lifecycle.telegram_reports", mock_reports):
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            # Threshold-1 Nudges: noch keine Eskalation
+            # Threshold-1 nudges: no escalation yet
             parent = await s.get(Task, data["parent_id"])
             lead = await s.get(Agent, data["lead_id"])
 
             for i in range(ORCH_CLOSE_ESCALATION_THRESHOLD - 1):
-                # Unique dedup-window pro call umgehen durch expliziten Reset der Comment-Suche —
-                # hier reichen wir einfach ein sehr kleines dedup_window und neuer reason
-                # alternativ: loesche Comments zwischen den Posts damit Idempotenz nicht greift
+                # Bypass the per-call dedup window by explicitly resetting the comment lookup —
+                # here we simply hand in a very small dedup_window and a new reason;
+                # alternative: delete comments between posts so idempotency doesn't kick in
                 from app.models.task import TaskComment
                 (await s.exec(
                     select(TaskComment).where(TaskComment.task_id == parent.id)
                 )).all()
-                # Clear reminders: setze alle existing system-comments auf sehr alt (vor dedup)
+                # Clear reminders: set all existing system comments to very old (before dedup)
                 all_c = (await s.exec(select(TaskComment).where(TaskComment.task_id == parent.id))).all()
                 for c in all_c:
                     from datetime import timedelta
@@ -507,11 +507,11 @@ async def test_orchestrator_close_nudge_escalates_to_mark_after_threshold():
 
                 await send_orchestrator_close_nudge(s, parent, lead, reason="phase_approved")
 
-            # So far: Reports-Bot NICHT aufgerufen
+            # So far: reports bot NOT called
             assert mock_reports.send.await_count == 0, \
                 f"Unter Threshold, kein Operator-Ping erwartet; got {mock_reports.send.await_count}"
 
-            # Letzter Nudge -> threshold erreicht -> Operator wird benachrichtigt
+            # Last nudge -> threshold reached -> operator gets notified
             all_c = (await s.exec(select(TaskComment).where(TaskComment.task_id == parent.id))).all()
             for c in all_c:
                 from datetime import timedelta
@@ -531,8 +531,8 @@ async def test_orchestrator_close_nudge_escalates_to_mark_after_threshold():
 
 @pytest.mark.asyncio
 async def test_orchestrator_close_escalation_is_idempotent():
-    """Zweite Welle von Nudges nach Eskalation darf den Operator nicht nochmal spammen
-    (bis Redis-TTL ablaeuft)."""
+    """A second wave of nudges after escalation must not spam the operator again
+    (until the Redis TTL expires)."""
     from app.services.task_lifecycle import (
         send_orchestrator_close_nudge,
         ORCH_CLOSE_ESCALATION_THRESHOLD,
@@ -590,7 +590,7 @@ async def test_orchestrator_close_escalation_is_idempotent():
             parent = await s.get(Task, data["parent_id"])
             lead = await s.get(Agent, data["lead_id"])
 
-            # 5 Nudges — weit ueber dem threshold
+            # 5 nudges — well over the threshold
             for i in range(5):
                 all_c = (await s.exec(select(TaskComment).where(TaskComment.task_id == parent.id))).all()
                 for c in all_c:
@@ -599,10 +599,10 @@ async def test_orchestrator_close_escalation_is_idempotent():
                 await s.commit()
                 await send_orchestrator_close_nudge(s, parent, lead, reason="stuck_safety_net")
 
-            # Nur EINE Eskalation, egal wie oft genudged wurde
+            # Only ONE escalation, no matter how often nudged
             assert mock_reports.send.await_count == 1, \
                 f"Erwartet genau 1 Eskalation (idempotent), got {mock_reports.send.await_count}"
 
 
-# Import am Ende damit select-Import fuer den ersten Test verfuegbar ist
+# Import at the end so the select import is available for the first test
 from sqlmodel import select  # noqa: E402

@@ -1,4 +1,4 @@
-"""Tests für Project Flow — Phase-Completion und Task-Injection."""
+"""Tests for Project Flow — phase completion and task injection."""
 import uuid
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select
@@ -16,20 +16,20 @@ def engine():
 
 
 def test_task_has_phase_id_field():
-    """Task-Model hat phase_id Feld."""
+    """Task model has phase_id field."""
     fields = Task.__fields__
     assert "phase_id" in fields
     assert "triggered_by_deliverable_id" in fields
 
 
 def test_phase_dependency_resolution():
-    """Phase-Completion-Logik: Aktiviere Phasen wenn alle Dependencies erfüllt."""
+    """Phase completion logic: activate phases once all dependencies are met."""
     from app.services.phase_engine import can_activate_phase
 
     phase_a_id = str(uuid.uuid4())
     phase_b_id = str(uuid.uuid4())
 
-    # Phase B hängt von Phase A ab
+    # Phase B depends on Phase A
     phase_b = ProjectPhase(
         id=uuid.UUID(phase_b_id),
         project_id=uuid.uuid4(),
@@ -40,12 +40,12 @@ def test_phase_dependency_resolution():
     completed_phase_ids = {phase_a_id}
     assert can_activate_phase(phase_b, completed_phase_ids) is True
 
-    # Ohne A: nicht aktivierbar
+    # Without A: not activatable
     assert can_activate_phase(phase_b, set()) is False
 
 
 def test_phase_no_dependencies_always_activatable():
-    """Phase ohne Dependencies kann immer aktiviert werden."""
+    """Phase with no dependencies can always be activated."""
     from app.services.phase_engine import can_activate_phase
 
     phase = ProjectPhase(
@@ -57,7 +57,7 @@ def test_phase_no_dependencies_always_activatable():
 
 
 def test_can_activate_with_multiple_deps_all_done():
-    """Alle Dependencies erfüllt → aktivierbar."""
+    """All dependencies met → activatable."""
     from app.services.phase_engine import can_activate_phase
     dep1, dep2 = str(uuid.uuid4()), str(uuid.uuid4())
     phase = ProjectPhase(
@@ -66,11 +66,11 @@ def test_can_activate_with_multiple_deps_all_done():
         depends_on_phases=[dep1, dep2],
     )
     assert can_activate_phase(phase, {dep1, dep2}) is True
-    assert can_activate_phase(phase, {dep1}) is False  # dep2 fehlt
+    assert can_activate_phase(phase, {dep1}) is False  # dep2 missing
 
 
 def test_can_activate_with_multiple_deps_partial():
-    """Nur eine von zwei Dependencies erfüllt → nicht aktivierbar."""
+    """Only one of two dependencies met → not activatable."""
     from app.services.phase_engine import can_activate_phase
     dep1, dep2 = str(uuid.uuid4()), str(uuid.uuid4())
     phase = ProjectPhase(

@@ -19,12 +19,12 @@ def test_valid_comment_types_contains_phase_approval_types():
 
 @pytest.mark.asyncio
 async def test_subtask_done_posts_comment_on_parent(async_session, board_with_agents):
-    """Wenn ein Subtask auf done gesetzt wird, erhält der Parent einen subtask_completed Comment."""
+    """When a subtask is set to done, the parent receives a subtask_completed comment."""
     board = board_with_agents["board"]
     developer = board_with_agents["developer"]
     boss = board_with_agents["boss"]
 
-    # Parent-Task (assigned to Boss)
+    # Parent task (assigned to Boss)
     parent = Task(
         board_id=board.id, title="Feature X", status="in_progress",
         assigned_agent_id=boss.id,
@@ -64,7 +64,7 @@ async def test_subtask_done_posts_comment_on_parent(async_session, board_with_ag
 
 @pytest.mark.asyncio
 async def test_subtask_done_no_comment_when_no_parent(async_session, board_with_agents):
-    """Root-Task (ohne parent) löst keinen subtask_completed Comment aus."""
+    """Root task (without a parent) does not trigger a subtask_completed comment."""
     board = board_with_agents["board"]
     developer = board_with_agents["developer"]
 
@@ -94,11 +94,11 @@ async def test_subtask_completion_helper_tolerates_emit_event_failure(async_sess
     """If emit_event raises, the helper should not crash (best-effort).
 
     Guard semantics:
-    - Der Helper selbst faengt KEINE Exceptions (bleibt simpel).
-    - Der Handler in agent_scoped.py wrapped den Helper-Call in try/except und
-      logged nur eine Warning, damit die PATCH-Response nicht auf 500 kippt.
-    - Dieser Test beweist: Helper erhebt die Exception weiterhin (raise), was
-      den Handler-Wrapper zur einzigen Absicherung gegen Redis/Event-Fails macht.
+    - The helper itself catches NO exceptions (stays simple).
+    - The handler in agent_scoped.py wraps the helper call in try/except and
+      logs only a warning, so the PATCH response doesn't tip over into 500.
+    - This test proves: the helper still raises the exception, which
+      makes the handler wrapper the sole safeguard against Redis/event failures.
     """
     board = board_with_agents["board"]
     boss = board_with_agents["boss"]
@@ -262,13 +262,13 @@ async def test_watchdog_creates_approval_task_when_all_subtasks_done(
 async def test_phase_approved_comment_promotes_parent_to_review(async_session, board_with_agents):
     """phase_approved comment on approval task moves parent from in_progress to review.
 
-    Hinweis (2026-04-22): Board muss explizit require_review_before_done=True haben,
-    seit dem Bug-2-Fix bleibt Parent auf Trust-by-Default-Boards in_progress
-    (dedizierter Test in test_phase_approval_bugfixes.py).
+    Note (2026-04-22): the board must explicitly have require_review_before_done=True;
+    since the bug-2 fix, the parent stays in_progress on trust-by-default boards
+    (dedicated test in test_phase_approval_bugfixes.py).
     """
     from unittest.mock import patch, AsyncMock
     board = board_with_agents["board"]
-    board.require_review_before_done = True  # review-Pfad explizit
+    board.require_review_before_done = True  # explicit review path
     async_session.add(board)
     await async_session.commit()
     boss = board_with_agents["boss"]
@@ -583,12 +583,12 @@ async def test_phase_approval_decision_returns_unknown_for_wrong_comment_type(as
     assert result["parent_promoted"] is False
 
 
-# ── Push-Callback: sofortige Approval-Erzeugung bei Subtask-Completion ──
+# ── Push callback: immediate approval creation on subtask completion ──
 
 
 @pytest.mark.asyncio
 async def test_push_callback_creates_approval_when_last_sibling_done(async_session, board_with_agents):
-    """Push: sobald alle Subtasks done sind, wird sofort ein phase_approval Task erzeugt."""
+    """Push: as soon as all subtasks are done, a phase_approval task is created immediately."""
     board = board_with_agents["board"]
     boss = board_with_agents["boss"]
     developer = board_with_agents["developer"]
@@ -631,7 +631,7 @@ async def test_push_callback_creates_approval_when_last_sibling_done(async_sessi
 
 @pytest.mark.asyncio
 async def test_push_callback_skips_when_sibling_still_in_progress(async_session, board_with_agents):
-    """Push: wenn ein Geschwister noch nicht done ist, wird KEIN Approval erzeugt."""
+    """Push: if a sibling is not yet done, NO approval is created."""
     board = board_with_agents["board"]
     boss = board_with_agents["boss"]
     developer = board_with_agents["developer"]
@@ -671,7 +671,7 @@ async def test_push_callback_skips_when_sibling_still_in_progress(async_session,
 
 @pytest.mark.asyncio
 async def test_push_callback_idempotent_when_approval_exists(async_session, board_with_agents):
-    """Push: wenn bereits ein phase_approval Task existiert, keinen zweiten erzeugen."""
+    """Push: if a phase_approval task already exists, don't create a second one."""
     board = board_with_agents["board"]
     boss = board_with_agents["boss"]
     developer = board_with_agents["developer"]
@@ -707,12 +707,12 @@ async def test_push_callback_idempotent_when_approval_exists(async_session, boar
             Task.delegation_type == "phase_approval",
         )
     )
-    assert len(approval_count.all()) == 1  # nur der existierende
+    assert len(approval_count.all()) == 1  # only the existing one
 
 
 @pytest.mark.asyncio
 async def test_push_callback_skips_when_self_is_phase_approval(async_session, board_with_agents):
-    """Push: Approval-Task-Completion darf keine weitere Approval-Erzeugung triggern."""
+    """Push: approval-task completion must not trigger another approval creation."""
     board = board_with_agents["board"]
     boss = board_with_agents["boss"]
 
@@ -737,7 +737,7 @@ async def test_push_callback_skips_when_self_is_phase_approval(async_session, bo
     with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
         await _handle_phase_completion_push(async_session, approval)
 
-    # Es darf kein NEUER phase_approval Task entstanden sein (nur der vorhandene)
+    # No NEW phase_approval task should have been created (only the existing one)
     result = await async_session.exec(
         select(Task).where(
             Task.parent_task_id == parent.id,
@@ -749,7 +749,7 @@ async def test_push_callback_skips_when_self_is_phase_approval(async_session, bo
 
 @pytest.mark.asyncio
 async def test_push_callback_no_board_lead_logs_warning(async_session):
-    """Push: wenn kein Board Lead existiert, Warning loggen und nichts tun (Watchdog übernimmt)."""
+    """Push: if no board lead exists, log a warning and do nothing (watchdog takes over)."""
     from app.models.board import Board
 
     board = Board(name="Orphan Board", slug="orphan")
@@ -771,7 +771,7 @@ async def test_push_callback_no_board_lead_logs_warning(async_session):
     await async_session.refresh(sub)
 
     from app.routers.agent_scoped import _handle_phase_completion_push
-    # Kein Board Lead → silent early return, kein Approval-Task
+    # No board lead → silent early return, no approval task
     await _handle_phase_completion_push(async_session, sub)
 
     result = await async_session.exec(

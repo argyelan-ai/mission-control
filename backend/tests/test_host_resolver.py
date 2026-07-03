@@ -1,18 +1,18 @@
-"""Host Resolver + host-aware runtime_manager (ADR-048, Aufgabe B2).
+"""Host Resolver + host-aware runtime_manager (ADR-048, Task B2).
 
-Deckt ab:
-- resolve_host_for_runtime(): alle 4 Stufen der Back-Compat-Kette
-  (host_id → Legacy-host-Feld → settings.dgx_ssh_* → None), inkl.
-  disabled-Host-Warnung ohne Silent-Fallback
-- _ssh_run(): klarer «Runtime hat keinen Host»-Fehler statt Connect gegen ""
-- Host-scoped Eviction: alle SSH-Calls laufen auf dem Host der Runtime
-- get_host_metrics(): ssh-Host (nvidia-smi via SSH, gemockt), flask_wol
-  (Health statt GPU), local (leer), Fehler → unreachable
-- get_spark_metrics(): bleibt dünner Settings-Fallback-Wrapper
-- Lifecycle-Funktionen reichen den Host bis in _ssh_run durch
+Covers:
+- resolve_host_for_runtime(): all 4 stages of the back-compat chain
+  (host_id → legacy host field → settings.dgx_ssh_* → None), incl.
+  disabled-host warning without silent fallback
+- _ssh_run(): clear "runtime has no host" error instead of connecting against ""
+- Host-scoped eviction: all SSH calls run on the runtime's host
+- get_host_metrics(): ssh host (nvidia-smi via SSH, mocked), flask_wol
+  (health instead of GPU), local (empty), error → unreachable
+- get_spark_metrics(): stays a thin settings fallback wrapper
+- Lifecycle functions thread the host through to _ssh_run
 
-Public-Repo-Regel: nur Doku-Platzhalter-IPs (192.0.2.x, RFC 5737) und
-Dummy-MACs in Fixtures.
+Public repo rule: only doc placeholder IPs (192.0.2.x, RFC 5737) and
+dummy MACs in fixtures.
 """
 from unittest.mock import AsyncMock, patch
 
@@ -44,7 +44,7 @@ def _make_runtime(slug: str = "test-rt", **kwargs) -> Runtime:
 
 @pytest.fixture
 def dgx_settings(monkeypatch):
-    """Klassisches Ein-Box-Setup: nur settings.dgx_ssh_* gesetzt."""
+    """Classic single-box setup: only settings.dgx_ssh_* set."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "192.0.2.60")
     monkeypatch.setattr(settings, "dgx_ssh_user", "mcuser")
     monkeypatch.setattr(settings, "dgx_ssh_key_path", "/keys/id_test")
@@ -53,13 +53,13 @@ def dgx_settings(monkeypatch):
 
 @pytest.fixture
 def no_dgx_settings(monkeypatch):
-    """Fresh-Install ohne GPU-Box: kein DGX-Env."""
+    """Fresh install without a GPU box: no DGX env."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     monkeypatch.setattr(settings, "dgx_ssh_user", "")
     return settings
 
 
-# ── Resolver-Kette Stufe 1: host_id → Registry-Host ────────────────────────
+# ── Resolver chain stage 1: host_id → registry host ────────────────────────
 
 
 async def test_stage1_host_id_wins_over_everything(session, dgx_settings):
@@ -71,7 +71,7 @@ async def test_stage1_host_id_wins_over_everything(session, dgx_settings):
     await session.commit()
     await session.refresh(host)
 
-    # Legacy-Feld UND Settings sind gesetzt — host_id muss trotzdem gewinnen.
+    # Legacy field AND settings are set — host_id must still win.
     rt = _make_runtime(host_id=host.id, host="192.0.2.50")
     session.add(rt)
     await session.commit()
@@ -100,7 +100,7 @@ async def test_stage1_disabled_host_warns_but_no_silent_fallback(
     with caplog.at_level("WARNING", logger="mc.host_resolver"):
         resolved = await resolve_host_for_runtime(session, rt)
 
-    # Der disabled Host wird zurückgegeben — NICHT still auf Settings gewechselt.
+    # The disabled host is returned — NOT silently swapped for settings.
     assert resolved is not None
     assert resolved.slug == "box-off"
     assert resolved.enabled is False
@@ -125,7 +125,7 @@ async def test_stage1_flask_wol_host_carries_control_fields(session, no_dgx_sett
     assert resolved.power_managed is True
 
 
-# ── Stufe 2: Legacy-host-Feld ───────────────────────────────────────────────
+# ── Stage 2: legacy host field ──────────────────────────────────────────────
 
 
 async def test_stage2_legacy_host_field(session, dgx_settings):
@@ -135,16 +135,16 @@ async def test_stage2_legacy_host_field(session, dgx_settings):
     assert resolved is not None
     assert resolved.source == "legacy_host_field"
     assert resolved.ssh_host == "192.0.2.50"
-    # SSH-User/Key kommen bei Stufe 2 aus den Settings (Vor-Registry-Verhalten).
+    # SSH user/key come from settings at stage 2 (pre-registry behavior).
     assert resolved.ssh_user == "mcuser"
     assert resolved.ssh_key_path == "/keys/id_test"
 
 
-# ── Stufe 3: settings.dgx_ssh_* Fallback ────────────────────────────────────
+# ── Stage 3: settings.dgx_ssh_* fallback ────────────────────────────────────
 
 
 async def test_stage3_settings_fallback(session, dgx_settings):
-    rt = _make_runtime()  # kein host_id, kein Legacy-Feld
+    rt = _make_runtime()  # no host_id, no legacy field
 
     resolved = await resolve_host_for_runtime(session, rt)
     assert resolved is not None
@@ -159,7 +159,7 @@ def test_stage3_works_without_session_via_runtime_fields(dgx_settings):
     assert resolved.ssh_host == "192.0.2.60"
 
 
-# ── Stufe 4: nichts konfiguriert → None ─────────────────────────────────────
+# ── Stage 4: nothing configured → None ──────────────────────────────────────
 
 
 async def test_stage4_none_when_nothing_configured(session, no_dgx_settings):
@@ -174,7 +174,7 @@ async def test_stage4_ssh_run_raises_clear_no_host_error(no_dgx_settings):
 
 
 async def test_stage4_lifecycle_op_surfaces_clear_error(no_dgx_settings):
-    """start_runtime ohne jeden Host → klarer Fehler, kein Connect gegen ''."""
+    """start_runtime without any host → clear error, no connect against ''."""
     rt = {
         "id": "orphan", "slug": "orphan", "display_name": "Orphan",
         "runtime_type": "vllm_docker", "container_name": "mc-orphan",
@@ -185,7 +185,7 @@ async def test_stage4_lifecycle_op_surfaces_clear_error(no_dgx_settings):
     assert "keinen Host" in result["message"]
 
 
-# ── Dict-Kompatibilität (model_dump / to_registry_dict) ─────────────────────
+# ── Dict compatibility (model_dump / to_registry_dict) ──────────────────────
 
 
 async def test_resolver_accepts_model_dump_dict(session, dgx_settings):
@@ -202,16 +202,16 @@ async def test_resolver_accepts_model_dump_dict(session, dgx_settings):
     assert resolved.slug == "box-d"
 
 
-# ── Host-scoped Eviction ────────────────────────────────────────────────────
+# ── Host-scoped eviction ─────────────────────────────────────────────────────
 
 
 async def test_eviction_runs_on_the_runtimes_host():
-    """Alle Eviction-SSH-Calls (stop + poll) müssen auf DEM Host der startenden
-    Runtime laufen — nie implizit auf der Settings-Box."""
+    """All eviction SSH calls (stop + poll) must run on the starting
+    runtime's host — never implicitly on the settings box."""
     box_b = ResolvedHost(ssh_host="192.0.2.70", ssh_user="u", slug="box-b", source="registry")
     ssh = AsyncMock(side_effect=[
         ("sparkrun_old_solo", "", 0),  # stop command
-        ("", "", 0),                   # poll: box frei
+        ("", "", 0),                   # poll: box free
     ])
     with patch.object(runtime_manager, "_ssh_run", ssh), \
          patch.object(runtime_manager, "_evict_poll_interval", 0):
@@ -240,8 +240,8 @@ async def test_verify_started_is_host_scoped():
 async def test_switch_recipe_evicts_and_starts_on_resolved_host(
     async_session, fake_redis
 ):
-    """switch_recipe löst den Host der Runtime auf und reicht ihn an Eviction
-    UND Start durch (Box A wird nie für einen Switch auf Box B angefasst)."""
+    """switch_recipe resolves the runtime's host and threads it through to
+    eviction AND start (box A is never touched for a switch to box B)."""
     from app.services import sparkrun_manager
 
     host = Host(slug="box-a", display_name="Box A", kind="ssh", ssh_host="192.0.2.20")
@@ -284,7 +284,7 @@ async def test_switch_recipe_evicts_and_starts_on_resolved_host(
     assert start.call_args.kwargs["host"].slug == "box-a"
 
 
-# ── get_host_metrics ────────────────────────────────────────────────────────
+# ── get_host_metrics ─────────────────────────────────────────────────────────
 
 _METRICS_OUT = (
     "47, 88064, 131072, 62\n---\n"
@@ -303,7 +303,7 @@ async def test_get_host_metrics_ssh_host(dgx_settings):
     assert metrics["gpu_util_pct"] == 47
     assert metrics["vram_total_mb"] == 131072
     assert metrics["ram_used_mb"] == 24000
-    # Der SSH-Call muss auf dem übergebenen Host laufen.
+    # The SSH call must run on the given host.
     assert ssh.call_args.kwargs.get("host") is box
     assert "nvidia-smi" in ssh.call_args.args[0]
 
@@ -319,7 +319,7 @@ async def test_get_host_metrics_flask_wol_uses_health_not_ssh():
         metrics = await runtime_manager.get_host_metrics(box)
 
     assert metrics["reachable"] is True
-    assert metrics["gpu_util_pct"] is None  # Health-Status statt GPU-Metrics
+    assert metrics["gpu_util_pct"] is None  # health status instead of GPU metrics
     ssh.assert_not_called()
 
 
@@ -348,7 +348,7 @@ async def test_get_spark_metrics_stays_settings_fallback_wrapper(dgx_settings):
     assert ssh.call_args.kwargs.get("host").ssh_host == "192.0.2.60"
 
 
-# ── Lifecycle-Funktionen reichen den Host durch ─────────────────────────────
+# ── Lifecycle functions thread the host through ─────────────────────────────
 
 
 async def test_start_runtime_threads_host_to_ssh():

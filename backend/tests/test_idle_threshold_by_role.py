@@ -1,12 +1,12 @@
-"""Idle-Thresholds sind rolle-basiert.
+"""Idle thresholds are role-based.
 
-Worker (developer/reviewer/designer/researcher/...) bekommen niedrige
-Thresholds (15-20 min), damit stecken gebliebene Agents schnell gefunden
-werden. Orchestrator (Boss/Planner) warten legitim laenger auf Callbacks
-→ 45 min. Default 60 min fuer unbekannte Rollen.
+Workers (developer/reviewer/designer/researcher/...) get low
+thresholds (15-20 min) so that stuck agents are found quickly.
+Orchestrators (Boss/Planner) legitimately wait longer for callbacks
+→ 45 min. Default 60 min for unknown roles.
 
-Agent-spezifischer Override via dispatch_config['stale_progress_minutes']
-hat Vorrang.
+Agent-specific override via dispatch_config['stale_progress_minutes']
+takes precedence.
 """
 import pytest
 from app.models.agent import Agent
@@ -38,7 +38,7 @@ def test_researcher_gets_20_min():
 
 
 def test_orchestrator_gets_45_min():
-    """Boss als orchestrator bekommt 45 min — delegiert und wartet legitim."""
+    """Boss as orchestrator gets 45 min — delegates and legitimately waits."""
     agent = Agent(name="Boss", role="orchestrator")
     assert _idle_threshold_for(agent) == 45
 
@@ -59,13 +59,13 @@ def test_no_role_falls_back_to_default():
 
 
 def test_board_lead_without_role_gets_45():
-    """Board-Lead ohne Rolle bekommt orchestrator-threshold."""
+    """Board lead without a role gets the orchestrator threshold."""
     agent = Agent(name="Lead", is_board_lead=True)
     assert _idle_threshold_for(agent) == 45
 
 
 def test_agent_dispatch_config_override_wins():
-    """dispatch_config[stale_progress_minutes] uebersteuert Rolle."""
+    """dispatch_config[stale_progress_minutes] overrides the role."""
     agent = Agent(name="Custom", role="developer", dispatch_config={"stale_progress_minutes": 5})
     assert _idle_threshold_for(agent) == 5
 

@@ -1,8 +1,8 @@
-"""Tests fuer Resolution Auto-Promote: Wenn Agent resolution-Kommentar schreibt
-und Task noch in_progress → automatisch auf review setzen.
+"""Tests for resolution auto-promote: when an agent writes a resolution comment
+and the task is still in_progress → automatically set to review.
 
-Repro-Case fuer Bug: Agent schreibt "Task abgeschlossen" aber vergisst PATCH status: review.
-Task bleibt auf in_progress haengen, obwohl die Arbeit fertig ist.
+Repro case for the bug: agent writes "Task abgeschlossen" but forgets PATCH status: review.
+Task stays stuck on in_progress even though the work is done.
 """
 
 import uuid
@@ -18,7 +18,7 @@ from tests.conftest import test_engine
 # ── Helpers ──────────────────────────────────────────────────────────────
 
 async def _create_test_data(session, *, task_status="in_progress", agent_is_lead=False):
-    """Board + Agent + Task erstellen. Gibt (board, agent, task, token) zurueck."""
+    """Create board + agent + task. Returns (board, agent, task, token)."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -63,7 +63,7 @@ async def _create_test_data(session, *, task_status="in_progress", agent_is_lead
 
 @pytest.mark.asyncio
 async def test_resolution_comment_promotes_in_progress_to_review(client, fake_redis):
-    """Repro-Case: Agent schreibt resolution-Kommentar auf in_progress Task → review."""
+    """Repro case: agent writes a resolution comment on an in_progress task → review."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="in_progress")
 
@@ -78,19 +78,19 @@ async def test_resolution_comment_promotes_in_progress_to_review(client, fake_re
 
     assert resp.status_code == 201, resp.text
 
-    # Task muss jetzt auf review stehen
+    # Task must now be on review
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
         updated_task = await s.get(Task, task.id)
         assert updated_task.status == "review", f"Expected review, got {updated_task.status}"
 
-    # Review-Handoff muss ausgeloest worden sein
+    # Review handoff must have been triggered
     mock_handoff.assert_called_once()
 
 
 @pytest.mark.asyncio
 async def test_resolution_comment_does_not_affect_review_status(client, fake_redis):
-    """Task auf review bleibt review — kein Doppel-Promote."""
+    """Task on review stays review — no double promote."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="review")
 
@@ -111,7 +111,7 @@ async def test_resolution_comment_does_not_affect_review_status(client, fake_red
 
 @pytest.mark.asyncio
 async def test_resolution_comment_does_not_affect_done_status(client, fake_redis):
-    """Task auf done bleibt done."""
+    """Task on done stays done."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="done")
 
@@ -132,7 +132,7 @@ async def test_resolution_comment_does_not_affect_done_status(client, fake_redis
 
 @pytest.mark.asyncio
 async def test_resolution_comment_does_not_affect_blocked_status(client, fake_redis):
-    """Task auf blocked bleibt blocked."""
+    """Task on blocked stays blocked."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="blocked")
 
@@ -153,7 +153,7 @@ async def test_resolution_comment_does_not_affect_blocked_status(client, fake_re
 
 @pytest.mark.asyncio
 async def test_non_resolution_comment_does_not_promote(client, fake_redis):
-    """Normaler progress-Kommentar aendert Status nicht."""
+    """A normal progress comment does not change status."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, agent, task, token = await _create_test_data(s, task_status="in_progress")
 
@@ -174,14 +174,14 @@ async def test_non_resolution_comment_does_not_promote(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_resolution_from_unassigned_agent_does_not_promote(client, fake_redis):
-    """Agent der nicht zugewiesen und nicht Board-Lead ist → kein Promote."""
+    """Agent that is neither assigned nor board lead → no promote."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, assigned_agent, task, _ = await _create_test_data(s, task_status="in_progress")
 
-        # Zweiten Agent erstellen (nicht zugewiesen, nicht Lead)
+        # Create a second agent (not assigned, not lead)
         raw_token2, token_hash2 = generate_agent_token()
         other_agent = Agent(
             id=uuid.uuid4(),
@@ -211,14 +211,14 @@ async def test_resolution_from_unassigned_agent_does_not_promote(client, fake_re
 
 @pytest.mark.asyncio
 async def test_resolution_from_board_lead_promotes(client, fake_redis):
-    """Board Lead darf fremde Tasks auto-promoten via resolution-Kommentar."""
+    """Board lead may auto-promote other agents' tasks via a resolution comment."""
     from app.models.agent import Agent
     from app.auth import generate_agent_token
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         board, assigned_agent, task, _ = await _create_test_data(s, task_status="in_progress")
 
-        # Board Lead erstellen
+        # Create board lead
         raw_token_lead, token_hash_lead = generate_agent_token()
         lead = Agent(
             id=uuid.uuid4(),

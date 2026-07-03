@@ -1,10 +1,10 @@
-"""Tests fuer Dependency-Check im /agent/me/poll Endpoint.
+"""Tests for the dependency check in the /agent/me/poll endpoint.
 
-Regression: 2026-04-22 — ein Worker der einen Subtask pollte claimed ihn auf
-in_progress, obwohl seine depends_on Tasks noch nicht done waren. Ursache war
-dass agent_poll() die SQL-Query nur auf status='inbox' filterte, nicht auf
-dependencies_met(). Der Fix iteriert jetzt die Candidates und nimmt den
-ersten mit erfuellten Dependencies.
+Regression: 2026-04-22 — a worker polling a subtask claimed it into
+in_progress even though its depends_on tasks weren't done yet. Root cause
+was that agent_poll() filtered the SQL query only on status='inbox', not on
+dependencies_met(). The fix now iterates the candidates and takes the
+first one with satisfied dependencies.
 """
 
 import uuid
@@ -39,7 +39,7 @@ provision_status="provisioned",
 
 @pytest.mark.asyncio
 async def test_poll_skips_inbox_task_with_unmet_dependency(client, fake_redis):
-    """Worker pollt, sein inbox-Task wartet auf ungedonen Vorgaenger → state=idle."""
+    """Worker polls, its inbox task waits on a not-yet-done predecessor → state=idle."""
     from app.models.task import Task, TaskDependency
 
     board_id, worker_id, token = await _setup_board_and_worker()
@@ -47,12 +47,12 @@ async def test_poll_skips_inbox_task_with_unmet_dependency(client, fake_redis):
     upstream_id = uuid.uuid4()
     blocked_id = uuid.uuid4()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        # Vorgaenger der NICHT done ist
+        # Predecessor that is NOT done
         s.add(Task(
             id=upstream_id, board_id=board_id, title="Upstream",
-            status="in_progress",  # ← nicht done
+            status="in_progress",  # ← not done
         ))
-        # Task der wartet — als inbox an Worker
+        # Task that is waiting — as inbox assigned to worker
         s.add(Task(
             id=blocked_id, board_id=board_id, title="Waits on upstream",
             status="inbox", assigned_agent_id=worker_id,
@@ -66,10 +66,10 @@ async def test_poll_skips_inbox_task_with_unmet_dependency(client, fake_redis):
     )
     assert resp.status_code == 200
     body = resp.json()
-    # Darf NICHT geclaimt worden sein
+    # Must NOT have been claimed
     assert body["state"] == "idle", f"Expected idle, got {body['state']} for task {body.get('task', {}).get('id')}"
 
-    # Task bleibt inbox in DB
+    # Task stays inbox in DB
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, blocked_id)
         assert t.status == "inbox"
@@ -78,7 +78,7 @@ async def test_poll_skips_inbox_task_with_unmet_dependency(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_poll_claims_inbox_task_when_dependency_is_done(client, fake_redis):
-    """Sobald Vorgaenger done ist, darf poll den Task claimen."""
+    """Once the predecessor is done, poll may claim the task."""
     from app.models.task import Task, TaskDependency
 
     board_id, worker_id, token = await _setup_board_and_worker()
@@ -88,7 +88,7 @@ async def test_poll_claims_inbox_task_when_dependency_is_done(client, fake_redis
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(Task(
             id=upstream_id, board_id=board_id, title="Upstream done",
-            status="done",  # ← erfuellt
+            status="done",  # ← satisfied
         ))
         s.add(Task(
             id=ready_id, board_id=board_id, title="Ready to run",
@@ -109,7 +109,7 @@ async def test_poll_claims_inbox_task_when_dependency_is_done(client, fake_redis
 
 @pytest.mark.asyncio
 async def test_poll_skips_blocked_picks_next_ready(client, fake_redis):
-    """Zwei inbox-Tasks: einer blockiert, einer frei → poll nimmt den freien."""
+    """Two inbox tasks: one blocked, one free → poll takes the free one."""
     from app.models.task import Task, TaskDependency
 
     board_id, worker_id, token = await _setup_board_and_worker()
@@ -122,13 +122,13 @@ async def test_poll_skips_blocked_picks_next_ready(client, fake_redis):
             id=upstream_id, board_id=board_id, title="Upstream",
             status="in_progress",
         ))
-        # Blocked (aelter)
+        # Blocked (older)
         s.add(Task(
             id=blocked_id, board_id=board_id, title="Blocked task",
             status="inbox", assigned_agent_id=worker_id,
         ))
         s.add(TaskDependency(task_id=blocked_id, depends_on_task_id=upstream_id))
-        # Free (juenger, ohne deps)
+        # Free (younger, no deps)
         s.add(Task(
             id=free_id, board_id=board_id, title="Free task",
             status="inbox", assigned_agent_id=worker_id,

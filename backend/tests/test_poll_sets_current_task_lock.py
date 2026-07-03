@@ -1,13 +1,13 @@
-"""Tests fuer Bug-Fix 2026-04-25: agent_poll setzt current_task_id Lock.
+"""Tests for bug fix 2026-04-25: agent_poll sets the current_task_id lock.
 
-Live-Bug Boss 2026-04-25: Boss bekam Task ueber Push-Dispatch (poll.sh
-fire-and-forget zu claude), agent_poll setzte ack_at aber NICHT
-agent.current_task_id. Boss versuchte sofort `mc delegate` (vor erstem
-Comment) → 409 "Kein aktiver Task". 6+ Minuten Stewing-Loop bis Boss via
-Comment-Auto-ACK eventually current_task_id bekam.
+Live bug for Boss on 2026-04-25: Boss received a task via push dispatch
+(poll.sh fire-and-forget to claude), agent_poll set ack_at but NOT
+agent.current_task_id. Boss immediately tried `mc delegate` (before its
+first comment) → 409 "Kein aktiver Task". 6+ minute stewing loop until
+Boss eventually got current_task_id via comment auto-ACK.
 
-PR #103 fixte den PATCH-ACK Pfad. PR ?? fixte Comment-Auto-ACK Pfad. Hier
-der dritte und letzte Push-Dispatch Pfad: agent_poll.
+PR #103 fixed the PATCH-ACK path. PR ?? fixed the comment auto-ACK path.
+Here's the third and final push-dispatch path: agent_poll.
 """
 import datetime as dt
 import uuid
@@ -60,10 +60,10 @@ async def _make_scenario(*, is_board_lead: bool, task_status: str = "in_progress
 async def test_agent_poll_sets_current_task_id_for_board_lead(
     client: AsyncClient, fake_redis,
 ):
-    """Push-Dispatch zu Board Lead: poll → current_task_id gesetzt.
+    """Push dispatch to board lead: poll → current_task_id gets set.
 
-    Verhindert dass mc delegate / mc help-request / mc clarification mit
-    409 'Kein aktiver Task' antworten obwohl Task aktiv ist.
+    Prevents mc delegate / mc help-request / mc clarification from
+    responding with 409 'Kein aktiver Task' even though a task is active.
     """
     raw_token, board_id, agent_id, task_id = await _make_scenario(is_board_lead=True)
 
@@ -88,9 +88,9 @@ async def test_agent_poll_sets_current_task_id_for_board_lead(
 async def test_agent_poll_skips_current_task_id_for_worker_subagent_mode(
     client: AsyncClient, fake_redis, monkeypatch,
 ):
-    """Subagent-Modus: Worker bekommen kein Lock — parallele Sessions.
+    """Subagent mode: workers don't get a lock — parallel sessions.
 
-    Gleiche Skip-Bedingung wie Comment-Auto-ACK und PATCH-ACK.
+    Same skip condition as comment auto-ACK and PATCH-ACK.
     """
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", True)
@@ -115,7 +115,7 @@ async def test_agent_poll_skips_current_task_id_for_worker_subagent_mode(
 async def test_agent_poll_sets_current_task_id_for_worker_legacy_mode(
     client: AsyncClient, fake_redis, monkeypatch,
 ):
-    """Legacy-Modus (USE_SUBAGENT_DISPATCH=false): auch Worker bekommen Lock."""
+    """Legacy mode (USE_SUBAGENT_DISPATCH=false): workers get a lock too."""
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", False)
 
@@ -136,12 +136,12 @@ async def test_agent_poll_sets_current_task_id_for_worker_legacy_mode(
 async def test_agent_poll_inbox_task_also_sets_lock(
     client: AsyncClient, fake_redis,
 ):
-    """Inbox-Task wird via poll geclaimt + current_task_id gesetzt."""
+    """Inbox task gets claimed via poll + current_task_id gets set."""
     raw_token, board_id, agent_id, task_id = await _make_scenario(
         is_board_lead=True, task_status="inbox",
     )
 
-    # Inbox tasks brauchen kein dispatched_at — der poll claimt direkt
+    # Inbox tasks don't need dispatched_at — poll claims directly
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task_id)
         t.dispatched_at = None

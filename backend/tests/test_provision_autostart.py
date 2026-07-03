@@ -1,11 +1,11 @@
-"""provision_agent_background — Container-Autostart nach erfolgreichem Provision.
+"""provision_agent_background — container autostart after successful provision.
 
-One-Click-Deploy (OSS-Kern-Feature): Provision rendert Files+Compose UND bringt
-den Container hoch. Vorher endete Provision in 'provisioned' ohne laufenden
-Container — der startete erst beim Runtime-Switch oder manuell via start-all.sh.
+One-click deploy (OSS core feature): provision renders files+compose AND brings
+the container up. Previously, provision ended in 'provisioned' without a running
+container — it only started on runtime switch or manually via start-all.sh.
 
-Schutzregel: Läuft der Container bereits (Re-Provision eines aktiven Agents),
-wird er NICHT recreated — ein Agent mitten im Task darf nicht abgeschossen werden.
+Protection rule: if the container is already running (re-provision of an active
+agent), it is NOT recreated — an agent mid-task must not get shot down.
 """
 from __future__ import annotations
 
@@ -18,13 +18,13 @@ from tests.conftest import test_engine
 
 @pytest.fixture
 def _patched_engine(monkeypatch):
-    """provision_agent_background baut seine eigene Session aus app.database.engine."""
+    """provision_agent_background builds its own session from app.database.engine."""
     monkeypatch.setattr("app.database.engine", test_engine)
 
 
 @pytest.fixture
 def _happy_sync(monkeypatch):
-    """Compose-Render + File-Sync erfolgreich, Events gesammelt."""
+    """Compose render + file sync succeed, events collected."""
     events: list[tuple] = []
 
     async def fake_write_compose(session):
@@ -62,7 +62,7 @@ async def _reload(agent_id) -> Agent:
 
 @pytest.mark.asyncio
 async def test_provision_starts_container(monkeypatch, _patched_engine, _happy_sync):
-    """Erfolgreicher Provision ruft ensure_agent_container_started und markiert provisioned."""
+    """Successful provision calls ensure_agent_container_started and marks provisioned."""
     from app.services import provisioning
 
     agent = await _make_agent()
@@ -84,12 +84,12 @@ async def test_provision_starts_container(monkeypatch, _patched_engine, _happy_s
     assert reloaded.provisioned_at is not None
     event_type, message, severity = _happy_sync[0]
     assert event_type == "agent.provisioned"
-    assert "recreated" in message  # Container-Status im Event sichtbar
+    assert "recreated" in message  # Container status visible in the event
 
 
 @pytest.mark.asyncio
 async def test_running_container_not_recreated(monkeypatch, _patched_engine, _happy_sync):
-    """already-running gilt als Erfolg — Re-Provision bounce't keinen aktiven Agent."""
+    """already-running counts as success — re-provision doesn't bounce an active agent."""
     from app.services import provisioning
 
     agent = await _make_agent(name="Busy Agent")
@@ -109,7 +109,7 @@ async def test_running_container_not_recreated(monkeypatch, _patched_engine, _ha
 
 @pytest.mark.asyncio
 async def test_container_start_error_marks_error(monkeypatch, _patched_engine, _happy_sync):
-    """Container-Start-Fehler → provision_status 'error' + Warning-Event (kein Silent-Fail)."""
+    """Container start error → provision_status 'error' + warning event (no silent fail)."""
     from app.services import provisioning
 
     agent = await _make_agent(name="Broken Agent")
@@ -130,12 +130,12 @@ async def test_container_start_error_marks_error(monkeypatch, _patched_engine, _
     event_type, message, severity = _happy_sync[0]
     assert event_type == "agent.provision_failed"
     assert severity == "warning"
-    assert "docker logs" in message  # Handlungsanweisung
+    assert "docker logs" in message  # Actionable instruction
 
 
 @pytest.mark.asyncio
 async def test_sync_error_skips_autostart(monkeypatch, _patched_engine):
-    """File-Sync-Fehler → Autostart darf gar nicht erst versucht werden."""
+    """File sync error → autostart must not even be attempted."""
     from app.services import provisioning
 
     agent = await _make_agent(name="No Files Agent")
@@ -174,7 +174,7 @@ async def test_sync_error_skips_autostart(monkeypatch, _patched_engine):
 
 @pytest.mark.asyncio
 async def test_host_agent_no_autostart(monkeypatch, _patched_engine):
-    """Host-Agents (launchd) haben keinen Docker-Container — kein Autostart-Aufruf."""
+    """Host agents (launchd) have no Docker container — no autostart call."""
     from app.services import provisioning
 
     agent = await _make_agent(name="Boss Agent", runtime="host")
@@ -200,7 +200,7 @@ async def test_host_agent_no_autostart(monkeypatch, _patched_engine):
 
 
 def test_ensure_skips_running_container(monkeypatch):
-    """ensure_agent_container_started: laufender Container → kein force_recreate."""
+    """ensure_agent_container_started: running container → no force_recreate."""
     from app.services import docker_agent_sync as das
 
     agent = Agent(name="Live Agent", agent_runtime="cli-bridge")
@@ -219,7 +219,7 @@ def test_ensure_skips_running_container(monkeypatch):
 
 
 def test_ensure_recreates_stopped_container(monkeypatch):
-    """ensure_agent_container_started: kein/gestoppter Container → force_recreate=True."""
+    """ensure_agent_container_started: no/stopped container → force_recreate=True."""
     from app.services import docker_agent_sync as das
 
     agent = Agent(name="Cold Agent", agent_runtime="cli-bridge")

@@ -1,9 +1,9 @@
-"""Tests fuer Timestamp-Reset bei Agent-Reassignment.
+"""Tests for timestamp reset on agent reassignment.
 
-Wenn assigned_agent_id wechselt, muessen dispatched_at und ack_at
-zurueckgesetzt werden — der neue Agent braucht einen frischen
-Dispatch-Zyklus. Sonst erkennt der Task Runner falsche ACK-Timeouts
-und der Watchdog arbeitet mit veralteten Timestamps.
+When assigned_agent_id changes, dispatched_at and ack_at must be
+reset — the new agent needs a fresh dispatch cycle. Otherwise the
+task runner detects false ACK timeouts and the watchdog operates
+on stale timestamps.
 """
 import uuid
 from datetime import datetime, timedelta
@@ -12,28 +12,28 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 
-# ── Path 1: Manuelles Reassignment via UI ──────────────────────────────
+# ── Path 1: Manual reassignment via UI ──────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_manual_reassignment_resets_dispatch_timestamps(
     auth_client, make_board, make_agent, make_task
 ):
-    """PATCH assigned_agent_id → dispatched_at und ack_at muessen None werden.
+    """PATCH assigned_agent_id → dispatched_at and ack_at must become None.
 
-    Phase 29 / Wave 4 cleanup: vor Phase 29 lief der Re-Dispatch inline
-    via rpc.chat_send und setzte dispatched_at synchron im PATCH-Response.
-    Seit Phase 29 schickt der Router den Re-Dispatch als Background-Task
-    (auto_dispatch_task via create_tracked_task) — dispatched_at bleibt im
-    PATCH-Response None und wird erst spaeter in dispatch_delivery gesetzt.
-    Das Loeschen alter Cody-Timestamps ist trotzdem ein synchroner Effekt
-    den wir hier verifizieren.
+    Phase 29 / Wave 4 cleanup: before Phase 29, re-dispatch ran inline via
+    rpc.chat_send and set dispatched_at synchronously in the PATCH response.
+    Since Phase 29 the router sends re-dispatch as a background task
+    (auto_dispatch_task via create_tracked_task) — dispatched_at stays None
+    in the PATCH response and is only set later in dispatch_delivery.
+    Clearing the old Cody timestamps is still a synchronous effect that
+    we verify here.
     """
     board = await make_board(name="Dev", slug="dev-reassign-1")
     cody = await make_agent(name="Cody", board_id=board.id)
     rex = await make_agent(name="Rex", board_id=board.id)
 
-    # Task war bei Cody in_progress mit allen Timestamps gesetzt
+    # Task was in_progress with Cody, with all timestamps set
     old_dispatch = datetime.utcnow() - timedelta(minutes=15)
     old_ack = datetime.utcnow() - timedelta(minutes=14)
     old_start = datetime.utcnow() - timedelta(minutes=14)
@@ -59,30 +59,30 @@ async def test_manual_reassignment_resets_dispatch_timestamps(
     assert resp.status_code == 200
     data = resp.json()
     assert data["assigned_agent_id"] == str(rex.id)
-    # Beide Tracking-Timestamps zurueckgesetzt — Re-Dispatch laeuft im
-    # Background-Task, fuellt dispatched_at erst nach erfolgreichem
-    # dispatch_delivery wieder.
+    # Both tracking timestamps reset — re-dispatch runs in the
+    # background task, only fills dispatched_at again after a
+    # successful dispatch_delivery.
     assert data["dispatched_at"] is None
     assert data["ack_at"] is None
 
 
-# test_manual_reassignment_sets_dispatched_at_on_success entfernt (Phase 29 /
-# Wave 4 cleanup): testete den synchronen rpc.chat_send-Erfolgs-Pfad in
-# `tasks.py`. Seit Phase 29 laeuft der Re-Dispatch via auto_dispatch_task
-# (Background-Task) — der PATCH-Response sieht dispatched_at nie inline
-# gesetzt, das geschieht erst in dispatch_delivery.
+# test_manual_reassignment_sets_dispatched_at_on_success removed (Phase 29 /
+# Wave 4 cleanup): tested the synchronous rpc.chat_send success path in
+# `tasks.py`. Since Phase 29, re-dispatch runs via auto_dispatch_task
+# (background task) — the PATCH response never sees dispatched_at set
+# inline; that only happens in dispatch_delivery.
 
 
 @pytest.mark.asyncio
 async def test_manual_reassignment_dispatch_fails_leaves_dispatched_at_none(
     auth_client, make_board, make_agent, make_task
 ):
-    """Re-Assignment-PATCH gibt dispatched_at=None zurueck.
+    """Reassignment PATCH returns dispatched_at=None.
 
-    Phase 29 / Wave 4: Re-Dispatch laeuft via create_tracked_task →
-    auto_dispatch_task im Background. Der PATCH-Response selbst hat
-    dispatched_at immer None. (Falls die Background-Lieferung scheitert,
-    bleibt dispatched_at dauerhaft None und der Watchdog re-dispatcht.)
+    Phase 29 / Wave 4: re-dispatch runs via create_tracked_task →
+    auto_dispatch_task in the background. The PATCH response itself
+    always has dispatched_at None. (If the background delivery fails,
+    dispatched_at stays None permanently and the watchdog re-dispatches.)
     """
     board = await make_board(name="Dev", slug="dev-reassign-3")
     cody = await make_agent(name="Cody", board_id=board.id)
@@ -111,14 +111,14 @@ async def test_manual_reassignment_dispatch_fails_leaves_dispatched_at_none(
     assert data["ack_at"] is None
 
 
-# ── Path 2+4: Review-Handoff (Reviewer bekommt Task) ──────────────────
+# ── Path 2+4: Review handoff (reviewer receives task) ──────────────────
 
 
 @pytest.mark.asyncio
 async def test_review_handoff_resets_dispatch_timestamps(
     auth_client, make_board, make_agent, make_task
 ):
-    """review-Handoff an Reviewer → dispatched_at/ack_at zurueckgesetzt."""
+    """review handoff to reviewer → dispatched_at/ack_at reset."""
     board = await make_board(name="Dev", slug="dev-review-handoff")
     dev = await make_agent(name="Cody", board_id=board.id)
     reviewer = await make_agent(name="Rex", board_id=board.id)
@@ -146,17 +146,17 @@ async def test_review_handoff_resets_dispatch_timestamps(
     assert resp.status_code == 200
     data = resp.json()
     assert data["assigned_agent_id"] == str(reviewer.id)
-    assert data["ack_at"] is None  # Reviewer hat noch nicht ACK'd
+    assert data["ack_at"] is None  # Reviewer hasn't ACK'd yet
 
 
-# ── Path 3+5: Review-Rejection (Dev bekommt zurueck, dev frei) ─────────
+# ── Path 3+5: Review rejection (dev gets it back, dev free) ─────────
 
 
 @pytest.mark.asyncio
 async def test_review_rejection_dev_free_resets_dispatch_timestamps(
     auth_client, make_board, make_agent, make_task
 ):
-    """Review abgelehnt, Dev ist frei → Timestamps fuer neuen Dispatch-Zyklus zurueckgesetzt."""
+    """Review rejected, dev is free → timestamps reset for new dispatch cycle."""
     board = await make_board(name="Dev", slug="dev-rejection-ts")
     dev = await make_agent(name="Cody", board_id=board.id)
 
@@ -188,4 +188,4 @@ async def test_review_rejection_dev_free_resets_dispatch_timestamps(
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["ack_at"] is None  # Neuer Dispatch-Zyklus
+    assert data["ack_at"] is None  # New dispatch cycle

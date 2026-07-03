@@ -18,7 +18,7 @@ _REFLECTION_BODY = (
 
 
 async def _post_reflection(client, agent_headers, board_id, task_id):
-    """ADR-023: Reflexion ist unabhaengig vom Review-Policy-Override."""
+    """ADR-023: reflection is independent of the review policy override."""
     resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
         headers=agent_headers,
@@ -31,7 +31,7 @@ async def _setup_review_policy_scenario(
     require_review: bool = True,
     review_policy=None,
 ):
-    """Board + Agent + Project + Task anlegen."""
+    """Create board + agent + project + task."""
     from app.models.board import Board, Project
     from app.models.agent import Agent
     from app.models.task import Task
@@ -92,7 +92,7 @@ async def _setup_review_policy_scenario(
 
 @pytest.mark.asyncio
 async def test_project_review_policy_never_bypasses_board_review_rule(client):
-    """Wenn Projekt review_policy=never → done direkt möglich, auch wenn Board require_review=True."""
+    """If project review_policy=never → done is possible directly, even if board require_review=True."""
     with patch(
         "app.services.work_context.validate_task_completion",
         new=AsyncMock(return_value=(True, [])),
@@ -105,9 +105,9 @@ async def test_project_review_policy_never_bypasses_board_review_rule(client):
         board_id = ids["board_id"]
         task_id = ids["task_id"]
 
-        # Reflexion posten (ADR-023 — unabhaengig vom Review-Policy-Override)
+        # Post reflection (ADR-023 — independent of the review policy override)
         await _post_reflection(client, agent_headers, board_id, task_id)
-        # Direkt auf done setzen (kein review nötig dank policy=never)
+        # Set directly to done (no review needed thanks to policy=never)
         resp = await client.patch(
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
             headers=agent_headers,
@@ -118,20 +118,20 @@ async def test_project_review_policy_never_bypasses_board_review_rule(client):
 
 @pytest.mark.asyncio
 async def test_project_without_review_policy_uses_board_default(client):
-    """Ohne project_config.review_policy gilt der Board-Default."""
+    """Without project_config.review_policy, the board default applies."""
     with patch(
         "app.services.work_context.validate_task_completion",
         new=AsyncMock(return_value=(True, [])),
     ), patch("app.services.activity.broadcast", new_callable=AsyncMock):
         ids = await _setup_review_policy_scenario(
             require_review=True,
-            review_policy=None,  # kein Override
+            review_policy=None,  # no override
         )
         agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
         board_id = ids["board_id"]
         task_id = ids["task_id"]
 
-        # done ohne review → sollte geblockt sein (Board-Default greift)
+        # done without review → should be blocked (board default applies)
         resp = await client.patch(
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
             headers=agent_headers,
@@ -143,7 +143,7 @@ async def test_project_without_review_policy_uses_board_default(client):
 
 @pytest.mark.asyncio
 async def test_task_skip_review_bypasses_board_review_rule(client):
-    """Task mit skip_review=True kann direkt done werden, auch wenn Board require_review=True."""
+    """Task with skip_review=True can be set directly to done, even if board require_review=True."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -188,7 +188,7 @@ async def test_task_skip_review_bypasses_board_review_rule(client):
         "app.services.work_context.validate_task_completion",
         new=AsyncMock(return_value=(True, [])),
     ), patch("app.services.activity.broadcast", new_callable=AsyncMock):
-        # Reflexion posten (ADR-023 — unabhaengig von skip_review)
+        # Post reflection (ADR-023 — independent of skip_review)
         await _post_reflection(
             client,
             {"Authorization": f"Bearer {raw_token}"},

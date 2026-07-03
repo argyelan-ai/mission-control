@@ -1,8 +1,8 @@
-"""Tests fuer /api/v1/agents/{id}/local-memory + /force-recreate Endpoints.
+"""Tests for /api/v1/agents/{id}/local-memory + /force-recreate endpoints.
 
-Use-Case (Sparky 2026-05-12): UI-Endpoints fuer Claude-Local-Memory-Files
-(Toxic Lessons loeschen ohne docker exec) und Container-Force-Recreate
-(neues Image ziehen ohne kompletten Stack-Restart).
+Use case (Sparky 2026-05-12): UI endpoints for Claude local-memory files
+(deleting toxic lessons without docker exec) and container force-recreate
+(pulling a new image without a full stack restart).
 """
 import uuid
 from unittest.mock import patch, AsyncMock
@@ -79,7 +79,7 @@ async def test_get_local_memory_requires_auth(client: AsyncClient):
 async def test_get_local_memory_container_stopped(
     auth_client: AsyncClient, session
 ):
-    """Wenn Container nicht running ist, kommen 0 files + state zurueck."""
+    """If the container isn't running, 0 files + state are returned."""
     agent = Agent(
         id=uuid.uuid4(), name="Test Stopped", agent_runtime="cli-bridge",
     )
@@ -99,7 +99,7 @@ async def test_get_local_memory_container_stopped(
 async def test_get_local_memory_lists_md_files(
     auth_client: AsyncClient, session
 ):
-    """Listet .md files mit Inhalt; hidden Files + Subdirs ignoriert."""
+    """Lists .md files with content; hidden files + subdirs ignored."""
     agent = Agent(
         id=uuid.uuid4(), name="Test Listing", agent_runtime="cli-bridge",
     )
@@ -145,7 +145,7 @@ async def test_delete_local_memory_404_unknown_agent(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_delete_local_memory_rejects_traversal(auth_client: AsyncClient, session):
-    """Path-traversal wird vor Agent-Lookup geprueft → 400."""
+    """Path traversal is checked before the agent lookup → 400."""
     agent = Agent(
         id=uuid.uuid4(), name="Test Traversal", agent_runtime="cli-bridge",
     )
@@ -221,7 +221,7 @@ async def test_force_recreate_404_unknown_agent(auth_client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_force_recreate_blocked_when_busy(auth_client: AsyncClient, session):
-    """Mit current_task_id und ohne force → 409."""
+    """With current_task_id and without force → 409."""
     agent = Agent(
         id=uuid.uuid4(),
         name="Test Busy",
@@ -239,7 +239,7 @@ async def test_force_recreate_blocked_when_busy(auth_client: AsyncClient, sessio
 
 @pytest.mark.anyio
 async def test_force_recreate_force_bypass(auth_client: AsyncClient, session):
-    """Mit force=true bypassed der Busy-Check."""
+    """With force=true, the busy check is bypassed."""
     agent = Agent(
         id=uuid.uuid4(),
         name="Test Force Bypass",
@@ -271,11 +271,11 @@ async def test_force_recreate_force_bypass(auth_client: AsyncClient, session):
 
 @pytest.mark.anyio
 async def test_force_recreate_uses_host_home(auth_client: AsyncClient, session, monkeypatch):
-    """Regression 2026-05-12: HOME=/Users/testuser/Workspace verschob Sparky's Mount
-    von /Users/testuser/.mc/... auf /Users/testuser/Workspace/.mc/...
+    """Regression 2026-05-12: HOME=/Users/testuser/Workspace shifted Sparky's mount
+    from /Users/testuser/.mc/... to /Users/testuser/Workspace/.mc/...
 
-    Test: docker compose subprocess wird mit env["HOME"] = HOME_HOST aufgerufen,
-    NICHT mit einem manuell konstruierten Pfad.
+    Test: the docker compose subprocess is called with env["HOME"] = HOME_HOST,
+    NOT with a manually constructed path.
     """
     agent = Agent(id=uuid.uuid4(), name="Test HOME Env", agent_runtime="cli-bridge")
     session.add(agent)

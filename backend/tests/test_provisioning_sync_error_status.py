@@ -1,11 +1,11 @@
-"""provision_agent_background — kein Silent-Fail bei File-Sync-Fehlern.
+"""provision_agent_background — no silent fail on file sync errors.
 
-OSS-Fresh-Install-Pfad (Agent-Deploy-Verifikation, Host-Registry Welle 1+2):
-Direkt nach Template-Instantiate existiert ~/.mc/agents/{slug}/claude-config/
-noch nicht — sync_docker_agent_files liefert dann {"_error": ...}. Vorher
-markierte provision_agent_background den Agent trotzdem als 'provisioned'
-(ProvisionBadge "Live" ohne Files/Container). Jetzt: Status bleibt 'local' +
-agent.provision_failed Warning-Event mit Handlungsanweisung.
+OSS fresh-install path (agent deploy verification, host registry wave 1+2):
+right after template instantiate, ~/.mc/agents/{slug}/claude-config/ doesn't
+exist yet — sync_docker_agent_files then returns {"_error": ...}. Previously,
+provision_agent_background marked the agent as 'provisioned' anyway
+(ProvisionBadge "Live" without files/container). Now: status stays 'local' +
+agent.provision_failed warning event with an actionable instruction.
 """
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from tests.conftest import test_engine
 
 @pytest.fixture
 def _patched_engine(monkeypatch):
-    """provision_agent_background baut seine eigene Session aus app.database.engine."""
+    """provision_agent_background builds its own session from app.database.engine."""
     monkeypatch.setattr("app.database.engine", test_engine)
 
 
@@ -42,7 +42,7 @@ async def _reload(agent_id) -> Agent:
 
 @pytest.mark.asyncio
 async def test_sync_error_keeps_status_local(monkeypatch, _patched_engine):
-    """_error im Sync-Result → provision_status bleibt 'local' + Warning-Event."""
+    """_error in the sync result → provision_status stays 'local' + warning event."""
     from app.services import provisioning
 
     agent = await _make_cli_agent()
@@ -76,12 +76,12 @@ async def test_sync_error_keeps_status_local(monkeypatch, _patched_engine):
     event_type, message, severity = events[0]
     assert event_type == "agent.provision_failed"
     assert severity == "warning"
-    assert "Provision" in message  # Handlungsanweisung statt Silent-Fail
+    assert "Provision" in message  # Actionable instruction instead of silent fail
 
 
 @pytest.mark.asyncio
 async def test_sync_ok_marks_provisioned(monkeypatch, _patched_engine):
-    """Regression-Guard: erfolgreicher Sync markiert weiterhin 'provisioned'."""
+    """Regression guard: successful sync still marks 'provisioned'."""
     from app.services import provisioning
 
     agent = await _make_cli_agent(name="Synced Agent")
@@ -95,8 +95,8 @@ async def test_sync_ok_marks_provisioned(monkeypatch, _patched_engine):
     async def fake_emit(session, event_type, message, **kwargs):
         pass
 
-    # Provision-Autostart (test_provision_autostart.py) würde hier sonst echt
-    # docker aufrufen — Erfolgsfall reicht für diesen Guard.
+    # Provision autostart (test_provision_autostart.py) would otherwise really
+    # call docker here — the success case is enough for this guard.
     monkeypatch.setattr(
         "app.services.docker_agent_sync.ensure_agent_container_started",
         lambda ag: {"status": "recreated", "container": "x", "mode": "recreate"},

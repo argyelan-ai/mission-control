@@ -1,8 +1,8 @@
-"""Tests fuer Phase 2A: Observability & Hygiene.
+"""Tests for Phase 2A: Observability & Hygiene.
 
-- Evidence-Guard: Mind. 1 progress/resolution Kommentar vor Review
-- Dispatch-Decision-Logging: find_dispatch_target gibt Reason zurueck
-- Owner-Callback: owner_agent_id wird fuer Callback genutzt
+- Evidence guard: at least 1 progress/resolution comment before review
+- Dispatch-decision logging: find_dispatch_target returns a reason
+- Owner callback: owner_agent_id is used for the callback
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -23,7 +23,7 @@ REFLECTION_TEXT = (
 
 
 async def _add_reflection(task_id: uuid.UUID, agent_id: uuid.UUID):
-    """Helper: Reflection-Kommentar erstellen (erfuellt Rule 4)."""
+    """Helper: create a reflection comment (satisfies Rule 4)."""
     from app.models.task import TaskComment
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         c = TaskComment(
@@ -82,15 +82,15 @@ async def _setup_phase2a_scenario():
 
 
 # ────────────────────────────────────────────────────────────
-# Evidence-Guard Tests
+# Evidence Guard Tests
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_review_blocked_without_evidence(client):
-    """Agent kann nicht auf review setzen ohne mindestens 1 progress/resolution Kommentar.
+    """Agent cannot set review without at least 1 progress/resolution comment.
 
-    Reflection-Kommentar ist seit Phase E Pflicht (Rule 4) und wird hier erfuellt.
-    Danach greift der Evidence-Guard (keine progress/resolution/checkpoint → 409).
+    Reflection comment has been mandatory since Phase E (Rule 4) and is satisfied here.
+    After that, the evidence guard applies (no progress/resolution/checkpoint → 409).
     """
     ids = await _setup_phase2a_scenario()
     from app.models.task import Task
@@ -105,7 +105,7 @@ async def test_review_blocked_without_evidence(client):
         s.add(task)
         await s.commit()
 
-    # Reflection posten (Rule 4 erfuellt) — aber kein Evidence-Kommentar
+    # Post reflection (Rule 4 satisfied) — but no evidence comment
     await _add_reflection(task_id, ids["dev_id"])
 
     with _BROADCAST_PATCH:
@@ -121,7 +121,7 @@ async def test_review_blocked_without_evidence(client):
 
 @pytest.mark.asyncio
 async def test_review_allowed_with_evidence(client):
-    """Agent kann auf review setzen mit Evidence + Reflection."""
+    """Agent can set review with evidence + reflection."""
     ids = await _setup_phase2a_scenario()
     from app.models.task import Task, TaskComment
 
@@ -141,7 +141,7 @@ async def test_review_allowed_with_evidence(client):
         s.add_all([task, comment])
         await s.commit()
 
-    # Reflection als letzter Kommentar (Rule 4)
+    # Reflection as the last comment (Rule 4)
     await _add_reflection(task_id, ids["dev_id"])
 
     with _BROADCAST_PATCH:
@@ -156,7 +156,7 @@ async def test_review_allowed_with_evidence(client):
 
 @pytest.mark.asyncio
 async def test_review_allowed_with_checkpoint(client):
-    """Checkpoint Kommentar zaehlt auch als Evidence, Reflection als letzter."""
+    """Checkpoint comment also counts as evidence, reflection last."""
     ids = await _setup_phase2a_scenario()
     from app.models.task import Task, TaskComment
 
@@ -176,7 +176,7 @@ async def test_review_allowed_with_checkpoint(client):
         s.add_all([task, comment])
         await s.commit()
 
-    # Reflection als letzter Kommentar (Rule 4)
+    # Reflection as the last comment (Rule 4)
     await _add_reflection(task_id, ids["dev_id"])
 
     with _BROADCAST_PATCH:
@@ -190,12 +190,12 @@ async def test_review_allowed_with_checkpoint(client):
 
 
 # ────────────────────────────────────────────────────────────
-# Dispatch-Decision-Logging Tests
+# Dispatch Decision Logging Tests
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_dispatch_target_returns_reason():
-    """find_dispatch_target gibt (agent, reason) Tupel zurueck."""
+    """find_dispatch_target returns an (agent, reason) tuple."""
     from app.services.dispatch import find_dispatch_target
     from app.models.task import Task
 
@@ -212,13 +212,13 @@ async def test_dispatch_target_returns_reason():
         agent, reason = await find_dispatch_target(s, task, ids["board_id"])
 
     assert agent is not None
-    assert agent.name == "Henry"  # Board Lead hat Prioritaet
+    assert agent.name == "Henry"  # Board lead has priority
     assert reason == "board_lead"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_target_explicit_assignment():
-    """Explizite assigned_agent_id hat Vorrang vor Board Lead."""
+    """Explicit assigned_agent_id takes precedence over board lead."""
     from app.services.dispatch import find_dispatch_target
     from app.models.task import Task
 
@@ -228,7 +228,7 @@ async def test_dispatch_target_explicit_assignment():
         task = Task(
             id=uuid.uuid4(), board_id=ids["board_id"],
             title="Explicit Assignment Test", status="inbox",
-            assigned_agent_id=ids["dev_id"],  # explizit Sparky (kein Board Lead)
+            assigned_agent_id=ids["dev_id"],  # explicitly Sparky (not board lead)
         )
         s.add(task)
         await s.commit()
@@ -236,13 +236,13 @@ async def test_dispatch_target_explicit_assignment():
         agent, reason = await find_dispatch_target(s, task, ids["board_id"])
 
     assert agent is not None
-    assert agent.name == "Sparky"       # direkt zum zugewiesenen Agent
+    assert agent.name == "Sparky"       # directly to the assigned agent
     assert reason == "explicit_assignment"
 
 
 @pytest.mark.asyncio
 async def test_dispatch_target_empty_board():
-    """Leeres Board gibt (None, 'no_agents_on_board') zurueck."""
+    """Empty board returns (None, 'no_agents_on_board')."""
     from app.services.dispatch import find_dispatch_target
     from app.models.board import Board
     from app.models.task import Task

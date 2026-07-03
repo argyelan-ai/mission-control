@@ -1,4 +1,4 @@
-"""Tests fuer model_prices CRUD + unmatched + recompute (admin-only) + Aggregat-Endpoints."""
+"""Tests for model_prices CRUD + unmatched + recompute (admin-only) + aggregate endpoints."""
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -28,7 +28,7 @@ def price_payload():
 
 @pytest.mark.asyncio
 async def test_list_prices_admin_ok(auth_client: AsyncClient, session, price_payload):
-    """Admin kann Preise auflisten."""
+    """Admin can list prices."""
     price = ModelPrice(
         id=uuid.uuid4(),
         model_pattern="claude-opus-4-*",
@@ -51,7 +51,7 @@ async def test_list_prices_admin_ok(auth_client: AsyncClient, session, price_pay
 
 @pytest.mark.asyncio
 async def test_list_prices_unauthenticated_fails(client: AsyncClient):
-    """Kein Token → 401."""
+    """No token → 401."""
     resp = await client.get("/api/v1/model-prices")
     assert resp.status_code in (401, 403)
 
@@ -60,7 +60,7 @@ async def test_list_prices_unauthenticated_fails(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_price_admin(auth_client: AsyncClient, price_payload):
-    """Admin kann Preis erstellen."""
+    """Admin can create a price."""
     resp = await auth_client.post("/api/v1/model-prices", json=price_payload)
     assert resp.status_code == 201
     data = resp.json()
@@ -71,7 +71,7 @@ async def test_create_price_admin(auth_client: AsyncClient, price_payload):
 
 @pytest.mark.asyncio
 async def test_create_price_unauthenticated_fails(client: AsyncClient, price_payload):
-    """Kein Token → 401."""
+    """No token → 401."""
     resp = await client.post("/api/v1/model-prices", json=price_payload)
     assert resp.status_code in (401, 403)
 
@@ -80,7 +80,7 @@ async def test_create_price_unauthenticated_fails(client: AsyncClient, price_pay
 
 @pytest.mark.asyncio
 async def test_update_price_admin(auth_client: AsyncClient, session):
-    """Admin kann Preis updaten."""
+    """Admin can update a price."""
     price = ModelPrice(
         id=uuid.uuid4(),
         model_pattern="qwen*",
@@ -106,7 +106,7 @@ async def test_update_price_admin(auth_client: AsyncClient, session):
 
 @pytest.mark.asyncio
 async def test_update_price_not_found(auth_client: AsyncClient):
-    """404 wenn Preis nicht existiert."""
+    """404 when the price doesn't exist."""
     resp = await auth_client.patch(
         f"/api/v1/model-prices/{uuid.uuid4()}",
         json={"note": "x"},
@@ -118,7 +118,7 @@ async def test_update_price_not_found(auth_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_delete_price_admin(auth_client: AsyncClient, session):
-    """Admin kann Preis loeschen."""
+    """Admin can delete a price."""
     price = ModelPrice(
         id=uuid.uuid4(),
         model_pattern="to-delete-*",
@@ -143,8 +143,8 @@ async def test_delete_price_admin(auth_client: AsyncClient, session):
 
 @pytest.mark.asyncio
 async def test_unmatched_models(auth_client: AsyncClient, session):
-    """Modelle in model_usage_events ohne passendes Preis-Pattern → unmatched."""
-    # Seed: Ein Preis fuer claude-*, kein Preis fuer minimax-*
+    """Models in model_usage_events without a matching price pattern → unmatched."""
+    # Seed: one price for claude-*, no price for minimax-*
     price = ModelPrice(
         id=uuid.uuid4(),
         model_pattern="claude-*",
@@ -157,10 +157,10 @@ async def test_unmatched_models(auth_client: AsyncClient, session):
     )
     session.add(price)
 
-    # Dynamisch statt eingefroren — ein fixes Datum faellt irgendwann
-    # aus dem days=30-Fenster der costs-Endpoints (Zeitbomben-Bug).
+    # Dynamic instead of frozen — a fixed date would eventually fall
+    # outside the days=30 window of the costs endpoints (time-bomb bug).
     now = datetime.now(timezone.utc) - timedelta(days=1)
-    # Ein Event mit bekanntem Modell (claude) → NICHT unmatched
+    # An event with a known model (claude) → NOT unmatched
     e1 = ModelUsageEvent(
         id=uuid.uuid4(),
         harness="cli-bridge",
@@ -174,7 +174,7 @@ async def test_unmatched_models(auth_client: AsyncClient, session):
         ts=now,
         source_file="/f1.jsonl",
     )
-    # Ein Event mit unbekanntem Modell (minimax) → unmatched
+    # An event with an unknown model (minimax) → unmatched
     e2 = ModelUsageEvent(
         id=uuid.uuid4(),
         harness="cli-bridge",
@@ -198,7 +198,7 @@ async def test_unmatched_models(auth_client: AsyncClient, session):
     models = [m["model"] for m in data]
     assert "minimax-m2.7" in models
     assert "claude-sonnet-4-6" not in models
-    # Event-Count und Token-Summen
+    # Event count and token sums
     mm = next(m for m in data if m["model"] == "minimax-m2.7")
     assert mm["event_count"] >= 1
     assert mm["total_input_tokens"] >= 28000
@@ -208,7 +208,7 @@ async def test_unmatched_models(auth_client: AsyncClient, session):
 
 @pytest.mark.asyncio
 async def test_recompute_costs(auth_client: AsyncClient, session):
-    """recompute berechnet cost_usd aller Events mit aktueller Preistabelle neu."""
+    """recompute recalculates cost_usd for all events using the current price table."""
     price = ModelPrice(
         id=uuid.uuid4(),
         model_pattern="claude-sonnet-4-*",
@@ -221,8 +221,8 @@ async def test_recompute_costs(auth_client: AsyncClient, session):
     )
     session.add(price)
 
-    # Dynamisch statt eingefroren — ein fixes Datum faellt irgendwann
-    # aus dem days=30-Fenster der costs-Endpoints (Zeitbomben-Bug).
+    # Dynamic instead of frozen — a fixed date would eventually fall
+    # outside the days=30 window of the costs endpoints (time-bomb bug).
     now = datetime.now(timezone.utc) - timedelta(days=1)
     event = ModelUsageEvent(
         id=uuid.uuid4(),
@@ -234,7 +234,7 @@ async def test_recompute_costs(auth_client: AsyncClient, session):
         output_tokens=0,
         cache_read_tokens=0,
         cache_write_tokens=0,
-        cost_usd=None,  # Noch nicht berechnet
+        cost_usd=None,  # Not computed yet
         ts=now,
         source_file="/f.jsonl",
     )
@@ -246,9 +246,9 @@ async def test_recompute_costs(auth_client: AsyncClient, session):
     data = resp.json()
     assert data["updated"] >= 1
 
-    # Event muss jetzt cost_usd=3.0 haben (1M Input * $3.0/Mtok)
-    # expire_on_commit=False → Session cached den alten Stand.
-    # expire_all() ist synchron (kein await noetig).
+    # Event must now have cost_usd=3.0 (1M input * $3.0/Mtok)
+    # expire_on_commit=False → session caches the old state.
+    # expire_all() is synchronous (no await needed).
     from sqlmodel import select
     from app.models.model_usage import ModelUsageEvent as MUE
     session.expire_all()
@@ -258,14 +258,14 @@ async def test_recompute_costs(auth_client: AsyncClient, session):
     assert abs(e.cost_usd - 3.0) < 0.001
 
 
-# ── Aggregat-Endpoints ────────────────────────────────────────────────────
+# ── Aggregate Endpoints ───────────────────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_costs_by_model(auth_client: AsyncClient, session):
-    """GET /intelligence/costs/by-model → pro Modell: events, tokens, cost."""
-    # Dynamisch statt eingefroren — ein fixes Datum faellt irgendwann
-    # aus dem days=30-Fenster der costs-Endpoints (Zeitbomben-Bug).
+    """GET /intelligence/costs/by-model → per model: events, tokens, cost."""
+    # Dynamic instead of frozen — a fixed date would eventually fall
+    # outside the days=30 window of the costs endpoints (time-bomb bug).
     now = datetime.now(timezone.utc) - timedelta(days=1)
     e1 = ModelUsageEvent(
         id=uuid.uuid4(),
@@ -333,9 +333,9 @@ async def test_costs_by_model(auth_client: AsyncClient, session):
 
 @pytest.mark.asyncio
 async def test_costs_timeseries(auth_client: AsyncClient, session):
-    """GET /intelligence/costs/timeseries → pro Tag: tokens_in, tokens_out, cost."""
-    # Dynamisch statt eingefroren — fixe Daten fallen irgendwann aus dem
-    # days=30-Fenster des Endpoints (Zeitbomben-Bug).
+    """GET /intelligence/costs/timeseries → per day: tokens_in, tokens_out, cost."""
+    # Dynamic instead of frozen — fixed dates would eventually fall outside
+    # the endpoint's days=30 window (time-bomb bug).
     day2 = datetime.now(timezone.utc) - timedelta(days=1)
     day1 = day2 - timedelta(days=1)
     e1 = ModelUsageEvent(
@@ -360,9 +360,9 @@ async def test_costs_timeseries(auth_client: AsyncClient, session):
     assert resp.status_code == 200
     data = resp.json()
     assert isinstance(data, list)
-    # Mindestens 2 Tage
+    # At least 2 days
     assert len(data) >= 2
-    # Felder vorhanden
+    # Fields present
     for row in data:
         assert "date" in row
         assert "tokens_in" in row
@@ -372,11 +372,11 @@ async def test_costs_timeseries(auth_client: AsyncClient, session):
 
 @pytest.mark.asyncio
 async def test_costs_by_task(auth_client: AsyncClient, session):
-    """GET /intelligence/costs/by-task → teuerste Tasks (task_id not null)."""
+    """GET /intelligence/costs/by-task → most expensive tasks (task_id not null)."""
     from app.models.task import Task
     from app.models.board import Board
 
-    # Board + Task erstellen
+    # Create board + task
     board = Board(name="Test Board", slug="test-board-cost")
     session.add(board)
     await session.commit()
@@ -391,8 +391,8 @@ async def test_costs_by_task(auth_client: AsyncClient, session):
     await session.commit()
     await session.refresh(task)
 
-    # Dynamisch statt eingefroren — ein fixes Datum faellt irgendwann
-    # aus dem days=30-Fenster der costs-Endpoints (Zeitbomben-Bug).
+    # Dynamic instead of frozen — a fixed date would eventually fall
+    # outside the days=30 window of the costs endpoints (time-bomb bug).
     now = datetime.now(timezone.utc) - timedelta(days=1)
     e1 = ModelUsageEvent(
         id=uuid.uuid4(),

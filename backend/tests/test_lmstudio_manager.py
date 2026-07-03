@@ -31,7 +31,7 @@ def test_parse_lms_ls_embedding():
 def test_parse_lms_ls_loaded():
     models = _parse_lms_ls(LMS_LS_OUTPUT)
     loaded = [m for m in models if m["is_loaded"]]
-    assert len(loaded) == 2  # nemotron + embedding beide LOADED
+    assert len(loaded) == 2  # nemotron + embedding both LOADED
     llm_loaded = [m for m in loaded if not m["is_embedding"]]
     assert llm_loaded[0]["id"] == "nvidia/nemotron-3-super"
 
@@ -54,7 +54,7 @@ def test_parse_lms_ls_strips_variant_suffix():
 def test_parse_lms_ls_not_loaded_by_default():
     models = _parse_lms_ls(LMS_LS_OUTPUT)
     not_loaded = [m for m in models if not m["is_loaded"]]
-    assert len(not_loaded) == 3  # 3 LLMs nicht geladen
+    assert len(not_loaded) == 3  # 3 LLMs not loaded
 
 
 @pytest.mark.asyncio

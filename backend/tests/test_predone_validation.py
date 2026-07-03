@@ -18,7 +18,7 @@ _REFLECTION_BODY = (
 
 
 async def _post_reflection(client, agent_headers, board_id, task_id):
-    """Pflicht-Reflexion posten, damit Closing-Transition durchgeht."""
+    """Post the mandatory reflection so the closing transition goes through."""
     resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
         headers=agent_headers,
@@ -28,7 +28,7 @@ async def _post_reflection(client, agent_headers, board_id, task_id):
 
 
 async def _setup_predone_scenario(status: str = "in_progress"):
-    """Board + Agent (mit tasks:read/write Scopes) + Task anlegen."""
+    """Create board + agent (with tasks:read/write scopes) + task."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.models.task import Task
@@ -77,13 +77,13 @@ async def _setup_predone_scenario(status: str = "in_progress"):
 
 @pytest.mark.asyncio
 async def test_validation_fails_if_checklist_incomplete(client):
-    """Agent kann Task nicht auf done setzen wenn Checklist-Items offen sind."""
+    """Agent cannot set a task to done while checklist items are still open."""
     ids = await _setup_predone_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
     board_id = ids["board_id"]
     task_id = ids["task_id"]
 
-    # Checklist mit 2 Items anlegen
+    # Create checklist with 2 items
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -94,7 +94,7 @@ async def test_validation_fails_if_checklist_incomplete(client):
     )
     assert create_resp.status_code == 201
 
-    # Nur ersten Item done machen
+    # Only mark the first item done
     item_id = create_resp.json()[0]["id"]
     await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist/{item_id}",
@@ -102,7 +102,7 @@ async def test_validation_fails_if_checklist_incomplete(client):
         json={"status": "done"},
     )
 
-    # Versuchen auf done zu setzen (muss FAIL)
+    # Try to set to done (must FAIL)
     resp = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
         headers=agent_headers,
@@ -115,13 +115,13 @@ async def test_validation_fails_if_checklist_incomplete(client):
 
 @pytest.mark.asyncio
 async def test_validation_fails_if_checklist_incomplete_on_review(client):
-    """Agent kann Task nicht auf review setzen wenn Checklist-Items offen sind."""
+    """Agent cannot set a task to review while checklist items are still open."""
     ids = await _setup_predone_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
     board_id = ids["board_id"]
     task_id = ids["task_id"]
 
-    # Checklist mit 2 Items anlegen — beide offen lassen
+    # Create checklist with 2 items — leave both open
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -132,7 +132,7 @@ async def test_validation_fails_if_checklist_incomplete_on_review(client):
     )
     assert create_resp.status_code == 201
 
-    # Versuchen auf review zu setzen (muss FAIL)
+    # Try to set to review (must FAIL)
     resp = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
         headers=agent_headers,
@@ -145,13 +145,13 @@ async def test_validation_fails_if_checklist_incomplete_on_review(client):
 
 @pytest.mark.asyncio
 async def test_validation_passes_if_no_checklist(client):
-    """Ohne Checkliste kein Validation-Block — done ist erlaubt."""
+    """Without a checklist there's no validation block — done is allowed."""
     ids = await _setup_predone_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
     board_id = ids["board_id"]
     task_id = ids["task_id"]
 
-    # Kein Checklist anlegen — direkt auf done (Reflexion vorher posten)
+    # Don't create a checklist — go straight to done (post reflection first)
     await _post_reflection(client, agent_headers, board_id, task_id)
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
         resp = await client.patch(
@@ -165,13 +165,13 @@ async def test_validation_passes_if_no_checklist(client):
 
 @pytest.mark.asyncio
 async def test_validation_passes_if_all_checklist_done(client):
-    """Wenn alle Checklist-Items done → done möglich."""
+    """When all checklist items are done → done is possible."""
     ids = await _setup_predone_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
     board_id = ids["board_id"]
     task_id = ids["task_id"]
 
-    # Checklist mit einem Item anlegen
+    # Create checklist with one item
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -180,14 +180,14 @@ async def test_validation_passes_if_all_checklist_done(client):
     assert create_resp.status_code == 201
     item_id = create_resp.json()[0]["id"]
 
-    # Item done machen
+    # Mark the item done
     await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist/{item_id}",
         headers=agent_headers,
         json={"status": "done"},
     )
 
-    # Reflexion vorher posten (ADR-023) — dann done setzen
+    # Post reflection first (ADR-023) — then set to done
     await _post_reflection(client, agent_headers, board_id, task_id)
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
         resp = await client.patch(
@@ -200,13 +200,13 @@ async def test_validation_passes_if_all_checklist_done(client):
 
 @pytest.mark.asyncio
 async def test_validation_passes_if_all_checklist_done_on_review(client):
-    """Wenn alle Checklist-Items done → review möglich."""
+    """When all checklist items are done → review is possible."""
     ids = await _setup_predone_scenario()
     agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
     board_id = ids["board_id"]
     task_id = ids["task_id"]
 
-    # 2 Items anlegen und beide done setzen
+    # Create 2 items and set both done
     create_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/checklist",
         headers=agent_headers,
@@ -223,7 +223,7 @@ async def test_validation_passes_if_all_checklist_done_on_review(client):
             json={"status": "done"},
         )
 
-    # Evidence-Kommentar hinzufügen (wird von anderem Guard verlangt)
+    # Add an evidence comment (required by a different guard)
     comment_resp = await client.post(
         f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
         headers=agent_headers,
@@ -231,10 +231,10 @@ async def test_validation_passes_if_all_checklist_done_on_review(client):
     )
     assert comment_resp.status_code in (200, 201), comment_resp.json()
 
-    # Reflexion posten (ADR-023 Pflicht vor Closing-Transition)
+    # Post reflection (ADR-023 mandatory before closing transition)
     await _post_reflection(client, agent_headers, board_id, task_id)
 
-    # Review setzen — muss klappen
+    # Set to review — must succeed
     with patch("app.services.activity.broadcast", new_callable=AsyncMock):
         resp = await client.patch(
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",

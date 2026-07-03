@@ -1,7 +1,7 @@
-"""Host Registry API (ADR-048, B3) — CRUD, Delete-Guard, Metrics, Spark-Alias.
+"""Host Registry API (ADR-048, B3) — CRUD, delete guard, metrics, spark alias.
 
-Nur RFC-5737-Platzhalter-IPs (192.0.2.x) + Dummy-MAC — public Repo,
-keine echten Adressen in Fixtures.
+Only RFC 5737 placeholder IPs (192.0.2.x) + dummy MAC — public repo,
+no real addresses in fixtures.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -13,7 +13,7 @@ from app.models.host import Host
 from app.models.runtime import Runtime
 from tests.conftest import test_engine
 
-# nvidia-smi + free -m Antwort im _SPARK_METRICS_CMD-Format
+# nvidia-smi + free -m response in _SPARK_METRICS_CMD format
 _SSH_METRICS_STDOUT = (
     "35, 8806, 131072, 61\n"
     "---\n"
@@ -24,7 +24,7 @@ _SSH_METRICS_STDOUT = (
 
 
 async def _viewer_token() -> str:
-    """JWT für einen viewer-User (Pattern aus test_runtime_readiness_gate)."""
+    """JWT for a viewer user (pattern from test_runtime_readiness_gate)."""
     from app.auth import create_access_token
     from app.models.user import User
 
@@ -52,7 +52,7 @@ def _ssh_host_body(slug: str = "gpu-box", **overrides) -> dict:
 
 
 async def _stub_state(*_args, **_kwargs):
-    """get_runtime_state-Ersatz — kein SSH in Tests."""
+    """get_runtime_state substitute — no SSH in tests."""
     return {"state": "ready", "http_reachable": True, "container_status": None}
 
 
@@ -61,7 +61,7 @@ async def _stub_state(*_args, **_kwargs):
 
 @pytest.mark.asyncio
 async def test_create_and_list_hosts_sorted(auth_client):
-    """POST legt Host an; GET liefert bare Liste, nach ui_order sortiert."""
+    """POST creates a host; GET returns a bare list, sorted by ui_order."""
     r1 = await auth_client.post("/api/v1/hosts", json=_ssh_host_body("b-box", ui_order=2))
     r2 = await auth_client.post(
         "/api/v1/hosts",
@@ -72,7 +72,7 @@ async def test_create_and_list_hosts_sorted(auth_client):
     created = r1.json()
     assert created["slug"] == "b-box"
     assert created["ssh_host"] == "192.0.2.10"
-    assert created["ssh_key_path"] == "/home/mcuser/.ssh/id_rsa"  # Pfad ok, kein Key-Inhalt
+    assert created["ssh_key_path"] == "/home/mcuser/.ssh/id_rsa"  # path ok, no key content
 
     resp = await auth_client.get("/api/v1/hosts")
     assert resp.status_code == 200
@@ -103,7 +103,7 @@ async def test_create_invalid_kind_and_control_url_422(auth_client):
 
 @pytest.mark.asyncio
 async def test_patch_host_updates_and_clears_nullable(auth_client):
-    """PATCH ändert Felder; explizites null räumt nullable Felder (exclude_unset)."""
+    """PATCH changes fields; explicit null clears nullable fields (exclude_unset)."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     resp = await auth_client.patch(
         f"/api/v1/hosts/{created['id']}",
@@ -114,7 +114,7 @@ async def test_patch_host_updates_and_clears_nullable(auth_client):
     assert data["display_name"] == "Renamed"
     assert data["enabled"] is False
     assert data["notes"] is None
-    # ohne notes im Body bleibt notes unangetastet
+    # without notes in the body, notes stays untouched
     resp2 = await auth_client.patch(f"/api/v1/hosts/{created['id']}", json={"ui_order": 7})
     assert resp2.json()["notes"] is None
     assert resp2.json()["ui_order"] == 7
@@ -126,7 +126,7 @@ async def test_patch_slug_conflict_409_and_lookup_by_slug(auth_client):
     await auth_client.post(
         "/api/v1/hosts", json={"slug": "box-two", "display_name": "Two", "kind": "local"}
     )
-    # Slug-Lookup im Pfad + Umbenennung auf belegten Slug → 409
+    # Slug lookup in the path + rename to a taken slug → 409
     resp = await auth_client.patch("/api/v1/hosts/box-two", json={"slug": "box-one"})
     assert resp.status_code == 409
 
@@ -147,7 +147,7 @@ async def test_delete_host_204(auth_client):
 
 @pytest.mark.asyncio
 async def test_delete_host_with_bound_runtime_409(auth_client, async_session):
-    """Delete-Guard: gebundene Runtimes blocken den Delete (erst umbinden)."""
+    """Delete guard: bound runtimes block the delete (must rebind first)."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     rt = Runtime(
         slug="bound-rt",
@@ -163,7 +163,7 @@ async def test_delete_host_with_bound_runtime_409(auth_client, async_session):
     assert resp.status_code == 409
     assert "bound-rt" in resp.json()["detail"]
 
-    # Umbinden → Delete geht durch
+    # Rebind → delete goes through
     rt.host_id = None
     async_session.add(rt)
     await async_session.commit()
@@ -173,7 +173,7 @@ async def test_delete_host_with_bound_runtime_409(auth_client, async_session):
 
 @pytest.mark.asyncio
 async def test_host_writes_forbidden_for_viewer(client, auth_client, fake_redis):
-    """Writes sind admin-only — viewer bekommt 403 (Reads bleiben offen)."""
+    """Writes are admin-only — viewer gets 403 (reads stay open)."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     token = await _viewer_token()
     headers = {"Authorization": f"Bearer {token}"}
@@ -192,7 +192,7 @@ async def test_host_writes_forbidden_for_viewer(client, auth_client, fake_redis)
 
 @pytest.mark.asyncio
 async def test_host_metrics_ssh(auth_client):
-    """kind=ssh → nvidia-smi/free-Parsing via get_host_metrics (SSH gemockt)."""
+    """kind=ssh → nvidia-smi/free parsing via get_host_metrics (SSH mocked)."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     with patch(
         "app.services.runtime_manager._ssh_run",
@@ -209,7 +209,7 @@ async def test_host_metrics_ssh(auth_client):
     assert data["gpu_temp_c"] == 61
     assert data["ram_total_mb"] == 119181
     assert data["ram_used_mb"] == 15230
-    # SSH lief gegen DIESEN Host, nicht gegen den Settings-Fallback
+    # SSH ran against THIS host, not against the settings fallback
     host_kwarg = ssh_mock.call_args.kwargs["host"]
     assert host_kwarg.ssh_host == "192.0.2.10"
     assert host_kwarg.slug == "gpu-box"
@@ -217,7 +217,7 @@ async def test_host_metrics_ssh(auth_client):
 
 @pytest.mark.asyncio
 async def test_host_metrics_ssh_unreachable(auth_client):
-    """SSH-Fehler → reachable=false statt 500 (Muster get_host_metrics)."""
+    """SSH error → reachable=false instead of 500 (get_host_metrics pattern)."""
     created = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     with patch(
         "app.services.runtime_manager._ssh_run",
@@ -232,7 +232,7 @@ async def test_host_metrics_ssh_unreachable(auth_client):
 
 @pytest.mark.asyncio
 async def test_host_metrics_flask_wol_awake_and_asleep(auth_client):
-    """kind=flask_wol → awake/health-Status statt GPU-Metrics."""
+    """kind=flask_wol → awake/health status instead of GPU metrics."""
     created = (
         await auth_client.post(
             "/api/v1/hosts",
@@ -272,7 +272,7 @@ async def test_host_metrics_flask_wol_awake_and_asleep(auth_client):
 
 @pytest.mark.asyncio
 async def test_host_metrics_local_empty(auth_client):
-    """kind=local → leeres Objekt mit kind-Feld, kein SSH-Versuch."""
+    """kind=local → empty object with kind field, no SSH attempt."""
     created = (
         await auth_client.post(
             "/api/v1/hosts",
@@ -299,7 +299,7 @@ async def test_host_metrics_unknown_host_404(auth_client):
 
 @pytest.mark.asyncio
 async def test_spark_alias_404_without_dgx_spark_host(auth_client):
-    """Kein Host 'dgx-spark' → 404 mit klarer Message (kein stummer Fallback)."""
+    """No host 'dgx-spark' → 404 with a clear message (no silent fallback)."""
     resp = await auth_client.get("/api/v1/runtimes/spark/metrics")
     assert resp.status_code == 404
     assert "dgx-spark" in resp.json()["detail"]
@@ -307,7 +307,7 @@ async def test_spark_alias_404_without_dgx_spark_host(auth_client):
 
 @pytest.mark.asyncio
 async def test_spark_alias_delegates_to_dgx_spark_host(auth_client, async_session):
-    """Host 'dgx-spark' vorhanden → Alias liefert dessen Metrics."""
+    """Host 'dgx-spark' present → alias returns its metrics."""
     async_session.add(Host(
         slug="dgx-spark",
         display_name="DGX Spark",
@@ -329,12 +329,12 @@ async def test_spark_alias_delegates_to_dgx_spark_host(auth_client, async_sessio
     assert ssh_mock.call_args.kwargs["host"].ssh_host == "192.0.2.10"
 
 
-# ── GET /runtimes: host-Referenz im Payload ──────────────────────────────────
+# ── GET /runtimes: host reference in the payload ─────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_runtimes_payload_contains_host_ref(auth_client, async_session):
-    """Gebundene Runtime → host {id, slug, display_name}; ungebunden → null."""
+    """Bound runtime → host {id, slug, display_name}; unbound → null."""
     host = Host(slug="gpu-box", display_name="GPU Box", kind="ssh", ssh_host="192.0.2.10")
     async_session.add(host)
     await async_session.commit()
@@ -369,7 +369,7 @@ async def test_runtimes_payload_contains_host_ref(auth_client, async_session):
 
 @pytest.mark.asyncio
 async def test_single_runtime_payload_contains_host_ref(auth_client, async_session):
-    """GET /runtimes/{slug} trägt dieselbe Host-Referenz wie die Liste."""
+    """GET /runtimes/{slug} carries the same host reference as the list."""
     host = Host(slug="gpu-box", display_name="GPU Box", kind="ssh", ssh_host="192.0.2.10")
     async_session.add(host)
     await async_session.commit()
@@ -389,16 +389,16 @@ async def test_single_runtime_payload_contains_host_ref(auth_client, async_sessi
     assert resp.json()["host"]["slug"] == "gpu-box"
 
 
-# ── Input-Längen (Spiegel der String(N)-Spalten) ─────────────────────────────
+# ── Input lengths (mirror of the String(N) columns) ───────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_host_create_overlong_fields_422(auth_client):
-    """Überlange Werte → 422 statt Postgres StringDataRightTruncation (500).
+    """Overlong values → 422 instead of Postgres StringDataRightTruncation (500).
 
-    SQLite (Tests) erzwingt keine Spaltenlängen — der Guard MUSS darum im
-    Pydantic-Modell sitzen."""
-    too_long_host = "h" * 129  # Spalte: String(128)
+    SQLite (tests) does not enforce column lengths — the guard MUST therefore
+    live in the Pydantic model."""
+    too_long_host = "h" * 129  # column: String(128)
     resp = await auth_client.post(
         "/api/v1/hosts", json=_ssh_host_body(ssh_host=too_long_host)
     )
@@ -417,7 +417,7 @@ async def test_host_create_overlong_fields_422(auth_client):
     assert resp.status_code == 422
 
 
-# ── Runtime ↔ Host Binden/Umbinden via API (ADR-048) ─────────────────────────
+# ── Runtime ↔ host bind/rebind via API (ADR-048) ─────────────────────────────
 
 
 def _runtime_body(slug: str = "api-rt", **overrides) -> dict:
@@ -433,15 +433,15 @@ def _runtime_body(slug: str = "api-rt", **overrides) -> dict:
 
 @pytest.mark.asyncio
 async def test_runtime_create_with_host_id_binds(auth_client):
-    """POST /runtimes/db mit host_id → Bindung + host-Ref in der Response."""
+    """POST /runtimes/db with host_id → binding + host ref in the response."""
     host = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     resp = await auth_client.post(
         "/api/v1/runtimes/db", json=_runtime_body(host_id=host["id"])
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    # CRUD-Response trägt die gleiche host-Shape wie GET /runtimes (HostRef|null),
-    # nicht den deprecated Legacy-String.
+    # CRUD response carries the same host shape as GET /runtimes (HostRef|null),
+    # not the deprecated legacy string.
     assert data["host"] == {
         "id": host["id"], "slug": "gpu-box", "display_name": "GPU Box",
     }
@@ -457,31 +457,31 @@ async def test_runtime_create_with_unknown_host_id_422(auth_client):
 
 @pytest.mark.asyncio
 async def test_runtime_patch_binds_and_unbinds_host(auth_client):
-    """PATCH host_id bindet um; explizites host_id=null bindet los —
-    danach geht der Host-Delete durch (der 409-Guard verlangte genau das)."""
+    """PATCH host_id rebinds; explicit host_id=null unbinds —
+    afterward the host delete goes through (the 409 guard demanded exactly that)."""
     host = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     created = await auth_client.post("/api/v1/runtimes/db", json=_runtime_body())
     assert created.status_code == 200
     assert created.json()["host"] is None
 
-    # Binden
+    # Bind
     resp = await auth_client.patch(
         "/api/v1/runtimes/db/api-rt", json={"host_id": host["id"]}
     )
     assert resp.status_code == 200, resp.text
     assert resp.json()["host"]["slug"] == "gpu-box"
 
-    # Gebunden → Delete blockt
+    # Bound → delete blocks
     assert (await auth_client.delete(f"/api/v1/hosts/{host['id']}")).status_code == 409
 
-    # Unbind via explizitem null (exclude_none darf das nicht verschlucken)
+    # Unbind via explicit null (exclude_none must not swallow this)
     resp = await auth_client.patch(
         "/api/v1/runtimes/db/api-rt", json={"host_id": None}
     )
     assert resp.status_code == 200
     assert resp.json()["host"] is None
 
-    # Jetzt geht der Delete durch — die 409-Anweisung ist per API erfüllbar
+    # Now the delete goes through — the 409 instruction is satisfiable via API
     assert (await auth_client.delete(f"/api/v1/hosts/{host['id']}")).status_code == 204
 
 
@@ -496,7 +496,7 @@ async def test_runtime_patch_unknown_host_id_422(auth_client):
 
 @pytest.mark.asyncio
 async def test_runtime_patch_without_host_id_keeps_binding(auth_client):
-    """PATCH ohne host_id im Body lässt eine bestehende Bindung unangetastet."""
+    """PATCH without host_id in the body leaves an existing binding untouched."""
     host = (await auth_client.post("/api/v1/hosts", json=_ssh_host_body())).json()
     await auth_client.post("/api/v1/runtimes/db", json=_runtime_body(host_id=host["id"]))
     resp = await auth_client.patch(

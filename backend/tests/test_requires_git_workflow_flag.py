@@ -1,8 +1,8 @@
-"""requires_git_workflow Flag respektieren im Git-Commit-Gate.
+"""Respect the requires_git_workflow flag in the git commit gate.
 
-Davinci (Designer) bekam "Keine Git-Commits im Workspace gefunden" auf seinem
-Design-Task (kein Code-Change, reine Deliverables). Fix: validate_task_completion
-ueberspringt Git-Check wenn assigned agent.requires_git_workflow=False.
+Davinci (Designer) got "Keine Git-Commits im Workspace gefunden" on his
+design task (no code change, deliverables only). Fix: validate_task_completion
+skips the git check when the assigned agent.requires_git_workflow=False.
 """
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -15,7 +15,7 @@ from app.models.board import Project
 
 @pytest.mark.asyncio
 async def test_git_check_skipped_for_designer_agent(async_session, board_with_agents):
-    """Agent mit requires_git_workflow=False -> Git-Check uebersprungen."""
+    """Agent with requires_git_workflow=False -> git check skipped."""
     from app.services.work_context import validate_task_completion
     from app.models.agent import Agent
 
@@ -35,26 +35,26 @@ async def test_git_check_skipped_for_designer_agent(async_session, board_with_ag
     task = Task(
         board_id=board.id, title="Design Arbeit", status="in_progress",
         assigned_agent_id=designer.id, project_id=project.id,
-        workspace_path="/tmp/some/path",  # wuerde Git-Check triggern
+        workspace_path="/tmp/some/path",  # would trigger the git check
     )
     async_session.add(task)
     await async_session.commit()
     await async_session.refresh(task)
 
-    # Trotz workspace_path + project_id + github_repo_url: kein Git-Check
+    # Despite workspace_path + project_id + github_repo_url: no git check
     ok, errors = await validate_task_completion(async_session, task)
     assert "Keine Git-Commits im Workspace gefunden" not in errors
 
 
 @pytest.mark.asyncio
 async def test_git_check_runs_for_developer_agent(async_session, board_with_agents, tmp_path):
-    """Agent mit requires_git_workflow=True + echtes Git-Repo -> Git-Check laeuft (mocked)."""
+    """Agent with requires_git_workflow=True + real git repo -> git check runs (mocked)."""
     from app.services.work_context import validate_task_completion
     from app.models.agent import Agent
 
-    # tmp_path muss ein Git-Repo sein, sonst greift der neue Guard und
-    # skippet den Check komplett. Nur `.git` zu mkdir'en reicht — der
-    # Check prueft nur auf dir-existence, nicht git-repo-validity.
+    # tmp_path must be a git repo, otherwise the new guard kicks in and
+    # skips the check entirely. Just mkdir'ing `.git` is enough — the
+    # check only tests for dir existence, not git-repo validity.
     (tmp_path / ".git").mkdir()
 
     board = board_with_agents["board"]
@@ -79,7 +79,7 @@ async def test_git_check_runs_for_developer_agent(async_session, board_with_agen
     await async_session.commit()
     await async_session.refresh(task)
 
-    # has_task_commits returns False -> error erwartet
+    # has_task_commits returns False -> error expected
     with patch("app.services.git_service.git_service.has_task_commits",
                new=AsyncMock(return_value=False)):
         ok, errors = await validate_task_completion(async_session, task)
@@ -91,18 +91,18 @@ async def test_git_check_runs_for_developer_agent(async_session, board_with_agen
 async def test_git_check_skipped_when_workspace_is_not_git_repo(
     async_session, board_with_agents, tmp_path,
 ):
-    """Fallback-Workspace ohne .git -> Git-Check wird geskippt, nicht als Fehler.
+    """Fallback workspace without .git -> git check is skipped, not treated as an error.
 
-    FreeCode case (2026-04-19): backend fiel beim Dispatch auf eine
-    leere Placeholder-Dir zurueck (~/FreeCode/projects/<slug>/), waehrend
-    der Agent im Container unter /workspace/... das echte Repo hatte.
-    has_task_commits auf die leere Dir haette den Task auf review
-    blockiert obwohl der Agent alles korrekt gepushed hat.
+    FreeCode case (2026-04-19): backend fell back during dispatch to an
+    empty placeholder dir (~/FreeCode/projects/<slug>/), while the
+    agent in the container had the real repo under /workspace/....
+    has_task_commits on the empty dir would have blocked the task on
+    review even though the agent had pushed everything correctly.
     """
     from app.services.work_context import validate_task_completion
     from app.models.agent import Agent
 
-    # Kein `.git` in tmp_path → Workspace ist kein Repo
+    # No `.git` in tmp_path → workspace is not a repo
     assert not (tmp_path / ".git").exists()
 
     board = board_with_agents["board"]
@@ -127,8 +127,8 @@ async def test_git_check_skipped_when_workspace_is_not_git_repo(
     await async_session.commit()
     await async_session.refresh(task)
 
-    # Selbst wenn has_task_commits False liefern wuerde — wir kommen gar nicht
-    # dorthin, weil der guard vorher greift.
+    # Even if has_task_commits would return False — we never get there,
+    # because the guard kicks in first.
     with patch("app.services.git_service.git_service.has_task_commits",
                new=AsyncMock(return_value=False)) as m:
         ok, errors = await validate_task_completion(async_session, task)
@@ -139,7 +139,7 @@ async def test_git_check_skipped_when_workspace_is_not_git_repo(
 
 @pytest.mark.asyncio
 async def test_git_check_skipped_when_no_workspace(async_session, board_with_agents):
-    """Ohne workspace_path -> kein Git-Check (bestehendes Verhalten)."""
+    """Without workspace_path -> no git check (existing behavior)."""
     from app.services.work_context import validate_task_completion
 
     board = board_with_agents["board"]

@@ -1,4 +1,4 @@
-"""Tests: ProjectPhase und DeliverableReference Models."""
+"""Tests: ProjectPhase and DeliverableReference models."""
 import uuid
 import pytest
 from sqlmodel import Session, SQLModel, create_engine, select

@@ -1,4 +1,4 @@
-"""Tests fuer Phase 2 Operator-Intake: Felder, Planning Brief, Root-vs-Child."""
+"""Tests for Phase 2 Operator-Intake: fields, Planning Brief, Root-vs-Child."""
 from unittest.mock import MagicMock
 import pytest
 
@@ -8,7 +8,7 @@ from app.services.dispatch import build_planning_brief
 # ── Planning Brief ──────────────────────────────────────
 
 def _root_task(**overrides):
-    """Root-/Intake-Task mit Structured Mode."""
+    """Root/intake task with Structured Mode."""
     t = MagicMock()
     t.intake_mode = "structured"
     t.request_kind = "code_change"
@@ -23,14 +23,14 @@ def _root_task(**overrides):
     t.reference_urls = ["https://example.com/spec"]
     t.reference_notes = "Siehe Abschnitt 3"
     t.publish_allowed = False
-    t.parent_task_id = None  # Root-Task
+    t.parent_task_id = None  # Root task
     for k, v in overrides.items():
         setattr(t, k, v)
     return t
 
 
 def test_planning_brief_structured():
-    """Structured Mode erzeugt vollstaendigen Planning Brief."""
+    """Structured Mode produces a complete Planning Brief."""
     task = _root_task()
     brief = build_planning_brief(task)
     assert brief is not None
@@ -46,7 +46,7 @@ def test_planning_brief_structured():
 
 
 def test_planning_brief_quick():
-    """Quick Mode erzeugt minimalen Brief."""
+    """Quick Mode produces a minimal brief."""
     task = _root_task(
         intake_mode="quick",
         desired_output=None,
@@ -65,14 +65,14 @@ def test_planning_brief_quick():
 
 
 def test_planning_brief_legacy_returns_none():
-    """Legacy-Task ohne intake_mode → kein Brief."""
+    """Legacy task without intake_mode → no brief."""
     task = _root_task(intake_mode=None)
     brief = build_planning_brief(task)
     assert brief is None
 
 
 def test_planning_brief_empty_fields():
-    """Alle Felder null → kein Brief (nur Header, zu kurz)."""
+    """All fields null → no brief (header only, too short)."""
     task = _root_task(
         intake_mode="quick",
         request_kind=None,
@@ -89,35 +89,35 @@ def test_planning_brief_empty_fields():
         publish_allowed=None,
     )
     brief = build_planning_brief(task)
-    assert brief is None  # Nur Header, keine Sections → None
+    assert brief is None  # Header only, no sections → None
 
 
-# ── request_kind vs delegation_type Trennung ────────────
+# ── request_kind vs delegation_type separation ────────────
 
 def test_request_kind_not_delegation_type():
-    """request_kind und delegation_type sind unterschiedliche Felder."""
+    """request_kind and delegation_type are different fields."""
     task = _root_task(request_kind="research")
-    task.delegation_type = None  # Root-Tasks haben keinen delegation_type
+    task.delegation_type = None  # Root tasks have no delegation_type
     brief = build_planning_brief(task)
     assert "research" in brief
     assert task.delegation_type is None
 
 
-# ── Root-vs-Child: Intake-Felder nur auf Root ───────────
+# ── Root-vs-Child: intake fields only on root ───────────
 
 def test_child_task_has_no_brief():
-    """Child-Task (parent_task_id gesetzt) → intake_mode typischerweise null."""
+    """Child task (parent_task_id set) → intake_mode typically null."""
     task = MagicMock()
-    task.intake_mode = None  # Child-Tasks bekommen kein intake_mode
+    task.intake_mode = None  # Child tasks don't get an intake_mode
     task.parent_task_id = "parent-id"
     brief = build_planning_brief(task)
     assert brief is None
 
 
-# ── Browser und Credentials getrennt ────────────────────
+# ── Browser and credentials kept separate ────────────────────
 
 def test_browser_without_credentials():
-    """needs_browser=True, requires_auth=False → nur Browser im Brief."""
+    """needs_browser=True, requires_auth=False → only browser in brief."""
     task = _root_task(needs_browser=True, requires_auth=False)
     brief = build_planning_brief(task)
     assert "Browser noetig:** Ja" in brief
@@ -125,7 +125,7 @@ def test_browser_without_credentials():
 
 
 def test_credentials_without_browser():
-    """needs_browser=False, requires_auth=True → nur Credentials im Brief."""
+    """needs_browser=False, requires_auth=True → only credentials in brief."""
     task = _root_task(needs_browser=False, requires_auth=True)
     brief = build_planning_brief(task)
     assert "Credentials noetig:** Ja" in brief
@@ -133,17 +133,17 @@ def test_credentials_without_browser():
 
 
 def test_both_browser_and_credentials():
-    """Beides gesetzt → beide im Brief."""
+    """Both set → both in brief."""
     task = _root_task(needs_browser=True, requires_auth=True)
     brief = build_planning_brief(task)
     assert "Browser noetig:** Ja" in brief
     assert "Credentials noetig:** Ja" in brief
 
 
-# ── Reference URLs als Liste ────────────────────────────
+# ── Reference URLs as a list ────────────────────────────
 
 def test_reference_urls_list():
-    """reference_urls ist eine Liste, nicht CSV."""
+    """reference_urls is a list, not CSV."""
     task = _root_task(reference_urls=["https://a.com", "https://b.com"])
     brief = build_planning_brief(task)
     assert "https://a.com" in brief
@@ -151,28 +151,28 @@ def test_reference_urls_list():
 
 
 def test_reference_urls_empty_list():
-    """Leere Liste → kein Referenz-Abschnitt."""
+    """Empty list → no reference section."""
     task = _root_task(reference_urls=[])
     brief = build_planning_brief(task)
     assert "Referenzen" not in brief
 
 
-# ── Enum-Validierung (Pydantic) ─────────────────────────
+# ── Enum validation (Pydantic) ─────────────────────────
 
 def test_request_kind_literal_validation():
-    """Pydantic TaskCreate akzeptiert nur gueltige request_kind Werte."""
+    """Pydantic TaskCreate only accepts valid request_kind values."""
     from app.routers.tasks import TaskCreate
-    # Gueltig
+    # Valid
     t = TaskCreate(title="Test", request_kind="research")
     assert t.request_kind == "research"
 
-    # Ungueltig
+    # Invalid
     with pytest.raises(Exception):
         TaskCreate(title="Test", request_kind="invalid_kind")
 
 
 def test_approval_policy_literal_validation():
-    """Pydantic TaskCreate akzeptiert nur gueltige approval_policy Werte."""
+    """Pydantic TaskCreate only accepts valid approval_policy values."""
     from app.routers.tasks import TaskCreate
     t = TaskCreate(title="Test", approval_policy="on_plan")
     assert t.approval_policy == "on_plan"
@@ -182,7 +182,7 @@ def test_approval_policy_literal_validation():
 
 
 def test_autonomy_level_literal_validation():
-    """Pydantic TaskCreate akzeptiert nur gueltige autonomy_level Werte."""
+    """Pydantic TaskCreate only accepts valid autonomy_level values."""
     from app.routers.tasks import TaskCreate
     t = TaskCreate(title="Test", autonomy_level="draft_only")
     assert t.autonomy_level == "draft_only"

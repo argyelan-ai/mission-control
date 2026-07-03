@@ -9,7 +9,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 async def test_dispatch_message_includes_parent_credentials_for_auth_child(
     session: AsyncSession, make_agent, make_task,
 ):
-    """Root-Credentials muessen in der Child-Dispatch-Message auftauchen, wenn das Child Auth braucht."""
+    """Root credentials must appear in the child dispatch message when the child requires auth."""
     from app.services.dispatch import _build_dispatch_message
 
     board_id = uuid.uuid4()

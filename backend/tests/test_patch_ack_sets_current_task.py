@@ -1,10 +1,10 @@
-"""Tests fuer Bug-Fix 2026-04-24: Push-Dispatch ACK (PATCH status:in_progress) muss
-agent.current_task_id setzen, sonst 409 bei `mc delegate` / `mc help-request` /
+"""Tests for bug fix 2026-04-24: push-dispatch ACK (PATCH status:in_progress) must
+set agent.current_task_id, otherwise 409 on `mc delegate` / `mc help-request` /
 `mc clarification`.
 
-Live-Bug: Boss bekam Task via Push-Dispatch, ACKed via PATCH, aber
-current_task_id blieb null. mc delegate → 409 "Kein aktiver Task". Workaround war
-direct POST /tasks. Fix: PATCH ACK setzt current_task_id analog zu Pull-Dispatch.
+Live bug: Boss received a task via push-dispatch, ACKed via PATCH, but
+current_task_id stayed null. mc delegate → 409 "No active task". Workaround was
+direct POST /tasks. Fix: PATCH ACK sets current_task_id analogous to pull-dispatch.
 """
 import uuid
 
@@ -66,7 +66,7 @@ async def _make_agent_with_task(
 
 @pytest.mark.asyncio
 async def test_patch_ack_sets_current_task_id_for_board_lead(client: AsyncClient):
-    """Push-Dispatch Board Lead: PATCH status:in_progress → current_task_id gesetzt."""
+    """Push-dispatch board lead: PATCH status:in_progress → current_task_id set."""
     agent, token, board_id, task = await _make_agent_with_task(is_board_lead=True)
 
     resp = await client.patch(
@@ -89,7 +89,7 @@ async def test_patch_ack_sets_current_task_id_for_board_lead(client: AsyncClient
 async def test_patch_ack_sets_current_task_id_for_worker_when_subagent_off(
     client: AsyncClient, monkeypatch,
 ):
-    """Legacy-Modus (USE_SUBAGENT_DISPATCH=false): auch Worker bekommen Lock."""
+    """Legacy mode (USE_SUBAGENT_DISPATCH=false): workers get the lock too."""
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", False)
 
@@ -112,8 +112,8 @@ async def test_patch_ack_sets_current_task_id_for_worker_when_subagent_off(
 async def test_patch_ack_skips_current_task_id_for_worker_subagent_mode(
     client: AsyncClient, monkeypatch,
 ):
-    """Subagent-Dispatch-Modus: Worker haben parallele Sessions, current_task_id
-    bleibt null (wie bei Pull-Dispatch agent_scoped.py:1293)."""
+    """Subagent-dispatch mode: workers have parallel sessions, current_task_id
+    stays null (like pull-dispatch agent_scoped.py:1293)."""
     from app.config import settings
     monkeypatch.setattr(settings, "use_subagent_dispatch", True)
 
@@ -138,10 +138,10 @@ async def test_patch_ack_skips_current_task_id_for_worker_subagent_mode(
 
 @pytest.mark.asyncio
 async def test_patch_done_clears_current_task_id(client: AsyncClient):
-    """Wenn current_task_id gesetzt ist und Task done wird → Lock freigeben."""
+    """When current_task_id is set and the task becomes done → release the lock."""
     agent, token, board_id, task = await _make_agent_with_task(is_board_lead=True)
 
-    # 1. ACK (setzt current_task_id)
+    # 1. ACK (sets current_task_id)
     r1 = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task.id}",
         headers={"Authorization": f"Bearer {token}"},
@@ -149,7 +149,7 @@ async def test_patch_done_clears_current_task_id(client: AsyncClient):
     )
     assert r1.status_code == 200
 
-    # 2. Done (clearen)
+    # 2. Done (clear)
     r2 = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task.id}",
         headers={"Authorization": f"Bearer {token}"},
@@ -168,17 +168,17 @@ async def test_patch_done_clears_current_task_id(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_auto_ack_via_comment_sets_current_task_id(client: AsyncClient):
-    """Auto-ACK via Comment (ack_at=None + dispatched_at != None) → current_task_id setzen.
+    """Auto-ACK via comment (ack_at=None + dispatched_at != None) → set current_task_id.
 
-    Bug-Repro 2026-04-24 (Boss Acme-Corp-Steckbrief): Boss ACKed via erstem
-    Kommentar (Auto-ACK-Pfad, NICHT via PATCH), current_task_id blieb null,
-    mc delegate warf 409. PR #103 hat nur den PATCH-Pfad gefixt — hier auch
-    den Comment-Auto-ACK-Pfad.
+    Bug repro 2026-04-24 (Boss Acme-Corp brief): Boss ACKed via the first
+    comment (auto-ACK path, NOT via PATCH), current_task_id stayed null,
+    mc delegate threw 409. PR #103 only fixed the PATCH path — this covers
+    the comment auto-ACK path too.
     """
     agent, token, board_id, task = await _make_agent_with_task(
         is_board_lead=True, task_status="inbox",
     )
-    # Dispatched-Marker setzen (sonst kein Auto-ACK)
+    # Set dispatched marker (otherwise no auto-ACK)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task as _Task
         fresh_task = await s.get(_Task, task.id)
@@ -205,10 +205,10 @@ async def test_auto_ack_via_comment_sets_current_task_id(client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_patch_ack_idempotent_for_already_locked_task(client: AsyncClient):
-    """Wenn current_task_id schon diese Task ist (z.B. via Pull-Dispatch), kein overwrite."""
+    """When current_task_id is already this task (e.g. via pull-dispatch), no overwrite."""
     agent, token, board_id, task = await _make_agent_with_task(is_board_lead=True, task_status="in_progress")
 
-    # Simuliere Pull-Dispatch state: current_task_id schon gesetzt
+    # Simulate pull-dispatch state: current_task_id already set
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
@@ -216,14 +216,14 @@ async def test_patch_ack_idempotent_for_already_locked_task(client: AsyncClient)
         s.add(fresh)
         await s.commit()
 
-    # Agent sendet PATCH status:in_progress obwohl schon in_progress (retry)
+    # Agent sends PATCH status:in_progress even though already in_progress (retry)
     resp = await client.patch(
         f"/api/v1/agent/boards/{board_id}/tasks/{task.id}",
         headers={"Authorization": f"Bearer {token}"},
         json={"status": "in_progress"},
     )
-    # Wir akzeptieren 200 (no-op) oder 400/409 (Status-Transition-Guard).
-    # Wichtig ist dass current_task_id intakt bleibt, egal was der Server macht.
+    # We accept 200 (no-op) or 400/409 (status-transition guard).
+    # What matters is that current_task_id stays intact, regardless of what the server does.
     assert resp.status_code in (200, 400, 409), resp.text
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.agent import Agent

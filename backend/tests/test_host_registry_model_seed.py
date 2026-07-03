@@ -1,14 +1,14 @@
-"""Host Registry (ADR-048) — Model + Bootstrap-Seed Tests (Aufgabe B1).
+"""Host Registry (ADR-048) — Model + Bootstrap Seed Tests (Task B1).
 
-Deckt ab:
-- Host-Model: Defaults, Persistenz, Unique-Slug
-- Runtime.host_id FK (nullable, Host-Delete → SET NULL semantisch via ondelete)
-- Seed: dgx-spark aus settings, porsche aus dem Legacy-unsloth-porsche-Runtime
-- Seed-Idempotenz (zweiter Lauf = no-op)
-- Fresh-Install ohne dgx_ssh_host → 0 Hosts, kein Fehler
+Covers:
+- Host model: defaults, persistence, unique slug
+- Runtime.host_id FK (nullable, host delete → SET NULL semantics via ondelete)
+- Seed: dgx-spark from settings, porsche from the legacy unsloth-porsche runtime
+- Seed idempotency (second run = no-op)
+- Fresh install without dgx_ssh_host → 0 hosts, no error
 
-Public-Repo-Regel: nur Doku-Platzhalter-IPs (192.0.2.x, RFC 5737) und
-Dummy-MACs in Fixtures.
+Public repo rule: only doc placeholder IPs (192.0.2.x, RFC 5737) and
+dummy MACs in fixtures.
 """
 import pytest
 from sqlalchemy import select
@@ -29,7 +29,7 @@ def _make_runtime(slug: str = "test-runtime", **kwargs) -> Runtime:
     return Runtime(slug=slug, **defaults)
 
 
-# ── Host-Model ─────────────────────────────────────────────────────────────
+# ── Host model ─────────────────────────────────────────────────────────────
 
 
 async def test_host_model_persists_with_defaults(session):
@@ -74,7 +74,7 @@ async def test_runtime_host_id_fk_nullable(session):
     assert rt_free.host_id is None
 
 
-# ── Fresh-Install: 0 Hosts, 0 Fehler ───────────────────────────────────────
+# ── Fresh install: 0 hosts, 0 errors ───────────────────────────────────────
 
 
 async def test_fresh_install_without_dgx_env_seeds_nothing(session, monkeypatch):
@@ -87,7 +87,7 @@ async def test_fresh_install_without_dgx_env_seeds_nothing(session, monkeypatch)
     assert result.scalars().all() == []
 
 
-# ── dgx-spark Seed aus settings ────────────────────────────────────────────
+# ── dgx-spark seed from settings ───────────────────────────────────────────
 
 
 async def test_seed_dgx_spark_from_settings(session, monkeypatch):
@@ -114,13 +114,13 @@ async def test_seed_is_idempotent(session, monkeypatch):
     second = await seed_hosts(session)
 
     assert first[0] == 1
-    assert second == (0, 0)  # zweiter Lauf: nichts eingefuegt, nichts neu verlinkt
+    assert second == (0, 0)  # second run: nothing inserted, nothing newly linked
     result = await session.exec(select(Host))
     assert len(result.scalars().all()) == 1
 
 
 async def test_seed_skips_when_ssh_host_already_registered(session, monkeypatch):
-    """User hat die Box bereits (unter anderem Slug) angelegt → kein Duplikat."""
+    """User already registered the box (under a different slug) → no duplicate."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "192.0.2.10")
     session.add(Host(slug="my-box", display_name="My Box", kind="ssh", ssh_host="192.0.2.10"))
     await session.commit()
@@ -132,7 +132,7 @@ async def test_seed_skips_when_ssh_host_already_registered(session, monkeypatch)
     assert len(result.scalars().all()) == 1
 
 
-# ── porsche Seed aus dem Legacy-Runtime ────────────────────────────────────
+# ── porsche seed from the legacy runtime ───────────────────────────────────
 
 
 async def test_seed_porsche_from_legacy_runtime(session, monkeypatch):
@@ -161,7 +161,7 @@ async def test_seed_porsche_from_legacy_runtime(session, monkeypatch):
     assert host.wol_mac_address == "00:00:5E:00:53:01"
     assert host.power_managed is True
 
-    # Runtime wurde per Endpoint-IP an den Host gebunden
+    # Runtime was bound to the host via endpoint IP
     assert linked == 1
     result = await session.exec(select(Runtime).where(Runtime.slug == "unsloth-porsche"))
     assert result.scalars().one().host_id == host.id
@@ -178,9 +178,9 @@ async def test_no_porsche_seed_without_control_url(session, monkeypatch):
 
 
 async def test_no_porsche_seed_for_disabled_runtime(session, monkeypatch):
-    """Der Beispiel-Seed aus runtimes.json ist enabled=false — ein OSS-
-    Fresh-Install darf daraus KEINEN Phantom-Host materialisieren
-    (Spec-Ziel: 0 Hosts, 0 Fehler ohne echte GPU-Box)."""
+    """The example seed from runtimes.json is enabled=false — an OSS
+    fresh install must NOT materialize a phantom host from it
+    (spec goal: 0 hosts, 0 errors without a real GPU box)."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     session.add(
         _make_runtime(
@@ -202,9 +202,9 @@ async def test_no_porsche_seed_for_disabled_runtime(session, monkeypatch):
 
 
 async def test_no_duplicate_porsche_after_slug_rename(session, monkeypatch):
-    """Slug-Rename des geseedeten porsche-Hosts (PATCH slug) darf beim
-    nächsten Boot keinen Duplikat-Host mit gleicher control_url erzeugen —
-    zwei Rows mit gleicher ssh_host machen das Linking nichtdeterministisch."""
+    """Slug rename of the seeded porsche host (PATCH slug) must not create
+    a duplicate host with the same control_url on the next boot —
+    two rows with the same ssh_host make linking nondeterministic."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "")
     session.add(
         _make_runtime(
@@ -216,7 +216,7 @@ async def test_no_duplicate_porsche_after_slug_rename(session, monkeypatch):
             power_managed=True,
         )
     )
-    # Der bereits geseedete Host wurde vom Admin umbenannt
+    # The already-seeded host was renamed by the admin
     session.add(
         Host(
             slug="workstation",
@@ -235,7 +235,7 @@ async def test_no_duplicate_porsche_after_slug_rename(session, monkeypatch):
     assert [h.slug for h in result.scalars().all()] == ["workstation"]
 
 
-# ── Runtime-Linking ────────────────────────────────────────────────────────
+# ── Runtime linking ────────────────────────────────────────────────────────
 
 
 async def test_seed_links_runtimes_by_endpoint_ip(session, monkeypatch):
@@ -253,11 +253,11 @@ async def test_seed_links_runtimes_by_endpoint_ip(session, monkeypatch):
     result = await session.exec(select(Runtime).where(Runtime.slug == "vllm-a"))
     assert result.scalars().one().host_id == host.id
     result = await session.exec(select(Runtime).where(Runtime.slug == "cloud-x"))
-    assert result.scalars().one().host_id is None  # Cloud-Runtime bleibt hostlos
+    assert result.scalars().one().host_id is None  # cloud runtime stays hostless
 
 
 async def test_seed_never_overwrites_existing_binding(session, monkeypatch):
-    """host_id != NULL wird vom Seed nicht angefasst (User-Umbindung bleibt)."""
+    """host_id != NULL is left untouched by the seed (user rebinding persists)."""
     monkeypatch.setattr(settings, "dgx_ssh_host", "192.0.2.10")
     other = Host(slug="other", display_name="Other", kind="ssh", ssh_host="192.0.2.99")
     session.add(other)

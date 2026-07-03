@@ -1,4 +1,4 @@
-"""Tests fuer Review-Decision — explizite Review-Entscheidungen."""
+"""Tests for review decisions — explicit review decisions."""
 import uuid
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,22 +12,22 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 
 async def _get_session(test_engine):
-    """Frische Session erstellen."""
+    """Create a fresh session."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         yield s
 
 
 async def _fresh_session(test_engine):
-    """Einzelne Session fuer Assertions (nicht-generator)."""
+    """Single session for assertions (non-generator)."""
     return AsyncSession(test_engine, expire_on_commit=False)
 
 
-# ── Test 1: Approve setzt status=done + review_decision ──────────────
+# ── Test 1: Approve sets status=done + review_decision ───────────────
 
 
 @pytest.mark.asyncio
 async def test_review_approve(make_board, make_agent, make_task):
-    """decision=approve → status=done, review_decision=approved, completed_at gesetzt."""
+    """decision=approve → status=done, review_decision=approved, completed_at set."""
     board = await make_board(name="Review Board", slug="rev-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -42,7 +42,7 @@ async def test_review_approve(make_board, make_agent, make_task):
         patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
     ):
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
-            # Task und Agent frisch laden
+            # Load task and agent fresh
             t = await s.get(type(task), task.id)
             from app.services.task_lifecycle import execute_review_decision
             await execute_review_decision(
@@ -50,7 +50,7 @@ async def test_review_approve(make_board, make_agent, make_task):
                 actor_agent=reviewer,
             )
 
-        # Assertions mit frischer Session
+        # Assertions with a fresh session
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             t = await s.get(type(task), task.id)
             assert t.status == "done"
@@ -59,12 +59,12 @@ async def test_review_approve(make_board, make_agent, make_task):
             assert t.completed_at is not None
 
 
-# ── Test 2: Request Changes ruft handle_review_rejection auf ────────
+# ── Test 2: Request changes calls handle_review_rejection ───────────
 
 
 @pytest.mark.asyncio
 async def test_review_request_changes(make_board, make_agent, make_task):
-    """decision=request_changes → handle_review_rejection aufgerufen."""
+    """decision=request_changes → handle_review_rejection called."""
     board = await make_board(name="RC Board", slug="rc-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -88,7 +88,7 @@ async def test_review_request_changes(make_board, make_agent, make_task):
 
         mock_reject.assert_called_once()
 
-        # Decision-Felder pruefen
+        # Check decision fields
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             t = await s.get(type(task), task.id)
             assert t.review_decision == "changes_requested"
@@ -96,12 +96,12 @@ async def test_review_request_changes(make_board, make_agent, make_task):
             assert t.status == "in_progress"
 
 
-# ── Test 3: Hold — Status bleibt review ──────────────────────────────
+# ── Test 3: Hold — status stays review ───────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_review_hold(make_board, make_agent, make_task):
-    """decision=hold → status bleibt review, review_decision=hold."""
+    """decision=hold → status stays review, review_decision=hold."""
     board = await make_board(name="Hold Board", slug="hold-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -125,17 +125,17 @@ async def test_review_hold(make_board, make_agent, make_task):
 
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             t = await s.get(type(task), task.id)
-            assert t.status == "review"  # Bleibt
+            assert t.status == "review"  # Stays
             assert t.review_decision == "hold"
             assert t.review_decided_at is not None
 
 
-# ── Test 4: Requires review status ───────────────────────────────────
+# ── Test 4: Requires review status ────────────────────────────────────
 
 
 @pytest.mark.asyncio
 async def test_review_requires_review_status(make_board, make_agent, make_task):
-    """409 wenn Task nicht im review Status."""
+    """409 if task is not in review status."""
     board = await make_board(name="Guard Board", slug="guard-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -163,7 +163,7 @@ async def test_review_requires_review_status(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_review_run_control_guard(make_board, make_agent, make_task):
-    """409 wenn run_control=stopped."""
+    """409 if run_control=stopped."""
     board = await make_board(name="Stopped Board", slug="stopped-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -192,7 +192,7 @@ async def test_review_run_control_guard(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_review_decision_cleared_on_handoff(make_board, make_agent, make_task):
-    """handle_review_handoff setzt review_decision=null."""
+    """handle_review_handoff sets review_decision=null."""
     board = await make_board(name="Handoff Board", slug="handoff-board")
     developer = await make_agent(name="Cody", board_id=board.id, is_board_lead=False)
     reviewer = await make_agent(
@@ -222,12 +222,12 @@ async def test_review_decision_cleared_on_handoff(make_board, make_agent, make_t
             assert t.review_decided_at is None
 
 
-# ── Test 7: Fallback — PATCH status:done setzt review_decision ──────
+# ── Test 7: Fallback — PATCH status:done sets review_decision ───────
 
 
 @pytest.mark.asyncio
 async def test_fallback_status_sets_decision(make_board, make_agent, make_task, auth_client):
-    """PATCH status:done auf review-Task setzt review_decision=approved."""
+    """PATCH status:done on a review task sets review_decision=approved."""
     board = await make_board(name="Fallback Board", slug="fallback-board")
     reviewer = await make_agent(
         name="Rex", board_id=board.id, role="reviewer",
@@ -239,15 +239,15 @@ async def test_fallback_status_sets_decision(make_board, make_agent, make_task, 
 
     from tests.conftest import test_engine
 
-    # Agent-Token erzeugen
+    # Generate agent token
     from app.auth import generate_agent_token
     raw_token, reviewer_token_hash = generate_agent_token()
 
-    # Agent Token in DB updaten
+    # Update agent token in DB
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         r = await s.get(type(reviewer), reviewer.id)
         r.agent_token_hash = reviewer_token_hash
-        r.scopes = []  # Alle Scopes (backward-compat)
+        r.scopes = []  # All scopes (backward-compat)
         s.add(r)
         await s.commit()
 
@@ -274,7 +274,7 @@ async def test_fallback_status_sets_decision(make_board, make_agent, make_task, 
 
 @pytest.mark.asyncio
 async def test_stop_clears_review_decision(make_board, make_agent, make_task):
-    """stop_task_run setzt review_decision=null."""
+    """stop_task_run sets review_decision=null."""
     board = await make_board(name="Stop Board", slug="stop-board")
     reviewer = await make_agent(name="Rex", board_id=board.id)
     task = await make_task(
@@ -309,7 +309,7 @@ async def test_stop_clears_review_decision(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_resume_clears_review_decision(make_board, make_agent, make_task):
-    """resume_task_run setzt review_decision=null."""
+    """resume_task_run sets review_decision=null."""
     board = await make_board(name="Resume Board", slug="resume-board")
     reviewer = await make_agent(name="Rex", board_id=board.id)
     task = await make_task(
@@ -345,7 +345,7 @@ async def test_resume_clears_review_decision(make_board, make_agent, make_task):
 
 @pytest.mark.asyncio
 async def test_review_creates_comment(make_board, make_agent, make_task):
-    """execute_review_decision erstellt einen Kommentar mit comment_type=review."""
+    """execute_review_decision creates a comment with comment_type=review."""
     board = await make_board(name="Comment Board", slug="comment-board")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -381,12 +381,12 @@ async def test_review_creates_comment(make_board, make_agent, make_task):
             assert comments[0].author_agent_id == reviewer.id
 
 
-# ── Test 11: Konsistenz-Guard — request_changes + ship-ready = 409 ────
+# ── Test 11: Consistency guard — request_changes + ship-ready = 409 ──
 
 
 @pytest.mark.asyncio
 async def test_consistency_request_changes_ship_ready_blocked(make_board, make_agent, make_task):
-    """request_changes + 'ship-ready' im Kommentar = 409 Widerspruch."""
+    """request_changes + 'ship-ready' in the comment = 409 contradiction."""
     board = await make_board(name="Consistency Board 1", slug="consist-1")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -411,12 +411,12 @@ async def test_consistency_request_changes_ship_ready_blocked(make_board, make_a
             assert "Widerspruch" in str(exc_info.value.detail)
 
 
-# ── Test 12: Konsistenz-Guard — hold + ship-ready = 409 ──────────────
+# ── Test 12: Consistency guard — hold + ship-ready = 409 ─────────────
 
 
 @pytest.mark.asyncio
 async def test_consistency_hold_ship_ready_blocked(make_board, make_agent, make_task):
-    """hold + 'ship-ready' im Kommentar = 409 Widerspruch."""
+    """hold + 'ship-ready' in the comment = 409 contradiction."""
     board = await make_board(name="Consistency Board 2", slug="consist-2")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -441,12 +441,12 @@ async def test_consistency_hold_ship_ready_blocked(make_board, make_agent, make_
             assert "Widerspruch" in str(exc_info.value.detail)
 
 
-# ── Test 13: Konsistenz-Guard — approve + not ship-ready = 409 ───────
+# ── Test 13: Consistency guard — approve + not ship-ready = 409 ──────
 
 
 @pytest.mark.asyncio
 async def test_consistency_approve_not_ship_ready_blocked(make_board, make_agent, make_task):
-    """approve + 'not ship-ready' im Kommentar = 409 Widerspruch."""
+    """approve + 'not ship-ready' in the comment = 409 contradiction."""
     board = await make_board(name="Consistency Board 3", slug="consist-3")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -474,12 +474,12 @@ async def test_consistency_approve_not_ship_ready_blocked(make_board, make_agent
             assert "Widerspruch" in str(exc_info.value.detail)
 
 
-# ── Test 14: Konsistenz-Guard — approve + ship-ready = OK ────────────
+# ── Test 14: Consistency guard — approve + ship-ready = OK ───────────
 
 
 @pytest.mark.asyncio
 async def test_consistency_approve_ship_ready_allowed(make_board, make_agent, make_task):
-    """approve + 'ship-ready' im Kommentar = erlaubt, kein Widerspruch."""
+    """approve + 'ship-ready' in the comment = allowed, no contradiction."""
     board = await make_board(name="Consistency Board 4", slug="consist-4")
     reviewer = await make_agent(name="Rex", board_id=board.id, role="reviewer")
     task = await make_task(
@@ -508,25 +508,25 @@ async def test_consistency_approve_ship_ready_allowed(make_board, make_agent, ma
             assert t.review_decision == "approved"
 
 
-# ── Test 15: Rework-Dispatch setzt Status auf inbox (ACK-Check) ──────
+# ── Test 15: Rework dispatch sets status to inbox (ACK check) ────────
 
 
 
 
-# ── Test 16: Full Rework E2E — mit echtem _find_last_developer ──────
+# ── Test 16: Full rework E2E — with real _find_last_developer ───────
 
 
 
 
-# ── Test 17: Reviewer-ACK setzt NICHT review_decision ─────────────
+# ── Test 17: Reviewer ACK does NOT set review_decision ────────────
 
 
 @pytest.mark.asyncio
 async def test_reviewer_ack_does_not_set_review_decision(make_board, make_agent, make_task, auth_client):
-    """PATCH status:in_progress auf review-Task (ACK) darf review_decision NICHT setzen.
+    """PATCH status:in_progress on a review task (ACK) must NOT set review_decision.
 
-    Reviewer-ACK = Arbeitsbeginn, keine Review-Entscheidung.
-    review_decision darf nur ueber den expliziten POST /review Endpoint gesetzt werden.
+    Reviewer ACK = start of work, not a review decision.
+    review_decision may only be set via the explicit POST /review endpoint.
     """
     board = await make_board(name="ACK Board", slug="ack-board")
     reviewer = await make_agent(
@@ -570,16 +570,16 @@ async def test_reviewer_ack_does_not_set_review_decision(make_board, make_agent,
             assert t.status == "in_progress"
 
 
-# ── Test 18: Reviewer darf trotz Review-Transitions approven ──────
+# ── Test 18: Reviewer may approve despite review transitions ──────
 
 
 @pytest.mark.asyncio
 async def test_reviewer_can_approve_despite_review_transitions(make_board, make_agent, make_task):
-    """Reviewer-ACK (review→in_progress) und Review-Abschluss (in_progress→review)
-    duerfen den Self-Review-Guard NICHT ausloesen.
+    """Reviewer ACK (review→in_progress) and review completion (in_progress→review)
+    must NOT trigger the self-review guard.
 
-    Reproduziert den Rex-Bug: Rex ACK'd, reviewte, und konnte dann nicht approven
-    weil seine eigenen Review-Transitions als 'Arbeit' gezaehlt wurden.
+    Reproduces the Rex bug: Rex ACK'd, reviewed, and then couldn't approve
+    because his own review transitions were counted as 'work'.
     """
     board = await make_board(name="Self-Review Board", slug="self-review")
     developer = await make_agent(
@@ -594,11 +594,11 @@ async def test_reviewer_can_approve_despite_review_transitions(make_board, make_
     from tests.conftest import test_engine
     from app.models.task import TaskEvent
 
-    # Simuliere die Event-Kette die Rex' Bug ausloest:
-    # 1. Cody: inbox → in_progress (Developer arbeitet)
-    # 2. Cody: in_progress → review (Developer fertig)
-    # 3. Rex: review → in_progress (Reviewer ACK)
-    # 4. Rex: in_progress → review (Reviewer fertig mit Review)
+    # Simulate the event chain that triggers Rex's bug:
+    # 1. Cody: inbox → in_progress (developer working)
+    # 2. Cody: in_progress → review (developer done)
+    # 3. Rex: review → in_progress (reviewer ACK)
+    # 4. Rex: in_progress → review (reviewer done with review)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         for from_s, to_s, agent in [
             ("inbox", "in_progress", developer),
@@ -622,7 +622,7 @@ async def test_reviewer_can_approve_despite_review_transitions(make_board, make_
             t = await s.get(type(task), task.id)
             r = await s.get(type(reviewer), reviewer.id)  # reload in same session
             from app.services.task_lifecycle import execute_review_decision
-            # Rex muss approven koennen — seine Transitions sind Review-Arbeit
+            # Rex must be able to approve — his transitions are review work
             await execute_review_decision(
                 s, t, board.id, "approve",
                 "### Urteil: ship-ready\nAlles gut",
@@ -635,12 +635,12 @@ async def test_reviewer_can_approve_despite_review_transitions(make_board, make_
             assert t.review_decision == "approved"
 
 
-# ── Test 19: Echter Self-Review bleibt verboten ──────────────────
+# ── Test 19: A real self-review remains forbidden ─────────────────
 
 
 @pytest.mark.asyncio
 async def test_real_self_review_still_blocked(make_board, make_agent, make_task):
-    """Developer der seinen eigenen Code reviewed wird weiterhin blockiert."""
+    """A developer reviewing their own code remains blocked."""
     board = await make_board(name="Real Self-Review Board", slug="real-self")
     developer = await make_agent(
         name="Cody", board_id=board.id, role="developer",
@@ -654,7 +654,7 @@ async def test_real_self_review_still_blocked(make_board, make_agent, make_task)
     from app.models.task import TaskEvent
     from fastapi import HTTPException
 
-    # Cody hat als Developer gearbeitet
+    # Cody worked as developer
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(TaskEvent(
             id=uuid.uuid4(), task_id=task.id,

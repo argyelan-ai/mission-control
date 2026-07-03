@@ -1,4 +1,4 @@
-"""Tests fuer Project-Scopes in scopes.py."""
+"""Tests for project scopes in scopes.py."""
 from app.scopes import DEFAULT_SCOPES, ALL_SCOPES, AgentRole, Scope
 
 
@@ -49,8 +49,8 @@ def test_tester_has_no_project_scopes():
 
 
 def test_tester_has_credentials_read():
-    """Tester braucht credentials:read fuer mc verify --login-as Vault-Resolve.
-    Side-Issue #2 (2026-04-23): Login-Rate-Limit blockierte Auto-Tests bevor
-    der Tester sich via Vault einloggen konnte."""
+    """Tester needs credentials:read for mc verify --login-as Vault resolve.
+    Side issue #2 (2026-04-23): login rate limit blocked auto-tests before
+    the tester could log in via Vault."""
     tester_scopes = DEFAULT_SCOPES[AgentRole.TESTER]
     assert "credentials:read" in tester_scopes

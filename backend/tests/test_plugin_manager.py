@@ -1,4 +1,4 @@
-"""Tests fuer plugin_manager Service."""
+"""Tests for the plugin_manager service."""
 import json
 from unittest.mock import patch
 
@@ -6,14 +6,14 @@ from app.services.plugin_manager import list_available_plugins, render_agent_ins
 
 
 def test_list_available_plugins_empty(tmp_path):
-    """Leerer Cache gibt leere Liste zurueck."""
+    """Empty cache returns an empty list."""
     with patch("app.services.plugin_manager._plugins_dir", return_value=tmp_path):
         result = list_available_plugins()
         assert result == []
 
 
 def test_list_available_plugins_parses_correctly(tmp_path):
-    """Plugins werden korrekt aus installed_plugins.json geparst."""
+    """Plugins are correctly parsed from installed_plugins.json."""
     ipj = {
         "version": 2,
         "plugins": {
@@ -34,7 +34,7 @@ def test_list_available_plugins_parses_correctly(tmp_path):
 
 
 def test_list_available_plugins_version_parsing(tmp_path):
-    """Version wird korrekt aus dem ersten Entry geparst."""
+    """Version is correctly parsed from the first entry."""
     ipj = {
         "version": 2,
         "plugins": {
@@ -51,7 +51,7 @@ def test_list_available_plugins_version_parsing(tmp_path):
 
 
 def test_list_available_plugins_invalid_json(tmp_path):
-    """Fehlerhaftes JSON gibt leere Liste zurueck."""
+    """Malformed JSON returns an empty list."""
     (tmp_path / "installed_plugins.json").write_text("not json")
 
     with patch("app.services.plugin_manager._plugins_dir", return_value=tmp_path):
@@ -60,7 +60,7 @@ def test_list_available_plugins_invalid_json(tmp_path):
 
 
 def test_render_agent_installed_plugins_filters(tmp_path):
-    """Nur zugewiesene Plugins werden in die Agent-spezifische JSON geschrieben."""
+    """Only assigned plugins are written into the agent-specific JSON."""
     ipj = {
         "version": 2,
         "plugins": {
@@ -78,7 +78,7 @@ def test_render_agent_installed_plugins_filters(tmp_path):
 
 
 def test_render_agent_installed_plugins_none_returns_all(tmp_path):
-    """None gibt alle Plugins zurueck."""
+    """None returns all plugins."""
     ipj = {
         "version": 2,
         "plugins": {
@@ -94,7 +94,7 @@ def test_render_agent_installed_plugins_none_returns_all(tmp_path):
 
 
 def test_render_agent_installed_plugins_empty_list(tmp_path):
-    """Leere Liste gibt keine Plugins zurueck."""
+    """Empty list returns no plugins."""
     ipj = {
         "version": 2,
         "plugins": {
@@ -109,18 +109,18 @@ def test_render_agent_installed_plugins_empty_list(tmp_path):
 
 
 def test_render_agent_installed_plugins_no_file(tmp_path):
-    """Fehlende Datei gibt leeres Ergebnis zurueck."""
+    """Missing file returns an empty result."""
     with patch("app.services.plugin_manager._plugins_dir", return_value=tmp_path):
         result = json.loads(render_agent_installed_plugins(None))
         assert result == {"version": 2, "plugins": {}}
 
 
 # ---------------------------------------------------------------------------
-# Helper: minimales Template-Dir fuer sync-Tests
+# Helper: minimal template dir for sync tests
 # ---------------------------------------------------------------------------
 
 def _setup_sync_env(tmp_path, plugins_data=None, km_data=None):
-    """Erstellt minimale Verzeichnisstruktur fuer sync_agent_plugins_to_disk Tests."""
+    """Creates a minimal directory structure for sync_agent_plugins_to_disk tests."""
     plugins_dir = tmp_path / "plugins"
     plugins_dir.mkdir()
     (plugins_dir / "installed_plugins.json").write_text(json.dumps(
@@ -201,7 +201,7 @@ def test_sync_replaces_stale_settings_symlink(tmp_path):
 
 
 def test_sync_writes_known_marketplaces(tmp_path):
-    """sync_agent_plugins_to_disk schreibt known_marketplaces.json mit Container-Pfaden."""
+    """sync_agent_plugins_to_disk writes known_marketplaces.json with container paths."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(
         tmp_path,
         plugins_data={
@@ -233,10 +233,10 @@ def test_sync_writes_known_marketplaces(tmp_path):
 
 
 def test_sync_replaces_known_marketplaces_symlink(tmp_path):
-    """Bestehende Symlinks werden durch echte Dateien ersetzt."""
+    """Existing symlinks are replaced by real files."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)
 
-    # Symlink erstellen (simuliert alten Zustand)
+    # Create symlink (simulates old state)
     symlink_target = plugin_out / "known_marketplaces.json"
     symlink_target.symlink_to("../../../plugins/known_marketplaces.json")
     assert symlink_target.is_symlink()
@@ -251,7 +251,7 @@ def test_sync_replaces_known_marketplaces_symlink(tmp_path):
 
 
 def test_sync_copies_cache_directories(tmp_path):
-    """sync kopiert nur benoetigte Marketplace-Dirs aus dem shared cache."""
+    """sync only copies needed marketplace dirs from the shared cache."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(
         tmp_path,
         plugins_data={
@@ -260,7 +260,7 @@ def test_sync_copies_cache_directories(tmp_path):
         },
     )
 
-    # Shared cache mit 2 Marketplaces
+    # Shared cache with 2 marketplaces
     cache_dir = plugins_dir / "cache"
     (cache_dir / "claude-plugins-official" / "superpowers" / "5.0.7").mkdir(parents=True)
     (cache_dir / "claude-plugins-official" / "superpowers" / "5.0.7" / "SKILL.md").write_text("# Superpowers")
@@ -274,7 +274,7 @@ def test_sync_copies_cache_directories(tmp_path):
     (mp_dir / "thedotmack").mkdir(parents=True)
     (mp_dir / "thedotmack" / "plugin-registry.json").write_text("{}")
 
-    # Nur superpowers zugewiesen — thedotmack sollte NICHT kopiert werden
+    # Only superpowers assigned — thedotmack should NOT be copied
     with patch("app.services.plugin_manager._plugins_dir", return_value=plugins_dir), \
          patch("app.services.plugin_manager._agents_dir", return_value=agents_dir), \
          patch("app.services.plugin_manager._templates_dir", return_value=tmpl_dir):
@@ -283,18 +283,18 @@ def test_sync_copies_cache_directories(tmp_path):
     assert result.get("cache") is True
     assert result.get("marketplaces") is True
 
-    # claude-plugins-official kopiert
+    # claude-plugins-official copied
     assert (plugin_out / "cache" / "claude-plugins-official" / "superpowers" / "5.0.7" / "SKILL.md").exists()
-    # thedotmack NICHT kopiert
+    # thedotmack NOT copied
     assert not (plugin_out / "cache" / "thedotmack").exists()
 
-    # marketplaces: claude-plugins-official kopiert, thedotmack nicht
+    # marketplaces: claude-plugins-official copied, thedotmack not
     assert (plugin_out / "marketplaces" / "claude-plugins-official" / "plugin-registry.json").exists()
     assert not (plugin_out / "marketplaces" / "thedotmack").exists()
 
 
 def test_sync_copies_all_cache_when_cli_plugins_none(tmp_path):
-    """cli_plugins=None kopiert alle Marketplace-Dirs."""
+    """cli_plugins=None copies all marketplace dirs."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(
         tmp_path,
         plugins_data={
@@ -326,11 +326,11 @@ def test_sync_copies_all_cache_when_cli_plugins_none(tmp_path):
 
 
 def test_sync_replaces_cache_symlink(tmp_path):
-    """Bestehender cache-Symlink wird durch echtes Verzeichnis ersetzt."""
+    """Existing cache symlink is replaced by a real directory."""
     plugins_dir, agents_dir, tmpl_dir, plugin_out = _setup_sync_env(tmp_path)
     (plugins_dir / "cache").mkdir()
 
-    # Symlink erstellen
+    # Create symlink
     cache_symlink = plugin_out / "cache"
     cache_symlink.symlink_to("../../../plugins/cache")
     assert cache_symlink.is_symlink()

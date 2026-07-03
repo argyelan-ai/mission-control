@@ -1,8 +1,8 @@
-"""Tests fuer Phase 1 Integrity Guards.
+"""Tests for Phase 1 Integrity Guards.
 
-Schritt 1: owner_agent_id — Immutable Ownership Tracking
-Schritt 2: Parent/Child Guard — Parent done nur wenn alle Children done
-Schritt 4: Self-Review Guard — Agent darf eigenen Code nicht approven
+Step 1: owner_agent_id — Immutable Ownership Tracking
+Step 2: Parent/Child Guard — parent done only when all children are done
+Step 4: Self-Review Guard — agent may not approve their own code
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -12,7 +12,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from tests.conftest import test_engine
 
-# Standard-Patches fuer Tests die erfolgreich bis emit_event/broadcast kommen
+# Standard patches for tests that succeed through to emit_event/broadcast
 _BROADCAST_PATCH = patch("app.services.activity.broadcast", new_callable=AsyncMock)
 _RPC_PATCH = patch("app.routers.agent_scoped.rpc", AsyncMock(connected=True), create=True)
 # Phase 29: task_lifecycle.rpc removed; placeholder patch retained for backwards
@@ -39,7 +39,7 @@ async def _add_reflection(task_id: uuid.UUID, agent_id: uuid.UUID):
 
 
 async def _setup_integrity_scenario():
-    """Board + Lead + Developer + Reviewer erstellen."""
+    """Create Board + Lead + Developer + Reviewer."""
     from app.models.board import Board
     from app.models.agent import Agent
     from app.auth import generate_agent_token
@@ -94,12 +94,12 @@ async def _setup_integrity_scenario():
 
 
 # ────────────────────────────────────────────────────────────
-# Schritt 1: owner_agent_id Tests
+# Step 1: owner_agent_id Tests
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_owner_agent_id_set_on_agent_create(client):
-    """Agent-erstellter Task bekommt owner_agent_id = erstellender Agent."""
+    """Agent-created task gets owner_agent_id = creating agent."""
     ids = await _setup_integrity_scenario()
 
     with _BROADCAST_PATCH, _RPC_PATCH:
@@ -122,7 +122,7 @@ async def test_owner_agent_id_set_on_agent_create(client):
 
 @pytest.mark.asyncio
 async def test_owner_agent_id_null_on_manual_create(auth_client):
-    """Manuell erstellter Task (via Dashboard) hat owner_agent_id = null."""
+    """Manually created task (via dashboard) has owner_agent_id = null."""
     ids = await _setup_integrity_scenario()
 
     with _BROADCAST_PATCH:
@@ -139,12 +139,12 @@ async def test_owner_agent_id_null_on_manual_create(auth_client):
 
 
 # ────────────────────────────────────────────────────────────
-# Schritt 2: Parent/Child Guard Tests
+# Step 2: Parent/Child Guard Tests
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_parent_done_blocked_when_children_open(auth_client):
-    """Parent kann nicht done werden wenn Children noch offen sind."""
+    """Parent cannot become done while children are still open."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task
 
@@ -179,7 +179,7 @@ async def test_parent_done_blocked_when_children_open(auth_client):
 
 @pytest.mark.asyncio
 async def test_parent_done_allowed_when_all_children_done(auth_client):
-    """Parent kann done werden wenn alle Children done sind."""
+    """Parent can become done when all children are done."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task
 
@@ -214,7 +214,7 @@ async def test_parent_done_allowed_when_all_children_done(auth_client):
 
 @pytest.mark.asyncio
 async def test_parent_done_allowed_without_children(auth_client):
-    """Task ohne Children kann normal auf done gehen."""
+    """Task without children can go to done normally."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task
 
@@ -239,7 +239,7 @@ async def test_parent_done_allowed_without_children(auth_client):
 
 @pytest.mark.asyncio
 async def test_parent_done_blocked_via_agent(client):
-    """Agent kann Parent nicht done setzen wenn Children offen."""
+    """Agent cannot set parent to done while children are open."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task
 
@@ -270,7 +270,7 @@ async def test_parent_done_blocked_via_agent(client):
 
 @pytest.mark.asyncio
 async def test_parent_done_blocked_mixed_children(auth_client):
-    """Parent mit done + failed Children wird blockiert."""
+    """Parent with done + failed children is blocked."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task
 
@@ -304,12 +304,12 @@ async def test_parent_done_blocked_mixed_children(auth_client):
 
 
 # ────────────────────────────────────────────────────────────
-# Schritt 4: Self-Review Guard Tests
+# Step 4: Self-Review Guard Tests
 # ────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_self_review_blocked(client):
-    """Agent der am Task gearbeitet hat wird an Board Lead eskaliert (nicht 409)."""
+    """Agent who worked on the task is escalated to the board lead (not 409)."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task, TaskEvent
     from unittest.mock import patch, AsyncMock
@@ -336,10 +336,10 @@ async def test_self_review_blocked(client):
             json={"decision": "approve", "comment": "ship-ready"},
         )
 
-    # Self-Review wird an Board Lead eskaliert (200), nicht blockiert (409)
+    # Self-review is escalated to the board lead (200), not blocked (409)
     assert resp.status_code == 200, f"Expected 200, got {resp.status_code} {resp.text}"
 
-    # Task muss an Board Lead re-assigned sein
+    # Task must be re-assigned to the board lead
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
         assert task.assigned_agent_id == ids["lead_id"], "Task sollte an Board Lead eskaliert sein"
@@ -348,7 +348,7 @@ async def test_self_review_blocked(client):
 
 @pytest.mark.asyncio
 async def test_cross_review_allowed(client):
-    """Reviewer der nicht am Task gearbeitet hat darf approven."""
+    """Reviewer who did not work on the task is allowed to approve."""
     ids = await _setup_integrity_scenario()
     from app.models.task import Task, TaskEvent
 
@@ -381,10 +381,10 @@ async def test_cross_review_allowed(client):
 # report_back Auto-Sent Tests (removed 2026-04-22)
 # ────────────────────────────────────────────────────────────
 #
-# Die alte Auto-Sent-Logik (`report_back_status = "sent"` wenn Owner/Lead
-# done setzt) wurde ersetzt durch den Hard-Gate in agent_scoped.py:
-# `task.report_sent_to_telegram` wird NUR durch expliziten `mc telegram`-
-# Aufruf gesetzt. Bei `mc done` ohne Flag → 422. Bei `mc failed` ohne
-# Flag → Auto-Draft.
+# The old auto-sent logic (`report_back_status = "sent"` when owner/lead
+# sets done) was replaced by the hard gate in agent_scoped.py:
+# `task.report_sent_to_telegram` is set ONLY by an explicit `mc telegram`
+# call. `mc done` without the flag → 422. `mc failed` without
+# the flag → auto-draft.
 #
-# Aktuelle Coverage siehe `tests/test_report_back_gate.py` (12 Szenarien).
+# See `tests/test_report_back_gate.py` for current coverage (12 scenarios).

@@ -1,7 +1,7 @@
-"""Tests fuer 2026-04-15 Memory-Indexing-Gaps Fix.
+"""Tests for the 2026-04-15 memory-indexing-gaps fix.
 
-Verifiziert dass alle BoardMemory-Write-Pfade `index_memory()` aufrufen
-sodass neue Eintraege automatisch im Qdrant-Vektor-Layer landen.
+Verifies that all BoardMemory write paths call `index_memory()` so new
+entries automatically land in the Qdrant vector layer.
 """
 import uuid
 from unittest.mock import AsyncMock, patch
@@ -17,7 +17,7 @@ from tests.conftest import test_engine
 
 
 async def _make_researcher(name: str = "TestResearcher") -> tuple[Agent, str]:
-    """Researcher-Agent mit knowledge:write Scope + Token."""
+    """Researcher agent with knowledge:write scope + token."""
     from app.auth import generate_agent_token
 
     raw_token, token_hash = generate_agent_token()
@@ -47,7 +47,7 @@ async def _make_researcher(name: str = "TestResearcher") -> tuple[Agent, str]:
 
 @pytest.mark.asyncio
 async def test_agent_create_knowledge_triggers_index_memory(client):
-    """POST /agent/knowledge muss index_memory() aufrufen (semantic layer)."""
+    """POST /agent/knowledge must call index_memory() (semantic layer)."""
     agent, token = await _make_researcher()
 
     with patch(
@@ -75,11 +75,11 @@ async def test_agent_create_knowledge_triggers_index_memory(client):
 
 @pytest.mark.asyncio
 async def test_save_research_triggers_index_memory(auth_client):
-    """POST /research/{id}/save muss index_memory() aufrufen (semantic layer).
+    """POST /research/{id}/save must call index_memory() (semantic layer).
 
-    Research-UI speichert Ergebnisse via User-Auth → save_research() in
-    routers/research.py. Landet als BoardMemory(memory_type="research") und
-    muss im memory_semantic Qdrant-Layer indiziert werden.
+    The research UI saves results via user auth → save_research() in
+    routers/research.py. Lands as BoardMemory(memory_type="research") and
+    must be indexed in the memory_semantic Qdrant layer.
     """
     from app.models.board import PlannerMessage, Project
 
@@ -129,12 +129,12 @@ async def test_save_research_triggers_index_memory(auth_client):
 
 @pytest.mark.asyncio
 async def test_auto_memory_task_completion_writes_task_comment(fake_redis):
-    """W4.2: record_task_completion schreibt TaskComment statt BoardMemory.
+    """W4.2: record_task_completion writes a TaskComment instead of BoardMemory.
 
-    Nach dem W4-Redirect landet die task_done Zusammenfassung als
-    TaskComment(comment_type='reflection', author_type='system') — nicht mehr
-    als BoardMemory. index_memory() wird fuer diesen Pfad NICHT aufgerufen
-    (kein Vault-Rauschen durch Telemetrie).
+    After the W4 redirect, the task_done summary lands as
+    TaskComment(comment_type='reflection', author_type='system') — no longer
+    as BoardMemory. index_memory() is NOT called for this path (no vault
+    noise from telemetry).
     """
     from app.models.task import TaskComment
     from app.services.auto_memory import record_task_completion
@@ -185,10 +185,11 @@ async def test_auto_memory_task_completion_writes_task_comment(fake_redis):
 
 @pytest.mark.asyncio
 async def test_auto_memory_task_failure_is_agent_scoped(fake_redis):
-    """record_task_failure muss lesson mit agent_id schreiben (agent layer).
+    """record_task_failure must write a lesson with agent_id (agent layer).
 
-    Ohne agent_id wuerde layer_for() None zurueckgeben und index_memory()
-    waere ein No-Op. Der Fix setzt agent_id=agent_id im BoardMemory-Constructor.
+    Without agent_id, layer_for() would return None and index_memory()
+    would be a no-op. The fix sets agent_id=agent_id in the BoardMemory
+    constructor.
     """
     from app.services.auto_memory import record_task_failure
 
