@@ -1794,6 +1794,31 @@ export default function AgentDetailPage() {
     onError: (e: Error) => notify.error(`Provisioning fehlgeschlagen: ${e.message}`),
   });
 
+  // Host-helper health: the Provision button silently failed with a generic
+  // toast when scripts/cli-bridge.py wasn't running — now the button is
+  // disabled with an actionable hint instead. Polled only while relevant.
+  const { data: bridgeHealth } = useQuery({
+    queryKey: ["cli-bridge-health"],
+    queryFn: () => api.cliBridge.health(),
+    enabled: agent?.agent_runtime === "cli-bridge" && agent?.provision_status === "local",
+    refetchInterval: 30_000,
+  });
+  const bridgeDown = bridgeHealth?.reachable === false;
+
+  // Latest provision-failure reason: emitted with actionable text but it
+  // used to land only in the activity feed where a noob never looks.
+  const provisionUnhealthy =
+    agent?.agent_runtime === "cli-bridge" &&
+    (agent?.provision_status === "local" || agent?.provision_status === "error");
+  const { data: provisionFailEvents } = useQuery({
+    queryKey: ["agent-provision-failed", id],
+    queryFn: () =>
+      api.activity.list({ agent_id: id, event_type: "agent.provision_failed", limit: 1 }),
+    enabled: provisionUnhealthy,
+    refetchInterval: 30_000,
+  });
+  const provisionFailure = provisionUnhealthy ? provisionFailEvents?.[0] : undefined;
+
   const syncConfigMutation = useMutation({
     mutationFn: () => api.agents.syncConfig(id),
     onSuccess: () => notify.success("Config synced to gateway"),
@@ -1931,6 +1956,23 @@ export default function AgentDetailPage() {
               </div>
             </div>
 
+            {/* Why isn't this agent live? Latest provision failure, inline. */}
+            {provisionFailure && (
+              <div
+                className="mt-4 rounded-lg px-3 py-2.5 text-[11px] leading-relaxed"
+                style={{
+                  backgroundColor: `${C.warning}14`,
+                  border: `1px solid ${C.warning}33`,
+                  color: "var(--color-text-secondary)",
+                }}
+              >
+                <span className="font-medium" style={{ color: C.warning }}>
+                  Provisioning failed:
+                </span>{" "}
+                {provisionFailure.title}
+              </div>
+            )}
+
             {/* Actions — mobile: even 2-col grid (≥44px touch targets); desktop: flex-wrap row */}
             <div
               className="mt-5 pt-4 border-t grid grid-cols-2 gap-2 sm:flex sm:items-center sm:flex-wrap"
@@ -2046,13 +2088,38 @@ export default function AgentDetailPage() {
               />
 
               {isCliBridge && agent.provision_status === "local" && (
-                <ActionButton
-                  icon={Cloud}
-                  label="Provision"
-                  color={C.online}
-                  onClick={() => provisionMutation.mutate()}
-                  loading={provisionMutation.isPending}
-                />
+                <>
+                  <ActionButton
+                    icon={Cloud}
+                    label="Provision"
+                    color={C.online}
+                    onClick={() => provisionMutation.mutate()}
+                    loading={provisionMutation.isPending}
+                    disabled={bridgeDown}
+                    title={
+                      bridgeDown
+                        ? "cli-bridge helper not reachable — start it on the host: python3 scripts/cli-bridge.py"
+                        : undefined
+                    }
+                  />
+                  {bridgeDown && (
+                    <span
+                      className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-lg max-sm:w-full"
+                      style={{
+                        backgroundColor: `${C.warning}14`,
+                        border: `1px solid ${C.warning}33`,
+                        color: C.warning,
+                      }}
+                      title="Start the host helper, then Provision becomes available: python3 scripts/cli-bridge.py"
+                    >
+                      <span
+                        className="w-1.5 h-1.5 rounded-full shrink-0"
+                        style={{ backgroundColor: C.warning }}
+                      />
+                      bridge offline
+                    </span>
+                  )}
+                </>
               )}
 
               {isCliBridge && agent.provision_status === "provisioned" && (

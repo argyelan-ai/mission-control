@@ -8,6 +8,13 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ### Added
 
+- **One-click agent creation:** "New Agent" now provisions cli-bridge
+  agents automatically (host-helper render → config sync → container
+  start) and can bind the LLM runtime directly in the create dialog.
+  If the cli-bridge helper isn't running, the UI says so with the exact
+  start command — and the agent detail page shows the latest
+  provisioning failure inline instead of burying it in the activity feed.
+- `GET /api/v1/cli-bridge/health` — host-helper reachability for the UI.
 - **Automatic daily backups** — `make backup-schedule` installs a 03:00
   run of `backup.sh` (launchd on macOS, cron on Linux); `make backup`
   runs one now. The installer recommends it after first boot.
@@ -37,6 +44,8 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
   `0.1.1`; CasaOS manifest now digest-pins images like Umbrel/Runtipi;
   two-component release tags (e.g. `v0.5`) are now recognized by the
   update banner.
+- `AgentCreate.agent_runtime` defaulted to the retired `openclaw` runtime
+  — API callers omitting the field hit a CHECK-constraint 500.
 
 ## [0.1.1] — 2026-07-03
 

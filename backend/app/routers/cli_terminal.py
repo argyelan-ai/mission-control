@@ -31,6 +31,10 @@ class CliProvisionPayload(BaseModel):
     role: str = ""            # Convenience: role for default identity when system_prompt is empty
     skills: list[str] = []    # Convenience: skills for default identity
     extra_plugins: list[str] = []
+    # Internal (one-click create): reuse this raw token instead of rotating.
+    # The create endpoint returns the token exactly once — rotating it away
+    # seconds later in auto-provision would invalidate what the operator saw.
+    mc_token: str | None = None
 
 
 # ── CLI Bridge Protocol — Single Source of Truth ─────────────────────────────
@@ -169,6 +173,20 @@ async def _get_cli_agent(
 
 
 # ── REST Endpoints ────────────────────────────────────────────────────────────
+
+@router.get("/cli-bridge/health")
+async def cli_bridge_health(current_user=Depends(require_user)):
+    """Is the cli-bridge host helper (scripts/cli-bridge.py) reachable?
+
+    Powers the UI health pill next to the Provision button — without it a
+    dead helper only surfaced as a generic "Provisioning fehlgeschlagen"
+    toast. bridge_url tells the operator what exactly to start.
+    """
+    return {
+        "reachable": _bridge_get("/health") is not None,
+        "bridge_url": settings.free_code_bridge_url,
+    }
+
 
 @router.get("/agents/{agent_id}/cli-sessions")
 async def list_cli_sessions(
@@ -354,11 +372,14 @@ async def provision_cli_agent(
     if getattr(agent, "agent_runtime", "openclaw") != "cli-bridge":
         raise HTTPException(400, "Agent ist kein CLI-Bridge-Agent")
 
-    # 1. Generate a new token (format: salt_hex:dk_hex — compatible with verify_agent_token)
-    raw_token, token_hash = generate_agent_token()
-
-    # Store token hash in DB
-    agent.agent_token_hash = token_hash
+    # 1. Token: reuse the supplied one (one-click create — hash is already
+    # stored, rotation would invalidate the token the operator just saw) or
+    # generate a new one (format: salt_hex:dk_hex — verify_agent_token-compatible).
+    if payload and payload.mc_token:
+        raw_token = payload.mc_token
+    else:
+        raw_token, token_hash = generate_agent_token()
+        agent.agent_token_hash = token_hash
     agent.provision_status = "provisioning"
     session.add(agent)
     await session.commit()
