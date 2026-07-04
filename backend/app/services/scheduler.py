@@ -599,6 +599,16 @@ class SchedulerService:
             assigned_agent_id = (
                 uuid.UUID(str(assigned_agent_id_raw)) if assigned_agent_id_raw else None
             )
+            # ADR-052: die Job-Maske teilt TaskFormFields mit der Task-Maske —
+            # project_id/repo_id aus dem Template dürfen beim Run nicht still
+            # verworfen werden (Repo bestimmt Clone + Arbeitsregeln).
+            # Das UI speichert das Template camelCase, ältere Payloads evtl.
+            # snake_case — beide lesen.
+            project_id_raw = payload.get("project_id") or payload.get("projectId")
+            repo_id_raw = payload.get("repo_id") or payload.get("repoId")
+            extra_fields = {}
+            if repo_id_raw:
+                extra_fields["repo_id"] = uuid.UUID(str(repo_id_raw))
             task = await create_task_internal(
                 session,
                 board_id=uuid.UUID(str(board_id)),
@@ -609,8 +619,10 @@ class SchedulerService:
                 is_auto_created=True,
                 auto_reason=f"scheduled:{job.name}",
                 assigned_agent_id=assigned_agent_id,
+                project_id=uuid.UUID(str(project_id_raw)) if project_id_raw else None,
                 report_back_enabled=bool(job.discord_channel_id),
                 report_back_channel="discord" if job.discord_channel_id else None,
+                extra_fields=extra_fields or None,
                 dispatch=True,
             )
             return True, None, {"task_id": str(task.id), "task_title": task.title}

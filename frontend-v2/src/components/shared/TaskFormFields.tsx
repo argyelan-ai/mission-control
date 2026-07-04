@@ -24,7 +24,8 @@ import {
 } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Agent, Project } from "@/lib/types";
+import { notify } from "@/lib/notify";
+import type { Agent, Project, Repo } from "@/lib/types";
 import { ProjectCombobox } from "./ProjectCombobox";
 import { PlannerSlider } from "./PlannerSlider";
 import { GitInfoBox } from "./GitInfoBox";
@@ -166,7 +167,12 @@ export interface TaskFormPayload {
   phaseId: string | null;
   deliverableId: string | null;
   branchName: string;
+  // Deprecated (ADR-052) — kept for backend/API compat, no longer set via UI.
+  // Repo selection now flows entirely through `repoId` (Repo Registry).
   useSeparateRepo: boolean;
+  // Registry-Repo für Ad-hoc-Tasks (ADR-052). Bei Projekt-Tasks bleibt dies
+  // null — das Repo kommt dann vom Projekt.
+  repoId: string | null;
 
   // Structured details
   taskType: string;
@@ -210,6 +216,7 @@ export const EMPTY_TASK_FORM_PAYLOAD: TaskFormPayload = {
   // Ad-hoc default is "kein eigenes Repo" (Mark, 04.07.) — ein separates Repo
   // ist Opt-in, nicht der Default für schnelle Tasks ohne Projekt-Verknüpfung.
   useSeparateRepo: false,
+  repoId: null,
   taskType: "story",
   plannerMode: "auto",
   acceptanceCriteria: "",
@@ -449,6 +456,11 @@ export function TaskFormFields({
     queryFn: () => api.credentials.list(),
     enabled: open,
   });
+  const { data: repos } = useQuery({
+    queryKey: ["repos"],
+    queryFn: () => api.repos.list(),
+    enabled: open,
+  });
 
   // ── Derived ──
   const availableAgents = useMemo(
@@ -518,6 +530,35 @@ export function TaskFormFields({
       setInitLoading(false);
     }
   };
+
+  // ADR-052: single canonical repo-creation path from the task mask —
+  // creates + registers a brand-new private GitHub repo.
+  const handleCreateRepo = useCallback(async (name: string): Promise<Repo> => {
+    try {
+      const repo = await api.repos.createNew(name);
+      qc.invalidateQueries({ queryKey: ["repos"] });
+      return repo;
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : "Repo-Erstellung fehlgeschlagen";
+      notify.error(msg);
+      throw err;
+    }
+  }, [qc]);
+
+  // Link an existing registry repo to the currently selected project.
+  const handleLinkRepo = useCallback(async (repoId: string) => {
+    if (!value.projectId) return;
+    try {
+      await api.repos.linkProject(repoId, value.projectId);
+      qc.invalidateQueries({ queryKey: ["repos"] });
+      refetchGitInfo();
+      notify.success("Repo verknüpft");
+    } catch (err) {
+      const msg = err instanceof Error && err.message ? err.message : "Repo-Verknüpfung fehlgeschlagen";
+      notify.error(msg);
+      throw err;
+    }
+  }, [qc, value.projectId, refetchGitInfo]);
 
   const toggleReportFormat = (fmt: string) => {
     patch({
@@ -634,7 +675,7 @@ export function TaskFormFields({
             <div className="flex flex-col gap-3">
               {sectionHead("Projekt")}
               <ProjectCombobox projects={projects ?? []} value={value.projectId}
-                onChange={(id) => patch({ projectId: id, phaseId: null, deliverableId: null, branchName: "" })}
+                onChange={(id) => patch({ projectId: id, phaseId: null, deliverableId: null, branchName: "", repoId: null })}
                 onCreateProject={handleCreateProject} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} />
               {value.projectId && phases && phases.length > 0 && (
                 <div className="flex flex-col gap-1.5">
@@ -655,9 +696,9 @@ export function TaskFormFields({
                 </div>
               )}
               {value.projectId ? (
-                <GitInfoBox gitInfo={gitInfo} isLoading={gitInfoLoading} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={handleInitRepo} initLoading={initLoading} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
+                <GitInfoBox gitInfo={gitInfo} isLoading={gitInfoLoading} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={handleInitRepo} initLoading={initLoading} repos={repos ?? []} onLinkRepo={handleLinkRepo} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} online={C.online} />
               ) : (
-                <GitInfoBox gitInfo={null} isLoading={false} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={() => {}} initLoading={false} adHocMode useSeparateRepo={value.useSeparateRepo} onUseSeparateRepoChange={(v) => patch({ useSeparateRepo: v })} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
+                <GitInfoBox gitInfo={null} isLoading={false} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={() => {}} initLoading={false} adHocMode repos={repos ?? []} repoId={value.repoId} onRepoIdChange={(id) => patch({ repoId: id })} onCreateRepo={handleCreateRepo} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
               )}
             </div>
 
@@ -1005,6 +1046,7 @@ export function TaskFormFields({
             phaseId: null,
             deliverableId: null,
             branchName: "",
+            repoId: null,
           });
         }}
         onCreateProject={handleCreateProject}
@@ -1151,6 +1193,8 @@ export function TaskFormFields({
               onBranchNameChange={(name) => patch({ branchName: name })}
               onInitRepo={handleInitRepo}
               initLoading={initLoading}
+              repos={repos ?? []}
+              onLinkRepo={handleLinkRepo}
               accent={C.accent}
               textPrimary={C.textPrimary}
               textMuted={C.textMuted}
@@ -1158,6 +1202,7 @@ export function TaskFormFields({
               border={C.border}
               deep={C.deep}
               warning={C.warning}
+              online={C.online}
             />
           ) : (
             <GitInfoBox
@@ -1169,8 +1214,10 @@ export function TaskFormFields({
               onInitRepo={() => {}}
               initLoading={false}
               adHocMode
-              useSeparateRepo={value.useSeparateRepo}
-              onUseSeparateRepoChange={(v) => patch({ useSeparateRepo: v })}
+              repos={repos ?? []}
+              repoId={value.repoId}
+              onRepoIdChange={(id) => patch({ repoId: id })}
+              onCreateRepo={handleCreateRepo}
               accent={C.accent}
               textPrimary={C.textPrimary}
               textMuted={C.textMuted}

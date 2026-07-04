@@ -1,16 +1,18 @@
 /**
- * CreateTaskModal — Repo-Default (Mark, 04.07.).
+ * CreateTaskModal — Repo-Auswahl (ADR-052).
  *
- * Der Ad-hoc-Task (kein Projekt gewählt) muss standardmässig OHNE separates
- * Repo starten — "Eigenes Repo" ist Opt-in, nicht vorausgewählt. Der Default
- * muss auch nach mehrfachem Öffnen/Schliessen des Modals stabil bleiben.
+ * Die Task-Maske hat eine EINHEITLICHE Repo-Auswahl aus der Repo-Registry.
+ * Der alte "Eigenes Repo"-Toggle ist weg — Ad-hoc-Tasks wählen ein
+ * Registry-Repo (oder keins), Projekt-Tasks zeigen ein Rules-Badge und
+ * können ein bestehendes Repo verknüpfen.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { CreateTaskModal } from "../CreateTaskModal";
 import { api } from "@/lib/api";
+import type { Project, Repo, Task } from "@/lib/types";
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({
@@ -19,7 +21,54 @@ function renderWithQuery(ui: React.ReactElement) {
   return render(<QueryClientProvider client={qc}>{ui}</QueryClientProvider>);
 }
 
-describe("CreateTaskModal — Repo-Default", () => {
+function mkRepo(overrides: Partial<Repo> = {}): Repo {
+  return {
+    id: "repo-1",
+    full_name: "acme/tool",
+    url: "https://github.com/acme/tool",
+    default_branch: "main",
+    description: null,
+    rules_md: null,
+    visibility: "private",
+    is_active: true,
+    source: "mc",
+    last_synced_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    linked_projects: [],
+    ...overrides,
+  };
+}
+
+function mkProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: "project-1",
+    board_id: "board-1",
+    name: "Acme Project",
+    description: null,
+    project_type: "feature",
+    status: "active",
+    priority: "medium",
+    plan_summary: null,
+    progress_pct: 0,
+    github_repo_url: null,
+    github_repo_name: null,
+    workspace_path: null,
+    project_config: null,
+    created_by: "user-1",
+    started_at: null,
+    completed_at: null,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+async function openModal() {
+  await userEvent.click(screen.getByRole("button", { name: "New task" }));
+}
+
+describe("CreateTaskModal — Repo-Auswahl (ADR-052)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     // Generic fetch stub for any unmocked call.
@@ -28,45 +77,111 @@ describe("CreateTaskModal — Repo-Default", () => {
     );
     vi.spyOn(api.projects, "list").mockResolvedValue([]);
     vi.spyOn(api.credentials, "list").mockResolvedValue([]);
+    vi.spyOn(api.repos, "list").mockResolvedValue([]);
   });
 
-  it("defaults to 'kein eigenes Repo' with no project preselected", async () => {
+  it("(a) defaults to 'no repository' with no toggle in the UI anymore", async () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
 
-    await userEvent.click(screen.getByRole("button", { name: "New task" }));
+    const select = (await screen.findByRole("combobox", { name: "Repository" })) as HTMLSelectElement;
+    expect(select.value).toBe("");
+    expect(screen.getByText("No repository (default)")).toBeInTheDocument();
 
-    const checkbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
-    expect(checkbox.checked).toBe(false);
+    // The old checkbox toggle must be gone entirely.
+    expect(screen.queryByRole("checkbox", { name: /Eigenes Repo/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Eigenes Repo/)).not.toBeInTheDocument();
   });
 
-  it("keeps the ad-hoc default after cancelling and reopening the modal", async () => {
+  it("(b) selecting a registry repo sends repo_id in the create call", async () => {
+    const repo = mkRepo({ id: "repo-42", full_name: "acme/widgets" });
+    vi.spyOn(api.repos, "list").mockResolvedValue([repo]);
+    const createSpy = vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-1" } as Task);
+
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
 
-    await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    const firstCheckbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
-    expect(firstCheckbox.checked).toBe(false);
+    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Ad-hoc mit Repo");
 
-    // Flip it on, then close without submitting.
-    await userEvent.click(firstCheckbox);
-    expect(firstCheckbox.checked).toBe(true);
-    await userEvent.click(screen.getByRole("button", { name: "Close" }));
+    const select = await screen.findByRole("combobox", { name: "Repository" });
+    await userEvent.selectOptions(select, repo.id);
 
-    // Reopen — the form must have reset to the ad-hoc default, not remember the toggle.
-    await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    const secondCheckbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
-    expect(secondCheckbox.checked).toBe(false);
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalled());
+    const [, body] = createSpy.mock.calls[0];
+    expect(body).toMatchObject({ repo_id: repo.id });
   });
 
-  it("renders the Projekt section directly after title/description, before Zuweisung", async () => {
+  it("(c) a project with repo rules shows the Rules-Badge", async () => {
+    const project = mkProject();
+    vi.spyOn(api.projects, "list").mockResolvedValue([project]);
+    vi.spyOn(api.projects, "gitInfo").mockResolvedValue({
+      has_repo: true,
+      repo_name: "acme/tool",
+      repo_url: "https://github.com/acme/tool",
+      branches: ["main"],
+      repo_id: "repo-1",
+      has_rules: true,
+    });
+
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
 
-    await userEvent.click(screen.getByRole("button", { name: "New task" }));
-    await screen.findByRole("checkbox", { name: /Eigenes Repo/ });
+    await userEvent.click(screen.getByText("Project (optional)"));
+    await userEvent.click(await screen.findByText(project.name));
 
-    const headings = screen.getAllByText(/^(Projekt|Zuweisung|Ausführung)$/).map((el) => el.textContent);
-    const projektIdx = headings.indexOf("Projekt");
-    const zuweisungIdx = headings.indexOf("Zuweisung");
-    expect(projektIdx).toBeGreaterThanOrEqual(0);
-    expect(projektIdx).toBeLessThan(zuweisungIdx);
+    expect(await screen.findByText("Rules active")).toBeInTheDocument();
+  });
+
+  it("(c2) a project without repo rules shows the neutral hint instead", async () => {
+    const project = mkProject();
+    vi.spyOn(api.projects, "list").mockResolvedValue([project]);
+    vi.spyOn(api.projects, "gitInfo").mockResolvedValue({
+      has_repo: true,
+      repo_name: "acme/tool",
+      repo_url: "https://github.com/acme/tool",
+      branches: ["main"],
+      repo_id: "repo-1",
+      has_rules: false,
+    });
+
+    renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
+
+    await userEvent.click(screen.getByText("Project (optional)"));
+    await userEvent.click(await screen.findByText(project.name));
+
+    expect(await screen.findByText("No repo rules yet")).toBeInTheDocument();
+    expect(screen.queryByText("Rules active")).not.toBeInTheDocument();
+  });
+
+  it("(d) 'Link existing repo' calls linkProject with the chosen repo and project", async () => {
+    const project = mkProject();
+    const repo = mkRepo({ id: "repo-9", full_name: "acme/legacy" });
+    vi.spyOn(api.projects, "list").mockResolvedValue([project]);
+    vi.spyOn(api.repos, "list").mockResolvedValue([repo]);
+    vi.spyOn(api.projects, "gitInfo").mockResolvedValue({
+      has_repo: false,
+      repo_name: null,
+      repo_url: null,
+      branches: [],
+      repo_id: null,
+      has_rules: false,
+    });
+    const linkSpy = vi.spyOn(api.repos, "linkProject").mockResolvedValue(repo);
+
+    renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
+
+    await userEvent.click(screen.getByText("Project (optional)"));
+    await userEvent.click(await screen.findByText(project.name));
+
+    await userEvent.click(await screen.findByText("Link existing repo"));
+    const linkSelect = await screen.findByRole("combobox", { name: "Link existing repository" });
+    await userEvent.selectOptions(linkSelect, repo.id);
+    await userEvent.click(screen.getByRole("button", { name: "Link" }));
+
+    await waitFor(() => expect(linkSpy).toHaveBeenCalledWith(repo.id, project.id));
   });
 });

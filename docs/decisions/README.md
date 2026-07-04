@@ -69,6 +69,7 @@ Jedes ADR hat folgende Sektionen:
 | [049](049-omp-native-tui-session.md) | omp Native-TUI Session — echte scrollbare omp-CLI auf der Sessions-Seite (Hook-Completion + `@file`-Inject + SIGKILL-Watchdog + Per-Task-Isolation), ersetzt das ADR-045-Headless-Modell | Proposed | 2026-07-04 | Infra/Runtime · Backend/Runtime |
 | [050](050-repos-registry.md) | Repos Registry — first-class Repo-Modell (`repos` + `projects.repo_id`), per-Repo-Arbeitsregeln in der Dispatch-Directive, `/repos`-Verwaltungsseite, Legacy-Sync-Kontrakt | Accepted | 2026-07-04 | Backend/DB · Backend/Dispatch · Frontend/Pages |
 | [051](051-loops.md) | Loops — ergebnisgesteuerte Task-Schleifen als Meta-Controller über normale Tasks (`loops`+`loop_rounds`, Loop-Runner, `loop_gate`-Approval, `/loops`; L1 mit Runden-/Zeitbudget, Circuit-Breaker 2 Fehlrunden, 1 Loop/Board) | Accepted | 2026-07-04 | Backend/DB · Backend/Services · Backend/Approvals · Frontend/Pages |
+| [052](052-task-repo-select.md) | Einheitliche Repo-Auswahl in der Task-Maske — `tasks.repo_id` (Registry-Repo, Vorrang Task > Projekt > mc-workspace), `POST /repos/new`, `use_separate_repo` deprecated (registriert jetzt mit), Regeln-Badge via git-info | Accepted | 2026-07-04 | Backend/DB · Backend/Dispatch · Frontend/Task-Maske |
 
 ## Neue ADRs schreiben
 

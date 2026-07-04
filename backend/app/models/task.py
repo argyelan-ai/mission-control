@@ -146,6 +146,13 @@ class Task(SQLModel, table=True):
     )
     # Which deliverable triggered this task (provenance)
     use_separate_repo: bool = Field(default=False)
+    # Deprecated seit ADR-052 (Repo-Registry-Auswahl) — bleibt für API-Kompat;
+    # der so erzeugte Task-Repo wird jetzt in der Registry mitregistriert.
+    repo_id: uuid.UUID | None = Field(
+        default=None, foreign_key="repos.id", nullable=True, index=True
+    )
+    # Ad-hoc-Tasks (ohne Projekt): explizit gewähltes Registry-Repo (ADR-052).
+    # Bei Projekt-Tasks kommt das Repo weiterhin vom Projekt.
     target_url: str | None = None          # e.g. "http://localhost/tasks"
     acceptance_criteria: str | None = None  # V1: text, JSON migration possible later
     requires_auth: bool = False            # Does the task need login/auth?

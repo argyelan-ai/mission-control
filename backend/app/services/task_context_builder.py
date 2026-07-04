@@ -66,6 +66,69 @@ async def setup_git_workspace_for_dispatch(
 
     git_branch = None
     git_project_dir = None
+
+    # ── ADR-052: explizit gewähltes Registry-Repo hat Vorrang ──────────
+    # Die Maske setzt task.repo_id für Ad-hoc-Aufträge; ein explizites Repo
+    # gewinnt auch gegen ein Board-Default-Projekt. Fehler blockt den Task
+    # (gleiche Härte wie beim Projekt-Repo — kein stilles mc-workspace).
+    if task.repo_id and agent.workspace_path:
+        from app.models.repo import Repo as _Repo
+        registry_repo = await session.get(_Repo, task.repo_id)
+        if registry_repo is not None:
+            try:
+                from app.services.git_service import git_service, slugify_project
+                from app.services.repo_registry import clone_url_for
+                if not is_backend_writable_path(agent.workspace_path):
+                    raise RuntimeError(
+                        f"Agent '{agent.name}' workspace_path "
+                        f"'{agent.workspace_path}' ist nicht backend-mounted."
+                    )
+                repo_slug = registry_repo.full_name.split("/", 1)[-1]
+                main_repo = await git_service.ensure_workspace(
+                    agent.workspace_path, clone_url_for(registry_repo), repo_slug,
+                )
+                task_slug = slugify_project(task.title)
+                try:
+                    worktree_path = await git_service.create_task_worktree(
+                        main_repo, task_slug, branch_name=f"task/{task_slug}",
+                    )
+                    git_project_dir = worktree_path
+                    task.workspace_path = worktree_path
+                except Exception:
+                    git_project_dir = main_repo
+                    await git_service.create_task_branch(main_repo, task_slug)
+                    task.workspace_path = main_repo
+                await git_service.setup_git_identity(git_project_dir, agent.name)
+                session.add(task)
+                await session.commit()
+                return True
+            except Exception as e:
+                logger.error(
+                    "Registry-Repo-Workspace-Setup fehlgeschlagen (Task %s, Repo %s): %s",
+                    task.id, registry_repo.full_name, e,
+                )
+                from app.models.task import TaskComment
+                from app.services.task_lifecycle import apply_terminal_unassign
+                session.add(TaskComment(
+                    task_id=task.id, author_type="system", comment_type="blocker",
+                    content=(
+                        "**Workspace-Setup fehlgeschlagen** — Dispatch abgebrochen.\n\n"
+                        f"Gewähltes Repo: `{registry_repo.full_name}`\n"
+                        f"**Fehler:** `{type(e).__name__}: {e}`\n\n"
+                        "**Question for @Operator** — Repo-Zugriff/Workspace prüfen?"
+                    ),
+                ))
+                task.status = "blocked"
+                await apply_terminal_unassign(session, task, "blocked")
+                session.add(task)
+                await session.commit()
+                return False
+        else:
+            logger.warning(
+                "Task %s: repo_id %s nicht in Registry — fahre mit Standard-Pfad fort",
+                task.id, task.repo_id,
+            )
+
     if task.project_id:
         try:
             from app.services.git_service import git_service, slugify_project
@@ -185,9 +248,25 @@ async def setup_git_workspace_for_dispatch(
             )
 
             if task.use_separate_repo:
-                # Dedicated repo for this task
+                # Dedicated repo for this task (deprecated Pfad, ADR-052 —
+                # die Maske wählt jetzt Registry-Repos; API-Kompat bleibt).
                 repo_url = await git_service.ensure_task_repo(task.title, str(task.id))
                 repo_slug = repo_url.rstrip(".git").split("/")[-1]
+                # Keine Schatten-Repos: in der Registry mitführen, damit es
+                # auf /repos sichtbar ist und Regeln bekommen kann.
+                try:
+                    from app.services.repo_registry import upsert_repo
+                    created = await upsert_repo(
+                        session,
+                        full_name=f"{require_github_owner()}/{repo_slug}",
+                        url=repo_url,
+                        source="mc",
+                    )
+                    await session.flush()
+                    task.repo_id = created.id
+                    await session.commit()
+                except Exception:
+                    logger.warning("Task-Repo-Registrierung fehlgeschlagen", exc_info=True)
             else:
                 # Shared mc-workspace repo (previous behavior).
                 # Fail loud instead of a silent warning fallback for a missing owner.
@@ -620,12 +699,12 @@ async def _load_dispatch_context(
         ctx.child_tasks = results[10]
     ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
 
-    # Per-repo working rules (ADR-050) — depends on ctx.project, so it runs
-    # after the gather. Best-effort like everything else here.
-    if ctx.project is not None:
+    # Per-repo working rules (ADR-050/052) — Task-Repo hat Vorrang vor dem
+    # Projekt-Repo. Läuft nach dem gather (braucht ctx.project). Best-effort.
+    if ctx.project is not None or getattr(task, "repo_id", None):
         try:
-            from app.services.repo_registry import get_repo_rules_for_project
-            rules = await get_repo_rules_for_project(session, ctx.project)
+            from app.services.repo_registry import get_repo_rules_for_task
+            rules = await get_repo_rules_for_task(session, task, ctx.project)
             if rules:
                 ctx.repo_rules_repo_name, ctx.repo_rules_context = rules
         except Exception:

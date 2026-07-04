@@ -140,6 +140,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
         planner_mode: payload.plannerMode,
         intake_mode: (isStructured ? "structured" : "quick") as Task["intake_mode"],
         use_separate_repo: payload.projectId ? false : payload.useSeparateRepo,
+        ...(!payload.projectId && payload.repoId && { repo_id: payload.repoId }),
         ...(payload.selectedAgentId && { assigned_agent_id: payload.selectedAgentId }),
         ...(payload.projectId && { project_id: payload.projectId }),
         ...(payload.phaseId && { phase_id: payload.phaseId }),
