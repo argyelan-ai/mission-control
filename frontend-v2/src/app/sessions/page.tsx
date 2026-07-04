@@ -338,7 +338,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           <div ref={outerRef} className="absolute inset-0 overflow-auto">
             <div
               style={{
-                width: size ? size.w : undefined,
+                width: size ? size.w * scale : undefined,
                 height: size ? size.h * scale : undefined,
               }}
             >
