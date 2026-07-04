@@ -75,3 +75,18 @@ async def test_force_sync_route_calls_propagation(async_session, auth_client):
         )
     assert resp.status_code == 200
     mock_sync.assert_awaited_once()
+    _, kwargs = mock_sync.call_args
+    assert kwargs["force"] is True
+    assert kwargs["runtime_id"] == rt.id
+
+
+@pytest.mark.asyncio
+async def test_force_sync_route_404_on_unknown_slug(auth_client):
+    with patch(
+        "app.routers.runtimes.sync_pending_agents", new=AsyncMock()
+    ) as mock_sync:
+        resp = await auth_client.post(
+            "/api/v1/runtimes/db/does-not-exist/sync-agents"
+        )
+    assert resp.status_code == 404
+    mock_sync.assert_not_awaited()

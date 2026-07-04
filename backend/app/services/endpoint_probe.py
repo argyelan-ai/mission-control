@@ -44,7 +44,10 @@ async def probe_endpoint_url(url: str) -> dict:
                     ]
                     reachable = True
                     break
-            except httpx.HTTPError as exc:
+            except (httpx.HTTPError, ValueError) as exc:
+                # ValueError covers resp.json() raising on a 200 response with a
+                # non-JSON body (e.g. an HTML landing page) — treat the same as
+                # an unreachable candidate instead of bubbling up as a 500.
                 error = str(exc)
 
         if not reachable:
@@ -60,15 +63,15 @@ async def probe_endpoint_url(url: str) -> dict:
             r = await client.get(f"{root}/api/v0/models")  # LM Studio REST API
             if r.status_code == 200:
                 detected = "lmstudio"
-        except httpx.HTTPError:
-            pass
+        except httpx.HTTPError as exc:
+            logger.debug("lmstudio fingerprint probe failed for %s: %s", root, exc)
         if detected != "lmstudio":
             try:
                 r = await client.get(f"{root}/version")  # vLLM version endpoint
                 if r.status_code == 200 and "version" in r.text:
                     detected = "vllm_docker"
-            except httpx.HTTPError:
-                pass
+            except httpx.HTTPError as exc:
+                logger.debug("vllm fingerprint probe failed for %s: %s", root, exc)
 
     return {
         "reachable": True,

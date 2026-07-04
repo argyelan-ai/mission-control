@@ -6,6 +6,7 @@ import pytest
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.services import agent_runtime_switch as switch_mod
 from app.services import runtime_propagation as rp
 from app.services import sse as sse_mod
 
@@ -85,6 +86,7 @@ async def test_sync_success_clears_flag_and_updates_model(async_session, fake_re
                      new=AsyncMock(return_value={"healthy": True})),
         patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
         patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
     ):
         await rp.sync_pending_agents(async_session)
 
@@ -104,9 +106,64 @@ async def test_sync_circuit_breaker_gives_up_after_max_attempts(async_session, f
                      return_value={"status": "error: boom"}),
         patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
         patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
     ):
         for _ in range(rp.MAX_SYNC_ATTEMPTS):
             await rp.sync_pending_agents(async_session)
             await async_session.refresh(agent)
 
     assert agent.pending_runtime_sync is False  # breaker tripped — stop retrying
+
+
+@pytest.mark.asyncio
+async def test_sync_scoped_to_runtime_id(async_session, fake_redis):
+    """sync_pending_agents(runtime_id=X) only touches agents bound to X."""
+    rt_a = await _mk_rt(async_session, slug="prop-rt-a")
+    rt_b = await _mk_rt(async_session, slug="prop-rt-b")
+    agent_a = await _mk_agent(async_session, rt_a, name="AgentA", pending=True)
+    agent_b = await _mk_agent(async_session, rt_b, name="AgentB", pending=True)
+
+    with (
+        patch.object(rp, "sync_docker_agent_files", new=AsyncMock()),
+        patch.object(rp, "restart_docker_agent_container",
+                     return_value={"status": "restarted"}),
+        patch.object(rp, "wait_for_agent_healthy",
+                     new=AsyncMock(return_value={"healthy": True})),
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await rp.sync_pending_agents(async_session, force=True, runtime_id=rt_a.id)
+
+    await async_session.refresh(agent_a)
+    await async_session.refresh(agent_b)
+    assert agent_a.pending_runtime_sync is False  # synced
+    assert agent_b.pending_runtime_sync is True  # untouched — different runtime
+
+
+@pytest.mark.asyncio
+async def test_sync_one_skips_when_switch_lock_held(async_session, fake_redis):
+    """_sync_one must not restart / bump the failure counter while a manual
+    runtime switch holds the mc:agent:{id}:runtime-switch lock — it should
+    just skip this tick and leave the agent flagged for the next one."""
+    rt = await _mk_rt(async_session)
+    agent = await _mk_agent(async_session, rt, pending=True)
+
+    # Simulate agent_runtime_switch.switch_agent_runtime() holding its lock.
+    await fake_redis.set(switch_mod._lock_key(agent.id), "1", nx=True, ex=120)
+
+    with (
+        patch.object(rp, "sync_docker_agent_files", new=AsyncMock()) as mock_sync_files,
+        patch.object(rp, "restart_docker_agent_container") as mock_restart,
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await rp.sync_pending_agents(async_session, force=True)
+
+    mock_sync_files.assert_not_awaited()
+    mock_restart.assert_not_called()
+    await async_session.refresh(agent)
+    assert agent.pending_runtime_sync is True  # stays flagged, no failure bumped
+    fails = await fake_redis.get(rp.RedisKeys.agent_model_sync_fails(str(agent.id)))
+    assert fails is None

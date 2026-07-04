@@ -892,6 +892,14 @@ async def force_sync_runtime_agents(
     current_user=Depends(require_user),
 ):
     """Force the pending-model sync for this runtime's flagged agents NOW —
-    including busy ones (their in-flight task will be interrupted)."""
-    await sync_pending_agents(session, force=True)
+    including busy ones (their in-flight task will be interrupted).
+
+    Scoped to this runtime's agents only (runtime_id filter) — without it a
+    force-sync on one runtime would restart every pending agent fleet-wide,
+    including busy agents bound to unrelated runtimes.
+    """
+    rt = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
+    if not rt:
+        raise HTTPException(status_code=404, detail=f"Runtime '{slug}' not found")
+    await sync_pending_agents(session, force=True, runtime_id=rt.id)
     return {"synced": True}
