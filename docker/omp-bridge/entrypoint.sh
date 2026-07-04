@@ -1,11 +1,18 @@
 #!/usr/bin/env bash
-# docker/omp-bridge/entrypoint.sh — Container PID 1 (ADR-045).
+# docker/omp-bridge/entrypoint.sh — Container PID 1 (ADR-049, supersedes the
+# ADR-045 headless-one-shot boot).
 #
-# Boots the same 3-window tmux + bootstrap-token pattern as mc-agent-base, but
-# Window 0 runs the PERSISTENT bridge.py driver instead of an interactive
-# openclaude pane. omp is a short-lived SUBPROCESS of bridge.py, never its own
-# pane — so the health-check, Sessions live-terminal and recycler all track one
-# stable process.
+# 3-window tmux, same bootstrap-token pattern as mc-agent-base, but now:
+#   Window 0 = the NATIVE omp TUI  (`launch-omp.sh` -> a real, scrollable omp
+#              chat session the Sessions page attaches to; loads the turn-end
+#              hook and boots STRAIGHT to chat via setupVersion:1).
+#   Window 1 = bridge.py --serve   (the poll driver: injects tasks into Window 0
+#              via `tmux send-keys @file` and reads the hook signal).
+#   Window 2 = omp-recycler.sh     (keeps BOTH the TUI and the bridge alive).
+#
+# omp is the persistent Window-0 process (not a bridge subprocess). The bridge
+# relaunches it per task (`tmux respawn-window`) for isolation + the correct
+# --cwd, and SIGKILLs+relaunches it on a watchdog trip.
 #
 # Do NOT `docker build` this from the omp-runtime workflow — image build is GATED
 # (the operator runs scripts/build-agent-images.sh mc-omp-agent). This file is authored
@@ -14,6 +21,9 @@ set -eu
 
 SESSION="${AGENT_NAME:-omp-agent}"
 BRIDGE=/opt/omp-bridge/bridge.py
+HOOK_FILE=/opt/omp-bridge/turn-end-hook.mjs
+LAUNCHER=/opt/omp-bridge/launch-omp.sh
+OMP_DEFAULT_CWD="${OMP_DEFAULT_CWD:-/workspace}"
 
 # ── 1. Bootstrap tokens from MC (analog to mc-agent-base entrypoint) ─────────
 # GET /api/v1/internal/bootstrap returns MC_AGENT_TOKEN + OPENAI_BASE_URL +
@@ -105,33 +115,88 @@ export OMP_PROFILE
 export OMP_MODEL_SELECTOR="qwen-spark/${_MODEL}"
 echo "[entrypoint] models.yml rendered at ${MODELS_DIR}/models.yml (provider qwen-spark -> ${_BASE_URL}, model ${_MODEL})"
 
+# ── 2b. Skip the first-run setup wizard so the TUI boots STRAIGHT to chat ────
+# Verified in-container (omp v16.2.13): a hand-written config.yml is NOT honored
+# — omp normalizes its own config store. Use `omp config set`, which persists to
+# the profile's config.yml where omp actually reads it. BOTH keys are required:
+# `startup.setupWizard=false` skips onboarding and `setupVersion` marks it done.
+omp config set startup.setupWizard false >/dev/null 2>&1 \
+    && omp config set setupVersion 1 >/dev/null 2>&1 \
+    && echo "[entrypoint] wizard skipped (startup.setupWizard=false, setupVersion=1)" \
+    || echo "[entrypoint] WARN: omp config set failed — TUI may show the setup wizard"
+
+# ── 2c. Signal file + env file so the hook and the per-task relaunch agree ───
+export OMP_HOME="${OMP_HOME:-${HOME}/.omp}"
+export OMP_HOOK_FILE="$HOOK_FILE"
+export OMP_TURN_SIGNAL_FILE="${OMP_TURN_SIGNAL_FILE:-${OMP_HOME}/turn-signal.ndjson}"
+export OMP_DEFAULT_CWD OMP_LAUNCHER="$LAUNCHER"
+mkdir -p "$(dirname "$OMP_TURN_SIGNAL_FILE")" "${OMP_HOME}/tasks"
+: > "$OMP_TURN_SIGNAL_FILE"   # fresh signal on boot
+
+# omp.env — sourced by launch-omp.sh so a `tmux respawn-window` (which does not
+# inherit the poller's shell) still gets provider/model/profile. Belt-and-
+# suspenders with the `tmux set-environment -g` below.
+export OMP_ENV_FILE="${OMP_HOME}/omp.env"
+cat > "$OMP_ENV_FILE" <<ENVFILE
+OPENAI_BASE_URL=${_BASE_URL}
+OPENAI_MODEL=${_MODEL}
+OPENAI_API_KEY=${OPENAI_API_KEY:-sk-noauth}
+OMP_MODEL_SELECTOR=${OMP_MODEL_SELECTOR}
+OMP_PROFILE=${OMP_PROFILE}
+OMP_HOME=${OMP_HOME}
+PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-${OMP_HOME}/agent}
+OMP_HOOK_FILE=${HOOK_FILE}
+OMP_TURN_SIGNAL_FILE=${OMP_TURN_SIGNAL_FILE}
+OMP_DEFAULT_CWD=${OMP_DEFAULT_CWD}
+HOME=${HOME}
+PATH=${PATH}
+ENVFILE
+chmod 600 "$OMP_ENV_FILE"
+
 # ── 3. tmux layout (~/.tmux.conf keeps a large scrollback for the pane SSE) ──
+# mouse on: the Sessions-page web terminal forwards wheel events as mouse CSI
+# sequences; tmux (mouse on) forwards them to the native omp TUI in Window 0 so
+# the user can scroll the session history. Matches the fleet-wide scroll fix for
+# mc-agent-base/mc-claude-agent (text selection uses Shift+drag).
 cat > "${HOME}/.tmux.conf" <<'TMUXCONF'
 set -g history-limit 20000
 set -g status off
+set -g mouse on
 TMUXCONF
 
-tmux new-session -d -s "$SESSION" -n win0
-# Window 0: the persistent driver. bridge.py --serve prints OMP_BRIDGE_READY
-# ITSELF once its first /me/poll round-trip completes — NOT a pre-exec echo
-# (that would leave the sentinel in the pane even while --serve crash-loops, so
-# the switch health-gate would false-positive). exec so the pane == PID of the
-# bridge (recycler + health scrape both track it).
-tmux send-keys -t "$SESSION":0 "exec python3 $BRIDGE --serve" C-m
-# Window 1: reserved (the old poll + screen-scrape split collapses into Window 0).
-tmux new-window -t "$SESSION" -n win1
-# Window 2: forked recycler that tracks bridge.py (never the short-lived omp).
-tmux new-window -t "$SESSION" -n win2 "exec /usr/local/bin/omp-recycler.sh"
-tmux select-window -t "$SESSION":0
+# start-native: (re)build the 3-window layout. Window 0 = the native TUI the
+# Sessions page attaches to; Window 1 = the bridge poll driver; Window 2 = the
+# recycler. Env is pushed to the tmux server so respawn-window inherits it.
+start_native() {
+    tmux new-session -d -s "$SESSION" -n win0
+    for _kv in \
+        "OPENAI_BASE_URL=${_BASE_URL}" "OPENAI_MODEL=${_MODEL}" \
+        "OPENAI_API_KEY=${OPENAI_API_KEY:-sk-noauth}" \
+        "OMP_MODEL_SELECTOR=${OMP_MODEL_SELECTOR}" "OMP_PROFILE=${OMP_PROFILE}" \
+        "OMP_HOME=${OMP_HOME}" "PI_CODING_AGENT_DIR=${PI_CODING_AGENT_DIR:-${OMP_HOME}/agent}" \
+        "OMP_HOOK_FILE=${HOOK_FILE}" "OMP_TURN_SIGNAL_FILE=${OMP_TURN_SIGNAL_FILE}" \
+        "OMP_DEFAULT_CWD=${OMP_DEFAULT_CWD}" "OMP_ENV_FILE=${OMP_ENV_FILE}" \
+        "OMP_LAUNCHER=${LAUNCHER}" "AGENT_NAME=${SESSION}" "HOME=${HOME}"; do
+        tmux set-environment -g "${_kv%%=*}" "${_kv#*=}"
+    done
+    # Window 0: the visible native TUI (loads the hook, boots to chat).
+    tmux send-keys -t "$SESSION":0 "exec ${LAUNCHER} ${OMP_DEFAULT_CWD}" C-m
+    # Window 1: the persistent poll driver. It injects tasks into Window 0 and
+    # reads the hook signal; it prints OMP_BRIDGE_READY into ITS pane (a Window-1
+    # liveness log — the health-gate now anchors on Window 0's TUI glyph).
+    tmux new-window -t "$SESSION" -n win1 "exec python3 $BRIDGE --serve"
+    # Window 2: recycler tracking BOTH the TUI and the bridge.
+    tmux new-window -t "$SESSION" -n win2 "exec /usr/local/bin/omp-recycler.sh"
+    tmux select-window -t "$SESSION":0
+}
+
+start_native
 
 # ── 4. PID-1 watchdog: keep the session (and its 3 windows) alive ───────────
 while true; do
     if ! tmux has-session -t "$SESSION" 2>/dev/null; then
         echo "[entrypoint] tmux session gone — recreating"
-        tmux new-session -d -s "$SESSION" -n win0
-        tmux send-keys -t "$SESSION":0 "exec python3 $BRIDGE --serve" C-m
-        tmux new-window -t "$SESSION" -n win1
-        tmux new-window -t "$SESSION" -n win2 "exec /usr/local/bin/omp-recycler.sh"
+        start_native
     fi
     sleep 30
 done

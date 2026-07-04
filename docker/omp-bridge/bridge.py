@@ -61,7 +61,11 @@ MIN_REFLECTION_CHARS = 80
 # only shape.
 TRANSIENT_ERROR_RE = re.compile(
     r"fetch failed|connection error|econnreset|socket hang ?up|network|"
-    r"etimedout|timed out|\b5\d\d\b|overloaded|upstream",
+    r"etimedout|timed out|\b5\d\d\b|overloaded|upstream|"
+    # omp's own wording when the OpenAI-compatible endpoint is unreachable
+    # (verified: a dead/cold Qwen vLLM yields exactly this) — the prime
+    # transient case (Qwen briefly down / still warming), so retry it.
+    r"unable to connect|econnrefused|connection refused",
     re.IGNORECASE,
 )
 
@@ -775,6 +779,7 @@ def run_omp_subprocess(
 
 import os
 import re as _re
+import shlex
 import subprocess
 
 # The task-active lock the forked recycler (omp-recycler.sh) gates on: while it
@@ -1048,23 +1053,44 @@ def serve_loop(
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> int:
-    """Persistent poll→omp→lifecycle driver (ADR-045 §4.3).
+    """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
+    ADR-045 headless one-shot serve path).
 
     Ported skeleton of scripts/hermes-bridge.py:dispatch_poll_loop — same
-    `GET /me/poll` contract + dispatch-dedup cache — but the delivery step spawns
-    an omp subprocess and drives it through drive_run() instead of pasting into a
-    tmux pane. Prints OMP_BRIDGE_READY exactly once, AFTER the first successful
-    poll (the health-check anchor; a pre-exec echo would false-positive a
-    crash-looping bridge). The `_*` params are injection seams for unit tests.
+    `GET /me/poll` contract + dispatch-dedup cache — but the delivery step no
+    longer spawns `omp -p`. It injects the task into the persistent native omp
+    TUI (tmux Window 0) and reads the turn-end hook signal (see
+    run_native_turn). The reduced RunOutcome flows through the SAME
+    classify()/decide_lifecycle()/drive_live_run() as before, so ack/finish/
+    blocked + the finish→blocked fallback are unchanged.
+
+    Window 1 (this loop) prints OMP_BRIDGE_READY once after the first poll — a
+    Window-1 liveness log. NOTE: the health-gate now scrapes Window 0 (the TUI),
+    whose readiness anchor is the TUI chat glyph, not this sentinel (ADR-049 §5).
+    The `_*` params are injection seams for unit tests.
     """
     api_url = os.environ.get("MC_API_URL", "http://backend:8000").rstrip("/")
     token = os.environ.get("MC_AGENT_TOKEN", "")
-    model = os.environ.get(
-        "OMP_MODEL_SELECTOR"
-    ) or _default_model_selector(os.environ.get("OPENAI_MODEL"))
-    max_time = int(os.environ.get("OMP_MAX_TIME", "900"))
     require_review = os.environ.get("OMP_REQUIRE_REVIEW", "1") not in ("0", "false", "")
     retries = int(os.environ.get("OMP_MAX_RETRIES", str(OMP_MAX_RETRIES)))
+
+    # Native-TUI knobs (all overridable via env).
+    session = os.environ.get("AGENT_NAME", "omp-agent")
+    tui_window = os.environ.get("OMP_TUI_WINDOW", "0")
+    signal_file = os.environ.get(
+        "OMP_TURN_SIGNAL_FILE",
+        os.path.join(os.environ.get("OMP_HOME", "/home/agent/.omp"), "turn-signal.ndjson"),
+    )
+    launcher = os.environ.get("OMP_LAUNCHER", "/opt/omp-bridge/launch-omp.sh")
+    ready_timeout = float(os.environ.get("OMP_READY_TIMEOUT", "45"))
+    turn_deadline = float(os.environ.get("OMP_TASK_DEADLINE", os.environ.get("OMP_MAX_TIME", "1200")))
+    idle_timeout = float(os.environ.get("OMP_TURN_IDLE_TIMEOUT", "300"))
+    isolation = os.environ.get("OMP_ISOLATION", "relaunch")  # relaunch | slash
+
+    # One controller for the container's lifetime; run_native_turn relaunches +
+    # truncates the signal per task, so state never bleeds between tasks.
+    tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
+                              launcher=launcher)
 
     poll_fn = _poll_fn or _make_http_poll(api_url, token)
     if _poll_fn is None:
@@ -1115,8 +1141,15 @@ def serve_loop(
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             else:
-                def run_once(_p=prompt, _cwd=cwd, _m=model, _t=max_time) -> RunOutcome:
-                    return run_omp_subprocess(_p, cwd=_cwd, model=_m, max_time=_t, tee=None)
+                task_file = _task_file_for(str(task["id"]))
+                _isolate = isolation != "slash"
+
+                def run_once(_cwd=cwd, _p=prompt, _tf=task_file, _iso=_isolate) -> RunOutcome:
+                    return run_native_turn(
+                        tui, cwd=_cwd, prompt=_p, task_file_path=_tf, isolate=_iso,
+                        ready_timeout=ready_timeout, turn_deadline=turn_deadline,
+                        idle_timeout=idle_timeout,
+                    )
 
             _set_task_lock(True)
             try:
@@ -1177,6 +1210,319 @@ def _make_http_poll(api_url: str, token: str) -> Callable[[], Optional[dict]]:
         return json.loads(body) if body.strip() else None
 
     return _poll
+
+
+# ---------------------------------------------------------------------------
+# Native-TUI driver (ADR-049) — inject into the persistent omp TUI + read the
+# turn-end hook signal instead of spawning a headless `omp -p` per task.
+# ---------------------------------------------------------------------------
+#
+# The reducer/classifier/lifecycle above stay UNCHANGED — they are the proven
+# taxonomy. What changes is HOW a run is produced: rather than spawning
+# `omp -p --mode json` and reducing its NDJSON stdout, we drive the long-lived
+# native TUI in tmux Window 0:
+#   1. relaunch Window 0 with the task's --cwd (per-task isolation + fresh ctx),
+#   2. inject the dispatch as an `@/abs/file` mention via `tmux send-keys`
+#      (no bracketed-paste of the multi-line body),
+#   3. tail the turn-end-hook signal file for THIS task's terminal turn,
+#   4. fold the hook events into a RunOutcome and hand it to the SAME
+#      classify()/decide_lifecycle()/drive_live_run() as the headless path.
+#
+# turn_end.stopReason mapping (verified against omp v16.2.13):
+#   stop            -> terminal; apply completion contract (finish|silent-abort)
+#   error | aborted -> terminal; error family (retry-then-blocker)
+#   toolUse | length-> agent continues (tools / auto-compaction) — keep waiting
+# Watchdog (non-negotiable): no terminal turn within the per-task deadline, a
+# no-progress idle timeout, OR the TUI child dying -> watchdog_killed -> the
+# supervisor SIGKILLs+relaunches the TUI and the task ends blocked (ABORT_HANG),
+# never left in_progress.
+
+
+class NativeTuiController:
+    """Drive + observe the persistent native omp TUI (tmux Window 0).
+
+    All tmux calls funnel through ``_run`` and all hook events through the
+    signal file, both injectable so the driver is unit-testable with neither a
+    real tmux server nor a real omp process.
+    """
+
+    def __init__(
+        self,
+        *,
+        session: str,
+        signal_file: str,
+        window: str = "0",
+        launcher: str = "/opt/omp-bridge/launch-omp.sh",
+        _run: Optional[Callable[[list[str]], tuple[int, str]]] = None,
+        _pid_alive: Optional[Callable[[int], bool]] = None,
+        _sleep: Optional[Callable[[float], None]] = None,
+        key_delay: float = 0.35,
+    ) -> None:
+        self.session = session
+        self.window = window
+        self.target = f"{session}:{window}"
+        self.signal_file = signal_file
+        self.launcher = launcher
+        self._run = _run or self._default_run
+        self._pid_alive = _pid_alive or _os_pid_alive
+        self._sleep = _sleep or time.sleep
+        self.key_delay = key_delay
+        self._offset = 0
+
+    @staticmethod
+    def _default_run(args: list[str]) -> tuple[int, str]:
+        try:
+            proc = subprocess.run(
+                ["tmux", *args], capture_output=True, text=True, timeout=15
+            )
+            return proc.returncode, (proc.stdout or "")
+        except Exception as e:  # noqa: BLE001 — a tmux hiccup must not crash the loop
+            sys.stderr.write(f"[native] tmux {args[:2]} failed: {type(e).__name__}: {e}\n")
+            return 1, ""
+
+    # -- drive ---------------------------------------------------------------
+
+    def relaunch(self, cwd: str) -> None:
+        """Kill + respawn Window 0 with the task cwd (isolation + fresh ctx)."""
+        cmd = f"exec {self.launcher} {shlex.quote(cwd)}"
+        self._run(["respawn-window", "-k", "-t", self.target, cmd])
+
+    def inject_file(self, path: str) -> None:
+        """Inject the dispatch as an `@/abs/path` mention (no body paste).
+
+        Verified in-container (omp v16.2.13 TUI): typing `@<existing-path>`
+        opens a file-mention AUTOCOMPLETE POPUP that swallows a bare Enter, so a
+        single Enter never submits. The robust sequence is:
+          1. type `@path`      -> popup appears, text in the input box,
+          2. `Escape`          -> dismisses the popup, KEEPS the `@path` text,
+          3. `Enter`           -> submits; omp resolves `@path` -> Read(file).
+        Escape is a no-op when no popup is showing, so this is safe either way.
+        Small key delays let the TUI process each event in order.
+        """
+        self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
+        self._sleep(self.key_delay)
+        self._run(["send-keys", "-t", self.target, "Escape"])
+        self._sleep(self.key_delay)
+        self._run(["send-keys", "-t", self.target, "Enter"])
+
+    def reset_conversation(self) -> None:
+        """`/new` slash-reset (same process, same cwd). Kept as an alternative
+        to relaunch() for same-cwd reuse; relaunch is the default because it
+        also rebinds --cwd, which /new cannot."""
+        self._run(["send-keys", "-t", self.target, "--", "/new"])
+        self._run(["send-keys", "-t", self.target, "Enter"])
+
+    def child_pid(self) -> Optional[int]:
+        rc, out = self._run(
+            ["list-panes", "-t", self.target, "-F", "#{pane_pid}"]
+        )
+        if rc == 0:
+            for line in (out or "").splitlines():
+                line = line.strip()
+                if line.isdigit():
+                    return int(line)
+        return None
+
+    def child_alive(self) -> bool:
+        pid = self.child_pid()
+        return pid is not None and self._pid_alive(pid)
+
+    # -- observe -------------------------------------------------------------
+
+    def truncate_signal(self) -> None:
+        """Clear the hook signal file at the start of a task so the tail only
+        sees THIS task's events; reset the read offset."""
+        try:
+            open(self.signal_file, "w", encoding="utf-8").close()
+        except OSError as e:  # pragma: no cover — defensive
+            sys.stderr.write(f"[native] signal truncate failed: {e}\n")
+        self._offset = 0
+
+    def drain(self) -> list[dict]:
+        """Return hook records appended since the last drain (complete lines
+        only — a half-written trailing line is left for the next poll)."""
+        try:
+            with open(self.signal_file, "rb") as fh:
+                fh.seek(self._offset)
+                data = fh.read()
+        except FileNotFoundError:
+            return []
+        nl = data.rfind(b"\n")
+        if nl == -1:
+            return []
+        chunk, self._offset = data[: nl + 1], self._offset + nl + 1
+        recs: list[dict] = []
+        for raw in chunk.split(b"\n"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if isinstance(obj, dict):
+                recs.append(obj)
+        return recs
+
+    def wait_for(
+        self,
+        kinds: Iterable[str],
+        *,
+        timeout: float,
+        poll_interval: float,
+        now: Callable[[], float],
+        sleep: Callable[[float], None],
+    ) -> Optional[dict]:
+        kinds = set(kinds)
+        deadline = now() + timeout
+        while now() < deadline:
+            for rec in self.drain():
+                if rec.get("kind") in kinds:
+                    return rec
+            sleep(poll_interval)
+        return None
+
+
+def _os_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _write_task_file(path: str, body: str) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(body)
+
+
+def run_native_turn(
+    controller: NativeTuiController,
+    *,
+    cwd: str,
+    prompt: str,
+    task_file_path: str,
+    isolate: bool = True,
+    ready_timeout: float = 45.0,
+    turn_deadline: float = 1200.0,
+    idle_timeout: float = 300.0,
+    poll_interval: float = 1.0,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RunOutcome:
+    """One inject→observe cycle against the native TUI → a RunOutcome.
+
+    Shaped exactly like ``run_omp_subprocess`` so it slots into the UNCHANGED
+    ``drive_live_run`` retry-then-blocker policy: a retry simply re-invokes this
+    (which relaunches the TUI and re-injects — a clean, isolated redo).
+    """
+    outcome = RunOutcome()
+
+    # 1. Per-task isolation + correct cwd: a fresh TUI conversation.
+    if isolate:
+        controller.relaunch(cwd)
+    controller.truncate_signal()
+
+    # 2. Wait for the fresh session's hook to load (hook_ready / session_start).
+    def _watchdog_kill() -> RunOutcome:
+        # SIGKILL + relaunch the TUI (respawn-window -k) so a wedged / dead omp
+        # is never left in Window 0, and flag the run so classify()->ABORT_HANG
+        # (retryable; exhausted -> terminal blocker). Never left in_progress.
+        outcome.watchdog_killed = True
+        try:
+            controller.relaunch(cwd)
+        except Exception as e:  # noqa: BLE001 — recovery must not raise past here
+            sys.stderr.write(f"[native] watchdog relaunch failed: {e}\n")
+        return outcome
+
+    ready = controller.wait_for(
+        ("session_start", "hook_ready"),
+        timeout=ready_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+    )
+    if ready is None and not controller.child_alive():
+        # TUI never came up (relaunch failed / hook never loaded) — a hang the
+        # supervisor must recover from, not a silent in_progress.
+        return _watchdog_kill()
+    if ready is not None:
+        outcome.saw_session = True
+        outcome.saw_agent_start = True
+
+    # 3. Inject the wrapped dispatch via an @file mention (no paste of the body).
+    _write_task_file(task_file_path, prompt)
+    controller.inject_file(task_file_path)
+
+    # 4. Tail the hook signal for this task's terminal turn.
+    start = now()
+    last_progress = now()
+    last_sr: Optional[str] = None
+    last_text = ""
+    last_err: Optional[str] = None
+    last_toolerr = False
+
+    while True:
+        for rec in controller.drain():
+            kind = rec.get("kind")
+            if kind in ("progress", "session_start", "hook_ready"):
+                last_progress = now()
+                if kind == "session_start":
+                    outcome.saw_session = True
+                continue
+            if kind == "turn_end":
+                last_progress = now()
+                outcome.turns += 1
+                sr = rec.get("stopReason")
+                last_sr = sr
+                last_text = rec.get("text") or ""
+                last_err = rec.get("errorMessage")
+                last_toolerr = bool(rec.get("toolError"))
+                if sr == "stop":
+                    outcome.saw_agent_end = True
+                    outcome.final_stop_reason = "stop"
+                    outcome.final_text = last_text
+                    outcome.last_turn_had_tool_error = last_toolerr
+                    if last_err:
+                        outcome.error_message = last_err
+                    return outcome
+                if sr in ("error", "aborted"):
+                    outcome.saw_agent_end = True
+                    outcome.final_stop_reason = "error"
+                    outcome.error_message = last_err or (
+                        "omp-Turn abgebrochen (aborted)." if sr == "aborted"
+                        else "Modell/Provider-Fehler."
+                    )
+                    return outcome
+                # toolUse | length | anything else -> agent continues; wait on.
+                continue
+            if kind == "agent_end":
+                outcome.saw_agent_end = True
+                if last_sr == "stop":
+                    outcome.final_stop_reason = "stop"
+                    outcome.final_text = last_text
+                    outcome.last_turn_had_tool_error = last_toolerr
+                else:
+                    # Response ended without a clean stop (length-truncated /
+                    # gave up) -> incomplete -> error family -> blocker.
+                    outcome.final_stop_reason = "error"
+                    outcome.error_message = last_err or (
+                        f"Antwort endete ohne sauberen stop (letzter stopReason={last_sr})."
+                    )
+                return outcome
+
+        # --- watchdog (out of band vs the model): child-death, wall-clock, idle
+        t = now()
+        if not controller.child_alive():
+            return _watchdog_kill()
+        if t - start > turn_deadline:
+            return _watchdog_kill()
+        if idle_timeout and (t - last_progress) > idle_timeout:
+            return _watchdog_kill()
+        sleep(poll_interval)
+
+
+def _task_file_for(task_id: str) -> str:
+    base = os.environ.get("OMP_HOME", os.path.expanduser("~/.omp"))
+    return os.path.join(base, "tasks", f"task-{task_id}.md")
 
 
 # ---------------------------------------------------------------------------

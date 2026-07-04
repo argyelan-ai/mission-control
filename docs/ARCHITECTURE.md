@@ -258,7 +258,7 @@ Seit 2026-04-19 ist diese Registry DB-backed (`runtimes` Tabelle) statt JSON-har
 | `cloud` | Nur Health-Probe (z. B. Ollama Cloud) | Extern | Enable/Disable |
 | `unsloth_porsche` | Start/Stop via Flask `:5555` (PowerShell) + Wake-on-LAN | Host der Runtime (Host-Registry, kind `flask_wol`) | Wecken/Start/Stop, power-managed |
 | `hermes` | Host-side Hermes-Worker (launchd) | Mac | Enable/Disable |
-| `omp` | Headless omp-Driver (`bridge.py --serve`) im `mc-omp-agent` Container | Host der Runtime (Host-Registry, Qwen vLLM) | Enable/Disable + Switch |
+| `omp` | Native omp-**TUI** (tmux Window 0) + `bridge.py`-Poll-Treiber (Window 1) im `mc-omp-agent` Container (ADR-049; ersetzt das Headless-`bridge.py --serve`-Modell von ADR-045) | Host der Runtime (Host-Registry, Qwen vLLM) | Enable/Disable + Switch |
 
 #### Host-Registry (NEU 2026-07-02, ADR-048)
 
@@ -284,6 +284,14 @@ PORSCHE ist eine **Windows-Box** mit lokalem **unsloth-OpenAI-Server**, die im L
 - **`docker_agent_sync`** — **kein neuer Branch**: der non-anthropic Slug `omp-qwen` nimmt den bestehenden OpenAI-Zweig (`OPENAI_BASE_URL`/`OPENAI_MODEL`/`OPENAI_API_KEY`).
 
 Readiness re-ankert auf das `OMP_BRIDGE_READY`-Sentinel (headless omp emittiert keine Glyphe): `wait_for_agent_healthy(ready_signals=("OMP_BRIDGE_READY",))` scrapt die Window-0-Pane **auf beiden** Switch-Pfaden (auch cross-image, wo `respawn_mode=False` sonst nur `docker inspect …==running` prüfen würde → false-positive bei crash-loopender Bridge). Registrierung: idempotenter Seed-Eintrag `omp-qwen` in `backend/config/runtimes.json` (oder `docker/omp-bridge/register-omp-runtime.sh`). Alle Produktionsaktionen (Image-Build, Registrierung, Switch) sind GATED.
+
+**omp Native-TUI Rework (NEU 2026-07-04, ADR-049 — ersetzt das Drive-Modell von ADR-045):** Damit die Sessions-Seite die **echte, scrollbare native omp-CLI** zeigt (Parität zu claude/openclaude) statt `bridge.py`-JSON-Logs, läuft jetzt **Window 0 = die native omp-TUI** (`launch-omp.sh` → `omp --hook turn-end-hook.mjs --model qwen-spark/<model> --cwd <task-cwd> --approval-mode yolo`), **Window 1 = `bridge.py --serve`** (Poll-Treiber), **Window 2 = Recycler** (trackt jetzt TUI **und** Bridge). Ablauf pro Task (alles in-container gegen echtes Qwen verifiziert):
+- **Wizard-Skip:** Entrypoint setzt `omp config set startup.setupWizard false` + `setupVersion 1` (roh-geschriebenes `config.yml` wird von omp nicht geehrt) → TUI bootet direkt zum Chat-Prompt.
+- **Completion via Hook, kein Scraping:** `turn-end-hook.mjs` (`api.on('turn_end', …)`) schreibt je Turn eine JSON-Zeile in ein Signal-File, das die Bridge tailt. Ein **Nicht-`toolUse`-Turn** ist terminal: `stop` → Completion-Contract (finish|silent-abort), `error`/`aborted` → Error-Familie, `toolUse`/`length` → weiter warten. Der reduzierte `RunOutcome` läuft durch das **unveränderte** `classify()`/`decide_lifecycle()`/`drive_live_run()` (gleiche Taxonomie, gleiches ack/finish/blocked + finish→blocked-Fallback).
+- **Task-Injektion via `@file`:** Dispatch-Body → `$OMP_HOME/tasks/task-<id>.md`, injiziert als `@/abs/path`-Mention per `tmux send-keys` (kein Paste). Sequenz: `@path` → `Escape` (Autocomplete-Popup schliessen, Text behalten) → `Enter` (submit → omp `Read`t das File).
+- **Per-Task-Isolation:** zwischen Tasks `tmux respawn-window -k` auf Window 0 mit dem neuen `--cwd` (Isolation + cwd-Rebind + frischer Kontext in einem; `/new` kann cwd nicht wechseln).
+- **Silent-Abort-Watchdog (unverhandelbar):** kein terminaler Turn bis zur Per-Task-Deadline, No-Progress-Idle-Timeout, **oder** TUI-Child tot → **SIGKILL + Relaunch** der TUI + Task → `blocked` (`ABORT_HANG`), nie `in_progress`.
+- **Readiness-Anker verschiebt sich** von `OMP_BRIDGE_READY` (jetzt in Window 1) auf die **TUI-Chat-Glyphe** (`╭─`/`❯`/`> `) in Window 0 — impliziert eine **einzeilige Backend-Folgeänderung** (für `runtime_type=="omp"` die Default-Glyphen statt des Sentinels an `wait_for_agent_healthy` übergeben; `agent_runtime_switch.py`).
 
 **Switch-Semantik (Phase 15, 2026-04-28):** Runtime-Wechsel eines cli-bridge Agents läuft atomar durch `services/agent_runtime_switch.switch_agent_runtime` (ADR-027 erweitert ADR-018):
 

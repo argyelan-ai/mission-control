@@ -74,11 +74,15 @@ COPY --chown=agent:agent mc-cli /home/agent/.mc-cli
 RUN chmod +x /home/agent/.mc-cli/mc \
     && ln -sf /home/agent/.mc-cli/mc /usr/local/bin/mc
 
-# The bridge driver + forked recycler + entrypoint.
+# The bridge driver + native-TUI hook + launcher + forked recycler + entrypoint.
 COPY bridge.py            /opt/omp-bridge/bridge.py
+COPY turn-end-hook.mjs    /opt/omp-bridge/turn-end-hook.mjs
+COPY launch-omp.sh        /opt/omp-bridge/launch-omp.sh
 COPY entrypoint.sh        /usr/local/bin/entrypoint.sh
 COPY omp-recycler.sh      /usr/local/bin/omp-recycler.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/omp-recycler.sh \
+        /opt/omp-bridge/launch-omp.sh \
+    && ln -sf /opt/omp-bridge/launch-omp.sh /usr/local/bin/launch-omp.sh
 
 USER agent
 WORKDIR /home/agent
@@ -92,7 +96,10 @@ ENV HOME=/home/agent \
     OMP_PROFILE=mc-agent
 RUN mkdir -p /home/agent/.omp/profiles/mc-agent/agent
 
-# Health-check anchor: bridge.py --serve prints OMP_BRIDGE_READY into the
-# Window-0 pane after its first /me/poll round-trip (see ADR-045 §2d).
-# wait_for_agent_healthy matches THAT sentinel, not the loose '$ ' shell prompt.
+# Health-check anchor (ADR-049): Window 0 now runs the native omp TUI, so its
+# readiness anchor is the TUI chat glyph (`╭─` / `❯`) in the visible pane — the
+# same anchor every interactive agent uses — NOT the OMP_BRIDGE_READY sentinel
+# (which the headless design printed into Window 0). The bridge still prints
+# OMP_BRIDGE_READY, but into Window 1. See ADR-049 §5 for the one-line backend
+# ready_signals follow-up this implies.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

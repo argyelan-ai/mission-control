@@ -212,9 +212,10 @@ async def test_switch_to_omp_is_cross_image_and_passes_ready_signals(
 
     assert result.image_switched is True  # openclaude -> omp = cross-image
     assert result.new_runtime["slug"] == "omp-qwen"
-    # The health check for an omp target MUST anchor on the sentinel.
+    # The health check for an omp target MUST anchor on the native-TUI prompt
+    # glyphs (ADR-049: Window 0 is now the omp TUI, not the headless bridge).
     _, kwargs = health_mock.await_args
-    assert kwargs.get("ready_signals") == ("OMP_BRIDGE_READY",)
+    assert kwargs.get("ready_signals") == ("╭─", "❯")
     assert kwargs.get("respawn_mode") is False  # cross-image path
 
 

@@ -66,6 +66,7 @@ Jedes ADR hat folgende Sektionen:
 | [046](046-lifecycle-safety-watchdog.md) | Lifecycle Safety Watchdog (Silent-Abort Auto-Block, cli-bridge v1) | Accepted | 2026-07-01 | Backend/Task-Runner · Backend/Watchdog |
 | [047](047-docker-socket-proxy.md) | Docker-Socket-Zugriff nur über filternden Proxy (tecnativa socket-proxy, DOCKER_HOST) | Accepted | 2026-07-02 | Infra/Compose · Backend/Runtime-Switch |
 | [048](048-host-registry.md) | Host-Registry — generische Multi-Host Control-Plane statt neuer runtime_type pro Box | Accepted | 2026-07-02 | Backend/Runtime · Backend/DB · Frontend/Runtimes · Infra/Runtime |
+| [049](049-omp-native-tui-session.md) | omp Native-TUI Session — echte scrollbare omp-CLI auf der Sessions-Seite (Hook-Completion + `@file`-Inject + SIGKILL-Watchdog + Per-Task-Isolation), ersetzt das ADR-045-Headless-Modell | Proposed | 2026-07-04 | Infra/Runtime · Backend/Runtime |
 
 ## Neue ADRs schreiben
 
@@ -76,3 +77,4 @@ Jedes ADR hat folgende Sektionen:
 5. Im Commit: `docs(adr): add ADR-XXX — {kurzer Titel}`
 - [ADR-041](041-compose-renderer-emits-new-agent-services.md) — Compose-Renderer emittiert Service-Blöcke für neue cli-bridge-Agenten
 - [ADR-045](045-omp-runtime.md) — `omp` Runtime-Typ — Clean-Stream Headless Agent (omp + Qwen, `mc-omp-agent` Image, `bridge.py --serve`)
+- [ADR-049](049-omp-native-tui-session.md) — omp Native-TUI Session (echte scrollbare omp-CLI auf Sessions, turn-end-Hook + `@file`-Inject + Watchdog; ersetzt das ADR-045-Headless-Drive-Modell)
