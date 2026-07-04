@@ -1,4 +1,4 @@
-"""Runtime Watcher (Runtime & Model Management v1, ADR-053).
+"""Runtime Watcher (Runtime & Model Management v1, ADR-054).
 
 "Engine leads, MC follows": the active model is changed at the inference
 engine (vLLM / LM Studio / OpenAI-compatible); this service detects it.
@@ -11,7 +11,7 @@ Every tick it probes all enabled probeable runtimes via ``/v1/models``:
      ``runtime.model_changed`` and flags bound cli-bridge agents,
   3. runs the propagation sync pass for flagged agents that are now idle.
 
-Supersedes decision D-22 (periodic probing rejected) — see ADR-053.
+Supersedes decision D-22 (periodic probing rejected) — see ADR-054.
 Same lifecycle pattern as IntelligenceService: singleton, asyncio loop,
 Redis lock for multi-worker dedup.
 """

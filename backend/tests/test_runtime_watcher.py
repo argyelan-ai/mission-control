@@ -1,4 +1,4 @@
-"""Runtime Watcher (ADR-053) — settings, keys, drift detection, propagation gates."""
+"""Runtime Watcher (ADR-054) — settings, keys, drift detection, propagation gates."""
 import json
 from unittest.mock import AsyncMock, patch
 

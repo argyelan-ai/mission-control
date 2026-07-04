@@ -1,4 +1,4 @@
-"""Cockpit routes (ADR-053) — live-status, probe-endpoint, force-sync."""
+"""Cockpit routes (ADR-054) — live-status, probe-endpoint, force-sync."""
 import json
 from unittest.mock import AsyncMock, patch
 

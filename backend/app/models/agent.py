@@ -168,7 +168,7 @@ class Agent(SQLModel, table=True):
     operational_mode: str = Field(default="active")  # active | paused
     agent_runtime: str = Field(default="cli-bridge")  # cli-bridge | claude-code | manual | host (Phase 24 ADR-029)
 
-    # Runtime & Model Management v1 (ADR-053): set by the runtime watcher when
+    # Runtime & Model Management v1 (ADR-054): set by the runtime watcher when
     # the bound runtime's model changed while this agent was busy. The watcher's
     # sync pass restarts the agent container once it is idle, then clears this.
     pending_runtime_sync: bool = Field(

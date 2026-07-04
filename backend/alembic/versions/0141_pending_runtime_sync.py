@@ -1,4 +1,4 @@
-"""0141 — agents.pending_runtime_sync flag (Runtime & Model Management v1, ADR-053).
+"""0141 — agents.pending_runtime_sync flag (Runtime & Model Management v1, ADR-054).
 
 Revision ID: 0141
 Revises: 0140

@@ -1,4 +1,4 @@
-"""Runtime → agent model propagation (Runtime & Model Management v1, ADR-053).
+"""Runtime → agent model propagation (Runtime & Model Management v1, ADR-054).
 
 When the runtime watcher confirms that an engine serves a different model,
 every cli-bridge agent bound to that runtime must reload it. The reload is a

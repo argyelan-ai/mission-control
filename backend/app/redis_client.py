@@ -251,7 +251,7 @@ class RedisKeys:
     def obsidian_export_lock() -> str:
         return "mc:obsidian_export:lock"
 
-    # ── Runtime Watcher (ADR-053) ───────────────────────────────────────
+    # ── Runtime Watcher (ADR-054) ───────────────────────────────────────
     @staticmethod
     def runtime_watcher_lock() -> str:
         return "mc:runtime-watcher:lock"

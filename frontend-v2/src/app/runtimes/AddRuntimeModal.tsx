@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Guided add-runtime flow (ADR-053): paste a base URL → MC probes it live,
+ * Guided add-runtime flow (ADR-054): paste a base URL → MC probes it live,
  * detects the engine type + served models → confirm name → runtime row
  * created. No model identifiers typed by hand.
  */

@@ -683,7 +683,7 @@ export const api = {
     subtasks: (boardId: string, parentTaskId: string) =>
       request<Task[]>(`/api/v1/boards/${boardId}/tasks?parent_task_id=${parentTaskId}`),
     /** `defer_dispatch: true` skips the server's normal auto-dispatch-on-create
-     *  (ADR-053 follow-up, C2 review fix) — used when reference files are
+     *  (ADR-054 follow-up, C2 review fix) — used when reference files are
      *  staged so the agent brief isn't built before they've been uploaded.
      *  Follow up with `dispatchDeferred` once the uploads are done. */
     create: (boardId: string, data: Partial<Task> & { defer_dispatch?: boolean }) =>
@@ -773,7 +773,7 @@ export const api = {
       ),
   },
 
-  // ── Reference Files (ADR-053) ────────────────────────────────────────────────
+  // ── Reference Files (ADR-054) ────────────────────────────────────────────────
   // Operator-uploaded example/asset files for tasks & projects. Agents read
   // them directly — their paths flow into the dispatch directive automatically.
   references: {

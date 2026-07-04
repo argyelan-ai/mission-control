@@ -1,4 +1,4 @@
-"""Switch progress breadcrumbs (ADR-053) — publish helper + GET route."""
+"""Switch progress breadcrumbs (ADR-054) — publish helper + GET route."""
 import json
 import uuid
 

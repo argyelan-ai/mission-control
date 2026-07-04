@@ -118,7 +118,7 @@ fi
 OMP_PROFILE="${OMP_PROFILE:-mc-agent}"
 MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
 mkdir -p "$MODELS_DIR"
-# No baked-in defaults (ADR-053): the model/endpoint MUST come from the MC
+# No baked-in defaults (ADR-054): the model/endpoint MUST come from the MC
 # bootstrap (runtime row) or the rendered .env. A silent fallback to a stale
 # model caused exactly the drift bug this feature removes — fail loudly.
 if [ -z "${OPENAI_BASE_URL:-}" ] || [ -z "${OPENAI_MODEL:-}" ]; then

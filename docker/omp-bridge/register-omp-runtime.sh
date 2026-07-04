@@ -31,7 +31,7 @@ read -r -d '' BODY <<'JSON' || true
   "preferred_context_len": 32768,
   "max_context_len": 262144,
   "gpu_profile": "dgx_spark_heavy",
-  "memory_notes": "omp headless driver (bridge.py). Reuses the vLLM endpoint on the DGX Spark (same endpoint as the primary local runtime); model_identifier is filled by the first watcher probe (ADR-053).",
+  "memory_notes": "omp headless driver (bridge.py). Reuses the vLLM endpoint on the DGX Spark (same endpoint as the primary local runtime); model_identifier is filled by the first watcher probe (ADR-054).",
   "startup_notes": "Container boots bridge.py --serve; ready when the Window-0 pane prints OMP_BRIDGE_READY. The upstream model must be warm before probing succeeds (2-5 min after vLLM start).",
   "ui_order": 10,
   "enabled": true

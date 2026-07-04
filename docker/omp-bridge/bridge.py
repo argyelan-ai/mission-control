@@ -1283,7 +1283,7 @@ def _default_model_selector(openai_model: Optional[str]) -> str:
     selector is `mc-openai/<OPENAI_MODEL>`. Never a bare token — that
     mis-resolves against omp's built-in provider catalog. No baked-in
     default: a missing model is a boot error, not a silent fallback to a
-    stale model (ADR-053).
+    stale model (ADR-054).
     """
     m = (openai_model or "").strip()
     if not m:

@@ -1,4 +1,4 @@
-"""Runtime propagation (ADR-053) — idle sync, busy flagging, circuit breaker."""
+"""Runtime propagation (ADR-054) — idle sync, busy flagging, circuit breaker."""
 import uuid
 from unittest.mock import AsyncMock, patch
 

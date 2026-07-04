@@ -179,7 +179,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
     await runtime_schedule_service.start()
-    await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-053)
+    await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
     await telegram_bot.start()
     # Defense-in-depth: agents that call `gh repo create` without --private
     # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
@@ -700,7 +700,7 @@ app.include_router(runtimes.router)
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
-app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-053)
+app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-054)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)

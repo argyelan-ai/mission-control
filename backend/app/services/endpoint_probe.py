@@ -1,4 +1,4 @@
-"""Arbitrary-URL endpoint probing for the add-runtime wizard (ADR-053).
+"""Arbitrary-URL endpoint probing for the add-runtime wizard (ADR-054).
 
 Fingerprints the engine behind an OpenAI-compatible base URL:
   - LM Studio exposes a native REST API at ``/api/v0/models``

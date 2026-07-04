@@ -306,7 +306,7 @@ export interface DeliverableDirectory {
   entries: DeliverableDirectoryEntry[];
 }
 
-// ── Reference Files (ADR-053) ────────────────────────────────────────────────
+// ── Reference Files (ADR-054) ────────────────────────────────────────────────
 // Operator-uploaded example/asset files for tasks & projects. Agents read
 // them directly — `abs_path` is baked into the dispatch directive.
 

@@ -187,7 +187,7 @@ class Settings(BaseSettings):
     ollama_url: str = "http://host.docker.internal:11434"
     intelligence_interval: int = 600  # 10 minutes — MEM-05 reduces overlap risk
 
-    # Runtime & Model Management v1 (ADR-053) — background /v1/models probing.
+    # Runtime & Model Management v1 (ADR-054) — background /v1/models probing.
     runtime_watcher_enabled: bool = True
     runtime_watcher_interval: int = 90  # seconds between probe ticks
 
