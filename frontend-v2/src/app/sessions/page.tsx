@@ -399,7 +399,7 @@ function AgentList({
   }
 
   return (
-    <div className="flex flex-col gap-1 p-3 overflow-y-auto">
+    <div className="flex flex-col gap-1 p-3 overflow-y-auto flex-1 min-h-0">
       {agents.map((agent) => {
         const isSelected = selected?.id === agent.id;
         const isRunning = agentIsRunning(agent);
@@ -619,7 +619,7 @@ export default function SessionsPage() {
         <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
           {/* Agent List — mobile: visible only in list view; desktop: always */}
           <div
-            className={`shrink-0 border-b md:border-b-0 md:border-r flex-col ${mobileView === "list" ? "flex" : "hidden"} md:flex md:w-[220px]`}
+            className={`border-b md:border-b-0 md:border-r flex-col min-h-0 ${mobileView === "list" ? "flex flex-1" : "hidden"} md:flex md:flex-none md:w-[220px]`}
             style={{
               borderColor: "var(--color-border-subtle)",
               background: "rgba(255,255,255,0.01)",
