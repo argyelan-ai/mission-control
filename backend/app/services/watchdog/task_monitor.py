@@ -796,6 +796,8 @@ class TaskMonitorMixin:
 
         redis = await get_redis()
 
+        now = utcnow()
+
         for dep in all_deps:
             # Only check if the dependent task is still actively waiting
             task = await session.get(Task, dep.task_id)
@@ -806,6 +808,30 @@ class TaskMonitorMixin:
             dep_task = await session.get(Task, dep.depends_on_task_id)
             if not dep_task or dep_task.status not in ("failed", "blocked"):
                 continue
+
+            # ── `blocked` ist NICHT terminal (Fix D, Incident 2026-07-04) ──
+            # Ein blockierter Upstream hat einen aktiven Loesungsweg:
+            # Lead-Triage laeuft oder ein Operator-Approval ist offen. Ein
+            # zusaetzliches Zombie-Approval waere ein zweites Approval fuer
+            # denselben Vorfall (im Incident: 60s nach dem Ursprungs-Blocker).
+            # Zombie-Eskalation nur, wenn der Upstream >60min blocked ist UND
+            # kein offener Fall existiert (Leiter faktisch tot = Safety-Net).
+            if dep_task.status == "blocked":
+                pending_upstream = (await session.exec(
+                    select(Approval).where(
+                        Approval.task_id == dep_task.id,
+                        Approval.action_type.in_(  # type: ignore[union-attr]
+                            ("blocker_decision", "clarification_question")
+                        ),
+                        Approval.status == "pending",
+                    )
+                )).first()
+                blocked_minutes = (
+                    (now - dep_task.updated_at).total_seconds() / 60
+                    if dep_task.updated_at else 0
+                )
+                if pending_upstream is not None or blocked_minutes < 60:
+                    continue
 
             # Approval needs agent_id — skip if task isn't assigned to an agent
             if not task.assigned_agent_id:

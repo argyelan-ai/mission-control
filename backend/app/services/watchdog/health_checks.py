@@ -53,8 +53,18 @@ class HealthChecksMixin:
                 logger.warning("Agent %s restart failed (no session for %dmin)", agent.name, int(minutes_ago))
 
     async def _check_expired_approvals(self, session: AsyncSession) -> None:
-        """Automatically set expired approvals to 'expired'."""
+        """Expiry-Handling fuer pending Approvals.
+
+        Blocker-/Klaerungs-Approvals laufen NICHT still ab (Fix E, Incident
+        2026-07-04: expired Approval → Task blieb fuer immer blocked, niemand
+        erinnerte mehr). Stattdessen: Renewal +24h + Telegram-Reminder +
+        Event. Alle anderen Approval-Typen expiren wie bisher.
+        """
+        from datetime import timedelta
         from app.models.approval import Approval
+
+        # Typen, deren Task ohne Entscheidung dauerhaft haengen wuerde.
+        renewable_types = {"blocker_decision", "clarification_question"}
 
         now = utcnow()
         result = await session.exec(
@@ -66,10 +76,50 @@ class HealthChecksMixin:
         )
         expired_approvals = result.all()
 
+        expired_count = 0
         for approval in expired_approvals:
+            if approval.action_type in renewable_types:
+                payload = dict(approval.payload or {})
+                payload["renewal_count"] = int(payload.get("renewal_count", 0)) + 1
+                approval.payload = payload
+                approval.expires_at = now + timedelta(hours=24)
+                session.add(approval)
+
+                agent_name = payload.get("blocked_agent_name") or payload.get("agent_name") or "Agent"
+                task_title = payload.get("task_title") or approval.description[:60]
+                try:
+                    from app.services.telegram_bot import telegram_bot
+                    await telegram_bot.send_approval_telegram(
+                        approval.id, agent_name, task_title,
+                        f"⏰ Reminder ({payload['renewal_count'] * 24}h offen): "
+                        f"{payload.get('question') or approval.description}",
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Approval-Renewal Telegram failed: %s", e)
+
+                await emit_event(
+                    session,
+                    "approval.renewed",
+                    f"Approval seit {payload['renewal_count'] * 24}h offen: {approval.description}",
+                    severity="warning",
+                    board_id=approval.board_id,
+                    agent_id=approval.agent_id,
+                    detail={
+                        "approval_id": str(approval.id),
+                        "action_type": approval.action_type,
+                        "renewal_count": payload["renewal_count"],
+                    },
+                )
+                logger.info(
+                    "Approval renewed (#%d): %s (%s)",
+                    payload["renewal_count"], approval.id, approval.action_type,
+                )
+                continue
+
             approval.status = "expired"
             approval.resolved_at = now
             session.add(approval)
+            expired_count += 1
             await emit_event(
                 session,
                 "approval.expired",
@@ -82,7 +132,8 @@ class HealthChecksMixin:
 
         if expired_approvals:
             await session.commit()
-            logger.info("Auto-expired %d approval(s)", len(expired_approvals))
+            if expired_count:
+                logger.info("Auto-expired %d approval(s)", expired_count)
 
         # Reconciliation: stale pending approvals whose task has left the approval reason
         from app.services.approval_cleanup import reconcile_stale_approvals
