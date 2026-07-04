@@ -155,7 +155,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                     type="text"
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="http://192.168.1.x:8000/v1"
+                    placeholder="http://192.0.2.10:8000/v1"
                     className="flex-1 text-[13px] px-3 py-2 rounded-lg outline-none"
                     style={{
                       backgroundColor: C.bgSurface,
