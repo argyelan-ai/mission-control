@@ -40,7 +40,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
-from app.redis_client import get_redis
+from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.discord import send_discord_notification
 from app.services.compose_renderer import (
@@ -306,6 +306,24 @@ async def _release_lock(agent_id: uuid.UUID) -> None:
         logger.warning("release_lock failed for %s: %s", agent_id, e)
 
 
+async def publish_switch_progress(
+    agent_id: uuid.UUID, step: str, *, error: str | None = None
+) -> None:
+    """Best-effort progress breadcrumbs for the switch modal (TTL 5 min).
+
+    Steps: rendering → restarting → waiting_healthy → done | rolled_back.
+    Redis failures are swallowed — progress is cosmetic, never load-bearing.
+    """
+    try:
+        redis = await get_redis()
+        payload = json.dumps({"step": step, "error": error, "ts": time.time()})
+        await redis.setex(
+            RedisKeys.agent_switch_progress(str(agent_id)), 300, payload
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("switch progress publish failed: %s", exc)
+
+
 def terminal_remount_channel(agent_id: uuid.UUID) -> str:
     """Per-agent Redis pub/sub channel name for terminal remount signals."""
     return f"mc:agent:{agent_id}:terminal:remount"
@@ -420,6 +438,7 @@ async def switch_agent_runtime(
         )
 
     snapshot_old_runtime_id = agent.runtime_id
+    await publish_switch_progress(agent.id, "rendering")
 
     try:
         # Step 5 — render new compose overlay BEFORE touching the container.
@@ -449,6 +468,9 @@ async def switch_agent_runtime(
                     session, agent, old_runtime, new_runtime,
                     reason=f"compose render failed: {e}", elapsed_ms=int((time.monotonic() - started_at) * 1000),
                 )
+                await publish_switch_progress(
+                    agent.id, "rolled_back", error=f"compose render failed: {e}"
+                )
                 raise SwitchHealthCheckFailed(
                     f"Compose-Render fehlgeschlagen — kein Switch ausgefuehrt: {e}"
                 ) from e
@@ -472,6 +494,7 @@ async def switch_agent_runtime(
         # Step 8 — restart / recreate container.
         # D-11: same-image switches use tmux respawn-window (15-30s saved);
         # cross-image switches still need force_recreate to pull the new image.
+        await publish_switch_progress(agent.id, "restarting")
         restart_result = restart_docker_agent_container(
             agent,
             force_recreate=image_change,
@@ -483,6 +506,9 @@ async def switch_agent_runtime(
             await _emit_failure_event(
                 session, agent, old_runtime, new_runtime,
                 reason=f"container restart failed: {status}", elapsed_ms=int((time.monotonic() - started_at) * 1000),
+            )
+            await publish_switch_progress(
+                agent.id, "rolled_back", error=f"container restart failed: {status}"
             )
             raise SwitchHealthCheckFailed(
                 f"Container-Neustart fehlgeschlagen ({status}) — Rollback ausgefuehrt."
@@ -499,6 +525,7 @@ async def switch_agent_runtime(
         # would report healthy before the TUI is up. The glyphs match the omp
         # chat prompt box ("╭─" frame + "❯" input) shown after setup-wizard skip.
         is_omp = new_runtime.runtime_type == "omp"
+        await publish_switch_progress(agent.id, "waiting_healthy")
         health = await wait_for_agent_healthy(
             agent,
             timeout=timeout,
@@ -512,6 +539,11 @@ async def switch_agent_runtime(
                 reason=f"health check failed: {health.get('reason')}",
                 elapsed_ms=int((time.monotonic() - started_at) * 1000),
             )
+            await publish_switch_progress(
+                agent.id,
+                "rolled_back",
+                error=f"health check failed: {health.get('reason')}",
+            )
             raise SwitchHealthCheckFailed(
                 f"Health-Check nach Restart fehlgeschlagen "
                 f"({health.get('reason')}) — Rollback ausgefuehrt."
@@ -519,6 +551,7 @@ async def switch_agent_runtime(
 
         # Step 11 — broadcast for Sessions auto-remount BEFORE the activity event.
         await _publish_terminal_remount(agent.id, image_changed=image_change)
+        await publish_switch_progress(agent.id, "done")
 
         # Step 12 — success event.
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
