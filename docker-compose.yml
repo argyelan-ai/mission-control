@@ -1,8 +1,17 @@
+# Container logs are capped per service (30 MB max) — without this the
+# json-file driver grows unbounded until the disk fills. Long-running
+# self-hosted installs died silently on full disks otherwise.
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - mc_postgres_data:/var/lib/postgresql/data
       - ./pg_hba.conf:/pg_hba_custom.conf:ro
@@ -22,6 +31,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     command: redis-server --requirepass ${REDIS_PASSWORD} --appendonly yes --appendfsync everysec
     volumes:
       - mc_redis_data:/data
@@ -42,6 +52,7 @@ services:
   docker-socket-proxy:
     image: tecnativa/docker-socket-proxy:v0.4.2
     restart: unless-stopped
+    logging: *default-logging
     environment:
       CONTAINERS: 1   # inspect/list + lifecycle (mit POST)
       IMAGES: 1       # compose up prueft Images
@@ -68,6 +79,7 @@ services:
     image: ghcr.io/argyelan-ai/mc-backend:${MC_IMAGE_TAG:-latest}
     build: ./backend
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         condition: service_healthy
@@ -204,12 +216,12 @@ services:
         # Wordmark/brand, e.g. "my-lab.io" ("main.accent" split at last dot).
         NEXT_PUBLIC_BRAND: ${NEXT_PUBLIC_BRAND:-}
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       backend:
         condition: service_healthy
     environment:
       NEXT_PUBLIC_API_URL: ""
-      NEXT_PUBLIC_APP_VERSION: "2.0.0"
       PUBLIC_HOST: ${PUBLIC_HOST:-}
     ports:
       - "127.0.0.1:3000:3000"
@@ -222,6 +234,7 @@ services:
   qdrant:
     image: qdrant/qdrant:latest
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "127.0.0.1:6333:6333"
     volumes:
@@ -238,12 +251,18 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       - frontend
       - backend
+    # Secure by default: Caddy (the front door) binds to localhost only.
+    # Anyone on a shared LAN could otherwise reach the app — and before the
+    # first admin registers, even claim the admin account. To reach MC from
+    # other devices (phone via Tailscale, LAN), set MC_BIND_ADDRESS=0.0.0.0
+    # in .env — see README "Access from your phone".
     ports:
-      - "80:80"
-      - "443:443"
+      - "${MC_BIND_ADDRESS:-127.0.0.1}:80:80"
+      - "${MC_BIND_ADDRESS:-127.0.0.1}:443:443"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - ./caddy/certs:/etc/caddy/certs:ro
@@ -259,6 +278,7 @@ services:
     # Optional: nur mit COMPOSE_PROFILES=browser (Visual-Verify fuer Agents).
     profiles: ["browser"]
     restart: unless-stopped
+    logging: *default-logging
     environment:
       SHARED_DELIVERABLES: /shared-deliverables
     volumes:
@@ -288,6 +308,7 @@ services:
     # Optional: nur mit COMPOSE_PROFILES=voice (oder --profile voice) aktiv.
     profiles: ["voice"]
     restart: unless-stopped
+    logging: *default-logging
     # --node-ip: the RTC candidate IP LiveKit advertises to clients. Set
     # LIVEKIT_NODE_IP in .env to your host's LAN/VPN IP so other devices
     # (phone, desktop) can reach voice. Default 127.0.0.1 = local-only.
@@ -321,6 +342,7 @@ services:
     build: ./voice_worker
     profiles: ["voice"]
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       livekit:
         condition: service_healthy
@@ -339,6 +361,7 @@ services:
     image: mcr.microsoft.com/playwright/mcp:latest
     profiles: ["browser"]
     restart: unless-stopped
+    logging: *default-logging
     # Default entrypoint is `node /app/cli.js --headless --browser chromium --no-sandbox`
     # — we override only the trailing args to add HTTP transport + isolation.
     command: [

@@ -291,3 +291,47 @@ def effective_host_ssh_user() -> str:
     basename (macOS: /Users/<login> is owned by that login).
     """
     return settings.host_ssh_user or Path(settings.home_host).name
+
+
+# Placeholder values that must never survive into a production boot: the
+# compose default, the .env.example sample, and common "fill me in" variants.
+_PLACEHOLDER_JWT_SECRETS = frozenset(
+    {
+        "",
+        "change-me",
+        "change-me-in-production",
+        "change_me_generate_with_openssl_rand_hex_32",
+    }
+)
+
+
+def validate_boot_secrets(s: Settings | None = None) -> None:
+    """Fail fast when production boots with placeholder/missing secrets.
+
+    A bare `docker compose up` without ./setup.sh (e.g. a Portainer
+    git-stackfile deploy) used to run with the default JWT secret — anyone
+    who could reach the API could forge admin tokens. Called at the top of
+    the lifespan; development/test environments are exempt.
+    """
+    s = s or settings
+    if s.environment != "production":
+        return
+    problems: list[str] = []
+    if s.jwt_secret_key in _PLACEHOLDER_JWT_SECRETS:
+        problems.append(
+            "JWT_SECRET_KEY is unset or a placeholder — anyone could forge "
+            "admin login tokens. Generate one: openssl rand -hex 32"
+        )
+    if not s.secrets_encryption_key:
+        problems.append(
+            "SECRETS_ENCRYPTION_KEY is empty — the encrypted secrets vault "
+            "(LLM provider keys) cannot work. Any stable passphrase is "
+            "accepted; best: openssl rand -hex 32"
+        )
+    if problems:
+        raise RuntimeError(
+            "Refusing to start with insecure configuration:\n- "
+            + "\n- ".join(problems)
+            + "\nFix: run ./setup.sh (generates all secrets into .env), "
+            "then `docker compose up -d` again."
+        )

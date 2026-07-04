@@ -141,8 +141,9 @@ echo
 say "✅ Mission Control is running!"
 echo
 echo "  1. Open http://localhost and register the first admin user."
-echo "  2. Optional: python3 scripts/demo-seed.py  (populates a demo board)"
-echo "  3. First agent: docs/setup/first-agent.md"
+echo "  2. Recommended: make backup-schedule  (daily 03:00 backup of DB + data)"
+echo "  3. Optional: python3 scripts/demo-seed.py  (populates a demo board)"
+echo "  4. First agent: docs/setup/first-agent.md"
 echo
 if [ "$INTERACTIVE" = 1 ]; then
   case "$OS" in

@@ -4,6 +4,40 @@ All notable changes to Mission Control are documented here. The format is
 based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions
 follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
+## [Unreleased]
+
+### Added
+
+- **Automatic daily backups** — `make backup-schedule` installs a 03:00
+  run of `backup.sh` (launchd on macOS, cron on Linux); `make backup`
+  runs one now. The installer recommends it after first boot.
+
+### Changed
+
+- **BREAKING (security): Caddy now binds to `127.0.0.1` by default** instead
+  of all interfaces. Nothing is reachable from the LAN until you opt in —
+  previously anyone on a shared network could reach the app and, before the
+  first admin registered, even claim the admin account. If you access MC
+  from other devices (e.g. phone via Tailscale), set `MC_BIND_ADDRESS=0.0.0.0`
+  in `.env` and run `docker compose up -d caddy`.
+- **Boot guard (security):** in production the backend now refuses to start
+  with a placeholder `JWT_SECRET_KEY` (forgeable admin tokens) or an empty
+  `SECRETS_ENCRYPTION_KEY`, with a clear "run ./setup.sh" message — a bare
+  `docker compose up` without setup.sh used to boot silently insecure.
+- Container logs are capped (10 MB × 3 files per service) — they previously
+  grew unbounded until the disk filled.
+
+### Fixed
+
+- **`backup.sh restore` now actually restores:** it recreates the database
+  (drop + create — importing into a non-empty DB errored on every table)
+  and also restores the matching `mc_data_*.tar.gz` (`~/.mc`: vault key
+  material, agent configs, deliverables), which was silently skipped before.
+- Version consistency: the frontend claimed `2.0.0` while the product is
+  `0.1.1`; CasaOS manifest now digest-pins images like Umbrel/Runtipi;
+  two-component release tags (e.g. `v0.5`) are now recognized by the
+  update banner.
+
 ## [0.1.1] — 2026-07-03
 
 ### Added

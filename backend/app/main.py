@@ -7,7 +7,7 @@ from app.utils import create_tracked_task as _create_background_task
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.config import settings
+from app.config import settings, validate_boot_secrets
 from app.database import engine
 from app.redis_client import close_redis
 
@@ -121,6 +121,9 @@ logger = logging.getLogger("mc.startup")
 async def lifespan(app: FastAPI):
     # Startup — check templates + seed builtin templates + start background services.
     # Phase 29 (ADR-039): OpenClaw RPC connect removed. Backend no longer dials a Gateway.
+    # Fail fast on placeholder secrets (default JWT key = forgeable admin
+    # tokens) BEFORE anything else touches the DB or starts services.
+    validate_boot_secrets()
     _verify_jinja_templates()
     await _seed_templates()
     await _seed_scheduled_jobs()

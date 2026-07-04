@@ -25,7 +25,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--requirepass", "$REDIS_PASSWORD"]
   backend:
-    image: ghcr.io/argyelan-ai/mc-backend:latest
+    image: ghcr.io/argyelan-ai/mc-backend:0.1.1@sha256:5c9d24bbe7271c35e3db240c3e1ed0c20ca1a60ec7d512f6ae8818a004a53cf2
     restart: unless-stopped
     depends_on: [db, redis]
     environment:
@@ -37,7 +37,7 @@ services:
     volumes:
       - /DATA/AppData/mission-control/mc:/home/mcuser/.mc
   frontend:
-    image: ghcr.io/argyelan-ai/mc-frontend:latest
+    image: ghcr.io/argyelan-ai/mc-frontend:0.1.1@sha256:0e5c3b4893e168b159b0288205db78b900f6e6d83fbd7fb091e19790a8c7f607
     restart: unless-stopped
     depends_on: [backend]
   proxy:

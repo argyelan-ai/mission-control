@@ -24,14 +24,18 @@ RELEASES_URL = (
 CACHE_KEY = "mc:update-check:latest"
 CACHE_TTL = 86400  # once daily is enough; protects the GitHub rate limit (60/h anon)
 
-_VER = re.compile(r"^v?(\d+)\.(\d+)\.(\d+)")
+# Patch part is optional: a release tagged "v0.5" must still count
+# (the strict MAJOR.MINOR.PATCH regex silently never fired for it).
+_VER = re.compile(r"^v?(\d+)\.(\d+)(?:\.(\d+))?")
 
 
 def _parse(tag: Optional[str]) -> Optional[tuple[int, int, int]]:
     if not tag:
         return None
     m = _VER.match(tag.strip())
-    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
 
 def is_newer(candidate: Optional[str], current: Optional[str]) -> bool:

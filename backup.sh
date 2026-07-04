@@ -73,19 +73,50 @@ else
     fi
 
     if [[ -z "$RESTORE_FILE" || ! -f "$RESTORE_FILE" ]]; then
-        echo "Kein Backup gefunden."
+        echo "No backup found."
         exit 1
     fi
 
-    echo "ACHTUNG: Das überschreibt die aktuelle Datenbank!"
-    echo "Backup: $RESTORE_FILE"
-    read -p "Fortfahren? (j/n): " CONFIRM
-    if [[ "$CONFIRM" != "j" ]]; then
-        echo "Abgebrochen."
+    # Every backup run writes a PAIR: mc_backup_<ts>.sql.gz (database) and
+    # mc_data_<ts>.tar.gz (~/.mc: vault key material, agent configs, skills,
+    # deliverables). A DB-only restore silently loses the vault half — so we
+    # restore the matching data archive too when it exists.
+    DATA_RESTORE_FILE="${RESTORE_FILE/mc_backup_/mc_data_}"
+    DATA_RESTORE_FILE="${DATA_RESTORE_FILE%.sql.gz}.tar.gz"
+
+    echo "WARNING: this overwrites the current database (drop + recreate)!"
+    echo "  Database: $RESTORE_FILE"
+    if [[ -f "$DATA_RESTORE_FILE" ]]; then
+        echo "  MC data:  $DATA_RESTORE_FILE  (restored over ~/.mc)"
+    else
+        echo "  MC data:  no matching mc_data archive found — ~/.mc is NOT restored."
+    fi
+    read -p "Continue? (y/n): " CONFIRM
+    if [[ "$CONFIRM" != "y" && "$CONFIRM" != "j" ]]; then
+        echo "Aborted."
         exit 0
     fi
 
-    echo "Stelle Backup wieder her..."
+    # Stop the backend so no connections/writes race the restore, then drop
+    # and recreate the DB — piping a pg_dump into a NON-empty database would
+    # error on every existing table.
+    echo "Stopping backend..."
+    docker compose stop backend >/dev/null
+    echo "Recreating database..."
+    docker compose exec -T db psql -U "$DB_USER" -d postgres --quiet \
+        -c "DROP DATABASE IF EXISTS $DB_NAME WITH (FORCE);" \
+        -c "CREATE DATABASE $DB_NAME OWNER $DB_USER;"
+    echo "Restoring database..."
     gunzip -c "$RESTORE_FILE" | docker compose exec -T db psql -U "$DB_USER" -d "$DB_NAME" --quiet
-    echo "Datenbank wiederhergestellt aus: $RESTORE_FILE"
+    echo "Database restored from: $RESTORE_FILE"
+
+    if [[ -f "$DATA_RESTORE_FILE" ]]; then
+        echo "Restoring MC data to ~/.mc ..."
+        tar -xzf "$DATA_RESTORE_FILE" -C "$HOME"
+        echo "MC data restored from: $DATA_RESTORE_FILE"
+    fi
+
+    echo "Starting backend..."
+    docker compose start backend >/dev/null
+    echo "Done."
 fi
