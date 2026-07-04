@@ -68,6 +68,14 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
   const [stagedReferenceFiles, setStagedReferenceFiles] = useState<StagedReferenceFile[]>([]);
   const [referenceNote, setReferenceNote] = useState("");
   const [referenceUploadErrors, setReferenceUploadErrors] = useState<string[]>([]);
+  // Dispatch-race fix (review C2): the task is created with `defer_dispatch`
+  // when files are staged, so `createdTaskId` marks "task exists, uploads
+  // may still be pending" — a retry state. `uploadedFileIds` tracks which
+  // staged files already made it, so a retry only repeats the failed ones
+  // instead of re-uploading (or re-creating the task, review M2).
+  const [createdTaskId, setCreatedTaskId] = useState<string | null>(null);
+  const [uploadedFileIds, setUploadedFileIds] = useState<Set<string>>(new Set());
+  const isRetry = createdTaskId != null;
 
   // Auto-resize description textarea on open (matches old behavior).
   useEffect(() => {
@@ -134,72 +142,107 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     setStagedReferenceFiles([]);
     setReferenceNote("");
     setReferenceUploadErrors([]);
+    setCreatedTaskId(null);
+    setUploadedFileIds(new Set());
     if (descriptionRef.current) descriptionRef.current.style.height = "auto";
     setOpen(false);
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!activeBoardId || !payload.title.trim() || loading) return;
+    if (loading || !activeBoardId) return;
+    if (!isRetry && !payload.title.trim()) return;
     setLoading(true);
     try {
-      const apiPayload: Partial<Task> = {
-        title: payload.title.trim(),
-        ...(payload.description.trim() && { description: payload.description.trim() }),
-        status: "inbox" as Task["status"],
-        priority: payload.priority as Task["priority"],
-        task_type: payload.taskType as Task["task_type"],
-        planner_mode: payload.plannerMode,
-        intake_mode: (isStructured ? "structured" : "quick") as Task["intake_mode"],
-        use_separate_repo: payload.projectId ? false : payload.useSeparateRepo,
-        ...(!payload.projectId && payload.repoId && { repo_id: payload.repoId }),
-        ...(payload.selectedAgentId && { assigned_agent_id: payload.selectedAgentId }),
-        ...(payload.projectId && { project_id: payload.projectId }),
-        ...(payload.phaseId && { phase_id: payload.phaseId }),
-        ...(payload.branchName && { branch_name: payload.branchName }),
-        ...(payload.deliverableId && { triggered_by_deliverable_id: payload.deliverableId }),
-        ...(payload.acceptanceCriteria.trim() && { acceptance_criteria: payload.acceptanceCriteria.trim() }),
-        ...(payload.scopeOut.trim() && { scope_out: payload.scopeOut.trim() }),
-        ...(payload.dueAt && { due_at: new Date(payload.dueAt).toISOString() }),
-        ...(payload.riskNotes.trim() && { risk_notes: payload.riskNotes.trim() }),
-        ...(payload.referenceUrls.length > 0 && { reference_urls: payload.referenceUrls }),
-        ...(payload.approvalPolicy && { approval_policy: payload.approvalPolicy as Task["approval_policy"] }),
-        ...(payload.needsBrowser && { needs_browser: true }),
-        ...(payload.requiresAuth && { requires_auth: true }),
-        ...(payload.requiresAuth && payload.credentialMode === "vault" && payload.credentialId && { credential_id: payload.credentialId }),
-        ...(payload.requiresAuth && payload.credentialMode === "inline" && payload.inlineCredentials.trim() && { credentials: payload.inlineCredentials.trim() }),
-        ...(payload.reportBack && {
-          report_back_required: true,
-          ...(payload.reportChannel && { report_back_channel: payload.reportChannel }),
-          ...(payload.reportFormats.length > 0 && { report_back_requirements: payload.reportFormats.join(",") }),
-        }),
-        ...(payload.requestKind && { request_kind: payload.requestKind as Task["request_kind"] }),
-        ...(payload.autonomyLevel && { autonomy_level: payload.autonomyLevel as Task["autonomy_level"] }),
-        ...(payload.desiredOutput.trim() && { desired_output: payload.desiredOutput.trim() }),
-        ...(payload.referenceNotes.trim() && { reference_notes: payload.referenceNotes.trim() }),
-        ...(payload.publishAllowed !== null && { publish_allowed: payload.publishAllowed }),
-      };
+      let taskId = createdTaskId;
 
-      const created = await api.tasks.create(activeBoardId, apiPayload);
-      qc.invalidateQueries({ queryKey: ["tasks"] });
-      qc.invalidateQueries({ queryKey: ["pipeline"] });
-      notify.success("Task created");
+      const hasStagedFiles = stagedReferenceFiles.length > 0;
 
-      if (stagedReferenceFiles.length > 0) {
+      if (!taskId) {
+        const apiPayload: Partial<Task> & { defer_dispatch?: boolean } = {
+          title: payload.title.trim(),
+          ...(payload.description.trim() && { description: payload.description.trim() }),
+          status: "inbox" as Task["status"],
+          priority: payload.priority as Task["priority"],
+          task_type: payload.taskType as Task["task_type"],
+          planner_mode: payload.plannerMode,
+          intake_mode: (isStructured ? "structured" : "quick") as Task["intake_mode"],
+          use_separate_repo: payload.projectId ? false : payload.useSeparateRepo,
+          ...(!payload.projectId && payload.repoId && { repo_id: payload.repoId }),
+          ...(payload.selectedAgentId && { assigned_agent_id: payload.selectedAgentId }),
+          ...(payload.projectId && { project_id: payload.projectId }),
+          ...(payload.phaseId && { phase_id: payload.phaseId }),
+          ...(payload.branchName && { branch_name: payload.branchName }),
+          ...(payload.deliverableId && { triggered_by_deliverable_id: payload.deliverableId }),
+          ...(payload.acceptanceCriteria.trim() && { acceptance_criteria: payload.acceptanceCriteria.trim() }),
+          ...(payload.scopeOut.trim() && { scope_out: payload.scopeOut.trim() }),
+          ...(payload.dueAt && { due_at: new Date(payload.dueAt).toISOString() }),
+          ...(payload.riskNotes.trim() && { risk_notes: payload.riskNotes.trim() }),
+          ...(payload.referenceUrls.length > 0 && { reference_urls: payload.referenceUrls }),
+          ...(payload.approvalPolicy && { approval_policy: payload.approvalPolicy as Task["approval_policy"] }),
+          ...(payload.needsBrowser && { needs_browser: true }),
+          ...(payload.requiresAuth && { requires_auth: true }),
+          ...(payload.requiresAuth && payload.credentialMode === "vault" && payload.credentialId && { credential_id: payload.credentialId }),
+          ...(payload.requiresAuth && payload.credentialMode === "inline" && payload.inlineCredentials.trim() && { credentials: payload.inlineCredentials.trim() }),
+          ...(payload.reportBack && {
+            report_back_required: true,
+            ...(payload.reportChannel && { report_back_channel: payload.reportChannel }),
+            ...(payload.reportFormats.length > 0 && { report_back_requirements: payload.reportFormats.join(",") }),
+          }),
+          ...(payload.requestKind && { request_kind: payload.requestKind as Task["request_kind"] }),
+          ...(payload.autonomyLevel && { autonomy_level: payload.autonomyLevel as Task["autonomy_level"] }),
+          ...(payload.desiredOutput.trim() && { desired_output: payload.desiredOutput.trim() }),
+          ...(payload.referenceNotes.trim() && { reference_notes: payload.referenceNotes.trim() }),
+          ...(payload.publishAllowed !== null && { publish_allowed: payload.publishAllowed }),
+          // Review C2: defer auto-dispatch when files are staged so the agent
+          // brief isn't built before the uploads land — we dispatch ourselves
+          // below, once every upload has succeeded.
+          ...(hasStagedFiles && { defer_dispatch: true }),
+        };
+
+        const created = await api.tasks.create(activeBoardId, apiPayload);
+        taskId = created.id;
+        setCreatedTaskId(created.id);
+        qc.invalidateQueries({ queryKey: ["tasks"] });
+        qc.invalidateQueries({ queryKey: ["pipeline"] });
+        notify.success("Task created");
+      }
+
+      // Review M2: only retry files that haven't already succeeded — a
+      // resubmit after a partial failure must not re-create the task or
+      // re-upload files that already made it.
+      const pending = stagedReferenceFiles.filter((f) => !uploadedFileIds.has(f.id));
+      if (pending.length > 0) {
+        const newlyUploaded: string[] = [];
         const failures: string[] = [];
-        for (const staged of stagedReferenceFiles) {
+        for (const staged of pending) {
           try {
-            await api.references.upload({ taskId: created.id }, staged.file, referenceNote.trim() || undefined);
+            await api.references.upload({ taskId }, staged.file, referenceNote.trim() || undefined);
+            newlyUploaded.push(staged.id);
           } catch (err) {
             const msg = err instanceof Error && err.message ? err.message : "Upload failed";
             failures.push(`${staged.file.name}: ${msg}`);
           }
         }
-        qc.invalidateQueries({ queryKey: ["references", "task", created.id] });
+        if (newlyUploaded.length > 0) {
+          setUploadedFileIds((prev) => new Set([...prev, ...newlyUploaded]));
+          qc.invalidateQueries({ queryKey: ["references", "task", taskId] });
+        }
         if (failures.length > 0) {
           // Task already exists — keep the modal open so the operator sees
-          // which uploads failed instead of silently closing on them.
+          // which uploads failed and can retry, instead of silently closing.
           setReferenceUploadErrors(failures);
           return;
+        }
+      }
+
+      if (hasStagedFiles) {
+        try {
+          await api.tasks.dispatchDeferred(activeBoardId, taskId);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : "";
+          // 409 = the task already moved on some other way (no longer
+          // inbox/undispatched) — not our problem, everything else is.
+          if (!msg.includes("409")) throw err;
         }
       }
 
@@ -210,7 +253,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     } finally {
       setLoading(false);
     }
-  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote]);
+  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote, createdTaskId, uploadedFileIds, isRetry]);
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
@@ -313,9 +356,14 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   style={{ background: `${C.warning}12`, borderBottom: `1px solid ${C.warning}33`, color: C.warning }}
                 >
                   <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                  <span>
-                    Task created, but {referenceUploadErrors.length} reference upload{referenceUploadErrors.length > 1 ? "s" : ""} failed: {referenceUploadErrors.join("; ")}
-                  </span>
+                  <div className="flex flex-col gap-0.5">
+                    <span>
+                      Task created, but {referenceUploadErrors.length} reference upload{referenceUploadErrors.length > 1 ? "s" : ""} failed: {referenceUploadErrors.join("; ")}
+                    </span>
+                    <span style={{ opacity: 0.85 }}>
+                      Task was created without the failed files. It has not been dispatched yet — dispatch it from the task detail.
+                    </span>
+                  </div>
                 </div>
               )}
 
@@ -328,7 +376,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   agents={agents}
                   layout="two-pane"
                   open={open}
-                  disabled={loading}
+                  disabled={loading || isRetry}
                   titleRef={titleRef}
                   descriptionRef={descriptionRef}
                   onSubmitShortcut={handleSubmit}
@@ -358,7 +406,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   <button
                     type="button"
                     onClick={handleSubmit}
-                    disabled={!payload.title.trim() || loading}
+                    disabled={(!isRetry && !payload.title.trim()) || loading}
                     className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-semibold rounded-lg cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                     style={{
                       background: `linear-gradient(135deg, ${C.accentHover}, ${C.accent})`,
@@ -367,7 +415,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     }}
                   >
                     <Send size={11} />
-                    {loading ? "..." : "Create task"}
+                    {loading ? "..." : isRetry ? "Retry uploads" : "Create task"}
                   </button>
                 </div>
               </div>

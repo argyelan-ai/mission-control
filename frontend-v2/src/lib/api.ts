@@ -682,7 +682,11 @@ export const api = {
     },
     subtasks: (boardId: string, parentTaskId: string) =>
       request<Task[]>(`/api/v1/boards/${boardId}/tasks?parent_task_id=${parentTaskId}`),
-    create: (boardId: string, data: Partial<Task>) =>
+    /** `defer_dispatch: true` skips the server's normal auto-dispatch-on-create
+     *  (ADR-053 follow-up, C2 review fix) — used when reference files are
+     *  staged so the agent brief isn't built before they've been uploaded.
+     *  Follow up with `dispatchDeferred` once the uploads are done. */
+    create: (boardId: string, data: Partial<Task> & { defer_dispatch?: boolean }) =>
       request<Task>(`/api/v1/boards/${boardId}/tasks`, { method: "POST", body: JSON.stringify(data) }),
     get: (boardId: string, id: string) => request<Task>(`/api/v1/boards/${boardId}/tasks/${id}`),
     update: (boardId: string, id: string, data: Partial<Task>) =>
@@ -691,6 +695,12 @@ export const api = {
       request<void>(`/api/v1/boards/${boardId}/tasks/${id}`, { method: "DELETE" }),
     reorder: (boardId: string, items: { id: string; sort_order: number; status?: string }[]) =>
       request<{ updated: number }>(`/api/v1/boards/${boardId}/tasks/reorder`, { method: "PATCH", body: JSON.stringify(items) }),
+    /** Fetch up a task created with `defer_dispatch: true` once its reference
+     *  uploads are done. 409 means the task moved on some other way (no
+     *  longer inbox/undispatched) — callers should tolerate that, not treat
+     *  it as a hard failure. */
+    dispatchDeferred: (boardId: string, taskId: string) =>
+      request<{ status: string }>(`/api/v1/boards/${boardId}/tasks/${taskId}/dispatch`, { method: "POST" }),
     dependencies: (boardId: string, taskId: string) =>
       request<TaskDependencyInfo[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/dependencies`),
     events: (boardId: string, taskId: string) =>

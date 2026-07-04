@@ -789,8 +789,9 @@ export function TaskFormFields({
                         <button
                           type="button"
                           onClick={() => removeStagedReferenceFile(f.id)}
+                          disabled={disabled}
                           aria-label={`Remove ${f.file.name}`}
-                          className="shrink-0 cursor-pointer"
+                          className="shrink-0 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
                           style={{ color: C.textMuted }}
                         >
                           <X size={11} />
@@ -803,6 +804,7 @@ export function TaskFormFields({
                       onChange={(e) => updateReferenceNote(e.target.value)}
                       placeholder="Note for the agent (optional)"
                       rows={2}
+                      disabled={disabled}
                       className="w-full text-[11px] px-2.5 py-2 rounded-lg outline-none resize-none"
                       style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
                     />
