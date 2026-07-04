@@ -1029,7 +1029,7 @@ For large tasks (website, app, feature with multiple steps):
         # Per-repo working rules (ADR-050): Mark-defined conventions for this
         # repo (test commands, branch policy, style). Attached to the git
         # section so they sit right next to the repo the agent works in.
-        if getattr(ctx, "repo_rules_context", ""):
+        if git_section and getattr(ctx, "repo_rules_context", ""):
             git_section += (
                 f"\n\n**Repository-Arbeitsregeln ({ctx.repo_rules_repo_name}) — BINDEND:**\n"
                 f"{ctx.repo_rules_context}"

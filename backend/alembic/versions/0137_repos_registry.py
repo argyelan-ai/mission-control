@@ -62,7 +62,16 @@ def upgrade() -> None:
         # Canonical form is owner/name — legacy init-repo rows stored just
         # "mc-slug". Normalize when the owner is known (gh --repo needs it).
         repo_name = raw_repo_name
-        if "/" not in repo_name and owner:
+        if "/" not in repo_name:
+            if not owner:
+                # Refuse to write an invariant-violating row (full_name MUST
+                # be owner/name — bare names break every gh --repo call and
+                # the import dedup). Set GITHUB_OWNER and re-run.
+                raise RuntimeError(
+                    f"Migration 0137: project repo '{repo_name}' has no owner "
+                    "prefix and GITHUB_OWNER is not set — cannot normalize. "
+                    "Set GITHUB_OWNER in the backend env and re-run."
+                )
             repo_name = f"{owner}/{repo_name}"
         if repo_name not in seen:
             repo_id = str(uuid.uuid4())

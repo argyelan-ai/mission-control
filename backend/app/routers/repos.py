@@ -9,6 +9,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -73,10 +74,15 @@ async def list_repos(
         query = query.where(Repo.is_active == True)  # noqa: E712
     result = await session.exec(query)
     repos = list(result.all())
-    out = []
-    for repo in repos:
-        out.append(_serialize(repo, await _linked_projects(session, repo)))
-    return out
+    # One query for all links instead of N+1 per repo.
+    by_repo: dict = {}
+    if repos:
+        proj_result = await session.exec(
+            select(Project).where(Project.repo_id.in_([r.id for r in repos]))  # type: ignore[union-attr]
+        )
+        for p in proj_result.all():
+            by_repo.setdefault(p.repo_id, []).append(p)
+    return [_serialize(repo, by_repo.get(repo.id, [])) for repo in repos]
 
 
 @router.get("/repos/import-candidates")
@@ -146,7 +152,13 @@ async def import_repo(
         source="imported",
     )
     repo.last_synced_at = utcnow()
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Concurrent double-import: the unique index on full_name wins the
+        # race — surface the same 409 as the pre-check instead of a 500.
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
     await session.refresh(repo)
     return _serialize(repo, [])
 
