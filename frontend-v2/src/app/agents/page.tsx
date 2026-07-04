@@ -144,7 +144,7 @@ function TokenDisplay({ token }: { token: string }) {
       <button
         onClick={copy}
         className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
-        title="Token kopieren"
+        title="Copy token"
       >
         {copied ? <Check size={12} className="text-[var(--color-online)]" /> : <Copy size={12} />}
       </button>
@@ -208,13 +208,13 @@ export function CreateAgentModal({
         agent_runtime: agentRuntime,
         runtime_id: isCliBridge && runtimeId ? runtimeId : undefined,
       });
-      notify.success(`Agent "${name}" erstellt`);
+      notify.success(`Agent "${name}" created`);
       onCreated();
       await qc.refetchQueries({ queryKey: ["agents"] });
       onClose();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Fehler";
-      notify.error(`Erstellen fehlgeschlagen: ${msg}`);
+      const msg = e instanceof Error ? e.message : "Error";
+      notify.error(`Create failed: ${msg}`);
     } finally {
       pendingRef.current = false;
       setIsPending(false);
@@ -239,7 +239,7 @@ export function CreateAgentModal({
           style={{ borderColor: CINEMA.borderSubtle }}
         >
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            Neuer Agent
+            New Agent
           </h2>
           <button
             onClick={onClose}
@@ -257,7 +257,7 @@ export function CreateAgentModal({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="z.B. Cody"
+              placeholder="e.g. Cody"
               className={inputClass}
               style={inputStyle}
               autoFocus
@@ -277,7 +277,7 @@ export function CreateAgentModal({
               />
             </div>
             <div>
-              <label className={labelClass}>Rolle</label>
+              <label className={labelClass}>Role</label>
               <input
                 type="text"
                 value={role}
@@ -303,7 +303,7 @@ export function CreateAgentModal({
                 className={`${inputClass} cursor-pointer`}
                 style={selectStyle}
               >
-                <option value="">Kein Board</option>
+                <option value="">No board</option>
                 {boards.map((b) => (
                   <option key={b.id} value={b.id}>{b.name}</option>
                 ))}
@@ -319,7 +319,7 @@ export function CreateAgentModal({
               className={`${inputClass} cursor-pointer`}
               style={selectStyle}
             >
-              <option value="cli-bridge">CLI Bridge (lokal)</option>
+              <option value="cli-bridge">CLI Bridge (local)</option>
               <option value="manual">Manual</option>
             </select>
           </div>
@@ -370,7 +370,7 @@ export function CreateAgentModal({
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">
             <button onClick={onClose} className={btnCancelClass}>
-              Abbrechen
+              Cancel
             </button>
             <button
               onClick={handleCreate}
@@ -380,10 +380,10 @@ export function CreateAgentModal({
             >
               {isPending ? (
                 <span className="flex items-center gap-2">
-                  <Loader2 size={14} className="animate-spin" /> Erstelle...
+                  <Loader2 size={14} className="animate-spin" /> Creating...
                 </span>
               ) : (
-                "Erstellen"
+                "Create"
               )}
             </button>
           </div>
@@ -418,12 +418,12 @@ function SpecializedSetupModal({
     try {
       const res = await api.agents.setupSpecialized(boardId, false);
       setResult(res.created);
-      notify.success(`${res.count} spezialisierte Agents erstellt`);
+      notify.success(`${res.count} specialized agents created`);
       onCreated();
       await qc.refetchQueries({ queryKey: ["agents"] });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Fehler";
-      notify.error(`Setup fehlgeschlagen: ${msg}`);
+      const msg = e instanceof Error ? e.message : "Error";
+      notify.error(`Setup failed: ${msg}`);
     } finally {
       pendingRef.current = false;
       setIsPending(false);
@@ -475,7 +475,7 @@ function SpecializedSetupModal({
 
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={onClose} className={btnCancelClass}>
-                  Abbrechen
+                  Cancel
                 </button>
                 <button
                   onClick={handleSetup}
@@ -485,10 +485,10 @@ function SpecializedSetupModal({
                 >
                   {isPending ? (
                     <span className="flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin" /> Erstelle...
+                      <Loader2 size={14} className="animate-spin" /> Creating...
                     </span>
                   ) : (
-                    "Team erstellen"
+                    "Create team"
                   )}
                 </button>
               </div>
@@ -496,10 +496,10 @@ function SpecializedSetupModal({
           ) : (
             <>
               <div className="text-sm font-medium text-[var(--color-online)]">
-                {result.length} Agents erstellt
+                {result.length} agents created
               </div>
               <p className="text-[11px] text-[var(--color-text-muted)]">
-                Tokens werden nur einmalig angezeigt — jetzt sichern!
+                Tokens are shown only once — save them now!
               </p>
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {result.map((a) => (
@@ -537,7 +537,7 @@ function SpecializedSetupModal({
                   className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
                   style={btnPrimaryStyle}
                 >
-                  Fertig
+                  Done
                 </button>
               </div>
             </>
@@ -582,12 +582,12 @@ function InstantiateModal({
         name: nameOverride.trim() || undefined,
       });
       setToken(res.token);
-      notify.success(`${template.emoji} ${res.agent.name} erstellt`);
+      notify.success(`${template.emoji} ${res.agent.name} created`);
       onCreated();
       qc.invalidateQueries({ queryKey: ["agents"] });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Fehler";
-      notify.error(`Fehler: ${msg}`);
+      const msg = e instanceof Error ? e.message : "Error";
+      notify.error(`Error: ${msg}`);
     } finally {
       pendingRef.current = false;
       setIsPending(false);
@@ -611,7 +611,7 @@ function InstantiateModal({
           style={{ borderColor: CINEMA.borderSubtle }}
         >
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {template.emoji} {template.name} — Agent erstellen
+            {template.emoji} {template.name} — Create agent
           </h2>
           <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
             <X size={16} />
@@ -636,9 +636,9 @@ function InstantiateModal({
                         border: `1px solid ${CINEMA.borderSubtle}`,
                       }}
                     >
-                      Noch kein Board vorhanden. Template-Agents brauchen ein
-                      Board — zuerst in der Sidebar über den Workspace-Switcher
-                      «Neues Board» anlegen.
+                      No board available yet. Template agents need a
+                      board — create one first in the sidebar via the
+                      workspace switcher ("New Board").
                     </div>
                   ) : (
                     <select
@@ -656,7 +656,7 @@ function InstantiateModal({
 
                 <div>
                   <label className={labelClass}>
-                    Name (optional, Standard: {template.name})
+                    Name (optional, default: {template.name})
                   </label>
                   <input
                     type="text"
@@ -670,19 +670,19 @@ function InstantiateModal({
 
                 <div>
                   <label className={labelClass}>
-                    Modell (Standard: {template.default_model ?? "keines"})
+                    Model (default: {template.default_model ?? "none"})
                   </label>
                   <ModelInput
                     value={modelOverride}
                     onChange={setModelOverride}
-                    placeholder={template.default_model ?? "Model-ID eingeben"}
+                    placeholder={template.default_model ?? "Enter model ID"}
                   />
                 </div>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
                 <button onClick={onClose} className={btnCancelClass}>
-                  Abbrechen
+                  Cancel
                 </button>
                 <button
                   onClick={handleCreate}
@@ -692,10 +692,10 @@ function InstantiateModal({
                 >
                   {isPending ? (
                     <span className="flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin" /> Erstelle...
+                      <Loader2 size={14} className="animate-spin" /> Creating...
                     </span>
                   ) : (
-                    "Agent erstellen"
+                    "Create agent"
                   )}
                 </button>
               </div>
@@ -703,10 +703,10 @@ function InstantiateModal({
           ) : (
             <>
               <div className="text-sm font-medium text-[var(--color-online)]">
-                Agent erstellt!
+                Agent created!
               </div>
               <p className="text-[11px] text-[var(--color-text-muted)]">
-                Token nur einmalig sichtbar — jetzt sichern!
+                Token visible only once — save it now!
               </p>
               <TokenDisplay token={token} />
               <div className="flex justify-end pt-2">
@@ -715,7 +715,7 @@ function InstantiateModal({
                   className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
                   style={btnPrimaryStyle}
                 >
-                  Fertig
+                  Done
                 </button>
               </div>
             </>
@@ -743,12 +743,12 @@ function AssignBoardModal({
   async function handleAssign() {
     try {
       await api.agents.assignBoard(agent.id, boardId || null);
-      notify.success(`${agent.name} Board zugewiesen`);
+      notify.success(`${agent.name} assigned to board`);
       qc.invalidateQueries({ queryKey: ["agents"] });
       onClose();
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Fehler";
-      notify.error(`Fehler: ${msg}`);
+      const msg = e instanceof Error ? e.message : "Error";
+      notify.error(`Error: ${msg}`);
     }
   }
 
@@ -769,7 +769,7 @@ function AssignBoardModal({
           style={{ borderColor: CINEMA.borderSubtle }}
         >
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {agent.emoji ?? "🤖"} {agent.name} — Board zuweisen
+            {agent.emoji ?? "🤖"} {agent.name} — Assign board
           </h2>
           <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
             <X size={16} />
@@ -783,7 +783,7 @@ function AssignBoardModal({
             className={`${inputClass} cursor-pointer`}
             style={selectStyle}
           >
-            <option value="">-- Kein Board --</option>
+            <option value="">-- No board --</option>
             {boards.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
@@ -791,14 +791,14 @@ function AssignBoardModal({
 
           <div className="flex justify-end gap-2">
             <button onClick={onClose} className={btnCancelClass}>
-              Abbrechen
+              Cancel
             </button>
             <button
               onClick={handleAssign}
               className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer transition-all"
               style={btnPrimaryStyle}
             >
-              Zuweisen
+              Assign
             </button>
           </div>
         </div>
@@ -840,7 +840,7 @@ function DeleteAgentModal({
             <Trash2 size={18} className="text-[var(--color-status-error)]" />
           </div>
           <div>
-            <div className="font-medium text-[var(--color-text-primary)]">Agent loschen?</div>
+            <div className="font-medium text-[var(--color-text-primary)]">Delete agent?</div>
             <div className="text-sm text-[var(--color-text-muted)]">
               {agent.emoji} {agent.name}
             </div>
@@ -848,8 +848,8 @@ function DeleteAgentModal({
         </div>
 
         <p className="text-sm mb-2 text-[var(--color-text-secondary)]">
-          Diese Aktion kann nicht ruckgangig gemacht werden. Chat-Verlauf und Metriken gehen
-          ebenfalls verloren.
+          This action cannot be undone. Chat history and metrics will
+          also be lost.
         </p>
 
         {agent.provision_status === "provisioned" && (
@@ -861,7 +861,7 @@ function DeleteAgentModal({
               border: `1px solid ${CINEMA.warningBorder}`,
             }}
           >
-            Gateway-Session wird zuruckgesetzt.
+            Gateway session will be reset.
           </p>
         )}
 
@@ -874,7 +874,7 @@ function DeleteAgentModal({
               border: `1px solid ${CINEMA.border}`,
             }}
           >
-            Abbrechen
+            Cancel
           </button>
           <button
             onClick={onConfirm}
@@ -883,7 +883,7 @@ function DeleteAgentModal({
             style={{ backgroundColor: C.error }}
           >
             {isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-            Loschen
+            Delete
           </button>
         </div>
       </motion.div>
@@ -990,7 +990,7 @@ function TemplatesTab({
                   className="w-full text-xs px-3 py-2 rounded-xl font-medium cursor-pointer transition-all text-white"
                   style={btnPrimaryStyle}
                 >
-                  Agent erstellen
+                  Create agent
                 </button>
               </div>
             </GlassCard>
@@ -999,7 +999,7 @@ function TemplatesTab({
 
         {!templates?.length && (
           <div className="col-span-3 py-12 text-center text-sm text-[var(--color-text-muted)]">
-            Keine Templates gefunden.
+            No templates found.
           </div>
         )}
       </div>
@@ -1093,7 +1093,7 @@ function AgentRosterRow({
       {/* Name + role = row link (covers the row via ::after) */}
       <Link
         href={`/agents/${agent.id}`}
-        aria-label={`Agent öffnen: ${agent.name}`}
+        aria-label={`Open agent: ${agent.name}`}
         className="min-w-0 flex-1 after:absolute after:inset-0 after:content-['']"
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -1114,7 +1114,7 @@ function AgentRosterRow({
                 border: `1px solid ${boardName ? CINEMA.borderSubtle : `${C.warning}4D`}`,
               }}
             >
-              {boardName ?? "Kein Board"}
+              {boardName ?? "No board"}
             </span>
           )}
         </span>
@@ -1142,7 +1142,7 @@ function AgentRosterRow({
       <span
         className="text-[11px] tabular-nums w-9 text-right shrink-0 max-sm:hidden"
         style={{ color: "var(--color-text-secondary)" }}
-        title={`${agent.total_tasks_completed} Tasks erledigt`}
+        title={`${agent.total_tasks_completed} tasks completed`}
       >
         {agent.total_tasks_completed}
       </span>
@@ -1150,7 +1150,7 @@ function AgentRosterRow({
       {/* Actions — above the row overlay */}
       <button
         onClick={() => onMenu(agent)}
-        aria-label={`Aktionen für ${agent.name}`}
+        aria-label={`Actions for ${agent.name}`}
         className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
         style={{ color: C.textMuted }}
       >
@@ -1204,7 +1204,7 @@ function AgentActionsSheet({
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-label={`Aktionen: ${agent.name}`}
+        aria-label={`Actions: ${agent.name}`}
         initial={{ opacity: 0, y: 32 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 32 }}
@@ -1251,7 +1251,7 @@ function AgentActionsSheet({
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.5rem)" }}
         >
           <Link href={`/agents/${agent.id}`} className={itemCls} style={{ color: "var(--color-text-primary)" }}>
-            <Bot size={15} style={{ color: C.accent }} /> Details öffnen
+            <Bot size={15} style={{ color: C.accent }} /> Open details
           </Link>
           <Link href={`/agents/${agent.id}?tab=config`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
             <Settings size={15} /> Config
@@ -1283,7 +1283,7 @@ function AgentActionsSheet({
               className={itemCls}
               style={{ color: "var(--color-text-secondary)" }}
             >
-              <Layout size={15} /> Board zuweisen{boardName ? ` (${boardName})` : ""}
+              <Layout size={15} /> Assign board{boardName ? ` (${boardName})` : ""}
             </button>
           )}
           <button
@@ -1291,7 +1291,7 @@ function AgentActionsSheet({
             className={itemCls}
             style={{ color: C.error }}
           >
-            <Trash2 size={15} /> Agent löschen
+            <Trash2 size={15} /> Delete agent
           </button>
         </div>
       </motion.div>
@@ -1353,12 +1353,12 @@ export default function AgentsPage() {
       if (result.reply) {
         notify.success(`${agent.emoji ?? "🤖"} ${agent.name}: ${result.reply}`);
       } else {
-        notify.info(`${agent.name}: Trigger gesendet, keine Antwort erhalten.`);
+        notify.info(`${agent.name}: Trigger sent, no reply received.`);
       }
       qc.invalidateQueries({ queryKey: ["agents"] });
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unbekannter Fehler";
-      notify.error(`Trigger fehlgeschlagen: ${msg}`);
+      const msg = e instanceof Error ? e.message : "Unknown error";
+      notify.error(`Trigger failed: ${msg}`);
     } finally {
       setTriggeringId(null);
     }
@@ -1380,12 +1380,12 @@ export default function AgentsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => api.agents.delete(id),
     onSuccess: () => {
-      notify.success("Agent geloscht");
+      notify.success("Agent deleted");
       setDeletingAgent(null);
       qc.invalidateQueries({ queryKey: ["agents"] });
     },
     onError: () => {
-      notify.error("Loschen fehlgeschlagen");
+      notify.error("Delete failed");
       setDeletingAgent(null);
     },
   });
@@ -1431,7 +1431,7 @@ export default function AgentsPage() {
               style={btnPrimaryStyle}
             >
               <Plus size={14} />
-              Neuer Agent
+              New Agent
             </button>
           </div>
         </div>
@@ -1494,7 +1494,7 @@ export default function AgentsPage() {
                 }}
               >
                 <Layout size={12} />
-                {showAllAgents ? "Alle Agents" : "Nur dieses Board"}
+                {showAllAgents ? "All Agents" : "This board only"}
                 <ChevronDown
                   size={12}
                   className="transition-transform"
@@ -1503,7 +1503,7 @@ export default function AgentsPage() {
               </button>
               {showAllAgents && (
                 <span className="text-[11px] text-[var(--color-text-muted)]">
-                  Registry-Ansicht — zeigt alle Agents aus allen Boards
+                  Registry view — shows all agents across all boards
                 </span>
               )}
             </div>
@@ -1542,8 +1542,8 @@ export default function AgentsPage() {
               <GlassCard className="py-16 text-center">
                 <p className="text-sm text-[var(--color-text-muted)]">
                   {showAllAgents
-                    ? "Keine Agents gefunden."
-                    : "Keine Agents fur dieses Board konfiguriert."}
+                    ? "No agents found."
+                    : "No agents configured for this board."}
                 </p>
               </GlassCard>
             )}

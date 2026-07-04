@@ -170,10 +170,10 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
       await api.tasks.create(activeBoardId, apiPayload);
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["pipeline"] });
-      notify.success("Auftrag erstellt");
+      notify.success("Task created");
       resetForm();
     } catch (err) {
-      const msg = err instanceof Error && err.message ? err.message : "Fehler beim Erstellen";
+      const msg = err instanceof Error && err.message ? err.message : "Failed to create";
       notify.error(msg);
     } finally {
       setLoading(false);
@@ -191,8 +191,8 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
       <button
         onClick={() => setOpen(true)}
         disabled={!activeBoardId}
-        aria-label="Neuer Auftrag"
-        title="Neuer Auftrag"
+        aria-label="New task"
+        title="New task"
         className="flex items-center justify-center min-h-touch min-w-touch rounded-lg transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
         style={{
           color: C.accent,
@@ -253,7 +253,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                 <div className="flex items-center gap-2">
-                  <span id="create-task-title" className="text-sm font-semibold" style={{ color: C.textPrimary }}>Neuer Auftrag</span>
+                  <span id="create-task-title" className="text-sm font-semibold" style={{ color: C.textPrimary }}>New task</span>
                   {currentTemplate && (
                     <span
                       className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-medium"
@@ -268,7 +268,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     </span>
                   )}
                 </div>
-                <button onClick={resetForm} aria-label="Schließen" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
+                <button onClick={resetForm} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
                   <X size={16} />
                 </button>
               </div>
@@ -293,7 +293,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               {/* Footer */}
               <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
                 <span className="text-[10px]" style={{ color: C.textMuted }}>
-                  Cmd+Enter = erstellen · Esc = schliessen
+                  Cmd+Enter = create · Esc = close
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -302,7 +302,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     className="px-3.5 py-1.5 text-[11px] rounded-lg cursor-pointer transition-colors"
                     style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
                   >
-                    Abbrechen
+                    Cancel
                   </button>
                   <button
                     type="button"
@@ -316,7 +316,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     }}
                   >
                     <Send size={11} />
-                    {loading ? "..." : "Auftrag erstellen"}
+                    {loading ? "..." : "Create task"}
                   </button>
                 </div>
               </div>

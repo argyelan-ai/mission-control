@@ -123,7 +123,7 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
             {(d.source_depth ?? 0) > 0 && d.source_task_title && (
               <span
                 className="text-[9px] px-1.5 py-0.5 rounded shrink-0 truncate"
-                title={`Von Subtask: ${d.source_task_title}`}
+                title={`From subtask: ${d.source_task_title}`}
                 style={{
                   background: C.accentSubtle,
                   color: C.accent,
@@ -162,7 +162,7 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
               <button
                 onClick={(e) => { e.stopPropagation(); reveal(); }}
                 className="flex items-center gap-1 mt-0.5 text-left hover:underline cursor-pointer"
-                title="Im Finder anzeigen"
+                title="Show in Finder"
               >
                 <span className="text-[10px] font-mono truncate" style={{ color: C.textMuted }}>{d.path}</span>
               </button>
@@ -187,8 +187,8 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
               onClick={openWithApp}
               className="text-[10px] cursor-pointer hover:underline shrink-0"
               style={{ color: C.accent }}
-              title="Mit Standard-App öffnen"
-              aria-label="Mit Standard-App öffnen"
+              title="Open with default app"
+              aria-label="Open with default app"
             >
               <FolderOpen size={12} />
             </button>

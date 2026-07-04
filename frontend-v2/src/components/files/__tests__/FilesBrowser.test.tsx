@@ -108,11 +108,11 @@ describe("FilesBrowser", () => {
       <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
     );
     await screen.findByText("a.txt");
-    const sizeHeader = screen.getByText("Grösse").closest("th")!;
+    const sizeHeader = screen.getByText("Size").closest("th")!;
     expect(sizeHeader).toHaveAttribute("aria-sort", "none");
-    await userEvent.click(screen.getByText("Grösse"));
+    await userEvent.click(screen.getByText("Size"));
     expect(sizeHeader).toHaveAttribute("aria-sort", "ascending");
-    await userEvent.click(screen.getByText("Grösse"));
+    await userEvent.click(screen.getByText("Size"));
     expect(sizeHeader).toHaveAttribute("aria-sort", "descending");
   });
 
@@ -132,9 +132,9 @@ describe("FilesBrowser", () => {
     );
     await screen.findByText("a.txt");
     // Two files → two per-file checkboxes; folder has none.
-    expect(screen.getByRole("checkbox", { name: "a.txt auswählen" })).toBeInTheDocument();
-    expect(screen.getByRole("checkbox", { name: "b.txt auswählen" })).toBeInTheDocument();
-    expect(screen.queryByRole("checkbox", { name: "dir auswählen" })).not.toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select a.txt" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "Select b.txt" })).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: "Select dir" })).not.toBeInTheDocument();
   });
 
   it("toggling a file checkbox calls onToggleSelect(subpath, true)", async () => {
@@ -150,7 +150,7 @@ describe("FilesBrowser", () => {
       />
     );
     await screen.findByText("readme.md");
-    await userEvent.click(screen.getByRole("checkbox", { name: "readme.md auswählen" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select readme.md" }));
     expect(onToggleSelect).toHaveBeenCalledWith("docs/readme.md", true);
   });
 
@@ -171,7 +171,7 @@ describe("FilesBrowser", () => {
       />
     );
     await screen.findByText("a.txt");
-    await userEvent.click(screen.getByRole("checkbox", { name: "Alle Dateien auswählen" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select all files" }));
     expect(onToggleSelectAll).toHaveBeenCalledWith(["a.txt", "b.txt"], true);
   });
 
@@ -187,7 +187,7 @@ describe("FilesBrowser", () => {
       />
     );
     await screen.findByText("a.txt");
-    const header = screen.getByRole("checkbox", { name: "Alle Dateien auswählen" }) as HTMLInputElement;
+    const header = screen.getByRole("checkbox", { name: "Select all files" }) as HTMLInputElement;
     expect(header.indeterminate).toBe(true);
     expect(header.checked).toBe(false);
   });
@@ -206,7 +206,7 @@ describe("FilesBrowser", () => {
       />
     );
     await screen.findByText("a.txt");
-    await userEvent.click(screen.getByRole("checkbox", { name: "a.txt auswählen" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Select a.txt" }));
     expect(onNavigate).not.toHaveBeenCalled();
     expect(onSelectFile).not.toHaveBeenCalled();
   });

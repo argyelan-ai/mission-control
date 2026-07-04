@@ -5,7 +5,7 @@
  *
  * - Image MIME → 120×80 image preview (auth-fetched as blob → object URL).
  *   Click opens the lightbox.
- * - Non-image MIME (PDF, etc.) → 80×80 icon-card with original_name + "Öffnen" link.
+ * - Non-image MIME (PDF, etc.) → 80×80 icon-card with original_name + "Open" link.
  * - Lazy-loaded (`loading="lazy"`).
  * - Framer Motion stagger entry; respects `useReducedMotion`.
  * - The operator's Design-DNA: glass surface (rgba), no Inter/Roboto/Arial, off-black bg.
@@ -81,7 +81,7 @@ export function AttachmentThumb({
           type="button"
           onClick={() => objectUrl && onClickImage?.(objectUrl, attachment)}
           className="block w-[120px] h-[80px]"
-          aria-label={`Bild "${attachment.original_name}" vergrössern`}
+          aria-label={`Enlarge image "${attachment.original_name}"`}
         >
           {objectUrl ? (
             <img
@@ -103,7 +103,7 @@ export function AttachmentThumb({
           rel="noreferrer noopener"
           className="flex flex-col items-center justify-center w-[80px] h-[80px] text-center p-1 text-[10px]"
           style={{ color: "rgba(255,255,255,0.7)" }}
-          title={`Öffnen: ${attachment.original_name}`}
+          title={`Open: ${attachment.original_name}`}
         >
           <FileText size={20} aria-hidden />
           <span className="mt-1 truncate max-w-full" title={attachment.original_name}>
@@ -121,13 +121,13 @@ export function AttachmentThumb({
         <button
           type="button"
           onClick={() => {
-            if (window.confirm(`Anhang "${attachment.original_name}" löschen?`)) {
+            if (window.confirm(`Delete attachment "${attachment.original_name}"?`)) {
               onDelete(filename);
             }
           }}
           className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity touch-visible"
           style={{ background: "rgba(239,68,68,0.8)" }}
-          aria-label={`Anhang ${attachment.original_name} löschen`}
+          aria-label={`Delete attachment ${attachment.original_name}`}
         >
           <X size={12} className="text-white" />
         </button>

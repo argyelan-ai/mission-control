@@ -71,7 +71,7 @@ describe("TrashView", () => {
     const invalidate = vi.spyOn(qc, "invalidateQueries");
 
     await screen.findByText("a.pdf");
-    await userEvent.click(screen.getByRole("button", { name: /Wiederherstellen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Restore/ }));
 
     await waitFor(() => expect(restore).toHaveBeenCalledWith([ENTRY_A.trash_id]));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["files-trash"] });
@@ -84,7 +84,7 @@ describe("TrashView", () => {
     vi.spyOn(api.files.trash, "list").mockResolvedValue({ entries: [] });
     renderWithQuery(<TrashView />);
 
-    expect(await screen.findByText("Papierkorb ist leer")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Papierkorb leeren/ })).not.toBeInTheDocument();
+    expect(await screen.findByText("Trash is empty")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Empty trash/ })).not.toBeInTheDocument();
   });
 });

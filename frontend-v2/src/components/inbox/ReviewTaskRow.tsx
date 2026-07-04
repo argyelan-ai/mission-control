@@ -61,7 +61,7 @@ function InlineCommentCard({
           </span>
         )}
         <span className="text-[10px] text-[var(--color-text-muted)]">
-          {agent ? `${agent.emoji ?? "🤖"} ${agent.name}` : comment.author_type === "user" ? "👤 Du" : "Agent"}
+          {agent ? `${agent.emoji ?? "🤖"} ${agent.name}` : comment.author_type === "user" ? "👤 You" : "Agent"}
         </span>
         <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
           {timeAgo(comment.created_at)}
@@ -204,7 +204,7 @@ export function ReviewTaskRow({
               {comments && comments.length > 0 && (
                 <div className="mt-3 ml-5 flex flex-col gap-2">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-                    Verlauf ({comments.length})
+                    History ({comments.length})
                   </div>
                   {comments.map((c) => (
                     <InlineCommentCard key={c.id} comment={c} agentMap={agentMap} />
@@ -214,7 +214,7 @@ export function ReviewTaskRow({
 
               {comments && comments.length === 0 && (
                 <div className="mt-3 ml-5 text-[11px] text-[var(--color-text-muted)]">
-                  Keine Comments vorhanden.
+                  No comments yet.
                 </div>
               )}
 
@@ -225,7 +225,7 @@ export function ReviewTaskRow({
                   className="inline-flex items-center gap-1 text-[11px] transition-colors"
                   style={{ color: C.accent }}
                 >
-                  <ExternalLink size={11} /> In Tasks anzeigen
+                  <ExternalLink size={11} /> View in Tasks
                 </Link>
               </div>
             </motion.div>
@@ -290,7 +290,7 @@ export function ReviewTaskRow({
               <XCircle size={13} /> Reject
             </button>
             <button
-              onClick={() => onDecision("hold", "On hold -- warte auf Klaerung")}
+              onClick={() => onDecision("hold", "On hold -- waiting for clarification")}
               disabled={loading}
               className="flex items-center gap-1.5 text-[12px] px-3.5 py-2 rounded-xl cursor-pointer transition-all disabled:opacity-50"
               style={{
@@ -316,7 +316,7 @@ export function ReviewTaskRow({
                     setShowApproveInput(false);
                   }
                 }}
-                placeholder="Begruendung... (Enter to approve)"
+                placeholder="Reason... (Enter to approve)"
                 aria-label="Approve comment"
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{
@@ -355,7 +355,7 @@ export function ReviewTaskRow({
                     setShowRejectInput(false);
                   }
                 }}
-                placeholder="Feedback fuer Developer... (Enter to send)"
+                placeholder="Feedback for developer... (Enter to send)"
                 aria-label="Reject comment"
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{

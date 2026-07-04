@@ -64,7 +64,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
   if (!events.length) {
     return (
       <div className={cn("text-sm text-[var(--color-text-muted)] py-6 text-center", className)}>
-        Keine Aktivitaeten
+        No activity
       </div>
     );
   }

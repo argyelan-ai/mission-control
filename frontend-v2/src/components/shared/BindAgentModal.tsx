@@ -75,10 +75,10 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                 >
                   <div>
                     <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                      Agent binden
+                      Bind agent
                     </h2>
                     <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                      Ziel-Runtime: <span className="font-mono">{runtime.display_name}</span>
+                      Target runtime: <span className="font-mono">{runtime.display_name}</span>
                     </div>
                   </div>
                   <button
@@ -93,12 +93,12 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                   {isLoading && (
                     <div className="flex items-center gap-2 p-3 text-[12px] text-[var(--color-text-muted)]">
                       <Loader2 size={12} className="animate-spin" />
-                      Lade cli-bridge Agents…
+                      Loading cli-bridge agents…
                     </div>
                   )}
                   {!isLoading && agents.length === 0 && (
                     <div className="p-4 text-[12px] text-[var(--color-text-muted)] text-center">
-                      Keine cli-bridge Agents verfügbar.
+                      No cli-bridge agents available.
                     </div>
                   )}
                   <ul className="space-y-1">
@@ -151,11 +151,11 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                     paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
                   }}
                 >
-                  Tipp: Im{" "}
+                  Tip: you can also control runtime switches per agent in the{" "}
                   <Link href="/agents" className="underline hover:text-[var(--color-text-secondary)]">
-                    Agents-Bereich
-                  </Link>{" "}
-                  kannst du Runtime-Switches auch pro Agent steuern.
+                    Agents section
+                  </Link>
+                  .
                 </div>
             </motion.div>
           </motion.div>

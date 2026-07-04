@@ -21,7 +21,7 @@ function formatNextRun(iso: string | null): string {
   const target = new Date(iso);
   const now = new Date();
   const diffMs = target.getTime() - now.getTime();
-  if (diffMs <= 0) return "jetzt";
+  if (diffMs <= 0) return "now";
 
   const diffMin = Math.floor(diffMs / 60000);
   const sameDay =
@@ -32,7 +32,7 @@ function formatNextRun(iso: string | null): string {
   const mm = String(target.getMinutes()).padStart(2, "0");
 
   if (diffMin < 60) return `in ${diffMin}m`;
-  if (sameDay) return `heute ${hh}:${mm}`;
+  if (sameDay) return `today ${hh}:${mm}`;
 
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -40,7 +40,7 @@ function formatNextRun(iso: string | null): string {
     target.getFullYear() === tomorrow.getFullYear() &&
     target.getMonth() === tomorrow.getMonth() &&
     target.getDate() === tomorrow.getDate();
-  if (isTomorrow) return `morgen ${hh}:${mm}`;
+  if (isTomorrow) return `tomorrow ${hh}:${mm}`;
 
   const diffH = Math.round(diffMin / 60);
   if (diffH < 48) return `in ${diffH}h`;
@@ -88,7 +88,7 @@ export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
     >
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <p className="text-sm" style={{ color: C.textMuted }}>
-          Geplante Jobs — Cron, Intervalle, eigene Wochentage.
+          Scheduled jobs — cron, intervals, custom weekdays.
         </p>
         <button
           type="button"
@@ -100,25 +100,25 @@ export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
           }}
         >
           <Plus size={16} />
-          Neuer Job
+          New job
         </button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <KPICard
-          label="Aktive Jobs"
+          label="Active Jobs"
           value={stats.enabled}
           icon={Activity}
         />
         <KPICard
-          label="Laeuft gerade"
+          label="Running now"
           value={stats.running}
           icon={Zap}
           trend={stats.running > 0 ? "up" : undefined}
         />
-        <KPICard label="Naechster Lauf" value={stats.nextRun} icon={Clock} />
+        <KPICard label="Next run" value={stats.nextRun} icon={Clock} />
         <KPICard
-          label="Fehler (7d)"
+          label="Errors (7d)"
           value={stats.failed}
           icon={AlertTriangle}
           trend={stats.failed > 0 ? "down" : undefined}

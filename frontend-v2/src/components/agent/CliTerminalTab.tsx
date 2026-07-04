@@ -51,12 +51,12 @@ function useTerminalWebSocket(
     };
 
     ws.onerror = () => {
-      term.writeln("\r\n\x1b[31m[Verbindungsfehler]\x1b[0m");
+      term.writeln("\r\n\x1b[31m[Connection error]\x1b[0m");
     };
 
     ws.onclose = (evt) => {
       if (evt.code !== 1000) {
-        term.writeln("\r\n\x1b[33m[Session getrennt]\x1b[0m");
+        term.writeln("\r\n\x1b[33m[Session disconnected]\x1b[0m");
       }
     };
 
@@ -93,10 +93,10 @@ function SessionList({
   const restartWorkerMutation = useMutation({
     mutationFn: () => api.agents.restartWorker(agentId),
     onSuccess: () => {
-      notify.success("Worker neu gestartet");
+      notify.success("Worker restarted");
       qc.invalidateQueries({ queryKey: ["cli-sessions", agentId] });
     },
-    onError: (e: Error) => notify.error(`Restart fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Restart failed: ${e.message}`),
   });
 
   if (isLoading) {
@@ -116,7 +116,7 @@ function SessionList({
         <button
           onClick={() => restartWorkerMutation.mutate()}
           disabled={restartWorkerMutation.isPending}
-          title="Worker neu starten"
+          title="Restart worker"
           className="flex items-center gap-1 text-[9px] text-[var(--color-text-muted)] hover:text-[#B8870A] transition-colors disabled:opacity-40"
         >
           <RotateCcw size={10} className={restartWorkerMutation.isPending ? "animate-spin" : ""} />
@@ -126,7 +126,7 @@ function SessionList({
       {sessions.length === 0 && (
         <div className="flex flex-col items-center justify-center py-8 gap-2 px-4 text-center">
           <MonitorOff size={20} className="text-[var(--color-text-muted)] opacity-30" />
-          <p className="text-[10px] text-[var(--color-text-muted)]">Keine aktiven Sessions</p>
+          <p className="text-[10px] text-[var(--color-text-muted)]">No active sessions</p>
         </div>
       )}
       {sessions.map((s) => {
@@ -169,12 +169,12 @@ function SessionList({
             <button
               onClick={(e) => {
                 e.stopPropagation();
-                if (confirm(`Session ${s.session} beenden?`)) {
+                if (confirm(`End session ${s.session}?`)) {
                   killMutation.mutate(s.task_id);
                 }
               }}
               className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded text-[var(--color-text-muted)] hover:text-red-400 touch-visible"
-              title="Session beenden"
+              title="End session"
             >
               <Square size={10} />
             </button>
@@ -250,7 +250,7 @@ function TerminalPanel({
           style={{ background: C.online }}
         />
         <span className="text-[10px] text-[var(--color-text-muted)] font-mono">
-          {taskId.slice(0, 8)} · session aktiv
+          {taskId.slice(0, 8)} · session active
         </span>
       </div>
 
@@ -272,7 +272,7 @@ function TerminalPanel({
           onKeyDown={(e) => {
             if (e.key === "Enter") handleSend();
           }}
-          placeholder="Befehl eingeben, z.B. /compact"
+          placeholder="Enter a command, e.g. /compact"
           className="flex-1 bg-transparent text-[11px] font-mono text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] outline-none"
         />
         <button
@@ -330,7 +330,7 @@ export function CliTerminalTab({ agentId }: Props) {
           <TerminalPanel agentId={agentId} taskId={selectedTaskId} />
         ) : (
           <div className="flex items-center justify-center h-full text-[11px] text-[var(--color-text-muted)]">
-            Session auswählen
+            Select a session
           </div>
         )}
       </div>

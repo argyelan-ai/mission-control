@@ -18,7 +18,7 @@ type ViewMode = "grid" | "list";
 type StatusFilter = "all" | "online" | "busy" | "idle" | "offline" | "error";
 
 const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "Alle" },
+  { value: "all", label: "All" },
   { value: "online", label: "Online" },
   { value: "busy", label: "Busy" },
   { value: "idle", label: "Idle" },
@@ -105,7 +105,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
       {filteredAgents.length === 0 ? (
         <GlassCard className="py-16 text-center">
           <p className="text-sm text-[var(--color-text-muted)]">
-            Keine Agents gefunden
+            No agents found
           </p>
         </GlassCard>
       ) : viewMode === "grid" ? (

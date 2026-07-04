@@ -33,17 +33,17 @@ function OperatorBriefing({ task }: { task: Task }) {
   if (!task.intake_mode) return null;
 
   const fields: { label: string; value: string | null | undefined }[] = [
-    { label: "Typ", value: task.request_kind },
+    { label: "Type", value: task.request_kind },
     { label: "Output", value: task.desired_output },
-    { label: "Nicht im Scope", value: task.scope_out },
-    { label: "Risiken", value: task.risk_notes },
-    { label: "Kriterien", value: task.acceptance_criteria },
-    { label: "Browser", value: task.needs_browser ? "Ja" : null },
-    { label: "Credentials", value: task.requires_auth ? "Ja" : null },
-    { label: "Freigabe", value: task.approval_policy },
-    { label: "Autonomie", value: task.autonomy_level },
+    { label: "Out of scope", value: task.scope_out },
+    { label: "Risks", value: task.risk_notes },
+    { label: "Criteria", value: task.acceptance_criteria },
+    { label: "Browser", value: task.needs_browser ? "Yes" : null },
+    { label: "Credentials", value: task.requires_auth ? "Yes" : null },
+    { label: "Approval", value: task.approval_policy },
+    { label: "Autonomy", value: task.autonomy_level },
     { label: "Links", value: task.reference_urls?.join(", ") || null },
-    { label: "Notizen", value: task.reference_notes },
+    { label: "Notes", value: task.reference_notes },
   ];
 
   const visibleFields = fields.filter((f) => f.value);
@@ -163,7 +163,7 @@ function ImageLightbox({
             onClick={onClose}
             className="absolute top-2 right-2 flex items-center justify-center w-8 h-8 rounded-full cursor-pointer"
             style={{ background: "rgba(0,0,0,0.6)", color: C.textPrimary, border: `1px solid ${C.borderActive}` }}
-            aria-label="Schließen"
+            aria-label="Close"
           >
             <X size={14} />
           </button>
@@ -191,7 +191,7 @@ function DeliverablesTab({
     return (
       <div className="flex flex-col items-center justify-center py-10 gap-2">
         <ImageIcon size={24} style={{ color: C.bgHover }} />
-        <p className="text-sm" style={{ color: C.textMuted }}>Keine Deliverables</p>
+        <p className="text-sm" style={{ color: C.textMuted }}>No deliverables</p>
       </div>
     );
   }
@@ -213,9 +213,9 @@ function DeliverablesTab({
             color: C.accent,
           }}
         >
-          <span>{deliverables.length - fromSubtasks} von diesem Task</span>
+          <span>{deliverables.length - fromSubtasks} from this task</span>
           <span style={{ color: C.textMuted }}>·</span>
-          <span>{fromSubtasks} aus Subtasks (mit ← Badge markiert)</span>
+          <span>{fromSubtasks} from subtasks (marked with ← badge)</span>
         </div>
       )}
 
@@ -254,7 +254,7 @@ function DeliverablesTab({
                   src: `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`,
                   alt: d.title,
                 })}
-                aria-label={`Screenshot anzeigen: ${d.title}`}
+                aria-label={`View screenshot: ${d.title}`}
               >
                 <AuthImage
                   src={`/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`}
@@ -793,7 +793,7 @@ export default function TaskDetailPanel({
       qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
       onClose();
     },
-    onError: (e: Error) => notify.error(`Löschen fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Delete failed: ${e.message}`),
   });
 
   // ── Data queries ──────────────────────────────────────────────────────────

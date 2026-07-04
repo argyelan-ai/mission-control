@@ -79,7 +79,7 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
           {host.display_name}
         </span>
         <span className="text-xs ml-auto" style={{ color: awake ? C.online : C.textMuted }}>
-          {awake ? "Wach" : "Schläft"}
+          {awake ? "Awake" : "Sleeping"}
         </span>
       </div>
     );
@@ -93,7 +93,7 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
       >
         <WifiOff size={13} style={{ color: C.textMuted }} />
         <span className="text-xs" style={{ color: C.textMuted }}>
-          {host.display_name} nicht erreichbar
+          {host.display_name} unreachable
         </span>
       </div>
     );
@@ -338,11 +338,11 @@ function HostFormModal({
             style={{ borderColor: "rgba(255,255,255,0.06)" }}
           >
             <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-              {host ? `Host bearbeiten — ${host.display_name}` : "Host hinzufügen"}
+              {host ? `Edit host — ${host.display_name}` : "Add host"}
             </h2>
             <button
               onClick={onClose}
-              aria-label="Schliessen"
+              aria-label="Close"
               className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer"
             >
               <X size={14} style={{ color: C.textMuted }} />
@@ -351,12 +351,12 @@ function HostFormModal({
 
           {/* Body */}
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
-            <Field label="Slug" value={form.slug} onChange={(v) => set("slug", v)} placeholder="z.B. dgx-spark" mono />
-            <Field label="Anzeigename" value={form.display_name} onChange={(v) => set("display_name", v)} placeholder="z.B. DGX Spark" />
+            <Field label="Slug" value={form.slug} onChange={(v) => set("slug", v)} placeholder="e.g. dgx-spark" mono />
+            <Field label="Display name" value={form.display_name} onChange={(v) => set("display_name", v)} placeholder="e.g. DGX Spark" />
 
             {/* Kind pills */}
             <div className="flex flex-col gap-1">
-              <span className="text-xs" style={{ color: C.textMuted }}>Typ</span>
+              <span className="text-xs" style={{ color: C.textMuted }}>Type</span>
               <div className="flex gap-1.5">
                 {(Object.keys(KIND_LABEL) as HostKind[]).map((k) => {
                   const active = form.kind === k;
@@ -381,16 +381,16 @@ function HostFormModal({
 
             {form.kind === "ssh" && (
               <>
-                <Field label="SSH Host" value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder="IP oder Hostname (z.B. 192.0.2.10)" mono />
+                <Field label="SSH Host" value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder="IP or hostname (e.g. 192.0.2.10)" mono />
                 <Field label="SSH User" value={form.ssh_user ?? ""} onChange={(v) => set("ssh_user", v)} mono />
-                <Field label="SSH Key Pfad" value={form.ssh_key_path ?? ""} onChange={(v) => set("ssh_key_path", v)} placeholder="/root/.ssh/id_ed25519" mono />
+                <Field label="SSH Key Path" value={form.ssh_key_path ?? ""} onChange={(v) => set("ssh_key_path", v)} placeholder="/root/.ssh/id_ed25519" mono />
               </>
             )}
 
             {form.kind === "flask_wol" && (
               <>
                 <Field label="Control URL" value={form.control_url ?? ""} onChange={(v) => set("control_url", v)} placeholder="http://192.0.2.20:5555" mono />
-                <Field label="WoL MAC-Adresse" value={form.wol_mac_address ?? ""} onChange={(v) => set("wol_mac_address", v)} placeholder="00:00:5E:00:53:01" mono />
+                <Field label="WoL MAC Address" value={form.wol_mac_address ?? ""} onChange={(v) => set("wol_mac_address", v)} placeholder="00:00:5E:00:53:01" mono />
               </>
             )}
 
@@ -402,13 +402,13 @@ function HostFormModal({
                   onChange={(e) => set("power_managed", e.target.checked)}
                   style={{ accentColor: C.accent }}
                 />
-                Power-managed (Box schläft bei Inaktivität)
+                Power-managed (box sleeps when idle)
               </label>
             )}
 
             <div className="flex flex-col gap-1">
               <label htmlFor="host-field-notes" className="text-xs" style={{ color: C.textMuted }}>
-                Notizen (GPU-Profil, Eigenheiten)
+                Notes (GPU profile, quirks)
               </label>
               <textarea
                 id="host-field-notes"
@@ -431,7 +431,7 @@ function HostFormModal({
                 onChange={(e) => set("enabled", e.target.checked)}
                 style={{ accentColor: C.accent }}
               />
-              Aktiviert
+              Enabled
             </label>
 
             {errorMsg && (
@@ -461,7 +461,7 @@ function HostFormModal({
               className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
               style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
             >
-              Abbrechen
+              Cancel
             </button>
             <button
               onClick={() => saveMutation.mutate()}
@@ -474,7 +474,7 @@ function HostFormModal({
               }}
             >
               {saveMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-              {host ? "Speichern" : "Hinzufügen"}
+              {host ? "Save" : "Add"}
             </button>
           </div>
         </motion.div>
@@ -543,7 +543,7 @@ function HostCard({
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs" style={{ color: host.enabled ? C.textMuted : C.textDim }}>
-              {host.enabled ? "Aktiv" : "Deaktiviert"}
+              {host.enabled ? "Active" : "Disabled"}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs tabular-nums" style={{ color: boundCount > 0 ? C.textSecondary : C.textMuted }}>
@@ -573,8 +573,8 @@ function HostCard({
         <div className="flex items-center gap-1 shrink-0 self-end sm:self-auto">
           <button
             onClick={onEdit}
-            title="Bearbeiten"
-            aria-label={`Host ${host.display_name} bearbeiten`}
+            title="Edit"
+            aria-label={`Edit host ${host.display_name}`}
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
             style={{
               background: C.borderSubtle,
@@ -587,8 +587,8 @@ function HostCard({
           <button
             onClick={onDelete}
             disabled={deletePending}
-            title="Löschen"
-            aria-label={`Host ${host.display_name} löschen`}
+            title="Delete"
+            aria-label={`Delete host ${host.display_name}`}
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
             style={{
               background: `${C.error}14`,
@@ -702,7 +702,7 @@ export function HostsSection() {
           <span>{feedback}</span>
           <button
             onClick={() => setFeedback(null)}
-            aria-label="Meldung schliessen"
+            aria-label="Dismiss message"
             className="cursor-pointer shrink-0"
             style={{ color: STATUS_TEXT.error }}
           >
@@ -714,7 +714,7 @@ export function HostsSection() {
       {!isLoading && (hosts ?? []).length === 0 && (
         <div className="flex items-center gap-2 text-xs py-6 justify-center" style={{ color: C.textMuted }}>
           <Server size={13} />
-          Keine Hosts registriert — Cloud-Runtimes brauchen keinen.
+          No hosts registered — cloud runtimes don&apos;t need one.
         </div>
       )}
 

@@ -81,8 +81,8 @@ function DayTimeline({
         style={{ borderColor: C.border }}
       >
         <p className="text-sm" style={{ color: C.textSecondary }}>
-          Heute —{" "}
-          {new Date().toLocaleDateString("de-CH", {
+          Today —{" "}
+          {new Date().toLocaleDateString("en-GB", {
             weekday: "long",
             day: "numeric",
             month: "long",
@@ -170,7 +170,7 @@ function DayTimeline({
 
 // ── Week Calendar ─────────────────────────────────────────────────────────────
 
-const WEEKDAY_LABELS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function jobRunsOnDay(job: ScheduledJob, dayIndex: number): boolean {
   if (!job.enabled) return false;
@@ -206,14 +206,14 @@ function WeekCalendar({
         style={{ borderColor: C.border }}
       >
         <p className="text-sm" style={{ color: C.textSecondary }}>
-          Diese Woche —{" "}
-          {weekStart.toLocaleDateString("de-CH", {
+          This week —{" "}
+          {weekStart.toLocaleDateString("en-GB", {
             day: "numeric",
             month: "short",
           })}{" "}
-          bis{" "}
+          to{" "}
           {new Date(weekStart.getTime() + 6 * 86400000).toLocaleDateString(
-            "de-CH",
+            "en-GB",
             { day: "numeric", month: "short" }
           )}
         </p>
@@ -322,13 +322,13 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
     <div className="flex flex-col gap-4 px-6 py-5 overflow-y-auto">
       <ScheduleHeatmap
         data={[]}
-        title="Job-Aktivität (30 Tage)"
+        title="Job Activity (30 days)"
       />
       <p
         className="text-[11px] -mt-2"
         style={{ color: C.textMuted }}
       >
-        Wähle einen Job für detaillierte Heatmap-Daten.
+        Select a job for detailed heatmap data.
       </p>
 
       <GlassCard className="p-5">
@@ -341,7 +341,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
             className="text-sm font-medium"
             style={{ color: C.textPrimary }}
           >
-            Top unzuverlässige Jobs
+            Top unreliable jobs
           </h3>
         </div>
         {unreliable.length === 0 ? (
@@ -349,7 +349,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
             className="text-xs py-6 text-center"
             style={{ color: C.textMuted }}
           >
-            Alle Jobs gesund — keine Fehler erkannt.
+            All jobs healthy — no errors detected.
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -382,7 +382,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                       className="text-[10px] mt-0.5"
                       style={{ color: C.textMuted }}
                     >
-                      Letzter Lauf {timeAgo(j.last_run_at)}
+                      Last run {timeAgo(j.last_run_at)}
                     </div>
                   )}
                 </div>
@@ -393,7 +393,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                     color: C.error,
                   }}
                 >
-                  {j.consecutive_failures ?? 0}× Fehler
+                  {j.consecutive_failures ?? 0}× errors
                 </div>
               </div>
             ))}
@@ -489,7 +489,7 @@ export default function SchedulePage() {
   const handleDelete = (id: string) => {
     const job = jobs.find((j) => j.id === id);
     if (!job) return;
-    if (confirm(`"${job.name}" wirklich löschen?`)) deleteMutation.mutate(id);
+    if (confirm(`Delete "${job.name}"?`)) deleteMutation.mutate(id);
   };
 
   const handleTrigger = (id: string) => {
@@ -517,7 +517,7 @@ export default function SchedulePage() {
   };
 
   const handleSnooze = (id: string) => {
-    const input = prompt("Für wie viele Stunden snoozen?", "1");
+    const input = prompt("Snooze for how many hours?", "1");
     if (!input) return;
     const hours = Number(input);
     if (!Number.isFinite(hours) || hours <= 0) return;
@@ -529,9 +529,9 @@ export default function SchedulePage() {
   };
 
   const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [
-    { id: "overview", label: "Übersicht", icon: Activity },
-    { id: "day", label: "Heute", icon: Clock },
-    { id: "week", label: "Woche", icon: Clock },
+    { id: "overview", label: "Overview", icon: Activity },
+    { id: "day", label: "Today", icon: Clock },
+    { id: "week", label: "Week", icon: Clock },
     { id: "health", label: "Health", icon: Heart },
   ];
 

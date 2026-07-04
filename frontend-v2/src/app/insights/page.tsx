@@ -178,10 +178,10 @@ export default function InsightsPage() {
   }
 
   const tabs = [
-    { id: "overview", label: "Übersicht" },
-    { id: "cost", label: "💰 Kosten" },
+    { id: "overview", label: "Overview" },
+    { id: "cost", label: "💰 Cost" },
     { id: "performance", label: "Performance" },
-    { id: "reports", label: "KI-Reports" },
+    { id: "reports", label: "AI Reports" },
   ] as const;
 
   return (
@@ -194,20 +194,20 @@ export default function InsightsPage() {
               Insights
             </h1>
             <p className="text-sm mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Performance · Kosten · Token-Verbrauch · KI-Analyse
+              Performance · Cost · Token Usage · AI Analysis
             </p>
           </div>
           <div className="flex items-center gap-3">
             {insights?.analyzed_at && (
               <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                Analysiert {timeAgo(insights.analyzed_at)}
+                Analyzed {timeAgo(insights.analyzed_at)}
               </span>
             )}
             <div className="relative">
               <select
                 value={days}
                 onChange={(e) => setDays(Number(e.target.value))}
-                aria-label="Zeitraum auswählen"
+                aria-label="Select time range"
                 className="appearance-none pl-3 pr-8 py-1.5 text-xs rounded-lg cursor-pointer"
                 style={{
                   background: IN_bg,
@@ -215,9 +215,9 @@ export default function InsightsPage() {
                   color: "var(--color-text-secondary)",
                 }}
               >
-                <option value={7}>7 Tage</option>
-                <option value={30}>30 Tage</option>
-                <option value={90}>90 Tage</option>
+                <option value={7}>7 days</option>
+                <option value={30}>30 days</option>
+                <option value={90}>90 days</option>
               </select>
               <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
             </div>
@@ -259,31 +259,31 @@ export default function InsightsPage() {
                 {/* KPI row */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
-                    label="Tasks erledigt"
+                    label="Tasks completed"
                     value={String(insights?.agent_performance?.reduce((s, a) => s + a.done, 0) ?? 0)}
-                    sub={`letzte ${days} Tage`}
+                    sub={`last ${days} days`}
                     icon={CheckCircle2}
                     color={C.online}
                   />
                   <KPICard
-                    label="Fehlgeschlagen"
+                    label="Failed"
                     value={String(insights?.agent_performance?.reduce((s, a) => s + a.failed, 0) ?? 0)}
-                    sub="gesamt"
+                    sub="total"
                     icon={XCircle}
                     color={C.error}
                   />
                   <KPICard
-                    label="Gesamtkosten"
+                    label="Total cost"
                     value={costs ? fmtUsd(costs.total_cost_usd) : "—"}
-                    sub={`${fmtK((costs?.total_tokens_in ?? 0) + (costs?.total_tokens_out ?? 0))} Tokens`}
+                    sub={`${fmtK((costs?.total_tokens_in ?? 0) + (costs?.total_tokens_out ?? 0))} tokens`}
                     icon={DollarSign}
                     color={C.accent}
                   />
                   <KPICard
-                    label="Anomalien"
+                    label="Anomalies"
                     value={String(insights?.anomalies?.length ?? 0)}
                     icon={AlertTriangle}
-                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? "⚠ Warnungen aktiv" : "Alles normal"}
+                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? "⚠ Warnings active" : "All normal"}
                     color={insights?.anomalies?.length ? C.warning : C.online}
                   />
                 </div>
@@ -300,30 +300,30 @@ export default function InsightsPage() {
                           <XAxis dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} />
                           <YAxis tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                          <Bar dataKey="done" name="Erledigt" stackId="a" fill="rgba(0,204,136,0.6)" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name="Fehlgeschlagen" stackId="a" fill="rgba(239,68,68,0.6)" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="done" name="Done" stackId="a" fill="rgba(0,204,136,0.6)" radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill="rgba(239,68,68,0.6)" radius={[4, 4, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <EmptyChart message="Keine Performance-Daten" />
+                      <EmptyChart message="No performance data" />
                     )}
                   </div>
 
                   <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                     <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>
-                      Kosten pro Agent (USD)
+                      Cost per agent (USD)
                     </div>
                     {agentCostData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={agentCostData} barSize={24} layout="vertical">
                           <XAxis type="number" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
                           <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={60} />
-                          <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Kosten"]} />
+                          <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Cost"]} />
                           <Bar dataKey="cost" fill={`${C.accent}B3`} radius={[0, 4, 4, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <EmptyChart message="Noch keine Kosten erfasst" />
+                      <EmptyChart message="No costs recorded yet" />
                     )}
                   </div>
                 </div>
@@ -331,7 +331,7 @@ export default function InsightsPage() {
                 {/* Anomalies */}
                 {(insights?.anomalies?.length ?? 0) > 0 && (
                   <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-3" style={{ color: "var(--color-text-secondary)" }}>Anomalien</div>
+                    <div className="text-xs font-semibold mb-3" style={{ color: "var(--color-text-secondary)" }}>Anomalies</div>
                     <div className="space-y-2">
                       {insights!.anomalies.map((a: IntelligenceAnomaly, i: number) => (
                         <div
@@ -362,27 +362,27 @@ export default function InsightsPage() {
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 {/* Totals */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-                  <KPICard label="Gesamtkosten" value={costs ? fmtUsd(costs.total_cost_usd) : "—"} sub={`letzte ${days} Tage`} icon={DollarSign} color={C.accent} />
-                  <KPICard label="Input Tokens" value={costs ? fmtK(costs.total_tokens_in) : "—"} sub="Prompt-Tokens" icon={TrendingUp} />
-                  <KPICard label="Output Tokens" value={costs ? fmtK(costs.total_tokens_out) : "—"} sub="Completion-Tokens" icon={Zap} />
+                  <KPICard label="Total cost" value={costs ? fmtUsd(costs.total_cost_usd) : "—"} sub={`last ${days} days`} icon={DollarSign} color={C.accent} />
+                  <KPICard label="Input Tokens" value={costs ? fmtK(costs.total_tokens_in) : "—"} sub="Prompt tokens" icon={TrendingUp} />
+                  <KPICard label="Output Tokens" value={costs ? fmtK(costs.total_tokens_out) : "—"} sub="Completion tokens" icon={Zap} />
                 </div>
 
                 {/* Agent table */}
                 <div className="rounded-2xl overflow-hidden mb-4" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                   <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
                     <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>
-                      Kosten pro Agent
+                      Cost per agent
                     </span>
                   </div>
                   {(costs?.agents?.length ?? 0) === 0 ? (
                     <div className="px-5 py-10 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
-                      Noch keine Kosten-Events erfasst.
+                      No cost events recorded yet.
                     </div>
                   ) : (
                     <table className="w-full">
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
-                          {["Agent", "Input Tokens", "Output Tokens", "Events", "Kosten USD"].map((h) => (
+                          {["Agent", "Input Tokens", "Output Tokens", "Events", "Cost USD"].map((h) => (
                             <th key={h} className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
                               {h}
                             </th>
@@ -419,19 +419,19 @@ export default function InsightsPage() {
                 <div className="rounded-2xl overflow-hidden" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                   <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
                     <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>
-                      Token-Verbrauch pro Session
+                      Token usage per session
                     </span>
-                    <span className="ml-2 text-[10px]" style={{ color: "var(--color-text-muted)" }}>Top 100 nach Kosten</span>
+                    <span className="ml-2 text-[10px]" style={{ color: "var(--color-text-muted)" }}>Top 100 by cost</span>
                   </div>
                   {(costs?.sessions?.length ?? 0) === 0 ? (
                     <div className="px-5 py-10 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
-                      Keine Session-Daten für diesen Zeitraum.
+                      No session data for this time range.
                     </div>
                   ) : (
                     <table className="w-full">
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
-                          {["Session", "Agent", "Input", "Output", "Kosten", "Zuletzt"].map((h) => (
+                          {["Session", "Agent", "Input", "Output", "Cost", "Last"].map((h) => (
                             <th key={h} className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>{h}</th>
                           ))}
                         </tr>
@@ -464,7 +464,7 @@ export default function InsightsPage() {
                 {/* ── Cache hit rate KPI + harness split counter ── */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4 mb-4">
                   <KPICard
-                    label="Cache-Hit-Quote"
+                    label="Cache hit rate"
                     value={cacheHitPct !== null ? `${cacheHitPct}%` : "—"}
                     sub="cache_read / (cache_read + input)"
                     icon={TrendingUp}
@@ -472,8 +472,8 @@ export default function InsightsPage() {
                   />
                   <KPICard
                     label="Harness-Split"
-                    value={harnessData.length > 0 ? `${harnessData.length} Typen` : "—"}
-                    sub={harnessData.map((h) => h.name).join(", ") || "Keine Daten"}
+                    value={harnessData.length > 0 ? `${harnessData.length} types` : "—"}
+                    sub={harnessData.map((h) => h.name).join(", ") || "No data"}
                     icon={BarChart3}
                   />
                 </div>
@@ -488,7 +488,7 @@ export default function InsightsPage() {
                       className="text-xs font-semibold uppercase tracking-wider"
                       style={{ color: "var(--color-text-secondary)" }}
                     >
-                      Tokens &amp; Kosten pro Modell
+                      Tokens &amp; cost per model
                     </span>
                   </div>
                   {(byModel?.length ?? 0) === 0 ? (
@@ -496,7 +496,7 @@ export default function InsightsPage() {
                       className="px-5 py-10 text-center text-sm"
                       style={{ color: "var(--color-text-muted)" }}
                     >
-                      Keine Modell-Daten fuer diesen Zeitraum.
+                      No model data for this time range.
                     </div>
                   ) : (
                     <div className="overflow-x-auto">
@@ -504,8 +504,8 @@ export default function InsightsPage() {
                         <thead>
                           <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                             {[
-                              "Modell", "Harness", "Input", "Output",
-                              "Cache-R", "Cache-W", "Events", "Kosten USD",
+                              "Model", "Harness", "Input", "Output",
+                              "Cache-R", "Cache-W", "Events", "Cost USD",
                             ].map((h) => (
                               <th
                                 key={h}
@@ -604,10 +604,10 @@ export default function InsightsPage() {
                     className="text-xs font-semibold mb-4"
                     style={{ color: "var(--color-text-secondary)" }}
                   >
-                    Kosten pro Tag (USD)
+                    Cost per day (USD)
                   </div>
                   {(timeseries?.length ?? 0) === 0 ? (
-                    <EmptyChart message="Keine Zeitreihen-Daten" />
+                    <EmptyChart message="No time series data" />
                   ) : (
                     <ResponsiveContainer width="100%" height={200}>
                       <AreaChart
@@ -640,12 +640,12 @@ export default function InsightsPage() {
                         />
                         <Tooltip
                           contentStyle={tooltipStyle}
-                          formatter={(v: number) => [`$${v.toFixed(4)}`, "Kosten"]}
+                          formatter={(v: number) => [`$${v.toFixed(4)}`, "Cost"]}
                         />
                         <Area
                           type="monotone"
                           dataKey="cost_usd"
-                          name="Kosten"
+                          name="Cost"
                           stroke={C.accent}
                           strokeWidth={1.5}
                           fill="url(#costGradient)"
@@ -667,7 +667,7 @@ export default function InsightsPage() {
                         className="text-xs font-semibold uppercase tracking-wider"
                         style={{ color: "var(--color-text-secondary)" }}
                       >
-                        Teuerste Tasks (Top 10)
+                        Most expensive tasks (Top 10)
                       </span>
                     </div>
                     {(byTask?.length ?? 0) === 0 ? (
@@ -675,7 +675,7 @@ export default function InsightsPage() {
                         className="px-5 py-8 text-center text-sm"
                         style={{ color: "var(--color-text-muted)" }}
                       >
-                        Keine Task-Daten.
+                        No task data.
                       </div>
                     ) : (
                       <div className="divide-y" style={{ borderColor: IN_borderSubtle }}>
@@ -704,8 +704,8 @@ export default function InsightsPage() {
                                 {t.task_title}
                               </div>
                               <div className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                                {t.event_count} Events ·{" "}
-                                {t.input_tokens.toLocaleString("de-CH")} Tokens
+                                {t.event_count} events ·{" "}
+                                {t.input_tokens.toLocaleString("de-CH")} tokens
                               </div>
                             </div>
                             <span
@@ -729,10 +729,10 @@ export default function InsightsPage() {
                       className="text-xs font-semibold mb-4"
                       style={{ color: "var(--color-text-secondary)" }}
                     >
-                      Harness-Split (nach Kosten)
+                      Harness split (by cost)
                     </div>
                     {harnessData.length === 0 ? (
-                      <EmptyChart message="Keine Harness-Daten" />
+                      <EmptyChart message="No harness data" />
                     ) : (
                       <ResponsiveContainer width="100%" height={200}>
                         <PieChart>
@@ -751,7 +751,7 @@ export default function InsightsPage() {
                           </Pie>
                           <Tooltip
                             contentStyle={tooltipStyle}
-                            formatter={(v: number) => [`$${v.toFixed(4)}`, "Kosten"]}
+                            formatter={(v: number) => [`$${v.toFixed(4)}`, "Cost"]}
                           />
                           <Legend
                             wrapperStyle={{
@@ -772,7 +772,7 @@ export default function InsightsPage() {
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                   <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Erledigt vs. Fehlgeschlagen</div>
+                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Done vs. Failed</div>
                     {agentPerfData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <BarChart data={agentPerfData}>
@@ -780,15 +780,15 @@ export default function InsightsPage() {
                           <YAxis tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
                           <Legend wrapperStyle={{ fontSize: 11, color: C.textSecondary }} />
-                          <Bar dataKey="done" name="Erledigt" stackId="a" fill="rgba(0,204,136,0.7)" />
-                          <Bar dataKey="failed" name="Fehlgeschlagen" stackId="a" fill="rgba(239,68,68,0.7)" radius={[4, 4, 0, 0]} />
+                          <Bar dataKey="done" name="Done" stackId="a" fill="rgba(0,204,136,0.7)" />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill="rgba(239,68,68,0.7)" radius={[4, 4, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
-                    ) : <EmptyChart message="Keine Daten" />}
+                    ) : <EmptyChart message="No data" />}
                   </div>
 
                   <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Fehler-Muster</div>
+                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Failure patterns</div>
                     {failureData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <PieChart>
@@ -801,7 +801,7 @@ export default function InsightsPage() {
                           <Legend wrapperStyle={{ fontSize: 11, color: C.textSecondary }} />
                         </PieChart>
                       </ResponsiveContainer>
-                    ) : <EmptyChart message="Keine Fehler-Muster" />}
+                    ) : <EmptyChart message="No failure patterns" />}
                   </div>
                 </div>
 
@@ -809,7 +809,7 @@ export default function InsightsPage() {
                 {insights?.task_durations?.per_agent && (
                   <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                     <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>
-                      Ø Task-Dauer pro Agent (Minuten)
+                      Ø Task duration per agent (minutes)
                     </div>
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart
@@ -818,7 +818,7 @@ export default function InsightsPage() {
                       >
                         <XAxis type="number" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} unit="min" />
                         <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={60} />
-                        <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, "Ø Dauer"]} />
+                        <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, "Ø duration"]} />
                         <Bar dataKey="mins" fill={`${C.info}B3`} radius={[0, 4, 4, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -838,7 +838,7 @@ export default function InsightsPage() {
                   <div className="flex flex-col items-center justify-center py-20 gap-3">
                     <BarChart3 size={32} style={{ color: "var(--color-text-muted)" }} />
                     <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                      Noch keine KI-Analysen. Intelligence-Service läuft täglich.
+                      No AI analyses yet. The intelligence service runs daily.
                     </p>
                   </div>
                 ) : (

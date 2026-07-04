@@ -10,9 +10,9 @@ import { LAYER_COLORS } from "@/components/memory/graphConfig";
 /**
  * Semantic Memory Search (Phase 3/4, 2026-04-11).
  *
- * Nutzt das neue POST /api/v1/memory/query Endpoint (Qdrant + Spark-Embedding).
- * Suche laeuft ueber alle 3 Layer (semantic/agent/episodic) und zeigt Treffer
- * mit Similarity-Score. Bei Embedding-Fail (Spark down) fallback auf ILIKE.
+ * Uses the POST /api/v1/memory/query endpoint (Qdrant + Spark embedding).
+ * Search runs across all 3 layers (semantic/agent/episodic) and shows hits
+ * with a similarity score. Falls back to ILIKE if embedding fails (Spark down).
  */
 
 type Layer = "semantic" | "agent" | "episodic";
@@ -59,7 +59,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
       });
       setResult(res as QueryResponse);
     } catch (e: any) {
-      setError(e?.message || "Query fehlgeschlagen");
+      setError(e?.message || "Query failed");
     } finally {
       setLoading(false);
     }
@@ -93,7 +93,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             if (e.key === "Enter") runQuery();
             if (e.key === "Escape") clear();
           }}
-          placeholder="Semantic Memory Search — frag das Memory (Qdrant + Spark-Embedding)..."
+          placeholder="Semantic Memory Search — ask the memory (Qdrant + Spark embedding)..."
           className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30"
         />
         {query && (
@@ -116,7 +116,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
           }}
         >
           {loading ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
-          Suchen
+          Search
         </button>
       </div>
 
@@ -142,7 +142,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
           >
             <div className="flex items-center justify-between px-1">
               <span className="text-xs text-white/40">
-                {totalHits} Treffer fuer &ldquo;{result.query}&rdquo;
+                {totalHits} hits for &ldquo;{result.query}&rdquo;
                 {result.fallback && (
                   <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
                     keyword fallback
@@ -179,7 +179,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                       >
                         <div className="flex items-start justify-between gap-2 mb-1">
                           <div className="font-medium text-white/90 truncate">
-                            {hit.title || "(Ohne Titel)"}
+                            {hit.title || "(No title)"}
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {hit.memory_type && (
@@ -210,7 +210,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
 
             {totalHits === 0 && (
               <div className="px-4 py-6 text-center text-xs text-white/30">
-                Keine Treffer — versuch eine andere Formulierung
+                No hits — try a different phrasing
               </div>
             )}
           </motion.div>

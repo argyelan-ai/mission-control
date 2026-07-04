@@ -5,7 +5,7 @@
  *
  * - Image fills max 90vw × 90vh; blurred dark overlay underneath.
  * - ESC closes (Radix default).
- * - German copy verbatim per UI-SPEC: filename · size below image; "Schliessen" aria-label.
+ * - Copy per UI-SPEC: filename · size below image; "Close" aria-label.
  */
 import * as Dialog from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
@@ -28,11 +28,11 @@ export function AttachmentLightbox({ open, src, filename, sizeKb, onClose }: Pro
         />
         <Dialog.Content
           className="fixed inset-0 z-50 flex items-center justify-center p-6"
-          aria-label="Anhang Vorschau"
+          aria-label="Attachment preview"
         >
           <Dialog.Title className="sr-only">{filename}</Dialog.Title>
           <Dialog.Description className="sr-only">
-            Bildvorschau in voller Grösse — ESC zum Schliessen.
+            Full-size image preview — press ESC to close.
           </Dialog.Description>
           {src && (
             <img
@@ -50,7 +50,7 @@ export function AttachmentLightbox({ open, src, filename, sizeKb, onClose }: Pro
           <Dialog.Close
             className="absolute top-6 right-6 p-2 rounded-full"
             style={{ background: "rgba(255,255,255,0.1)" }}
-            aria-label="Schliessen"
+            aria-label="Close"
           >
             <X size={20} className="text-white" />
           </Dialog.Close>

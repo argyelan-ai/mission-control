@@ -172,7 +172,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
         {/* Swim Lanes */}
         {visibleLanes.length === 0 ? (
           <div className="text-sm text-center py-6" style={{ color: C.textMuted }}>
-            Keine aktiven Tasks.
+            No active tasks.
           </div>
         ) : (
           <div className="flex flex-col gap-5">

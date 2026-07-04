@@ -144,17 +144,17 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
               <button onClick={() => { setEditContent(data?.content ?? ""); setDirty(false); setWriteTab("write"); setMode("edit"); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                 style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}>
-                <Pencil size={11} /> Bearbeiten
+                <Pencil size={11} /> Edit
               </button>
             )}
             {mode === "edit" && (
               <>
-                <button onClick={() => setMode("view")} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Abbrechen</button>
+                <button onClick={() => setMode("view")} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Cancel</button>
                 <button onClick={() => saveMutation.mutate(editContent)} disabled={saveMutation.isPending || !dirty}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                   style={{ background: dirty ? `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` : "rgba(255,255,255,0.05)",
                     color: dirty ? "white" : "var(--color-text-muted)", cursor: !dirty ? "default" : "pointer" }}>
-                  {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> Speichern...</> : <><Save size={11} /> Speichern</>}
+                  {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> Saving...</> : <><Save size={11} /> Save</>}
                 </button>
               </>
             )}
@@ -169,11 +169,11 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
           ) : error ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3">
               <FileText size={22} style={{ color: "var(--color-text-muted)" }} />
-              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Keine SKILL.md gefunden</p>
+              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No SKILL.md found</p>
               <button onClick={() => { setEditContent("---\nname: " + skillKey + '\ndescription: ""\n---\n\n# ' + skillKey + "\n\n"); setDirty(true); setMode("edit"); }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer"
                 style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}>
-                <FileText size={13} /> Neue SKILL.md erstellen
+                <FileText size={13} /> Create new SKILL.md
               </button>
             </div>
           ) : mode === "view" ? (
@@ -186,11 +186,11 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
                     style={{ background: writeTab === tab ? "rgba(255,255,255,0.07)" : "transparent",
                       color: writeTab === tab ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
-                    {tab === "write" ? <><Pencil size={11} /> Schreiben</> : <><Eye size={11} /> Vorschau</>}
+                    {tab === "write" ? <><Pencil size={11} /> Write</> : <><Eye size={11} /> Preview</>}
                   </button>
                 ))}
                 {dirty && <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full"
-                  style={{ background: "rgba(245,158,11,0.1)", color: C.warning, border: "1px solid rgba(245,158,11,0.2)" }}>Ungespeichert</span>}
+                  style={{ background: "rgba(245,158,11,0.1)", color: C.warning, border: "1px solid rgba(245,158,11,0.2)" }}>Unsaved</span>}
               </div>
               <div className="flex-1 overflow-hidden">
                 {writeTab === "write" ? (
@@ -198,10 +198,10 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                     spellCheck={false} className="w-full h-full px-6 py-4 text-sm outline-none resize-none"
                     style={{ background: "transparent", color: "var(--color-text-body)",
                       fontFamily: 'ui-monospace, "Cascadia Code", "Fira Code", monospace', lineHeight: 1.7, fontSize: 13 }}
-                    placeholder="Markdown hier eingeben..." />
+                    placeholder="Enter markdown here..." />
                 ) : (
                   <div className="h-full overflow-y-auto px-6 py-5">
-                    {editContent.trim() ? <MdContent content={editContent} /> : <p className="text-sm italic" style={{ color: "var(--color-text-muted)" }}>Noch kein Inhalt.</p>}
+                    {editContent.trim() ? <MdContent content={editContent} /> : <p className="text-sm italic" style={{ color: "var(--color-text-muted)" }}>No content yet.</p>}
                   </div>
                 )}
               </div>
@@ -365,13 +365,13 @@ export default function SkillsPage() {
       qc.invalidateQueries({ queryKey: ["mcp-servers"] });
       qc.invalidateQueries({ queryKey: ["agents"] });
       const affected = data.cleaned_agents.length;
-      notify.success(affected > 0 ? `Server entfernt. ${affected} Agent(s) aktualisiert.` : "Server entfernt.");
+      notify.success(affected > 0 ? `Server removed. ${affected} agent(s) updated.` : "Server removed.");
     },
-    onError: (e: Error) => notify.error(e.message ?? "Server konnte nicht entfernt werden"),
+    onError: (e: Error) => notify.error(e.message ?? "Failed to remove server"),
   });
 
   function handleMcpDelete(name: string) {
-    if (!confirm(`MCP-Server "${name}" wirklich entfernen?\nAlle Agent-Zuweisungen werden bereinigt.`)) return;
+    if (!confirm(`Really remove MCP server "${name}"?\nAll agent assignments will be cleaned up.`)) return;
     deleteMcpMutation.mutate(name);
   }
 
@@ -384,14 +384,14 @@ export default function SkillsPage() {
           <div>
             <h1 className="text-2xl font-bold tracking-tight" style={{ color: "var(--color-text-primary)" }}>Skills</h1>
             <p className="text-sm mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Skills, CLI Plugins und MCP Servers — lokal aus ~/.mc/
+              Skills, CLI plugins, and MCP servers — local from ~/.mc/
             </p>
           </div>
           {activeTab === "local" && (
             <button onClick={() => refetch()}
               className="p-2 rounded-xl cursor-pointer transition-colors"
               style={{ background: SK.bg, border: `1px solid ${C.border}`, color: "var(--color-text-muted)" }}
-              title="Aktualisieren">
+              title="Refresh">
               <RefreshCw size={14} className={isRefetching ? "animate-spin" : ""} />
             </button>
           )}
@@ -434,8 +434,8 @@ export default function SkillsPage() {
             <div className="relative mb-5" style={{ maxWidth: 400 }}>
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
               <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="Skill suchen…"
-                aria-label="Skill suchen"
+                placeholder="Search skills…"
+                aria-label="Search skills"
                 className="w-full pl-9 pr-3 py-2 text-sm rounded-xl outline-none"
                 style={{ background: SK.bg, border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }} />
               {search && (
@@ -460,9 +460,9 @@ export default function SkillsPage() {
               <div className="flex flex-col items-center justify-center py-16 gap-2">
                 <Search size={28} style={{ color: "var(--color-text-muted)" }} />
                 <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  {search ? "Keine Skills gefunden." : "Keine Skills in ~/.mc/skills/"}
+                  {search ? "No skills found." : "No skills in ~/.mc/skills/"}
                 </p>
-                {search && <button onClick={() => setSearch("")} className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Suche zurücksetzen</button>}
+                {search && <button onClick={() => setSearch("")} className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Reset search</button>}
               </div>
             ) : (
               <div className="flex flex-col gap-3">
@@ -492,12 +492,12 @@ export default function SkillsPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                {mcpServers?.length ?? 0} MCP-Server installiert · {allAgents?.length ?? 0} Agents
+                {mcpServers?.length ?? 0} MCP servers installed · {allAgents?.length ?? 0} agents
               </p>
               <button onClick={() => setShowAddMcpModal(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                 style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}>
-                <Plus size={13} /> MCP-Server hinzufügen
+                <Plus size={13} /> Add MCP server
               </button>
             </div>
             <MCPServerMatrix servers={mcpServers ?? []} agents={allAgents ?? []} showDeleteButton onDeleteServer={handleMcpDelete} />

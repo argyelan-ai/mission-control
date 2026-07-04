@@ -39,19 +39,19 @@ const STATUS_META: Record<
     bg: "rgba(255,255,255,0.03)",
   },
   validated: {
-    label: "Validiert",
+    label: "Validated",
     text: C.accent,
     border: `${C.accent}4D`,
     bg: `${C.accent}1A`,
   },
   active: {
-    label: "Aktiv",
+    label: "Active",
     text: "var(--color-status-online)",
     border: "rgba(0,204,136,0.28)",
     bg: "rgba(0,204,136,0.08)",
   },
   archived: {
-    label: "Archiv",
+    label: "Archived",
     text: "var(--color-text-muted)",
     border: "rgba(255,255,255,0.08)",
     bg: "rgba(255,255,255,0.02)",
@@ -64,7 +64,7 @@ function deliveryLabel(workflow: WorkflowTemplate): string {
     const channelName = String(config.channel_name ?? "").trim();
     return channelName ? `Discord • #${channelName}` : "Discord";
   }
-  return "Keine Delivery";
+  return "No delivery";
 }
 
 function summarize(workflows: WorkflowTemplate[]) {
@@ -77,7 +77,7 @@ function summarize(workflows: WorkflowTemplate[]) {
 }
 
 function formatDateTime(value: string | null): string {
-  if (!value) return "Noch kein Termin";
+  if (!value) return "No date scheduled";
   return new Date(value).toLocaleString("de-CH", {
     day: "2-digit",
     month: "2-digit",
@@ -87,7 +87,7 @@ function formatDateTime(value: string | null): string {
 }
 
 function formatError(error: unknown): string {
-  if (!(error instanceof Error)) return "Unbekannter Fehler";
+  if (!(error instanceof Error)) return "Unknown error";
   const raw = error.message.replace(/^API \d+:\s*/, "");
   try {
     const parsed = JSON.parse(raw) as { detail?: string };
@@ -171,7 +171,7 @@ export default function WorkflowListClient() {
   const createWorkflow = useMutation({
     mutationFn: () =>
       api.workflows.create({
-        name: `Neuer Workflow ${new Date().toLocaleTimeString("de-CH", {
+        name: `New Workflow ${new Date().toLocaleTimeString("de-CH", {
           hour: "2-digit",
           minute: "2-digit",
         })}`,
@@ -185,7 +185,7 @@ export default function WorkflowListClient() {
       }),
     onSuccess: async (workflow) => {
       await queryClient.invalidateQueries({ queryKey: ["workflows"] });
-      notify.success("Workflow angelegt");
+      notify.success("Workflow created");
       router.push(`/workflows/${workflow.id}`);
     },
     onError: (error) => notify.error(formatError(error)),
@@ -194,10 +194,10 @@ export default function WorkflowListClient() {
   const createStarter = useMutation({
     mutationFn: () => {
       if (!starterBoard) {
-        throw new Error("Bitte zuerst ein Board waehlen");
+        throw new Error("Please choose a board first");
       }
       if (!starterAgentId) {
-        throw new Error("Bitte zuerst einen provisionierten Agenten waehlen");
+        throw new Error("Please choose a provisioned agent first");
       }
       return api.workflows.create(
         buildWeeklyPlanningDigestPreset({
@@ -211,7 +211,7 @@ export default function WorkflowListClient() {
     },
     onSuccess: async (workflow) => {
       await queryClient.invalidateQueries({ queryKey: ["workflows"] });
-      notify.success("Weekly Planning Digest angelegt");
+      notify.success("Weekly Planning Digest created");
       router.push(`/workflows/${workflow.id}`);
     },
     onError: (error) => notify.error(formatError(error)),
@@ -257,13 +257,13 @@ export default function WorkflowListClient() {
               className="mt-3 text-3xl font-semibold tracking-tight"
               style={{ color: "var(--color-text-primary)" }}
             >
-              Wiederkehrende Abläufe zentral steuern
+              Manage recurring workflows in one place
             </h1>
             <p
               className="mt-2 max-w-3xl text-sm leading-6"
               style={{ color: "var(--color-text-secondary)" }}
             >
-              Hier legst du wiederkehrende Ergebnisse fest: Was soll passieren, wann soll es laufen und wohin soll das Resultat gehen.
+              Define recurring outcomes here: what should happen, when it should run, and where the result should go.
             </p>
           </div>
 
@@ -298,7 +298,7 @@ export default function WorkflowListClient() {
               ) : (
                 <Plus size={15} />
               )}
-              Leerer Workflow
+              Blank workflow
             </button>
           </div>
         </div>
@@ -306,7 +306,7 @@ export default function WorkflowListClient() {
         <div className="grid gap-3 md:grid-cols-3">
           <GlassCard className="p-4">
             <div className="text-xs uppercase tracking-[0.18em]" style={{ color: "var(--color-text-muted)" }}>
-              Aktiv
+              Active
             </div>
             <div className="mt-2 text-3xl font-semibold" style={{ color: "var(--color-status-online)" }}>
               {stats.active}
@@ -425,10 +425,10 @@ export default function WorkflowListClient() {
 
             <div>
               <label className="mb-2 block text-xs uppercase tracking-[0.14em]" style={{ color: "var(--color-text-muted)" }}>
-                Wochentag
+                Weekday
               </label>
               <select
-                aria-label="Wochentag"
+                aria-label="Weekday"
                 value={starterScheduleDay}
                 onChange={(event) => setStarterScheduleDay(event.target.value)}
                 className="w-full rounded-xl border px-3 py-2.5 text-sm"
@@ -448,11 +448,11 @@ export default function WorkflowListClient() {
 
             <div>
               <label className="mb-2 block text-xs uppercase tracking-[0.14em]" style={{ color: "var(--color-text-muted)" }}>
-                Uhrzeit
+                Time
               </label>
               <input
                 type="time"
-                aria-label="Uhrzeit"
+                aria-label="Time"
                 value={starterScheduleTime}
                 onChange={(event) => setStarterScheduleTime(event.target.value)}
                 className="w-full rounded-xl border px-3 py-2.5 text-sm"
@@ -563,7 +563,7 @@ export default function WorkflowListClient() {
           <GlassCard className="p-8">
             <div className="flex items-center gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
               <RefreshCw size={16} className="animate-spin" />
-              Workflows werden geladen...
+              Loading workflows...
             </div>
           </GlassCard>
         ) : workflows.length === 0 ? (
@@ -580,10 +580,10 @@ export default function WorkflowListClient() {
                 <GitBranch size={22} />
               </div>
               <h2 className="mt-4 text-xl font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                Noch keine Workflows angelegt
+                No workflows yet
               </h2>
               <p className="mt-2 text-sm leading-6" style={{ color: "var(--color-text-secondary)" }}>
-                Starte am besten mit dem Schnellstart oben. Falls du etwas ganz Freies bauen willst, kannst du auch mit einem leeren Workflow beginnen.
+                Best to start with the quick start above. If you want to build something completely free-form, you can also begin with a blank workflow.
               </p>
               <button
                 type="button"
@@ -599,7 +599,7 @@ export default function WorkflowListClient() {
                 ) : (
                   <Plus size={15} />
                 )}
-                Leeren Workflow anlegen
+                Create blank workflow
               </button>
             </div>
           </GlassCard>
@@ -658,7 +658,7 @@ export default function WorkflowListClient() {
                           {formatWorkflowTriggerLabel(workflow.trigger_type, workflow.trigger_config)}
                         </div>
                         <div className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                          {workflow.next_run_at ? formatDateTime(workflow.next_run_at) : "Kein nächster Lauf geplant"}
+                          {workflow.next_run_at ? formatDateTime(workflow.next_run_at) : "No next run scheduled"}
                         </div>
                       </div>
 
@@ -687,12 +687,12 @@ export default function WorkflowListClient() {
                       <div className="flex items-center gap-3" style={{ color: "var(--color-text-muted)" }}>
                         <span className="inline-flex items-center gap-1.5">
                           <PlayCircle size={13} />
-                          {workflow.trigger_type === "scheduled" ? "Automatisch" : "Auf Abruf"}
+                          {workflow.trigger_type === "scheduled" ? "Automatic" : "On demand"}
                         </span>
-                        <span>Aktualisiert {timeAgo(workflow.updated_at)}</span>
+                        <span>Updated {timeAgo(workflow.updated_at)}</span>
                       </div>
                       <span className="inline-flex items-center gap-1.5" style={{ color: C.accent }}>
-                        Öffnen
+                        Open
                         <ArrowRight size={13} />
                       </span>
                     </div>

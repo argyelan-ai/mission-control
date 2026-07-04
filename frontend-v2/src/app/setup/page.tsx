@@ -79,7 +79,7 @@ export default function SetupWizardPage() {
       setKeySaved(true);
       setStep(3);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Speichern fehlgeschlagen.");
+      setError(err instanceof Error ? err.message : "Failed to save.");
     } finally {
       setSaving(false);
     }
@@ -92,7 +92,7 @@ export default function SetupWizardPage() {
       const board = await api.boards.create({
         name: "🚀 Demo: Product Launch",
         slug: "demo-product-launch",
-        description: "Demo-Board — gefahrlos loeschbar.",
+        description: "Demo board — safe to delete.",
         objective: "Ship v1.0 publicly: site live, docs done, launch thread out.",
         color: C.accent,
       });
@@ -101,7 +101,7 @@ export default function SetupWizardPage() {
       }
       setSeeded(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Demo-Board fehlgeschlagen.");
+      setError(err instanceof Error ? err.message : "Failed to create demo board.");
     } finally {
       setSeeding(false);
     }
@@ -109,8 +109,8 @@ export default function SetupWizardPage() {
 
   const steps = [
     { n: 1, label: "Admin", done: true },
-    { n: 2, label: "Provider-Key", done: keySaved || step > 2 },
-    { n: 3, label: "Loslegen", done: false },
+    { n: 2, label: "Provider Key", done: keySaved || step > 2 },
+    { n: 3, label: "Get Started", done: false },
   ];
 
   return (
@@ -165,11 +165,11 @@ export default function SetupWizardPage() {
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  LLM-Provider verbinden
+                  Connect an LLM provider
                 </h2>
                 <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-                  Agents brauchen ein Modell. Der Key landet verschluesselt im
-                  Secrets-Vault — spaeter aenderbar unter Settings → API Keys.
+                  Agents need a model. The key is stored encrypted in the
+                  secrets vault — changeable later under Settings → API Keys.
                 </p>
               </div>
 
@@ -231,14 +231,14 @@ export default function SetupWizardPage() {
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {saving && <Loader2 className="animate-spin" size={14} />}
-                  Speichern & weiter
+                  Save & continue
                 </button>
                 <button
                   onClick={() => setStep(3)}
                   className="text-sm px-3 py-2.5 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  Ueberspringen
+                  Skip
                 </button>
               </div>
             </>
@@ -248,11 +248,11 @@ export default function SetupWizardPage() {
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  Bereit zum Loslegen
+                  Ready to get started
                 </h2>
                 <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-                  Optional: ein Demo-Board zeigt die Pipeline mit Beispiel-Tasks,
-                  bevor der erste Agent provisioniert ist.
+                  Optional: a demo board shows the pipeline with sample tasks
+                  before your first agent is provisioned.
                 </p>
               </div>
 
@@ -269,10 +269,10 @@ export default function SetupWizardPage() {
                 {seeding && <Loader2 className="animate-spin" size={14} />}
                 {seeded ? (
                   <>
-                    <Check size={14} /> Demo-Board angelegt
+                    <Check size={14} /> Demo board created
                   </>
                 ) : (
-                  "Demo-Board anlegen (8 Beispiel-Tasks)"
+                  "Create demo board (8 sample tasks)"
                 )}
               </button>
 
@@ -287,7 +287,7 @@ export default function SetupWizardPage() {
                   background: "rgba(255,255,255,0.02)",
                 }}
               >
-                Anleitung: ersten Agent provisionieren <ExternalLink size={13} />
+                Guide: provision your first agent <ExternalLink size={13} />
               </a>
 
               {error && (
@@ -308,14 +308,14 @@ export default function SetupWizardPage() {
                 className="w-full text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
               >
-                <Rocket size={14} /> Zum Leitstand
+                <Rocket size={14} /> Go to command center
               </button>
             </>
           )}
         </div>
 
         <p className="text-center text-xs mt-4" style={{ color: "var(--color-text-muted)" }}>
-          Alles hier ist spaeter unter Settings aenderbar.
+          Everything here can be changed later under Settings.
         </p>
       </motion.div>
     </main>

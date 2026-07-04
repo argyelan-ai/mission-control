@@ -125,7 +125,7 @@ export function RuntimeSwitchModal({
       onSwitched?.(result ?? null);
       onClose();
     } catch (e) {
-      setError((e as Error).message ?? "Switch fehlgeschlagen");
+      setError((e as Error).message ?? "Switch failed");
     } finally {
       setSubmitting(false);
       if (longSwitchTimer.current) {
@@ -172,7 +172,7 @@ export function RuntimeSwitchModal({
                 <div className="flex items-center gap-2">
                   <RotateCcw size={16} style={{ color: C.accent }} />
                   <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                    Runtime wechseln — {agent.name}
+                    Switch runtime — {agent.name}
                   </h2>
                 </div>
                 <button
@@ -190,7 +190,7 @@ export function RuntimeSwitchModal({
                 {previewLoading && (
                   <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-muted)]">
                     <Loader2 size={12} className="animate-spin" />
-                    Compatibility wird geprüft…
+                    Checking compatibility…
                   </div>
                 )}
                 {previewErrMsg && (
@@ -204,7 +204,7 @@ export function RuntimeSwitchModal({
                   >
                     <AlertTriangle size={13} className="mt-0.5 shrink-0" />
                     <div>
-                      <div className="font-medium">Switch geblockt</div>
+                      <div className="font-medium">Switch blocked</div>
                       <div className="opacity-80">{previewErrMsg}</div>
                     </div>
                   </div>
@@ -215,7 +215,7 @@ export function RuntimeSwitchModal({
                       {preview.old_runtime ? (
                         <MiniRuntimeChip runtime={preview.old_runtime} />
                       ) : (
-                        <span className="font-mono text-[11px] text-[var(--color-text-muted)]">— kein Runtime gesetzt —</span>
+                        <span className="font-mono text-[11px] text-[var(--color-text-muted)]">— no runtime set —</span>
                       )}
                       <span
                         className={singleInstanceBlocked ? "opacity-50 cursor-not-allowed" : ""}
@@ -245,12 +245,12 @@ export function RuntimeSwitchModal({
                         <Lock size={13} className="mt-0.5 shrink-0" />
                         <div>
                           <div className="font-medium">
-                            Single-instance runtime — switch nicht möglich
+                            Single-instance runtime — switch not possible
                           </div>
                           <div className="opacity-80">
                             {targetLocked
-                              ? "Ziel-Runtime ist single-instance und akzeptiert keine zusätzlichen Agents."
-                              : "Quell-Runtime ist single-instance und kann nicht freigegeben werden."}
+                              ? "Target runtime is single-instance and doesn't accept additional agents."
+                              : "Source runtime is single-instance and can't be released."}
                           </div>
                         </div>
                       </div>
@@ -268,11 +268,11 @@ export function RuntimeSwitchModal({
                       >
                         <Box size={13} className="mt-0.5 shrink-0" />
                         <div>
-                          <div className="font-medium">Container-Image wird gewechselt</div>
+                          <div className="font-medium">Container image will change</div>
                           <div className="opacity-80">
-                            Wechsel zwischen claude-code und openclaude — Container wird mit
+                            Switching between claude-code and openclaude — the container is
                             <code className="font-mono mx-1">--force-recreate</code>
-                            neu gebaut. Erwartete Dauer ~30–90s.
+                            rebuilt. Expected duration ~30–90s.
                           </div>
                         </div>
                       </div>
@@ -290,7 +290,7 @@ export function RuntimeSwitchModal({
                       >
                         <div className="flex items-center gap-1.5 font-medium">
                           <AlertTriangle size={12} />
-                          Hinweise
+                          Notes
                         </div>
                         <ul className="list-disc pl-5 opacity-90">
                           {preview.warnings.map((w, i) => (
@@ -314,11 +314,11 @@ export function RuntimeSwitchModal({
                   >
                     <div className="flex items-center gap-1.5 font-medium">
                       <Zap size={12} />
-                      Agent bearbeitet aktive Task
+                      Agent is working on an active task
                     </div>
                     <div className="opacity-80">
-                      <span className="font-mono">{agent.current_task_id?.slice(0, 8)}</span> läuft.
-                      Switch ohne Force ist 409. Aktive Session geht verloren.
+                      <span className="font-mono">{agent.current_task_id?.slice(0, 8)}</span> is running.
+                      Switch without force returns 409. The active session will be lost.
                     </div>
                     <label className="flex items-center gap-2 cursor-pointer pt-1">
                       <input
@@ -327,7 +327,7 @@ export function RuntimeSwitchModal({
                         onChange={(e) => setForceWhenInProgress(e.target.checked)}
                         className="w-3.5 h-3.5 cursor-pointer"
                       />
-                      <span>Trotzdem switchen (Force)</span>
+                      <span>Switch anyway (force)</span>
                     </label>
                   </div>
                 )}
@@ -336,7 +336,7 @@ export function RuntimeSwitchModal({
                 {longSwitch && (
                   <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
                     <Loader2 size={12} className="animate-spin" />
-                    Container wird neu gebaut, ~60s…
+                    Rebuilding container, ~60s…
                   </div>
                 )}
 
@@ -363,7 +363,7 @@ export function RuntimeSwitchModal({
                   className="text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
                   style={{ color: "var(--color-text-secondary)" }}
                 >
-                  Abbrechen
+                  Cancel
                 </button>
                 <button
                   onClick={handleSubmit}
@@ -375,7 +375,7 @@ export function RuntimeSwitchModal({
                   }
                   title={
                     singleInstanceBlocked
-                      ? "Single-instance runtime — switch nicht möglich"
+                      ? "Single-instance runtime — switch not possible"
                       : undefined
                   }
                   className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"

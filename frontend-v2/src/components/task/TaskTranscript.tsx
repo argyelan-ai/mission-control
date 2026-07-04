@@ -189,7 +189,7 @@ export function TaskTranscript({ taskId, isLive }: TaskTranscriptProps) {
   if (isLoading) {
     return (
       <div className="text-xs" style={{ color: C.textMuted }}>
-        Lade Transcript...
+        Loading transcript...
       </div>
     );
   }
@@ -197,7 +197,7 @@ export function TaskTranscript({ taskId, isLive }: TaskTranscriptProps) {
   if (!data || data.transcript_mode === "unavailable") {
     return (
       <div className="text-xs" style={{ color: C.textMuted }}>
-        Kein Transcript verfuegbar.
+        No transcript available.
       </div>
     );
   }
@@ -224,19 +224,19 @@ export function TaskTranscript({ taskId, isLive }: TaskTranscriptProps) {
           <>
             <Info size={10} />
             <span>
-              Letzte bekannte Session
+              Last known session
               {data.session_role ? ` (${data.session_role})` : ""}
             </span>
           </>
         ) : (
-          <span>Aktuelle Session</span>
+          <span>Current session</span>
         )}
       </div>
 
       {/* Messages */}
       {data.messages.length === 0 ? (
         <div className="text-xs" style={{ color: C.textMuted }}>
-          Session leer -- noch keine Nachrichten.
+          Session empty -- no messages yet.
         </div>
       ) : (
         data.messages.map((msg, i) => (

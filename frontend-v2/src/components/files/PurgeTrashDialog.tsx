@@ -39,11 +39,11 @@ export function PurgeTrashDialog({
       qc.invalidateQueries({ queryKey: ["files-trash"] });
       qc.invalidateQueries({ queryKey: ["files-list"] });
       qc.invalidateQueries({ queryKey: ["files-roots"] });
-      notify.success(`${res.purged.length} endgültig gelöscht`);
+      notify.success(`${res.purged.length} deleted permanently`);
       onDone();
     },
     onError: () => {
-      notify.error("Leeren fehlgeschlagen");
+      notify.error("Failed to empty trash");
     },
   });
 
@@ -57,7 +57,7 @@ export function PurgeTrashDialog({
           className="text-base font-semibold"
           style={{ color: C.textPrimary }}
         >
-          Papierkorb endgültig leeren?
+          Empty trash permanently?
         </h2>
       </div>
 
@@ -73,8 +73,8 @@ export function PurgeTrashDialog({
         >
           <AlertTriangle size={15} className="shrink-0 mt-px" />
           <span>
-            Unwiderruflich — diese Dateien werden dauerhaft gelöscht und können
-            NICHT wiederhergestellt werden.
+            Irreversible — these files will be permanently deleted and CANNOT
+            be restored.
           </span>
         </div>
       </div>
@@ -109,7 +109,7 @@ export function PurgeTrashDialog({
           onMouseEnter={(e) => { if (!mutation.isPending) e.currentTarget.style.background = C.bgHover; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
-          Abbrechen
+          Cancel
         </button>
         <button
           onClick={() => mutation.mutate()}
@@ -120,7 +120,7 @@ export function PurgeTrashDialog({
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />
             : <Trash2 size={15} />}
-          Endgültig löschen
+          Delete permanently
         </button>
       </div>
     </ResponsiveModal>

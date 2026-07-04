@@ -54,7 +54,7 @@ export function MCPServerMatrix({
     onError: (_e, vars) => {
       // Roll back this agent's assignment to the saved snapshot
       setAssignments((s) => ({ ...s, [vars.agentId]: savedAssignments[vars.agentId] ?? null }));
-      notify.error("MCP-Zuweisung fehlgeschlagen");
+      notify.error("MCP assignment failed");
     },
     onSuccess: (_data, vars) => {
       // Promote optimistic state to saved
@@ -85,10 +85,10 @@ export function MCPServerMatrix({
       >
         <Server className="mx-auto h-8 w-8" style={{ color: "rgba(255,255,255,0.15)" }} />
         <p className="mt-3 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          Keine MCP-Server installiert
+          No MCP servers installed
         </p>
         <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.2)" }}>
-          Boss kann Install-Requests stellen, oder du installierst via CLI.
+          Boss can submit install requests, or you can install via CLI.
         </p>
       </div>
     );
@@ -104,7 +104,7 @@ export function MCPServerMatrix({
       } as React.CSSProperties}
       tabIndex={0}
       role="region"
-      aria-label="MCP Server Zuweisung"
+      aria-label="MCP server assignment"
     >
       <table className="w-full text-xs">
         <thead>

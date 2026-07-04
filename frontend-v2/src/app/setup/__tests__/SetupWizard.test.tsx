@@ -31,7 +31,7 @@ const PROVIDERS = [
     provider: "anthropic-claude-code",
     key: "claude_code_oauth_token",
     label: "Claude Code OAuth Token",
-    description: "Fuer cli-bridge Agents",
+    description: "For cli-bridge agents",
     placeholder: "sk-ant-oat01-...",
   },
 ];
@@ -56,12 +56,12 @@ describe("First-Run-Wizard", () => {
     const create = vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
 
     render(<SetupWizardPage />);
-    await screen.findByText("LLM-Provider verbinden");
+    await screen.findByText("Connect an LLM provider");
 
     await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-xyz");
-    await userEvent.click(screen.getByRole("button", { name: /Speichern & weiter/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
 
-    await screen.findByText("Bereit zum Loslegen");
+    await screen.findByText("Ready to get started");
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "claude_code_oauth_token",
@@ -80,17 +80,17 @@ describe("First-Run-Wizard", () => {
     const task = vi.spyOn(api.tasks, "create").mockResolvedValue({} as never);
 
     render(<SetupWizardPage />);
-    await screen.findByText("LLM-Provider verbinden");
-    await userEvent.click(screen.getByRole("button", { name: "Ueberspringen" }));
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.click(screen.getByRole("button", { name: "Skip" }));
 
     await userEvent.click(
-      screen.getByRole("button", { name: /Demo-Board anlegen/ }),
+      screen.getByRole("button", { name: /Create demo board/ }),
     );
-    await screen.findByText("Demo-Board angelegt");
+    await screen.findByText("Demo board created");
     expect(board).toHaveBeenCalledTimes(1);
     expect(task).toHaveBeenCalledTimes(8);
 
-    await userEvent.click(screen.getByRole("button", { name: /Zum Leitstand/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Go to command center/ }));
     expect(replace).toHaveBeenCalledWith("/");
   });
 });

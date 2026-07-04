@@ -59,12 +59,12 @@ const AUTONOMY_COLORS: Record<string, string> = {
 };
 
 const BLOCKER_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  missing_info: { label: "Fehlende Info", color: C.warning },
-  technical_problem: { label: "Technisches Problem", color: C.error },
-  decision_needed: { label: "Entscheidung nötig", color: C.accent },
-  permission_needed: { label: "Berechtigung fehlt", color: C.warning },
-  dependency_blocked: { label: "Abhängigkeit", color: C.textMuted },
-  other: { label: "Sonstiges", color: C.textMuted },
+  missing_info: { label: "Missing info", color: C.warning },
+  technical_problem: { label: "Technical problem", color: C.error },
+  decision_needed: { label: "Decision needed", color: C.accent },
+  permission_needed: { label: "Permission missing", color: C.warning },
+  dependency_blocked: { label: "Dependency", color: C.textMuted },
+  other: { label: "Other", color: C.textMuted },
 };
 
 // ── Approval Card ────────────────────────────────────────────────────────────
@@ -240,7 +240,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                       className="inline-flex items-center gap-1.5 text-sm transition-colors"
                       style={{ color: "var(--color-accent-light)" }}
                     >
-                      <ExternalLink size={13} /> Preview oeffnen
+                      <ExternalLink size={13} /> Open preview
                     </a>
                   )}
                 </div>
@@ -255,7 +255,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Anweisung fuer den Agent..."
+              placeholder="Instruction for the agent..."
               rows={2}
               className="w-full px-3 py-2.5 rounded-xl text-[12px] outline-none resize-none"
               style={{
@@ -282,7 +282,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               border: `1px solid ${C.online}40`,
             }}
           >
-            <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? "Antworten" : isBlocker ? "Entblocken" : "Approve"}
+            <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? "Reply" : isBlocker ? "Unblock" : "Approve"}
           </button>
           {approval.action_type !== "clarification_question" && (
             <button
@@ -295,7 +295,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                 border: `1px solid ${C.error}40`,
               }}
             >
-              <XCircle size={13} /> {isBlocker ? "Task abbrechen" : "Reject"}
+              <XCircle size={13} /> {isBlocker ? "Cancel task" : "Reject"}
             </button>
           )}
         </div>

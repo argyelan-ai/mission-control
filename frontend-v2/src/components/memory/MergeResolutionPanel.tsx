@@ -5,15 +5,15 @@
  *
  * Inline expansion inside MemoryModal body when the displayed entry has
  * `merge_candidate_id !== null`. Renders:
- *   - heading "Mögliches Duplikat" (teal)
+ *   - heading "Possible duplicate" (teal)
  *   - candidate preview card (clickable navigation hint via title + content)
  *   - 3 action buttons:
- *       1. "In bestehenden zusammenführen" (primary, teal gradient)
+ *       1. "Merge into existing" (primary, teal gradient)
  *          → POST /knowledge/{id}/merge_into/{candidate_id}
  *          → window.confirm before destructive merge (UI-SPEC accepts for v0.5)
- *       2. "Beide behalten" (neutral ghost)
+ *       2. "Keep both" (neutral ghost)
  *          → POST /knowledge/{id}/keep_both
- *       3. "Als nicht verwandt markieren" (destructive ghost, red text)
+ *       3. "Mark as unrelated" (destructive ghost, red text)
  *          → POST /knowledge/{id}/unrelated
  *
  * Motion contract — height + opacity via AnimatePresence; spring-physics
@@ -64,11 +64,11 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
     const targetTitle =
       candidate?.entry?.title ??
       candidate?.entry?.content?.slice(0, 40) ??
-      "Ziel";
+      "Target";
     const sourceLabel = entry.title ?? entry.content.slice(0, 40);
     if (
       !window.confirm(
-        `${sourceLabel} in ${targetTitle} zusammenführen? Der Quell-Eintrag wird gelöscht.`,
+        `Merge ${sourceLabel} into ${targetTitle}? The source entry will be deleted.`,
       )
     ) {
       return;
@@ -119,7 +119,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
           className="text-base font-semibold mb-3"
           style={{ color: C.accent }}
         >
-          Mögliches Duplikat
+          Possible duplicate
         </h3>
         {candidate?.entry && (
           <div
@@ -131,7 +131,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
             }}
           >
             <div className="text-sm font-semibold">
-              {candidate.entry.title ?? "(ohne Titel)"}
+              {candidate.entry.title ?? "(no title)"}
             </div>
             <div className="text-xs opacity-70 line-clamp-2 mt-1">
               {candidate.entry.content}
@@ -148,7 +148,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
               color: C.bgDeep,
             }}
           >
-            In bestehenden zusammenführen
+            Merge into existing
           </button>
           <button
             onClick={onKeepBoth}
@@ -156,7 +156,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
             className="px-4 py-2 rounded-lg text-sm border disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-teal-500/50"
             style={{ borderColor: C.border }}
           >
-            Beide behalten
+            Keep both
           </button>
           <button
             onClick={onUnrelated}
@@ -167,7 +167,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
               color: C.error,
             }}
           >
-            Als nicht verwandt markieren
+            Mark as unrelated
           </button>
         </div>
       </motion.section>

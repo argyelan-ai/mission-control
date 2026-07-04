@@ -34,8 +34,8 @@ describe("DeleteFilesDialog", () => {
     renderWithQuery(
       <DeleteFilesDialog open root={ROOT} subpaths={SUBPATHS} onClose={() => {}} onDone={() => {}} />
     );
-    expect(screen.getByText(/Papierkorb/)).toBeInTheDocument();
-    expect(screen.getByText(/wiederherstellbar/)).toBeInTheDocument();
+    expect(screen.getByText(/trash/)).toBeInTheDocument();
+    expect(screen.getByText(/recoverable/)).toBeInTheDocument();
     // "a.pdf" appears twice (basename + full mono subpath, which are equal here).
     expect(screen.getAllByText("a.pdf").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("b.txt")).toBeInTheDocument();
@@ -56,7 +56,7 @@ describe("DeleteFilesDialog", () => {
     );
     const invalidate = vi.spyOn(qc, "invalidateQueries");
 
-    await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Delete/ }));
 
     await waitFor(() => expect(del).toHaveBeenCalledWith("vault", SUBPATHS));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["files-list"] });
@@ -74,8 +74,8 @@ describe("DeleteFilesDialog", () => {
     renderWithQuery(
       <DeleteFilesDialog open root={ROOT} subpaths={SUBPATHS} onClose={() => {}} onDone={() => {}} />
     );
-    await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Delete/ }));
     await waitFor(() => expect(success).toHaveBeenCalled());
-    expect(success.mock.calls[0][0]).toContain("übersprungen");
+    expect(success.mock.calls[0][0]).toContain("skipped");
   });
 });

@@ -103,7 +103,7 @@ export function JobsTable({
   const bulkDelete = () => {
     if (
       typeof window !== "undefined" &&
-      !window.confirm(`${selected.size} Job(s) wirklich loeschen?`)
+      !window.confirm(`Delete ${selected.size} job(s)?`)
     ) {
       return;
     }
@@ -125,8 +125,8 @@ export function JobsTable({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Jobs suchen…"
-            aria-label="Jobs suchen"
+            placeholder="Search jobs…"
+            aria-label="Search jobs"
             className="w-full rounded-lg py-2 pl-9 pr-9 text-sm"
             style={{
               border: `1px solid ${C.border}`,
@@ -140,7 +140,7 @@ export function JobsTable({
               onClick={() => setSearch("")}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1"
               style={{ color: C.textDim }}
-              aria-label="Suche zuruecksetzen"
+              aria-label="Clear search"
             >
               <X size={12} />
             </button>
@@ -178,7 +178,7 @@ export function JobsTable({
                 className="text-[10px]"
                 style={{ color: C.textMuted }}
               >
-                zuruecksetzen
+                clear
               </button>
             )}
           </div>
@@ -199,21 +199,21 @@ export function JobsTable({
             }}
           >
             <span className="text-xs font-medium" style={{ color: C.textPrimary }}>
-              {selected.size} ausgewaehlt
+              {selected.size} selected
             </span>
             <div className="flex items-center gap-1.5">
               <BulkBtn onClick={bulkPause} icon={<Pause size={12} />}>
-                Alle pausieren
+                Pause all
               </BulkBtn>
               <BulkBtn onClick={bulkEnable} icon={<Play size={12} />}>
-                Alle aktivieren
+                Enable all
               </BulkBtn>
               <BulkBtn
                 onClick={bulkDelete}
                 icon={<Trash2 size={12} />}
                 danger
               >
-                Loeschen
+                Delete
               </BulkBtn>
               <button
                 type="button"
@@ -221,7 +221,7 @@ export function JobsTable({
                 className="ml-1 text-xs"
                 style={{ color: C.textSecondary }}
               >
-                abbrechen
+                cancel
               </button>
             </div>
           </motion.div>
@@ -234,7 +234,7 @@ export function JobsTable({
         style={{ overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"
-        aria-label="Jobs Tabelle"
+        aria-label="Jobs table"
       >
         <div style={{ minWidth: 640 }}>
           {/* Header */}
@@ -248,7 +248,7 @@ export function JobsTable({
               onChange={toggleSelectAllVisible}
               className="h-3.5 w-3.5 cursor-pointer"
               style={{ accentColor: C.accent }}
-              aria-label="Alle sichtbaren auswaehlen"
+              aria-label="Select all visible"
             />
             <span></span>
             {/* Sticky "Name" header cell — opaque bg so row content doesn't bleed through.
@@ -260,8 +260,8 @@ export function JobsTable({
               Name
             </span>
             <span>Trigger</span>
-            <span>Naechster</span>
-            <span>Letzter</span>
+            <span>Next</span>
+            <span>Last</span>
             <span>Agent</span>
             <span></span>
           </div>
@@ -274,8 +274,8 @@ export function JobsTable({
                 style={{ borderColor: C.border, color: C.textDim }}
               >
                 {jobs.length === 0
-                  ? 'Noch keine Jobs angelegt — leg los mit "Neuer Job".'
-                  : "Keine Treffer fuer die aktuellen Filter."}
+                  ? 'No jobs created yet — get started with "New job".'
+                  : "No matches for the current filters."}
               </div>
             ) : (
               filteredJobs.map((j) => (

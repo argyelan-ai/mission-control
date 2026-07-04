@@ -76,7 +76,7 @@ function RelatedNotesMini({
             color: C.accent,
           }}
         >
-          verwandt · {others.length}
+          related · {others.length}
         </span>
       </div>
       <ul className="space-y-0.5">
@@ -210,7 +210,7 @@ export function NoteSidePanel({
       setEditError(null);
     },
     onError: (err: Error) => {
-      setEditError(err.message || "Speichern fehlgeschlagen");
+      setEditError(err.message || "Save failed");
     },
   });
 
@@ -359,7 +359,7 @@ export function NoteSidePanel({
                         opacity: saveMutation.isPending ? 0.4 : 1,
                       }}
                       aria-label="Cancel edit"
-                      title="Abbrechen (Esc)"
+                      title="Cancel (Esc)"
                     >
                       <X style={{ width: "13px", height: "13px" }} />
                     </button>
@@ -375,7 +375,7 @@ export function NoteSidePanel({
                         cursor: saveMutation.isPending ? "default" : "pointer",
                       }}
                       aria-label="Save edit"
-                      title="Speichern (⌘S)"
+                      title="Save (⌘S)"
                     >
                       {saveMutation.isPending ? (
                         <span
@@ -417,7 +417,7 @@ export function NoteSidePanel({
                           "transparent";
                       }}
                       aria-label="Edit note"
-                      title="Bearbeiten"
+                      title="Edit"
                     >
                       <Pencil style={{ width: "12px", height: "12px" }} />
                     </button>
@@ -443,7 +443,7 @@ export function NoteSidePanel({
                           "transparent";
                       }}
                       aria-label="Delete note"
-                      title="Note in Papierkorb verschieben"
+                      title="Move note to trash"
                     >
                       <Trash2 style={{ width: "13px", height: "13px" }} />
                     </button>
@@ -520,7 +520,7 @@ export function NoteSidePanel({
                 type="text"
                 value={draftTitle}
                 onChange={(e) => setDraftTitle(e.target.value)}
-                placeholder="Titel"
+                placeholder="Title"
                 className="w-full bg-transparent outline-none"
                 style={{
                   fontSize: "17px",
@@ -555,7 +555,7 @@ export function NoteSidePanel({
                     marginBottom: "3px",
                   }}
                 >
-                  tags (komma)
+                  tags (comma)
                 </label>
                 <input
                   type="text"

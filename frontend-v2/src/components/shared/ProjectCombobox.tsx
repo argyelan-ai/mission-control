@@ -35,7 +35,7 @@ const PROJECT_TYPES = [
   { value: "research", label: "Research" },
   { value: "automation", label: "Automation" },
   { value: "design", label: "Design" },
-  { value: "free", label: "Frei" },
+  { value: "free", label: "Free-form" },
 ];
 
 const STATUS_ORDER = ["active", "draft", "planning", "paused", "done", "archived"];
@@ -114,7 +114,7 @@ export function ProjectCombobox({
         }}
       >
         <span className="flex-1 truncate">
-          {selected ? selected.name : "Projekt (optional)"}
+          {selected ? selected.name : "Project (optional)"}
         </span>
         {value ? (
           <X
@@ -150,7 +150,7 @@ export function ProjectCombobox({
                 ref={inputRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Projekt suchen..."
+                placeholder="Search projects..."
                 className="flex-1 bg-transparent text-[11px] outline-none"
                 style={{ color: textPrimary }}
               />
@@ -185,7 +185,7 @@ export function ProjectCombobox({
               })}
               {filtered.length === 0 && (
                 <div className="px-3 py-3 text-[11px] text-center" style={{ color: textMuted }}>
-                  Kein Projekt gefunden
+                  No project found
                 </div>
               )}
             </div>
@@ -199,7 +199,7 @@ export function ProjectCombobox({
                   style={{ color: accent }}
                 >
                   <Plus size={12} />
-                  Neues Projekt erstellen
+                  Create new project
                 </button>
               ) : (
                 <div className="p-3 flex flex-col gap-2">
@@ -211,7 +211,7 @@ export function ProjectCombobox({
                       if (e.key === "Enter") handleCreate();
                       if (e.key === "Escape") setShowCreate(false);
                     }}
-                    placeholder="Projektname"
+                    placeholder="Project name"
                     className="w-full text-[11px] px-2.5 py-1.5 rounded-lg bg-transparent outline-none"
                     style={{ border: `1px solid ${border}`, color: textPrimary }}
                   />
@@ -232,7 +232,7 @@ export function ProjectCombobox({
                       className="flex-1 text-[10px] py-1 rounded-lg cursor-pointer"
                       style={{ color: textMuted, border: `1px solid ${border}` }}
                     >
-                      Abbrechen
+                      Cancel
                     </button>
                     <button
                       type="button"
@@ -241,7 +241,7 @@ export function ProjectCombobox({
                       className="flex-1 text-[10px] py-1 rounded-lg font-medium cursor-pointer disabled:opacity-30"
                       style={{ backgroundColor: `${accent}22`, color: accent, border: `1px solid ${accent}66` }}
                     >
-                      {creating ? "..." : "Erstellen"}
+                      {creating ? "..." : "Create"}
                     </button>
                   </div>
                 </div>

@@ -127,13 +127,13 @@ export default function InboxPage() {
               >
                 {totalCount}
               </span>
-              <span className="text-[var(--color-text-muted)]"> wartend</span>
+              <span className="text-[var(--color-text-muted)]"> pending</span>
             </p>
           )}
         </div>
         {totalCount > 0 && (
           <Pill color={C.warning} size="md">
-            {totalCount} offen
+            {totalCount} open
           </Pill>
         )}
       </div>
@@ -146,7 +146,7 @@ export default function InboxPage() {
               <Inbox size={14} />
             </span>
             <span className="text-[11px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
-              Tasks zur Review ({reviews.length})
+              Tasks for review ({reviews.length})
             </span>
           </div>
           <div className="flex flex-col gap-3">
@@ -207,8 +207,8 @@ export default function InboxPage() {
             <span className="text-base">&#9203;</span>
             <span className="text-[12px] text-[var(--color-text-muted)]">
               {waitingForReview === 1
-                ? "1 Task wartet noch auf Review"
-                : `${waitingForReview} Tasks warten noch auf Review`}
+                ? "1 task still awaiting review"
+                : `${waitingForReview} tasks still awaiting review`}
             </span>
           </GlassCard>
         </motion.div>
@@ -240,7 +240,7 @@ export default function InboxPage() {
                 All clear
               </p>
               <p className="text-[12px] text-[var(--color-text-muted)] mt-1">
-                Keine offenen Approvals oder Reviews
+                No open approvals or reviews
               </p>
             </div>
           </GlassCard>

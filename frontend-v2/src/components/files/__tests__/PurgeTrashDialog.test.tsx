@@ -26,7 +26,7 @@ describe("PurgeTrashDialog", () => {
     renderWithQuery(
       <PurgeTrashDialog open trashIds={TRASH_IDS} onClose={() => {}} onDone={() => {}} />
     );
-    expect(screen.getByText(/unwiderruflich|NICHT wiederhergestellt/i)).toBeInTheDocument();
+    expect(screen.getByText(/irreversible|CANNOT be restored/i)).toBeInTheDocument();
     expect(screen.getByText("a.pdf")).toBeInTheDocument();
     expect(screen.getByText("note.md")).toBeInTheDocument();
   });
@@ -51,7 +51,7 @@ describe("PurgeTrashDialog", () => {
     );
     const invalidate = vi.spyOn(qc, "invalidateQueries");
 
-    await userEvent.click(screen.getByRole("button", { name: /Endgültig löschen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Delete permanently/ }));
 
     await waitFor(() => expect(purge).toHaveBeenCalledWith(TRASH_IDS));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["files-trash"] });

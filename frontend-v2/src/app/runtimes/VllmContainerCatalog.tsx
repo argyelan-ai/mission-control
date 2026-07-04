@@ -23,7 +23,7 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
           </span>
         </div>
         <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-          {container.endpoint || "Endpoint nicht erkannt"}
+          {container.endpoint || "Endpoint not detected"}
         </div>
       </div>
       <button
@@ -36,7 +36,7 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
         }}
       >
         <Plus size={11} />
-        Hinzufügen
+        Add
       </button>
     </div>
   );
@@ -67,7 +67,7 @@ function AddVllmModal({
         role_tags: roleTags,
       }),
     onSuccess: onAdded,
-    onError: (e: Error) => setError(e.message || "Fehler beim Hinzufügen"),
+    onError: (e: Error) => setError(e.message || "Failed to add"),
   });
 
   const toggleTag = (tag: string) => {
@@ -78,7 +78,7 @@ function AddVllmModal({
     e.preventDefault();
     setError(null);
     if (!endpoint.trim()) {
-      setError("Endpoint darf nicht leer sein");
+      setError("Endpoint must not be empty");
       return;
     }
     addMutation.mutate();
@@ -108,14 +108,14 @@ function AddVllmModal({
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-            vLLM Runtime hinzufügen
+            Add vLLM Runtime
           </h3>
           <button
             type="button"
             onClick={onClose}
             className="p-1 rounded cursor-pointer"
             style={{ color: C.textMuted }}
-            aria-label="Schließen"
+            aria-label="Close"
           >
             <X size={14} />
           </button>
@@ -127,7 +127,7 @@ function AddVllmModal({
 
         <label className="block mb-3">
           <span className="text-xs block mb-1" style={{ color: C.textMuted }}>
-            Display-Name
+            Display name
           </span>
           <input
             type="text"
@@ -154,7 +154,7 @@ function AddVllmModal({
 
         <div className="mb-4">
           <span className="text-xs block mb-2" style={{ color: C.textMuted }}>
-            Rollen-Tags (optional)
+            Role tags (optional)
           </span>
           <div className="flex flex-wrap gap-1.5">
             {VLLM_TAG_OPTIONS.map((tag) => {
@@ -198,7 +198,7 @@ function AddVllmModal({
             className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
             style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}` }}
           >
-            Abbrechen
+            Cancel
           </button>
           <button
             type="submit"
@@ -212,7 +212,7 @@ function AddVllmModal({
             }}
           >
             {addMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-            Hinzufügen
+            Add
           </button>
         </div>
       </form>
@@ -240,7 +240,7 @@ export function VllmContainerCatalog() {
           className="text-xs font-medium tracking-wider uppercase"
           style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}
         >
-          Erkannt
+          Discovered
         </span>
         <div className="flex-1 h-px" style={{ background: C.border }} />
       </div>

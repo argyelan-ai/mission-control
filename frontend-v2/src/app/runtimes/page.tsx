@@ -42,7 +42,7 @@ const STATE_CONFIG: Record<
   { label: string; color: string; dot: string; icon: LucideIcon }
 > = {
   ready: {
-    label: "Bereit",
+    label: "Ready",
     color: C.online,
     dot: C.online,
     icon: CheckCircle2,
@@ -54,25 +54,25 @@ const STATE_CONFIG: Record<
     icon: Clock,
   },
   starting: {
-    label: "Startet...",
+    label: "Starting...",
     color: C.info,
     dot: C.info,
     icon: Loader2,
   },
   stopped: {
-    label: "Gestoppt",
+    label: "Stopped",
     color: C.textMuted,
     dot: STATUS.offline,
     icon: Square,
   },
   failed: {
-    label: "Fehler",
+    label: "Error",
     color: C.error,
     dot: C.error,
     icon: AlertCircle,
   },
   unknown: {
-    label: "Unbekannt",
+    label: "Unknown",
     color: C.textMuted,
     dot: STATUS.offline,
     icon: WifiOff,
@@ -184,8 +184,8 @@ function ActiveDownloads() {
                 <button
                   onClick={() => cancelMutation.mutate(dl.name)}
                   disabled={cancelMutation.isPending && cancelMutation.variables === dl.name}
-                  title="Abbrechen"
-                  aria-label="Download abbrechen"
+                  title="Cancel"
+                  aria-label="Cancel download"
                   className="flex items-center justify-center w-6 h-6 rounded-md transition-all cursor-pointer disabled:opacity-40"
                   style={{
                     background: `${C.error}14`,
@@ -356,7 +356,7 @@ function ContextSettingsPanel({
               setCustomError(false);
             }}
             disabled={isStandard}
-            aria-label="Context Window Voreinstellung"
+            aria-label="Context window preset"
             className="w-full cursor-pointer disabled:opacity-30"
             style={{ accentColor: C.accent, height: "2px" }}
           />
@@ -375,10 +375,10 @@ function ContextSettingsPanel({
             <input
               type="text"
               inputMode="numeric"
-              placeholder="z.B. 200000"
+              placeholder="e.g. 200000"
               value={customInput}
               disabled={isStandard}
-              aria-label="Benutzerdefinierter Context-Wert"
+              aria-label="Custom context value"
               onChange={(e) => handleCustomInput(e.target.value)}
               className="flex-1 text-xs font-mono px-2 py-1 rounded disabled:opacity-30"
               style={{
@@ -398,7 +398,7 @@ function ContextSettingsPanel({
         {/* Hint + Save */}
         <div className="flex items-center justify-between gap-2">
           <span style={{ color: C.textDim, fontSize: "10px" }}>
-            {isStandard ? "Nutzt LM Studio Globaleinstellung" : "Wird beim nächsten Laden verwendet"}
+            {isStandard ? "Uses LM Studio global setting" : "Applied on next load"}
           </span>
           <button
             onClick={handleSave}
@@ -410,7 +410,7 @@ function ContextSettingsPanel({
               color: C.accent,
             }}
           >
-            Speichern
+            Save
           </button>
         </div>
       </div>
@@ -434,13 +434,13 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
   const loadMutation = useMutation({
     mutationFn: () => api.lmstudio.load(model.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Laden fehlgeschlagen."),
+    onError: () => setActionMsg("Load failed."),
   });
 
   const unloadMutation = useMutation({
     mutationFn: () => api.lmstudio.unload(model.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Entladen fehlgeschlagen."),
+    onError: () => setActionMsg("Unload failed."),
   });
 
   const isMutating = loadMutation.isPending || unloadMutation.isPending;
@@ -515,8 +515,8 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
           {!model.is_embedding && (
             <button
               onClick={() => setSettingsOpen((o) => !o)}
-              title="Context-Einstellungen"
-              aria-label="Context-Einstellungen"
+              title="Context settings"
+              aria-label="Context settings"
               className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
               style={{
                 background: settingsOpen ? C.border : "transparent",
@@ -529,7 +529,7 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
           )}
           <ActionButton
             icon={Play}
-            label="Laden"
+            label="Load"
             disabled={model.is_loaded || isMutating}
             onClick={() => loadMutation.mutate()}
             loading={loadMutation.isPending}
@@ -537,7 +537,7 @@ function LMStudioModelCard({ model }: { model: LMStudioModel }) {
           />
           <ActionButton
             icon={Square}
-            label="Entladen"
+            label="Unload"
             disabled={!model.is_loaded || isMutating}
             onClick={() => unloadMutation.mutate()}
             loading={unloadMutation.isPending}
@@ -596,7 +596,7 @@ function QuantPicker({ modelId, onDownload, isPending }: {
     >
       {isFetching ? (
         <div className="flex items-center gap-2 px-3 py-2.5 text-xs" style={{ color: C.textMuted }}>
-          <Loader2 size={11} className="animate-spin" /> Varianten laden...
+          <Loader2 size={11} className="animate-spin" /> Loading variants...
         </div>
       ) : data?.error ? (
         <div className="px-3 py-2 text-xs" style={{ color: STATUS_TEXT.error }}>{data.error}</div>
@@ -629,7 +629,7 @@ function QuantPicker({ modelId, onDownload, isPending }: {
           );
         })
       ) : (
-        <div className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>Keine GGUF-Varianten gefunden</div>
+        <div className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>No GGUF variants found</div>
       )}
     </div>
   );
@@ -674,7 +674,7 @@ function ModelCatalog() {
       queryClient.invalidateQueries({ queryKey: ["lms-downloads"] });
     },
     onError: () => {
-      setMessage("Download konnte nicht gestartet werden.");
+      setMessage("Failed to start download.");
       setIsError(true);
     },
   });
@@ -687,7 +687,7 @@ function ModelCatalog() {
       setIsError(false);
     },
     onError: () => {
-      setMessage("Download konnte nicht gestartet werden.");
+      setMessage("Failed to start download.");
       setIsError(true);
     },
   });
@@ -719,7 +719,7 @@ function ModelCatalog() {
       >
         <div className="flex items-center gap-2 text-sm font-medium">
           <Download size={14} />
-          Modell herunterladen
+          Download model
         </div>
         {open ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
       </button>
@@ -766,7 +766,7 @@ function ModelCatalog() {
               style={{ color: C.textMuted }}
             >
               <span>↗</span>
-              lmstudio.ai/models öffnen
+              Open lmstudio.ai/models
             </a>
           )}
 
@@ -780,9 +780,9 @@ function ModelCatalog() {
               placeholder={
                 isLms
                   ? "qwen, llama, mistral..."
-                  : "Repo-ID (z.B. Jackrong/Qwen3.5-27B-GGUF)"
+                  : "Repo ID (e.g. Jackrong/Qwen3.5-27B-GGUF)"
               }
-              aria-label={isLms ? "LM Studio Modell suchen" : "HuggingFace Repo-ID"}
+              aria-label={isLms ? "Search LM Studio model" : "HuggingFace repo ID"}
               className="flex-1 text-sm px-3 py-2 rounded-lg outline-none"
               style={{
                 background: C.border,
@@ -802,7 +802,7 @@ function ModelCatalog() {
                 color: isLms ? lmsColor : hfColor,
               }}
             >
-              Suchen
+              Search
             </button>
           </div>
 
@@ -824,11 +824,11 @@ function ModelCatalog() {
           {isLms && submitted && (
             catalogLoading ? (
               <div className="text-xs text-center py-4" style={{ color: C.textMuted }}>
-                Suche...
+                Searching...
               </div>
             ) : !catalogData?.models.length ? (
               <div className="text-xs text-center py-4" style={{ color: C.textMuted }}>
-                Keine Ergebnisse für &ldquo;{submitted}&rdquo;
+                No results for &ldquo;{submitted}&rdquo;
               </div>
             ) : (
               <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
@@ -873,7 +873,7 @@ function ModelCatalog() {
                               color: C.accent,
                             }}
                           >
-                            {pickingModel === m.model_id ? "✕" : "↓ Laden"}
+                            {pickingModel === m.model_id ? "✕" : "↓ Load"}
                           </button>
                         )}
                       </div>
@@ -898,7 +898,7 @@ function ModelCatalog() {
           {!isLms && submitted && (
             hfLoading ? (
               <div className="text-xs text-center py-4" style={{ color: C.textMuted }}>
-                Repo wird geladen...
+                Loading repo...
               </div>
             ) : hfData?.error ? (
               <div
@@ -914,7 +914,7 @@ function ModelCatalog() {
             ) : hfData ? (
               <div>
                 <div className="text-xs mb-2 px-1" style={{ color: C.textMuted }}>
-                  {hfData.name} · {hfData.files.length} Dateien
+                  {hfData.name} · {hfData.files.length} files
                 </div>
                 <div className="rounded-lg overflow-hidden" style={{ border: `1px solid ${C.borderSubtle}` }}>
                   {hfData.files.map((f, i) => (
@@ -951,7 +951,7 @@ function ModelCatalog() {
                         {downloadHfMutation.isPending ? (
                           <Loader2 size={11} className="animate-spin" />
                         ) : (
-                          "↓ Laden"
+                          "↓ Load"
                         )}
                       </button>
                     </div>
@@ -1002,7 +1002,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
         {isLoading && <Loader2 size={11} className="animate-spin" style={{ color: C.textMuted }} />}
         {!isLoading && bound.length === 0 && (
           <span className="text-[11px]" style={{ color: C.textMuted }}>
-            keine — ungebunden
+            none — unbound
           </span>
         )}
         {bound.map((a) => (
@@ -1073,25 +1073,25 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
   const startMutation = useMutation({
     mutationFn: () => api.runtimes.start(runtime.id, storedCtx ?? undefined),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Start fehlgeschlagen."),
+    onError: () => setActionMsg("Start failed."),
   });
 
   const stopMutation = useMutation({
     mutationFn: () => api.runtimes.stop(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Stop fehlgeschlagen."),
+    onError: () => setActionMsg("Stop failed."),
   });
 
   const restartMutation = useMutation({
     mutationFn: () => api.runtimes.restart(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Restart fehlgeschlagen."),
+    onError: () => setActionMsg("Restart failed."),
   });
 
   const wakeMutation = useMutation({
     mutationFn: () => api.runtimes.wake(runtime.id),
     onSuccess: (data) => { setActionMsg(data.message); invalidate(); },
-    onError: () => setActionMsg("Wecken fehlgeschlagen."),
+    onError: () => setActionMsg("Wake failed."),
   });
 
   const probeMutation = useMutation({
@@ -1099,12 +1099,12 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
     onSuccess: (data) => {
       const msg = data.changed
         ? `Model: ${data.old_model_identifier ?? "—"} → ${data.new_model_identifier}`
-        : `Model unverändert: ${data.new_model_identifier ?? "—"}`;
+        : `Model unchanged: ${data.new_model_identifier ?? "—"}`;
       setActionMsg(msg);
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: () => setActionMsg("Probe fehlgeschlagen."),
+    onError: () => setActionMsg("Probe failed."),
   });
 
   const isProbeable = ["vllm_docker", "lmstudio", "openai_compatible", "unsloth", "unsloth_porsche"].includes(runtime.runtime_type);
@@ -1183,7 +1183,7 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
               <>
                 <span style={{ color: C.borderSubtle }}>·</span>
                 <span className="text-xs" style={{ color: C.textDim }}>
-                  Schläft
+                  Sleeping
                 </span>
               </>
             )}
@@ -1191,7 +1191,7 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
               <>
                 <span style={{ color: C.borderSubtle }}>·</span>
                 <span className="text-xs" style={{ color: STATUS_TEXT.warning }}>
-                  Wach — Modell nicht geladen (Start)
+                  Awake — model not loaded (Start)
                 </span>
               </>
             )}
@@ -1221,8 +1221,8 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
           {isLmStudio && (
             <button
               onClick={() => setSettingsOpen(v => !v)}
-              title="Kontext-Einstellungen"
-              aria-label="Kontext-Einstellungen"
+              title="Context settings"
+              aria-label="Context settings"
               style={{
                 padding: "4px",
                 borderRadius: "6px",
@@ -1241,7 +1241,7 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
           {isPowerManaged && (
             <ActionButton
               icon={Power}
-              label="Wecken"
+              label="Wake"
               // Enabled when the box is asleep, or generally whenever it is not
               // yet serving (state !== "ready"); WoL is cheap and idempotent.
               disabled={(!isAsleep && effectiveState === "ready") || isMutating}
@@ -1344,7 +1344,7 @@ function KvResetScheduleToggle() {
       setResetMsg(data.message);
       queryClient.invalidateQueries({ queryKey: ["lmstudio-models"] });
     },
-    onError: () => setResetMsg("KV Reset fehlgeschlagen."),
+    onError: () => setResetMsg("KV Reset failed."),
   });
 
   const activeSchedule = schedules?.find((s) => s.action === "kv_reset" && s.enabled);
@@ -1390,7 +1390,7 @@ function KvResetScheduleToggle() {
             <div className="flex items-center gap-2 min-w-0">
               <span className="text-xs font-medium" style={{ color: C.warning }}>KV Reset Schedule</span>
               <span className="text-xs" style={{ color: C.textMuted }}>
-                — merkt aktive Modelle, entlädt alle, lädt sie neu
+                — remembers active models, unloads all, reloads them
               </span>
             </div>
             <button
@@ -1406,7 +1406,7 @@ function KvResetScheduleToggle() {
               {kvResetMutation.isPending ? (
                 <Loader2 size={11} className="animate-spin" />
               ) : "⚡"}
-              Jetzt ausführen
+              Run now
             </button>
           </div>
           {resetMsg && (
@@ -1477,7 +1477,7 @@ export default function RuntimesPage() {
               className="text-sm mt-0.5"
               style={{ color: C.textMuted }}
             >
-              KI-Modell-Runtimes und ihre Hosts
+              AI model runtimes and their hosts
             </p>
           </div>
 
@@ -1491,7 +1491,7 @@ export default function RuntimesPage() {
             }}
           >
             <RotateCcw size={11} />
-            Aktualisieren
+            Refresh
           </button>
         </div>
 
@@ -1507,21 +1507,21 @@ export default function RuntimesPage() {
                 <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>vLLM Docker</h2>
                 <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>Container</span>
               </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>Containerisierte Modelle auf GPU-Hosts</p>
+              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>Containerized models on GPU hosts</p>
             </div>
           </div>
 
           {isLoading && (
             <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
               <Loader2 size={13} className="animate-spin" />
-              <span className="text-xs">Lade Runtimes...</span>
+              <span className="text-xs">Loading runtimes...</span>
             </div>
           )}
 
           {error && (
             <div className="flex items-center gap-2 text-xs px-4 py-3 rounded-xl" style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}>
               <AlertCircle size={13} />
-              Runtimes konnten nicht geladen werden.
+              Failed to load runtimes.
             </div>
           )}
 
@@ -1534,7 +1534,7 @@ export default function RuntimesPage() {
               ))}
               {vllmRuntimes.length === 0 && (
                 <div className="text-xs text-center py-10" style={{ color: C.textMuted }}>
-                  Keine vLLM Docker Runtimes konfiguriert.
+                  No vLLM Docker runtimes configured.
                 </div>
               )}
             </div>
@@ -1550,7 +1550,7 @@ export default function RuntimesPage() {
                 <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>LM Studio</h2>
                 <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>LLM</span>
               </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>Lokal installierte Modelle auf DGX Spark</p>
+              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>Locally installed models on DGX Spark</p>
             </div>
             <KvResetScheduleToggle />
           </div>
@@ -1562,7 +1562,7 @@ export default function RuntimesPage() {
           {!lmsData && lmsRuntimes.length === 0 && (
             <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
               <Loader2 size={13} className="animate-spin" />
-              <span className="text-xs">Verbinde mit DGX Spark...</span>
+              <span className="text-xs">Connecting to DGX Spark...</span>
             </div>
           )}
 
@@ -1582,7 +1582,7 @@ export default function RuntimesPage() {
                 {hasActive && (
                   <div className="mb-3">
                     <div className="flex items-center gap-2 mb-2 px-0.5">
-                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.online, letterSpacing: "0.07em", fontSize: "10px" }}>Aktiv</span>
+                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.online, letterSpacing: "0.07em", fontSize: "10px" }}>Active</span>
                       <div className="flex-1 h-px" style={{ background: `${C.online}26` }} />
                     </div>
                     <div className="flex flex-col gap-2">
@@ -1594,7 +1594,7 @@ export default function RuntimesPage() {
                 {hasInactive && (
                   <div>
                     <div className="flex items-center gap-2 mb-2 px-0.5">
-                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}>Inaktiv</span>
+                      <span className="text-xs font-medium tracking-wider uppercase" style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}>Inactive</span>
                       <div className="flex-1 h-px" style={{ background: C.border }} />
                     </div>
                     <div className="flex flex-col gap-2">

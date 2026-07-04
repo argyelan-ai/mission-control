@@ -49,14 +49,14 @@ const KIND_OPTIONS: Array<{
   label: string;
   icon: typeof Calendar;
 }> = [
-  { id: "daily", label: "Taeglich", icon: Calendar },
-  { id: "weekdays", label: "Wochentage", icon: Clock },
-  { id: "interval", label: "Intervall", icon: Repeat },
+  { id: "daily", label: "Daily", icon: Calendar },
+  { id: "weekdays", label: "Weekdays", icon: Clock },
+  { id: "interval", label: "Interval", icon: Repeat },
   { id: "cron", label: "Cron", icon: Code2 },
-  { id: "weekly_custom", label: "Benutzerdef.", icon: Sliders },
+  { id: "weekly_custom", label: "Custom", icon: Sliders },
 ];
 
-const DAY_LABELS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function deriveKind(t: string): TriggerKind {
   if (t === "weekly_custom") return "weekly_custom";
@@ -95,9 +95,9 @@ export function TriggerEditor(props: TriggerEditorProps) {
   const cronDescription = useMemo(() => {
     if (kind !== "cron" || !schedule_cron) return null;
     try {
-      return cronstrue.toString(schedule_cron, { locale: "de" });
+      return cronstrue.toString(schedule_cron, { locale: "en" });
     } catch (e) {
-      return `Ungueltig: ${(e as Error).message}`;
+      return `Invalid: ${(e as Error).message}`;
     }
   }, [kind, schedule_cron]);
 
@@ -188,7 +188,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {/* Per-kind body */}
       {kind === "daily" && (
-        <Field label="Uhrzeit">
+        <Field label="Time">
           <TimeInput
             value={schedule_time ?? ""}
             onChange={(v) => onChange({ schedule_time: v })}
@@ -198,20 +198,20 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {kind === "weekdays" && (
         <div className="flex flex-col gap-2">
-          <Field label="Uhrzeit">
+          <Field label="Time">
             <TimeInput
               value={schedule_time ?? ""}
               onChange={(v) => onChange({ schedule_time: v })}
             />
           </Field>
           <p className="text-[11px]" style={{ color: C.textMuted }}>
-            Laeuft Mo, Di, Mi, Do, Fr — Wochenende ausgenommen.
+            Runs Mon, Tue, Wed, Thu, Fri — weekends excluded.
           </p>
         </div>
       )}
 
       {kind === "interval" && (
-        <Field label="Intervall (Stunden)">
+        <Field label="Interval (hours)">
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -225,16 +225,16 @@ export function TriggerEditor(props: TriggerEditorProps) {
               }
               className="w-24 rounded-md px-2 py-1.5 text-sm"
               style={inputStyle}
-              aria-label="Intervall in Stunden"
+              aria-label="Interval in hours"
             />
-            <span className="text-xs" style={{ color: C.textSecondary }}>Stunden</span>
+            <span className="text-xs" style={{ color: C.textSecondary }}>hours</span>
           </div>
         </Field>
       )}
 
       {kind === "cron" && (
         <div className="flex flex-col gap-2">
-          <Field label="Cron-Expression">
+          <Field label="Cron expression">
             <input
               type="text"
               value={schedule_cron ?? ""}
@@ -242,7 +242,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
               placeholder="0 9 * * 1-5"
               className="w-full rounded-md px-2.5 py-1.5 font-mono text-sm"
               style={inputStyle}
-              aria-label="Cron-Expression"
+              aria-label="Cron expression"
             />
           </Field>
           {cronDescription && (
@@ -259,7 +259,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {kind === "weekly_custom" && (
         <div className="flex flex-col gap-3">
-          <Field label="Uhrzeit">
+          <Field label="Time">
             <TimeInput
               value={schedule_time ?? ""}
               onChange={(v) => onChange({ schedule_time: v })}
@@ -267,7 +267,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
           </Field>
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-              Wochentage
+              Weekdays
             </span>
             <div className="flex flex-wrap gap-1.5">
               {DAY_LABELS.map((lbl, i) => {
@@ -300,7 +300,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
           style={{ border: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
         >
           <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-            Nächste {firingPreview.length} Firings
+            Next {firingPreview.length} firings
           </span>
           <ul className="flex flex-col gap-0.5 text-[11px] font-mono" style={{ color: C.textSecondary }}>
             {firingPreview.slice(0, 5).map((iso) => (
@@ -313,14 +313,14 @@ export function TriggerEditor(props: TriggerEditorProps) {
       {/* Active range */}
       <div className="flex flex-col gap-1.5 pt-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
         <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-          Nur aktiv von … bis (optional)
+          Active only from … to (optional)
         </span>
         <div className="flex flex-wrap items-center gap-2">
           <DateInput
             value={start_date ?? ""}
             onChange={(v) => onChange({ start_date: v || null })}
           />
-          <span className="text-xs" style={{ color: C.textDim }}>bis</span>
+          <span className="text-xs" style={{ color: C.textDim }}>to</span>
           <DateInput
             value={end_date ?? ""}
             onChange={(v) => onChange({ end_date: v || null })}
@@ -334,7 +334,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
               className="text-[10px]"
               style={{ color: C.textMuted }}
             >
-              zuruecksetzen
+              clear
             </button>
           )}
         </div>
@@ -379,7 +379,7 @@ function TimeInput({
         color: C.textPrimary,
         colorScheme: "dark",
       }}
-      aria-label="Uhrzeit"
+      aria-label="Time"
     />
   );
 }
@@ -403,7 +403,7 @@ function DateInput({
         color: C.textPrimary,
         colorScheme: "dark",
       }}
-      aria-label="Datum"
+      aria-label="Date"
     />
   );
 }

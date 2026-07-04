@@ -10,9 +10,9 @@ import { cn } from "@/lib/utils";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 const DAYS_LABEL: Record<string, string> = {
-  daily: "täglich",
-  weekdays: "Mo–Fr",
-  weekends: "Sa–So",
+  daily: "daily",
+  weekdays: "Mon–Fri",
+  weekends: "Sat–Sun",
 };
 
 const ACTION_LABEL: Record<string, string> = {
@@ -57,13 +57,13 @@ function ScheduleEntry({
     mutationFn: (data: Partial<RuntimeScheduleCreate>) =>
       api.runtimes.schedules.update(runtimeId, schedule.id, data),
     onSuccess: () => { setEditing(false); invalidate(); },
-    onError: () => setEditError("Speichern fehlgeschlagen."),
+    onError: () => setEditError("Save failed."),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.runtimes.schedules.delete(runtimeId, schedule.id),
     onSuccess: invalidate,
-    onError: () => setEditError("Löschen fehlgeschlagen."),
+    onError: () => setEditError("Delete failed."),
   });
 
   useEffect(() => {
@@ -86,7 +86,7 @@ function ScheduleEntry({
     updateMutation.mutate(form);
 
   const handleDelete = () => {
-    if (window.confirm(`'${schedule.name}' wirklich löschen?`)) {
+    if (window.confirm(`Delete '${schedule.name}'?`)) {
       deleteMutation.mutate();
     }
   };
@@ -153,7 +153,7 @@ function ScheduleEntry({
                 background: C.borderSubtle,
               }}
             >
-              {editing ? "Abbruch" : "···"}
+              {editing ? "Cancel" : "···"}
             </button>
           </div>
         </div>
@@ -168,7 +168,7 @@ function ScheduleEntry({
           >
             {runs.length === 0 ? (
               <div className="px-3 py-2" style={{ color: C.textMuted }}>
-                Noch keine Ausführungen.
+                No runs yet.
               </div>
             ) : (
               runs.map((run, i) => (
@@ -188,7 +188,7 @@ function ScheduleEntry({
                     })}
                   </span>
                   <span style={{ color: run.success ? C.online : C.error }}>
-                    {run.success ? "✓ OK" : `✗ ${run.message ?? "Fehler"}`}
+                    {run.success ? "✓ OK" : `✗ ${run.message ?? "Error"}`}
                   </span>
                 </div>
               ))
@@ -211,7 +211,7 @@ function ScheduleEntry({
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
               placeholder="Name"
-              aria-label="Schedule Name"
+              aria-label="Schedule name"
               className="text-xs px-2.5 py-1.5 rounded-lg w-full"
               style={inputStyle}
             />
@@ -219,7 +219,7 @@ function ScheduleEntry({
               <select
                 value={form.action}
                 onChange={(e) => setForm((f) => ({ ...f, action: e.target.value as "start" | "stop" | "kv_reset" }))}
-                aria-label="Aktion"
+                aria-label="Action"
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
                 style={inputStyle}
               >
@@ -231,7 +231,7 @@ function ScheduleEntry({
                 type="time"
                 value={form.time_of_day}
                 onChange={(e) => setForm((f) => ({ ...f, time_of_day: e.target.value }))}
-                aria-label="Uhrzeit"
+                aria-label="Time"
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg"
                 style={inputStyle}
               />
@@ -240,13 +240,13 @@ function ScheduleEntry({
                 onChange={(e) =>
                   setForm((f) => ({ ...f, days: e.target.value as "daily" | "weekdays" | "weekends" }))
                 }
-                aria-label="Wochentage"
+                aria-label="Days of week"
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
                 style={inputStyle}
               >
-                <option value="daily">Täglich</option>
-                <option value="weekdays">Mo–Fr</option>
-                <option value="weekends">Sa–So</option>
+                <option value="daily">Daily</option>
+                <option value="weekdays">Mon–Fri</option>
+                <option value="weekends">Sat–Sun</option>
               </select>
             </div>
             {isLmStudio && form.action === "start" && (
@@ -256,7 +256,7 @@ function ScheduleEntry({
                   checked={form.unload_first}
                   onChange={(e) => setForm((f) => ({ ...f, unload_first: e.target.checked }))}
                 />
-                Alle Modelle vorher entladen
+                Unload all models first
               </label>
             )}
             {editError && (
@@ -272,7 +272,7 @@ function ScheduleEntry({
                   color: C.textMuted,
                 }}
               >
-                {schedule.enabled ? "Deaktivieren" : "Aktivieren"}
+                {schedule.enabled ? "Disable" : "Enable"}
               </button>
               <button
                 onClick={handleDelete}
@@ -283,7 +283,7 @@ function ScheduleEntry({
                   color: STATUS_TEXT.error,
                 }}
               >
-                Löschen
+                Delete
               </button>
               <button
                 onClick={handleSave}
@@ -295,7 +295,7 @@ function ScheduleEntry({
                   color: C.accent,
                 }}
               >
-                {updateMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Speichern"}
+                {updateMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Save"}
               </button>
             </div>
           </div>
@@ -330,7 +330,7 @@ function AddScheduleForm({
       queryClient.invalidateQueries({ queryKey: ["runtime-schedules", runtimeId] });
       onDone();
     },
-    onError: () => setCreateError("Erstellen fehlgeschlagen."),
+    onError: () => setCreateError("Create failed."),
   });
 
   const inputStyle: React.CSSProperties = {
@@ -348,14 +348,14 @@ function AddScheduleForm({
       }}
     >
       <div className="text-xs font-medium" style={{ color: C.accent }}>
-        Neuer Schedule
+        New Schedule
       </div>
       <input
         value={form.name}
         onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-        placeholder="Name (z.B. Nacht-Pause)"
+        placeholder="Name (e.g. Night pause)"
         autoFocus
-        aria-label="Schedule Name"
+        aria-label="Schedule name"
         className="text-xs px-2.5 py-1.5 rounded-lg w-full"
         style={inputStyle}
       />
@@ -363,7 +363,7 @@ function AddScheduleForm({
         <select
           value={form.action}
           onChange={(e) => setForm((f) => ({ ...f, action: e.target.value as "start" | "stop" | "kv_reset" }))}
-          aria-label="Aktion"
+          aria-label="Action"
           className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
           style={inputStyle}
         >
@@ -375,7 +375,7 @@ function AddScheduleForm({
           type="time"
           value={form.time_of_day}
           onChange={(e) => setForm((f) => ({ ...f, time_of_day: e.target.value }))}
-          aria-label="Uhrzeit"
+          aria-label="Time"
           className="flex-1 text-xs px-2 py-1.5 rounded-lg"
           style={inputStyle}
         />
@@ -384,13 +384,13 @@ function AddScheduleForm({
           onChange={(e) =>
             setForm((f) => ({ ...f, days: e.target.value as "daily" | "weekdays" | "weekends" }))
           }
-          aria-label="Wochentage"
+          aria-label="Days of week"
           className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
           style={inputStyle}
         >
-          <option value="daily">Täglich</option>
-          <option value="weekdays">Mo–Fr</option>
-          <option value="weekends">Sa–So</option>
+          <option value="daily">Daily</option>
+          <option value="weekdays">Mon–Fri</option>
+          <option value="weekends">Sat–Sun</option>
         </select>
       </div>
       {isLmStudio && form.action === "start" && (
@@ -400,7 +400,7 @@ function AddScheduleForm({
             checked={form.unload_first}
             onChange={(e) => setForm((f) => ({ ...f, unload_first: e.target.checked }))}
           />
-          Alle Modelle vorher entladen
+          Unload all models first
         </label>
       )}
       {createError && (
@@ -416,7 +416,7 @@ function AddScheduleForm({
             color: C.textMuted,
           }}
         >
-          Abbrechen
+          Cancel
         </button>
         <button
           onClick={() => createMutation.mutate()}
@@ -428,7 +428,7 @@ function AddScheduleForm({
             color: C.accent,
           }}
         >
-          {createMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Speichern"}
+          {createMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Save"}
         </button>
       </div>
     </div>
@@ -462,7 +462,7 @@ export function RuntimeScheduleTab({
   if (isError) {
     return (
       <div className="px-3 py-4 text-xs text-center" style={{ color: STATUS_TEXT.error }}>
-        Fehler beim Laden der Schedules.
+        Error loading schedules.
       </div>
     );
   }
@@ -490,7 +490,7 @@ export function RuntimeScheduleTab({
             className="mx-3 mt-3 py-4 text-center text-xs rounded-lg"
             style={{ color: C.textMuted, border: `1px dashed ${C.border}` }}
           >
-            Noch keine Schedules konfiguriert.
+            No schedules configured yet.
           </div>
         )
       )}
@@ -513,7 +513,7 @@ export function RuntimeScheduleTab({
           style={{ color: C.textMuted }}
         >
           <Plus size={11} />
-          Schedule hinzufügen
+          Add schedule
         </button>
       )}
     </div>

@@ -200,10 +200,10 @@ export function serviceStatusColor(status: string): string {
 
 export function getGreeting(): string {
   const hour = new Date().getHours();
-  if (hour < 6) return "Gute Nacht";
-  if (hour < 12) return "Guten Morgen";
-  if (hour < 18) return "Guten Tag";
-  return "Guten Abend";
+  if (hour < 6) return "Good night";
+  if (hour < 12) return "Good morning";
+  if (hour < 18) return "Good afternoon";
+  return "Good evening";
 }
 
 // Responsive bento grid

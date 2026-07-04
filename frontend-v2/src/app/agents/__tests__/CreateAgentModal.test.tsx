@@ -86,7 +86,7 @@ describe("CreateAgentModal — one-click create (Day-2 basics)", () => {
     });
     renderModal();
     await screen.findByText("LLM Runtime");
-    await userEvent.selectOptions(screen.getByDisplayValue("CLI Bridge (lokal)"), "manual");
+    await userEvent.selectOptions(screen.getByDisplayValue("CLI Bridge (local)"), "manual");
     await waitFor(() =>
       expect(screen.queryByText("LLM Runtime")).not.toBeInTheDocument()
     );
@@ -102,11 +102,11 @@ describe("CreateAgentModal — one-click create (Day-2 basics)", () => {
       .mockResolvedValue({ id: "a-1", token: "t" } as never);
 
     renderModal();
-    await userEvent.type(screen.getByPlaceholderText("z.B. Cody"), "Testo");
+    await userEvent.type(screen.getByPlaceholderText("e.g. Cody"), "Testo");
     const llmSelect = (await screen.findByText("LLM Runtime"))
       .parentElement!.querySelector("select")!;
     await userEvent.selectOptions(llmSelect, "rt-1");
-    await userEvent.click(screen.getByText("Erstellen"));
+    await userEvent.click(screen.getByText("Create"));
 
     await waitFor(() =>
       expect(create).toHaveBeenCalledWith(

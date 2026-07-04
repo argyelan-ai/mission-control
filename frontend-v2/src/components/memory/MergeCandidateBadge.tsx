@@ -36,8 +36,8 @@ export function MergeCandidateBadge() {
         color: C.accent,
       }}
       role="status"
-      aria-label="Mögliches Duplikat — anklicken zum Prüfen"
-      title="Ähnlicher Eintrag gefunden — anklicken zum Prüfen"
+      aria-label="Possible duplicate — click to review"
+      title="Similar entry found — click to review"
     >
       <GitMerge size={12} aria-hidden />
       <span>MERGE</span>

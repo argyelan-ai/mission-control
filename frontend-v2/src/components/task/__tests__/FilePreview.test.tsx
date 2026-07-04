@@ -48,9 +48,9 @@ describe("FilePreview", () => {
     render(<FilePreview fileUrl="/api/v1/files/content?root=vault&subpath=archive.zip" path="archive.zip" />);
 
     // Download button present for an unsupported type…
-    expect(screen.getByRole("button", { name: /herunterladen/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument();
     // …and the user is told there is no inline preview.
-    expect(screen.getByText(/Keine Vorschau/i)).toBeInTheDocument();
+    expect(screen.getByText(/No preview/i)).toBeInTheDocument();
   });
 
   it("offers Download for image types too (preview + fallback)", async () => {
@@ -64,7 +64,7 @@ describe("FilePreview", () => {
     render(<FilePreview fileUrl="/api/v1/files/content?root=media&subpath=pic.png" path="pic.png" />);
 
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: /herunterladen/i })).toBeInTheDocument()
+      expect(screen.getByRole("button", { name: /download/i })).toBeInTheDocument()
     );
   });
 });

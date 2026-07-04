@@ -626,7 +626,7 @@ export default function SessionsPage() {
               </>
             ) : (
               <div className="hidden md:flex items-center justify-center flex-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                Agent auswählen
+                Select an agent
               </div>
             )}
           </div>

@@ -254,11 +254,11 @@ function parseObjectJson(
   try {
     parsed = JSON.parse(trimmed);
   } catch {
-    throw new Error(`${label} muss valides JSON sein`);
+    throw new Error(`${label} must be valid JSON`);
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} muss ein JSON-Objekt sein`);
+    throw new Error(`${label} must be a JSON object`);
   }
   return parsed as Record<string, unknown>;
 }
@@ -587,7 +587,7 @@ function buildWorkflowPayload(
   },
 ) {
   if (!draft.name.trim()) {
-    throw new Error("Workflow-Name fehlt");
+    throw new Error("Workflow name is missing");
   }
 
   let triggerConfig: Record<string, unknown> | null = null;
@@ -603,7 +603,7 @@ function buildWorkflowPayload(
     if (scheduleType === "interval") {
       const hours = Number(draft.trigger_config.schedule_interval_hours ?? 0);
       if (!Number.isFinite(hours) || hours <= 0) {
-        throw new Error("Intervall-Trigger braucht eine Stundenangabe > 0");
+        throw new Error("Interval trigger needs an hour value > 0");
       }
       triggerConfig = {
         schedule_type: "interval",
@@ -613,10 +613,10 @@ function buildWorkflowPayload(
       const scheduleTime = String(draft.trigger_config.schedule_time ?? "").trim();
       const scheduleDay = String(draft.trigger_config.schedule_day ?? "").trim().toLowerCase();
       if (!scheduleTime) {
-        throw new Error("Weekly-Trigger braucht eine Uhrzeit");
+        throw new Error("Weekly trigger needs a time");
       }
       if (!scheduleDay) {
-        throw new Error("Weekly-Trigger braucht einen Wochentag");
+        throw new Error("Weekly trigger needs a weekday");
       }
       triggerConfig = {
         schedule_type: "weekly",
@@ -626,7 +626,7 @@ function buildWorkflowPayload(
     } else {
       const scheduleTime = String(draft.trigger_config.schedule_time ?? "").trim();
       if (!scheduleTime) {
-        throw new Error("Geplante Workflows brauchen eine Uhrzeit");
+        throw new Error("Scheduled workflows need a time");
       }
       triggerConfig = {
         schedule_type: scheduleType,
@@ -639,21 +639,21 @@ function buildWorkflowPayload(
 
   const steps = draft.current_definition.steps.map((step, index) => {
     if (!step.key.trim()) {
-      throw new Error(`Step ${index + 1} braucht einen Key`);
+      throw new Error(`Step ${index + 1} needs a key`);
     }
     if (!step.name.trim()) {
-      throw new Error(`Step ${index + 1} braucht einen Namen`);
+      throw new Error(`Step ${index + 1} needs a name`);
     }
 
     const evaluationContract = parseObjectJson(
       step.evaluation_contract_text,
-      `Evaluation Contract von ${step.name.trim() || step.key.trim()}`,
+      `Evaluation contract for ${step.name.trim() || step.key.trim()}`,
       { allowEmpty: true, defaultWhenEmpty: null }
     );
 
     if (step.step_type === "llm") {
       if (!step.agent_id) {
-        throw new Error(`LLM-Step "${step.name}" braucht einen Agenten`);
+        throw new Error(`LLM step "${step.name}" needs an agent`);
       }
       return {
         key: step.key.trim(),
@@ -677,18 +677,18 @@ function buildWorkflowPayload(
 
     if (step.step_type === "deterministic") {
       if (!step.executor_type) {
-        throw new Error(`Deterministischer Step "${step.name}" braucht einen Executor-Typ`);
+        throw new Error(`Deterministic step "${step.name}" needs an executor type`);
       }
       const executorConfig = parseObjectJson(
         step.executor_config_text,
-        `Executor-Config von ${step.name.trim() || step.key.trim()}`,
+        `Executor config for ${step.name.trim() || step.key.trim()}`,
         {
           allowEmpty: false,
           defaultWhenEmpty: null,
         }
       );
       if (!executorConfig) {
-        throw new Error(`Executor-Config von ${step.name.trim() || step.key.trim()} fehlt`);
+        throw new Error(`Executor config missing for ${step.name.trim() || step.key.trim()}`);
       }
       return {
         key: step.key.trim(),
@@ -2385,14 +2385,14 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
               <SectionTitle
                 eyebrow="Builder"
                 title="Workflow-Setup"
-                description="Die wichtigsten Einstellungen sind hier in einer kompakten Fläche gebündelt. Du musst nicht mehr durch mehrere getrennte Karten springen."
+                description="The most important settings are bundled here in one compact area. No more jumping between several separate cards."
               />
 
               <div className="grid gap-6 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
                 <div className="space-y-6">
                   <InlineSection
                     title="Basics"
-                    description="Name, Status, Kontext und Laufzeitgrenzen. Das ist alles, was du für einen sinnvollen Start wirklich brauchst."
+                    description="Name, status, context, and runtime limits. That's everything you really need for a solid start."
                   >
                     <div className="grid gap-4 md:grid-cols-2">
                       <div className="md:col-span-2">
@@ -2417,7 +2417,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           }
                           className={cn(INPUT_CLASS, "resize-y")}
                           style={inputStyle(true)}
-                          placeholder="Was soll dieser Workflow zuverlässig automatisieren?"
+                          placeholder="What should this workflow reliably automate?"
                         />
                       </div>
 
@@ -2436,7 +2436,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                         >
                           <option value="draft">Draft</option>
                           <option value="validated">Validiert</option>
-                          <option value="active">Aktiv</option>
+                          <option value="active">Active</option>
                           <option value="archived">Archiv</option>
                         </select>
                       </div>
@@ -2473,7 +2473,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           className={INPUT_CLASS}
                           style={inputStyle()}
                         >
-                          <option value="">Kein Board</option>
+                          <option value="">No board</option>
                           {boards.map((board) => (
                             <option key={board.id} value={board.id}>
                               {board.name}
@@ -2496,7 +2496,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           style={inputStyle()}
                           disabled={!draft.board_id}
                         >
-                          <option value="">Kein Projekt</option>
+                          <option value="">No project</option>
                           {projects.map((project) => (
                             <option key={project.id} value={project.id}>
                               {project.name}
@@ -2549,7 +2549,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
 
                   <InlineSection
                     title="Trigger"
-                    description="Hier entscheidest du, ob der Workflow manuell startet oder nach Zeitplan läuft."
+                    description="Decide here whether the workflow starts manually or runs on a schedule."
                   >
                     <div className="grid gap-4 md:grid-cols-2">
                       <div>
@@ -2638,7 +2638,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           ) : draft.trigger_config.schedule_type === "weekly" ? (
                             <>
                               <div>
-                                <FieldLabel>Wochentag</FieldLabel>
+                                <FieldLabel>Weekday</FieldLabel>
                                 <select
                                   value={String(draft.trigger_config.schedule_day ?? "mon")}
                                   onChange={(event) =>
@@ -2662,7 +2662,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                               </div>
 
                               <div>
-                                <FieldLabel>Uhrzeit</FieldLabel>
+                                <FieldLabel>Time</FieldLabel>
                                 <input
                                   type="time"
                                   value={String(draft.trigger_config.schedule_time ?? "08:30")}
@@ -2682,7 +2682,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                             </>
                           ) : (
                             <div>
-                              <FieldLabel>Uhrzeit</FieldLabel>
+                              <FieldLabel>Time</FieldLabel>
                               <input
                                 type="time"
                                 value={String(draft.trigger_config.schedule_time ?? "08:00")}
@@ -2709,7 +2709,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                 <div className="space-y-6">
                   <InlineSection
                     title="Delivery"
-                    description="Discord-Delivery bleibt in derselben Oberfläche und fühlt sich nicht mehr wie ein eigener Unterbereich an."
+                    description="Discord delivery stays in the same surface and no longer feels like a separate section."
                   >
                     <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1">
                       <div>
@@ -2793,7 +2793,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                             className="mt-2 text-xs leading-5"
                             style={{ color: "var(--color-text-muted)" }}
                           >
-                            Discord-Kanäle werden geladen...
+                            Loading Discord channels...
                           </p>
                         )}
                         {draft.delivery_mode === "discord_channel" && channelQueryError && (
@@ -2812,7 +2812,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                               className="mt-2 text-xs leading-5"
                               style={{ color: "var(--color-text-muted)" }}
                             >
-                              Der Discord-Server liefert aktuell keine Kanäle zurück.
+                              The Discord server is not returning any channels right now.
                             </p>
                           )}
                       </div>
@@ -2824,12 +2824,12 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                             {
                               value: "summary_card",
                               title: "summary_card",
-                              description: "Kompakter Statusblock für Repo-Checks, Digests und numerische Ergebnisse.",
+                              description: "Compact status block for repo checks, digests, and numeric results.",
                             },
                             {
                               value: "markdown",
                               title: "markdown",
-                              description: "Freierer Text, gut für Briefings oder LLM-generierte Zusammenfassungen.",
+                              description: "Freer-form text, good for briefings or LLM-generated summaries.",
                             },
                           ].map((option) => {
                             const active = draft.delivery_format === option.value;
@@ -2901,7 +2901,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                   <SectionTitle
                     eyebrow="Steps"
                     title="Workflow-Builder"
-                    description="Links ordnest du deine Schritte, rechts bearbeitest du nur den aktuell gewählten Schritt."
+                    description="Order your steps on the left; edit only the currently selected step on the right."
                   />
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -3119,7 +3119,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                               className="text-xs"
                               style={{ color: C.accent }}
                             >
-                              aus Name
+                              from name
                             </button>
                           </div>
                           <input
@@ -3207,11 +3207,11 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                                 className={INPUT_CLASS}
                                 style={inputStyle()}
                               >
-                                <option value="">Agent wählen</option>
+                                <option value="">Choose agent</option>
                                 {agents.map((agentOption) => (
                                   <option key={agentOption.id} value={agentOption.id}>
                                     {agentOption.name}
-                                    {agentOption.provision_status === "provisioned" ? "" : " • nicht provisioniert"}
+                                    {agentOption.provision_status === "provisioned" ? "" : " • not provisioned"}
                                   </option>
                                 ))}
                               </select>
@@ -3269,7 +3269,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                             }
                             className={cn(INPUT_CLASS, "resize-y")}
                             style={inputStyle(true)}
-                            placeholder="Nutze z. B. {{workflow.name}}, {{run.id}} oder {{steps.previous_step.output}}"
+                            placeholder="Use e.g. {{workflow.name}}, {{run.id}}, or {{steps.previous_step.output}}"
                           />
                         </div>
                       </div>
@@ -3285,10 +3285,10 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           <div className="flex items-center justify-between gap-3">
                             <div>
                               <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-                                Erweiterte Einstellungen
+                                Advanced settings
                               </div>
                               <div className="mt-1 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                                Timeout, Retry, Executor-JSON und optionale Evaluationsregeln
+                                Timeout, retry, executor JSON, and optional evaluation rules
                               </div>
                             </div>
                           </div>
@@ -3296,7 +3296,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
 
                         <div className="mt-4 grid gap-4 md:grid-cols-2">
                           <div>
-                            <FieldLabel>Timeout (Sekunden)</FieldLabel>
+                            <FieldLabel>Timeout (seconds)</FieldLabel>
                             <input
                               type="number"
                               min={5}
@@ -3351,7 +3351,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           </div>
 
                           <div>
-                            <FieldLabel>Retry Delay (Sekunden)</FieldLabel>
+                            <FieldLabel>Retry delay (seconds)</FieldLabel>
                             <input
                               type="number"
                               min={0}
@@ -3417,7 +3417,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
               <SectionTitle
                 eyebrow="Runs"
                 title="Run-History"
-                description="Laufende und vergangene Ausführungen inklusive Delivery-Status und Schritt-Outputs."
+                description="Running and past executions, including delivery status and step outputs."
               />
 
               {activeRun && (
@@ -3493,7 +3493,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                 {runsQuery.isLoading ? (
                   <div className="flex items-center gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
                     <RefreshCw size={15} className="animate-spin" />
-                    Runs werden geladen...
+                    Loading runs...
                   </div>
                 ) : runs.length === 0 ? (
                   <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
@@ -3539,7 +3539,7 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                         <div className="mt-2 flex flex-wrap gap-3 text-xs" style={{ color: "var(--color-text-muted)" }}>
                           <span className="inline-flex items-center gap-1.5">
                             <Clock3 size={12} />
-                            {run.completed_at ? `Fertig ${timeAgo(run.completed_at)}` : "läuft"}
+                            {run.completed_at ? `Done ${timeAgo(run.completed_at)}` : "running"}
                           </span>
                           <span className="inline-flex items-center gap-1.5">
                             <History size={12} />
@@ -3556,18 +3556,18 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
             <GlassCard className="p-5">
               <SectionTitle
                 eyebrow="Run Detail"
-                title="Schritte und Outputs"
-                description="Ideal zum Debuggen: gerenderter Input, stdout/stderr, HTTP-Status und strukturierte Outputs."
+                title="Steps and outputs"
+                description="Ideal for debugging: rendered input, stdout/stderr, HTTP status, and structured outputs."
               />
 
               {runDetailQuery.isLoading ? (
                 <div className="flex items-center gap-3 text-sm" style={{ color: "var(--color-text-secondary)" }}>
                   <RefreshCw size={15} className="animate-spin" />
-                  Run-Detail wird geladen...
+                  Loading run detail...
                 </div>
               ) : !runDetailQuery.data ? (
                 <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
-                  Wähle einen Run aus, um die Step-Details zu sehen.
+                  Select a run to see the step details.
                 </div>
               ) : (
                 <div className="space-y-4">

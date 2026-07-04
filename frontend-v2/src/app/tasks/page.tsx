@@ -135,7 +135,7 @@ function TagManager({
       className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl z-50 overflow-hidden"
       role="dialog"
       aria-modal="true"
-      aria-label="Tags verwalten"
+      aria-label="Manage tags"
       style={{
         backgroundColor: C.bgBase,
         border: `1px solid ${C.border}`,
@@ -146,7 +146,7 @@ function TagManager({
       <div className="max-h-48 overflow-y-auto py-1">
         {allTags.length === 0 && (
           <div className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>
-            Keine Tags vorhanden
+            No tags yet
           </div>
         )}
         {allTags.map((tag) => (
@@ -179,9 +179,9 @@ function TagManager({
               if (e.key === "Enter") handleCreate();
               if (e.key === "Escape") onClose();
             }}
-            placeholder="Neuer Tag..."
+            placeholder="New tag..."
             autoFocus
-            aria-label="Neuen Tag erstellen"
+            aria-label="Create new tag"
             className="flex-1 text-xs px-2 py-1 rounded outline-none min-w-0"
             style={{
               backgroundColor: C.bgSurface,
@@ -310,7 +310,7 @@ function TaskRow({
         <button
           type="button"
           onClick={onClick}
-          aria-label={`Task öffnen: ${task.title}`}
+          aria-label={`Open task: ${task.title}`}
           className="flex-1 text-sm truncate flex items-center gap-1 min-w-0 text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
@@ -369,7 +369,7 @@ function TaskRow({
             href={`/memory?task=${task.id}`}
             onClick={(e) => e.stopPropagation()}
             className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
-            title="Vault: alle Notes + Files zu diesem Task"
+            title="Vault: all notes + files for this task"
             style={{ color: C.textMuted }}
           >
             <Brain size={12} />
@@ -379,7 +379,7 @@ function TaskRow({
               onClick={handleDispatch}
               disabled={dispatchMutation.isPending}
               className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
-              title={isDone ? "Task bereits erledigt -- erneut dispatchen?" : "Task dispatchen"}
+              title={isDone ? "Task already done — dispatch again?" : "Dispatch task"}
               style={{ color: isDone ? C.warning : C.accent }}
             >
               <Send size={12} />
@@ -563,8 +563,8 @@ function PhaseSection({
                 >
                   <Play size={11} fill="currentColor" />
                   {phase.status === "review"
-                    ? "Phase abschliessen & naechste starten"
-                    : "Phase starten"}
+                    ? "Finish phase & start next"
+                    : "Start phase"}
                 </button>
               )}
             </div>
@@ -637,7 +637,7 @@ function RevisionSection({
           className="text-xs transition-colors cursor-pointer"
           style={{ color: C.textMuted }}
         >
-          {showForm ? "Abbrechen" : "+ Neu"}
+          {showForm ? "Cancel" : "+ New"}
         </button>
       </div>
 
@@ -649,10 +649,10 @@ function RevisionSection({
         >
           <input
             type="text"
-            placeholder="Was soll geaendert werden?"
+            placeholder="What should change?"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            aria-label="Revisions-Titel"
+            aria-label="Revision title"
             className="w-full bg-transparent rounded px-2 py-1.5 text-sm focus:outline-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
             autoFocus
@@ -662,7 +662,7 @@ function RevisionSection({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
-            aria-label="Revisions-Beschreibung"
+            aria-label="Revision description"
             className="w-full bg-transparent rounded px-2 py-1.5 text-sm focus:outline-none resize-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
           />
@@ -670,7 +670,7 @@ function RevisionSection({
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value)}
-              aria-label="Priorität auswählen"
+              aria-label="Select priority"
               className="rounded px-2 py-1 text-xs cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
@@ -686,7 +686,7 @@ function RevisionSection({
             <select
               value={assignedAgent}
               onChange={(e) => setAssignedAgent(e.target.value)}
-              aria-label="Agent zuweisen"
+              aria-label="Assign agent"
               className="rounded px-2 py-1 text-xs flex-1 cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
@@ -694,7 +694,7 @@ function RevisionSection({
                 color: C.textSecondary,
               }}
             >
-              <option value="">Agent zuweisen...</option>
+              <option value="">Assign agent...</option>
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.emoji} {a.name}
@@ -710,7 +710,7 @@ function RevisionSection({
                 color: C.accentHover,
               }}
             >
-              {createRevision.isPending ? "..." : "Erstellen"}
+              {createRevision.isPending ? "..." : "Create"}
             </button>
           </div>
         </div>
@@ -869,7 +869,7 @@ function ProjectDetail({
               onClick={() => setShowTagManager(!showTagManager)}
               className="w-5 h-5 rounded-full flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
               style={{ color: C.textMuted }}
-              title="Tags verwalten"
+              title="Manage tags"
             >
               <Plus size={13} />
             </button>
@@ -1145,7 +1145,7 @@ function ProjectList({
                 style={{ color: "inherit" }}
               >
                 <span className="block truncate text-xs">
-                  {isConfirming ? "Loeschen?" : project.name}
+                  {isConfirming ? "Delete?" : project.name}
                 </span>
                 {!isConfirming && projectTags[project.id]?.length > 0 && (
                   <div className="flex flex-wrap gap-0.5 mt-0.5">
@@ -1211,8 +1211,8 @@ function ProjectList({
                     }}
                     className="hidden group-hover:flex items-center justify-center w-4 h-4 shrink-0 rounded transition-colors cursor-pointer relative z-[1] touch-visible"
                     style={{ color: C.textMuted }}
-                    title="Projekt loeschen"
-                    aria-label={`Projekt löschen: ${project.name}`}
+                    title="Delete project"
+                    aria-label={`Delete project: ${project.name}`}
                   >
                     <Trash2 size={11} />
                   </button>
@@ -1467,7 +1467,7 @@ function TasksPageContent() {
         >
           <button
             onClick={() => setMobileView("list")}
-            aria-label="Zurück zur Projektliste"
+            aria-label="Back to project list"
             className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
             style={{
               backgroundColor: C.bgSurface,
@@ -1478,7 +1478,7 @@ function TasksPageContent() {
             <ChevronRight size={14} className="rotate-180" style={{ color: C.textMuted }} />
             <FolderKanban size={14} />
             <span className="truncate max-w-[120px]">
-              {showAdHoc ? "Ad-hoc" : (selectedProject?.name ?? "Projekte")}
+              {showAdHoc ? "Ad-hoc" : (selectedProject?.name ?? "Projects")}
             </span>
           </button>
 

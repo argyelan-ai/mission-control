@@ -267,8 +267,8 @@ export function VoiceButton({ size = 36, variant = "header" }: VoiceButtonProps)
             : "1px solid transparent",
         color: active ? "var(--color-accent-light, #14C4C4)" : "var(--color-text-secondary)",
       }}
-      aria-label={active ? "Voice-Sitzung verwalten" : "Voice-Assistant starten"}
-      title={active ? "Voice aktiv — klicken fuer Optionen" : "Voice starten"}
+      aria-label={active ? "Manage voice session" : "Start voice assistant"}
+      title={active ? "Voice active — click for options" : "Start voice"}
     >
       {connecting ? (
         <div
@@ -334,10 +334,10 @@ export function VoiceOverlay() {
             color: C.textPrimary,
           }}
         >
-          <div className="font-medium mb-1">Voice-Fehler</div>
+          <div className="font-medium mb-1">Voice error</div>
           <div className="opacity-90">{error}</div>
           <button onClick={dismissError} className="mt-2 underline text-xs cursor-pointer">
-            Schliessen
+            Close
           </button>
         </div>
       )}
@@ -438,13 +438,13 @@ function VoiceDrawer({
 
   const isConnected = connectionState === ConnectionState.Connected;
   const stateLabel: Record<string, string> = {
-    listening: "Hört zu",
-    thinking: "Überlegt",
-    speaking: "Spricht",
-    initializing: "Initialisiert",
-    idle: "Bereit",
+    listening: "Listening",
+    thinking: "Thinking",
+    speaking: "Speaking",
+    initializing: "Initializing",
+    idle: "Ready",
   };
-  const label = isConnected ? (stateLabel[state] ?? state) : "Verbindet …";
+  const label = isConnected ? (stateLabel[state] ?? state) : "Connecting …";
   const isSpeaking = state === "speaking";
   const isThinking = state === "thinking";
 
@@ -551,7 +551,7 @@ function VoiceDrawer({
                 type="button"
                 onClick={onClose}
                 className="p-1.5 rounded-md hover:bg-white/5 transition-colors cursor-pointer"
-                aria-label="Schliessen"
+                aria-label="Close"
               >
                 <X size={14} style={{ color: "var(--color-text-muted)" }} />
               </button>
@@ -644,8 +644,8 @@ function VoiceDrawer({
                   border: `1px solid ${muted ? `${C.error}4D` : "rgba(255,255,255,0.06)"}`,
                   color: muted ? C.error : "var(--color-text-primary)",
                 }}
-                aria-label={muted ? "Mikro aktivieren" : "Stummschalten"}
-                title={muted ? "Mikrofon ist stumm" : "Stummschalten"}
+                aria-label={muted ? "Enable microphone" : "Mute"}
+                title={muted ? "Microphone is muted" : "Mute"}
               >
                 {muted ? <MicOff size={15} /> : <Mic size={15} />}
               </button>
@@ -658,8 +658,8 @@ function VoiceDrawer({
                   color: C.textPrimary,
                   boxShadow: "0 4px 14px rgba(0,0,0,0.4)",
                 }}
-                aria-label="Beenden"
-                title="Anruf beenden"
+                aria-label="End"
+                title="End call"
               >
                 <PhoneOff size={15} />
               </button>

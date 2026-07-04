@@ -15,7 +15,7 @@ interface ScheduleHeatmapProps {
   title?: string;
 }
 
-const WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOUR_LABELS = [0, 6, 12, 18];
 // C.accent = "#0FA3A3" → RGB for use in rgba()
 const ACCENT = "15,163,163";
@@ -44,7 +44,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium" style={{ color: C.textPrimary }}>{title}</h3>
           <span className="text-[10px]" style={{ color: C.textDim }}>
-            {max === 0 ? "Keine Daten" : `Max: ${max} Lauf${max === 1 ? "" : "e"}`}
+            {max === 0 ? "No data" : `Max: ${max} run${max === 1 ? "" : "s"}`}
           </span>
         </div>
       )}
@@ -93,7 +93,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
                 return (
                   <div
                     key={`${w}-${h}`}
-                    title={`${WEEKDAYS[w]} ${String(h).padStart(2, "0")}:00 — ${c} Lauf${c === 1 ? "" : "e"}`}
+                    title={`${WEEKDAYS[w]} ${String(h).padStart(2, "0")}:00 — ${c} run${c === 1 ? "" : "s"}`}
                     className="rounded-sm transition-colors"
                     style={{
                       gridColumn: h + 1,
@@ -117,7 +117,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
 
       {/* Legend */}
       <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textDim }}>
-        <span>Wenig</span>
+        <span>Low</span>
         <div className="flex gap-0.5">
           {[0.15, 0.4, 0.65, 0.9].map((a) => (
             <span
@@ -127,7 +127,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
             />
           ))}
         </div>
-        <span>Viel</span>
+        <span>High</span>
       </div>
     </div>
   );

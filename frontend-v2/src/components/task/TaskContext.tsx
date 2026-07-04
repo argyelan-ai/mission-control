@@ -73,7 +73,7 @@ function AgentAssignDropdown({
       >
         <span className="text-base">{current?.emoji || ""}</span>
         <span className="flex-1 text-left text-[13px]">
-          {current?.name || "Nicht zugewiesen"}
+          {current?.name || "Unassigned"}
         </span>
         <ChevronDown
           size={14}
@@ -170,7 +170,7 @@ function ProjectAssignDropdown({
         className="text-[10px] font-semibold uppercase tracking-[0.06em] mb-1"
         style={{ color: C.textMuted }}
       >
-        Projekt
+        Project
       </div>
       <button
         onClick={() => setOpen(!open)}
@@ -182,7 +182,7 @@ function ProjectAssignDropdown({
         }}
       >
         <span className="flex-1 text-left text-[13px]">
-          {current?.name || <span style={{ color: C.textMuted }}>— Kein Projekt (Ad-hoc) —</span>}
+          {current?.name || <span style={{ color: C.textMuted }}>— No project (ad-hoc) —</span>}
         </span>
         <ChevronDown
           size={14}
@@ -226,7 +226,7 @@ function ProjectAssignDropdown({
                 e.currentTarget.style.backgroundColor = currentProjectId === null ? C.accentSubtle : "transparent";
               }}
             >
-              <span className="flex-1 text-left">— Kein Projekt (Ad-hoc) —</span>
+              <span className="flex-1 text-left">— No project (ad-hoc) —</span>
             </button>
             {projects.map((p) => {
               const isActive = p.id === currentProjectId;
@@ -438,7 +438,7 @@ export function TaskContext({ task, agents, boardId, onAssign, onAssignProject }
             <div className="flex items-center gap-2">
               <Lock size={10} style={{ color: C.warning }} />
               <span className="text-[10px]" style={{ color: C.warning }}>
-                Credentials hinterlegt
+                Credentials stored
               </span>
             </div>
           )}

@@ -48,7 +48,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           a.remove();
           URL.revokeObjectURL(url);
         } catch {
-          notify.error(`${basename(sub)} konnte nicht geladen werden`);
+          notify.error(`Failed to load ${basename(sub)}`);
         }
       }
     } finally {
@@ -74,7 +74,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           className="px-2 text-sm tabular-nums whitespace-nowrap"
           style={{ color: C.textSecondary }}
         >
-          {selected.size} ausgewählt
+          {selected.size} selected
         </span>
 
         <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
@@ -96,7 +96,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
         <button
           onClick={() => { if (canDelete) setDeleteOpen(true); }}
           disabled={!canDelete}
-          title={canDelete ? undefined : "Dieser Bereich ist schreibgeschützt — Löschen nicht möglich"}
+          title={canDelete ? undefined : "This area is read-only — delete not available"}
           aria-disabled={!canDelete}
           className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${canDelete ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`}
           style={{ color: STATUS_TEXT.error }}
@@ -104,7 +104,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
-          Löschen
+          Delete
         </button>
 
         <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
@@ -117,7 +117,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textMuted; }}
         >
           <X size={15} />
-          Abbrechen
+          Cancel
         </button>
       </motion.div>
 

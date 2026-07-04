@@ -28,10 +28,10 @@ function formatDay(dateStr: string): string {
   const yesterday = new Date();
   yesterday.setDate(yesterday.getDate() - 1);
 
-  if (d.toDateString() === today.toDateString()) return "Heute";
-  if (d.toDateString() === yesterday.toDateString()) return "Gestern";
+  if (d.toDateString() === today.toDateString()) return "Today";
+  if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
 
-  return d.toLocaleDateString("de-CH", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString("en-US", { weekday: "short", day: "numeric", month: "short", year: "numeric" });
 }
 
 function groupByDay(items: BoardMemory[]): Map<string, BoardMemory[]> {
@@ -57,7 +57,7 @@ export function EpisodicTimeline({
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3">
         <Clock size={32} style={{ color: "var(--color-text-muted)" }} />
-        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Keine episodischen Eintraege.</p>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No episodic entries.</p>
       </div>
     );
   }
@@ -76,7 +76,7 @@ export function EpisodicTimeline({
             </div>
             <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.06)" }} />
             <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>
-              {items.length} {items.length === 1 ? "Eintrag" : "Eintraege"}
+              {items.length} {items.length === 1 ? "entry" : "entries"}
             </span>
           </div>
 
@@ -132,7 +132,7 @@ export function EpisodicTimeline({
                       )}
                       {item.source && item.source !== "user" && item.source !== "system" && (
                         <span className="text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                          von {item.source}
+                          from {item.source}
                         </span>
                       )}
                     </div>

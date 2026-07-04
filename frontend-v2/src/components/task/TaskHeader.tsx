@@ -112,7 +112,7 @@ export function TaskHeader({
           <div className="flex items-center gap-1">
             {isActive && (
               <span className="text-[10px] mr-1" style={{ color: C.warning }}>
-                Agent aktiv!
+                Agent active!
               </span>
             )}
             <button
@@ -124,7 +124,7 @@ export function TaskHeader({
                 color: C.error,
               }}
             >
-              {deleteLoading ? "..." : "Trotzdem löschen"}
+              {deleteLoading ? "..." : "Delete anyway"}
             </button>
             <button
               onClick={() => setConfirmDelete(false)}
@@ -139,7 +139,7 @@ export function TaskHeader({
             onClick={() => setConfirmDelete(true)}
             className="p-1 rounded transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
             style={{ color: isActive ? C.warning : C.textMuted }}
-            title={isActive ? "Agent arbeitet gerade — trotzdem löschen?" : "Task löschen"}
+            title={isActive ? "Agent is working — delete anyway?" : "Delete task"}
           >
             <Trash2 size={14} />
           </button>
