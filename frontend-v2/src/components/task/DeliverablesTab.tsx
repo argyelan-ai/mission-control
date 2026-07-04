@@ -94,12 +94,15 @@ function ImageLightbox({
           className="relative max-w-[90vw] max-h-[88vh]"
           onClick={(e) => e.stopPropagation()}
         >
-          <AuthImage
-            src={src}
-            alt={alt}
-            className="block rounded-xl object-contain max-w-[90vw] max-h-[85vh]"
-            style={{ boxShadow: "0 0 60px rgba(0,0,0,0.8)" }}
-          />
+          {/* Full-page screenshots are far taller than the viewport — show
+              them at full width and let the operator scroll through the page
+              instead of squeezing everything into 85vh. */}
+          <div
+            className="overflow-y-auto overflow-x-hidden rounded-xl"
+            style={{ maxWidth: "90vw", maxHeight: "82vh", boxShadow: "0 0 60px rgba(0,0,0,0.8)" }}
+          >
+            <AuthImage src={src} alt={alt} className="block w-full h-auto" />
+          </div>
           <button
             onClick={onClose}
             className="absolute top-2 right-2 flex items-center justify-center w-8 h-8 rounded-full cursor-pointer"
@@ -201,6 +204,7 @@ export function DeliverablesTab({
                   src={`/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${d.id}/image`}
                   alt={d.title}
                   className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                  style={{ objectPosition: "top" }}
                 />
                 {/* Hover overlay */}
                 <div

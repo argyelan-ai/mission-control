@@ -21,6 +21,7 @@
  */
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, AlertCircle, Trash2, X } from "lucide-react";
@@ -282,12 +283,62 @@ function PropertyMenuCell({
   onSelect: (id: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useClickOutside(() => setOpen(false));
+  // The properties grid clips its children (overflow-hidden for the rounded
+  // corners) and sits inside a scroll container — an absolute dropdown gets
+  // cut off after ~2 entries. Render the menu through a portal with fixed
+  // positioning measured off the trigger instead.
+  const [menuPos, setMenuPos] = useState<{ top: number; bottom: number; left: number; width: number; up: boolean } | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function handleClick(e: MouseEvent) {
+      if (
+        !triggerRef.current?.contains(e.target as Node) &&
+        !menuRef.current?.contains(e.target as Node)
+      ) {
+        setOpen(false);
+      }
+    }
+    // Fixed positioning goes stale when the panel scrolls or resizes — close.
+    function handleScroll(e: Event) {
+      if (menuRef.current?.contains(e.target as Node)) return; // menu's own scrollbar
+      setOpen(false);
+    }
+    document.addEventListener("mousedown", handleClick);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleScroll);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleScroll);
+    };
+  }, [open]);
+
+  const MENU_MAX = 240;
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      const up = window.innerHeight - r.bottom < MENU_MAX + 16 && r.top > MENU_MAX + 16;
+      // "up" positions via bottom instead of a translate — Framer Motion
+      // animates transform and would clobber a translateY(-100%).
+      setMenuPos({
+        top: up ? 0 : r.bottom + 4,
+        bottom: up ? window.innerHeight - r.top + 4 : 0,
+        left: r.left,
+        width: r.width,
+        up,
+      });
+    }
+    setOpen((o) => !o);
+  };
+
   return (
-    <div className="relative" style={{ background: C.bgSurface }} ref={ref}>
+    <div className="relative" style={{ background: C.bgSurface }} ref={triggerRef}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
         className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.03)]"
@@ -300,16 +351,23 @@ function PropertyMenuCell({
           <ChevronDown size={9} className="ml-auto shrink-0" style={{ color: C.textDim }} />
         </span>
       </button>
-      <AnimatePresence>
-        {open && (
+      {open && menuPos && createPortal(
+        <AnimatePresence>
           <motion.div
+            ref={menuRef}
             role="listbox"
-            initial={{ opacity: 0, y: -4 }}
+            initial={{ opacity: 0, y: menuPos.up ? 4 : -4 }}
             animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
+            exit={{ opacity: 0 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute left-0 right-0 top-full mt-1 z-20 rounded-lg py-1 max-h-56 overflow-y-auto"
+            className="rounded-lg py-1 overflow-y-auto"
             style={{
+              position: "fixed",
+              ...(menuPos.up ? { bottom: menuPos.bottom } : { top: menuPos.top }),
+              left: menuPos.left,
+              width: menuPos.width,
+              maxHeight: MENU_MAX,
+              zIndex: 70,
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
@@ -341,8 +399,9 @@ function PropertyMenuCell({
               </button>
             ))}
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   );
 }

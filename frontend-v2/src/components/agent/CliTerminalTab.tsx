@@ -4,12 +4,12 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { Loader2, Square, Send, MonitorOff, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, XTERM_THEME } from "@/lib/colors";
+import { TERM_COLS, TERM_ROWS, useTerminalScale } from "@/lib/terminalScale";
 
 interface CliSession {
   task_id: string;
@@ -195,6 +195,7 @@ function TerminalPanel({
   taskId: string;
 }) {
   const termRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const [term, setTerm] = useState<Terminal | null>(null);
   const [input, setInput] = useState("");
 
@@ -216,24 +217,20 @@ function TerminalPanel({
       disableStdin: false,
     });
 
-    const fitAddon = new FitAddon();
-    t.loadAddon(fitAddon);
     t.open(termRef.current);
-    // Fit after a tick so the browser knows the height of the absolutely positioned div
-    requestAnimationFrame(() => fitAddon.fit());
-
-    const ro = new ResizeObserver(() => fitAddon.fit());
-    ro.observe(termRef.current.parentElement!);
+    // Canonical size — same for every viewer, so the shared tmux window is
+    // never reshaped by a browser/phone (see lib/terminalScale.ts).
+    t.resize(TERM_COLS, TERM_ROWS);
 
     setTerm(t);
     return () => {
       t.dispose();
-      ro.disconnect();
     };
   }, []);
 
   // Connect WebSocket
   useTerminalWebSocket(agentId, taskId, term);
+  const { scale, size } = useTerminalScale(outerRef, term, "fit");
 
   const handleSend = useCallback(() => {
     if (!input.trim()) return;
@@ -254,9 +251,17 @@ function TerminalPanel({
         </span>
       </div>
 
-      {/* xterm.js output — position:relative wrapper gives xterm a defined bounding box */}
+      {/* xterm.js output — canonical size, scaled to fit the container */}
       <div className="flex-1 min-h-0 relative">
-        <div ref={termRef} className="absolute inset-0 p-1" />
+        <div ref={outerRef} className="absolute inset-0 overflow-auto">
+          <div style={{ width: size ? size.w : undefined, height: size ? size.h * scale : undefined }}>
+            <div
+              ref={termRef}
+              className="p-1"
+              style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}
+            />
+          </div>
+        </div>
       </div>
 
       {/* Input Bar — padding-bottom accounts for virtual keyboard on iOS (M9) */}
