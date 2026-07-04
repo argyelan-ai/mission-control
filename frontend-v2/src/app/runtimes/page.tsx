@@ -23,7 +23,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { Runtime, RuntimeState, LMStudioModel, LMSCatalogModel, HFRepoInfo, LMStudioModelsResponse, LMSActiveDownload, VllmContainer } from "@/lib/types";
+import type { Runtime, RuntimeState, RuntimeLiveStatus, LMStudioModel, LMSCatalogModel, HFRepoInfo, LMStudioModelsResponse, LMSActiveDownload, VllmContainer } from "@/lib/types";
 import AppShell from "@/components/layout/AppShell";
 import { cn } from "@/lib/utils";
 import { RuntimeScheduleTab } from "./RuntimeScheduleTab";
@@ -976,6 +976,7 @@ function ModelCatalog() {
 function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
   const [bindOpen, setBindOpen] = useState(false);
   const slug = runtime.slug ?? runtime.id;
+  const queryClient = useQueryClient();
 
   const { data, isLoading } = useQuery({
     queryKey: ["runtimes", slug, "agents"],
@@ -986,6 +987,15 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
   });
 
   const bound = data?.agents ?? [];
+  const anyPending = bound.some((a) => a.pending_runtime_sync);
+
+  const syncNowMutation = useMutation({
+    mutationFn: () => api.runtimes.db.syncAgents(slug),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["runtimes", slug, "agents"] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+    },
+  });
 
   return (
     <>
@@ -1006,19 +1016,29 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
           </span>
         )}
         {bound.map((a) => (
-          <Link
-            key={a.id}
-            href={`/agents/${a.id}`}
-            className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[rgba(255,255,255,0.06)] transition-colors cursor-pointer"
-            style={{
-              backgroundColor: C.accentSubtle,
-              color: C.textSecondary,
-              border: `1px solid ${C.borderAccent}`,
-            }}
-            title={`${a.name} · ${a.agent_runtime}`}
-          >
-            🤖 {a.name}
-          </Link>
+          <span key={a.id} className="inline-flex items-center gap-1">
+            <Link
+              href={`/agents/${a.id}`}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[rgba(255,255,255,0.06)] transition-colors cursor-pointer"
+              style={{
+                backgroundColor: C.accentSubtle,
+                color: C.textSecondary,
+                border: `1px solid ${C.borderAccent}`,
+              }}
+              title={`${a.name} · ${a.agent_runtime}`}
+            >
+              🤖 {a.name}
+            </Link>
+            {a.pending_runtime_sync && (
+              <span
+                className="rounded px-1 text-[10px]"
+                style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
+                title="Model changed while busy — auto-syncs after its current task"
+              >
+                pending sync
+              </span>
+            )}
+          </span>
         ))}
         <button
           onClick={() => setBindOpen(true)}
@@ -1033,6 +1053,23 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
         </button>
       </div>
 
+      {anyPending && (
+        <div
+          className="px-3 pb-2 flex items-center gap-2 text-[11px]"
+          style={{ color: C.textSecondary }}
+        >
+          <span>Model sync pending — runs automatically when the agent is idle.</span>
+          <button
+            onClick={() => syncNowMutation.mutate()}
+            className="underline cursor-pointer"
+            style={{ color: STATUS_TEXT.warning }}
+            title="Force sync NOW — interrupts a running task"
+          >
+            Sync now (force)
+          </button>
+        </div>
+      )}
+
       <BindAgentModal
         open={bindOpen}
         onClose={() => setBindOpen(false)}
@@ -1042,7 +1079,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
   );
 }
 
-function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number }) {
+export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeGb?: number; live?: RuntimeLiveStatus }) {
   const queryClient = useQueryClient();
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1212,6 +1249,34 @@ function RuntimeCard({ runtime, sizeGb }: { runtime: Runtime; sizeGb?: number })
               </>
             )}
           </div>
+          {live && (
+            <div className="flex items-center gap-2 text-xs mt-0.5" style={{ color: C.textSecondary }}>
+              <span
+                className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
+                style={{ background: live.reachable ? STATUS.online : STATUS.error }}
+              />
+              {live.reachable ? (
+                <>
+                  <span className="truncate" title={live.served_model ?? undefined}>
+                    Engine serves: {live.served_model ?? "—"}
+                  </span>
+                  {live.drift && (
+                    <span
+                      className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                      style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
+                      title={`Registry says ${runtime.model_identifier ?? "—"} — will sync on the next watcher tick`}
+                    >
+                      Drift
+                    </span>
+                  )}
+                </>
+              ) : (
+                <span style={{ color: STATUS_TEXT.error }}>
+                  Engine unreachable ({live.consecutive_failures} probes)
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         </div>
@@ -1446,6 +1511,12 @@ export default function RuntimesPage() {
     refetchInterval: 15_000,
   });
 
+  const { data: liveData } = useQuery({
+    queryKey: ["runtimes", "live-status"],
+    queryFn: () => api.runtimes.liveStatus(),
+    refetchInterval: 30_000,
+  });
+
   const lmsRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "lmstudio") ?? [];
   const vllmRuntimes = data?.runtimes.filter((rt) => rt.runtime_type === "vllm_docker") ?? [];
 
@@ -1530,7 +1601,7 @@ export default function RuntimesPage() {
           {data && (
             <div className="flex flex-col gap-2">
               {vllmRuntimes.map((rt) => (
-                <RuntimeCard key={rt.id} runtime={rt} />
+                <RuntimeCard key={rt.id} runtime={rt} live={liveData?.live?.[rt.slug ?? rt.id]} />
               ))}
               {vllmRuntimes.length === 0 && (
                 <div className="text-xs text-center py-10" style={{ color: C.textMuted }}>
@@ -1586,7 +1657,7 @@ export default function RuntimesPage() {
                       <div className="flex-1 h-px" style={{ background: `${C.online}26` }} />
                     </div>
                     <div className="flex flex-col gap-2">
-                      {activeRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} />)}
+                      {activeRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} live={liveData?.live?.[rt.slug ?? rt.id]} />)}
                       {activeModels.map((model) => <LMStudioModelCard key={model.id} model={model} />)}
                     </div>
                   </div>
@@ -1598,7 +1669,7 @@ export default function RuntimesPage() {
                       <div className="flex-1 h-px" style={{ background: C.border }} />
                     </div>
                     <div className="flex flex-col gap-2">
-                      {inactiveRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} />)}
+                      {inactiveRuntimes.map((rt) => <RuntimeCard key={rt.id} runtime={rt} sizeGb={getSizeGb(rt)} live={liveData?.live?.[rt.slug ?? rt.id]} />)}
                       {inactiveModels.map((model) => <LMStudioModelCard key={model.id} model={model} />)}
                     </div>
                   </div>
