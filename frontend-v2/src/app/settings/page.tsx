@@ -46,32 +46,32 @@ interface SettingsSection {
 }
 
 const SECTIONS: SettingsSection[] = [
-  { id: "profile", label: "Profil", icon: User },
-  { id: "security", label: "Sicherheit", icon: Shield },
+  { id: "profile", label: "Profile", icon: User },
+  { id: "security", label: "Security", icon: Shield },
   { id: "autonomy", label: "Autonomy", icon: SlidersHorizontal, adminOnly: true },
   { id: "intelligence", label: "Intelligence", icon: Zap, adminOnly: true },
   { id: "apikeys", label: "API Keys", icon: Key, adminOnly: true },
   { id: "credentials", label: "Credentials", icon: KeyRound, adminOnly: true },
-  { id: "costs", label: "Kosten", icon: DollarSign, adminOnly: true },
-  { id: "users", label: "Benutzer", icon: Users, adminOnly: true },
-  { id: "shortcuts", label: "Tastenkuerzel", icon: Keyboard },
-  { id: "about", label: "Ueber", icon: Info },
+  { id: "costs", label: "Costs", icon: DollarSign, adminOnly: true },
+  { id: "users", label: "Users", icon: Users, adminOnly: true },
+  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
+  { id: "about", label: "About", icon: Info },
 ];
 
 // ── Keyboard shortcuts reference ──────────────────────────────────────────────
 
 const SHORTCUTS = [
-  { keys: ["Cmd", "K"], description: "Command Palette oeffnen" },
-  { keys: ["Cmd", "B"], description: "Sidebar ein-/ausklappen" },
-  { keys: ["Cmd", "N"], description: "Neuer Task" },
-  { keys: ["Cmd", "Shift", "A"], description: "Alle Approvals genehmigen" },
-  { keys: ["Esc"], description: "Dialog/Palette schliessen" },
-  { keys: ["?"], description: "Hilfe (Command Palette)" },
-  { keys: ["g", "h"], description: "Gehe zu Home" },
-  { keys: ["g", "t"], description: "Gehe zu Tasks" },
-  { keys: ["g", "a"], description: "Gehe zu Agents" },
-  { keys: ["g", "i"], description: "Gehe zu Inbox" },
-  { keys: ["g", "s"], description: "Gehe zu Settings" },
+  { keys: ["Cmd", "K"], description: "Open command palette" },
+  { keys: ["Cmd", "B"], description: "Collapse/expand sidebar" },
+  { keys: ["Cmd", "N"], description: "New task" },
+  { keys: ["Cmd", "Shift", "A"], description: "Approve all approvals" },
+  { keys: ["Esc"], description: "Close dialog/palette" },
+  { keys: ["?"], description: "Help (command palette)" },
+  { keys: ["g", "h"], description: "Go to Home" },
+  { keys: ["g", "t"], description: "Go to Tasks" },
+  { keys: ["g", "a"], description: "Go to Agents" },
+  { keys: ["g", "i"], description: "Go to Inbox" },
+  { keys: ["g", "s"], description: "Go to Settings" },
 ];
 
 // ── Timezones ─────────────────────────────────────────────────────────────────
@@ -103,17 +103,17 @@ const TIMEZONES = [
 // ── Autonomy Labels ───────────────────────────────────────────────────────────
 
 const AUTONOMY_LABELS: Record<string, { label: string; desc: string }> = {
-  deploy: { label: "Deploy", desc: "Vercel/Cloudflare Deployments" },
-  external_post: { label: "External Post", desc: "Social Media, Emails" },
-  config_change: { label: "Config Change", desc: "System-Konfiguration aendern" },
-  browser_action: { label: "Browser Action", desc: "Webseiten besuchen" },
-  visual_review: { label: "Visual Review", desc: "Screenshot-Vergleiche" },
-  blocker_decision: { label: "Blocker Decision", desc: "Blockierte Tasks eskalieren" },
-  question: { label: "Question", desc: "Fragen an den Operator" },
-  code_change: { label: "Code Change", desc: "Code schreiben/aendern" },
-  mark_done: { label: "Mark Done", desc: "Tasks als erledigt markieren" },
-  dispatch_escalation: { label: "Dispatch Escalation", desc: "Agent reagiert nicht" },
-  recovery_failed: { label: "Recovery Failed", desc: "Automatische Recovery gescheitert" },
+  deploy: { label: "Deploy", desc: "Vercel/Cloudflare deployments" },
+  external_post: { label: "External Post", desc: "Social media, emails" },
+  config_change: { label: "Config Change", desc: "Change system configuration" },
+  browser_action: { label: "Browser Action", desc: "Visit websites" },
+  visual_review: { label: "Visual Review", desc: "Screenshot comparisons" },
+  blocker_decision: { label: "Blocker Decision", desc: "Escalate blocked tasks" },
+  question: { label: "Question", desc: "Questions to the operator" },
+  code_change: { label: "Code Change", desc: "Write/change code" },
+  mark_done: { label: "Mark Done", desc: "Mark tasks as done" },
+  dispatch_escalation: { label: "Dispatch Escalation", desc: "Agent not responding" },
+  recovery_failed: { label: "Recovery Failed", desc: "Automatic recovery failed" },
 };
 
 const LEVEL_OPTIONS = [
@@ -224,7 +224,7 @@ function SaveButton({
   loading,
   disabled,
   success,
-  label = "Speichern",
+  label = "Save",
 }: {
   onClick: () => void;
   loading: boolean;
@@ -250,7 +250,7 @@ function SaveButton({
       ) : (
         <Save size={14} />
       )}
-      {success ? "Gespeichert" : label}
+      {success ? "Saved" : label}
     </button>
   );
 }
@@ -340,17 +340,17 @@ function ProfileSection() {
 
   return (
     <SectionMotion sectionKey="profile">
-      <SectionHeader title="Profil" description="Deine persoenlichen Informationen." />
+      <SectionHeader title="Profile" description="Your personal information." />
 
       {error && <ErrorBanner message={error} />}
 
       <div className="mc-card p-6 space-y-5" style={cardStyle}>
         {/* Email (read-only) */}
         <div>
-          <FieldLabel>E-Mail</FieldLabel>
-          <InputField value={profile?.email ?? ""} readOnly ariaLabel="E-Mail (schreibgeschützt)" />
+          <FieldLabel>Email</FieldLabel>
+          <InputField value={profile?.email ?? ""} readOnly ariaLabel="Email (read-only)" />
           <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-            E-Mail kann nicht geaendert werden.
+            Email cannot be changed.
           </p>
         </div>
 
@@ -360,27 +360,27 @@ function ProfileSection() {
           <InputField
             value={name}
             onChange={setName}
-            placeholder="Dein vollstaendiger Name"
+            placeholder="Your full name"
           />
         </div>
 
         {/* Preferred Name */}
         <div>
-          <FieldLabel>Anzeigename</FieldLabel>
+          <FieldLabel>Display Name</FieldLabel>
           <InputField
             value={preferredName}
             onChange={setPreferredName}
-            placeholder="Optional: wie du angesprochen werden moechtest"
+            placeholder="Optional: how you'd like to be addressed"
           />
         </div>
 
         {/* Timezone */}
         <div>
-          <FieldLabel>Zeitzone</FieldLabel>
+          <FieldLabel>Timezone</FieldLabel>
           <select
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
-            aria-label="Zeitzone auswählen"
+            aria-label="Select timezone"
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -407,7 +407,7 @@ function ProfileSection() {
 
         {/* Role (read-only display) */}
         <div>
-          <FieldLabel>Rolle</FieldLabel>
+          <FieldLabel>Role</FieldLabel>
           <div className="flex items-center gap-2">
             <span
               className="px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider"
@@ -420,7 +420,7 @@ function ProfileSection() {
               {currentUser?.role ?? "viewer"}
             </span>
             <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-              Kann nur von einem Admin geaendert werden.
+              Can only be changed by an admin.
             </span>
           </div>
         </div>
@@ -472,11 +472,11 @@ function SecuritySection() {
   function handleSubmit() {
     setError("");
     if (newPassword.length < 6) {
-      setError("Neues Passwort muss mindestens 6 Zeichen lang sein.");
+      setError("New password must be at least 6 characters long.");
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("Passwoerter stimmen nicht ueberein.");
+      setError("Passwords do not match.");
       return;
     }
     mutation.mutate();
@@ -490,8 +490,8 @@ function SecuritySection() {
   return (
     <SectionMotion sectionKey="security">
       <SectionHeader
-        title="Sicherheit"
-        description="Passwort aendern und Sicherheitseinstellungen verwalten."
+        title="Security"
+        description="Change your password and manage security settings."
       />
 
       {error && <ErrorBanner message={error} />}
@@ -501,16 +501,16 @@ function SecuritySection() {
           className="text-sm font-medium"
           style={{ color: "var(--color-text-primary)" }}
         >
-          Passwort aendern
+          Change Password
         </h3>
 
         <div>
-          <FieldLabel>Aktuelles Passwort</FieldLabel>
+          <FieldLabel>Current Password</FieldLabel>
           <InputField
             type={showCurrent ? "text" : "password"}
             value={currentPassword}
             onChange={setCurrentPassword}
-            placeholder="Dein aktuelles Passwort"
+            placeholder="Your current password"
             rightElement={
               <button
                 type="button"
@@ -525,12 +525,12 @@ function SecuritySection() {
         </div>
 
         <div>
-          <FieldLabel>Neues Passwort</FieldLabel>
+          <FieldLabel>New Password</FieldLabel>
           <InputField
             type={showNew ? "text" : "password"}
             value={newPassword}
             onChange={setNewPassword}
-            placeholder="Min. 6 Zeichen"
+            placeholder="Min. 6 characters"
             rightElement={
               <button
                 type="button"
@@ -545,16 +545,16 @@ function SecuritySection() {
         </div>
 
         <div>
-          <FieldLabel>Neues Passwort bestaetigen</FieldLabel>
+          <FieldLabel>Confirm New Password</FieldLabel>
           <InputField
             type="password"
             value={confirmPassword}
             onChange={setConfirmPassword}
-            placeholder="Nochmal eingeben"
+            placeholder="Enter again"
           />
           {confirmPassword && newPassword !== confirmPassword && (
             <p className="text-xs mt-1" style={{ color: C.error }}>
-              Passwoerter stimmen nicht ueberein.
+              Passwords do not match.
             </p>
           )}
         </div>
@@ -564,7 +564,7 @@ function SecuritySection() {
           loading={mutation.isPending}
           disabled={!canSubmit}
           success={success}
-          label="Passwort aendern"
+          label="Change Password"
         />
       </div>
     </SectionMotion>
@@ -600,7 +600,7 @@ function AutonomySection() {
     <SectionMotion sectionKey="autonomy">
       <SectionHeader
         title="Autonomy Levels"
-        description="Bestimme fuer jede Aktion, ob Agents autonom handeln (L1), dich informieren (L2) oder auf Genehmigung warten (L3)."
+        description="Decide for each action whether agents act autonomously (L1), notify you (L2), or wait for approval (L3)."
       />
 
       <div className="mc-card p-4 sm:p-6" style={cardStyle}>
@@ -612,7 +612,7 @@ function AutonomySection() {
             color: "var(--color-text-muted)",
           }}
         >
-          <span className="text-xs font-medium uppercase tracking-wide">Aktion</span>
+          <span className="text-xs font-medium uppercase tracking-wide">Action</span>
           {LEVEL_OPTIONS.map((opt) => (
             <span key={opt.value} className="text-xs font-medium text-center" style={{ color: opt.color }}>
               {opt.label}
@@ -780,7 +780,7 @@ function IntelligenceSection() {
     <SectionMotion sectionKey="intelligence">
       <SectionHeader
         title="Intelligence Service"
-        description="Konfiguration fuer automatische Analyse und LLM-Destillation."
+        description="Configuration for automatic analysis and LLM distillation."
       />
 
       {error && <ErrorBanner message={error} />}
@@ -790,10 +790,10 @@ function IntelligenceSection() {
         <div className="mc-card p-5 flex items-center justify-between" style={cardStyle}>
           <div>
             <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-              Service aktiv
+              Service Active
             </span>
             <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-              Periodische Analyse im Hintergrund ausfuehren.
+              Run periodic analysis in the background.
             </p>
           </div>
           <button
@@ -814,11 +814,11 @@ function IntelligenceSection() {
         {/* Analyse */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Analyse
+            Analysis
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <FieldLabel>Analyse-Intervall (Sekunden)</FieldLabel>
+              <FieldLabel>Analysis Interval (seconds)</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.interval_seconds)}
@@ -827,7 +827,7 @@ function IntelligenceSection() {
               <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>Min. 60s</p>
             </div>
             <div>
-              <FieldLabel>Analyse-Fenster (Tage)</FieldLabel>
+              <FieldLabel>Analysis Window (days)</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.analysis_window_days)}
@@ -843,7 +843,7 @@ function IntelligenceSection() {
             Ollama / LLM
           </h3>
           <div>
-            <FieldLabel>Modell</FieldLabel>
+            <FieldLabel>Model</FieldLabel>
             <InputField
               value={config.ollama_model}
               onChange={(v) => update({ ollama_model: v })}
@@ -852,7 +852,7 @@ function IntelligenceSection() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <FieldLabel>Temperatur</FieldLabel>
+              <FieldLabel>Temperature</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.temperature)}
@@ -874,13 +874,13 @@ function IntelligenceSection() {
             </div>
           </div>
           <div>
-            <FieldLabel>System-Prompt</FieldLabel>
+            <FieldLabel>System Prompt</FieldLabel>
             <textarea
-              aria-label="System-Prompt"
+              aria-label="System prompt"
               value={config.system_prompt}
               onChange={(e) => update({ system_prompt: e.target.value })}
               rows={6}
-              placeholder="Leer lassen fuer Standard-Prompt"
+              placeholder="Leave empty for default prompt"
               className={cn(inputBaseClasses, "resize-y")}
               style={{
                 backgroundColor: C.bgDeep,
@@ -897,7 +897,7 @@ function IntelligenceSection() {
               }}
             />
             <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Leer lassen fuer Standard-Prompt. Analyse-Daten werden automatisch angehaengt.
+              Leave empty for default prompt. Analysis data is appended automatically.
             </p>
           </div>
         </div>
@@ -905,11 +905,11 @@ function IntelligenceSection() {
         {/* Schwellenwerte */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Schwellenwerte
+            Thresholds
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <FieldLabel>Outlier-Multiplikator</FieldLabel>
+              <FieldLabel>Outlier Multiplier</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.outlier_multiplier)}
@@ -966,7 +966,7 @@ function IntelligenceSection() {
             ) : (
               <Play size={14} />
             )}
-            {triggerSuccess ? "Analyse gestartet" : "Jetzt analysieren"}
+            {triggerSuccess ? "Analysis started" : "Analyze Now"}
           </button>
         </div>
       </div>
@@ -1027,7 +1027,7 @@ function ApiKeysSection() {
     <SectionMotion sectionKey="apikeys">
       <SectionHeader
         title="API Keys"
-        description="API-Schluessel fuer AI-Provider und Integrationen. Alle Keys werden verschluesselt gespeichert. Provider-Health (LM Studio / Ollama / vLLM / Anthropic Live-Status) siehe /runtimes."
+        description="API keys for AI providers and integrations. All keys are stored encrypted. See /runtimes for provider health (LM Studio / Ollama / vLLM / Anthropic live status)."
       />
 
       {isLoading ? (
@@ -1066,7 +1066,7 @@ function ApiKeysSection() {
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
                       >
-                        {isSet ? "Gesetzt" : "Nicht gesetzt"}
+                        {isSet ? "Set" : "Not set"}
                       </span>
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
@@ -1094,11 +1094,11 @@ function ApiKeysSection() {
                           className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                           style={{ color: "var(--color-text-secondary)" }}
                         >
-                          {isEditing ? "Abbrechen" : "Aendern"}
+                          {isEditing ? "Cancel" : "Change"}
                         </button>
                         <button
                           onClick={() => {
-                            if (confirm(`${tmpl.label} wirklich loeschen?`)) {
+                            if (confirm(`Really delete ${tmpl.label}?`)) {
                               deleteMutation.mutate(tmpl.key);
                             }
                           }}
@@ -1123,7 +1123,7 @@ function ApiKeysSection() {
                         }}
                       >
                         {isAdding ? <X size={12} /> : <Plus size={12} />}
-                        {isAdding ? "Abbrechen" : "Hinzufuegen"}
+                        {isAdding ? "Cancel" : "Add"}
                       </button>
                     )}
                   </div>
@@ -1172,7 +1172,7 @@ function ApiKeysSection() {
                       {createMutation.isPending ? (
                         <Loader2 size={12} className="animate-spin" />
                       ) : (
-                        "Speichern"
+                        "Save"
                       )}
                     </button>
                   </div>
@@ -1188,7 +1188,7 @@ function ApiKeysSection() {
                       type={showValue === tmpl.key ? "text" : "password"}
                       value={editValue}
                       onChange={setEditValue}
-                      placeholder="Neuer Wert..."
+                      placeholder="New value..."
                       rightElement={
                         <button
                           type="button"
@@ -1215,7 +1215,7 @@ function ApiKeysSection() {
                       {updateMutation.isPending ? (
                         <Loader2 size={12} className="animate-spin" />
                       ) : (
-                        "Aktualisieren"
+                        "Update"
                       )}
                     </button>
                   </div>
@@ -1243,8 +1243,8 @@ function UsersSection() {
   return (
     <SectionMotion sectionKey="users">
       <SectionHeader
-        title="Benutzer verwalten"
-        description="Benutzer erstellen, Rollen zuweisen und Konten verwalten."
+        title="Manage Users"
+        description="Create users, assign roles, and manage accounts."
       />
 
       {/* Create button */}
@@ -1262,11 +1262,11 @@ function UsersSection() {
         >
           {showCreateForm ? (
             <>
-              <X size={12} /> Abbrechen
+              <X size={12} /> Cancel
             </>
           ) : (
             <>
-              <Plus size={12} /> Neuer Benutzer
+              <Plus size={12} /> New User
             </>
           )}
         </button>
@@ -1335,27 +1335,27 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
           <InputField value={name} onChange={setName} placeholder="Name" />
         </div>
         <div>
-          <FieldLabel>E-Mail</FieldLabel>
+          <FieldLabel>Email</FieldLabel>
           <InputField value={email} onChange={setEmail} placeholder="user@example.com" />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <FieldLabel>Passwort</FieldLabel>
+          <FieldLabel>Password</FieldLabel>
           <InputField
             type="password"
             value={password}
             onChange={setPassword}
-            placeholder="Min. 6 Zeichen"
+            placeholder="Min. 6 characters"
           />
         </div>
         <div>
-          <FieldLabel>Rolle</FieldLabel>
+          <FieldLabel>Role</FieldLabel>
           <select
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            aria-label="Rolle auswählen"
+            aria-label="Select role"
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -1383,7 +1383,7 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
         onClick={() => mutation.mutate()}
         loading={mutation.isPending}
         disabled={!email.trim() || !name.trim() || password.length < 6}
-        label="Benutzer erstellen"
+        label="Create User"
       />
     </div>
   );
@@ -1460,7 +1460,7 @@ function UserRow({
                   color: "var(--color-text-muted)",
                 }}
               >
-                Du
+                You
               </span>
             )}
             {!user.is_active && (
@@ -1471,7 +1471,7 @@ function UserRow({
                   color: C.error,
                 }}
               >
-                Deaktiviert
+                Deactivated
               </span>
             )}
             {/* Role badge — inline with name */}
@@ -1484,7 +1484,7 @@ function UserRow({
               </span>
             ) : (
               <select
-                aria-label="Rolle ändern"
+                aria-label="Change role"
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
                 className="rounded px-2 py-1 text-xs outline-none cursor-pointer"
@@ -1520,7 +1520,7 @@ function UserRow({
                 {updateMutation.isPending ? (
                   <Loader2 size={12} className="animate-spin" />
                 ) : (
-                  "Speichern"
+                  "Save"
                 )}
               </button>
               <button
@@ -1532,7 +1532,7 @@ function UserRow({
                 className="px-2 py-1 rounded text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
-                Abbrechen
+                Cancel
               </button>
             </>
           ) : (
@@ -1542,7 +1542,7 @@ function UserRow({
                 className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
-                Bearbeiten
+                Edit
               </button>
               <button
                 onClick={() =>
@@ -1553,7 +1553,7 @@ function UserRow({
                   color: user.is_active ? C.error : C.online,
                 }}
               >
-                {user.is_active ? "Deaktivieren" : "Aktivieren"}
+                {user.is_active ? "Deactivate" : "Activate"}
               </button>
             </>
           )}
@@ -1585,8 +1585,8 @@ function ShortcutsSection() {
   return (
     <SectionMotion sectionKey="shortcuts">
       <SectionHeader
-        title="Tastenkuerzel"
-        description="Vim-Style Chord-Shortcuts: druecke g gefolgt von einem Buchstaben"
+        title="Keyboard Shortcuts"
+        description="Vim-style chord shortcuts: press g followed by a letter"
       />
 
       <div className="mc-card p-6" style={cardStyle}>
@@ -1650,7 +1650,7 @@ function AboutSection() {
   });
   return (
     <SectionMotion sectionKey="about">
-      <SectionHeader title="Ueber" description="System-Informationen und Links." />
+      <SectionHeader title="About" description="System information and links." />
 
       <div className="space-y-6">
         {/* System info */}
@@ -1679,7 +1679,7 @@ function AboutSection() {
             {version?.update_available && version.release_url && (
               <div className="flex items-center justify-between pt-2" style={{ borderTop: "1px solid var(--color-border)" }}>
                 <span className="text-sm" style={{ color: "var(--color-warning)" }}>
-                  Update verfuegbar: {version.latest}
+                  Update available: {version.latest}
                 </span>
                 <a
                   href={version.release_url}
@@ -1754,9 +1754,9 @@ function SettingsContent() {
         className="shrink-0 px-4 py-4 md:px-6"
         style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.04)" }}
       >
-        <h1 className="text-heading-page">Einstellungen</h1>
+        <h1 className="text-heading-page">Settings</h1>
         <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-          Profil, Sicherheit, System-Konfiguration
+          Profile, security, system configuration
         </p>
       </motion.div>
 
@@ -1803,14 +1803,8 @@ function SettingsContent() {
                       }
                     }}
                   >
-                    {isActive && (
-                      <motion.div
-                        layoutId="settings-section-indicator"
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
-                        style={{ backgroundColor: C.accent }}
-                        transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                      />
-                    )}
+                    {/* Active state = accent-subtle surface + teal icon (DESIGN.md
+                        navigation pattern) — no side-stripe indicator on top. */}
                     <Icon
                       size={16}
                       style={{

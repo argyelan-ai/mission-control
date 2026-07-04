@@ -6,7 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
 import "@xterm/xterm/css/xterm.css";
 
 export function PluginsShellTab() {
@@ -70,21 +70,7 @@ export function PluginsShellTab() {
     if (!termRef.current || termInstance.current) return;
 
     const term = new XTerm({
-      theme: {
-        background: "#0d0d0d",
-        foreground: "#e5e5e5",
-        cursor: C.accent,
-        cursorAccent: "#0d0d0d",
-        selectionBackground: `${C.accent}4D`,
-        black: "#1a1a1a",
-        green: C.online,
-        red: C.error,
-        yellow: C.warning,
-        blue: C.info,
-        magenta: C.accent,
-        cyan: "#22D3EE",
-        white: "#e5e5e5",
-      },
+      theme: XTERM_THEME,
       scrollback: 5000,
       convertEol: true,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
@@ -145,7 +131,7 @@ export function PluginsShellTab() {
     },
     onError: (e: Error) => {
       setStarting(false);
-      notify.error(`Shell konnte nicht gestartet werden: ${e.message}`);
+      notify.error(`Failed to start shell: ${e.message}`);
     },
   });
 
@@ -164,7 +150,7 @@ export function PluginsShellTab() {
       // ignore
     }
     termInstance.current?.clear();
-    termInstance.current?.writeln("\x1b[33m[Session beendet]\x1b[0m");
+    termInstance.current?.writeln("\x1b[33m[Session ended]\x1b[0m");
   };
 
   return (
@@ -184,7 +170,7 @@ export function PluginsShellTab() {
               className="text-[10px] px-1.5 py-0.5 rounded"
               style={{ background: `${C.online}1A`, color: C.online }}
             >
-              verbunden
+              connected
             </span>
           )}
         </div>
@@ -197,7 +183,7 @@ export function PluginsShellTab() {
               style={{ backgroundColor: C.accent, color: "#fff" }}
             >
               {starting ? <Loader2 size={12} className="animate-spin" /> : <Terminal size={12} />}
-              Installer starten
+              Start installer
             </button>
           ) : (
             <button
@@ -210,7 +196,7 @@ export function PluginsShellTab() {
               }}
             >
               <Power size={12} />
-              Beenden
+              Stop
             </button>
           )}
         </div>
@@ -226,15 +212,15 @@ export function PluginsShellTab() {
             color: "var(--color-text-muted)",
           }}
         >
-          Starte den Installer um MCP-Server, CLI-Plugins oder Custom Skills einzurichten.
-          Der Installer kennt MC-API + Vault — sag ihm einfach was du willst.
+          Start the installer to set up MCP servers, CLI plugins, or custom skills.
+          The installer knows the MC API + Vault — just tell it what you want.
           <br />
           <code className="text-[11px] mt-1 inline-block" style={{ color: STATUS_TEXT.info }}>
-            "Installier Brave-Search MCP für Researcher"
+            "Install Brave Search MCP for Researcher"
           </code>
           <br />
           <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
-            Auch via Task-Delegation: <code>mc delegate --to Installer ...</code>
+            Also via task delegation: <code>mc delegate --to Installer ...</code>
           </span>
         </div>
       )}
@@ -243,7 +229,7 @@ export function PluginsShellTab() {
       <div
         className="rounded-xl overflow-hidden flex-1"
         style={{
-          backgroundColor: "#0d0d0d",
+          backgroundColor: XTERM_THEME.background,
           border: "1px solid rgba(255,255,255,0.06)",
           height: "calc(100dvh - 240px)",
           minHeight: "300px",

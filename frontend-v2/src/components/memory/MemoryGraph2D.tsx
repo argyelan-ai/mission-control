@@ -20,11 +20,11 @@
  *  - colorMode="community" → Louvain community palette (COMMUNITY_PALETTE)
  *  - Node radius via sqrt on link count (nodeRadiusFromLinkCount, 3-12px)
  *    — hubs visibly larger than leaves, like Obsidian's Graph View
- *  - Selected node rendered in BRAND_PURPLE with a thin ring
+ *  - Selected node rendered in GRAPH_SELECTED with a thin ring
  *  - Filter-non-match → globalAlpha = NODE_DIMMED_OPACITY + edges fade too
  *  - Hover → neighbour highlight, non-neighbours fade to 0.12 alpha
  *  - Heatmap mode → translucent halo whose radius grows with viewCount
- *  - Traversal edge → BRAND_PURPLE, 2× width during wikilink fly-to
+ *  - Traversal edge → GRAPH_SELECTED, 2× width during wikilink fly-to
  *  - Forces: charge=-300, linkDistance=25, forceX/Y(0).strength(0.4) for
  *    spherical centering — keeps brain at world origin so framing is stable.
  */
@@ -46,7 +46,7 @@ import { forceX, forceY } from "d3-force";
 
 import type { GraphNode, VaultGraphResponse } from "@/lib/types";
 import {
-  BRAND_PURPLE,
+  GRAPH_SELECTED,
   EDGE_COLOR_DEFAULT,
   EDGE_COLOR_HOVER,
   EDGE_WIDTH,
@@ -58,6 +58,7 @@ import {
   nodeRadiusFromLinkCount,
 } from "./graphConfig";
 import { computeCommunities } from "@/lib/graphLouvain";
+import { C } from "@/lib/colors";
 
 // ── Public imperative handle ──────────────────────────────────────────────────
 
@@ -84,7 +85,7 @@ export interface MemoryGraph2DRef {
 export interface MemoryGraph2DProps {
   /** Full graph payload from GET /api/v1/vault/graph */
   data: VaultGraphResponse;
-  /** Currently selected vault path — rendered in brand purple with a ring */
+  /** Currently selected vault path — rendered in accent teal with a ring */
   selectedPath?: string | null;
   /** Called with the vault path when a node is clicked */
   onNodeClick: (path: string) => void;
@@ -103,7 +104,7 @@ export interface MemoryGraph2DProps {
   matchingNodeIds?: Set<string> | null;
   /**
    * T9 traversal edge — when set, this specific edge is rendered with
-   * brand-purple glow (2× width, full opacity) for 800ms during wikilink
+   * accent-teal glow (2× width, full opacity) for 800ms during wikilink
    * traversal. TraversalAnimation sets it, then clears after zoom completes.
    */
   traversalEdge?: { source: string; target: string } | null;
@@ -325,7 +326,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     // ── Custom canvas renderer ────────────────────────────────────────────────
     //
     // Node color priority:
-    //   1. Selected → BRAND_PURPLE (always)
+    //   1. Selected → GRAPH_SELECTED (always)
     //   2. colorMode="community" → community palette
     //   3. colorMode="type"      → type color
     //
@@ -347,7 +348,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         // Color resolution
         let baseColor: string;
         if (isSelected) {
-          baseColor = BRAND_PURPLE;
+          baseColor = GRAPH_SELECTED;
         } else if (colorMode === "community") {
           baseColor = colorForCommunity(communities[n.id] ?? 0);
         } else {
@@ -384,7 +385,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
         if (isSelected) {
           ctx.beginPath();
           ctx.arc(x, y, radius + 2.5, 0, 2 * Math.PI);
-          ctx.strokeStyle = "#F5F5F5";
+          ctx.strokeStyle = C.textPrimary;
           ctx.lineWidth = 1.5 / globalScale;
           ctx.stroke();
         }
@@ -395,7 +396,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
           ctx.font = `${fontSize}px 'Geist Mono', monospace`;
           ctx.textAlign = "center";
           ctx.textBaseline = "top";
-          ctx.fillStyle = "#F5F5F5";
+          ctx.fillStyle = C.textPrimary;
           ctx.fillText(n.label, x, y + radius + 2 / globalScale);
         }
 
@@ -420,7 +421,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
     const nodeLabel = useCallback((node: object) => {
       const n = node as GraphNode;
       // HTML tooltip emitted by the library on hover.
-      return `<div style="font-family:'Geist Mono',monospace;font-size:11px;color:#F5F5F5;background:rgba(10,10,10,0.92);padding:4px 8px;border-radius:4px;line-height:1.4;pointer-events:none;">${n.label}<br/><span style="opacity:0.55">${n.type} · ${n.agent}</span></div>`;
+      return `<div style="font-family:'Geist Mono',monospace;font-size:11px;color:${C.textPrimary};background:rgba(10,10,10,0.92);padding:4px 8px;border-radius:4px;line-height:1.4;pointer-events:none;">${n.label}<br/><span style="opacity:0.55">${n.type} · ${n.agent}</span></div>`;
     }, []);
 
     // ── Link color — filter-aware + hover-fade + traversal highlight ──────────
@@ -433,7 +434,7 @@ export const MemoryGraph2D = forwardRef<MemoryGraph2DRef, MemoryGraph2DProps>(
 
         // Traversal highlight takes priority
         if (traversalEdge && srcId === traversalEdge.source && tgtId === traversalEdge.target) {
-          return BRAND_PURPLE;
+          return GRAPH_SELECTED;
         }
 
         // Filter dim — when a filter is active, only edges that connect two

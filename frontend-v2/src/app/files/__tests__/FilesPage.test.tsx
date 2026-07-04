@@ -88,36 +88,36 @@ describe("FilesPage — root selector", () => {
     renderPage();
 
     // Select the file → the floating action bar appears.
-    const cb = await screen.findByRole("checkbox", { name: "report.pdf auswählen" });
+    const cb = await screen.findByRole("checkbox", { name: "Select report.pdf" });
     await userEvent.click(cb);
-    expect(await screen.findByText("1 ausgewählt")).toBeInTheDocument();
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
 
     // Switching root clears the selection.
     await userEvent.click(screen.getByRole("button", { name: /Vault/ }));
-    await waitFor(() => expect(screen.queryByText("1 ausgewählt")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("1 selected")).not.toBeInTheDocument());
 
     // Re-select on deliverables, then navigate into a folder → clears again.
     await userEvent.click(screen.getByRole("button", { name: /Deliverables/ }));
-    const cb2 = await screen.findByRole("checkbox", { name: "report.pdf auswählen" });
+    const cb2 = await screen.findByRole("checkbox", { name: "Select report.pdf" });
     await userEvent.click(cb2);
-    expect(await screen.findByText("1 ausgewählt")).toBeInTheDocument();
+    expect(await screen.findByText("1 selected")).toBeInTheDocument();
     await userEvent.click(screen.getByText("archive"));
-    await waitFor(() => expect(screen.queryByText("1 ausgewählt")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("1 selected")).not.toBeInTheDocument());
   });
 
-  it("shows a Papierkorb tab even though /roots returns only real roots; clicking it renders TrashView", async () => {
+  it("shows a Trash tab even though /roots returns only real roots; clicking it renders TrashView", async () => {
     const trashList = vi.spyOn(api.files.trash, "list").mockResolvedValue({ entries: [] });
 
     renderPage();
 
-    // The Papierkorb pseudo-root is appended to the strip, not fetched from /roots.
-    const trashTab = await screen.findByRole("button", { name: /Papierkorb/ });
+    // The Trash pseudo-root is appended to the strip, not fetched from /roots.
+    const trashTab = await screen.findByRole("button", { name: /Trash/ });
     expect(trashTab).toBeInTheDocument();
 
     await userEvent.click(trashTab);
 
     // TrashView renders its empty state and queries the trash endpoint.
     await waitFor(() => expect(trashList).toHaveBeenCalled());
-    expect(await screen.findByText("Papierkorb ist leer")).toBeInTheDocument();
+    expect(await screen.findByText("Trash is empty")).toBeInTheDocument();
   });
 });

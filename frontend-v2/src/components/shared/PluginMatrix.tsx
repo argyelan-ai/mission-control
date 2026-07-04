@@ -23,15 +23,15 @@ function GithubSkillsSection() {
 
   if (isLoading) return (
     <div className="flex items-center gap-2 text-xs py-4" style={{ color: "var(--color-text-muted)" }}>
-      <Loader2 size={12} className="animate-spin" /> Lade GitHub Skills...
+      <Loader2 size={12} className="animate-spin" /> Loading GitHub skills...
     </div>
   );
 
   if (!repos.length) return (
     <div className="text-xs py-4" style={{ color: "var(--color-text-muted)" }}>
-      Keine GitHub Skill-Repos installiert.{" "}
+      No GitHub skill repos installed.{" "}
       <span style={{ color: "rgba(255,255,255,0.3)" }}>
-        Installieren via: <code style={{ color: C.info }}>~/.agents/skills/install-skill.sh owner/repo</code>
+        Install via: <code style={{ color: C.info }}>~/.agents/skills/install-skill.sh owner/repo</code>
       </span>
     </div>
   );
@@ -188,7 +188,7 @@ export function PluginMatrix() {
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["agents"] });
       qc.invalidateQueries({ queryKey: ["cli-plugins"] });
-      notify.success("Team-Zuweisungen gespeichert");
+      notify.success("Team assignments saved");
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -197,11 +197,11 @@ export function PluginMatrix() {
     return (
       <div className="space-y-6">
         <div className="text-xs text-center py-8 text-[var(--color-text-muted)]">
-          Keine CLI-Bridge Agents oder Plugins gefunden
+          No CLI-bridge agents or plugins found
         </div>
         <div>
           <h3 className="text-xs font-medium mb-3" style={{ color: "var(--color-text-muted)" }}>
-            GitHub Skill-Repos
+            GitHub skill repos
           </h3>
           <GithubSkillsSection />
         </div>
@@ -220,7 +220,7 @@ export function PluginMatrix() {
           }}
         >
           <span className="text-xs" style={{ color: C.accent }}>
-            Ungespeicherte Aenderungen
+            Unsaved changes
           </span>
           <div className="flex gap-2">
             <button
@@ -233,7 +233,7 @@ export function PluginMatrix() {
               }}
             >
               <Undo2 size={12} />
-              Verwerfen
+              Discard
             </button>
             <button
               onClick={() => saveMutation.mutate()}
@@ -246,7 +246,7 @@ export function PluginMatrix() {
               ) : (
                 <Save size={12} />
               )}
-              Speichern
+              Save
             </button>
           </div>
         </div>
@@ -261,7 +261,7 @@ export function PluginMatrix() {
         } as React.CSSProperties}
         tabIndex={0}
         role="region"
-        aria-label="Plugin Team-Zuweisungen"
+        aria-label="Plugin team assignments"
       >
         <table className="w-full text-xs">
           <thead>
@@ -346,7 +346,7 @@ export function PluginMatrix() {
       {/* GitHub Skill-Repos */}
       <div>
         <h3 className="text-xs font-medium mb-3" style={{ color: "var(--color-text-muted)" }}>
-          GitHub Skill-Repos
+          GitHub skill repos
         </h3>
         <GithubSkillsSection />
       </div>

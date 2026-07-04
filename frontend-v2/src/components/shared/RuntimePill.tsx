@@ -26,7 +26,7 @@ export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   cloud: C.textDim,          // #6E6E6E — external, neutral
   // Phase 24 (Hermes) — distinct teal variant, intentionally NOT the same as
   // C.accent so single-instance host workers stand out from cli-bridge runtimes.
-  hermes: "#14B8A6",
+  hermes: C.accentHover, // hermes — helle Teal-Stufe
 };
 
 interface Props {

@@ -16,10 +16,10 @@ describe("MCPAddServerModal", () => {
 
   it("renders title, name input, transport select, and submit button", () => {
     renderWithQuery(<MCPAddServerModal onClose={() => {}} onSuccess={() => {}} />);
-    expect(screen.getByText("MCP-Server hinzufügen")).toBeInTheDocument();
+    expect(screen.getByText("Add MCP server")).toBeInTheDocument();
     expect(screen.getByLabelText(/name/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/transport/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /hinzufügen|submit|speichern/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^add$/i })).toBeInTheDocument();
   });
 
   it("transport=stdio shows command and args inputs (and no url)", () => {
@@ -40,8 +40,8 @@ describe("MCPAddServerModal", () => {
     renderWithQuery(<MCPAddServerModal onClose={() => {}} onSuccess={() => {}} />);
     const nameInput = screen.getByLabelText(/name/i);
     await userEvent.type(nameInput, "bad/name");
-    expect(screen.getByText(/nur a-z, 0-9, _, - erlaubt/i)).toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: /hinzufügen|submit|speichern/i });
+    expect(screen.getByText(/only a-z, 0-9, _, - allowed/i)).toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: /^add$/i });
     expect(submit).toBeDisabled();
   });
 
@@ -54,7 +54,7 @@ describe("MCPAddServerModal", () => {
     renderWithQuery(<MCPAddServerModal onClose={() => {}} onSuccess={onSuccess} />);
     await userEvent.type(screen.getByLabelText(/name/i), "filesystem");
     await userEvent.type(screen.getByLabelText(/command/i), "uvx fs-mcp");
-    await userEvent.click(screen.getByRole("button", { name: /hinzufügen|submit|speichern/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^add$/i }));
     await waitFor(() => expect(onSuccess).toHaveBeenCalled());
     expect(create).toHaveBeenCalledWith(expect.objectContaining({
       name: "filesystem", transport: "stdio", command: "uvx fs-mcp",
@@ -70,7 +70,7 @@ describe("MCPAddServerModal", () => {
     renderWithQuery(<MCPAddServerModal onClose={onClose} onSuccess={onSuccess} />);
     await userEvent.type(screen.getByLabelText(/name/i), "filesystem");
     await userEvent.type(screen.getByLabelText(/command/i), "uvx fs-mcp");
-    await userEvent.click(screen.getByRole("button", { name: /hinzufügen|submit|speichern/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^add$/i }));
     await waitFor(() => expect(errorSpy).toHaveBeenCalledWith("Server already exists"));
     expect(onSuccess).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();

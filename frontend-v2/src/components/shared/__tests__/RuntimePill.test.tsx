@@ -81,13 +81,13 @@ describe("RuntimePill", () => {
       <RuntimePill agent={mkAgent({ runtime_id: "rt-hermes" })} variant="default" />,
     );
     await waitFor(() => expect(screen.getByText("Hermes")).toBeInTheDocument());
-    // jsdom normalises hex → rgb(20, 184, 166)
+    // jsdom normalises hex → rgb(20, 196, 196) — C.accentHover
     const dot = Array.from(container.querySelectorAll("span")).find(
       (el) =>
-        el.getAttribute("style")?.includes("20, 184, 166") ||
-        el.getAttribute("style")?.toLowerCase().includes("#14b8a6"),
+        el.getAttribute("style")?.includes("20, 196, 196") ||
+        el.getAttribute("style")?.toLowerCase().includes("#14c4c4"),
     );
-    expect(dot, "expected a span with the hermes teal color #14B8A6").toBeDefined();
+    expect(dot, "expected a span with the hermes teal color #14C4C4").toBeDefined();
     expect(dot).toBeTruthy();
   });
 

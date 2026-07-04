@@ -18,7 +18,7 @@ import { FilePreviewPanel } from "@/components/files/FilePreviewPanel";
 import { TrashView } from "@/components/files/TrashView";
 import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "@/components/files/fileUtils";
 
-/** Sentinel root key for the synthetic Papierkorb pseudo-root. Double-underscore
+/** Sentinel root key for the synthetic Trash pseudo-root. Double-underscore
  *  so it can never collide with a real fs_roots slug (all simple slugs). */
 const TRASH_KEY = "__trash__";
 
@@ -123,7 +123,7 @@ export default function FilesPage() {
               Files
             </h1>
             <p className="text-sm mt-1" style={{ color: C.textMuted }}>
-              Deliverables, Workspaces, Vault und mehr durchsuchen
+              Search deliverables, workspaces, vault, and more
             </p>
           </div>
         </div>
@@ -135,8 +135,8 @@ export default function FilesPage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Dateien suchen…"
-            aria-label="Dateien suchen"
+            placeholder="Search files…"
+            aria-label="Search files"
             className="w-full pl-9 pr-9 py-2.5 text-sm rounded-xl outline-none"
             style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textPrimary }}
             onFocus={(e) => (e.currentTarget.style.borderColor = C.borderAccent)}
@@ -147,7 +147,7 @@ export default function FilesPage() {
               onClick={() => setQuery("")}
               className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
               style={{ color: C.textMuted }}
-              aria-label="Suche leeren"
+              aria-label="Clear search"
             >
               <X size={15} />
             </button>
@@ -198,7 +198,7 @@ export default function FilesPage() {
                 );
               })}
 
-              {/* Synthetic Papierkorb pseudo-root — not in /roots, never an FsRoot */}
+              {/* Synthetic Trash pseudo-root — not in /roots, never an FsRoot */}
               {(() => {
                 const active = activeRootKey === TRASH_KEY;
                 return (
@@ -214,7 +214,7 @@ export default function FilesPage() {
                     onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = C.textSecondary; }}
                   >
                     <Trash2 size={15} style={{ color: active ? C.accent : C.textMuted }} />
-                    Papierkorb
+                    Trash
                   </button>
                 );
               })()}
@@ -297,7 +297,7 @@ function SearchResults({
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16">
         <Search size={28} style={{ color: C.textDim }} />
-        <p className="text-sm" style={{ color: C.textMuted }}>Keine Treffer</p>
+        <p className="text-sm" style={{ color: C.textMuted }}>No results</p>
       </div>
     );
   }
@@ -306,7 +306,7 @@ function SearchResults({
     <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
       <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.textSecondary }}>
-          {results.length} Treffer
+          {results.length} results
         </span>
       </div>
       <div className="divide-y" style={{ borderColor: C.borderSubtle }}>

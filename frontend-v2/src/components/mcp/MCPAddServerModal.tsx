@@ -54,7 +54,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         description: description.trim() || undefined,
       }),
     onSuccess: () => {
-      notify.success(`MCP-Server "${name}" hinzugefügt`);
+      notify.success(`MCP server "${name}" added`);
       onSuccess();
     },
     onError: (e: Error) => notify.error(e.message),
@@ -86,7 +86,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
           role="dialog"
           aria-modal="true"
-          aria-label="MCP-Server hinzufügen"
+          aria-label="Add MCP server"
           style={{
             maxWidth: "min(520px, 100%)",
             background: C.bgBase,
@@ -113,7 +113,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              MCP-Server hinzufügen
+              Add MCP server
             </h2>
           </div>
           <button
@@ -134,7 +134,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="z.B. filesystem"
+              placeholder="e.g. filesystem"
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
               style={{
                 border: `1px solid ${nameInvalid ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.08)"}`,
@@ -144,7 +144,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             />
             {nameInvalid && (
               <span className="text-[11px]" style={{ color: C.error }}>
-                Nur a-z, 0-9, _, - erlaubt
+                Only a-z, 0-9, _, - allowed
               </span>
             )}
           </label>
@@ -176,7 +176,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                   type="text"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
-                  placeholder="z.B. uvx my-mcp-server"
+                  placeholder="e.g. uvx my-mcp-server"
                   className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                   style={{ border: "1px solid rgba(255,255,255,0.08)", color: "var(--color-text-primary)" }}
                   aria-label="Command"
@@ -214,7 +214,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               />
               {urlInvalid && (
                 <span className="text-[11px]" style={{ color: C.error }}>
-                  URL ist erforderlich
+                  URL is required
                 </span>
               )}
             </label>
@@ -244,7 +244,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Abbrechen
+            Cancel
           </button>
           <button
             onClick={() => addMutation.mutate()}
@@ -257,7 +257,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             }}
           >
             {addMutation.isPending && <Loader2 size={12} className="animate-spin" />}
-            Hinzufügen
+            Add
           </button>
         </div>
         </motion.div>

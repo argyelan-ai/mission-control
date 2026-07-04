@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, XTERM_THEME } from "@/lib/colors";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -89,8 +89,9 @@ function useAgentTerminal(
       ws.onclose = (evt) => {
         setConnected(false);
         if (!destroyedRef.current && evt.code !== 1000) {
-          // Auto-reconnect after 3s
-          term.writeln("\r\n\x1b[33m[Reconnecting...]\x1b[0m");
+          // Auto-reconnect after 3s. Status lives in the header badge —
+          // writing "[Reconnecting...]" into the scrollback spammed the
+          // terminal content on every retry.
           reconnectTimer.current = setTimeout(connect, 3000);
         }
       };
@@ -237,23 +238,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
   useEffect(() => {
     if (!termRef.current) return;
     const t = new XTerm({
-      theme: {
-        background: "#0d0d0d",
-        foreground: "#e5e5e5",
-        cursor: C.accent,
-        black: "#1a1a1a",
-        brightBlack: "#444444",
-        white: "#e5e5e5",
-        brightWhite: "#ffffff",
-        blue: "#60A5FA",
-        brightBlue: "#93C5FD",
-        green: "#00CC88",
-        brightGreen: "#34D399",
-        red: "#EF4444",
-        yellow: "#F59E0B",
-        magenta: "#A855F7",
-        cyan: "#06B6D4",
-      },
+      theme: XTERM_THEME,
       scrollback: 5000,
       cursorBlink: true,
       convertEol: true,
@@ -642,7 +627,7 @@ export default function SessionsPage() {
               </>
             ) : (
               <div className="hidden md:flex items-center justify-center flex-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                Agent auswählen
+                Select an agent
               </div>
             )}
           </div>

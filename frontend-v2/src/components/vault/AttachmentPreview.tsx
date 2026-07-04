@@ -125,7 +125,7 @@ export function AttachmentPreview({
           type="button"
           onClick={() => setFullsizeOpen(true)}
           className="block w-full"
-          aria-label={`Bild vergrössern${title ? `: ${title}` : ""}`}
+          aria-label={`Enlarge image${title ? `: ${title}` : ""}`}
         >
           <motion.img
             src={objectUrl}

@@ -29,23 +29,23 @@ describe("FilesActionBar", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows the count + Download/Löschen/Abbrechen for a non-empty selection", () => {
+  it("shows the count + Download/Delete/Cancel for a non-empty selection", () => {
     renderWithQuery(
       <FilesActionBar root={ROOT} selected={new Set(["a.pdf", "b.txt"])} onClear={() => {}} />
     );
-    expect(screen.getByText("2 ausgewählt")).toBeInTheDocument();
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Download/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Löschen/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Abbrechen/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Delete/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Cancel/ })).toBeInTheDocument();
   });
 
-  it("disables Löschen with a read-only title when the root is not deletable; click does not open the dialog", async () => {
+  it("disables Delete with a read-only title when the root is not deletable; click does not open the dialog", async () => {
     renderWithQuery(
       <FilesActionBar root={READONLY} selected={new Set(["a.pdf"])} onClear={() => {}} />
     );
-    const del = screen.getByRole("button", { name: /Löschen/ });
+    const del = screen.getByRole("button", { name: /Delete/ });
     expect(del).toBeDisabled();
-    expect(del).toHaveAttribute("title", "Dieser Bereich ist schreibgeschützt — Löschen nicht möglich");
+    expect(del).toHaveAttribute("title", "This area is read-only — delete not available");
     await userEvent.click(del);
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
@@ -54,7 +54,7 @@ describe("FilesActionBar", () => {
     renderWithQuery(
       <FilesActionBar root={ROOT} selected={new Set(["a.pdf", "sub/b.txt"])} onClear={() => {}} />
     );
-    await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Delete/ }));
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toBeInTheDocument();
     // "a.pdf" appears twice (basename + full mono subpath, equal here).
@@ -62,12 +62,12 @@ describe("FilesActionBar", () => {
     expect(screen.getByText("b.txt")).toBeInTheDocument();
   });
 
-  it("Abbrechen calls onClear", async () => {
+  it("Cancel calls onClear", async () => {
     const onClear = vi.fn();
     renderWithQuery(
       <FilesActionBar root={ROOT} selected={new Set(["a.pdf"])} onClear={onClear} />
     );
-    await userEvent.click(screen.getByRole("button", { name: /Abbrechen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(onClear).toHaveBeenCalled();
   });
 

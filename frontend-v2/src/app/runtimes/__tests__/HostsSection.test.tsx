@@ -105,12 +105,12 @@ describe("HostMetricsBar", () => {
 
     renderWithQuery(<HostMetricsBar />);
 
-    expect(await screen.findByText(/GPU Box 1 nicht erreichbar/)).toBeInTheDocument();
+    expect(await screen.findByText(/GPU Box 1 unreachable/)).toBeInTheDocument();
   });
 
   // flask_wol: backend sets reachable = awake — a sleeping power-managed
   // box (ADR-042) is a NORMAL state and must not render as a failure.
-  it("renders a sleeping flask_wol host as 'Schläft', not as unreachable", async () => {
+  it("renders a sleeping flask_wol host as 'Sleeping', not as unreachable", async () => {
     vi.spyOn(api.hosts, "list").mockResolvedValue([
       makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true }),
     ]);
@@ -122,11 +122,11 @@ describe("HostMetricsBar", () => {
 
     renderWithQuery(<HostMetricsBar />);
 
-    expect(await screen.findByText("Schläft")).toBeInTheDocument();
-    expect(screen.queryByText(/nicht erreichbar/)).toBeNull();
+    expect(await screen.findByText("Sleeping")).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/)).toBeNull();
   });
 
-  it("renders an awake flask_wol host with the German 'Wach' label", async () => {
+  it("renders an awake flask_wol host with the 'Awake' label", async () => {
     vi.spyOn(api.hosts, "list").mockResolvedValue([
       makeHost({ id: "host-w", slug: "wol-box", display_name: "WoL Box", kind: "flask_wol", control_url: "http://192.0.2.20:5555", power_managed: true }),
     ]);
@@ -138,7 +138,7 @@ describe("HostMetricsBar", () => {
 
     renderWithQuery(<HostMetricsBar />);
 
-    expect(await screen.findByText("Wach")).toBeInTheDocument();
+    expect(await screen.findByText("Awake")).toBeInTheDocument();
     // raw backend status ("awake") must not leak through
     expect(screen.queryByText("awake")).toBeNull();
   });
@@ -173,7 +173,7 @@ describe("HostsSection", () => {
     expect(screen.getByText("0 Runtimes")).toBeInTheDocument();
     // non-admin: no add/edit/delete controls
     expect(screen.queryByRole("button", { name: /^Host$/ })).toBeNull();
-    expect(screen.queryByLabelText(/löschen/)).toBeNull();
+    expect(screen.queryByLabelText(/Delete host/)).toBeNull();
   });
 
   it("shows an empty state with 0 hosts (fresh install)", async () => {
@@ -182,7 +182,7 @@ describe("HostsSection", () => {
 
     renderWithQuery(<HostsSection />);
 
-    expect(await screen.findByText(/Keine Hosts registriert/)).toBeInTheDocument();
+    expect(await screen.findByText(/No hosts registered/)).toBeInTheDocument();
   });
 
   it("admin sees the add button and gets the 409 guard message on delete", async () => {
@@ -197,7 +197,7 @@ describe("HostsSection", () => {
 
     expect(await screen.findByRole("button", { name: "Host" })).toBeInTheDocument();
 
-    const deleteBtn = await screen.findByLabelText("Host GPU Box 1 löschen");
+    const deleteBtn = await screen.findByLabelText("Delete host GPU Box 1");
     await userEvent.click(deleteBtn);
 
     expect(

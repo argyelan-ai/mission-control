@@ -92,10 +92,10 @@ const PROVISION_CONFIG: Record<string, { label: string; color: string }> = {
 
 const SKILL_STATUS_CONFIG: Record<string, { color: string; label: string; icon: typeof CheckCircle }> = {
   ready: { color: C.online, label: "Ready", icon: CheckCircle },
-  missing_bin: { color: C.warning, label: "Binary fehlt", icon: AlertTriangle },
-  missing_env: { color: C.warning, label: "Config fehlt", icon: Key },
-  disabled: { color: C.textDim, label: "Deaktiviert", icon: PowerOff },
-  not_installed: { color: C.error, label: "Nicht installiert", icon: XCircle },
+  missing_bin: { color: C.warning, label: "Binary missing", icon: AlertTriangle },
+  missing_env: { color: C.warning, label: "Config missing", icon: Key },
+  disabled: { color: C.textDim, label: "Disabled", icon: PowerOff },
+  not_installed: { color: C.error, label: "Not installed", icon: XCircle },
 };
 
 function SkillStatusIcon({ status }: { status: string }) {
@@ -121,7 +121,7 @@ function SkillRow({
   const installMutation = useMutation({
     mutationFn: (installId: string) => api.skills.install(skill.key, installId),
     onSuccess: () => {
-      notify.success(`${skill.name} wird installiert...`);
+      notify.success(`Installing ${skill.name}...`);
       qc.invalidateQueries({ queryKey: ["openclaw-skills"] });
     },
     onError: (e: Error) => notify.error(e.message),
@@ -130,7 +130,7 @@ function SkillRow({
   const toggleMutation = useMutation({
     mutationFn: (enabled: boolean) => api.skills.update(skill.key, { enabled }),
     onSuccess: (_, enabled) => {
-      notify.success(`${skill.name} ${enabled ? "aktiviert" : "deaktiviert"}`);
+      notify.success(`${skill.name} ${enabled ? "enabled" : "disabled"}`);
       qc.invalidateQueries({ queryKey: ["openclaw-skills"] });
     },
     onError: (e: Error) => notify.error(e.message),
@@ -186,7 +186,7 @@ function SkillRow({
                   backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
                 }}
               >
-                {pendingChange === "add" ? "+ Neu" : "- Entfernt"}
+                {pendingChange === "add" ? "+ New" : "- Removed"}
               </span>
             )}
             {skill.source !== "bundled" && (
@@ -229,7 +229,7 @@ function SkillRow({
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}
-            title="Skill deaktivieren"
+            title="Disable skill"
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <PowerOff size={11} />}
           </button>
@@ -241,10 +241,10 @@ function SkillRow({
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{ color: C.online, backgroundColor: `${C.online}1F` }}
-            title="Skill aktivieren"
+            title="Enable skill"
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
-            Aktivieren
+            Enable
           </button>
         )}
 
@@ -281,9 +281,9 @@ function SkillRow({
             {pendingChange === "remove" && <Undo2 size={11} />}
             {pendingChange === "add" && <Undo2 size={11} />}
             {!isActive && !pendingChange && <Plus size={11} />}
-            {pendingChange === "remove" ? "Rueckgaengig" :
-             pendingChange === "add" ? "Rueckgaengig" :
-             isActive ? "Entfernen" : "Hinzufuegen"}
+            {pendingChange === "remove" ? "Undo" :
+             pendingChange === "add" ? "Undo" :
+             isActive ? "Remove" : "Add"}
           </button>
         )}
       </div>
@@ -370,16 +370,15 @@ function HostSkillsView({
         <Server size={15} className="shrink-0 mt-0.5" style={{ color: C.textSecondary }} />
         <div className="min-w-0">
           <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Host-Agent — Skills via Filesystem
+            Host agent — Skills via filesystem
           </div>
           <p className="text-xs mt-1 leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
-            {agentName} läuft via launchd auf dem Mac ({agentRuntime}) und liest Skills + CLI-Plugins
-            direkt aus dem geteilten Cache <code className="font-mono" style={{ color: "var(--color-text-secondary)" }}>~/.mc/skills</code>.
-            Die Zuweisung ist read-only —{" "}
+            {agentName} runs via launchd on the Mac ({agentRuntime}) and reads Skills + CLI plugins
+            directly from the shared cache <code className="font-mono" style={{ color: "var(--color-text-secondary)" }}>~/.mc/skills</code>.
+            This assignment is read-only — manage it on the{" "}
             <Link href="/skills" className="underline" style={{ color: C.accent }}>
-              auf der Skills-Seite
-            </Link>{" "}
-            verwalten.
+              Skills page
+            </Link>.
           </p>
         </div>
       </div>
@@ -390,7 +389,7 @@ function HostSkillsView({
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Skills & Plugins suchen..."
+          placeholder="Search skills & plugins..."
           className="flex-1 bg-transparent text-sm outline-none text-[var(--color-text-primary)]"
         />
       </GlassCard>
@@ -400,7 +399,7 @@ function HostSkillsView({
         <div className="flex items-center gap-2">
           <Box size={13} style={{ color: C.accent }} />
           <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>Custom Skills</h2>
-          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activeSkills.length} aktiv</span>
+          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activeSkills.length} active</span>
         </div>
         <div className="space-y-1.5">
           {fSkills.map((s) => (
@@ -409,8 +408,8 @@ function HostSkillsView({
           {fSkills.length === 0 && (
             <div className="text-xs text-center py-5 flex items-center justify-center gap-2" style={{ color: "var(--color-text-muted)" }}>
               {loading
-                ? <><Loader2 size={12} className="animate-spin" /> Laden…</>
-                : search ? "Keine Skills gefunden" : "Keine Custom Skills aktiv"}
+                ? <><Loader2 size={12} className="animate-spin" /> Loading…</>
+                : search ? "No skills found" : "No custom skills active"}
             </div>
           )}
         </div>
@@ -421,7 +420,7 @@ function HostSkillsView({
         <div className="flex items-center gap-2">
           <Package size={13} style={{ color: C.online }} />
           <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>CLI Plugins</h2>
-          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activePlugins.length} aktiv</span>
+          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activePlugins.length} active</span>
         </div>
         <div className="space-y-1.5">
           {fPlugins.map((p) => (
@@ -430,8 +429,8 @@ function HostSkillsView({
           {fPlugins.length === 0 && (
             <div className="text-xs text-center py-5 flex items-center justify-center gap-2" style={{ color: "var(--color-text-muted)" }}>
               {loading
-                ? <><Loader2 size={12} className="animate-spin" /> Laden…</>
-                : search ? "Keine Plugins gefunden" : "Keine CLI Plugins aktiv"}
+                ? <><Loader2 size={12} className="animate-spin" /> Loading…</>
+                : search ? "No plugins found" : "No CLI plugins active"}
             </div>
           )}
         </div>
@@ -469,7 +468,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
       qc.invalidateQueries({ queryKey: ["agent-skills", agentId] });
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
       qc.invalidateQueries({ queryKey: ["agents"] });
-      notify.success("Skills gespeichert");
+      notify.success("Skills saved");
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -536,7 +535,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
           <div className="flex items-center gap-3">
             <h2 className="text-sm font-medium text-[var(--color-text-primary)]">CLI Plugins</h2>
             <span className="text-xs text-[var(--color-text-muted)]">
-              {savedCliPlugins?.length ?? 0} aktiv / {cliPlugins.length} verfuegbar
+              {savedCliPlugins?.length ?? 0} active / {cliPlugins.length} available
             </span>
           </div>
           {cliDirty && (
@@ -545,14 +544,14 @@ function SkillsTab({ agentId }: { agentId: string }) {
                 {cliAdded.size > 0 && `+${cliAdded.size}`}
                 {cliAdded.size > 0 && cliRemoved.size > 0 && " / "}
                 {cliRemoved.size > 0 && `-${cliRemoved.size}`}
-                {" "}Aenderung{(cliAdded.size + cliRemoved.size) !== 1 ? "en" : ""}
+                {" "}Change{(cliAdded.size + cliRemoved.size) !== 1 ? "s" : ""}
               </span>
               <button
                 onClick={() => setDraftCliPlugins(null)}
                 className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer"
                 style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
               >
-                <Undo2 size={12} /> Verwerfen
+                <Undo2 size={12} /> Discard
               </button>
               <button
                 onClick={handleCliSave}
@@ -561,7 +560,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
                 style={{ backgroundColor: C.accent, color: "#fff" }}
               >
                 {setAgentSkillsMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                Speichern
+                Save
               </button>
             </div>
           )}
@@ -573,7 +572,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Plugins suchen..."
+            placeholder="Search plugins..."
             className="flex-1 bg-transparent text-sm outline-none text-[var(--color-text-primary)]"
           />
         </GlassCard>
@@ -584,7 +583,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
             style={{ backgroundColor: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
           >
             <Save size={13} />
-            Ungespeicherte Aenderungen
+            Unsaved changes
           </div>
         )}
 
@@ -598,7 +597,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
               })}
             {cliPluginRows.length === 0 && (
               <div className="text-xs text-center py-6 text-[var(--color-text-muted)]">
-                Keine CLI Plugins im Cache gefunden
+                No CLI plugins found in cache
               </div>
             )}
           </AnimatePresence>
@@ -641,8 +640,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
     // Locked badge for host agents
     const reason =
       agent.agent_runtime === "host"
-        ? "Host-Agent: Runtime wird via launchd auf dem Mac gesteuert (Boss = Opus 4.7)."
-        : "Runtime-Switch nicht unterstützt für diesen Agent-Typ.";
+        ? "Host agent: runtime is controlled via launchd on the Mac (Boss = Opus 4.7)."
+        : "Runtime switch not supported for this agent type.";
     return (
       <div
         className="rounded-xl p-4"
@@ -715,9 +714,9 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
               })}
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Wechsel triggert <code className="font-mono">docker restart</code>{" "}
-              (~5s) — bei Cross-Image Switch Container-Rebuild (~30–90s).
-              Compatibility-Check + Warnings erscheinen im Confirm-Modal.
+              Switching triggers <code className="font-mono">docker restart</code>{" "}
+              (~5s) — for cross-image switches, a container rebuild (~30–90s).
+              Compatibility check + warnings appear in the confirm modal.
             </div>
           </div>
           <div className="pt-[22px]">
@@ -756,8 +755,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
           qc.invalidateQueries({ queryKey: ["runtime-switch-preview", agentId] });
           notify.success(
             res._switch?.image_switched
-              ? `Runtime gewechselt — Image neu gebaut (${Math.round((res._switch?.duration_ms ?? 0) / 1000)}s)`
-              : "Runtime gewechselt",
+              ? `Runtime switched — image rebuilt (${Math.round((res._switch?.duration_ms ?? 0) / 1000)}s)`
+              : "Runtime switched",
           );
           return res._switch ?? null;
         }}
@@ -799,9 +798,9 @@ function ConfigTab({
       api.agents.update(agentId, { secret_id } as Partial<Agent>),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
-      notify.success("API Key gespeichert");
+      notify.success("API key saved");
     },
-    onError: (e: Error) => notify.error(`Fehler beim Speichern: ${e.message}`),
+    onError: (e: Error) => notify.error(`Failed to save: ${e.message}`),
   });
 
   const applyRestartMutation = useMutation({
@@ -811,7 +810,7 @@ function ConfigTab({
       notify.success(`Config synced + ${restartStatus}`);
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
     },
-    onError: (e: Error) => notify.error(`Sync fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Sync failed: ${e.message}`),
   });
 
   const handleSecretChange = (newValue: string) => {
@@ -882,7 +881,7 @@ function ConfigTab({
                     color: C.warning,
                     border: `1px solid ${C.warning}40`,
                   }}
-                  title="Gateway-Agent: der Key wird in openclaw.json gesetzt und wirkt global auf alle openclaw-Agents mit demselben Provider."
+                  title="Gateway agent: the key is set in openclaw.json and applies globally to all openclaw agents with the same provider."
                 >
                   Gateway · global
                 </span>
@@ -907,8 +906,8 @@ function ConfigTab({
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {agent.agent_runtime === "openclaw"
-                ? "Aus Settings → API Keys. Wird bei Apply ins openclaw.json gepusht (models.providers.*.apiKey) und Sessions werden resetted. Wirkt global auf alle Gateway-Agents mit demselben Provider."
-                : "Aus Settings → API Keys. Wird bei Apply in das .env des Containers geschrieben und beim openclaude-Start geladen."}
+                ? "From Settings → API Keys. Pushed into openclaw.json on Apply (models.providers.*.apiKey) and sessions are reset. Applies globally to all gateway agents with the same provider."
+                : "From Settings → API Keys. Written to the container's .env on Apply and loaded on openclaude start."}
             </div>
             {/* Warning: Ollama local daemon proxy case.
                 DB field agent.model may be with or without "ollama/" prefix
@@ -923,10 +922,10 @@ function ConfigTab({
                     color: C.warning,
                   }}
                 >
-                  ⚠️ <strong>Achtung:</strong> Dieses Model (<code className="font-mono">{agent.model}</code>) läuft über den
-                  lokalen Ollama-Daemon (<code className="font-mono">127.0.0.1:11434</code>), der dann mit seinem
-                  <strong> eigenen Account</strong> zu ollama.com proxyiert (authentifiziert via <code className="font-mono">~/.ollama/id_ed25519</code>).
-                  Dein API-Key hier wird <strong>nicht</strong> verwendet. Fix: <code className="font-mono">ollama signin</code> auf dem Host mit dem gewünschten Account.
+                  ⚠️ <strong>Warning:</strong> This model (<code className="font-mono">{agent.model}</code>) runs through the
+                  local Ollama daemon (<code className="font-mono">127.0.0.1:11434</code>), which proxies to ollama.com with
+                  <strong> its own account</strong> (authenticated via <code className="font-mono">~/.ollama/id_ed25519</code>).
+                  Your API key here is <strong>not</strong> used. Fix: run <code className="font-mono">ollama signin</code> on the host with the desired account.
                 </div>
               )}
           </div>
@@ -946,7 +945,7 @@ function ConfigTab({
                 color: "var(--color-text-secondary)",
               }}
             >
-              {updateSecretMutation.isPending ? "Speichere…" : "Save"}
+              {updateSecretMutation.isPending ? "Saving…" : "Save"}
             </button>
             <button
               onClick={handleSaveAndApply}
@@ -1054,7 +1053,7 @@ function ConfigTab({
               className="text-xs px-2 py-1 rounded-lg cursor-pointer"
               style={{ color: "var(--color-text-secondary)", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
             >
-              {syncConfigMutation.isPending ? "..." : "Neu generieren"}
+              {syncConfigMutation.isPending ? "..." : "Regenerate"}
             </button>
           </div>
         )}
@@ -1083,16 +1082,16 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
       setIsEditing(false);
-      notify.success("Memory gespeichert & auf Gateway gepusht");
+      notify.success("Memory saved & pushed to gateway");
     },
-    onError: () => notify.error("Fehler beim Speichern"),
+    onError: () => notify.error("Failed to save"),
   });
 
   const clearMutation = useMutation({
     mutationFn: () => api.agents.config.update(agentId, "memory_md", ""),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
-      notify.success("Memory geleert");
+      notify.success("Memory cleared");
     },
   });
 
@@ -1109,7 +1108,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
       <GlassCard className="flex flex-col min-h-[400px]">
         <div className="flex items-center justify-between p-4 border-b border-[rgba(255,255,255,0.06)]">
           <span className="text-sm font-medium text-[var(--color-text-primary)]">
-            MEMORY.md bearbeiten
+            Edit MEMORY.md
           </span>
           <div className="flex gap-2">
             <button
@@ -1117,7 +1116,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}
             >
-              Abbrechen
+              Cancel
             </button>
             <button
               onClick={() => saveMutation.mutate(editContent)}
@@ -1125,7 +1124,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
               style={{ backgroundColor: C.accent, color: "white" }}
             >
-              {saveMutation.isPending ? "Speichert..." : "Speichern & Sync"}
+              {saveMutation.isPending ? "Saving..." : "Save & Sync"}
             </button>
           </div>
         </div>
@@ -1149,11 +1148,11 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
         <div className="flex gap-2">
           {memory && (
             <button
-              onClick={() => { if (confirm("Memory wirklich loeschen?")) clearMutation.mutate(); }}
+              onClick={() => { if (confirm("Really delete memory?")) clearMutation.mutate(); }}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: C.error, backgroundColor: `${C.error}14` }}
             >
-              Loeschen
+              Delete
             </button>
           )}
           <button
@@ -1161,7 +1160,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
             style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "var(--color-text-primary)", border: "1px solid rgba(255,255,255,0.07)" }}
           >
-            Bearbeiten
+            Edit
           </button>
         </div>
       </div>
@@ -1175,7 +1174,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <Brain size={36} className="text-[var(--color-text-muted)] opacity-30" />
             <p className="text-sm text-[var(--color-text-muted)]">
-              {agentName} hat noch keine Erkenntnisse gespeichert.
+              {agentName} hasn't saved any insights yet.
             </p>
             <p className="text-xs text-center max-w-xs text-[var(--color-text-muted)]">
               Agents aktualisieren ihre Memory via{" "}
@@ -1188,7 +1187,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="mt-2 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "var(--color-text-secondary)", border: "1px solid rgba(255,255,255,0.07)" }}
             >
-              Manuell befuellen
+              Fill in manually
             </button>
           </div>
         )}
@@ -1217,7 +1216,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
   return (
     <div className="space-y-4">
       <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-        MCP-Server Zuweisung fur {agent.name}. Deaktiviere Server die dieser Agent nicht braucht.
+        MCP server assignment for {agent.name}. Disable servers this agent doesn't need.
       </p>
       <MCPServerMatrix servers={servers ?? []} agents={[agent]} />
     </div>
@@ -1245,11 +1244,11 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
   const deleteMutation = useMutation({
     mutationFn: (filename: string) => api.agents.localMemory.delete(agentId, filename),
     onSuccess: (_, filename) => {
-      notify.success(`${filename} gelöscht`);
+      notify.success(`${filename} deleted`);
       qc.invalidateQueries({ queryKey: ["agent-local-memory", agentId] });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : "Löschen fehlgeschlagen";
+      const msg = err instanceof Error ? err.message : "Delete failed";
       notify.error(msg);
     },
   });
@@ -1269,7 +1268,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
           <AlertTriangle size={16} style={{ color: C.error }} />
           <div>
             <p className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-              Fehler beim Laden
+              Failed to load
             </p>
             <p className="text-xs mt-1">{error instanceof Error ? error.message : String(error)}</p>
           </div>
@@ -1290,15 +1289,15 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
             {data?.directory ?? "—"}
           </p>
           <p className="text-xs mt-1" style={{ color: "var(--color-text-secondary)" }}>
-            Claude-lokale Memory-Files von {agentName}. Werden vom Agent bei jedem
-            Turn gelesen — falsche Lessons hier verzerren das Verhalten dauerhaft.
+            Claude local memory files for {agentName}. Read by the agent on every
+            turn — wrong lessons here permanently distort behavior.
           </p>
         </div>
         <button
           onClick={() => qc.invalidateQueries({ queryKey: ["agent-local-memory", agentId] })}
           className="p-1.5 rounded-lg cursor-pointer transition-colors"
           style={{ background: "rgba(255,255,255,0.04)", color: "var(--color-text-muted)" }}
-          title="Neu laden"
+          title="Reload"
         >
           <RefreshCw size={14} />
         </button>
@@ -1308,8 +1307,8 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
         <GlassCard className="p-4">
           <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-secondary)" }}>
             <WifiOff size={14} />
-            Container nicht running (state: {containerState ?? "unknown"}). Starte den Container,
-            um die Files zu sehen.
+            Container not running (state: {containerState ?? "unknown"}). Start the container
+            to see the files.
           </div>
         </GlassCard>
       )}
@@ -1317,7 +1316,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
       {isRunning && files.length === 0 && (
         <GlassCard className="p-6">
           <div className="text-center text-xs" style={{ color: "var(--color-text-muted)" }}>
-            Keine .md-Files im Memory-Verzeichnis.
+            No .md files in the memory directory.
           </div>
         </GlassCard>
       )}
@@ -1346,7 +1345,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
               </button>
               <button
                 onClick={() => {
-                  if (confirm(`"${file.name}" wirklich löschen? Diese Aktion ist nicht rückgängig.`)) {
+                  if (confirm(`Really delete "${file.name}"? This action cannot be undone.`)) {
                     deleteMutation.mutate(file.name);
                   }
                 }}
@@ -1357,7 +1356,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                   border: `1px solid ${C.error}33`,
                   color: C.error,
                 }}
-                title="Datei löschen"
+                title="Delete file"
               >
                 <Trash2 size={13} />
               </button>
@@ -1370,7 +1369,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 role="region"
                 aria-label="File content"
               >
-                {file.content || "(leer)"}
+                {file.content || "(empty)"}
               </pre>
             )}
           </GlassCard>
@@ -1488,7 +1487,7 @@ function OverviewTab({
                 <span className="text-[11px] text-[var(--color-text-muted)]">Runtime</span>
                 <RuntimePill agent={agent} />
               </div>
-              <InfoRow label="Agent-Typ" value={agent.agent_runtime ?? "manual"} />
+              <InfoRow label="Agent Type" value={agent.agent_runtime ?? "manual"} />
               {agent.discord_channel_name && (
                 <InfoRow label="Discord" value={`#${agent.discord_channel_name}`} />
               )}
@@ -1506,16 +1505,16 @@ function OverviewTab({
                 className="text-[10px] cursor-pointer"
                 style={{ color: C.accent }}
               >
-                Verwalten
+                Manage
               </button>
             </div>
             {displaySkills.length > 0 ? (
               <SkillBadges skills={displaySkills} />
             ) : (
               <div className="text-xs text-[var(--color-text-muted)]">
-                Keine Skills zugewiesen --{" "}
+                No skills assigned —{" "}
                 <button onClick={() => setActiveTab("skills")} className="underline cursor-pointer" style={{ color: C.accent }}>
-                  Skills hinzufuegen
+                  Add skills
                 </button>
               </div>
             )}
@@ -1541,7 +1540,7 @@ function OverviewTab({
               Cron Jobs
             </h2>
             {agentJobs.length === 0 ? (
-              <span className="text-xs text-[var(--color-text-muted)]">Keine aktiven Triggers</span>
+              <span className="text-xs text-[var(--color-text-muted)]">No active triggers</span>
             ) : (
               <div className="space-y-1">
                 {agentJobs.map((job: ScheduledJob) => {
@@ -1638,7 +1637,7 @@ function OverviewTab({
                 ))}
               </div>
             ) : (
-              <div className="text-xs text-[var(--color-text-muted)]">Noch keine Events</div>
+              <div className="text-xs text-[var(--color-text-muted)]">No events yet</div>
             )}
           </GlassCard>
         </div>
@@ -1735,7 +1734,7 @@ export default function AgentDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agents"] });
-      notify.success("Agent aktualisiert");
+      notify.success("Agent updated");
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -1746,13 +1745,13 @@ export default function AgentDetailPage() {
       if (data.reply) {
         notify.success(`${agent?.emoji ?? ""} ${agent?.name ?? "Agent"}: ${data.reply}`);
       } else {
-        notify.info("Trigger gesendet");
+        notify.info("Trigger sent");
       }
       setTriggerMessage("");
       setShowTriggerInput(false);
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: (e: Error) => notify.error(`Trigger fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Trigger failed: ${e.message}`),
   });
 
   const resetMutation = useMutation({
@@ -1761,16 +1760,16 @@ export default function AgentDetailPage() {
       notify.success("Agent reset");
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: () => notify.error("Reset fehlgeschlagen"),
+    onError: () => notify.error("Reset failed"),
   });
 
   const restartWorkerMutation = useMutation({
     mutationFn: () => api.agents.restartWorker(id),
     onSuccess: () => {
-      notify.success("Worker neu gestartet");
+      notify.success("Worker restarted");
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: () => notify.error("Worker restart fehlgeschlagen"),
+    onError: () => notify.error("Worker restart failed"),
   });
 
   const forceRecreateMutation = useMutation({
@@ -1782,7 +1781,7 @@ export default function AgentDetailPage() {
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agent-local-memory", id] });
     },
-    onError: (e: Error) => notify.error(`Force-Recreate fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Force recreate failed: ${e.message}`),
   });
 
   const provisionMutation = useMutation<unknown, Error>({
@@ -1791,7 +1790,7 @@ export default function AgentDetailPage() {
       notify.success("Agent provisioned");
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: (e: Error) => notify.error(`Provisioning fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(`Provisioning failed: ${e.message}`),
   });
 
   // Host-helper health: the Provision button silently failed with a generic
@@ -1830,18 +1829,18 @@ export default function AgentDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agent-config", id] });
-      notify.success("Agents neu konfiguriert -- Templates + USER.md + MEMORY.md gepusht");
+      notify.success("Agents reconfigured -- templates + USER.md + MEMORY.md pushed");
     },
-    onError: () => notify.error("Fehler beim Neu-konfigurieren"),
+    onError: () => notify.error("Failed to reconfigure"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.agents.delete(id),
     onSuccess: () => {
-      notify.success(`${agent?.emoji ?? ""} ${agent?.name ?? "Agent"} geloescht`);
+      notify.success(`${agent?.emoji ?? ""} ${agent?.name ?? "Agent"} deleted`);
       router.push("/agents");
     },
-    onError: () => notify.error("Loeschen fehlgeschlagen"),
+    onError: () => notify.error("Delete failed"),
   });
 
   if (!agent) {
@@ -1868,7 +1867,7 @@ export default function AgentDetailPage() {
           href="/agents"
           className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
         >
-          <ArrowLeft size={14} /> Alle Agents
+          <ArrowLeft size={14} /> All Agents
         </Link>
 
         {/* Agent Header */}
@@ -1910,7 +1909,7 @@ export default function AgentDetailPage() {
                   <div className="flex items-center gap-1.5 ml-auto">
                     <StatusDot status={dotStatus} pulse={dotStatus === "online" || dotStatus === "busy"} />
                     <span className="text-sm capitalize text-[var(--color-text-secondary)]">
-                      {agent.status === "restarting" ? "Neustart..." : agent.status}
+                      {agent.status === "restarting" ? "Restarting..." : agent.status}
                     </span>
                   </div>
                 </div>
@@ -1997,7 +1996,7 @@ export default function AgentDetailPage() {
                   <div className="shrink-0">
                     <ActionButton
                       icon={Zap}
-                      label="Senden"
+                      label="Send"
                       color={C.accent}
                       onClick={() => triggerMutation.mutate(triggerMessage || undefined)}
                       loading={triggerMutation.isPending}
@@ -2007,7 +2006,7 @@ export default function AgentDetailPage() {
                     onClick={() => { setShowTriggerInput(false); setTriggerMessage(""); }}
                     className="shrink-0 text-[11px] px-2 py-1.5 max-sm:py-3 max-sm:min-h-touch text-[var(--color-text-muted)] cursor-pointer"
                   >
-                    Abbrechen
+                    Cancel
                   </button>
                 </div>
               ) : (
@@ -2020,14 +2019,14 @@ export default function AgentDetailPage() {
                       onClick={() => triggerMutation.mutate(undefined)}
                       loading={triggerMutation.isPending}
                       disabled={isCliBridge}
-                      title={isCliBridge ? "Nur für Host-Runtime Agents verfügbar" : undefined}
+                      title={isCliBridge ? "Only available for host-runtime agents" : undefined}
                     />
                   </div>
                   {!isCliBridge && (
                     <button
                       onClick={() => setShowTriggerInput(true)}
                       className="shrink-0 text-[10px] text-[var(--color-text-muted)] cursor-pointer px-1.5 max-sm:min-h-touch rounded-lg max-sm:bg-[rgba(255,255,255,0.03)]"
-                      title="Trigger mit Message Override"
+                      title="Trigger with message override"
                     >
                       +msg
                     </button>
@@ -2042,7 +2041,7 @@ export default function AgentDetailPage() {
                   color={C.warning}
                   onClick={() => restartWorkerMutation.mutate()}
                   loading={restartWorkerMutation.isPending}
-                  title="Worker-Session neu starten"
+                  title="Restart worker session"
                 />
               ) : (
                 <ActionButton
@@ -2061,16 +2060,16 @@ export default function AgentDetailPage() {
                   color={C.error}
                   onClick={() => {
                     const hasTask = !!agent.current_task_id;
-                    const baseMsg = `Container ${agent.name} komplett neu erstellen?\n\nDas zieht das aktuelle Docker-Image (~30-90s).\nLaufende Worker-Session wird beendet.`;
+                    const baseMsg = `Fully recreate container ${agent.name}?\n\nThis pulls the current Docker image (~30-90s).\nThe running worker session will be terminated.`;
                     const taskWarning = hasTask
-                      ? `\n\nWARNUNG: Agent bearbeitet gerade einen Task — der Run wird abgebrochen.\nMit OK trotzdem fortfahren (force=true).`
+                      ? `\n\nWARNING: The agent is currently working on a task — the run will be aborted.\nClick OK to continue anyway (force=true).`
                       : "";
                     if (confirm(baseMsg + taskWarning)) {
                       forceRecreateMutation.mutate({ force: hasTask });
                     }
                   }}
                   loading={forceRecreateMutation.isPending}
-                  title="Container neu erstellen (zieht aktuelles Image)"
+                  title="Recreate container (pulls current image)"
                 />
               )}
 
@@ -2084,7 +2083,7 @@ export default function AgentDetailPage() {
                   updateAgentMutation.mutate({ operational_mode: newMode } as Partial<Pick<Agent, "name" | "model" | "role" | "heartbeat_config" | "operational_mode">>);
                 }}
                 loading={updateAgentMutation.isPending}
-                title={agent.operational_mode === "paused" ? "Agent wieder aktivieren" : "Agent pausieren"}
+                title={agent.operational_mode === "paused" ? "Resume agent" : "Pause agent"}
               />
 
               {isCliBridge && agent.provision_status === "local" && (
@@ -2134,11 +2133,11 @@ export default function AgentDetailPage() {
                   {agent.is_board_lead && (
                     <ActionButton
                       icon={Settings}
-                      label="Neu konfigurieren"
+                      label="Reconfigure"
                       color={C.textDim}
                       onClick={() => setupCoordMutation.mutate()}
                       loading={setupCoordMutation.isPending}
-                      title="Templates neu generieren + auf Worker pushen"
+                      title="Regenerate templates + push to worker"
                     />
                   )}
                 </>
@@ -2147,19 +2146,19 @@ export default function AgentDetailPage() {
               <div className="col-span-2 max-sm:mt-1 sm:col-auto sm:ml-auto">
                 {showDeleteConfirm ? (
                   <div className="flex items-center gap-2">
-                    <span className="text-[11px]" style={{ color: C.error }}>Sicher?</span>
+                    <span className="text-[11px]" style={{ color: C.error }}>Sure?</span>
                     <button
                       onClick={() => deleteMutation.mutate()}
                       className="flex-1 text-[11px] px-2.5 py-1 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer font-medium sm:flex-none"
                       style={{ backgroundColor: `${C.error}26`, color: C.error }}
                     >
-                      Ja, loeschen
+                      Yes, delete
                     </button>
                     <button
                       onClick={() => setShowDeleteConfirm(false)}
                       className="flex-1 text-[11px] px-2.5 py-1 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer text-[var(--color-text-muted)] sm:flex-none"
                     >
-                      Abbrechen
+                      Cancel
                     </button>
                   </div>
                 ) : (
@@ -2167,7 +2166,7 @@ export default function AgentDetailPage() {
                     onClick={() => setShowDeleteConfirm(true)}
                     className="flex w-full items-center justify-center gap-1.5 text-[11px] px-2.5 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer transition-colors text-[var(--color-text-muted)] hover:text-[#C23838] max-sm:border max-sm:border-[rgba(255,255,255,0.06)] sm:w-auto"
                   >
-                    <Trash2 size={12} /> Loeschen
+                    <Trash2 size={12} /> Delete
                   </button>
                 )}
               </div>

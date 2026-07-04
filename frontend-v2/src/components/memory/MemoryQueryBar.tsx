@@ -4,15 +4,15 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Sparkles, Loader2, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { LAYER_COLORS } from "@/components/memory/graphConfig";
 
 /**
  * Semantic Memory Search (Phase 3/4, 2026-04-11).
  *
- * Nutzt das neue POST /api/v1/memory/query Endpoint (Qdrant + Spark-Embedding).
- * Suche laeuft ueber alle 3 Layer (semantic/agent/episodic) und zeigt Treffer
- * mit Similarity-Score. Bei Embedding-Fail (Spark down) fallback auf ILIKE.
+ * Uses the POST /api/v1/memory/query endpoint (Qdrant + Spark embedding).
+ * Search runs across all 3 layers (semantic/agent/episodic) and shows hits
+ * with a similarity score. Falls back to ILIKE if embedding fails (Spark down).
  */
 
 type Layer = "semantic" | "agent" | "episodic";
@@ -59,7 +59,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
       });
       setResult(res as QueryResponse);
     } catch (e: any) {
-      setError(e?.message || "Query fehlgeschlagen");
+      setError(e?.message || "Query failed");
     } finally {
       setLoading(false);
     }
@@ -93,7 +93,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             if (e.key === "Enter") runQuery();
             if (e.key === "Escape") clear();
           }}
-          placeholder="Semantic Memory Search — frag das Memory (Qdrant + Spark-Embedding)..."
+          placeholder="Semantic Memory Search — ask the memory (Qdrant + Spark embedding)..."
           className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30"
         />
         {query && (
@@ -116,7 +116,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
           }}
         >
           {loading ? <Loader2 size={12} className="animate-spin" /> : <Search size={12} />}
-          Suchen
+          Search
         </button>
       </div>
 
@@ -127,7 +127,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             className="mt-2 px-4 py-2 text-xs rounded-lg"
-            style={{ background: "rgba(239,68,68,0.1)", color: "#FCA5A5" }}
+            style={{ background: "rgba(194,56,56,0.12)", color: STATUS_TEXT.error }}
           >
             {error}
           </motion.div>
@@ -142,9 +142,9 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
           >
             <div className="flex items-center justify-between px-1">
               <span className="text-xs text-white/40">
-                {totalHits} Treffer fuer &ldquo;{result.query}&rdquo;
+                {totalHits} hits for &ldquo;{result.query}&rdquo;
                 {result.fallback && (
-                  <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(245,158,11,0.15)", color: "#FCD34D" }}>
+                  <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
                     keyword fallback
                   </span>
                 )}
@@ -179,7 +179,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                       >
                         <div className="flex items-start justify-between gap-2 mb-1">
                           <div className="font-medium text-white/90 truncate">
-                            {hit.title || "(Ohne Titel)"}
+                            {hit.title || "(No title)"}
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {hit.memory_type && (
@@ -191,7 +191,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                               className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                               style={{
                                 background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "rgba(255,255,255,0.05)",
-                                color: hit.score > 0.75 ? "#4ADE80" : "#9CA3AF",
+                                color: hit.score > 0.75 ? C.online : C.textSecondary,
                               }}
                             >
                               {hit.score.toFixed(3)}
@@ -210,7 +210,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
 
             {totalHits === 0 && (
               <div className="px-4 py-6 text-center text-xs text-white/30">
-                Keine Treffer — versuch eine andere Formulierung
+                No hits — try a different phrasing
               </div>
             )}
           </motion.div>

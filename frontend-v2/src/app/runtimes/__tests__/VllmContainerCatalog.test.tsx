@@ -44,7 +44,7 @@ describe("VllmContainerCatalog", () => {
       expect(api.runtimes.vllm.discover).toHaveBeenCalled()
     );
     expect(container.querySelector("button")).toBeNull();
-    expect(screen.queryByText(/Erkannt/i)).toBeNull();
+    expect(screen.queryByText(/Discovered/i)).toBeNull();
   });
 
   it("clicking + opens the AddVllmModal", async () => {
@@ -52,9 +52,9 @@ describe("VllmContainerCatalog", () => {
       containers: [UNREGISTERED_CONTAINER],
     });
     renderWithQuery(<VllmContainerCatalog />);
-    const addBtn = await screen.findByRole("button", { name: /hinzufügen/i });
+    const addBtn = await screen.findByRole("button", { name: /add/i });
     await userEvent.click(addBtn);
-    expect(screen.getByText(/vLLM Runtime hinzufügen/i)).toBeInTheDocument();
+    expect(screen.getByText(/Add vLLM Runtime/i)).toBeInTheDocument();
     expect(screen.getByDisplayValue("mc-qwen36-vllm")).toBeInTheDocument();
     expect(screen.getByDisplayValue("http://192.0.2.10:8003/v1")).toBeInTheDocument();
   });
@@ -68,11 +68,11 @@ describe("VllmContainerCatalog", () => {
       .mockResolvedValue({} as never);
 
     renderWithQuery(<VllmContainerCatalog />);
-    const cardBtn = await screen.findByRole("button", { name: /hinzufügen/i });
+    const cardBtn = await screen.findByRole("button", { name: /add/i });
     await userEvent.click(cardBtn);
 
     await userEvent.click(screen.getByRole("button", { name: /^coder$/i }));
-    const submitBtn = screen.getAllByRole("button", { name: /hinzufügen/i }).at(-1)!;
+    const submitBtn = screen.getAllByRole("button", { name: /add/i }).at(-1)!;
     await userEvent.click(submitBtn);
 
     await waitFor(() => expect(addSpy).toHaveBeenCalled());

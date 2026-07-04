@@ -40,13 +40,13 @@ export function DeleteFilesDialog({
       qc.invalidateQueries({ queryKey: ["files-roots"] });
       notify.success(
         res.skipped.length
-          ? `${res.trashed.length} in Papierkorb · ${res.skipped.length} übersprungen`
-          : `${res.trashed.length} in den Papierkorb verschoben`,
+          ? `${res.trashed.length} moved to trash · ${res.skipped.length} skipped`
+          : `${res.trashed.length} moved to trash`,
       );
       onDone();
     },
     onError: () => {
-      notify.error("Löschen fehlgeschlagen");
+      notify.error("Delete failed");
     },
   });
 
@@ -60,7 +60,7 @@ export function DeleteFilesDialog({
           className="text-base font-semibold"
           style={{ color: C.textPrimary }}
         >
-          {count} Datei{count === 1 ? "" : "en"} löschen?
+          Delete {count} file{count === 1 ? "" : "s"}?
         </h2>
       </div>
 
@@ -90,7 +90,7 @@ export function DeleteFilesDialog({
           className="rounded-xl px-3 py-2.5 text-xs"
           style={{ background: C.accentSubtle, border: `1px solid ${C.borderSubtle}`, color: C.textSecondary }}
         >
-          In den Papierkorb (~/.mc/.trash) — wiederherstellbar.
+          Moved to trash (~/.mc/.trash) — recoverable.
         </div>
       </div>
 
@@ -107,18 +107,18 @@ export function DeleteFilesDialog({
           onMouseEnter={(e) => { if (!mutation.isPending) e.currentTarget.style.background = C.bgHover; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
-          Abbrechen
+          Cancel
         </button>
         <button
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending}
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-opacity cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
-          style={{ background: C.error, color: "#FFFFFF" }}
+          style={{ background: C.error, color: C.textPrimary }}
         >
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />
             : <Trash2 size={15} />}
-          Löschen
+          Delete
         </button>
       </div>
     </ResponsiveModal>

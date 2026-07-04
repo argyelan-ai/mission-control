@@ -73,7 +73,7 @@ function WikilinkChip({
             <div
               className="rounded-lg px-3 py-2 text-xs leading-relaxed"
               style={{
-                background: "#1a1a1a",
+                background: C.bgHover,
                 border: `1px solid ${C.borderAccent}`,
                 color: "var(--color-text-secondary)",
                 boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
@@ -167,7 +167,7 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
           <blockquote
             className="pl-4 italic my-4"
             style={{
-              borderLeft: `2px solid ${C.accent}`,
+              borderLeft: `2px solid ${C.borderActive}`,
               color: "var(--color-text-secondary)",
             }}
           >

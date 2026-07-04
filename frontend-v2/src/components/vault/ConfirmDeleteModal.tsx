@@ -4,11 +4,11 @@
  * ConfirmDeleteModal — gates vault note deletion with wikilink back-ref preview.
  *
  * Three-state lifecycle:
- *   1. Fetching back-refs   — disabled "Lädt…" button
- *   2. Confirm              — primary action ("In Papierkorb"), shows ref count
+ *   1. Fetching back-refs   — disabled "Loading…" button
+ *   2. Confirm              — primary action ("Move to trash"), shows ref count
  *   3. Deleting             — spinner button, disabled cancel
  *
- * The button label is intentionally "In Papierkorb" (Trash), not "Löschen" —
+ * The button label is intentionally "Move to trash" (Trash), not "Delete" —
  * the backend soft-deletes to ~/.mc/vault/_trash/ so the action is recoverable.
  * The operator can `mv ~/.mc/vault/_trash/<file> back` if needed.
  */
@@ -19,6 +19,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { STATUS_TEXT } from "@/lib/colors";
 
 interface ConfirmDeleteModalProps {
   /** Vault-relative path of the note. When null, the modal is closed. */
@@ -117,7 +118,7 @@ export function ConfirmDeleteModal({
                     border: "1px solid rgba(239,68,68,0.25)",
                   }}
                 >
-                  <Trash2 size={16} style={{ color: "#fca5a5" }} />
+                  <Trash2 size={16} style={{ color: STATUS_TEXT.error }} />
                 </div>
                 <div className="min-w-0">
                   <div
@@ -128,7 +129,7 @@ export function ConfirmDeleteModal({
                       color: "var(--color-text-muted)",
                     }}
                   >
-                    Note in Papierkorb verschieben
+                    Move note to trash
                   </div>
                   <div
                     className="truncate"
@@ -148,7 +149,7 @@ export function ConfirmDeleteModal({
                 type="button"
                 onClick={onClose}
                 disabled={deleteMutation.isPending}
-                aria-label="Abbrechen"
+                aria-label="Cancel"
                 className="shrink-0 rounded p-1"
                 style={{
                   color: "var(--color-text-muted)",
@@ -171,7 +172,7 @@ export function ConfirmDeleteModal({
                   color: "var(--color-text-secondary)",
                 }}
               >
-                Die Datei wird in den Vault-Papierkorb verschoben
+                The file will be moved to the vault trash
                 (<code
                   className="font-mono"
                   style={{
@@ -184,8 +185,8 @@ export function ConfirmDeleteModal({
                 >
                   ~/.mc/vault/_trash/
                 </code>).
-                Search-Index und Graph aktualisieren sich automatisch. Du kannst
-                die Datei manuell zurückverschieben, falls du sie doch brauchst.
+                The search index and graph update automatically. You can move
+                the file back manually if you need it again.
               </p>
 
               {/* Back-refs warning */}
@@ -198,7 +199,7 @@ export function ConfirmDeleteModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  Prüfe Wikilinks…
+                  Checking wikilinks…
                 </div>
               ) : refCount > 0 ? (
                 <div
@@ -210,20 +211,20 @@ export function ConfirmDeleteModal({
                 >
                   <AlertTriangle
                     size={14}
-                    style={{ color: "#fbbf24", marginTop: "1px", flexShrink: 0 }}
+                    style={{ color: STATUS_TEXT.warning, marginTop: "1px", flexShrink: 0 }}
                   />
                   <div className="min-w-0">
                     <div
                       style={{
                         fontSize: "12.5px",
                         fontWeight: 600,
-                        color: "#fbbf24",
+                        color: STATUS_TEXT.warning,
                         marginBottom: "3px",
                       }}
                     >
                       {refCount === 1
-                        ? "1 andere Note verlinkt hierhin"
-                        : `${refCount} andere Notes verlinken hierhin`}
+                        ? "1 other note links here"
+                        : `${refCount} other notes link here`}
                     </div>
                     <ul
                       className="space-y-0.5"
@@ -244,7 +245,7 @@ export function ConfirmDeleteModal({
                           className="font-mono"
                           style={{ color: "var(--color-text-muted)", opacity: 0.7 }}
                         >
-                          + {refCount - 4} weitere
+                          + {refCount - 4} more
                         </li>
                       )}
                     </ul>
@@ -255,7 +256,7 @@ export function ConfirmDeleteModal({
                         marginTop: "6px",
                       }}
                     >
-                      Diese Wikilinks zeigen nach dem Löschen ins Leere.
+                      These wikilinks will point to nothing after deletion.
                     </div>
                   </div>
                 </div>
@@ -268,7 +269,7 @@ export function ConfirmDeleteModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  Keine Wikilinks auf diese Note.
+                  No wikilinks to this note.
                 </div>
               )}
 
@@ -280,11 +281,11 @@ export function ConfirmDeleteModal({
                     background: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.25)",
                     fontSize: "12px",
-                    color: "#fca5a5",
+                    color: STATUS_TEXT.error,
                   }}
                 >
-                  Löschen fehlgeschlagen:{" "}
-                  {(deleteMutation.error as Error)?.message ?? "Unbekannter Fehler"}
+                  Delete failed:{" "}
+                  {(deleteMutation.error as Error)?.message ?? "Unknown error"}
                 </div>
               )}
             </div>
@@ -309,7 +310,7 @@ export function ConfirmDeleteModal({
                   opacity: deleteMutation.isPending ? 0.5 : 1,
                 }}
               >
-                Abbrechen
+                Cancel
               </button>
               <button
                 type="button"
@@ -323,7 +324,7 @@ export function ConfirmDeleteModal({
                     ? "rgba(239,68,68,0.18)"
                     : "rgba(239,68,68,0.14)",
                   border: "1px solid rgba(239,68,68,0.45)",
-                  color: "#fca5a5",
+                  color: STATUS_TEXT.error,
                   cursor: deleteMutation.isPending ? "default" : "pointer",
                 }}
               >
@@ -331,14 +332,14 @@ export function ConfirmDeleteModal({
                   <>
                     <span
                       className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
-                      style={{ borderColor: "#fca5a5", borderTopColor: "transparent" }}
+                      style={{ borderColor: STATUS_TEXT.error, borderTopColor: "transparent" }}
                     />
-                    Löschen…
+                    Deleting…
                   </>
                 ) : (
                   <>
                     <Trash2 size={12} />
-                    In Papierkorb
+                    Move to trash
                   </>
                 )}
               </button>

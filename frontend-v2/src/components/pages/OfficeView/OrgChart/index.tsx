@@ -5,7 +5,7 @@ import { motion, useReducedMotion } from "framer-motion";
 import { OrgChartNode } from "./OrgChartNode";
 import { ORG_CHART, getChildren, getRoot } from "./org-chart-data";
 import type { OrgNode } from "./types";
-import { C } from "@/lib/colors";
+import { C, STATUS } from "@/lib/colors";
 
 /**
  * Connector descriptor — computed from card DOM rects relative to the
@@ -320,7 +320,7 @@ function Legend() {
       <span className="hidden sm:inline-block h-3 w-px bg-zinc-800" />
       <LegendItem swatch={<Dot color={C.online} />} label="online" />
       <LegendItem swatch={<Dot color={C.accent} />} label="working" />
-      <LegendItem swatch={<Dot color="#3A3A3A" />} label="offline" />
+      <LegendItem swatch={<Dot color={STATUS.offline} />} label="offline" />
     </div>
   );
 }

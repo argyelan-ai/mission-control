@@ -290,7 +290,7 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
           >
             <StopCircle size={12} />
             <span className="font-medium">
-              Run {task.run_control === "stopped" ? "gestoppt" : "gehalten"}
+              Run {task.run_control === "stopped" ? "stopped" : "held"}
             </span>
           </div>
           <button
@@ -307,7 +307,7 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
             {resumeRunMutation.isPending ? "..." : "Requeue"}
           </button>
           <div className="text-[10px]" style={{ color: C.textMuted }}>
-            Task geht zurueck in die Queue und wird im naechsten Dispatch-Zyklus neu zugewiesen.
+            The task goes back to the queue and gets reassigned in the next dispatch cycle.
           </div>
         </div>
       )}
@@ -317,36 +317,8 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
         <ReviewDecisionSection task={task} boardId={boardId} />
       )}
 
-      {/* Status Change Buttons */}
-      <div>
-        <div
-          className="text-[10px] font-semibold uppercase tracking-[0.06em] mb-2"
-          style={{ color: C.textMuted }}
-        >
-          Change Status
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {(
-            ["inbox", "in_progress", "review", "user_test", "done", "blocked", "failed"] as TaskStatus[]
-          ).map((s) => (
-            <button
-              key={s}
-              onClick={() => updateMutation.mutate({ status: s })}
-              disabled={task.status === s}
-              className="px-2 py-1 rounded-lg text-xs transition-colors disabled:opacity-30 cursor-pointer disabled:cursor-not-allowed"
-              style={{
-                backgroundColor: task.status === s
-                  ? C.accentSubtle
-                  : "rgba(255, 255, 255, 0.03)",
-                color: task.status === s ? C.accent : C.textSecondary,
-                border: `1px solid ${task.status === s ? C.borderAccent : C.border}`,
-              }}
-            >
-              {s.replace("_", " ")}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Status changes moved to the header dropdown (TaskDetailBody) —
+          the old 7-chip "Change Status" wall is gone. */}
     </div>
   );
 }

@@ -90,7 +90,7 @@ describe("RuntimeSwitchModal", () => {
         onConfirm={async () => null}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/container-image wird gewechselt/i)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(/container image will change/i)).toBeInTheDocument());
   });
 
   it("shows in-progress force toggle when agent has current_task_id", async () => {
@@ -105,8 +105,8 @@ describe("RuntimeSwitchModal", () => {
         onConfirm={async () => null}
       />,
     );
-    await waitFor(() => expect(screen.getByText(/agent bearbeitet aktive task/i)).toBeInTheDocument());
-    expect(screen.getByLabelText(/trotzdem switchen/i)).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText(/agent is working on an active task/i)).toBeInTheDocument());
+    expect(screen.getByLabelText(/switch anyway/i)).toBeInTheDocument();
   });
 
   it("submit calls onConfirm with force flag value and closes", async () => {
@@ -152,7 +152,7 @@ describe("RuntimeSwitchModal", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByText("Single-instance runtime — switch nicht möglich"),
+        screen.getByText("Single-instance runtime — switch not possible"),
       ).toBeInTheDocument(),
     );
     expect(screen.getByTestId("single-instance-lock-banner")).toBeInTheDocument();
@@ -213,7 +213,7 @@ describe("RuntimeSwitchModal", () => {
     );
     await waitFor(() =>
       expect(
-        screen.getByText("Single-instance runtime — switch nicht möglich"),
+        screen.getByText("Single-instance runtime — switch not possible"),
       ).toBeInTheDocument(),
     );
     expect(screen.getByRole("button", { name: /switch/i })).toBeDisabled();

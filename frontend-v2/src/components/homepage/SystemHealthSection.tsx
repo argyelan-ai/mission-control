@@ -24,7 +24,7 @@ function SystemActivityFeed() {
   if (events.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <span className="text-[11px]" style={{ color: C.textMuted }}>Keine Aktivitaet</span>
+        <span className="text-[11px]" style={{ color: C.textMuted }}>No activity</span>
       </div>
     );
   }
@@ -118,11 +118,11 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
           <span className="text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: C.textMuted }}>Events</span>
           <button
             onClick={onOpenActivity}
-            aria-label="Alle Aktivitäten anzeigen"
+            aria-label="Show all activity"
             className="inline-flex items-center min-h-touch px-2 -my-2 text-[10px] hover:opacity-70 transition-opacity cursor-pointer"
             style={{ color: C.accent, background: "none", border: "none" }}
           >
-            Alle <span aria-hidden="true">→</span>
+            All <span aria-hidden="true">→</span>
           </button>
         </div>
       </div>
@@ -138,7 +138,7 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
           style={{ borderColor: C.border, maxHeight: 80 }}
           tabIndex={0}
           role="region"
-          aria-label="Aktivitäts-Verlauf"
+          aria-label="Activity history"
         >
           <SystemActivityFeed />
         </div>

@@ -115,12 +115,12 @@ export function FilesBrowser({
       ) : isError || !data ? (
         <div className="flex items-center gap-2 px-4 py-12 justify-center">
           <AlertCircle size={16} style={{ color: C.error }} />
-          <span className="text-sm" style={{ color: C.textMuted }}>Verzeichnis konnte nicht geladen werden</span>
+          <span className="text-sm" style={{ color: C.textMuted }}>Failed to load directory</span>
         </div>
       ) : entries.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 py-16">
           <FolderOpen size={28} style={{ color: C.textDim }} />
-          <p className="text-sm" style={{ color: C.textMuted }}>Dieser Ordner ist leer</p>
+          <p className="text-sm" style={{ color: C.textMuted }}>This folder is empty</p>
         </div>
       ) : (
         <table className="w-full">
@@ -135,15 +135,15 @@ export function FilesBrowser({
                   type="checkbox"
                   checked={allSelected}
                   disabled={fileSubpaths.length === 0}
-                  aria-label="Alle Dateien auswählen"
+                  aria-label="Select all files"
                   onChange={(e) => onToggleSelectAll(fileSubpaths, e.target.checked)}
                   className="cursor-pointer disabled:cursor-not-allowed"
                   style={{ accentColor: C.accent }}
                 />
               </th>
               <SortHeader label="Name" col="name" sort={sort} onToggle={toggleSort} align="left" />
-              <SortHeader label="Grösse" col="size" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
-              <SortHeader label="Geändert" col="mtime" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label="Size" col="size" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label="Modified" col="mtime" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
             </tr>
           </thead>
           <tbody>
@@ -195,7 +195,7 @@ function FileRow({
           <input
             type="checkbox"
             checked={checked}
-            aria-label={`${entry.name} auswählen`}
+            aria-label={`Select ${entry.name}`}
             onChange={(e) => onToggleSelect(entrySubpath, e.target.checked)}
             className="cursor-pointer"
             style={{ accentColor: C.accent }}

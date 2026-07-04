@@ -64,10 +64,10 @@ export function TrashView() {
       invalidateAfterMutation();
       setSelected(new Set());
       notify.success(
-        `${res.restored.length} wiederhergestellt${res.skipped.length ? ` · ${res.skipped.length} übersprungen` : ""}`,
+        `${res.restored.length} restored${res.skipped.length ? ` · ${res.skipped.length} skipped` : ""}`,
       );
     },
-    onError: () => notify.error("Wiederherstellen fehlgeschlagen"),
+    onError: () => notify.error("Restore failed"),
   });
 
   function toggle(id: string, on: boolean) {
@@ -101,7 +101,7 @@ export function TrashView() {
       <div className="flex items-center gap-2 px-4 py-12 justify-center">
         <Trash2 size={16} style={{ color: C.error }} />
         <span className="text-sm" style={{ color: C.textMuted }}>
-          Papierkorb konnte nicht geladen werden
+          Failed to load trash
         </span>
       </div>
     );
@@ -111,14 +111,14 @@ export function TrashView() {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16">
         <Trash2 size={28} style={{ color: C.textDim }} />
-        <p className="text-sm" style={{ color: C.textMuted }}>Papierkorb ist leer</p>
+        <p className="text-sm" style={{ color: C.textMuted }}>Trash is empty</p>
       </div>
     );
   }
 
   return (
     <>
-      {/* Header row: count + "Papierkorb leeren" */}
+      {/* Header row: count + "Empty trash" */}
       <div className="flex items-center justify-between mb-3 gap-3">
         <div className="flex items-center gap-2.5">
           <input
@@ -128,13 +128,13 @@ export function TrashView() {
             }}
             type="checkbox"
             checked={allSelected}
-            aria-label="Alle Dateien im Papierkorb auswählen"
+            aria-label="Select all files in trash"
             onChange={(e) => toggleAll(e.target.checked)}
             className="cursor-pointer"
             style={{ accentColor: C.accent }}
           />
           <span className="text-sm" style={{ color: C.textMuted }}>
-            {entries.length} im Papierkorb
+            {entries.length} in trash
           </span>
         </div>
 
@@ -146,7 +146,7 @@ export function TrashView() {
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
-          Papierkorb leeren
+          Empty trash
         </button>
       </div>
 
@@ -185,7 +185,7 @@ export function TrashView() {
                   <input
                     type="checkbox"
                     checked={checked}
-                    aria-label={`${entry.name} auswählen`}
+                    aria-label={`Select ${entry.name}`}
                     onChange={(e) => toggle(entry.trash_id, e.target.checked)}
                     className="cursor-pointer shrink-0"
                     style={{ accentColor: C.accent }}
@@ -209,7 +209,7 @@ export function TrashView() {
                     onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                   >
                     <RotateCcw size={14} />
-                    <span className="hidden sm:inline">Wiederherstellen</span>
+                    <span className="hidden sm:inline">Restore</span>
                   </button>
                 </div>
               );
@@ -233,7 +233,7 @@ export function TrashView() {
           }}
         >
           <span className="px-2 text-sm tabular-nums whitespace-nowrap" style={{ color: C.textSecondary }}>
-            {selected.size} ausgewählt
+            {selected.size} selected
           </span>
           <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
           <button
@@ -247,7 +247,7 @@ export function TrashView() {
             {restore.isPending
               ? <Loader2 size={15} className="animate-spin" />
               : <RotateCcw size={15} />}
-            Wiederherstellen
+            Restore
           </button>
           <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
           <button
@@ -258,7 +258,7 @@ export function TrashView() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textMuted; }}
           >
             <X size={15} />
-            Abbrechen
+            Cancel
           </button>
         </motion.div>
       )}

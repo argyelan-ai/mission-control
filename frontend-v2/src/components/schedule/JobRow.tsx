@@ -58,17 +58,17 @@ function tagColor(tag: string): string {
 function describeTrigger(j: ScheduledJob): string {
   if (j.schedule_cron) {
     try {
-      return cronstrue.toString(j.schedule_cron, { locale: "de" });
+      return cronstrue.toString(j.schedule_cron, { locale: "en" });
     } catch {
       return `Cron: ${j.schedule_cron}`;
     }
   }
-  if (j.schedule_type === "daily") return `Taeglich um ${j.schedule_time ?? "—"}`;
-  if (j.schedule_type === "weekdays") return `Mo–Fr um ${j.schedule_time ?? "—"}`;
+  if (j.schedule_type === "daily") return `Daily at ${j.schedule_time ?? "—"}`;
+  if (j.schedule_type === "weekdays") return `Mon–Fri at ${j.schedule_time ?? "—"}`;
   if (j.schedule_type === "interval") {
     const h = j.schedule_interval_hours ?? 0;
-    if (h === 1) return "Jede Stunde";
-    return `Alle ${h} Stunden`;
+    if (h === 1) return "Every hour";
+    return `Every ${h} hours`;
   }
   return "—";
 }
@@ -86,12 +86,12 @@ function relativeTime(iso: string | null): string {
     return `in ${dAhead}d`;
   }
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "gerade eben";
-  if (mins < 60) return `vor ${mins}m`;
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
   const hours = Math.floor(mins / 60);
-  if (hours < 48) return `vor ${hours}h`;
+  if (hours < 48) return `${hours}h ago`;
   const days = Math.floor(hours / 24);
-  return `vor ${days}d`;
+  return `${days}d ago`;
 }
 
 function StatusDot({ job }: { job: ScheduledJob }) {
@@ -100,7 +100,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.borderActive }}
-        title="Pausiert"
+        title="Paused"
       />
     );
   }
@@ -112,7 +112,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.error }}
-        title="Letzter Lauf fehlgeschlagen"
+        title="Last run failed"
       />
     );
   }
@@ -121,7 +121,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.online }}
-        title="Erfolgreich"
+        title="Successful"
       />
     );
   }
@@ -129,7 +129,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
     <span
       className="block h-2 w-2 rounded-full"
       style={{ background: C.textSecondary }}
-      title="Noch nicht gelaufen"
+      title="Not run yet"
     />
   );
 }
@@ -168,7 +168,7 @@ export function JobRow({
         onChange={(e) => onSelectChange(e.target.checked)}
         className="h-3.5 w-3.5 cursor-pointer"
         style={{ accentColor: C.accent }}
-        aria-label={`${job.name} auswaehlen`}
+        aria-label={`Select ${job.name}`}
       />
 
       <div className="flex items-center justify-center">
@@ -194,7 +194,7 @@ export function JobRow({
                 color: STATUS_TEXT.error,
                 border: `1px solid ${C.error}4D`,
               }}
-              title={`${failures} fehlgeschlagene Laeufe in Folge`}
+              title={`${failures} consecutive failed runs`}
             >
               <AlertTriangle size={9} />
               {failures}x fail
@@ -208,9 +208,9 @@ export function JobRow({
                 color: C.warning,
                 border: `1px solid ${C.warning}4D`,
               }}
-              title={`Snoozed bis ${new Date(snoozedUntil).toLocaleString("de-DE")}`}
+              title={`Snoozed until ${new Date(snoozedUntil).toLocaleString("en-GB")}`}
             >
-              💤 {new Date(snoozedUntil).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" })}
+              💤 {new Date(snoozedUntil).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
         </span>
@@ -261,7 +261,7 @@ export function JobRow({
 
       <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 touch-visible-secondary">
         <IconBtn
-          title={job.enabled ? "Pausieren" : "Aktivieren"}
+          title={job.enabled ? "Pause" : "Enable"}
           onClick={() => onToggleEnabled(job.id, !job.enabled)}
         >
           <span
@@ -271,19 +271,19 @@ export function JobRow({
             }}
           />
         </IconBtn>
-        <IconBtn title="Jetzt ausfuehren" onClick={() => onTrigger(job.id)}>
+        <IconBtn title="Run now" onClick={() => onTrigger(job.id)}>
           <Play size={12} />
         </IconBtn>
-        <IconBtn title="Bearbeiten" onClick={() => onEdit(job)}>
+        <IconBtn title="Edit" onClick={() => onEdit(job)}>
           <Pencil size={12} />
         </IconBtn>
-        <IconBtn title="Duplizieren" onClick={() => onDuplicate(job.id)}>
+        <IconBtn title="Duplicate" onClick={() => onDuplicate(job.id)}>
           <Copy size={12} />
         </IconBtn>
         <IconBtn title="Snooze" onClick={() => onSnooze(job.id)}>
           <AlarmClockOff size={12} />
         </IconBtn>
-        <IconBtn title="Loeschen" danger onClick={() => onDelete(job.id)}>
+        <IconBtn title="Delete" danger onClick={() => onDelete(job.id)}>
           <Trash2 size={12} />
         </IconBtn>
       </div>

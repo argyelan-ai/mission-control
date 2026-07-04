@@ -42,17 +42,17 @@ const TYPE_CONFIG: Record<MemoryType, { color: string; label: string; pill: stri
   journal:       { color: C.online, label: "Journal",       pill: "rgba(0,204,136,0.10)" },
   knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: `${_C.textSecondary}1F` },
   weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: `${_C.textSecondary}1F` },
-  research:      { color: "#5E9EF7", label: "Research",     pill: "rgba(94,158,247,0.12)" },
+  research:      { color: STATUS_TEXT.info, label: "Research",     pill: "rgba(46,111,216,0.12)" },
   insight:       { color: C.online, label: "Insight",       pill: "rgba(0,204,136,0.10)" },
 };
 
 // Date range options
 const DATE_RANGES = [
-  { label: "Alle", value: "" },
-  { label: "Heute", value: "1" },
-  { label: "7 Tage", value: "7" },
-  { label: "30 Tage", value: "30" },
-  { label: "90 Tage", value: "90" },
+  { label: "All", value: "" },
+  { label: "Today", value: "1" },
+  { label: "7 days", value: "7" },
+  { label: "30 days", value: "30" },
+  { label: "90 days", value: "90" },
 ];
 
 function isWithinDays(dateStr: string, days: number): boolean {
@@ -153,7 +153,7 @@ function FilterBar({
           type="text"
           value={search}
           onChange={(e) => onSearch(e.target.value)}
-          placeholder="Suchen..."
+          placeholder="Search..."
           className="w-full pl-8 pr-3 py-2 text-sm rounded-xl outline-none"
           style={{ background: C.bg, border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }}
         />
@@ -166,7 +166,7 @@ function FilterBar({
         className="px-3 py-2 text-sm rounded-xl cursor-pointer outline-none"
         style={{ background: C.bg, border: `1px solid ${C.border}`, color: "var(--color-text-secondary)" }}
       >
-        <option value="">Alle Typen</option>
+        <option value="">All types</option>
         {(Object.keys(TYPE_CONFIG) as MemoryType[]).map((t) => (
           <option key={t} value={t}>{TYPE_CONFIG[t].label}</option>
         ))}
@@ -328,7 +328,7 @@ function MemoryModal({
                 onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-text-primary)")}
                 onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-text-secondary)")}
               >
-                <Pencil size={12} /> Bearbeiten
+                <Pencil size={12} /> Edit
               </button>
               {!isNew && (
                 <>
@@ -336,12 +336,12 @@ function MemoryModal({
                     onClick={() => pinMutation.mutate({ id: entry.id, pinned: !entry.is_pinned })}
                     className="p-1.5 rounded-lg cursor-pointer transition-colors"
                     style={{ background: C.bg, border: `1px solid ${C.border}`, color: entry.is_pinned ? C.warn : "var(--color-text-muted)" }}
-                    title={entry.is_pinned ? "Entpinnen" : "Anpinnen"}
+                    title={entry.is_pinned ? "Unpin" : "Pin"}
                   >
                     <Pin size={13} />
                   </button>
                   <button
-                    onClick={() => { if (confirm(`"${entry.title}" löschen?`)) deleteMutation.mutate(entry.id); }}
+                    onClick={() => { if (confirm(`Delete "${entry.title}"?`)) deleteMutation.mutate(entry.id); }}
                     className="p-1.5 rounded-lg cursor-pointer transition-colors"
                     style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: C.err }}
                   >
@@ -361,7 +361,7 @@ function MemoryModal({
           {mode === "edit" && (
             <div className="flex items-center gap-1.5">
               <button onClick={() => { if (dirty) setShowUnsaved(true); else setMode("view"); }} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-secondary)" }}>
-                Abbrechen
+                Cancel
               </button>
               <button
                 onClick={handleSave}
@@ -369,7 +369,7 @@ function MemoryModal({
                 className="px-4 py-1.5 text-xs rounded-lg cursor-pointer font-medium"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${_C.accentHover})`, color: _C.bgDeep }}
               >
-                {(updateMutation.isPending || createMutation.isPending) ? "..." : "Speichern"}
+                {(updateMutation.isPending || createMutation.isPending) ? "..." : "Save"}
               </button>
               <button onClick={tryClose} className="p-1.5 rounded-lg cursor-pointer ml-1" style={{ color: "var(--color-text-muted)" }}>
                 <X size={16} />
@@ -382,11 +382,11 @@ function MemoryModal({
         {mode === "view" && (
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <h2 className="text-xl font-bold tracking-tight mb-3" style={{ color: "var(--color-text-primary)" }}>
-              {entry.title || "(Kein Titel)"}
+              {entry.title || "(No title)"}
             </h2>
             <div className="flex gap-3 flex-wrap text-xs mb-5" style={{ color: "var(--color-text-muted)" }}>
               <span>{timeAgo(entry.created_at)}</span>
-              {entry.auto_generated && <span>· Auto-generiert</span>}
+              {entry.auto_generated && <span>· Auto-generated</span>}
               {entry.source && <span>· {entry.source}</span>}
             </div>
             <div
@@ -395,7 +395,7 @@ function MemoryModal({
             >
               {entry.content
                 ? <MarkdownContent content={entry.content} />
-                : <em style={{ color: "var(--color-text-muted)" }}>Kein Inhalt</em>
+                : <em style={{ color: "var(--color-text-muted)" }}>No content</em>
               }
             </div>
             {/* Phase 5 MSY-02: cosine-merge candidate resolution panel.
@@ -425,7 +425,7 @@ function MemoryModal({
           <div className="flex-1 overflow-y-auto px-6 py-5 flex flex-col gap-4">
             {/* Type picker */}
             <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-muted)" }}>Typ</label>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider mb-2" style={{ color: "var(--color-text-muted)" }}>Type</label>
               <div className="flex gap-1.5 flex-wrap">
                 {(Object.keys(TYPE_CONFIG) as MemoryType[]).map((t) => (
                   <button
@@ -446,12 +446,12 @@ function MemoryModal({
 
             {/* Title */}
             <div>
-              <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-muted)" }}>Titel</label>
+              <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5" style={{ color: "var(--color-text-muted)" }}>Title</label>
               <input
                 type="text"
                 value={editTitle}
                 onChange={(e) => { setEditTitle(e.target.value); setDirty(true); }}
-                placeholder="Titel des Eintrags..."
+                placeholder="Entry title..."
                 className="w-full px-4 py-2.5 rounded-xl text-sm font-medium outline-none transition-colors"
                 style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = _C.accent)}
@@ -462,7 +462,7 @@ function MemoryModal({
             {/* Content with write/preview tab */}
             <div className="flex-1">
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Inhalt</label>
+                <label className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Content</label>
                 <div className="flex gap-0.5 p-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>
                   {(["write", "preview"] as const).map((tab) => (
                     <button
@@ -474,7 +474,7 @@ function MemoryModal({
                         color: activeWriteTab === tab ? "var(--color-text-primary)" : "var(--color-text-muted)",
                       }}
                     >
-                      {tab === "write" ? "Schreiben" : "Vorschau"}
+                      {tab === "write" ? "Write" : "Preview"}
                     </button>
                   ))}
                 </div>
@@ -484,7 +484,7 @@ function MemoryModal({
                   value={editContent}
                   onChange={(e) => { setEditContent(e.target.value); setDirty(true); }}
                   rows={10}
-                  placeholder="Markdown wird unterstützt..."
+                  placeholder="Markdown supported..."
                   className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-y transition-colors"
                   style={{
                     background: "rgba(255,255,255,0.02)",
@@ -508,7 +508,7 @@ function MemoryModal({
                 >
                   {editContent
                     ? <MarkdownContent content={editContent} />
-                    : <em style={{ color: "var(--color-text-muted)" }}>Kein Inhalt</em>
+                    : <em style={{ color: "var(--color-text-muted)" }}>No content</em>
                   }
                 </div>
               )}
@@ -522,9 +522,9 @@ function MemoryModal({
                   className="flex items-center gap-3 px-4 py-3 rounded-xl text-xs"
                   style={{ background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)", color: C.warn }}
                 >
-                  ⚠ Ungespeicherte Änderungen — Trotzdem schliessen?
-                  <button onClick={onClose} className="ml-auto underline cursor-pointer">Schliessen</button>
-                  <button onClick={() => setShowUnsaved(false)} className="underline cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Weiterschreiben</button>
+                  ⚠ Unsaved changes — close anyway?
+                  <button onClick={onClose} className="ml-auto underline cursor-pointer">Close</button>
+                  <button onClick={() => setShowUnsaved(false)} className="underline cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Keep editing</button>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -539,7 +539,7 @@ function MemoryModal({
               className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium pointer-events-none"
               style={{ background: "rgba(0,204,136,0.15)", border: "1px solid rgba(0,204,136,0.3)", color: C.online }}
             >
-              <Check size={12} /> Gespeichert
+              <Check size={12} /> Saved
             </motion.div>
           )}
         </AnimatePresence>
@@ -550,10 +550,10 @@ function MemoryModal({
 
 // ── Scope options for the dropdown ───────────────────────────────────────────
 const SCOPE_OPTIONS = [
-  { value: "all",    label: "Alle" },
+  { value: "all",    label: "All" },
   { value: "board",  label: "Board" },
   { value: "agent",  label: "Agent" },
-  { value: "global", label: "Kein Kontext" },
+  { value: "global", label: "No context" },
 ] as const;
 
 type Scope = (typeof SCOPE_OPTIONS)[number]["value"];
@@ -702,12 +702,12 @@ export default function LegacyMemoryPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer transition-all whitespace-nowrap"
               style={{ background: C.accentSoft, border: `1px solid ${_C.borderAccent}`, color: C.accent }}
             >
-              <Plus size={14} /> Neuer Eintrag
+              <Plus size={14} /> New entry
             </button>
           </div>
         </div>
 
-        {/* Semantic Memory Query — Qdrant Vektor-Suche ueber alle 3 Layer */}
+        {/* Semantic Memory Query — Qdrant vector search across all 3 layers */}
         <MemoryQueryBar boardId={boardId || null} agentId={null} />
 
         {/* Layer Tabs */}
@@ -785,7 +785,7 @@ function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: B
               <div className="w-2 h-2 rounded-full shrink-0" style={{ background: cfg.color }} />
               <div className="min-w-0">
                 <div className="text-sm font-medium truncate" style={{ color: "var(--color-text-primary)" }}>
-                  {entry.title || "(Kein Titel)"}
+                  {entry.title || "(No title)"}
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
                   {timeAgo(entry.created_at)}{entry.auto_generated ? " · Auto" : ""}

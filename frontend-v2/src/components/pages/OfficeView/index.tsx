@@ -80,7 +80,7 @@ export default function OfficeView() {
         {/* Header — title + zoom cluster (subtitle removed per operator's req) */}
         <header className="shrink-0 flex items-center justify-between gap-4 px-5 lg:px-7 pt-5 pb-4">
           <h1 className="text-[26px] font-bold text-white tracking-tight leading-tight">
-            Organigramm
+            Org Chart
           </h1>
           <ZoomCluster zoom={zoom} onIn={zoomIn} onOut={zoomOut} onReset={zoomReset} />
         </header>
@@ -91,7 +91,7 @@ export default function OfficeView() {
             viewport rectangle) — the operator hit "hintergrund zu kurz" before. */}
         <div
           ref={panelRef}
-          className="relative flex-1 min-h-0 overflow-auto" tabIndex={0} role="region" aria-label="Organigramm"
+          className="relative flex-1 min-h-0 overflow-auto" tabIndex={0} role="region" aria-label="Org chart"
         >
           {/* Glass-panel — min-h-full so it always covers viewport even when
               content is short; intrinsic height grows with the chart when
@@ -150,7 +150,7 @@ function ZoomCluster({
       <ZoomButton
         onClick={onOut}
         disabled={atMin}
-        title="Auszoomen (⌘−)"
+        title="Zoom out (⌘−)"
         aria-label="Zoom out"
       >
         <ZoomOut size={15} strokeWidth={2} />
@@ -159,7 +159,7 @@ function ZoomCluster({
       <button
         type="button"
         onClick={onReset}
-        title="Auf 100% zurücksetzen (⌘0)"
+        title="Reset to 100% (⌘0)"
         className="px-2.5 min-w-[52px] text-[11.5px] font-mono tabular-nums rounded-md transition-colors cursor-pointer"
         style={{
           color: zoom === ZOOM_DEFAULT ? C.textMuted : C.textSecondary,
@@ -176,7 +176,7 @@ function ZoomCluster({
       <ZoomButton
         onClick={onIn}
         disabled={atMax}
-        title="Zoomen (⌘+)"
+        title="Zoom in (⌘+)"
         aria-label="Zoom in"
       >
         <ZoomIn size={15} strokeWidth={2} />
@@ -186,7 +186,7 @@ function ZoomCluster({
 
       <ZoomButton
         onClick={onReset}
-        title="Anpassen / 100% (⌘0)"
+        title="Fit / 100% (⌘0)"
         aria-label="Reset zoom"
       >
         <Maximize2 size={14} strokeWidth={2} />

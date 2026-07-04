@@ -106,7 +106,7 @@ export default function CommandPalette() {
                 />
                 <Command.Input
                   autoFocus
-                  placeholder="Suche oder Befehl..."
+                  placeholder="Search or command..."
                   className="flex-1 py-3.5 bg-transparent text-sm outline-none"
                   style={{
                     color: "var(--color-text-primary)",
@@ -134,7 +134,7 @@ export default function CommandPalette() {
                   className="py-8 text-center text-sm"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  Keine Ergebnisse
+                  No results
                 </Command.Empty>
 
                 {/* Navigation */}
@@ -149,7 +149,7 @@ export default function CommandPalette() {
                     { icon: Inbox, label: "Inbox", href: "/inbox" },
                     {
                       icon: Settings,
-                      label: "Einstellungen",
+                      label: "Settings",
                       href: "/settings",
                     },
                   ].map(({ icon: Icon, label, href }) => (
@@ -176,11 +176,11 @@ export default function CommandPalette() {
 
                 {/* Quick Actions */}
                 <Command.Group
-                  heading="Aktionen"
+                  heading="Actions"
                   className="[&_[cmdk-group-heading]]:text-nav [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:px-2"
                 >
                   <Command.Item
-                    value="new task neuer task"
+                    value="new task"
                     onSelect={() => navigate("/tasks")}
                     className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer"
                   >
@@ -188,7 +188,7 @@ export default function CommandPalette() {
                       size={15}
                       style={{ color: "var(--color-info)" }}
                     />
-                    Neuer Task
+                    New Task
                     <kbd
                       className="ml-auto text-[10px] font-mono"
                       style={{ color: "var(--color-text-muted)" }}
@@ -197,7 +197,7 @@ export default function CommandPalette() {
                     </kbd>
                   </Command.Item>
                   <Command.Item
-                    value="approve all alle genehmigen"
+                    value="approve all"
                     onSelect={approveAll}
                     className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer"
                   >
@@ -205,7 +205,7 @@ export default function CommandPalette() {
                       size={15}
                       style={{ color: "var(--color-online)" }}
                     />
-                    Alle Approvals genehmigen
+                    Approve all approvals
                     <kbd
                       className="ml-auto text-[10px] font-mono"
                       style={{ color: "var(--color-text-muted)" }}

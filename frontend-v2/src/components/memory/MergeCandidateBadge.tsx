@@ -3,7 +3,7 @@
 /**
  * Phase 5 MSY-02 — MergeCandidateBadge.
  *
- * Small violet pill on a memory card header indicating the entry has a
+ * Small teal pill on a memory card header indicating the entry has a
  * cosine-similarity candidate (merge_candidate_id !== null). Click navigates
  * to / opens the entry's modal where the MergeResolutionPanel auto-expands
  * with the 3 user-confirm actions.
@@ -36,8 +36,8 @@ export function MergeCandidateBadge() {
         color: C.accent,
       }}
       role="status"
-      aria-label="Mögliches Duplikat — anklicken zum Prüfen"
-      title="Ähnlicher Eintrag gefunden — anklicken zum Prüfen"
+      aria-label="Possible duplicate — click to review"
+      title="Similar entry found — click to review"
     >
       <GitMerge size={12} aria-hidden />
       <span>MERGE</span>

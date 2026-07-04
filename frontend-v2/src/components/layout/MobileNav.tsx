@@ -77,7 +77,7 @@ export default function MobileNav() {
           onClick={() => setOpen(!open)}
           className="flex items-center justify-center w-11 h-11 rounded-lg cursor-pointer"
           style={{ color: "var(--color-text-secondary)" }}
-          aria-label={open ? "Menü schliessen" : "Menü öffnen"}
+          aria-label={open ? "Close menu" : "Open menu"}
         >
           {open ? <X size={20} /> : <Menu size={20} />}
         </button>

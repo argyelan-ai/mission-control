@@ -42,13 +42,13 @@ export function SemanticCardGrid({
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3">
         <Database size={32} style={{ color: "var(--color-text-muted)" }} />
-        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Keine semantischen Eintraege.</p>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No semantic entries.</p>
         <button
           onClick={onNew}
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-medium cursor-pointer transition-colors"
           style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
         >
-          <Plus size={13} /> Neuer Eintrag
+          <Plus size={13} /> New entry
         </button>
       </div>
     );
@@ -82,7 +82,7 @@ export function SemanticCardGrid({
             background: item.is_pinned ? "rgba(245,158,11,0.12)" : "rgba(255,255,255,0.05)",
             color: item.is_pinned ? C.warning : "var(--color-text-muted)",
           }}
-          title={item.is_pinned ? "Entpinnen" : "Anpinnen"}
+          title={item.is_pinned ? "Unpin" : "Pin"}
         >
           <Pin size={12} />
         </button>
@@ -104,7 +104,7 @@ export function SemanticCardGrid({
 
         {/* Title */}
         <div className="text-sm font-semibold mb-1.5 pr-6" style={{ color: "var(--color-text-primary)" }}>
-          {item.title || "(Kein Titel)"}
+          {item.title || "(No title)"}
         </div>
 
         {/* Content preview */}
@@ -143,7 +143,7 @@ export function SemanticCardGrid({
           <div className="flex items-center gap-2 mb-3 px-1">
             <Pin size={11} style={{ color: C.warning }} />
             <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
-              Gepinnt ({pinned.length})
+              Pinned ({pinned.length})
             </span>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -172,7 +172,7 @@ export function SemanticCardGrid({
           }}
         >
           <Plus size={20} />
-          <span className="text-sm">Neuer Eintrag</span>
+          <span className="text-sm">New entry</span>
         </motion.div>
       </div>
     </div>

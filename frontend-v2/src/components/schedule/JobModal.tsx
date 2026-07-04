@@ -304,7 +304,7 @@ export function JobModal({
   const handleSubmit = () => {
     setError(null);
     if (!form.name.trim()) {
-      setError("Name ist erforderlich.");
+      setError("Name is required.");
       return;
     }
     const payload = buildPayload();
@@ -373,7 +373,7 @@ export function JobModal({
             key="modal"
             role="dialog"
             aria-modal="true"
-            aria-label={editing ? "Job bearbeiten" : "Neuer Job"}
+            aria-label={editing ? "Edit job" : "New job"}
             initial={{ opacity: 0, y: 32 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 32 }}
@@ -389,12 +389,12 @@ export function JobModal({
             <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
               <div className="flex flex-col gap-0.5">
                 <h2 className="text-lg font-semibold" style={{ color: C.textPrimary }}>
-                  {editing ? "Job bearbeiten" : "Neuer Job"}
+                  {editing ? "Edit job" : "New job"}
                 </h2>
                 <p className="text-xs" style={{ color: C.textMuted }}>
                   {editing
                     ? job?.name
-                    : "Vorlage waehlen oder eigene Konfiguration anlegen."}
+                    : "Choose a template or create a custom configuration."}
                 </p>
               </div>
               <button
@@ -412,7 +412,7 @@ export function JobModal({
             <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-6 py-5">
               {/* Templates */}
               {!editing && (
-                <Section title="Vorlagen" icon={<Sparkles size={12} />}>
+                <Section title="Templates" icon={<Sparkles size={12} />}>
                   <div className="grid grid-cols-2 gap-2 md:grid-cols-3">
                     {JOB_TEMPLATES.map((tpl) => (
                       <button
@@ -453,19 +453,19 @@ export function JobModal({
                       style={inputStyle}
                     />
                   </Label>
-                  <Label text="Beschreibung">
+                  <Label text="Description">
                     <textarea
                       value={form.description}
                       onChange={(e) =>
                         setForm((p) => ({ ...p, description: e.target.value }))
                       }
                       rows={2}
-                      placeholder="Was macht dieser Job?"
+                      placeholder="What does this job do?"
                       className="w-full resize-none rounded-md px-3 py-2 text-sm outline-none"
                       style={inputStyle}
                     />
                   </Label>
-                  <Label text="Tags (kommasepariert)">
+                  <Label text="Tags (comma-separated)">
                     <input
                       type="text"
                       value={form.tags}
@@ -487,7 +487,7 @@ export function JobModal({
                       className="h-3.5 w-3.5 cursor-pointer"
                       style={{ accentColor: C.accent }}
                     />
-                    Job aktiv
+                    Job active
                   </label>
                 </div>
               </Section>
@@ -507,22 +507,22 @@ export function JobModal({
                 />
               </Section>
 
-              {/* Task-Vorlage */}
+              {/* Task Template */}
               <CollapsibleSection
-                title="Task-Vorlage"
+                title="Task Template"
                 expanded={taskExpanded}
                 onToggle={() => setTaskExpanded((v) => !v)}
-                hint={taskPayload.title || "(noch nicht konfiguriert)"}
+                hint={taskPayload.title || "(not configured yet)"}
               >
                 <div className="flex flex-col gap-3 pt-2">
-                  <Label text="Task Titel (Template)">
+                  <Label text="Task title (template)">
                     <input
                       type="text"
                       value={taskPayload.title}
                       onChange={(e) =>
                         setTaskPayload((p) => ({ ...p, title: e.target.value }))
                       }
-                      placeholder="Standup-Briefing zusammenstellen"
+                      placeholder="Compile standup briefing"
                       className={inputCls}
                       style={inputStyle}
                     />
@@ -537,9 +537,9 @@ export function JobModal({
                 </div>
               </CollapsibleSection>
 
-              {/* Erweitert */}
+              {/* Advanced */}
               <CollapsibleSection
-                title="Erweitert"
+                title="Advanced"
                 icon={<Settings2 size={12} />}
                 expanded={advancedExpanded}
                 onToggle={() => setAdvancedExpanded((v) => !v)}
@@ -566,7 +566,7 @@ export function JobModal({
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Retry delay (Min)">
+                    <Label text="Retry delay (min)">
                       <input
                         type="number"
                         min={0}
@@ -598,7 +598,7 @@ export function JobModal({
                       className={inputCls}
                       style={inputStyle}
                     >
-                      <option value="">— keine —</option>
+                      <option value="">— none —</option>
                       {otherJobs.map((j) => (
                         <option key={j.id} value={j.id}>
                           {j.name}
@@ -620,7 +620,7 @@ export function JobModal({
                       className="h-3.5 w-3.5 cursor-pointer"
                       style={{ accentColor: C.accent }}
                     />
-                    Telegram-Benachrichtigung bei Fehler
+                    Telegram notification on failure
                   </label>
 
                   <Label text="Discord Channel ID (optional)">
@@ -668,7 +668,7 @@ export function JobModal({
                   color: C.textSecondary,
                 }}
               >
-                Abbrechen
+                Cancel
               </button>
               <button
                 type="button"
@@ -681,7 +681,7 @@ export function JobModal({
                 }}
               >
                 {submitting && <Loader2 size={14} className="animate-spin" />}
-                {editing ? "Aenderungen speichern" : "Job anlegen"}
+                {editing ? "Save changes" : "Create job"}
               </button>
             </div>
           </motion.div>

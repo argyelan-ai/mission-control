@@ -59,7 +59,7 @@ export function DirectoryBrowser({
     return (
       <div className="flex items-center gap-2 py-4 px-2">
         <AlertCircle size={14} style={{ color: C.error }} />
-        <span className="text-xs" style={{ color: C.textMuted }}>Verzeichnis konnte nicht geladen werden</span>
+        <span className="text-xs" style={{ color: C.textMuted }}>Failed to load directory</span>
       </div>
     );
   }
@@ -97,7 +97,7 @@ export function DirectoryBrowser({
 
       {/* File list */}
       {data.entries.length === 0 ? (
-        <p className="text-xs py-2" style={{ color: C.textMuted }}>Verzeichnis ist leer</p>
+        <p className="text-xs py-2" style={{ color: C.textMuted }}>Directory is empty</p>
       ) : (
         <div className="flex flex-col gap-0.5">
           {data.entries.map((entry) => {
@@ -165,7 +165,7 @@ export function DirectoryBrowser({
                 className="text-[10px] cursor-pointer hover:underline"
                 style={{ color: C.accent }}
               >
-                Im Finder ↗
+                In Finder ↗
               </button>
             )}
           </div>
@@ -181,7 +181,7 @@ export function DirectoryBrowser({
             className="text-[10px] cursor-pointer hover:underline"
             style={{ color: C.textMuted }}
           >
-            Ordner im Finder öffnen ↗
+            Open folder in Finder ↗
           </button>
         </div>
       )}

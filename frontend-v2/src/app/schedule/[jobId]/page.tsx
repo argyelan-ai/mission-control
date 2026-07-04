@@ -57,13 +57,13 @@ function formatPercent(rate: number | null | undefined): string {
 function scheduleLabel(job: ScheduledJob): string {
   if (job.schedule_cron) return `cron ${job.schedule_cron}`;
   if (job.schedule_type === "daily" && job.schedule_time)
-    return `täglich ${job.schedule_time}`;
+    return `daily ${job.schedule_time}`;
   if (job.schedule_type === "weekdays" && job.schedule_time)
-    return `Mo–Fr ${job.schedule_time}`;
+    return `Mon–Fri ${job.schedule_time}`;
   if (job.schedule_type === "interval" && job.schedule_interval_hours)
-    return `alle ${job.schedule_interval_hours}h`;
+    return `every ${job.schedule_interval_hours}h`;
   if (job.schedule_type === "weekly_custom" && job.schedule_weekdays)
-    return `Wochentage ${job.schedule_weekdays.join(",")} ${job.schedule_time ?? ""}`;
+    return `weekdays ${job.schedule_weekdays.join(",")} ${job.schedule_time ?? ""}`;
   return "—";
 }
 
@@ -167,7 +167,7 @@ export default function ScheduleJobDetailPage() {
         <div className="flex flex-col items-center justify-center h-full gap-3">
           <Loader2 size={20} className="animate-spin" style={{ color: C.accent }} />
           <p className="text-sm" style={{ color: C.textMuted }}>
-            Lade Job…
+            Loading job…
           </p>
         </div>
       </AppShell>
@@ -184,7 +184,7 @@ export default function ScheduleJobDetailPage() {
         >
           <Link
             href="/schedule"
-            aria-label="Zurück zu Schedule"
+            aria-label="Back to schedule"
             className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors shrink-0"
             style={{ color: C.textMuted }}
           >
@@ -211,7 +211,7 @@ export default function ScheduleJobDetailPage() {
           </button>
           <button
             onClick={() => setEditOpen(true)}
-            aria-label="Job bearbeiten"
+            aria-label="Edit job"
             className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer shrink-0"
             style={{
               color: C.textSecondary,
@@ -219,7 +219,7 @@ export default function ScheduleJobDetailPage() {
             }}
           >
             <Pencil size={12} />
-            <span className="max-sm:hidden">Bearbeiten</span>
+            <span className="max-sm:hidden">Edit</span>
           </button>
         </div>
 
@@ -231,15 +231,15 @@ export default function ScheduleJobDetailPage() {
               value={formatPercent(stats?.success_rate_7d)}
             />
             <KPICard
-              label="Avg. Dauer"
+              label="Avg. Duration"
               value={formatMs(stats?.avg_duration_ms ?? 0)}
             />
             <KPICard
-              label="P95 Dauer"
+              label="P95 Duration"
               value={formatMs(stats?.p95_duration_ms ?? 0)}
             />
             <KPICard
-              label="Läufe (30d)"
+              label="Runs (30d)"
               value={stats?.total_runs_30d ?? 0}
             />
           </div>
@@ -251,7 +251,7 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Läufe (30 Tage)
+                Runs (30 days)
               </h2>
               <div style={{ width: "100%", height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -300,12 +300,12 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Konfiguration
+                Configuration
               </h2>
               <dl className="flex flex-col gap-3 text-xs">
                 <ConfigRow label="Trigger" value={scheduleLabel(job)} />
                 <ConfigRow
-                  label="Nächster Lauf"
+                  label="Next run"
                   value={
                     job.next_run_at
                       ? new Date(job.next_run_at).toLocaleString("de-CH", {
@@ -319,7 +319,7 @@ export default function ScheduleJobDetailPage() {
                   }
                 />
                 <ConfigRow
-                  label="Letzter Status"
+                  label="Last status"
                   value={job.last_run_status ?? "—"}
                   valueColor={
                     job.last_run_status === "failed"
@@ -334,25 +334,25 @@ export default function ScheduleJobDetailPage() {
                   value={
                     job.retry_max > 0
                       ? `${job.retry_max}× / ${job.retry_delay_minutes}min`
-                      : "keine"
+                      : "none"
                   }
                 />
                 <ConfigRow
                   label="Skip Review"
-                  value={job.task_skip_review ? "ja" : "nein"}
+                  value={job.task_skip_review ? "yes" : "no"}
                 />
                 <ConfigRow label="Board" value={board?.name ?? "—"} />
-                <ConfigRow label="Aktion" value={job.action_type} />
+                <ConfigRow label="Action" value={job.action_type} />
                 {job.consecutive_failures && job.consecutive_failures > 0 ? (
                   <ConfigRow
-                    label="Aufeinanderfolgende Fehler"
+                    label="Consecutive failures"
                     value={String(job.consecutive_failures)}
                     valueColor={STATUS_TEXT.error}
                   />
                 ) : null}
                 {job.snoozed_until ? (
                   <ConfigRow
-                    label="Snoozed bis"
+                    label="Snoozed until"
                     value={new Date(job.snoozed_until).toLocaleString("de-CH")}
                   />
                 ) : null}
@@ -374,7 +374,7 @@ export default function ScheduleJobDetailPage() {
                   className="text-xs py-6 text-center"
                   style={{ color: C.textMuted }}
                 >
-                  Noch keine Läufe.
+                  No runs yet.
                 </p>
               ) : (
                 <div className="flex flex-col max-h-[400px] overflow-y-auto">
@@ -390,14 +390,14 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Erzeugte Tasks
+                Created Tasks
               </h2>
               {createdTasks.length === 0 ? (
                 <p
                   className="text-xs py-6 text-center"
                   style={{ color: C.textMuted }}
                 >
-                  Dieser Job hat noch keine Tasks erstellt.
+                  This job hasn&apos;t created any tasks yet.
                 </p>
               ) : (
                 <div className="flex flex-col gap-1.5 max-h-[400px] overflow-y-auto">
@@ -510,7 +510,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
       {run.task_id && (
         <Link
           href={`/tasks/${run.task_id}`}
-          title="Zum Task"
+          title="Go to task"
           className="flex-shrink-0 p-1 rounded transition-colors"
           style={{ color: C.textMuted }}
         >

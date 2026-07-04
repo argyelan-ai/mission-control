@@ -98,7 +98,7 @@ export function SlideOverPanel({
                   onClick={onClose}
                   className="flex items-center justify-center min-h-touch min-w-touch rounded-lg transition-opacity hover:opacity-70 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
-                  aria-label="Schließen"
+                  aria-label="Close"
                 >
                   <X size={18} />
                 </button>

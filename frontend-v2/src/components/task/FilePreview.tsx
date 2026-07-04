@@ -166,10 +166,10 @@ function DownloadButton({ fileUrl, path }: { fileUrl: string; path: string }) {
       style={{ background: C.bgElevated, color: C.textSecondary, border: `1px solid ${C.border}` }}
       onMouseEnter={(e) => (e.currentTarget.style.color = C.textPrimary)}
       onMouseLeave={(e) => (e.currentTarget.style.color = C.textSecondary)}
-      title={`${fileName(path)} herunterladen`}
+      title={`Download ${fileName(path)}`}
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : <Download size={12} />}
-      Herunterladen
+      Download
     </button>
   );
 }
@@ -223,7 +223,7 @@ function PreviewError() {
   return (
     <div className="flex flex-col items-center justify-center py-6 gap-1.5">
       <FileX size={16} style={{ color: C.textMuted }} />
-      <p className="text-xs" style={{ color: C.textMuted }}>Datei konnte nicht geladen werden</p>
+      <p className="text-xs" style={{ color: C.textMuted }}>Failed to load file</p>
     </div>
   );
 }
@@ -264,7 +264,7 @@ export function FilePreview({ fileUrl, path, showDownload = true }: FilePreviewP
       <div className="flex flex-col items-center justify-center py-6 gap-1">
         <FileX size={16} style={{ color: C.textMuted }} />
         <p className="text-xs" style={{ color: C.textMuted }}>
-          Keine Vorschau für diesen Dateityp — bitte herunterladen.
+          No preview for this file type — please download.
         </p>
       </div>
     );

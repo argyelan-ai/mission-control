@@ -38,11 +38,11 @@ const C = {
 // journal (daily entry), lesson/reference for later detail-tagging.
 // Values match the backend 1:1 (_ADMIN_NOTE_TYPES).
 const NOTE_TYPES: { value: VaultNoteType; label: string; hint: string }[] = [
-  { value: "note",       label: "Note",       hint: "freier Eintrag" },
-  { value: "knowledge",  label: "Knowledge",  hint: "fakten / wissen" },
-  { value: "journal",    label: "Journal",    hint: "tagesnotiz" },
-  { value: "lesson",     label: "Lesson",     hint: "lernerfahrung" },
-  { value: "reference",  label: "Reference",  hint: "link / quelle" },
+  { value: "note",       label: "Note",       hint: "free-form entry" },
+  { value: "knowledge",  label: "Knowledge",  hint: "facts / knowledge" },
+  { value: "journal",    label: "Journal",    hint: "daily entry" },
+  { value: "lesson",     label: "Lesson",     hint: "learning experience" },
+  { value: "reference",  label: "Reference",  hint: "link / source" },
 ];
 
 interface CreateVaultNoteModalProps {
@@ -167,11 +167,11 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
       // graph, trash counter etc. A single prefix invalidate is enough
       // because TanStack Query does partial matching.
       qc.invalidateQueries({ queryKey: ["vault"] });
-      notify.success("Eintrag erstellt");
+      notify.success("Entry created");
       onCreated?.(res.path);
       resetForm();
     } catch (err) {
-      const msg = err instanceof Error && err.message ? err.message : "Fehler beim Erstellen";
+      const msg = err instanceof Error && err.message ? err.message : "Failed to create entry";
       notify.error(msg);
     } finally {
       setLoading(false);
@@ -259,7 +259,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                     template chips so the muscle memory transfers. */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono block mb-2" style={{ color: C.textMuted }}>
-                    Typ
+                    Type
                   </label>
                   <div className="flex flex-wrap gap-1.5">
                     {NOTE_TYPES.map((t) => {
@@ -287,14 +287,14 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                 {/* Title */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono block mb-2" style={{ color: C.textMuted }}>
-                    Titel
+                    Title
                   </label>
                   <input
                     ref={titleRef}
                     type="text"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="Was willst du dir merken?"
+                    placeholder="What do you want to remember?"
                     spellCheck={true}
                     disabled={loading}
                     className="w-full px-3 py-2 rounded-md text-sm outline-none transition-colors"
@@ -309,7 +309,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                 {/* Body */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono block mb-2" style={{ color: C.textMuted }}>
-                    Inhalt
+                    Body
                   </label>
                   <textarea
                     ref={bodyRef}
@@ -322,7 +322,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                       el.style.height = "auto";
                       el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.5)}px`;
                     }}
-                    placeholder="Markdown erlaubt. Wikilinks per [[note-slug]]."
+                    placeholder="Markdown allowed. Wikilinks via [[note-slug]]."
                     spellCheck={true}
                     disabled={loading}
                     className="w-full px-3 py-2 rounded-md text-sm outline-none transition-colors font-mono resize-none"
@@ -355,13 +355,13 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                 {/* Tags */}
                 <div>
                   <label className="text-[10px] uppercase tracking-wider font-mono mb-2 flex items-center gap-1.5" style={{ color: C.textMuted }}>
-                    <Hash size={10} /> Tags <span className="opacity-60">(optional, komma- oder leertrennt)</span>
+                    <Hash size={10} /> Tags <span className="opacity-60">(optional, comma- or space-separated)</span>
                   </label>
                   <input
                     type="text"
                     value={tagsRaw}
                     onChange={(e) => setTagsRaw(e.target.value)}
-                    placeholder="z.b.  personal, idee, todo"
+                    placeholder="e.g. personal, idea, todo"
                     disabled={loading}
                     className="w-full px-3 py-2 rounded-md text-sm outline-none transition-colors"
                     style={{
@@ -407,7 +407,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
               {/* Footer */}
               <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
                 <span className="text-[10px]" style={{ color: C.textMuted }}>
-                  Cmd+Enter = speichern · Esc = schliessen
+                  Cmd+Enter = save · Esc = close
                 </span>
                 <div className="flex items-center gap-2">
                   <button
@@ -416,7 +416,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                     className="px-3.5 py-1.5 text-[11px] rounded-lg cursor-pointer transition-colors"
                     style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
                   >
-                    Abbrechen
+                    Cancel
                   </button>
                   <button
                     type="button"
@@ -429,7 +429,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                     }}
                   >
                     <Send size={11} />
-                    {loading ? "..." : "Eintrag erstellen"}
+                    {loading ? "..." : "Create entry"}
                   </button>
                 </div>
               </div>

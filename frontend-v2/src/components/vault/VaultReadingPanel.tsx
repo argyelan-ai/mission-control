@@ -221,7 +221,7 @@ function PanelContent({
       setEditError(null);
     },
     onError: (err: Error) => {
-      setEditError(err.message || "Speichern fehlgeschlagen");
+      setEditError(err.message || "Save failed");
     },
   });
 
@@ -292,7 +292,7 @@ function PanelContent({
                   onClick={cancelEdit}
                   disabled={saveMutation.isPending}
                   aria-label="Cancel edit"
-                  title="Abbrechen (Esc)"
+                  title="Cancel (Esc)"
                   className="rounded p-1.5 transition-colors"
                   style={{
                     color: "var(--color-text-muted)",
@@ -317,7 +317,7 @@ function PanelContent({
                   onClick={handleSave}
                   disabled={saveMutation.isPending}
                   aria-label="Save edit"
-                  title="Speichern (⌘S)"
+                  title="Save (⌘S)"
                   className="rounded p-1.5 transition-colors flex items-center gap-1.5"
                   style={{
                     color: C.online,
@@ -387,7 +387,7 @@ function PanelContent({
                     (e.currentTarget as HTMLButtonElement).style.background =
                       "transparent";
                   }}
-                  title="Note in Papierkorb verschieben"
+                  title="Move note to trash"
                 >
                   <Trash2 size={14} />
                 </button>
@@ -724,7 +724,7 @@ function MobileOverlayPanel({
         <button
           onClick={onClose}
           type="button"
-          aria-label="Zurück zur Liste"
+          aria-label="Back to list"
           className="flex items-center gap-1 cursor-pointer min-h-touch -ml-2 px-2 rounded-md"
           style={{ color: "var(--color-text-secondary)", background: "none", border: "none" }}
         >

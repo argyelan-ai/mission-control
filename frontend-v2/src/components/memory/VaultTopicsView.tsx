@@ -57,7 +57,7 @@ export function VaultTopicsView() {
       <div className="flex items-center justify-center py-20">
         <div className="flex items-center gap-3 text-[var(--color-text-muted)]">
           <Layers size={18} className="animate-pulse" />
-          <span className="text-sm font-mono">Themen werden geladen...</span>
+          <span className="text-sm font-mono">Loading topics...</span>
         </div>
       </div>
     );
@@ -66,7 +66,7 @@ export function VaultTopicsView() {
   if (error) {
     return (
       <div className="text-center py-20 text-[var(--color-text-muted)] text-sm">
-        Themen konnten nicht geladen werden.
+        Topics could not be loaded.
       </div>
     );
   }
@@ -78,9 +78,9 @@ export function VaultTopicsView() {
     return (
       <div className="text-center py-20 text-[var(--color-text-muted)]">
         <Layers size={32} className="mx-auto mb-3 opacity-40" />
-        <p className="text-sm">Noch keine Themen-Cluster vorhanden.</p>
+        <p className="text-sm">No topic clusters yet.</p>
         <p className="text-xs mt-1 opacity-60">
-          Themen werden aus semantischen Embeddings generiert.
+          Topics are generated from semantic embeddings.
         </p>
       </div>
     );
@@ -92,7 +92,7 @@ export function VaultTopicsView() {
       <div className="flex items-center gap-2 mb-6 text-[var(--color-text-muted)] text-xs font-mono">
         <Layers size={13} />
         <span>
-          {topics.length} Themen aus {totalNotes} Notes
+          {topics.length} topics from {totalNotes} notes
         </span>
       </div>
 

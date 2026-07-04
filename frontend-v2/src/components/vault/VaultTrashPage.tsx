@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * VaultTrashPage — Papierkorb tab inside /memory.
+ * VaultTrashPage — Trash tab inside /memory.
  *
  * Lists everything sitting in ~/.mc/vault/_trash/, lets the admin either
  * restore (move back to original path) or permanently purge.
@@ -111,7 +111,7 @@ function PurgeConfirmModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  Permanent löschen
+                  Delete permanently
                 </div>
                 <div
                   className="truncate"
@@ -141,8 +141,8 @@ function PurgeConfirmModal({
                   style={{ color: STATUS_TEXT.error, marginTop: "1px", flexShrink: 0 }}
                 />
                 <div style={{ fontSize: "12.5px", color: "var(--color-text-secondary)" }}>
-                  Diese Datei wird endgültig aus dem Papierkorb entfernt. Keine
-                  Wiederherstellung mehr möglich (ausser via Datenbank-Backup).
+                  This file will be permanently removed from the trash. No
+                  restoration possible afterward (except via database backup).
                 </div>
               </div>
               {error && (
@@ -178,7 +178,7 @@ function PurgeConfirmModal({
                   opacity: isPurging ? 0.5 : 1,
                 }}
               >
-                Abbrechen
+                Cancel
               </button>
               <button
                 onClick={onConfirm}
@@ -199,12 +199,12 @@ function PurgeConfirmModal({
                       className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
                       style={{ borderColor: STATUS_TEXT.error, borderTopColor: "transparent" }}
                     />
-                    Löschen…
+                    Deleting…
                   </>
                 ) : (
                   <>
                     <Trash2 size={12} />
-                    Permanent löschen
+                    Delete permanently
                   </>
                 )}
               </button>
@@ -431,12 +431,12 @@ function TrashRow({
           aria-label="Restore note"
           title={
             restorable
-              ? "Note wiederherstellen"
-              : "Original-Pfad unbekannt (Legacy-Trash) — manuell wiederherstellen"
+              ? "Restore note"
+              : "Original path unknown (legacy trash) — restore manually"
           }
           className="rounded-md p-2 transition-colors"
           style={{
-            color: restorable ? "#34d399" : "rgba(255,255,255,0.18)",
+            color: restorable ? C.online : "rgba(255,255,255,0.18)",
             background: "transparent",
             border: "1px solid",
             borderColor: restorable ? "rgba(52,211,153,0.25)" : "rgba(255,255,255,0.04)",
@@ -456,7 +456,7 @@ function TrashRow({
           {isRestoring ? (
             <span
               className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
-              style={{ borderColor: "#34d399", borderTopColor: "transparent" }}
+              style={{ borderColor: C.online, borderTopColor: "transparent" }}
             />
           ) : (
             <RotateCcw size={13} />
@@ -466,7 +466,7 @@ function TrashRow({
           type="button"
           onClick={() => onPurge(item.trash_filename, item.title)}
           aria-label="Permanently delete"
-          title="Endgültig löschen"
+          title="Delete permanently"
           className="rounded-md p-2 transition-colors"
           style={{
             color: "var(--color-text-muted)",
@@ -524,7 +524,7 @@ export function VaultTrashPage() {
     onError: (err: Error, filename) => {
       setRestoreErrors((prev) => ({
         ...prev,
-        [filename]: err.message || "Restore fehlgeschlagen",
+        [filename]: err.message || "Restore failed",
       }));
     },
   });
@@ -540,7 +540,7 @@ export function VaultTrashPage() {
       setPurgeError(null);
     },
     onError: (err: Error) => {
-      setPurgeError(err.message || "Permanent-Delete fehlgeschlagen");
+      setPurgeError(err.message || "Permanent delete failed");
     },
   });
 
@@ -571,7 +571,7 @@ export function VaultTrashPage() {
           className="px-6 py-12 text-center"
           style={{ color: "var(--color-text-muted)", fontSize: "13.5px" }}
         >
-          Papierkorb konnte nicht geladen werden: {(error as Error)?.message}
+          Failed to load trash: {(error as Error)?.message}
         </div>
       )}
 
@@ -594,7 +594,7 @@ export function VaultTrashPage() {
               color: "var(--color-text-secondary)",
             }}
           >
-            Papierkorb ist leer
+            Trash is empty
           </div>
           <div
             style={{
@@ -604,8 +604,8 @@ export function VaultTrashPage() {
               lineHeight: 1.55,
             }}
           >
-            Gelöschte Notes landen hier und können wiederhergestellt werden,
-            bevor du sie endgültig entfernst.
+            Deleted notes land here and can be restored before you
+            remove them permanently.
           </div>
         </div>
       )}
@@ -628,7 +628,7 @@ export function VaultTrashPage() {
                 color: "var(--color-text-secondary)",
               }}
             >
-              Papierkorb · {data?.count ?? 0}
+              Trash · {data?.count ?? 0}
             </span>
             <div
               className="flex-1 h-px"

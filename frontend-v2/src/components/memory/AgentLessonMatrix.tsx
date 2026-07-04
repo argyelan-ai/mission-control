@@ -64,9 +64,9 @@ export function AgentLessonMatrix({
     return (
       <div className="flex flex-col items-center justify-center py-20 gap-3">
         <GraduationCap size={32} style={{ color: "var(--color-text-muted)" }} />
-        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>Keine Agent-Lessons vorhanden.</p>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No agent lessons yet.</p>
         <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-          Lessons werden automatisch aus Reflections extrahiert.
+          Lessons are automatically extracted from reflections.
         </p>
       </div>
     );
@@ -169,7 +169,7 @@ export function AgentLessonMatrix({
                     )}
                   </div>
                   <div className="text-sm font-medium mb-1" style={{ color: "var(--color-text-primary)" }}>
-                    {lesson.title || "(Kein Titel)"}
+                    {lesson.title || "(No title)"}
                   </div>
                   <p className="text-xs leading-relaxed line-clamp-3" style={{ color: "var(--color-text-secondary)" }}>
                     {lesson.content}
@@ -193,7 +193,7 @@ export function AgentLessonMatrix({
               className="flex items-center justify-center h-full"
             >
               <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                Agent auswaehlen um Lessons anzuzeigen
+                Select an agent to view lessons
               </p>
             </motion.div>
           )}

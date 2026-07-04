@@ -64,7 +64,7 @@ export function VoicePreviewSheet({
             className="fixed z-[59] rounded-2xl overflow-hidden flex flex-col left-1/2 -translate-x-1/2 top-1/2 -translate-y-1/2 w-[calc(100vw-1.5rem)] md:w-[640px]"
             role="dialog"
             aria-modal="true"
-            aria-label="Vorschau"
+            aria-label="Preview"
             initial={{ opacity: 0, scale: 0.96, y: 8 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.97, y: 4 }}
@@ -115,9 +115,9 @@ function HangupChip() {
         color: C.textPrimary,
         boxShadow: `0 2px 8px ${C.error}40`,
       }}
-      title="Anruf beenden (Tokens sparen) — diese Vorschau bleibt offen"
+      title="End call (saves tokens) — this preview stays open"
     >
-      <PhoneOff size={11} /> Anruf beenden
+      <PhoneOff size={11} /> End call
     </button>
   );
 }
@@ -139,7 +139,7 @@ function NoteSheet({
   });
 
   const title = useMemo(
-    () => card.title || card.data.title || path.split("/").pop() || "Notiz",
+    () => card.title || card.data.title || path.split("/").pop() || "Note",
     [card, path],
   );
 
@@ -176,7 +176,7 @@ function NoteSheet({
               rel="noopener noreferrer"
               className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/5 cursor-pointer"
               style={{ color: "var(--color-text-secondary)" }}
-              title="Im Vault öffnen (neuer Tab)"
+              title="Open in Vault (new tab)"
             >
               <ExternalLink size={11} /> Vault
             </a>
@@ -185,7 +185,7 @@ function NoteSheet({
             type="button"
             onClick={onClose}
             className="p-1.5 rounded hover:bg-white/5 cursor-pointer"
-            aria-label="Schliessen"
+            aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />
           </button>
@@ -196,19 +196,19 @@ function NoteSheet({
       <div className="relative flex-1 overflow-y-auto px-6 py-5">
         {!enabled && (
           <div className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-            Keine Vault-Pfad-Information.
+            No vault path information.
           </div>
         )}
         {enabled && isLoading && (
           <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-muted)" }}>
-            <Loader2 size={13} className="animate-spin" /> Lade Inhalt …
+            <Loader2 size={13} className="animate-spin" /> Loading content …
           </div>
         )}
         {enabled && error && (
           <div className="flex items-start gap-2 text-xs" style={{ color: C.error }}>
             <AlertCircle size={13} className="mt-0.5" />
             <div>
-              <div className="font-medium">Konnte Notiz nicht laden</div>
+              <div className="font-medium">Failed to load note</div>
               <div className="opacity-80 mt-0.5">{(error as Error).message}</div>
             </div>
           </div>
@@ -218,7 +218,7 @@ function NoteSheet({
             className="prose prose-invert prose-sm max-w-none"
             style={{ color: "var(--color-text-body)" }}
           >
-            <ReactMarkdown>{data.content || "_Leer._"}</ReactMarkdown>
+            <ReactMarkdown>{data.content || "_Empty._"}</ReactMarkdown>
           </article>
         )}
       </div>
@@ -269,7 +269,7 @@ function TaskSheet({
             rel="noopener noreferrer"
             className="flex items-center gap-1 px-2 py-1 rounded text-[10px] hover:bg-white/5 cursor-pointer"
             style={{ color: "var(--color-text-secondary)" }}
-            title="In Tasks-Board öffnen (neuer Tab)"
+            title="Open in tasks board (new tab)"
           >
             <ExternalLink size={11} /> Tasks
           </a>
@@ -277,7 +277,7 @@ function TaskSheet({
             type="button"
             onClick={onClose}
             className="p-1.5 rounded hover:bg-white/5 cursor-pointer"
-            aria-label="Schliessen"
+            aria-label="Close"
           >
             <X size={14} style={{ color: "var(--color-text-secondary)" }} />
           </button>
@@ -287,9 +287,9 @@ function TaskSheet({
         <div className="grid grid-cols-2 gap-y-2 gap-x-6 max-w-md">
           <span style={{ color: "var(--color-text-muted)" }}>Status</span>
           <span style={{ color: statusColor }}>{card.data.status || "—"}</span>
-          <span style={{ color: "var(--color-text-muted)" }}>Zuständig</span>
+          <span style={{ color: "var(--color-text-muted)" }}>Assignee</span>
           <span>{card.data.assignee || "—"}</span>
-          <span style={{ color: "var(--color-text-muted)" }}>Priorität</span>
+          <span style={{ color: "var(--color-text-muted)" }}>Priority</span>
           <span>{card.data.priority || "—"}</span>
           {card.data.task_id && (
             <>

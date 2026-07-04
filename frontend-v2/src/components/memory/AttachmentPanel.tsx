@@ -9,7 +9,7 @@
  * to flip this flag. Backend POST/DELETE endpoints remain reachable.
  *
  * - Renders nothing if attachments empty + editMode false.
- * - German copy verbatim per UI-SPEC.
+ * - Copy per UI-SPEC.
  * - The operator's Design-DNA: glass surface, off-black, no Inter/Roboto/Arial.
  */
 import { useState } from "react";
@@ -54,7 +54,7 @@ export function AttachmentPanel({ entry, editMode }: Props) {
     setUploadError(null);
     for (const f of files) {
       if (attachments.length >= 5) {
-        setUploadError("Maximal 5 Anhänge pro Eintrag erreicht");
+        setUploadError("Maximum of 5 attachments per entry reached");
         break;
       }
       setUploading(true);
@@ -63,13 +63,13 @@ export function AttachmentPanel({ entry, editMode }: Props) {
       } catch (err: unknown) {
         const msg = (err as { message?: string }).message ?? "";
         if (msg.includes("415")) {
-          setUploadError("Dateityp nicht erlaubt. Erlaubt: PNG, JPEG, GIF, WebP, PDF");
+          setUploadError("File type not allowed. Allowed: PNG, JPEG, GIF, WebP, PDF");
         } else if (msg.includes("413")) {
-          setUploadError("Datei zu gross. Maximale Grösse: 10 MB");
+          setUploadError("File too large. Maximum size: 10 MB");
         } else if (msg.includes("400")) {
-          setUploadError("Maximal 5 Anhänge pro Eintrag erreicht");
+          setUploadError("Maximum of 5 attachments per entry reached");
         } else {
-          setUploadError("Upload fehlgeschlagen — bitte erneut versuchen");
+          setUploadError("Upload failed — please try again");
         }
         break;
       } finally {
@@ -85,7 +85,7 @@ export function AttachmentPanel({ entry, editMode }: Props) {
       await api.knowledge.deleteAttachment(entry.id, filename);
       await invalidate();
     } catch {
-      setUploadError("Anhang konnte nicht gelöscht werden");
+      setUploadError("Attachment could not be deleted");
     }
   }
 
@@ -101,12 +101,12 @@ export function AttachmentPanel({ entry, editMode }: Props) {
         className="text-xs font-semibold uppercase tracking-wider mb-3"
         style={{ color: "rgba(255,255,255,0.7)" }}
       >
-        {attachments.length === 1 ? "1 Anhang" : `${attachments.length} Anhänge`}
+        {attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`}
       </h3>
       {attachments.length === 0 && editMode && (
         <p className="text-xs mb-3" style={{ color: "rgba(255,255,255,0.6)" }}>
-          Noch keine Anhänge — Bilder und PDFs hochladbar (max. 10 MB pro Datei,
-          max. 5 Dateien)
+          No attachments yet — images and PDFs can be uploaded (max. 10 MB per file,
+          max. 5 files)
         </p>
       )}
       <div className="flex flex-wrap gap-2">
@@ -130,7 +130,7 @@ export function AttachmentPanel({ entry, editMode }: Props) {
             }}
           >
             <Upload size={14} aria-hidden />
-            <span>{uploading ? "Lade…" : "Datei hochladen"}</span>
+            <span>{uploading ? "Uploading…" : "Upload file"}</span>
             <input
               type="file"
               multiple

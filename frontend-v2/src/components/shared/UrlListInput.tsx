@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
+import { C } from "@/lib/colors";
 
 interface UrlListInputProps {
   value: string[];
@@ -17,11 +18,11 @@ interface UrlListInputProps {
 export function UrlListInput({
   value,
   onChange,
-  textPrimary = "#EDEDEF",
-  textMuted = "#888888",
+  textPrimary = C.textPrimary,
+  textMuted = C.textMuted,
   border = "rgba(255,255,255,0.06)",
-  deep = "#020203",
-  accent = "#0FA3A3",
+  deep = C.bgDeep,
+  accent = C.accent,
 }: UrlListInputProps) {
   const [input, setInput] = useState("");
 
@@ -50,7 +51,7 @@ export function UrlListInput({
           <button
             type="button"
             onClick={() => removeUrl(i)}
-            aria-label="URL entfernen"
+            aria-label="Remove URL"
             className="shrink-0 cursor-pointer hover:opacity-80"
           >
             <X size={10} style={{ color: textMuted }} />
@@ -59,7 +60,7 @@ export function UrlListInput({
       ))}
       <div className="flex items-center gap-1.5">
         <input
-          aria-label="Referenz-URL eingeben"
+          aria-label="Enter reference URL"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addUrl(); } }}
@@ -70,7 +71,7 @@ export function UrlListInput({
         <button
           type="button"
           onClick={addUrl}
-          aria-label="URL hinzufügen"
+          aria-label="Add URL"
           disabled={!input.trim()}
           className="px-2 py-1.5 rounded-lg cursor-pointer transition-opacity disabled:opacity-30"
           style={{ backgroundColor: `${accent}11`, border: `1px solid ${border}` }}
