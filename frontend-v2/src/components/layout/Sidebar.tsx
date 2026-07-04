@@ -22,6 +22,7 @@ import {
   Building2,
   Newspaper,
   FolderOpen,
+  Repeat,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
@@ -60,6 +61,7 @@ export const NAV_ITEMS = [
   { href: "/runtimes", icon: Server, label: "Runtimes" },
   { href: "/sessions", icon: Terminal, label: "Sessions" },
   { href: "/workflows", icon: GitBranch, label: "Workflows" },
+  { href: "/loops", icon: Repeat, label: "Loops" },
   { href: "/schedule", icon: Calendar, label: "Schedule" },
   { href: "/settings", icon: Settings, label: "Settings" },
 ];

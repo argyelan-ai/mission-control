@@ -14,6 +14,10 @@ import type {
   HenrySessionState,
   IntelligenceConfig,
   IntelligenceInsights,
+  Loop,
+  LoopCreate,
+  LoopDetail,
+  LoopUpdate,
   Meeting,
   MeetingMessage,
   MetricsHistoryResponse,
@@ -1262,6 +1266,21 @@ export const api = {
     pauseRun: (runId: string) => request<{ status: string; signal: string; run_id: string }>(`/api/v1/workflows/runs/${runId}/pause`, { method: "POST" }),
     resumeRun: (runId: string) => request<WorkflowRun>(`/api/v1/workflows/runs/${runId}/resume`, { method: "POST" }),
     stopRun: (runId: string) => request<{ status: string; signal: string; run_id: string }>(`/api/v1/workflows/runs/${runId}/stop`, { method: "POST" }),
+  },
+
+  // Loops (ADR-051) — outcome-driven task loops.
+  loops: {
+    list: (boardId?: string) =>
+      request<Loop[]>(`/api/v1/loops${boardId ? `?board_id=${boardId}` : ""}`),
+    create: (data: LoopCreate) =>
+      request<Loop>("/api/v1/loops", { method: "POST", body: JSON.stringify(data) }),
+    get: (id: string) => request<LoopDetail>(`/api/v1/loops/${id}`),
+    update: (id: string, data: LoopUpdate) =>
+      request<Loop>(`/api/v1/loops/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    start: (id: string) => request<Loop>(`/api/v1/loops/${id}/start`, { method: "POST" }),
+    pause: (id: string) => request<Loop>(`/api/v1/loops/${id}/pause`, { method: "POST" }),
+    stop: (id: string) => request<Loop>(`/api/v1/loops/${id}/stop`, { method: "POST" }),
+    remove: (id: string) => request<void>(`/api/v1/loops/${id}`, { method: "DELETE" }),
   },
 
   // ── Skills (filesystem-local) ─────────────────────────────────────────────
