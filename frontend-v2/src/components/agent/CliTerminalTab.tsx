@@ -254,7 +254,7 @@ function TerminalPanel({
       {/* xterm.js output — canonical size, scaled to fit the container */}
       <div className="flex-1 min-h-0 relative">
         <div ref={outerRef} className="absolute inset-0 overflow-auto">
-          <div style={{ width: size ? size.w : undefined, height: size ? size.h * scale : undefined }}>
+          <div style={{ width: size ? size.w * scale : undefined, height: size ? size.h * scale : undefined }}>
             <div
               ref={termRef}
               className="p-1"

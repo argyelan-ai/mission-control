@@ -49,6 +49,10 @@ export function useTerminalScale(
     const raf = requestAnimationFrame(() => requestAnimationFrame(measure));
     const ro = new ResizeObserver(measure);
     ro.observe(outer);
+    // Cell metrics change when the mono font finishes loading — the screen
+    // element resizes then, so observing it keeps the scale honest.
+    const screen = term.element?.querySelector(".xterm-screen");
+    if (screen) ro.observe(screen);
     return () => {
       cancelAnimationFrame(raf);
       ro.disconnect();
