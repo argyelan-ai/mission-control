@@ -1,7 +1,8 @@
 """Model Usage Events — token/cost tracking per model × agent × harness.
 
 Replaces the gateway-era CostEvent schema for new writes.
-CostEvent is kept for budget warnings (check_budget_warnings reads from it).
+check_budget_warnings (cost_collector) reads from this table too; CostEvent
+is retained only as a historical archive (last write 04/2026).
 
 Data source: JSONL transcripts written by Claude Code / openclaude.
 Dedup key: top-level `uuid` (UNIQUE) — NEVER message.id (has collisions).

@@ -1686,6 +1686,17 @@ async def delete_task(
         ce.task_id = None
         session.add(ce)
 
+    # 6d2. Model usage events (Token Harvester): set task_id to null —
+    # nullable FK without ondelete (NO ACTION) would otherwise block the
+    # delete as soon as the harvester attributes events to tasks.
+    from app.models.model_usage import ModelUsageEvent
+    usage_result = await session.exec(
+        select(ModelUsageEvent).where(ModelUsageEvent.task_id == task_id)
+    )
+    for ue in usage_result.all():
+        ue.task_id = None
+        session.add(ue)
+
     # 6e. Delete task deliverables (non-nullable FK → RESTRICT)
     from app.models.deliverable import TaskDeliverable
     del_result = await session.exec(
