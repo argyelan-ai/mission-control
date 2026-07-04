@@ -281,6 +281,8 @@ class DispatchContext:
     meeting_context: str = ""
     credentials_text: str = ""
     dependency_context: str = ""
+    repo_rules_context: str = ""  # per-repo Arbeitsregeln (ADR-050)
+    repo_rules_repo_name: str = ""
     project: Project | None = None
     project_tags: list[str] = field(default_factory=list)
     team_agents: list[Agent] = field(default_factory=list)
@@ -617,6 +619,17 @@ async def _load_dispatch_context(
     if isinstance(results[10], list):
         ctx.child_tasks = results[10]
     ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
+
+    # Per-repo working rules (ADR-050) — depends on ctx.project, so it runs
+    # after the gather. Best-effort like everything else here.
+    if ctx.project is not None:
+        try:
+            from app.services.repo_registry import get_repo_rules_for_project
+            rules = await get_repo_rules_for_project(session, ctx.project)
+            if rules:
+                ctx.repo_rules_repo_name, ctx.repo_rules_context = rules
+        except Exception:
+            pass
 
     # Resolve vault credential (sequential, since credential_id is rarely set).
     # _inherited_credential_id is set by the _build_dispatch_message inheritance

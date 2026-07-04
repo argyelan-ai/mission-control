@@ -207,7 +207,9 @@ export const EMPTY_TASK_FORM_PAYLOAD: TaskFormPayload = {
   phaseId: null,
   deliverableId: null,
   branchName: "",
-  useSeparateRepo: true,
+  // Ad-hoc default is "kein eigenes Repo" (Mark, 04.07.) — ein separates Repo
+  // ist Opt-in, nicht der Default für schnelle Tasks ohne Projekt-Verknüpfung.
+  useSeparateRepo: false,
   taskType: "story",
   plannerMode: "auto",
   acceptanceCriteria: "",
@@ -626,6 +628,39 @@ export function TaskFormFields({
 
           {/* ── RAIL: metadata ── */}
           <div className="flex flex-col gap-5 min-w-0 lg:pl-7 lg:border-l" style={{ borderColor: C.borderSubtle }}>
+            {/* Projekt & Repo — direkt nach Titel/Beschreibung, vor den sekundären
+                Zuweisungs-/Ausführungs-Optionen (Mark, 04.07.: Repo-Wahl ist wichtig
+                genug, um nicht unter Agent/Priorität zu verschwinden). */}
+            <div className="flex flex-col gap-3">
+              {sectionHead("Projekt")}
+              <ProjectCombobox projects={projects ?? []} value={value.projectId}
+                onChange={(id) => patch({ projectId: id, phaseId: null, deliverableId: null, branchName: "" })}
+                onCreateProject={handleCreateProject} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} />
+              {value.projectId && phases && phases.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>Phase</label>
+                  <select id={`${fieldId}-phase`} aria-label="Phase" value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
+                    <option value="">Keine Phase (optional)</option>
+                    {phases.filter((p) => p.status === "active" || p.status === "pending").map((p) => (<option key={p.id} value={p.id}>{p.status === "active" ? "● " : "○ "}{p.title}</option>))}
+                  </select>
+                </div>
+              )}
+              {value.projectId && deliverables && deliverables.length > 0 && (
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>Basiert auf</label>
+                  <select id={`${fieldId}-deliverable`} aria-label="Basiert auf Deliverable" value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
+                    <option value="">Kein Deliverable</option>
+                    {deliverables.map((d) => (<option key={d.id} value={d.id}>{d.title} ({d.deliverable_type})</option>))}
+                  </select>
+                </div>
+              )}
+              {value.projectId ? (
+                <GitInfoBox gitInfo={gitInfo} isLoading={gitInfoLoading} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={handleInitRepo} initLoading={initLoading} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
+              ) : (
+                <GitInfoBox gitInfo={null} isLoading={false} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={() => {}} initLoading={false} adHocMode useSeparateRepo={value.useSeparateRepo} onUseSeparateRepoChange={(v) => patch({ useSeparateRepo: v })} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
+              )}
+            </div>
+
             {/* Zuweisung */}
             <div className="flex flex-col gap-3">
               {sectionHead("Zuweisung")}
@@ -666,32 +701,6 @@ export function TaskFormFields({
                   ))}
                 </div>
               </div>
-              <ProjectCombobox projects={projects ?? []} value={value.projectId}
-                onChange={(id) => patch({ projectId: id, phaseId: null, deliverableId: null, branchName: "" })}
-                onCreateProject={handleCreateProject} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} />
-              {value.projectId && phases && phases.length > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>Phase</label>
-                  <select id={`${fieldId}-phase`} aria-label="Phase" value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
-                    <option value="">Keine Phase (optional)</option>
-                    {phases.filter((p) => p.status === "active" || p.status === "pending").map((p) => (<option key={p.id} value={p.id}>{p.status === "active" ? "● " : "○ "}{p.title}</option>))}
-                  </select>
-                </div>
-              )}
-              {value.projectId && deliverables && deliverables.length > 0 && (
-                <div className="flex flex-col gap-1.5">
-                  <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>Basiert auf</label>
-                  <select id={`${fieldId}-deliverable`} aria-label="Basiert auf Deliverable" value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
-                    <option value="">Kein Deliverable</option>
-                    {deliverables.map((d) => (<option key={d.id} value={d.id}>{d.title} ({d.deliverable_type})</option>))}
-                  </select>
-                </div>
-              )}
-              {value.projectId ? (
-                <GitInfoBox gitInfo={gitInfo} isLoading={gitInfoLoading} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={handleInitRepo} initLoading={initLoading} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
-              ) : (
-                <GitInfoBox gitInfo={null} isLoading={false} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={() => {}} initLoading={false} adHocMode useSeparateRepo={value.useSeparateRepo} onUseSeparateRepoChange={(v) => patch({ useSeparateRepo: v })} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
-              )}
               <div className="flex flex-col gap-1.5">
                 <label htmlFor={`${fieldId}-deadline`} className="text-[10px]" style={{ color: C.textMuted }}><Calendar size={10} className="inline mr-1" />Deadline</label>
                 <input id={`${fieldId}-deadline`} type="date" aria-label="Deadline" value={value.dueAt} onChange={(e) => patch({ dueAt: e.target.value })}

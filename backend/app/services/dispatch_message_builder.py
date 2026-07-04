@@ -1026,6 +1026,15 @@ For large tasks (website, app, feature with multiple steps):
                     f"Start the dev server: `npm run dev -- -p {task.workspace_port}` or `python -m http.server {task.workspace_port}`"
                 )
 
+        # Per-repo working rules (ADR-050): Mark-defined conventions for this
+        # repo (test commands, branch policy, style). Attached to the git
+        # section so they sit right next to the repo the agent works in.
+        if git_section and getattr(ctx, "repo_rules_context", ""):
+            git_section += (
+                f"\n\n**Repository-Arbeitsregeln ({ctx.repo_rules_repo_name}) — BINDEND:**\n"
+                f"{ctx.repo_rules_context}"
+            )
+
         # Worker-Contract content (Task-Status truth, 5-Min-Blocker, Fokus-Regel,
         # Output-Location-Regel) moved to SOUL.md.j2 worker footer in Phase 1.
         # SOUL.md is loaded as --append-system-prompt at openclaude start and

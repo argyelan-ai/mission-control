@@ -69,6 +69,9 @@ import type {
   LMStudioModelsResponse,
   LMSCatalogModel,
   HFRepoInfo,
+  Repo,
+  RepoImportCandidate,
+  RepoUpdate,
   Host,
   HostCreate,
   HostMetrics,
@@ -1635,6 +1638,27 @@ export const api = {
     // Back-compat alias — delegates to the host with slug `dgx-spark` (ADR-048).
     metrics: (): Promise<SparkMetrics> =>
       request("/api/v1/runtimes/spark/metrics"),
+  },
+
+  // ── Repos (Repo Registry, ADR-050) ─────────────────────────────────────────
+  repos: {
+    list: (includeInactive = false): Promise<Repo[]> =>
+      request(`/api/v1/repos${includeInactive ? "?include_inactive=true" : ""}`),
+    get: (id: string): Promise<Repo> => request(`/api/v1/repos/${id}`),
+    importCandidates: (): Promise<RepoImportCandidate[]> =>
+      request("/api/v1/repos/import-candidates"),
+    register: (fullName: string): Promise<Repo> =>
+      request("/api/v1/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
+    update: (id: string, data: RepoUpdate): Promise<Repo> =>
+      request(`/api/v1/repos/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+    remove: (id: string): Promise<void> =>
+      request(`/api/v1/repos/${id}`, { method: "DELETE" }),
+    sync: (id: string): Promise<Repo> =>
+      request(`/api/v1/repos/${id}/sync`, { method: "POST" }),
+    linkProject: (id: string, projectId: string): Promise<Repo> =>
+      request(`/api/v1/repos/${id}/link-project`, { method: "POST", body: JSON.stringify({ project_id: projectId }) }),
+    unlinkProject: (id: string, projectId: string): Promise<Repo> =>
+      request(`/api/v1/repos/${id}/link-project/${projectId}`, { method: "DELETE" }),
   },
 
   // ── Hosts (Host Registry, ADR-048) ─────────────────────────────────────────
