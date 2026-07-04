@@ -145,14 +145,14 @@ PY
 
 # tmux config — wird automatisch beim server start geladen
 cat > /home/agent/.tmux.conf <<'TMUX_CONF'
-# mouse off — xterm.js im Browser macht native Text-Selection (macOS clipboard).
-# Scrolling: Frontend-JS fuegt einen Custom-Wheel-Handler hinzu der tmux copy-mode
-# keystrokes an den PTY sendet (siehe frontend-v2/src/app/sessions/page.tsx).
-# Historie: 7426520 hatte mouse on (scroll ja, selection nein); 4f95fe2 mouse off
-# (selection ja, scroll nein); der vorige Fix (mouse on + Shift-Drag) war Annahme-
-# Fehler — xterm.js forwardet drag-events an tmux wenn mouse tracking aktiv ist.
-# Dieser Fix: mouse off + JS-wheel-handler = beides funktioniert.
-set -g mouse off
+# mouse on — tmux handles wheel events natively via mouse button 4/5 CSI sequences
+# that xterm.js generates and the backend forwards through the PTY.
+# Text selection: Shift+drag (standard tradeoff with tmux mouse on).
+# History: 7426520 mouse on (scroll ok, selection broken without shift);
+#          4f95fe2 mouse off + JS copy-mode keystrokes (selection ok, scroll broken —
+#          Ctrl-B prefix byte via PTY never triggers copy-mode in tmux client);
+#          this commit reverts to mouse on as the only working scroll approach.
+set -g mouse on
 set -g aggressive-resize on
 set -g history-limit 50000
 set -g default-terminal "xterm-256color"
