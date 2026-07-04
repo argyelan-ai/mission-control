@@ -120,6 +120,9 @@ export interface ProjectGitInfo {
   repo_name: string | null;
   repo_url: string | null;
   branches: string[];
+  // ADR-052: Registry-Anbindung fuer die Task-Maske (Rules-Badge + Link)
+  repo_id: string | null;
+  has_rules: boolean;
 }
 
 export interface TaskChecklistItem {
@@ -231,6 +234,7 @@ export interface Task {
   publish_allowed: boolean | null;
   needs_browser: boolean | null;
   use_separate_repo: boolean;
+  repo_id: string | null;
   credential_consent: boolean | null;
   credential_id: string | null;
   // Planner Mode

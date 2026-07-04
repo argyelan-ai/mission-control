@@ -1668,6 +1668,11 @@ export const api = {
       request("/api/v1/repos/import-candidates"),
     register: (fullName: string): Promise<Repo> =>
       request("/api/v1/repos", { method: "POST", body: JSON.stringify({ full_name: fullName }) }),
+    createNew: (name: string, description?: string): Promise<Repo> =>
+      request("/api/v1/repos/new", {
+        method: "POST",
+        body: JSON.stringify({ name, ...(description ? { description } : {}) }),
+      }),
     update: (id: string, data: RepoUpdate): Promise<Repo> =>
       request(`/api/v1/repos/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     remove: (id: string): Promise<void> =>
