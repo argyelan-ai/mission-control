@@ -15,10 +15,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
-import { Brain, Check, ChevronRight, Clock, Search, Send, X, Zap } from "lucide-react";
+import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import { C, LANE } from "@/lib/colors";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
+import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
@@ -192,6 +193,7 @@ function GroupHeader({
   collapsed,
   onToggle,
   onOpenProject,
+  onOpenReferences,
 }: {
   label: string;
   count: number;
@@ -200,6 +202,7 @@ function GroupHeader({
   collapsed: boolean;
   onToggle: () => void;
   onOpenProject?: () => void;
+  onOpenReferences?: () => void;
 }) {
   return (
     <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1" style={{ backgroundColor: C.bgBase }}>
@@ -238,16 +241,32 @@ function GroupHeader({
           </span>
         </span>
       )}
-      {onOpenProject && (
-        <button
-          type="button"
-          onClick={onOpenProject}
-          className="ml-auto text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors whitespace-nowrap shrink-0"
-          style={{ color: C.textMuted }}
-          title="Open project view (phases)"
-        >
-          Phases →
-        </button>
+      {(onOpenReferences || onOpenProject) && (
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          {onOpenReferences && (
+            <button
+              type="button"
+              onClick={onOpenReferences}
+              className="p-1 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+              style={{ color: C.textDim }}
+              title="Reference files for this project"
+              aria-label={`Reference files for ${label}`}
+            >
+              <Paperclip size={11} />
+            </button>
+          )}
+          {onOpenProject && (
+            <button
+              type="button"
+              onClick={onOpenProject}
+              className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors whitespace-nowrap"
+              style={{ color: C.textMuted }}
+              title="Open project view (phases)"
+            >
+              Phases →
+            </button>
+          )}
+        </div>
       )}
     </div>
   );
@@ -284,6 +303,8 @@ export default function TaskListColumn({
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
   // Per-group render limit — 168 expanded ad-hoc rows must not land in the DOM at once
   const [limits, setLimits] = useState<Record<string, number>>({});
+  // Project references dialog (ADR-053) — paperclip icon in project group headers
+  const [referencesProjectId, setReferencesProjectId] = useState<string | null>(null);
 
   const projectName = useMemo(() => {
     const m = new Map<string, string>();
@@ -455,6 +476,7 @@ export default function TaskListColumn({
                 collapsed={isCollapsed}
                 onToggle={() => toggleGroup(g.key)}
                 onOpenProject={g.projectId ? () => onOpenProject(g.projectId!) : undefined}
+                onOpenReferences={g.projectId ? () => setReferencesProjectId(g.projectId!) : undefined}
               />
               {!isCollapsed && (
                 <div className="px-1">
@@ -486,6 +508,13 @@ export default function TaskListColumn({
           );
         })}
       </div>
+
+      <ProjectReferencesDialog
+        open={referencesProjectId != null}
+        onClose={() => setReferencesProjectId(null)}
+        projectId={referencesProjectId ?? ""}
+        projectName={referencesProjectId ? (projectName.get(referencesProjectId) ?? "Project") : ""}
+      />
     </div>
   );
 }

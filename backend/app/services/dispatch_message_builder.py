@@ -754,6 +754,16 @@ The requesting agent automatically resumes with your result.
         # Credentials are mandatory — agent literally cannot do the task without them
         _add("credentials", f"\n## Credentials\n{creds_text}")
 
+    # Referenz-Dateien (ADR-053): vom Operator hochgeladene Beispiele/Assets.
+    # Pfade sind im Agent-Container identisch lesbar (1:1 ~/.mc-Mount).
+    if getattr(ctx, "reference_files_context", ""):
+        _add("reference_files", (
+            "\n## Reference files (uploaded by the operator)\n"
+            "Read these directly from disk — same absolute paths in your container. "
+            "Use them as examples/assets for this task:\n"
+            f"{ctx.reference_files_context}"
+        ))
+
     # Project context (optional priority=1 — agent can read project via API if needed)
     if ctx.project:
         project_parts = ["\n## Project Context", f"**Project:** {ctx.project.name}"]

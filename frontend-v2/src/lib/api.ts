@@ -76,6 +76,7 @@ import type {
   Repo,
   RepoImportCandidate,
   RepoUpdate,
+  ReferenceFile,
   Host,
   HostCreate,
   HostMetrics,
@@ -681,7 +682,11 @@ export const api = {
     },
     subtasks: (boardId: string, parentTaskId: string) =>
       request<Task[]>(`/api/v1/boards/${boardId}/tasks?parent_task_id=${parentTaskId}`),
-    create: (boardId: string, data: Partial<Task>) =>
+    /** `defer_dispatch: true` skips the server's normal auto-dispatch-on-create
+     *  (ADR-053 follow-up, C2 review fix) — used when reference files are
+     *  staged so the agent brief isn't built before they've been uploaded.
+     *  Follow up with `dispatchDeferred` once the uploads are done. */
+    create: (boardId: string, data: Partial<Task> & { defer_dispatch?: boolean }) =>
       request<Task>(`/api/v1/boards/${boardId}/tasks`, { method: "POST", body: JSON.stringify(data) }),
     get: (boardId: string, id: string) => request<Task>(`/api/v1/boards/${boardId}/tasks/${id}`),
     update: (boardId: string, id: string, data: Partial<Task>) =>
@@ -690,6 +695,12 @@ export const api = {
       request<void>(`/api/v1/boards/${boardId}/tasks/${id}`, { method: "DELETE" }),
     reorder: (boardId: string, items: { id: string; sort_order: number; status?: string }[]) =>
       request<{ updated: number }>(`/api/v1/boards/${boardId}/tasks/reorder`, { method: "PATCH", body: JSON.stringify(items) }),
+    /** Fetch up a task created with `defer_dispatch: true` once its reference
+     *  uploads are done. 409 means the task moved on some other way (no
+     *  longer inbox/undispatched) — callers should tolerate that, not treat
+     *  it as a hard failure. */
+    dispatchDeferred: (boardId: string, taskId: string) =>
+      request<{ status: string }>(`/api/v1/boards/${boardId}/tasks/${taskId}/dispatch`, { method: "POST" }),
     dependencies: (boardId: string, taskId: string) =>
       request<TaskDependencyInfo[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/dependencies`),
     events: (boardId: string, taskId: string) =>
@@ -760,6 +771,57 @@ export const api = {
       request<import("./types").TaskTranscriptResponse>(
         `/api/v1/tasks/${taskId}/transcript${limit ? `?limit=${limit}` : ""}`
       ),
+  },
+
+  // ── Reference Files (ADR-053) ────────────────────────────────────────────────
+  // Operator-uploaded example/asset files for tasks & projects. Agents read
+  // them directly — their paths flow into the dispatch directive automatically.
+  references: {
+    /** Upload bypasses the json-encoding default of `request` — FormData must
+     *  set its own multipart boundary in the Content-Type header (same
+     *  pattern as knowledge.uploadAttachment). */
+    upload: async (
+      target: { taskId: string } | { projectId: string },
+      file: File,
+      note?: string,
+    ): Promise<ReferenceFile> => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if ("taskId" in target) fd.append("task_id", target.taskId);
+      else fd.append("project_id", target.projectId);
+      if (note) fd.append("note", note);
+      const res = await fetch(`${BASE_URL}/api/v1/references/upload`, {
+        method: "POST",
+        body: fd,
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+      return res.json();
+    },
+    list: (target: { taskId: string } | { projectId: string }) => {
+      const qs = new URLSearchParams(
+        "taskId" in target ? { task_id: target.taskId } : { project_id: target.projectId },
+      ).toString();
+      return request<ReferenceFile[]>(`/api/v1/references?${qs}`);
+    },
+    downloadUrl: (id: string): string => `${BASE_URL}/api/v1/references/${id}/download`,
+    /** The download route requires a Bearer header, which `<a href>` can't
+     *  carry — fetch as blob and wrap in an object URL (same gotcha as
+     *  knowledge.getAttachmentUrl / files.fetchBlob). */
+    fetchBlob: async (id: string): Promise<string> => {
+      const res = await fetch(api.references.downloadUrl(id), {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+      return URL.createObjectURL(await res.blob());
+    },
+    remove: (id: string) => request<void>(`/api/v1/references/${id}`, { method: "DELETE" }),
   },
 
   // ── Agents ──────────────────────────────────────────────────────────────────

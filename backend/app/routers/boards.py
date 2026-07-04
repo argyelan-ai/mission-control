@@ -393,11 +393,20 @@ async def delete_project(
         delete(PlannerMessage).where(PlannerMessage.project_id == project_id)
     )
 
+    # Referenz-Dateien (ADR-053): Projekt-Referenzen (Rows + Dateien) mitlöschen.
+    from app.services.reference_cleanup import delete_references_for
+    await delete_references_for(session, project_id=project_id)
+
     # Collect task IDs for cascading delete
     task_ids_result = await session.exec(
         select(Task.id).where(Task.project_id == project_id)
     )
     task_ids = list(task_ids_result.all())
+
+    # Task-Referenzen der Projekt-Tasks (ADR-053) — die Tasks selbst werden
+    # unten per Bulk-SQL gelöscht, ohne den Task-Delete-Endpoint zu passieren.
+    from app.services.reference_cleanup import delete_references_for_tasks
+    await delete_references_for_tasks(session, task_ids)
 
     if task_ids:
         # 1) Resolve parent references (self-FK)

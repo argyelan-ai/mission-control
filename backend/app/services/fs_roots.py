@@ -71,6 +71,10 @@ _ROOTS: tuple[FsRoot, ...] = (
     FsRoot("workspaces", "Workspaces", "FolderGit2", "workspaces", True, False),
     FsRoot("vault", "Vault", "BookOpen", "vault", True, False),
     FsRoot("attachments", "Attachments", "Paperclip", "attachments", True, False),
+    # Referenz-/Asset-Uploads für Tasks & Projekte (ADR-053). Löschen läuft
+    # ausschliesslich über die References-API (Row + Datei zusammen), darum
+    # NICHT deletable im Files-Browser.
+    FsRoot("references", "References", "FileInput", "references", True, False),
     FsRoot("mcp-screenshots", "Screenshots", "Camera", "mcp-screenshots", True, False, deletable=True),
     FsRoot("media", "Media", "Image", "media", True, False, deletable=True),
     FsRoot("shared-artifacts", "Shared Artifacts", "Boxes", "shared-artifacts", True, False, deletable=True),
@@ -103,7 +107,7 @@ assert DELETABLE_KEYS == {
 }, f"DELETABLE_KEYS drifted from policy: {sorted(DELETABLE_KEYS)}"
 assert not (SENSITIVE_KEYS & DELETABLE_KEYS), "a sensitive root must never be deletable"
 assert DELETABLE_KEYS.isdisjoint(
-    {"workspaces", "vault", "attachments", "shared-deliverables"}
+    {"workspaces", "vault", "attachments", "references", "shared-deliverables"}
 ), "a blocked root must never be deletable"
 # every deletable root must be host-backed & same-fs (never a named volume) —
 # cross-device shutil.move degrades to copy+unlink = real data loss.
