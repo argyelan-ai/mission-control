@@ -382,30 +382,10 @@ async def resolve_approval(
                 agent_id=approval.agent_id,
             )
 
-    # ── Loop-Gate (ADR-051): approved → Loop läuft weiter, rejected → pausiert ──
+    # ── Loop-Gate (ADR-051): geteilter Pfad mit Telegram-Quick-Resolve ──
     if approval.action_type == "loop_gate":
-        from app.models.loop import Loop
-
-        _loop_id = (approval.payload or {}).get("loop_id")
-        loop = await session.get(Loop, uuid.UUID(_loop_id)) if _loop_id else None
-        if loop and loop.status in ("paused", "waiting_gate"):
-            if payload.status == "approved":
-                loop.status = "running"
-                # Nach Operator-Go zählt die Fehlerserie von vorn.
-                loop.consecutive_failed_rounds = 0
-            else:
-                loop.status = "paused"
-            loop.updated_at = utcnow()
-            session.add(loop)
-            await session.commit()
-            await emit_event(
-                session,
-                "loop.gate_resolved",
-                f"Loop '{loop.name}': Gate {payload.status} — "
-                + ("läuft weiter" if payload.status == "approved" else "bleibt pausiert"),
-                board_id=loop.board_id,
-                detail={"loop_id": str(loop.id), "decision": payload.status},
-            )
+        from app.services.loop_runner import apply_loop_gate_decision
+        await apply_loop_gate_decision(session, approval, payload.status)
 
     # ── Boss Spawn-Approval: approved → create + provision agent ──
     if approval.action_type == "spawn_agent":
@@ -830,6 +810,12 @@ async def quick_resolve_confirm(
                     changed_by="user", reason="telegram_blocker_rejected",
                 )
                 await session.commit()
+
+    # Loop-Gate (ADR-051): geteilter Pfad mit resolve_approval — ohne diesen
+    # Aufruf wäre ein Telegram-Approve fürs Loop-Gate wirkungslos.
+    if approval.action_type == "loop_gate":
+        from app.services.loop_runner import apply_loop_gate_decision
+        await apply_loop_gate_decision(session, approval, status)
 
     # Update Telegram message
     try:

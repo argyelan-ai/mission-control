@@ -142,7 +142,14 @@ async def update_loop(
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status in TERMINAL_LOOP_STATUSES:
         raise HTTPException(status_code=409, detail="Loop ist abgeschlossen")
-    for k, v in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "max_rounds" in data and (data["max_rounds"] is None or data["max_rounds"] < 1):
+        raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
+    if "pause_on_failed_rounds" in data and (data["pause_on_failed_rounds"] or 0) < 1:
+        raise HTTPException(status_code=400, detail="pause_on_failed_rounds muss >= 1 sein")
+    if "human_every_n_rounds" in data and (data["human_every_n_rounds"] or 0) < 0:
+        raise HTTPException(status_code=400, detail="human_every_n_rounds muss >= 0 sein")
+    for k, v in data.items():
         setattr(loop, k, v)
     loop.updated_at = utcnow()
     session.add(loop)
@@ -225,6 +232,21 @@ async def stop_loop(
         raise HTTPException(status_code=404, detail="Loop not found")
     if loop.status in TERMINAL_LOOP_STATUSES:
         raise HTTPException(status_code=409, detail="Loop ist bereits abgeschlossen")
+    # Laufende Runde in der Historie sauber abschliessen (Review Mi5) —
+    # der Runden-Task selbst läuft als normaler Task weiter.
+    if loop.current_task_id is not None:
+        running_round = (await session.exec(
+            select(LoopRound).where(
+                LoopRound.loop_id == loop.id,
+                LoopRound.round_no == loop.current_round_no,
+            )
+        )).first()
+        if running_round and running_round.outcome is None:
+            running_round.outcome = "aborted"
+            running_round.report = "Loop wurde vom Operator beendet — Runde abgebrochen."
+            running_round.finished_at = utcnow()
+            session.add(running_round)
+        loop.current_task_id = None
     loop.status = "done"
     loop.finished_at = utcnow()
     loop.updated_at = utcnow()

@@ -170,14 +170,16 @@ function RoundCard({ round }: { round: LoopRound }) {
         </div>
       )}
 
-      <Link
-        href={`/tasks?taskId=${round.task_id}`}
-        className="inline-flex items-center gap-1 text-[11px] w-fit"
-        style={{ color: C.accent }}
-      >
-        View task
-        <ArrowUpRight size={11} />
-      </Link>
+      {round.task_id && (
+        <Link
+          href={`/tasks?taskId=${round.task_id}`}
+          className="inline-flex items-center gap-1 text-[11px] w-fit"
+          style={{ color: C.accent }}
+        >
+          View task
+          <ArrowUpRight size={11} />
+        </Link>
+      )}
     </div>
   );
 }

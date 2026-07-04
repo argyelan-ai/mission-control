@@ -232,7 +232,40 @@ async def test_scheduled_human_gate(fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_deleted_round_task_counts_as_failed(fake_redis):
+async def test_deleted_round_task_counts_as_failed_via_endpoint(
+    auth_client: AsyncClient, fake_redis,
+):
+    """Review-Fund M1: Der ECHTE Delete-Endpoint muss die Fehlrunden-Wertung
+    auslösen — blosses FK-Nullen würde den Circuit-Breaker umgehen."""
+    board = await _mk_board()
+    loop = await _mk_loop(board, pause_on_failed_rounds=99)
+    await _tick(fake_redis)
+    fresh = await _get_loop(loop.id)
+
+    with patch("app.services.loop_runner.emit_event", new_callable=AsyncMock), \
+         patch("app.services.task_create.emit_event", new_callable=AsyncMock):
+        r = await auth_client.delete(
+            f"/api/v1/boards/{board.id}/tasks/{fresh.current_task_id}"
+        )
+    assert r.status_code in (200, 204), r.text
+
+    fresh = await _get_loop(loop.id)
+    assert fresh.consecutive_failed_rounds == 1
+    assert fresh.rounds_completed == 1
+    assert fresh.current_round_no == 2  # nächste Runde direkt gestartet
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        round1 = (await s.exec(
+            select(LoopRound).where(
+                LoopRound.loop_id == loop.id, LoopRound.round_no == 1)
+        )).first()
+    assert round1.outcome == "failed"
+    assert round1.task_id is None  # FK gelöst
+
+
+@pytest.mark.asyncio
+async def test_deleted_task_direct_db_still_counts_as_failed(fake_redis):
+    """Safety-Net: Task verschwindet am Endpoint vorbei (direktes DB-Delete)
+    → der Runner-Tick wertet die Runde trotzdem als Fehlrunde."""
     board = await _mk_board()
     loop = await _mk_loop(board, pause_on_failed_rounds=99)
     await _tick(fake_redis)
@@ -245,7 +278,7 @@ async def test_deleted_round_task_counts_as_failed(fake_redis):
     await _tick(fake_redis)
     fresh = await _get_loop(loop.id)
     assert fresh.consecutive_failed_rounds == 1
-    assert fresh.current_round_no == 2  # nächste Runde gestartet
+    assert fresh.current_round_no == 2
 
 
 # ── loop_gate-Resolve ─────────────────────────────────────────────────
@@ -290,6 +323,38 @@ async def test_gate_reject_keeps_paused(auth_client: AsyncClient, fake_redis):
     )
     assert r.status_code == 200, r.text
     assert (await _get_loop(loop.id)).status == "paused"
+
+
+@pytest.mark.asyncio
+async def test_gate_approve_via_telegram_quick_resolve(auth_client: AsyncClient, fake_redis):
+    """Telegram-Quick-Resolve hat einen EIGENEN Resolve-Pfad — der muss den
+    Loop genauso weiterschalten wie resolve_approval (Review-Fund)."""
+    board = await _mk_board()
+    loop = await _mk_loop(board, status="paused", consecutive_failed_rounds=2)
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        approval = Approval(
+            board_id=board.id, action_type="loop_gate",
+            description="x", payload={"loop_id": str(loop.id), "reason": "circuit_breaker"},
+        )
+        s.add(approval)
+        await s.commit()
+        await s.refresh(approval)
+
+    with patch(
+        "app.routers.approvals.consume_action_token",
+        new=AsyncMock(return_value={"approval_id": str(approval.id), "action": "approve"}),
+    ), patch(
+        "app.services.telegram_bot.telegram_bot.update_resolved_telegram",
+        new_callable=AsyncMock,
+    ):
+        r = await auth_client.post(
+            f"/api/v1/approvals/{approval.id}/quick-resolve/confirm",
+            data={"token": "tok"},
+        )
+    assert r.status_code == 200, r.text
+    fresh = await _get_loop(loop.id)
+    assert fresh.status == "running"
+    assert fresh.consecutive_failed_rounds == 0
 
 
 # ── Router ────────────────────────────────────────────────────────────

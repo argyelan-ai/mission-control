@@ -96,6 +96,12 @@ class LoopRunnerService:
                 await self._advance(session, loop)
             except Exception:  # noqa: BLE001
                 logger.exception("Loop %s: advance fehlgeschlagen", loop.id)
+                # Session sauber halten — sonst failen alle Folgeloops
+                # dieses Ticks an der abgebrochenen Transaktion (Review M2).
+                try:
+                    await session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def _advance(self, session: AsyncSession, loop: Loop) -> None:
         if loop.current_task_id is None:
@@ -414,6 +420,84 @@ class LoopRunnerService:
             board_id=loop.board_id,
             detail={"loop_id": str(loop.id), "reason": reason},
         )
+
+
+async def handle_round_task_deleted(session: AsyncSession, task_id) -> None:
+    """Von den Task-Delete-Endpoints gerufen, BEVOR der Task gelöscht wird.
+
+    Ein gelöschter Runden-Task ist eine Fehlrunde (ADR-051 §Leitplanken) —
+    volle Wertung inkl. Circuit-Breaker/Stop/Gate-Entscheidung. Ohne diesen
+    Hook würde das blosse FK-Nullen den Fail-Pfad des Runners umgehen
+    (Review-Fund M1). Fehler dürfen den Delete nie blockieren.
+    """
+    runner = LoopRunnerService()
+    loops = (await session.exec(
+        select(Loop).where(Loop.current_task_id == task_id))
+    ).all()
+    for loop in loops:
+        try:
+            if loop.status == "running":
+                await runner._complete_round(
+                    session, loop, outcome="failed",
+                    note="Runden-Task wurde gelöscht",
+                )
+            else:
+                loop.current_task_id = None
+                loop.updated_at = utcnow()
+                session.add(loop)
+        except Exception:  # noqa: BLE001
+            logger.exception("Loop %s: Delete-Wertung fehlgeschlagen — FK wird nur gelöst", loop.id)
+            await session.rollback()
+            fresh = await session.get(Loop, loop.id)
+            if fresh and fresh.current_task_id == task_id:
+                fresh.current_task_id = None
+                session.add(fresh)
+
+    rounds = (await session.exec(
+        select(LoopRound).where(LoopRound.task_id == task_id))
+    ).all()
+    for lr in rounds:
+        lr.task_id = None
+        session.add(lr)
+
+
+async def apply_loop_gate_decision(
+    session: AsyncSession, approval: Approval, decision: str,
+) -> None:
+    """Wendet eine loop_gate-Entscheidung an — geteilter Pfad für
+    resolve_approval (UI) UND Telegram-Quick-Resolve.
+
+    approved → Loop läuft weiter (Fehlerserie zurückgesetzt, Runner startet
+    die nächste Runde im nächsten Tick); rejected → bleibt pausiert.
+    """
+    import uuid as _uuid
+
+    _loop_id = (approval.payload or {}).get("loop_id")
+    if not _loop_id:
+        return
+    try:
+        loop = await session.get(Loop, _uuid.UUID(str(_loop_id)))
+    except (ValueError, TypeError):
+        logger.warning("loop_gate mit kaputter loop_id im Payload: %r", _loop_id)
+        return
+    if loop is None or loop.status not in ("paused", "waiting_gate"):
+        return  # Loop weg oder inzwischen anders weitergeschaltet — no-op.
+
+    if decision == "approved":
+        loop.status = "running"
+        loop.consecutive_failed_rounds = 0
+    else:
+        loop.status = "paused"
+    loop.updated_at = utcnow()
+    session.add(loop)
+    await session.commit()
+    await emit_event(
+        session, "loop.gate_resolved",
+        f"Loop '{loop.name}': Gate {decision} — "
+        + ("läuft weiter" if decision == "approved" else "bleibt pausiert"),
+        board_id=loop.board_id,
+        detail={"loop_id": str(loop.id), "decision": decision},
+    )
 
 
 loop_runner = LoopRunnerService()
