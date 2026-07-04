@@ -23,7 +23,7 @@ read -r -d '' BODY <<'JSON' || true
   "runtime_type": "omp",
   "endpoint": "http://192.0.2.20:8000/v1",
   "healthcheck_path": "/models",
-  "model_identifier": "nvidia/Qwen3.6-35B-A3B-NVFP4",
+  "model_identifier": null,
   "role_tags": ["coder", "general"],
   "supports_tools": true,
   "supports_reasoning": true,
@@ -31,8 +31,8 @@ read -r -d '' BODY <<'JSON' || true
   "preferred_context_len": 32768,
   "max_context_len": 262144,
   "gpu_profile": "dgx_spark_heavy",
-  "memory_notes": "omp headless driver (bridge.py). Reuses the Qwen vLLM on the DGX Spark (same endpoint as qwen-general).",
-  "startup_notes": "Container boots bridge.py --serve; ready when the Window-0 pane prints OMP_BRIDGE_READY. Qwen must be warm (2-5 min after vLLM start).",
+  "memory_notes": "omp headless driver (bridge.py). Reuses the vLLM endpoint on the DGX Spark (same endpoint as the primary local runtime); model_identifier is filled by the first watcher probe (ADR-053).",
+  "startup_notes": "Container boots bridge.py --serve; ready when the Window-0 pane prints OMP_BRIDGE_READY. The upstream model must be warm before probing succeeds (2-5 min after vLLM start).",
   "ui_order": 10,
   "enabled": true
 }

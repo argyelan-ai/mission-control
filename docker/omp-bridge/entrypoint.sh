@@ -112,30 +112,37 @@ fi
 # $HOME/.omp/profiles/mc-agent/agent/models.yml (a file at $PI_CODING_AGENT_DIR
 # is IGNORED once OMP_PROFILE is set). omp's built-in `openai` provider does NOT
 # resolve a vLLM-served model from OPENAI_BASE_URL, so a models.yml is mandatory.
-# We render a dedicated `qwen-spark` provider (auth: none = keyless vLLM) so
+# We render a dedicated `mc-openai` provider (auth: none = keyless vLLM) so
 # runtime.endpoint stays the single source of truth and no token routing is
-# duplicated. bridge.py selects `qwen-spark/${OPENAI_MODEL}`.
+# duplicated. bridge.py selects `mc-openai/${OPENAI_MODEL}`.
 OMP_PROFILE="${OMP_PROFILE:-mc-agent}"
 MODELS_DIR="${HOME}/.omp/profiles/${OMP_PROFILE}/agent"
 mkdir -p "$MODELS_DIR"
-_BASE_URL="${OPENAI_BASE_URL:-http://192.0.2.20:8000/v1}"
-_MODEL="${OPENAI_MODEL:-nvidia/Qwen3.6-35B-A3B-NVFP4}"
+# No baked-in defaults (ADR-053): the model/endpoint MUST come from the MC
+# bootstrap (runtime row) or the rendered .env. A silent fallback to a stale
+# model caused exactly the drift bug this feature removes — fail loudly.
+if [ -z "${OPENAI_BASE_URL:-}" ] || [ -z "${OPENAI_MODEL:-}" ]; then
+    echo "[entrypoint] FATAL: OPENAI_BASE_URL/OPENAI_MODEL not set (bootstrap failed and no env fallback) — refusing to boot with an unknown model" >&2
+    exit 1
+fi
+_BASE_URL="${OPENAI_BASE_URL}"
+_MODEL="${OPENAI_MODEL}"
 cat > "${MODELS_DIR}/models.yml" <<YAML
 providers:
-  qwen-spark:
-    name: Qwen Spark vLLM
+  mc-openai:
+    name: MC OpenAI-compatible endpoint
     baseUrl: ${_BASE_URL}
     api: openai-completions
     auth: none
     models:
       - id: ${_MODEL}
-        name: Qwen Spark
+        name: MC model
         contextWindow: 262144
         maxTokens: 65536
 YAML
 export OMP_PROFILE
-export OMP_MODEL_SELECTOR="qwen-spark/${_MODEL}"
-echo "[entrypoint] models.yml rendered at ${MODELS_DIR}/models.yml (provider qwen-spark -> ${_BASE_URL}, model ${_MODEL})"
+export OMP_MODEL_SELECTOR="mc-openai/${_MODEL}"
+echo "[entrypoint] models.yml rendered at ${MODELS_DIR}/models.yml (provider mc-openai -> ${_BASE_URL}, model ${_MODEL})"
 
 # ── 2b. Skip the first-run setup wizard so the TUI boots STRAIGHT to chat ────
 # Verified in-container (omp v16.2.13): a hand-written config.yml is NOT honored
