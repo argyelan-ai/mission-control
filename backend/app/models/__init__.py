@@ -43,6 +43,7 @@ from app.models.trend import TrendSignal, ViralShortsSettings  # noqa: F401
 from app.models.task_attempt_audit import TaskAttemptAudit  # noqa: F401
 from app.models.model_usage import ModelUsageEvent, ModelPrice, ModelUsageHarvestState  # noqa: F401
 from app.models.file_index import FileIndexEntry  # noqa: F401
+from app.models.repo import Repo  # noqa: F401
 
 __all__ = [
     "AgentMeeting",

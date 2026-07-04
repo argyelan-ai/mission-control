@@ -351,13 +351,30 @@ async def init_project_repo(
             raise HTTPException(status_code=400, detail=str(e))
         raise
 
-    project.github_repo_name = f"mc-{slug}"
-    project.github_repo_url = clone_url
+    # Register in the repos registry (ADR-050) + link — apply_repo_link
+    # syncs the legacy github_repo_* fields with the canonical owner/name.
+    from app.services.git_service import require_github_owner
+    from app.services.repo_registry import apply_repo_link, upsert_repo
+
+    full_name = f"{require_github_owner()}/mc-{slug}"
+    repo = await upsert_repo(
+        session,
+        full_name=full_name,
+        url=clone_url,
+        description=project.description,
+        source="mc",
+    )
+    await session.flush()  # ensure repo.id is assigned before linking
+    apply_repo_link(project, repo)
     session.add(project)
     await session.commit()
     await session.refresh(project)
 
-    return {"github_repo_url": clone_url, "github_repo_name": f"mc-{slug}"}
+    return {
+        "github_repo_url": project.github_repo_url,
+        "github_repo_name": project.github_repo_name,
+        "repo_id": str(project.repo_id),
+    }
 
 
 @router.delete("/boards/{board_id}/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)

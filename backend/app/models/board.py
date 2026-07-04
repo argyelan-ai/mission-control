@@ -103,6 +103,11 @@ class Project(SQLModel, table=True):
     progress_pct: int = Field(default=0, ge=0, le=100)
     github_repo_url: str | None = None
     github_repo_name: str | None = None  # e.g. "<owner>/agar-io-clone"
+    repo_id: uuid.UUID | None = Field(
+        default=None, foreign_key="repos.id", nullable=True, index=True
+    )
+    # FK into the repos registry (ADR-050). Legacy github_repo_url/name stay
+    # synced on link so existing clone/PR flows keep working.
     workspace_path: str | None = None  # Local path to the project (e.g. /private/tmp/my-portfolio)
     project_config: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)

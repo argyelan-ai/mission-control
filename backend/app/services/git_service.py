@@ -208,6 +208,52 @@ class GitService:
         await self.init_repo_files_with_briefing(repo_name, slug)
         return clone_url
 
+    # ── Repo Registry (ADR-050) ─────────────────────────────────────
+
+    async def list_github_repos(self, limit: int = 100) -> list[dict]:
+        """List the GITHUB_OWNER account's repos via gh CLI.
+
+        Returns normalized dicts: full_name, url, description, visibility,
+        default_branch, is_archived, pushed_at.
+        """
+        import json
+
+        owner = require_github_owner()
+        out = await self._run_cmd(
+            "gh", "repo", "list", owner,
+            "--limit", str(limit),
+            "--json", "nameWithOwner,url,visibility,defaultBranchRef,description,isArchived,pushedAt",
+        )
+        repos = []
+        for r in json.loads(out or "[]"):
+            repos.append({
+                "full_name": r.get("nameWithOwner", ""),
+                "url": r.get("url", ""),
+                "description": r.get("description") or None,
+                "visibility": (r.get("visibility") or "private").lower(),
+                "default_branch": (r.get("defaultBranchRef") or {}).get("name") or "main",
+                "is_archived": bool(r.get("isArchived")),
+                "pushed_at": r.get("pushedAt"),
+            })
+        return repos
+
+    async def fetch_repo_meta(self, full_name: str) -> dict:
+        """Fetch a single repo's metadata via gh CLI (for import/sync)."""
+        import json
+
+        out = await self._run_cmd(
+            "gh", "repo", "view", full_name,
+            "--json", "nameWithOwner,url,visibility,defaultBranchRef,description",
+        )
+        r = json.loads(out)
+        return {
+            "full_name": r.get("nameWithOwner", full_name),
+            "url": r.get("url", f"https://github.com/{full_name}"),
+            "description": r.get("description") or None,
+            "visibility": (r.get("visibility") or "private").lower(),
+            "default_branch": (r.get("defaultBranchRef") or {}).get("name") or "main",
+        }
+
     async def init_repo_files_with_briefing(
         self, repo_name: str, project_slug: str,
     ) -> None:

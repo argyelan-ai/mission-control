@@ -74,6 +74,7 @@ from app.routers import (
     models,
     project_git,
     projects,
+    repos,
     runtimes,
     runtime_schedules,
     playbooks,
@@ -689,6 +690,7 @@ app.include_router(model_prices.router)
 app.include_router(models.router)
 app.include_router(runtimes.router)
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
+app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)

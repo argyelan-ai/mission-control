@@ -67,6 +67,7 @@ Jedes ADR hat folgende Sektionen:
 | [047](047-docker-socket-proxy.md) | Docker-Socket-Zugriff nur über filternden Proxy (tecnativa socket-proxy, DOCKER_HOST) | Accepted | 2026-07-02 | Infra/Compose · Backend/Runtime-Switch |
 | [048](048-host-registry.md) | Host-Registry — generische Multi-Host Control-Plane statt neuer runtime_type pro Box | Accepted | 2026-07-02 | Backend/Runtime · Backend/DB · Frontend/Runtimes · Infra/Runtime |
 | [049](049-omp-native-tui-session.md) | omp Native-TUI Session — echte scrollbare omp-CLI auf der Sessions-Seite (Hook-Completion + `@file`-Inject + SIGKILL-Watchdog + Per-Task-Isolation), ersetzt das ADR-045-Headless-Modell | Proposed | 2026-07-04 | Infra/Runtime · Backend/Runtime |
+| [050](050-repos-registry.md) | Repos Registry — first-class Repo-Modell (`repos` + `projects.repo_id`), per-Repo-Arbeitsregeln in der Dispatch-Directive, `/repos`-Verwaltungsseite, Legacy-Sync-Kontrakt | Accepted | 2026-07-04 | Backend/DB · Backend/Dispatch · Frontend/Pages |
 
 ## Neue ADRs schreiben
 
