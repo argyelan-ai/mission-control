@@ -805,6 +805,14 @@ async def agent_delete_task(
     from app.services.reference_cleanup import delete_references_for
     await delete_references_for(session, task_id=task_id)
 
+    # file_index: task_id-Provenance loesen (FK wuerde den Delete blocken).
+    from app.models.file_index import FileIndexEntry
+    for fi in (await session.exec(
+        select(FileIndexEntry).where(FileIndexEntry.task_id == task_id)
+    )).all():
+        fi.task_id = None
+        session.add(fi)
+
     await session.delete(task)
     await session.commit()
 

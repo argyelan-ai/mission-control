@@ -245,4 +245,34 @@ async def test_task_delete_removes_references(auth_client: AsyncClient, refs_roo
         rows = (await s.exec(
             select(ReferenceFile).where(ReferenceFile.task_id == task.id)
         )).all()
+        # Live-Smoke-Fund: file_index.task_id-FK blockte den Task-Delete auf
+        # Postgres (500) — Index-Provenance muss gelöst/entfernt sein.
+        from app.models.file_index import FileIndexEntry
+        idx = (await s.exec(
+            select(FileIndexEntry).where(FileIndexEntry.task_id == task.id)
+        )).all()
     assert rows == []
+    assert idx == []
+
+
+@pytest.mark.asyncio
+async def test_reference_delete_cleans_file_index(auth_client: AsyncClient, refs_root):
+    _, _, task = await _mk_entities()
+    r = await auth_client.post(
+        "/api/v1/references/upload", files=_png(),
+        data={"task_id": str(task.id)},
+    )
+    ref = r.json()
+    from app.models.file_index import FileIndexEntry
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        before = (await s.exec(
+            select(FileIndexEntry).where(FileIndexEntry.rel_path == ref["rel_path"])
+        )).all()
+    assert len(before) == 1  # capture-at-write hat indexiert
+
+    await auth_client.delete(f"/api/v1/references/{ref['id']}")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        after = (await s.exec(
+            select(FileIndexEntry).where(FileIndexEntry.rel_path == ref["rel_path"])
+        )).all()
+    assert after == []

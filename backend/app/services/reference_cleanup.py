@@ -45,6 +45,8 @@ async def delete_references_for_tasks(
 
 
 async def _delete_rows(session: AsyncSession, refs) -> int:
+    from app.models.file_index import FileIndexEntry
+
     root = os.path.realpath(str(mc_home() / "references"))
     for ref in refs:
         target = os.path.realpath(os.path.join(root, ref.rel_path))
@@ -53,5 +55,14 @@ async def _delete_rows(session: AsyncSession, refs) -> int:
                 os.remove(target)
             except OSError:
                 logger.warning("Referenz-Datei nicht löschbar: %s", target)
+        # Index-Row miträumen — deren task_id-FK würde sonst den Task-Delete
+        # blockieren (Live-Smoke-Fund 04.07.).
+        for idx in (await session.exec(
+            select(FileIndexEntry).where(
+                FileIndexEntry.root_key == "references",
+                FileIndexEntry.rel_path == ref.rel_path,
+            )
+        )).all():
+            await session.delete(idx)
         await session.delete(ref)
     return len(refs)
