@@ -163,6 +163,11 @@ _ANCHOR_RE = re.compile(r"^\s*<<:\s*\*(?P<anchor>[a-z0-9_-]+)\s*$")
 # environment:/volumes: keys, and 6 spaces ("      - ...") for list items.
 _VAULT_VOLUME_TEMPLATE = "      - ${HOME}/.mc/vault:/vault:rw"
 
+# Referenz-Dateien (ADR-053): Source UND Target = Host-Pfad, damit die
+# absoluten Pfade aus der Dispatch-Directive im Container identisch
+# auflösen (compose-up läuft mit HOME=HOME_HOST, docker_agent_sync.py).
+_REFERENCES_VOLUME_TEMPLATE = "      - ${HOME}/.mc/references:${HOME}/.mc/references:ro"
+
 
 def _find_block_range(
     body_lines: list[str], key: str
@@ -272,6 +277,22 @@ def _ensure_vault_entries(body_lines: list[str], slug: str) -> list[str]:
             body.append("    volumes:")
             body.append(_VAULT_VOLUME_TEMPLATE)
 
+    return body
+
+
+def _ensure_references_volume(body_lines: list[str]) -> list[str]:
+    """Referenz-Dateien-Mount (ADR-053) für JEDEN Agent-Service — sonst sind
+    die absoluten Pfade aus der Dispatch-Directive im Container unlesbar.
+    Idempotent via Substring-Marker."""
+    body = list(body_lines)
+    if "/.mc/references:" not in "\n".join(body):
+        vol_range = _find_block_range(body, "volumes")
+        if vol_range is not None:
+            _, end = vol_range
+            body.insert(end, _REFERENCES_VOLUME_TEMPLATE)
+        else:
+            body.append("    volumes:")
+            body.append(_REFERENCES_VOLUME_TEMPLATE)
     return body
 
 
@@ -423,6 +444,9 @@ def _rewrite_compose(
         if wants_vault:
             body_lines = _ensure_vault_entries(body_lines, slug)
 
+        # Referenz-Dateien-Mount für ALLE Agent-Services (ADR-053).
+        body_lines = _ensure_references_volume(body_lines)
+
         # Defense layer 1: ensure docker/.env.agents is in every agent service's
         # env_file so MC_TOKEN_<NAME> vars are available at container runtime
         # even when compose is called without --env-file docker/.env.agents.
@@ -495,6 +519,7 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
         "      - ${HOME}/.mc/mcp-servers:/mc-servers:ro",
         f"      - ${{HOME}}/.mc/workspaces/{slug}:/workspace",
         f"      - ${{HOME}}/.mc/deliverables/{slug}:/deliverables",
+        _REFERENCES_VOLUME_TEMPLATE,
     ]
     if is_vault_writer:
         lines.append("      - ${HOME}/.mc/vault:/vault:rw")

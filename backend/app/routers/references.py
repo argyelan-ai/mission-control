@@ -30,13 +30,15 @@ logger = logging.getLogger("mc.references")
 
 router = APIRouter(prefix="/api/v1/references", tags=["references"])
 
+# KEIN text/html und KEIN image/svg+xml: der browsable Files-Root served
+# Inhalte inline mit Endungs-MIME — aktive Inhalte wären Stored XSS im
+# App-Origin (Review-Fund M1).
 ALLOWED_MIMES = {
-    "image/png", "image/jpeg", "image/webp", "image/gif", "image/svg+xml",
+    "image/png", "image/jpeg", "image/webp", "image/gif",
     "application/pdf", "text/plain", "text/markdown", "text/csv",
     "application/json", "application/zip",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",   # xlsx
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
-    "text/html",
 }
 MAX_BYTES = 25 * 1024 * 1024  # 25 MB
 MAX_FILES_PER_ENTITY = 20

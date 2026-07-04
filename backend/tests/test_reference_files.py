@@ -157,6 +157,77 @@ async def test_dispatch_context_lists_reference_paths(refs_root, fake_redis, aut
 
 
 @pytest.mark.asyncio
+async def test_html_and_svg_uploads_rejected(auth_client: AsyncClient, refs_root):
+    """Review M1: aktive Inhalte wären Stored XSS via inline-servierendem
+    Files-Browser — html/svg sind hart verboten."""
+    _, _, task = await _mk_entities()
+    for name, mime in (("x.html", "text/html"), ("x.svg", "image/svg+xml")):
+        r = await auth_client.post(
+            "/api/v1/references/upload",
+            files={"file": (name, io.BytesIO(b"<svg/>"), mime)},
+            data={"task_id": str(task.id)},
+        )
+        assert r.status_code == 415, f"{mime} muss abgelehnt werden"
+
+
+@pytest.mark.asyncio
+async def test_defer_dispatch_skips_auto_dispatch_then_manual(auth_client: AsyncClient, refs_root):
+    """Review C2: defer_dispatch verhindert das Rennen Dispatch vs. Upload;
+    POST /dispatch holt den Dispatch danach explizit nach."""
+    from unittest.mock import AsyncMock, patch as _patch
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(id=uuid.uuid4(), name="B", slug=f"b-{uuid.uuid4().hex[:6]}",
+                      auto_dispatch_enabled=True)
+        s.add(board)
+        await s.commit()
+
+    with _patch("app.routers.tasks.auto_dispatch_task", new=AsyncMock()) as adt:
+        r = await auth_client.post(f"/api/v1/boards/{board.id}/tasks", json={
+            "title": "Mit Referenzen", "defer_dispatch": True,
+        })
+        assert r.status_code in (200, 201), r.text
+        task_id = r.json()["id"]
+        adt.assert_not_called()  # kein Auto-Dispatch trotz auto_dispatch_enabled
+
+        r2 = await auth_client.post(f"/api/v1/boards/{board.id}/tasks/{task_id}/dispatch")
+        assert r2.status_code == 200, r2.text
+        adt.assert_called_once()
+
+        # Doppel-Dispatch-Guard: nach dispatched_at → 409
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            t = await s.get(Task, uuid.UUID(task_id))
+            from app.utils import utcnow
+            t.dispatched_at = utcnow()
+            s.add(t)
+            await s.commit()
+        r3 = await auth_client.post(f"/api/v1/boards/{board.id}/tasks/{task_id}/dispatch")
+        assert r3.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_compose_renderer_mounts_references_for_all_agents():
+    """Review C1: ohne den Mount sind die Directive-Pfade im Docker-Fleet tot."""
+    from app.services.compose_renderer import (
+        _build_new_agent_block, _ensure_references_volume,
+    )
+
+    block = _build_new_agent_block("worker", "mc-claude-agent:latest", False)
+    assert "${HOME}/.mc/references:${HOME}/.mc/references:ro" in block
+
+    # Bestehender Service-Body ohne references-Mount → wird injiziert (idempotent)
+    body = [
+        "    environment:",
+        "      - AGENT_NAME=worker",
+        "    volumes:",
+        "      - ${HOME}/.mc/workspaces/worker:/workspace",
+    ]
+    once = _ensure_references_volume(body)
+    assert any("/.mc/references:" in l for l in once)
+    assert _ensure_references_volume(once) == once  # idempotent
+
+
+@pytest.mark.asyncio
 async def test_task_delete_removes_references(auth_client: AsyncClient, refs_root):
     board, _, task = await _mk_entities()
     r = await auth_client.post(

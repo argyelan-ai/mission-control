@@ -162,6 +162,10 @@ class TaskCreate(BaseModel):
     phase_id: uuid.UUID | None = None
     use_separate_repo: bool | None = None  # deprecated — repo_id (ADR-052)
     repo_id: uuid.UUID | None = None  # Registry-Repo für Ad-hoc-Tasks (ADR-052)
+    defer_dispatch: bool = False
+    # ADR-053: True wenn der Client nach dem Create noch Referenz-Dateien
+    # hochlädt — Auto-Dispatch würde die Uploads sonst überholen und der
+    # Agent-Brief bliebe ohne Referenzen. Client promotet danach explizit.
     # planner_mode was removed by Migration 0071; accept+ignore here so
     # older UI code doesn't trigger a 422 while the deprecation finishes.
     planner_mode: str | None = None
@@ -517,7 +521,7 @@ async def create_task(
     # Task-model column (removed in Migration 0071). Strip before passing
     # to Task(). `use_separate_repo`/`phase_id` DO exist on the model
     # and flow through normally.
-    task_data = payload.model_dump(exclude={"credentials", "credential_id", "planner_mode"})
+    task_data = payload.model_dump(exclude={"credentials", "credential_id", "planner_mode", "defer_dispatch"})
 
     # Encrypt credentials if present
     if payload.credentials:
@@ -566,6 +570,11 @@ async def create_task(
     # Auto-dispatch: assign task and send via PUSH
     # Also for pre-assigned tasks (assigned_agent_id set) — so the push gets triggered
     skip_dispatch = _settings.enable_dispatch_gating and task.dispatch_phase == "planning"
+    # ADR-053: Client lädt gleich noch Referenz-Dateien hoch — nicht
+    # losrennen, sonst überholt der Dispatch die Uploads und der Brief
+    # bleibt ohne Referenzen. Client ruft danach POST .../promote.
+    if payload.defer_dispatch:
+        skip_dispatch = True
     board_obj = await session.get(Board, board_id)
     if board_obj and board_obj.auto_dispatch_enabled and not skip_dispatch:
         create_tracked_task(auto_dispatch_task(task.id, board_id))
@@ -645,6 +654,27 @@ async def user_review_decision(
 
 
 # ── Pre-Dispatch Gating: Promote (User-only) ─────────────────────────────
+
+
+@router.post("/boards/{board_id}/tasks/{task_id}/dispatch")
+async def dispatch_deferred_task(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Dispatch nachholen für Tasks, die mit defer_dispatch erstellt wurden
+    (ADR-053: erst Referenz-Uploads, dann losschicken)."""
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.status != "inbox" or task.dispatched_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Task ist nicht mehr dispatchbar (Status '{task.status}')",
+        )
+    create_tracked_task(auto_dispatch_task(task.id, task.board_id))
+    return {"status": "dispatch_triggered", "task_id": str(task.id)}
 
 
 @router.post("/boards/{board_id}/tasks/{task_id}/promote")
