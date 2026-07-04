@@ -43,6 +43,9 @@ Updating later is `./install.sh --update`. Details in
   dispatch-ACK handshake, watchdogs, automatic re-assignment, review gates.
 - **Agent git workflow** — one repo per project, one branch per task,
   automatic PRs and squash-merges via the GitHub CLI.
+- **Repos registry** — a first-class repo model shared across projects, with
+  per-repo work rules (test commands, branch policy, house style) injected
+  into every dispatch for that codebase.
 - **Knowledge & memory** — a Markdown vault as source of truth, hybrid FTS5 +
   vector search (Qdrant), per-agent lessons, daily LLM-distilled insights.
 - **Live terminals** — attach to any agent's tmux session from the browser.
@@ -59,6 +62,7 @@ Updating later is `./install.sh --update`. Details in
 - **Projects & phases** — Linear-style hierarchy: lead agent plans phases, subtasks auto-dispatch to workers
 - **Dispatch ACK handshake** — a task counts as picked up only when the agent explicitly confirms
 - **Git workflow** — repo per project, branch per task, PR on review, squash-merge on approval
+- **Repos registry** — one repo shared across projects, GitHub import, per-repo work rules injected into every dispatch (ADR-050)
 - **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
 - **Workflows, automations & scheduler** — reusable action sequences and cron jobs with run history
 - **Multi-agent consensus** — ask several agents the same question, aggregate the answers
@@ -91,6 +95,16 @@ Updating later is `./install.sh --update`. Details in
 
 Every agent runs in a real terminal session you can watch and type into from
 the browser — the same Claude Code (or local-LLM) REPL the agent itself uses.
+
+### Git integration — rules that travel with the code
+
+Mission Control manages GitHub the way a team would: one repo per project,
+one branch per task, automatic PRs and squash-merges via the GitHub CLI.
+Repos live in a shared registry — import an existing GitHub repo or let
+Mission Control create one, link it to multiple projects, and write **work
+rules** once (test commands, branch policy, house style). Those rules are
+injected into every dispatch for that codebase, so an agent working on repo
+X always sees X's conventions instead of a generic default.
 
 <details>
 <summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
