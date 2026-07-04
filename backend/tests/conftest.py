@@ -185,14 +185,17 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     # Must be patched in every module that imported it.
     import app.routers.system as system_mod
     import app.routers.agents as agents_mod
+    import app.routers.runtimes as runtimes_mod
     import app.services.sse as sse_mod
     import app.services.agent_runtime_switch as switch_mod
     original_system_get_redis = system_mod.get_redis
     original_agents_get_redis = agents_mod.get_redis
+    original_runtimes_get_redis = runtimes_mod.get_redis
     original_sse_get_redis = sse_mod.get_redis
     original_switch_get_redis = switch_mod.get_redis
     system_mod.get_redis = override_get_redis
     agents_mod.get_redis = override_get_redis
+    runtimes_mod.get_redis = override_get_redis
     sse_mod.get_redis = override_get_redis  # broadcast() calls get_redis() directly
     switch_mod.get_redis = override_get_redis
 
@@ -203,6 +206,7 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     fastapi_app.dependency_overrides.clear()
     system_mod.get_redis = original_system_get_redis
     agents_mod.get_redis = original_agents_get_redis
+    runtimes_mod.get_redis = original_runtimes_get_redis
     sse_mod.get_redis = original_sse_get_redis
     switch_mod.get_redis = original_switch_get_redis
     app.redis_client._redis = original_redis_singleton

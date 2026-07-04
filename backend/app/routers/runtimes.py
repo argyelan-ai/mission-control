@@ -2,6 +2,7 @@
 Runtimes API — start/stop/restart/status for local model runtimes.
 """
 
+import json as _json
 import re as _re
 import uuid
 from datetime import datetime
@@ -12,20 +13,24 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_user, require_role, Role
+from app.config import settings
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.runtime import Runtime
+from app.redis_client import RedisKeys, get_redis
 from app.services import runtime_manager, runtime_readiness
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
 )
+from app.services.endpoint_probe import probe_endpoint_url
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_by_slug,
     resolve_host_for_runtime,
 )
 from app.services.runtime_manager import add_lmstudio_runtime
+from app.services.runtime_propagation import sync_pending_agents
 
 router = APIRouter(prefix="/api/v1/runtimes", tags=["runtimes"])
 
@@ -428,6 +433,53 @@ async def list_runtimes(
     return {"runtimes": result}
 
 
+@router.get("/live-status")
+async def runtimes_live_status(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Watcher-fed live view: what each probeable runtime ACTUALLY serves."""
+    result = await session.exec(
+        select(Runtime).where(Runtime.enabled.is_(True))
+    )
+    redis = await get_redis()
+    live: dict = {}
+    for rt in result.all():
+        raw = await redis.get(RedisKeys.runtime_live(rt.slug))
+        if raw is None:
+            continue
+        data = _json.loads(raw)
+        served = data.get("served_model")
+        data["drift"] = bool(served) and served != (rt.model_identifier or "")
+        live[rt.slug] = data
+    return {
+        "live": live,
+        "watcher_enabled": settings.runtime_watcher_enabled,
+        "interval": settings.runtime_watcher_interval,
+    }
+
+
+class ProbeEndpointBody(BaseModel):
+    url: str
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        v = v.strip().rstrip("/")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("url must start with http:// or https://")
+        return v
+
+
+@router.post("/probe-endpoint")
+async def probe_endpoint(
+    body: ProbeEndpointBody, current_user=Depends(require_user)
+):
+    """Probe an arbitrary base URL (no runtime row required) — the
+    add-runtime wizard's engine/model auto-detection."""
+    return await probe_endpoint_url(body.url)
+
+
 @router.get("/{runtime_id}")
 async def get_runtime(
     runtime_id: str,
@@ -822,7 +874,24 @@ async def runtime_db_agents(
         "runtime_slug": rt.slug,
         "count": len(agents),
         "agents": [
-            {"id": str(a.id), "name": a.name, "agent_runtime": a.agent_runtime}
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "agent_runtime": a.agent_runtime,
+                "pending_runtime_sync": a.pending_runtime_sync,
+            }
             for a in agents
         ],
     }
+
+
+@router.post("/db/{slug}/sync-agents")
+async def force_sync_runtime_agents(
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Force the pending-model sync for this runtime's flagged agents NOW —
+    including busy ones (their in-flight task will be interrupted)."""
+    await sync_pending_agents(session, force=True)
+    return {"synced": True}
