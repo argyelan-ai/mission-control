@@ -22,6 +22,8 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
     "subtask_completed", "phase_approved", "phase_rewrite_request",
     # Install-Approval Callback
     "install_completed", "install_failed",
+    # Lead-first Blocker-Triage (Fix A): Lead eskaliert explizit an Operator
+    "escalate_to_operator",
 })
 
 # Comment_types that get delivered as actionable system events to the

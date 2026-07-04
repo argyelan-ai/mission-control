@@ -256,6 +256,11 @@ async def resolve_approval(
                 task.spawn_run_id = None
                 task.updated_at = utcnow()
                 session.add(task)
+                from app.services.task_lifecycle import record_task_event
+                await record_task_event(
+                    session, task.id, "blocked", "inbox",
+                    changed_by="user", reason="blocker_approval_approved",
+                )
                 await session.commit()
                 logger.info("Task %s unblocked → inbox for re-dispatch (note: %s)", task.id, note[:50])
 
@@ -271,9 +276,13 @@ async def resolve_approval(
                 task.updated_at = utcnow()
                 # Auto-unassign — otherwise a failed task in agent_poll triggers
                 # a cancel loop. The operator explicitly cancelled the task.
-                from app.services.task_lifecycle import apply_terminal_unassign
+                from app.services.task_lifecycle import apply_terminal_unassign, record_task_event
                 await apply_terminal_unassign(session, task, "failed")
                 session.add(task)
+                await record_task_event(
+                    session, task.id, "blocked", "failed",
+                    changed_by="user", reason="blocker_approval_rejected",
+                )
                 await session.commit()
 
     # ── Promote Approval: approved → promote + dispatch ──
@@ -771,6 +780,11 @@ async def quick_resolve_confirm(
                 task.spawn_run_id = None
                 task.updated_at = utcnow()
                 session.add(task)
+                from app.services.task_lifecycle import record_task_event
+                await record_task_event(
+                    session, task.id, "blocked", "inbox",
+                    changed_by="user", reason="telegram_unblock_redispatch",
+                )
                 await session.commit()
                 logger.info("Task %s unblocked via Telegram → inbox for re-dispatch", task.id)
 
@@ -783,9 +797,13 @@ async def quick_resolve_confirm(
                 task.status = "failed"
                 task.updated_at = utcnow()
                 # Auto-unassign — see above (cancel-loop protection).
-                from app.services.task_lifecycle import apply_terminal_unassign
+                from app.services.task_lifecycle import apply_terminal_unassign, record_task_event
                 await apply_terminal_unassign(session, task, "failed")
                 session.add(task)
+                await record_task_event(
+                    session, task.id, "blocked", "failed",
+                    changed_by="user", reason="telegram_blocker_rejected",
+                )
                 await session.commit()
 
     # Update Telegram message

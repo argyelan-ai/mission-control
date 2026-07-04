@@ -77,6 +77,13 @@ _DROP_TYPES = frozenset({"message_update"})
 # falls through to a terminal `mc blocked` — never a dangling non-terminal state.
 OMP_MAX_RETRIES = 2
 
+# Continue-nudge budget (Fix B, design §4). SEPARATE from OMP_MAX_RETRIES: the
+# harmless self-completion aborts (turn ended without / with a malformed sentinel,
+# or a trailing tool error) are nudged forward IN THE SAME live session instead of
+# escalated. Own counter so a run can burn its crash-retries AND its continues
+# independently. Exhausted -> terminal blocker (routed via Fix A to the Lead first).
+OMP_MAX_CONTINUES = 2
+
 
 # ---------------------------------------------------------------------------
 # Run outcome + classification
@@ -110,6 +117,37 @@ RETRYABLE_KINDS = frozenset(
         Kind.ABORT_UNKNOWN,
     }
 )
+
+# Which kinds heal via a Continue-Nudge (Fix B): the model stopped mid-work or
+# just forgot the sentinel/reflection — the least harmful aborts, so instead of
+# a Blocker they get a follow-up prompt in the SAME session. These are NOT in
+# RETRYABLE_KINDS (a full re-run would relaunch fresh and drop the model's
+# context — a continue keeps it).
+CONTINUEABLE_KINDS = frozenset(
+    {
+        Kind.SILENT_ABORT_NO_SENTINEL,
+        Kind.MALFORMED_REFLECTION,
+        Kind.TRAILING_TOOL_ERROR,
+    }
+)
+
+# The follow-up prompt per continueable kind (design §4). Kept as the ALLERLETZTE
+# instruction the model reads before resuming.
+CONTINUE_NUDGE_PROMPTS: dict[Kind, str] = {
+    Kind.SILENT_ABORT_NO_SENTINEL: (
+        "Dein letzter Turn endete ohne Abschluss-Sentinel. Setze die Arbeit fort "
+        "und beende mit der 4-Feld-Reflexion + TASK_COMPLETE als allerletzter Zeile."
+    ),
+    Kind.MALFORMED_REFLECTION: (
+        "Sentinel erhalten, aber die 4-Feld-Reflexion fehlt oder ist zu kurz. "
+        "Liefere die vollstaendige Reflexion und beende erneut mit TASK_COMPLETE."
+    ),
+    Kind.TRAILING_TOOL_ERROR: (
+        "Dein letzter Tool-Aufruf endete mit einem Fehler, obwohl du abgeschlossen "
+        "hast. Pruefe das Ergebnis, korrigiere falls noetig, und schliesse sauber "
+        "ab (Reflexion + TASK_COMPLETE)."
+    ),
+}
 
 
 @dataclass
@@ -148,11 +186,12 @@ class Classification:
 class LifecycleAction:
     """What the driver decided to do about the run."""
 
-    action: str          # "finish" | "blocker" | "retry"
+    action: str          # "finish" | "blocker" | "retry" | "continue"
     review: bool = False
     blocker_type: Optional[str] = None
     question: Optional[str] = None
     reflection: Optional[str] = None
+    nudge_prompt: Optional[str] = None   # set for action=="continue" (Fix B)
     classification: Optional[Classification] = None
 
 
@@ -424,18 +463,32 @@ def decide_lifecycle(
     *,
     board_requires_review: bool,
     retries_left: int,
+    continues_left: int = 0,
 ) -> LifecycleAction:
     """Map a classification to a single MC lifecycle action.
 
-    Policy: FINISH -> finish/review. Retryable abort with retries left -> retry.
-    Everything else (exhausted retries, non-retryable) -> blocker.
+    Policy (in order): FINISH -> finish/review. Continueable self-completion
+    abort with continues left -> continue (Fix B: a follow-up nudge in the SAME
+    session). Retryable abort with retries left -> retry (fresh re-run).
+    Everything else (both budgets exhausted, non-continueable/non-retryable)
+    -> blocker.
     NEVER `mc failed` (FAILED -> {INBOX} only, auto-unassigns, no auto-redispatch).
+
+    `continues_left` defaults to 0 so callers that don't opt in keep the exact
+    old behavior (a continueable kind falls straight through to blocker).
     """
     c = classification
     if c.kind is Kind.FINISH:
         return LifecycleAction(
             action="finish",
             review=board_requires_review,
+            classification=c,
+        )
+
+    if c.kind in CONTINUEABLE_KINDS and continues_left > 0:
+        return LifecycleAction(
+            action="continue",
+            nudge_prompt=CONTINUE_NUDGE_PROMPTS[c.kind],
             classification=c,
         )
 
@@ -945,44 +998,71 @@ def drive_live_run(
     board_requires_review: bool,
     retries_left: int,
     pre_acked: bool = False,
+    continues_left: int = 0,
+    continue_once: Optional[Callable[[str], RunOutcome]] = None,
 ) -> LifecycleAction:
-    """Live-path analogue of drive_run for the omp SUBPROCESS model.
+    """Live-path analogue of drive_run for the omp SUBPROCESS / native-TUI model.
 
     drive_run consumes a TextIO stream and re-derives the outcome; the live path
     already has a fully-reduced `RunOutcome` from `run_omp_subprocess` (which ran
     the out-of-band wall-clock/no-progress watchdog), so re-serialising it would
     DROP the `watchdog_killed` verdict. This reuses the genuinely reusable cores
-    — `classify` + `decide_lifecycle` — with the same retry-then-blocker policy:
-    ack once, bounded retry on retryable aborts, ALWAYS terminal (finish|blocker),
+    — `classify` + `decide_lifecycle` — with the same policy:
+    ack once, then per outcome: FINISH -> finish; a continueable self-completion
+    abort with continue-budget -> continue-nudge (`continue_once`, SAME session);
+    a retryable abort with retry-budget -> retry (`run_once`, fresh re-run);
+    both budgets spent -> terminal blocker. ALWAYS terminal (finish|blocker),
     never `mc failed`, never left `in_progress`.
 
     `pre_acked=True` when the caller already stamped `mc ack` (serve_loop acks up
     front so a long omp run cannot trip the 10-min ACK-timeout re-dispatch and so
     `mc finish` sees the required `in_progress` precondition).
+
+    `continues_left` / `continue_once` opt into Fix B. `continue_once(nudge)`
+    returns the RunOutcome of the nudged follow-up turn. Both default off so the
+    subprocess path (no live session to continue) keeps the old behavior.
     """
     attempts_left = retries_left
+    continues = continues_left
     acked = pre_acked
+    outcome = run_once()
     while True:
-        outcome = run_once()
         if not acked and outcome.saw_session:
             lifecycle.ack(task_id)
             acked = True
         cls = classify(outcome)
         action = decide_lifecycle(
-            cls, board_requires_review=board_requires_review, retries_left=attempts_left,
+            cls, board_requires_review=board_requires_review,
+            retries_left=attempts_left, continues_left=continues,
         )
+        # Continue-Nudge: resume the SAME session with a follow-up prompt (Fix B).
+        if action.action == "continue" and continue_once is not None and continues > 0:
+            lifecycle.comment(
+                task_id, f"omp {cls.reason}; continue-nudge, {continues} left"
+            )
+            continues -= 1
+            outcome = continue_once(action.nudge_prompt or "")
+            continue
         if action.action == "retry" and attempts_left > 0:
             lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
             attempts_left -= 1
+            outcome = run_once()
             continue
         if action.action == "finish":
             lifecycle.finish(task_id, outcome.reflection_block or "", review=action.review)
         else:
-            if action.action == "retry":  # budget exhausted -> collapse to blocker
+            # Budget exhausted / no executor wired -> collapse to a terminal blocker.
+            if action.action in ("retry", "continue"):
                 action = LifecycleAction(
                     action="blocker", blocker_type="technical_problem",
                     question=cls.detail, classification=cls,
                 )
+            # Blocker-Qualität (Fix B §): post the bridge's OWN classification as a
+            # fresh comment BEFORE blocking, so Lead/Operator (via Fix A triage)
+            # see the real cause — not a stale reflection quoted from the run-up.
+            lifecycle.comment(
+                task_id, f"omp-bridge Klassifikation: {cls.reason} — {cls.detail}"
+            )
             lifecycle.set_blocker(
                 task_id,
                 blocker_type=action.blocker_type or "technical_problem",
@@ -1051,6 +1131,7 @@ def serve_loop(
     _poll_fn: Optional[Callable[[], Optional[dict]]] = None,
     _lifecycle_factory: Optional[Callable[[dict], MCLifecycle]] = None,
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
+    _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
@@ -1073,6 +1154,7 @@ def serve_loop(
     token = os.environ.get("MC_AGENT_TOKEN", "")
     require_review = os.environ.get("OMP_REQUIRE_REVIEW", "1") not in ("0", "false", "")
     retries = int(os.environ.get("OMP_MAX_RETRIES", str(OMP_MAX_RETRIES)))
+    continues = int(os.environ.get("OMP_MAX_CONTINUES", str(OMP_MAX_CONTINUES)))
 
     # Native-TUI knobs (all overridable via env).
     session = os.environ.get("AGENT_NAME", "omp-agent")
@@ -1138,6 +1220,8 @@ def serve_loop(
                     board_id=task.get("board_id"), attempt_id=task.get("dispatch_attempt_id"),
                 )
 
+            continue_once: Optional[Callable[[str], RunOutcome]] = _continue_factory(task, cwd) \
+                if _continue_factory is not None else None
             if _run_factory is not None:
                 run_once = _run_factory(task, cwd)
             else:
@@ -1149,6 +1233,14 @@ def serve_loop(
                         tui, cwd=_cwd, prompt=_p, task_file_path=_tf, isolate=_iso,
                         ready_timeout=ready_timeout, turn_deadline=turn_deadline,
                         idle_timeout=idle_timeout,
+                    )
+
+                # Continue-Nudge (Fix B): resume the SAME TUI session (no relaunch,
+                # so context survives) with the wrapped nudge follow-up.
+                def continue_once(nudge: str, _cwd=cwd, _tf=task_file) -> RunOutcome:
+                    return run_native_continue(
+                        tui, cwd=_cwd, nudge_prompt=wrap_prompt(nudge), task_file_path=_tf,
+                        turn_deadline=turn_deadline, idle_timeout=idle_timeout,
                     )
 
             _set_task_lock(True)
@@ -1163,6 +1255,8 @@ def serve_loop(
                     board_requires_review=require_review,
                     retries_left=retries,
                     pre_acked=True,
+                    continues_left=continues,
+                    continue_once=continue_once,
                 )
             except Exception as e:  # noqa: BLE001 — resolve terminally, never hang
                 sys.stderr.write(f"[serve] run error: {type(e).__name__}: {e}\n")
@@ -1397,62 +1491,36 @@ def _write_task_file(path: str, body: str) -> None:
         fh.write(body)
 
 
-def run_native_turn(
+def _native_watchdog_kill(
+    controller: NativeTuiController, outcome: RunOutcome, cwd: str
+) -> RunOutcome:
+    """SIGKILL + relaunch the TUI (respawn-window -k) so a wedged / dead omp is
+    never left in Window 0, and flag the run so classify()->ABORT_HANG
+    (retryable; exhausted -> terminal blocker). Never left in_progress."""
+    outcome.watchdog_killed = True
+    try:
+        controller.relaunch(cwd)
+    except Exception as e:  # noqa: BLE001 — recovery must not raise past here
+        sys.stderr.write(f"[native] watchdog relaunch failed: {e}\n")
+    return outcome
+
+
+def _observe_native_turn(
     controller: NativeTuiController,
+    outcome: RunOutcome,
     *,
     cwd: str,
-    prompt: str,
-    task_file_path: str,
-    isolate: bool = True,
-    ready_timeout: float = 45.0,
-    turn_deadline: float = 1200.0,
-    idle_timeout: float = 300.0,
-    poll_interval: float = 1.0,
-    now: Callable[[], float] = time.monotonic,
-    sleep: Callable[[float], None] = time.sleep,
+    turn_deadline: float,
+    idle_timeout: float,
+    poll_interval: float,
+    now: Callable[[], float],
+    sleep: Callable[[float], None],
 ) -> RunOutcome:
-    """One inject→observe cycle against the native TUI → a RunOutcome.
-
-    Shaped exactly like ``run_omp_subprocess`` so it slots into the UNCHANGED
-    ``drive_live_run`` retry-then-blocker policy: a retry simply re-invokes this
-    (which relaunches the TUI and re-injects — a clean, isolated redo).
-    """
-    outcome = RunOutcome()
-
-    # 1. Per-task isolation + correct cwd: a fresh TUI conversation.
-    if isolate:
-        controller.relaunch(cwd)
-    controller.truncate_signal()
-
-    # 2. Wait for the fresh session's hook to load (hook_ready / session_start).
-    def _watchdog_kill() -> RunOutcome:
-        # SIGKILL + relaunch the TUI (respawn-window -k) so a wedged / dead omp
-        # is never left in Window 0, and flag the run so classify()->ABORT_HANG
-        # (retryable; exhausted -> terminal blocker). Never left in_progress.
-        outcome.watchdog_killed = True
-        try:
-            controller.relaunch(cwd)
-        except Exception as e:  # noqa: BLE001 — recovery must not raise past here
-            sys.stderr.write(f"[native] watchdog relaunch failed: {e}\n")
-        return outcome
-
-    ready = controller.wait_for(
-        ("session_start", "hook_ready"),
-        timeout=ready_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
-    )
-    if ready is None and not controller.child_alive():
-        # TUI never came up (relaunch failed / hook never loaded) — a hang the
-        # supervisor must recover from, not a silent in_progress.
-        return _watchdog_kill()
-    if ready is not None:
-        outcome.saw_session = True
-        outcome.saw_agent_start = True
-
-    # 3. Inject the wrapped dispatch via an @file mention (no paste of the body).
-    _write_task_file(task_file_path, prompt)
-    controller.inject_file(task_file_path)
-
-    # 4. Tail the hook signal for this task's terminal turn.
+    """Tail the hook signal for THIS turn's terminal turn_end, folding it into
+    `outcome`. Shared by the initial turn (run_native_turn) and a continue-nudge
+    (run_native_continue). Owns the out-of-band watchdog: no terminal turn within
+    the deadline, a no-progress idle, OR the TUI child dying -> watchdog_killed +
+    SIGKILL/relaunch, never a silent in_progress."""
     start = now()
     last_progress = now()
     last_sr: Optional[str] = None
@@ -1512,12 +1580,102 @@ def run_native_turn(
         # --- watchdog (out of band vs the model): child-death, wall-clock, idle
         t = now()
         if not controller.child_alive():
-            return _watchdog_kill()
+            return _native_watchdog_kill(controller, outcome, cwd)
         if t - start > turn_deadline:
-            return _watchdog_kill()
+            return _native_watchdog_kill(controller, outcome, cwd)
         if idle_timeout and (t - last_progress) > idle_timeout:
-            return _watchdog_kill()
+            return _native_watchdog_kill(controller, outcome, cwd)
         sleep(poll_interval)
+
+
+def run_native_turn(
+    controller: NativeTuiController,
+    *,
+    cwd: str,
+    prompt: str,
+    task_file_path: str,
+    isolate: bool = True,
+    ready_timeout: float = 45.0,
+    turn_deadline: float = 1200.0,
+    idle_timeout: float = 300.0,
+    poll_interval: float = 1.0,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RunOutcome:
+    """One inject→observe cycle against the native TUI → a RunOutcome.
+
+    Shaped exactly like ``run_omp_subprocess`` so it slots into the UNCHANGED
+    ``drive_live_run`` retry-then-blocker policy: a retry simply re-invokes this
+    (which relaunches the TUI and re-injects — a clean, isolated redo).
+    """
+    outcome = RunOutcome()
+
+    # 1. Per-task isolation + correct cwd: a fresh TUI conversation.
+    if isolate:
+        controller.relaunch(cwd)
+    controller.truncate_signal()
+
+    # 2. Wait for the fresh session's hook to load (hook_ready / session_start).
+    ready = controller.wait_for(
+        ("session_start", "hook_ready"),
+        timeout=ready_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+    )
+    if ready is None and not controller.child_alive():
+        # TUI never came up (relaunch failed / hook never loaded) — a hang the
+        # supervisor must recover from, not a silent in_progress.
+        return _native_watchdog_kill(controller, outcome, cwd)
+    if ready is not None:
+        outcome.saw_session = True
+        outcome.saw_agent_start = True
+
+    # 3. Inject the wrapped dispatch via an @file mention (no paste of the body).
+    _write_task_file(task_file_path, prompt)
+    controller.inject_file(task_file_path)
+
+    # 4. Tail the hook signal for this task's terminal turn.
+    return _observe_native_turn(
+        controller, outcome, cwd=cwd, turn_deadline=turn_deadline,
+        idle_timeout=idle_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+    )
+
+
+def run_native_continue(
+    controller: NativeTuiController,
+    *,
+    cwd: str,
+    nudge_prompt: str,
+    task_file_path: str,
+    turn_deadline: float = 1200.0,
+    idle_timeout: float = 300.0,
+    poll_interval: float = 1.0,
+    now: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> RunOutcome:
+    """Continue-Nudge (Fix B): re-inject a follow-up prompt into the ALREADY-LIVE
+    native TUI session — NO relaunch, so the model keeps its context (that is the
+    whole point vs a full retry, which relaunches fresh). Folds the next terminal
+    turn into a RunOutcome via the SAME observe/watchdog core + classify() taxonomy.
+    """
+    outcome = RunOutcome()
+
+    # The session is known-live from the turn we are continuing; claim it up front
+    # so classify() reads the next turn as a real result, not a launch/preflight
+    # (no fresh session_start hook fires without a relaunch).
+    outcome.saw_session = True
+    outcome.saw_agent_start = True
+    controller.truncate_signal()
+
+    # The child could have died between turns — recover, don't inject into a corpse.
+    if not controller.child_alive():
+        return _native_watchdog_kill(controller, outcome, cwd)
+
+    _write_task_file(task_file_path, nudge_prompt)
+    controller.inject_file(task_file_path)
+
+    return _observe_native_turn(
+        controller, outcome, cwd=cwd, turn_deadline=turn_deadline,
+        idle_timeout=idle_timeout, poll_interval=poll_interval, now=now, sleep=sleep,
+    )
 
 
 def _task_file_for(task_id: str) -> str:

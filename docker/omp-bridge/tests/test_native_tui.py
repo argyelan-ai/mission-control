@@ -364,7 +364,7 @@ class _Recording(bridge.MCLifecycle):
         self.calls.append(("blocker", task_id, blocker_type))
 
     def comment(self, task_id, text):
-        self.calls.append(("comment", task_id))
+        self.calls.append(("comment", task_id, text))
 
 
 def test_native_finish_flows_through_drive_live_run():
@@ -402,8 +402,221 @@ def test_native_hang_retries_then_blocks_terminally():
     assert action.action == "blocker"
     assert attempts["n"] == 2  # initial + one retry
     kinds = [c[0] for c in lc.calls]
-    assert kinds.count("comment") == 1  # one retry note
+    # one retry note + the Blocker-Qualität classification comment (Fix B §):
+    # the bridge posts its OWN cause before blocking.
+    assert kinds.count("comment") == 2
+    classifications = [c[2] for c in lc.calls if c[0] == "comment"]
+    assert any("omp-bridge Klassifikation" in t for t in classifications)
     assert "blocker" in kinds and "finish" not in kinds
+
+
+# ---------------------------------------------------------------------------
+# Fix B — Continue-Nudge (§4): the harmless self-completion aborts heal via a
+# follow-up prompt in the SAME session instead of an immediate Blocker.
+# ---------------------------------------------------------------------------
+
+def _stop_outcome(text: str) -> "bridge.RunOutcome":
+    o = bridge.RunOutcome()
+    o.saw_session = True
+    o.saw_agent_start = True
+    o.saw_agent_end = True
+    o.final_stop_reason = "stop"
+    o.final_text = text
+    return o
+
+
+def _finish_outcome() -> "bridge.RunOutcome":
+    return _stop_outcome(REFLECTION)                 # valid sentinel + reflection
+
+
+def _silent_abort_outcome() -> "bridge.RunOutcome":
+    return _stop_outcome("Done.")                    # stop, but NO sentinel
+
+
+def _trailing_tool_err_outcome() -> "bridge.RunOutcome":
+    o = _stop_outcome(REFLECTION)                     # sentinel + reflection OK,
+    o.last_turn_had_tool_error = True                # but the last tool errored
+    return o
+
+
+def _crash_outcome() -> "bridge.RunOutcome":
+    o = bridge.RunOutcome()
+    o.saw_session = True
+    o.saw_agent_start = True
+    o.saw_agent_end = False                           # no agent_end -> ABORT_CRASH (retryable)
+    return o
+
+
+# -- decide_lifecycle policy (pure) -----------------------------------------
+
+def test_decide_continue_on_silent_abort_with_budget():
+    # (a) sentinel-loser stop -> action=continue with the correct nudge prompt.
+    cls = bridge.classify(_silent_abort_outcome())
+    assert cls.kind is Kind.SILENT_ABORT_NO_SENTINEL
+    action = bridge.decide_lifecycle(
+        cls, board_requires_review=True, retries_left=0, continues_left=2,
+    )
+    assert action.action == "continue"
+    assert action.nudge_prompt == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert "TASK_COMPLETE" in action.nudge_prompt
+
+
+def test_decide_continue_on_trailing_tool_error():
+    # (e) TRAILING_TOOL_ERROR is continueable, with its own nudge prompt.
+    cls = bridge.classify(_trailing_tool_err_outcome())
+    assert cls.kind is Kind.TRAILING_TOOL_ERROR
+    action = bridge.decide_lifecycle(
+        cls, board_requires_review=True, retries_left=0, continues_left=1,
+    )
+    assert action.action == "continue"
+    assert action.nudge_prompt == bridge.CONTINUE_NUDGE_PROMPTS[Kind.TRAILING_TOOL_ERROR]
+
+
+def test_decide_continue_on_malformed_reflection():
+    o = _stop_outcome("TASK_COMPLETE")               # sentinel, but reflection too short
+    cls = bridge.classify(o)
+    assert cls.kind is Kind.MALFORMED_REFLECTION
+    action = bridge.decide_lifecycle(
+        cls, board_requires_review=True, retries_left=0, continues_left=2,
+    )
+    assert action.action == "continue"
+    assert action.nudge_prompt == bridge.CONTINUE_NUDGE_PROMPTS[Kind.MALFORMED_REFLECTION]
+
+
+def test_decide_finish_stays_finish_even_with_continue_budget():
+    # (c) FINISH is FINISH regardless of any budget.
+    cls = bridge.classify(_finish_outcome())
+    assert cls.kind is Kind.FINISH
+    action = bridge.decide_lifecycle(
+        cls, board_requires_review=True, retries_left=2, continues_left=2,
+    )
+    assert action.action == "finish"
+
+
+def test_decide_continueable_without_budget_still_blocks():
+    # Backward-compat: continues_left defaults to 0 -> the old straight-to-blocker.
+    cls = bridge.classify(_silent_abort_outcome())
+    action = bridge.decide_lifecycle(cls, board_requires_review=True, retries_left=0)
+    assert action.action == "blocker"
+
+
+# -- drive_live_run integration ---------------------------------------------
+
+def test_continue_budget_exhausts_to_blocker():
+    # (b) every turn stays sentinel-less -> nudged exactly `continues_left` times,
+    # then a terminal blocker (never left in_progress).
+    nudges: list[str] = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return _silent_abort_outcome()               # the nudge did not help
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    assert len(nudges) == 2                            # exactly the continue budget
+    assert all(
+        n == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL] for n in nudges
+    )
+    kinds = [c[0] for c in lc.calls]
+    assert kinds.count("comment") == 3                # 2 nudge notes + 1 classification
+    assert "blocker" in kinds and "finish" not in kinds
+
+
+def test_continue_nudge_recovers_to_finish():
+    # A single nudge lands the sentinel -> FINISH (proves the nudge is EXECUTED,
+    # not just decided).
+    def continue_once(nudge):
+        return _finish_outcome()
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "finish"
+    kinds = [c[0] for c in lc.calls]
+    assert kinds.count("comment") == 1                # one nudge note, then finish
+    assert "finish" in kinds and "blocker" not in kinds
+
+
+def test_retry_and_continue_budgets_are_independent():
+    # (d) a crash consumes a RETRY (fresh re-run); the follow-up silent-abort then
+    # consumes the CONTINUE budget — two separate counters, both spent before block.
+    outcomes = iter([_crash_outcome(), _silent_abort_outcome()])
+
+    def run_once():
+        return next(outcomes)
+
+    cont = {"n": 0}
+
+    def continue_once(nudge):
+        cont["n"] += 1
+        return _silent_abort_outcome()               # keep failing the continue path
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, run_once, task_id="T1",
+        board_requires_review=True, retries_left=1,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    assert cont["n"] == 2                              # both continues spent AFTER the retry
+    kinds = [c[0] for c in lc.calls]
+    # 1 retry note + 2 nudge notes + 1 classification comment.
+    assert kinds.count("comment") == 4
+
+
+def test_continue_without_executor_collapses_to_blocker():
+    # continues_left>0 but no continue_once wired -> must NOT strand as 'continue';
+    # collapses to a terminal blocker (mirrors the retry-without-executor guard).
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=None, pre_acked=True,
+    )
+    assert action.action == "blocker"
+
+
+# -- run_native_continue mechanics (no relaunch, keep context) ---------------
+
+def test_run_native_continue_no_relaunch_injects_nudge():
+    h = _Harness([[_te("stop", text=REFLECTION)]])    # terminal turn on the first tick
+    tf = os.path.join(h.tmp, "task-cont.md")
+    outcome = bridge.run_native_continue(
+        h.ctrl, cwd="/workspace/proj", nudge_prompt="NUDGE-BODY\n" + REFLECTION,
+        task_file_path=tf, turn_deadline=1000, idle_timeout=1000,
+        poll_interval=1.0, now=h.clock.now, sleep=h.sleep,
+    )
+    assert outcome.saw_session is True                # claimed up front (no session_start)
+    assert outcome.final_stop_reason == "stop"
+    assert h.cmds("respawn-window") == []             # NO relaunch — context preserved
+    sends = h.cmds("send-keys")
+    assert ["send-keys", "-t", "sparky:0", "--", f"@{tf}"] in sends
+    with open(tf, encoding="utf-8") as fh:
+        body = fh.read()
+    assert "NUDGE-BODY" in body
+
+
+def test_run_native_continue_dead_child_is_watchdog_not_silent():
+    # The TUI child died between turns -> a continue must recover (watchdog), never
+    # inject into a corpse and hang.
+    h = _Harness([[_te("stop", text=REFLECTION)]], alive=False)
+    outcome = bridge.run_native_continue(
+        h.ctrl, cwd="/workspace/proj", nudge_prompt="NUDGE\n" + REFLECTION,
+        task_file_path=os.path.join(h.tmp, "t.md"),
+        turn_deadline=1000, idle_timeout=1000, poll_interval=1.0,
+        now=h.clock.now, sleep=h.sleep,
+    )
+    assert outcome.watchdog_killed is True
+    assert bridge.classify(outcome).kind is Kind.ABORT_HANG
+    assert h.cmds("respawn-window")                   # relaunched to recover
 
 
 # ---------------------------------------------------------------------------

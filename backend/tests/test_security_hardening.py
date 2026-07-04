@@ -27,6 +27,8 @@ def test_valid_comment_types():
         "subtask_completed", "phase_approved", "phase_rewrite_request",
         # Install-Approval Callback (2026-04-19)
         "install_completed", "install_failed",
+        # Lead-first Blocker-Triage (2026-07-04, Fix A)
+        "escalate_to_operator",
     }
 
 
