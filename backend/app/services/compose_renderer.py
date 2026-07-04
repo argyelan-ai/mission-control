@@ -213,51 +213,6 @@ def _find_block_range(
     return (header_idx, end)
 
 
-def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
-    """Inject ``env_file: [docker/.env.agents]`` into a service body if not
-    already present.
-
-    The entry makes the per-agent token variables (``MC_TOKEN_<NAME>``) available
-    inside the container regardless of whether ``--env-file docker/.env.agents``
-    was passed at compose-up time.  Path is relative to the project root (the
-    canonical run directory, same convention as the anchor's ``docker/.env.shared``).
-
-    Idempotent: if ``.env.agents`` is already listed (under any ``env_file:``
-    block), the function is a no-op.
-    """
-    agents_marker = ".env.agents"
-    if any(agents_marker in line for line in body_lines):
-        return list(body_lines)
-
-    body = list(body_lines)
-    env_file_entry = "      - docker/.env.agents"
-
-    # Look for an existing env_file: block (4-space indent key) and append.
-    env_file_header_re = re.compile(r"^    env_file:\s*$")
-    for i, line in enumerate(body):
-        if env_file_header_re.match(line):
-            # Find end of this block (next 4-space key or end of body).
-            end = len(body)
-            for j in range(i + 1, len(body)):
-                if body[j] and not body[j].startswith("      ") and body[j].startswith("    "):
-                    end = j
-                    break
-            body.insert(end, env_file_entry)
-            return body
-
-    # No env_file: block — create one.  Insert BEFORE environment: (if present)
-    # so it precedes env vars; otherwise append at body end.
-    env_range = _find_block_range(body, "environment")
-    if env_range is not None:
-        header_idx, _ = env_range
-        body[header_idx:header_idx] = ["    env_file:", env_file_entry]
-    else:
-        body.append("    env_file:")
-        body.append(env_file_entry)
-
-    return body
-
-
 def _ensure_vault_entries(body_lines: list[str], slug: str) -> list[str]:
     """Insert the vault volume mount + env vars into a service body if they
     are not already present.
@@ -316,6 +271,42 @@ def _ensure_vault_entries(body_lines: list[str], slug: str) -> list[str]:
         else:
             body.append("    volumes:")
             body.append(_VAULT_VOLUME_TEMPLATE)
+
+    return body
+
+
+def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
+    """Ensure ``docker/.env.agents`` appears in this service body's ``env_file``
+    block.
+
+    Two cases:
+    - An ``env_file:`` block already exists in the body (service-level override
+      was previously added) → append ``docker/.env.agents`` if not present.
+    - No ``env_file:`` block in body (normal case — the service relies on the
+      anchor's env_file) → create a new block that explicitly lists BOTH
+      ``docker/.env.shared`` (the anchor's file) and ``docker/.env.agents`` so
+      that YAML merge semantics (service-level list *replaces* the anchor list)
+      do not silently drop the shared credentials.
+
+    Idempotent: re-running with the same body produces the same output.
+    """
+    agents_env = _AGENTS_ENV_FILE
+
+    # Early-out: already present.
+    if any(agents_env in line for line in body_lines):
+        return list(body_lines)
+
+    body = list(body_lines)
+    env_file_range = _find_block_range(body, "env_file")
+    if env_file_range is not None:
+        # Existing service-level env_file block — append .env.agents.
+        _, end = env_file_range
+        body.insert(end, f"      - {agents_env}")
+    else:
+        # No service-level env_file block — add one with both files.
+        body.append("    env_file:")
+        body.append(f"      - {_SHARED_ENV_FILE}")
+        body.append(f"      - {agents_env}")
 
     return body
 
@@ -483,11 +474,14 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
 
     lines += [
         f"    container_name: mc-agent-{slug}",
-        # env_file: docker/.env.agents ensures MC_TOKEN_<NAME> vars are
-        # available inside the container even when compose is called without
-        # --env-file docker/.env.agents (defense layer 1, ADR-051).
+        # Explicit service-level env_file overrides the anchor's env_file in
+        # YAML merge semantics (service-level list replaces the anchor list).
+        # We therefore repeat docker/.env.shared here so CLAUDE_CODE_OAUTH_TOKEN
+        # and GH_TOKEN remain available, and add docker/.env.agents to ensure
+        # MC_TOKEN_<NAME> vars are present even without --env-file at compose-up.
         "    env_file:",
-        "      - docker/.env.agents",
+        f"      - {_SHARED_ENV_FILE}",
+        f"      - {_AGENTS_ENV_FILE}",
         "    environment:",
         f"      - AGENT_NAME={slug}",
         "      - MC_API_URL=${MC_API_URL:-http://backend:8000}",
