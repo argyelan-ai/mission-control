@@ -221,12 +221,6 @@ async def delete_reference(
     ref = await session.get(ReferenceFile, reference_id)
     if not ref:
         raise HTTPException(404, "Reference not found")
-    root = os.path.realpath(_references_root())
-    target = os.path.realpath(os.path.join(root, ref.rel_path))
-    if target.startswith(root + os.sep) and os.path.isfile(target):
-        try:
-            os.remove(target)
-        except OSError:
-            logger.warning("Referenz-Datei nicht löschbar: %s", target)
-    await session.delete(ref)
+    from app.services.reference_cleanup import _delete_rows
+    await _delete_rows(session, [ref])
     await session.commit()

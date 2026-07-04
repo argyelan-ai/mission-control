@@ -1763,6 +1763,15 @@ async def delete_task(
     from app.services.reference_cleanup import delete_references_for
     await delete_references_for(session, task_id=task_id)
 
+    # 6i. file_index: task_id-Provenance lösen — der FK blockte sonst den
+    # Task-Delete (Live-Smoke-Fund; betraf latent auch Deliverable-Captures).
+    from app.models.file_index import FileIndexEntry
+    for fi in (await session.exec(
+        select(FileIndexEntry).where(FileIndexEntry.task_id == task_id)
+    )).all():
+        fi.task_id = None
+        session.add(fi)
+
     # 7. Clear agent current_task_id
     agent_result = await session.exec(
         select(Agent).where(Agent.current_task_id == task_id)
