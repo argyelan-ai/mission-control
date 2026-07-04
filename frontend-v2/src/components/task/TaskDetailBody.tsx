@@ -290,7 +290,6 @@ function PropertyMenuCell({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="listbox"
         aria-expanded={open}
-        aria-label={`${label}: ${value} — change`}
         className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.03)]"
       >
         <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>

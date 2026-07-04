@@ -1100,7 +1100,6 @@ function TasksPageContent() {
           >
             <button
               onClick={handleCloseDetail}
-              aria-label="Back to task list"
               className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
               style={{
                 backgroundColor: C.bgSurface,
