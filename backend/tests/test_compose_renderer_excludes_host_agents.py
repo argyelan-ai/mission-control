@@ -161,8 +161,9 @@ async def test_boss_excluded_from_compose(async_session, compose_path):
     parsed = yaml.safe_load(rendered)
     services = parsed.get("services", {})
     assert "mc-agent-boss" not in services
-    # Static fixture should be byte-identical when no cli-bridge overrides apply.
-    assert rendered == COMPOSE_FIXTURE
+    # env_file hardening (ADR-051) is applied even with no cli-bridge overrides,
+    # so the output is no longer byte-identical to the static fixture — that is
+    # intentional and correct.  The primary assertion is that Boss is absent.
 
 
 @pytest.mark.asyncio
@@ -217,15 +218,14 @@ async def test_empty_db_renders_minimal_compose(async_session, compose_path):
     Covers T-24-61: empty compose YAML must not break docker startup."""
     rendered = await render_compose_agents(async_session, compose_path=compose_path)
 
-    # Byte-identical to source when there are no overrides to apply.
-    assert rendered == COMPOSE_FIXTURE
-
     # Output is valid YAML.
     parsed = yaml.safe_load(rendered)
     assert parsed is not None
     assert "services" in parsed
     # The static service blocks survive (renderer doesn't strip them).
     assert "mc-agent-davinci" in parsed["services"]
+    # env_file hardening (ADR-051) is applied even with an empty DB, so output
+    # is not byte-identical to source — that is expected and correct.
 
 
 @pytest.mark.asyncio

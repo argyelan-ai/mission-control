@@ -101,10 +101,32 @@ except Exception:
         fi
     else
         echo "[entrypoint] Bootstrap JSON-Parse fehlgeschlagen — Fallback auf Env-Vars"
+        # Defense layer 2: resolve MC_TOKEN from per-agent env var (loaded by
+        # env_file: docker/.env.agents) when MC_TOKEN is still blank.
+        if [ -z "${MC_TOKEN:-}" ]; then
+            _agent_upper=$(printf '%s' "${AGENT_NAME:-}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+            _tok_var="MC_TOKEN_${_agent_upper}"
+            eval "_tok_val=\${${_tok_var}:-}"
+            if [ -n "$_tok_val" ]; then
+                export MC_TOKEN="$_tok_val"
+                echo "[entrypoint] MC_TOKEN resolved from ${_tok_var} (env_file fallback)"
+            fi
+        fi
         export MC_AGENT_TOKEN="${MC_TOKEN:-}"
     fi
 else
     echo "[entrypoint] Bootstrap fehlgeschlagen — Fallback auf Env-Vars"
+    # Defense layer 2: resolve MC_TOKEN from per-agent env var (loaded by
+    # env_file: docker/.env.agents) when MC_TOKEN is still blank.
+    if [ -z "${MC_TOKEN:-}" ]; then
+        _agent_upper=$(printf '%s' "${AGENT_NAME:-}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+        _tok_var="MC_TOKEN_${_agent_upper}"
+        eval "_tok_val=\${${_tok_var}:-}"
+        if [ -n "$_tok_val" ]; then
+            export MC_TOKEN="$_tok_val"
+            echo "[entrypoint] MC_TOKEN resolved from ${_tok_var} (env_file fallback)"
+        fi
+    fi
     export MC_AGENT_TOKEN="${MC_TOKEN:-}"
 fi
 

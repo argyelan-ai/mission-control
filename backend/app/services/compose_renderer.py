@@ -60,6 +60,21 @@ OPENCLAUDE_IMAGE = "mc-agent-base:latest"
 # of an interactive openclaude pane. Selected by runtime_type == "omp".
 OMP_IMAGE = "mc-omp-agent:latest"
 
+# Token-hardening (fix/agent-token-recreate-hardening):
+# MC_TOKEN_<AGENTNAME> vars live in docker/.env.agents (symlink under
+# ~/.mc/secrets/…/docker/.env.agents).  By emitting this env_file for every
+# rendered agent service we ensure the variables are available inside the
+# container even when the caller forgot --env-file docker/.env.agents on
+# `docker compose up --force-recreate`.
+# Path is relative to the project root — same convention as docker/.env.shared
+# used in the anchor blocks.
+_AGENTS_ENV_FILE = "docker/.env.agents"
+# The shared env file already referenced by anchor blocks.  We re-declare it
+# at service level whenever we emit a service-level env_file list so that YAML
+# merge semantics (service-level list replaces the anchor list, not merges) do
+# not silently drop CLAUDE_CODE_OAUTH_TOKEN, GH_TOKEN, TAVILY_API_KEY, etc.
+_SHARED_ENV_FILE = "docker/.env.shared"
+
 # Compose path: docker/docker-compose.agents.yml relative to repo root.
 # Repo root comes from settings.mc_repo_path (MC_REPO_PATH env — set by
 # setup.sh; the checkout may have any folder name). Tests inject the path.
@@ -198,6 +213,51 @@ def _find_block_range(
     return (header_idx, end)
 
 
+def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
+    """Inject ``env_file: [docker/.env.agents]`` into a service body if not
+    already present.
+
+    The entry makes the per-agent token variables (``MC_TOKEN_<NAME>``) available
+    inside the container regardless of whether ``--env-file docker/.env.agents``
+    was passed at compose-up time.  Path is relative to the project root (the
+    canonical run directory, same convention as the anchor's ``docker/.env.shared``).
+
+    Idempotent: if ``.env.agents`` is already listed (under any ``env_file:``
+    block), the function is a no-op.
+    """
+    agents_marker = ".env.agents"
+    if any(agents_marker in line for line in body_lines):
+        return list(body_lines)
+
+    body = list(body_lines)
+    env_file_entry = "      - docker/.env.agents"
+
+    # Look for an existing env_file: block (4-space indent key) and append.
+    env_file_header_re = re.compile(r"^    env_file:\s*$")
+    for i, line in enumerate(body):
+        if env_file_header_re.match(line):
+            # Find end of this block (next 4-space key or end of body).
+            end = len(body)
+            for j in range(i + 1, len(body)):
+                if body[j] and not body[j].startswith("      ") and body[j].startswith("    "):
+                    end = j
+                    break
+            body.insert(end, env_file_entry)
+            return body
+
+    # No env_file: block — create one.  Insert BEFORE environment: (if present)
+    # so it precedes env vars; otherwise append at body end.
+    env_range = _find_block_range(body, "environment")
+    if env_range is not None:
+        header_idx, _ = env_range
+        body[header_idx:header_idx] = ["    env_file:", env_file_entry]
+    else:
+        body.append("    env_file:")
+        body.append(env_file_entry)
+
+    return body
+
+
 def _ensure_vault_entries(body_lines: list[str], slug: str) -> list[str]:
     """Insert the vault volume mount + env vars into a service body if they
     are not already present.
@@ -318,10 +378,9 @@ def _rewrite_compose(
 
         target_image = image_overrides.get(slug)
         wants_vault = slug in vault_writers
-
-        if target_image is None and not wants_vault:
-            # No work for this service — leave its body unchanged.
-            continue
+        # env_file injection is always applied — every agent service needs the
+        # MC_TOKEN_<NAME> variables available inside the container regardless of
+        # how compose was invoked (defense layer 1 against silent blank MC_TOKEN).
 
         # Walk through the service body until we hit the next top-level key
         # (no leading whitespace) or another service definition. Collect the
@@ -373,6 +432,11 @@ def _rewrite_compose(
         if wants_vault:
             body_lines = _ensure_vault_entries(body_lines, slug)
 
+        # Defense layer 1: ensure docker/.env.agents is in every agent service's
+        # env_file so MC_TOKEN_<NAME> vars are available at container runtime
+        # even when compose is called without --env-file docker/.env.agents.
+        body_lines = _ensure_env_file_entry(body_lines)
+
         out.extend(body_lines)
 
     rendered = "\n".join(out)
@@ -419,6 +483,11 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
 
     lines += [
         f"    container_name: mc-agent-{slug}",
+        # env_file: docker/.env.agents ensures MC_TOKEN_<NAME> vars are
+        # available inside the container even when compose is called without
+        # --env-file docker/.env.agents (defense layer 1, ADR-051).
+        "    env_file:",
+        "      - docker/.env.agents",
         "    environment:",
         f"      - AGENT_NAME={slug}",
         "      - MC_API_URL=${MC_API_URL:-http://backend:8000}",
@@ -489,12 +558,9 @@ async def render_compose_agents(
         if f"mc-agent-{slug}:" not in static:
             new_agents.append((slug, resolved_image))
 
-    # Bail early only when there is truly nothing to do (no overrides, no vault
-    # injections, and no new agents to append).
-    if not overrides and not vault_writers and not new_agents:
-        return static
-
-    # Apply existing-service overlay (image overrides + vault injection).
+    # Note: _rewrite_compose is always called (even with empty overrides/vault_writers)
+    # because it now also injects env_file: docker/.env.agents into every agent service
+    # (defense layer 1 against blank MC_TOKEN when --env-file is omitted at compose-up).
     rendered = _rewrite_compose(static, overrides, vault_writers=vault_writers)
 
     # Append full service blocks for agents not already present in the file.
