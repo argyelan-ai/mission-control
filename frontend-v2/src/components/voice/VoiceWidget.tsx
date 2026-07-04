@@ -449,11 +449,16 @@ function VoiceDrawer({
   const isThinking = state === "thinking";
 
   // Style — mobile stays centered at the top, desktop uses the anchor position
+  // Wichtig: kein transform-Centering — Framer Motion animiert transform
+  // (scale/y) und überschreibt ein translateX(-50%), das Panel ragt dann
+  // rechts aus dem Viewport (iPhone-Befund Operator). Stattdessen
+  // left+right+margin auto.
   const panelStyle: React.CSSProperties = mobile || !position
     ? {
         top: "calc(env(safe-area-inset-top) + 4.5rem)",
-        left: "50%",
-        transform: "translateX(-50%)",
+        left: "0.75rem",
+        right: "0.75rem",
+        marginInline: "auto",
         width: "calc(100vw - 1.5rem)",
         maxWidth: 340,
         // Never beyond the bottom of the viewport (otherwise the controls
