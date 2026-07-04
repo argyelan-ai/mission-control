@@ -222,15 +222,27 @@ function GroupHeader({
         </span>
       </button>
       {typeof progressPct === "number" && (
-        <span className="flex-1 max-w-[72px] h-[3px] rounded-full overflow-hidden ml-1" style={{ backgroundColor: C.bgHover }}>
-          <span className="block h-full" style={{ width: `${progressPct}%`, backgroundColor: C.accent }} />
+        <span className="flex items-center gap-1 ml-1 shrink-0" title={`${progressPct}% done`}>
+          {/* Segmented stepper (mockup pattern) — 5 blocks read faster than a hairline bar */}
+          <span className="flex gap-[2px]">
+            {[0, 1, 2, 3, 4].map((i) => (
+              <span
+                key={i}
+                className="w-[9px] h-[4px] rounded-[1px]"
+                style={{ backgroundColor: progressPct >= (i + 1) * 20 - 10 ? C.accent : C.bgHover }}
+              />
+            ))}
+          </span>
+          <span className="text-[9px] font-mono" style={{ color: C.textDim }}>
+            {progressPct}%
+          </span>
         </span>
       )}
       {onOpenProject && (
         <button
           type="button"
           onClick={onOpenProject}
-          className="ml-auto text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+          className="ml-auto text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors whitespace-nowrap shrink-0"
           style={{ color: C.textMuted }}
           title="Open project view (phases)"
         >
@@ -267,8 +279,11 @@ export default function TaskListColumn({
   const [mode, setMode] = useState<TaskGroupMode>("status");
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState<string>("");
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set(["status:done", "status:aborted"]));
-  const [doneLimit, setDoneLimit] = useState(DONE_PAGE);
+  // Collapse state as inversion of the per-group default: done/aborted and
+  // project groups start collapsed (Ad-hoc stays open), user toggles flip it.
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set());
+  // Per-group render limit — 168 expanded ad-hoc rows must not land in the DOM at once
+  const [limits, setLimits] = useState<Record<string, number>>({});
 
   const projectName = useMemo(() => {
     const m = new Map<string, string>();
@@ -327,8 +342,13 @@ export default function TaskListColumn({
     return [adHoc, ...rest].filter((g) => g.tasks.length > 0);
   }, [mode, visible, projects, tasks]);
 
+  // Project mode: everything starts collapsed (scannable project overview);
+  // status mode: only done/aborted start collapsed.
+  const defaultCollapsed = (g: Group) =>
+    g.key === "status:done" || g.key === "status:aborted" || !!g.projectId || !!g.adHoc;
+
   const toggleGroup = (key: string) =>
-    setCollapsed((prev) => {
+    setToggled((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -421,9 +441,10 @@ export default function TaskListColumn({
           </div>
         )}
         {groups.map((g) => {
-          const isCollapsed = collapsed.has(g.key);
-          const isDoneGroup = g.key === "status:done";
-          const shown = isDoneGroup ? g.tasks.slice(0, doneLimit) : g.tasks;
+          // XOR: default state per group, user toggle inverts it
+          const isCollapsed = defaultCollapsed(g) !== toggled.has(g.key);
+          const limit = limits[g.key] ?? DONE_PAGE;
+          const shown = g.tasks.slice(0, limit);
           return (
             <section key={g.key} aria-label={g.label}>
               <GroupHeader
@@ -449,14 +470,14 @@ export default function TaskListColumn({
                       onClick={() => onSelectTask(t)}
                     />
                   ))}
-                  {isDoneGroup && g.tasks.length > doneLimit && (
+                  {g.tasks.length > limit && (
                     <button
                       type="button"
-                      onClick={() => setDoneLimit((n) => n + DONE_PAGE)}
+                      onClick={() => setLimits((m) => ({ ...m, [g.key]: limit + DONE_PAGE }))}
                       className="w-full text-center text-[11px] py-2 rounded-lg cursor-pointer hover:bg-[rgba(255,255,255,0.03)] transition-colors"
                       style={{ color: C.textMuted }}
                     >
-                      Show {Math.min(DONE_PAGE, g.tasks.length - doneLimit)} more
+                      Show {Math.min(DONE_PAGE, g.tasks.length - limit)} more
                     </button>
                   )}
                 </div>
