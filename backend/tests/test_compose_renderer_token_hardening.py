@@ -127,6 +127,28 @@ async def test_existing_services_get_env_file_agents(async_session, compose_path
 
 
 @pytest.mark.asyncio
+async def test_existing_services_retain_env_shared(async_session, compose_path):
+    """Regression guard: injecting a service-level env_file REPLACES the anchor's
+    env_file in YAML merge semantics.  The renderer must therefore repeat
+    docker/.env.shared alongside docker/.env.agents — otherwise every agent
+    silently loses CLAUDE_CODE_OAUTH_TOKEN / GH_TOKEN / TAVILY_API_KEY (a worse
+    incident than the blank MC_TOKEN this PR fixes)."""
+    rendered = await render_compose_agents(async_session, compose_path=compose_path)
+    parsed = yaml.safe_load(rendered)
+    services = parsed["services"]
+
+    for svc_name, svc_def in services.items():
+        ef = _env_file_list(svc_def)
+        assert any(".env.shared" in entry for entry in ef), (
+            f"Service {svc_name} lost docker/.env.shared after env_file injection "
+            f"(YAML merge override bug): {ef}"
+        )
+        assert any(".env.agents" in entry for entry in ef), (
+            f"Service {svc_name} missing docker/.env.agents in env_file: {ef}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_existing_services_retain_mc_token_env_var(async_session, compose_path):
     """Backward-compat: MC_TOKEN=${MC_TOKEN_<NAME>} interpolation line must be
     preserved in existing services (canonical --env-file path still works)."""
