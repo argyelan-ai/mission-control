@@ -61,3 +61,21 @@ export function slugify(str: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 }
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let i = 0;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[i]}`;
+}
+
+// ── Reference Files (ADR-053) ────────────────────────────────────────────────
+// Shared `accept` attribute for reference-file upload inputs — mirrors the
+// backend's allowed-MIME allowlist (routers/references.py).
+export const REFERENCE_FILE_ACCEPT =
+  ".png,.jpg,.jpeg,.webp,.gif,.svg,.pdf,.txt,.md,.csv,.json,.zip,.xlsx,.docx,.html";

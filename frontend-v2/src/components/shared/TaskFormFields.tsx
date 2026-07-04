@@ -20,11 +20,12 @@ import {
   Globe, KeyRound, MessageSquare, Calendar,
   Bug, Sparkles, Search as SearchIcon, Zap, Settings2,
   FolderKanban, Users, ChevronDown, ChevronRight, ClipboardList,
-  CircleAlert, Wand2,
+  CircleAlert, Wand2, Paperclip, X,
 } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { formatBytes, REFERENCE_FILE_ACCEPT } from "@/lib/utils";
 import type { Agent, Project, Repo } from "@/lib/types";
 import { ProjectCombobox } from "./ProjectCombobox";
 import { PlannerSlider } from "./PlannerSlider";
@@ -152,6 +153,15 @@ const INTAKE_LOCALSTORAGE_KEY = "mc.intake.expanded";
 const MODE_LOCALSTORAGE_KEY = "mc.task.mode";
 
 export type TaskMode = "schnell" | "strukturiert";
+
+// ── Reference files (ADR-053) ────────────────────────────────────────
+// Staged locally (NOT part of TaskFormPayload — they can't be JSON'd into
+// the task-create body) and reported upward so the parent can upload them
+// once the task itself exists.
+export interface StagedReferenceFile {
+  id: string;
+  file: File;
+}
 
 // ── Payload type — exported so parents can type their state ──────────
 
@@ -365,6 +375,13 @@ export interface TaskFormFieldsProps {
   onSubmitShortcut?: () => void;
   /** Esc handler from parent (close) */
   onEscape?: () => void;
+  /** Show the "Reference files" section (ADR-053). Default off — the
+   *  Schedule JobModal's Task-Vorlage doesn't support attachments yet. */
+  enableReferenceFiles?: boolean;
+  /** Fired whenever the staged reference files or their shared note change.
+   *  The parent mirrors this into its own state and uploads the files once
+   *  the task has been created (they need a task_id, which doesn't exist yet). */
+  onStagedReferenceFilesChange?: (files: StagedReferenceFile[], note: string) => void;
 }
 
 export function TaskFormFields({
@@ -382,9 +399,47 @@ export function TaskFormFields({
   descriptionRef,
   onSubmitShortcut,
   onEscape,
+  enableReferenceFiles = false,
+  onStagedReferenceFilesChange,
 }: TaskFormFieldsProps) {
   const qc = useQueryClient();
   const fieldId = useId();
+
+  // ── Reference files (ADR-053) — local-only, reported upward via callback ──
+  const [stagedReferenceFiles, setStagedReferenceFiles] = useState<StagedReferenceFile[]>([]);
+  const [referenceNote, setReferenceNote] = useState("");
+
+  // Note: these read `stagedReferenceFiles`/`referenceNote` from the closure
+  // (not a setState functional updater) and call the parent callback as a
+  // plain synchronous side effect of the event handler — calling a *different*
+  // component's setState from inside a setState updater is timing-fragile
+  // (the updater can run outside the normal commit, deferring the parent
+  // update unpredictably).
+  const handleReferenceFilesPicked = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const picked = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (picked.length === 0) return;
+    const next = [
+      ...stagedReferenceFiles,
+      ...picked.map((file) => ({
+        id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+      })),
+    ];
+    setStagedReferenceFiles(next);
+    onStagedReferenceFilesChange?.(next, referenceNote);
+  }, [stagedReferenceFiles, onStagedReferenceFilesChange, referenceNote]);
+
+  const removeStagedReferenceFile = useCallback((id: string) => {
+    const next = stagedReferenceFiles.filter((f) => f.id !== id);
+    setStagedReferenceFiles(next);
+    onStagedReferenceFilesChange?.(next, referenceNote);
+  }, [stagedReferenceFiles, onStagedReferenceFilesChange, referenceNote]);
+
+  const updateReferenceNote = useCallback((note: string) => {
+    setReferenceNote(note);
+    onStagedReferenceFilesChange?.(stagedReferenceFiles, note);
+  }, [stagedReferenceFiles, onStagedReferenceFilesChange]);
 
   // Local mode toggle when parent doesn't control it
   const [localMode, setLocalMode] = useState<TaskMode>("schnell");
@@ -701,6 +756,60 @@ export function TaskFormFields({
                 <GitInfoBox gitInfo={null} isLoading={false} autoSlug={autoSlug} branchName={value.branchName} onBranchNameChange={(name) => patch({ branchName: name })} onInitRepo={() => {}} initLoading={false} adHocMode repos={repos ?? []} repoId={value.repoId} onRepoIdChange={(id) => patch({ repoId: id })} onCreateRepo={handleCreateRepo} accent={C.accent} textPrimary={C.textPrimary} textMuted={C.textMuted} textSecondary={C.textSecondary} border={C.border} deep={C.deep} warning={C.warning} />
               )}
             </div>
+
+            {/* Reference files (ADR-053) */}
+            {enableReferenceFiles && (
+              <div className="flex flex-col gap-3">
+                {sectionHead("Reference files")}
+                <label
+                  className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-[11px] cursor-pointer transition-colors self-start"
+                  style={{ border: `1px dashed ${C.border}`, color: C.textMuted }}
+                >
+                  <Paperclip size={11} />
+                  Add files
+                  <input
+                    type="file"
+                    multiple
+                    accept={REFERENCE_FILE_ACCEPT}
+                    onChange={handleReferenceFilesPicked}
+                    className="hidden"
+                    disabled={disabled}
+                  />
+                </label>
+                {stagedReferenceFiles.length > 0 && (
+                  <div className="flex flex-col gap-1.5">
+                    {stagedReferenceFiles.map((f) => (
+                      <div
+                        key={f.id}
+                        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[11px]"
+                        style={{ background: C.deep, border: `1px solid ${C.border}` }}
+                      >
+                        <span className="truncate flex-1" style={{ color: C.textPrimary }}>{f.file.name}</span>
+                        <span className="shrink-0" style={{ color: C.textMuted }}>{formatBytes(f.file.size)}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeStagedReferenceFile(f.id)}
+                          aria-label={`Remove ${f.file.name}`}
+                          className="shrink-0 cursor-pointer"
+                          style={{ color: C.textMuted }}
+                        >
+                          <X size={11} />
+                        </button>
+                      </div>
+                    ))}
+                    <textarea
+                      aria-label="Note for reference files"
+                      value={referenceNote}
+                      onChange={(e) => updateReferenceNote(e.target.value)}
+                      placeholder="Note for the agent (optional)"
+                      rows={2}
+                      className="w-full text-[11px] px-2.5 py-2 rounded-lg outline-none resize-none"
+                      style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }}
+                    />
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Zuweisung */}
             <div className="flex flex-col gap-3">

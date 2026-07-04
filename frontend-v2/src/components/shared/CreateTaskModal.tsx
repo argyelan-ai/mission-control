@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
-import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon } from "lucide-react";
+import { X, Send, Plus, Bug, Sparkles, Search as SearchIcon, AlertTriangle } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -11,6 +11,7 @@ import {
   TaskFormFields,
   EMPTY_TASK_FORM_PAYLOAD,
   type TaskFormPayload,
+  type StagedReferenceFile,
 } from "./TaskFormFields";
 import { C as MC } from "@/components/homepage/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -25,6 +26,7 @@ const C = {
   accentHover: MC.accentHover,
   info: MC.info,
   error: MC.error,
+  warning: MC.warning,
   textPrimary: MC.textPrimary,
   textMuted: MC.textMuted,
 };
@@ -60,6 +62,12 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
 
   // Single payload state — was 30+ individual useState calls before.
   const [payload, setPayload] = useState<TaskFormPayload>(EMPTY_TASK_FORM_PAYLOAD);
+
+  // Reference files (ADR-053) — staged in TaskFormFields, mirrored here so
+  // handleSubmit can upload them once the task (and its task_id) exists.
+  const [stagedReferenceFiles, setStagedReferenceFiles] = useState<StagedReferenceFile[]>([]);
+  const [referenceNote, setReferenceNote] = useState("");
+  const [referenceUploadErrors, setReferenceUploadErrors] = useState<string[]>([]);
 
   // Auto-resize description textarea on open (matches old behavior).
   useEffect(() => {
@@ -123,6 +131,9 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
 
   const resetForm = useCallback(() => {
     setPayload(EMPTY_TASK_FORM_PAYLOAD);
+    setStagedReferenceFiles([]);
+    setReferenceNote("");
+    setReferenceUploadErrors([]);
     if (descriptionRef.current) descriptionRef.current.style.height = "auto";
     setOpen(false);
   }, []);
@@ -168,10 +179,30 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
         ...(payload.publishAllowed !== null && { publish_allowed: payload.publishAllowed }),
       };
 
-      await api.tasks.create(activeBoardId, apiPayload);
+      const created = await api.tasks.create(activeBoardId, apiPayload);
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["pipeline"] });
       notify.success("Task created");
+
+      if (stagedReferenceFiles.length > 0) {
+        const failures: string[] = [];
+        for (const staged of stagedReferenceFiles) {
+          try {
+            await api.references.upload({ taskId: created.id }, staged.file, referenceNote.trim() || undefined);
+          } catch (err) {
+            const msg = err instanceof Error && err.message ? err.message : "Upload failed";
+            failures.push(`${staged.file.name}: ${msg}`);
+          }
+        }
+        qc.invalidateQueries({ queryKey: ["references", "task", created.id] });
+        if (failures.length > 0) {
+          // Task already exists — keep the modal open so the operator sees
+          // which uploads failed instead of silently closing on them.
+          setReferenceUploadErrors(failures);
+          return;
+        }
+      }
+
       resetForm();
     } catch (err) {
       const msg = err instanceof Error && err.message ? err.message : "Failed to create";
@@ -179,7 +210,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     } finally {
       setLoading(false);
     }
-  }, [activeBoardId, payload, loading, isStructured, qc, resetForm]);
+  }, [activeBoardId, payload, loading, isStructured, qc, resetForm, stagedReferenceFiles, referenceNote]);
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
@@ -274,6 +305,20 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                 </button>
               </div>
 
+              {/* Reference upload banner — task already exists at this point,
+                  so we keep the modal open instead of silently discarding it. */}
+              {referenceUploadErrors.length > 0 && (
+                <div
+                  className="flex items-start gap-2 px-5 py-2.5 text-[11px] shrink-0"
+                  style={{ background: `${C.warning}12`, borderBottom: `1px solid ${C.warning}33`, color: C.warning }}
+                >
+                  <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                  <span>
+                    Task created, but {referenceUploadErrors.length} reference upload{referenceUploadErrors.length > 1 ? "s" : ""} failed: {referenceUploadErrors.join("; ")}
+                  </span>
+                </div>
+              )}
+
               {/* Body — delegated to TaskFormFields */}
               <div className="p-5 overflow-y-auto flex-1">
                 <TaskFormFields
@@ -288,6 +333,11 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                   descriptionRef={descriptionRef}
                   onSubmitShortcut={handleSubmit}
                   onEscape={resetForm}
+                  enableReferenceFiles
+                  onStagedReferenceFilesChange={(files, note) => {
+                    setStagedReferenceFiles(files);
+                    setReferenceNote(note);
+                  }}
                 />
               </div>
 

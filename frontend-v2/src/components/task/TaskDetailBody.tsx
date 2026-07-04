@@ -37,6 +37,7 @@ import { TaskHistory } from "./TaskHistory";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
 import { GitPanel } from "./GitPanel";
+import { TaskReferences } from "./TaskReferences";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
@@ -801,6 +802,12 @@ export function TaskDetailBody({
             </AnimatePresence>
           </Section>
         )}
+
+        {/* References (ADR-053) */}
+        <Section>
+          <SectionLabel>References</SectionLabel>
+          <TaskReferences taskId={task.id} />
+        </Section>
 
         {/* Git */}
         {gitInfo?.branch && (

@@ -306,6 +306,26 @@ export interface DeliverableDirectory {
   entries: DeliverableDirectoryEntry[];
 }
 
+// ── Reference Files (ADR-053) ────────────────────────────────────────────────
+// Operator-uploaded example/asset files for tasks & projects. Agents read
+// them directly — `abs_path` is baked into the dispatch directive.
+
+export interface ReferenceFile {
+  id: string;
+  board_id: string;
+  task_id: string | null;
+  project_id: string | null;
+  rel_path: string;
+  original_name: string;
+  mime: string;
+  size: number;
+  note: string | null;
+  created_at: string;
+  abs_path: string;
+  /** Only set by GET /references?task_id=X — true when inherited from the task's project. */
+  inherited?: boolean;
+}
+
 // ── Files (global filesystem browser, /api/v1/files/*) ─────────────────────
 // Backend contract: deliverables, workspaces, vault, etc. as browsable roots.
 // `native_open` (per root) + `native_open_available` (per response/meta) gate

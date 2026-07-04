@@ -76,6 +76,7 @@ import type {
   Repo,
   RepoImportCandidate,
   RepoUpdate,
+  ReferenceFile,
   Host,
   HostCreate,
   HostMetrics,
@@ -760,6 +761,57 @@ export const api = {
       request<import("./types").TaskTranscriptResponse>(
         `/api/v1/tasks/${taskId}/transcript${limit ? `?limit=${limit}` : ""}`
       ),
+  },
+
+  // ── Reference Files (ADR-053) ────────────────────────────────────────────────
+  // Operator-uploaded example/asset files for tasks & projects. Agents read
+  // them directly — their paths flow into the dispatch directive automatically.
+  references: {
+    /** Upload bypasses the json-encoding default of `request` — FormData must
+     *  set its own multipart boundary in the Content-Type header (same
+     *  pattern as knowledge.uploadAttachment). */
+    upload: async (
+      target: { taskId: string } | { projectId: string },
+      file: File,
+      note?: string,
+    ): Promise<ReferenceFile> => {
+      const fd = new FormData();
+      fd.append("file", file);
+      if ("taskId" in target) fd.append("task_id", target.taskId);
+      else fd.append("project_id", target.projectId);
+      if (note) fd.append("note", note);
+      const res = await fetch(`${BASE_URL}/api/v1/references/upload`, {
+        method: "POST",
+        body: fd,
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+      return res.json();
+    },
+    list: (target: { taskId: string } | { projectId: string }) => {
+      const qs = new URLSearchParams(
+        "taskId" in target ? { task_id: target.taskId } : { project_id: target.projectId },
+      ).toString();
+      return request<ReferenceFile[]>(`/api/v1/references?${qs}`);
+    },
+    downloadUrl: (id: string): string => `${BASE_URL}/api/v1/references/${id}/download`,
+    /** The download route requires a Bearer header, which `<a href>` can't
+     *  carry — fetch as blob and wrap in an object URL (same gotcha as
+     *  knowledge.getAttachmentUrl / files.fetchBlob). */
+    fetchBlob: async (id: string): Promise<string> => {
+      const res = await fetch(api.references.downloadUrl(id), {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => res.statusText);
+        throw new Error(`API ${res.status}: ${text}`);
+      }
+      return URL.createObjectURL(await res.blob());
+    },
+    remove: (id: string) => request<void>(`/api/v1/references/${id}`, { method: "DELETE" }),
   },
 
   // ── Agents ──────────────────────────────────────────────────────────────────
