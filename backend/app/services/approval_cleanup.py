@@ -25,6 +25,10 @@ logger = logging.getLogger("mc.approval_cleanup")
 # Key: action_type -> Value: set of task statuses for which the approval is STILL valid
 APPROVAL_VALID_STATES: dict[str, set[str]] = {
     "blocker_decision": {"blocked"},
+    # Klaerungsfrage: Task verlaesst blocked (z.B. Lead beantwortet + entblockt)
+    # → die Frage ist beantwortet oder obsolet, das Approval darf nicht als
+    # Zombie in der Operator-Inbox haengen bleiben.
+    "clarification_question": {"blocked"},
     "spawn_timeout": {"inbox"},
     "dispatch_escalation": {"inbox"},
 }

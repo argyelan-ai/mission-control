@@ -1543,8 +1543,13 @@ async def agent_update_task(
         # ── Blocker-approval guard (PRE-COMMIT) ─────────────────
         # Must come BEFORE setattr/commit, otherwise the DB state drifts
         # from the API response.
+        # Gilt fuer JEDEN Weg aus `blocked` heraus (in_progress UND inbox —
+        # die inbox-Luecke war ein bekannter Gate-Bypass). Ausnahme: der
+        # Board-Lead darf entblocken; sein Unblock supersedet das Approval
+        # (Lead-first-Triage, Fix A) — der Operator sieht die Aufloesung als
+        # Event im Feed statt eines offenen Approvals.
         new_status_check = updates["status"]
-        if new_status_check == "in_progress" and task.status == "blocked":
+        if task.status == "blocked" and new_status_check in ("in_progress", "inbox"):
             pending_approval = (await session.exec(
                 select(Approval).where(
                     Approval.task_id == task.id,
@@ -1553,10 +1558,30 @@ async def agent_update_task(
                 )
             )).first()
             if pending_approval:
-                raise HTTPException(
-                    status_code=403,
-                    detail="Task hat ein offenes Blocker-Approval. Warte auf die Entscheidung des Operators.",
-                )
+                if agent.is_board_lead:
+                    pending_approval.status = "superseded"
+                    pending_approval.resolved_at = utcnow()
+                    pending_approval.resolver_note = f"Vom Board-Lead {agent.name} geloest"
+                    session.add(pending_approval)
+                    await session.commit()
+                    await emit_event(
+                        session,
+                        "blocker.lead_resolved",
+                        f"Lead {agent.name} hat den Blocker bei \"{task.title}\" geloest",
+                        board_id=board_id,
+                        task_id=task.id,
+                        agent_id=agent.id,
+                        severity="info",
+                        detail={"approval_id": str(pending_approval.id)},
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=403,
+                        detail=(
+                            "Task hat ein offenes Blocker-Approval. Nur Board-Lead "
+                            "oder Operator koennen entblocken."
+                        ),
+                    )
 
     # Soft validation: warn when description contains no markdown signal
     _desc_update = updates.get("description")
@@ -1842,6 +1867,11 @@ async def agent_update_task(
     if "status" in updates:
         from app.services.approval_cleanup import cleanup_obsolete_approvals
         await cleanup_obsolete_approvals(session, task.id, updates["status"], board_id)
+        # Lead-Triage-Payload aufraeumen, sobald der Task `blocked` verlaesst —
+        # sonst wuerde ein spaeterer erneuter Blocker das alte Payload eskalieren.
+        if old_status == "blocked" and updates["status"] != "blocked":
+            from app.services.blocker_triage import clear_triage_payload
+            await clear_triage_payload(task.id)
 
     # Vertical-Hooks (z.B. News-Studio Pipeline-Stage auto-advance) — no-op
     # when no vertical is registered (stripped public release).
@@ -2124,66 +2154,76 @@ async def agent_update_task(
                     _project = await session.get(Project, task.project_id)
                     project_name = _project.name if _project else None
 
-                # 1. Create approval for the operator
-                approval = Approval(
-                    board_id=board_id,
-                    task_id=task.id,
-                    agent_id=agent.id,
-                    action_type="blocker_decision",
-                    description=f"{agent.name} ist blockiert bei \"{task.title}\"",
-                    payload={
-                        "blocked_agent_id": str(agent.id),
-                        "blocked_agent_name": agent.name,
-                        "task_title": task.title,
-                        "project_name": project_name,
-                        "blocker_type": blocker_type,
-                        "description": blocker_description,
-                        "question": blocker_question,
-                        "blocker_comment": blocker_text,  # Freitext-Fallback
-                    },
-                    expires_at=utcnow() + timedelta(hours=24),
+                blocker_payload = {
+                    "blocked_agent_id": str(agent.id),
+                    "blocked_agent_name": agent.name,
+                    "task_title": task.title,
+                    "project_name": project_name,
+                    "blocker_type": blocker_type,
+                    "description": blocker_description,
+                    "question": blocker_question,
+                    "blocker_comment": blocker_text,  # Freitext-Fallback
+                }
+
+                # ── Lead-first-Triage (Fix A) ──────────────────────
+                # Eskalations-Leiter: technische Blocker gehen zuerst an den
+                # Board-Lead (Triage-Fenster), nur echte Operator-Entscheide
+                # (decision_needed/permission_needed) sofort an den Operator.
+                # Der Watchdog eskaliert nach Fristablauf automatisch.
+                from app.services.blocker_triage import (
+                    OPERATOR_ONLY_BLOCKER_TYPES,
+                    escalate_blocker_to_operator,
+                    start_lead_triage,
                 )
-                session.add(approval)
-                await session.commit()
+                from app.models.board import Board as _Board
 
-                # 2. Telegram Approval Buttons
-                try:
-                    from app.services.telegram_bot import telegram_bot
-                    await telegram_bot.send_approval_telegram(
-                        approval.id, agent.name, task.title, blocker_text,
-                    )
-                except Exception as e:
-                    logger.warning("Telegram approval failed: %s", e)
-
-                # 3. Activity Event (severity=warning → Inbox-Badge)
-                await emit_event(
-                    session,
-                    "approval.created",
-                    f"Blocker-Approval: {agent.name} blockiert bei \"{task.title}\"",
-                    board_id=board_id,
-                    task_id=task.id,
-                    agent_id=agent.id,
-                    severity="warning",
+                _board_row = await session.get(_Board, board_id)
+                triage_minutes = (
+                    _board_row.blocker_triage_minutes if _board_row is not None else 15
                 )
-
-                # 4. Inform the lead via TaskComment (Phase 29 — gateway removed).
-                # the lead's poll.sh picks up the message on the next tick.
                 lead = await find_agent_by_role(session, board_id, AgentRole.LEAD)
-                if lead and lead.id != agent.id:
-                    msg = (
-                        f"BLOCKER: {agent.name} bei \"{task.title}\"\n\n"
-                        f"{blocker_text}\n\n"
-                        f"Task-ID: {task.id}\n\n"
-                        f"Ein Approval wurde fuer den Operator erstellt. Der Operator entscheidet ueber die Loesung.\n"
-                        f"Du kannst hilfreiche Infos als Kommentar posten."
+                can_triage = (
+                    triage_minutes > 0
+                    and blocker_type not in OPERATOR_ONLY_BLOCKER_TYPES
+                    and lead is not None
+                    and lead.id != agent.id
+                )
+
+                if can_triage:
+                    await start_lead_triage(
+                        session,
+                        task=task,
+                        agent=agent,
+                        lead=lead,
+                        blocker_payload=blocker_payload,
+                        triage_minutes=triage_minutes,
                     )
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        content=msg,
-                        comment_type="blocker_lead_notify",
-                    ))
-                    await session.commit()
+                else:
+                    await escalate_blocker_to_operator(
+                        session,
+                        task=task,
+                        reason="direct",
+                        blocker_payload=blocker_payload,
+                        lead_context=False,
+                    )
+                    # Lead-FYI wie bisher — er darf Infos beisteuern, auch
+                    # wenn der Entscheid beim Operator liegt.
+                    if lead and lead.id != agent.id:
+                        msg = (
+                            f"BLOCKER: {agent.name} bei \"{task.title}\"\n\n"
+                            f"{blocker_text}\n\n"
+                            f"Task-ID: {task.id}\n\n"
+                            f"Ein Approval wurde fuer den Operator erstellt "
+                            f"(Typ: {blocker_type} — Operator-Entscheid).\n"
+                            f"Du kannst hilfreiche Infos als Kommentar posten."
+                        )
+                        session.add(TaskComment(
+                            task_id=task.id,
+                            author_type="system",
+                            content=msg,
+                            comment_type="blocker_lead_notify",
+                        ))
+                        await session.commit()
 
         # Agent entblockt Task → assigned Agent benachrichtigen (TaskComment)
         if new_status == "in_progress" and old_status == "blocked":

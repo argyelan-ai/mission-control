@@ -682,8 +682,17 @@ class TaskMonitorMixin:
     # via dispatch.auto_dispatch_task (runtime-aware).
 
     async def _check_blocked_tasks(self, session: AsyncSession) -> None:
-        """Safety net: check blocked tasks. If an approval exists → remind operator, otherwise lead."""
+        """Blocked-Task-Leiter (Fix A):
+
+        1. Callback-Waits (blocked_by_task_id) sind Orchestrierung — skip.
+        2. Pending Approval vorhanden → Operator ist dran; nur Reminder-Event.
+        3. Kein Approval → Lead-Triage laeuft. Nach Ablauf des Board-
+           Triage-Fensters eskaliert der Watchdog an den Operator
+           (blocker_decision-Approval + Telegram).
+        """
         from app.models.approval import Approval
+        from app.models.board import Board
+        from app.services.blocker_triage import escalate_blocker_to_operator
 
         result = await session.exec(
             select(Task).where(Task.status == "blocked")
@@ -699,76 +708,72 @@ class TaskMonitorMixin:
         for task in blocked_tasks:
             if not task.board_id or not task.updated_at:
                 continue
+            # Orchestrierungs-Wait: Callback-Resume kuemmert sich, kein Fall
+            # fuer Lead oder Operator.
+            if task.blocked_by_task_id is not None:
+                continue
 
-            # Grace period: 30 minutes
             age_minutes = (now - task.updated_at).total_seconds() / 60
-            if age_minutes < 30:
-                continue
 
-            # Redis dedup: only remind every 2h
-            dedup_key = f"mc:watchdog:blocked_remind:{task.id}"
-            if await redis.get(dedup_key):
-                continue
+            # Offene Approvals (Blocker ODER Klaerungsfrage) → Fall liegt
+            # bereits beim Operator; nur periodischer Reminder.
+            pending_approval = (await session.exec(
+                select(Approval).where(
+                    Approval.task_id == task.id,
+                    Approval.action_type.in_(  # type: ignore[union-attr]
+                        ("blocker_decision", "clarification_question")
+                    ),
+                    Approval.status == "pending",
+                )
+            )).first()
 
-            # Get agent name
             assigned_name = "unbekannt"
             if task.assigned_agent_id:
                 assigned_agent = await session.get(Agent, task.assigned_agent_id)
                 if assigned_agent:
                     assigned_name = assigned_agent.name
 
-            # Check whether a blocker_decision approval exists
-            pending_approval = (await session.exec(
-                select(Approval).where(
-                    Approval.task_id == task.id,
-                    Approval.action_type == "blocker_decision",
-                    Approval.status == "pending",
-                )
-            )).first()
-
             if pending_approval:
-                # Approval exists → operator sees it in the inbox, just log
+                if age_minutes < 30:
+                    continue
+                dedup_key = f"mc:watchdog:blocked_remind:{task.id}"
+                if await redis.get(dedup_key):
+                    continue
                 await redis.set(dedup_key, "1", ex=7200)  # 2h TTL
                 await emit_event(
                     session, "task.blocked_reminder",
                     f"Blocked-Reminder: '{task.title}' ({assigned_name}) — {int(age_minutes)}min — Approval pending",
                     board_id=task.board_id, task_id=task.id,
                 )
-                logger.info("Blocked reminder (approval pending) for '%s' (%dmin)", task.title, int(age_minutes))
-            else:
-                # No approval (legacy?) → remind lead via TaskComment
-                lead_result = await session.exec(
-                    select(Agent).where(
-                        Agent.board_id == task.board_id,
-                        Agent.is_board_lead == True,  # noqa: E712
-                    )
+                logger.info(
+                    "Blocked reminder (approval pending) for '%s' (%dmin)",
+                    task.title, int(age_minutes),
                 )
-                lead = lead_result.first()
-                if not lead:
-                    continue
+                continue
 
-                msg = (
-                    f"REMINDER: Task \"{task.title}\" ist seit {int(age_minutes)} Min blockiert.\n"
-                    f"Zugewiesen an: {assigned_name}\n"
-                    f"Task-ID: {task.id}\n"
-                    f"Bitte pruefen und Blocker loesen."
-                )
-                # Pattern A (29-PATTERNS.md): TaskComment notify replaces Gateway RPC.
-                session.add(TaskComment(
-                    task_id=task.id,
-                    author_type="system",
-                    content=msg,
-                    comment_type="watchdog_notify",
-                ))
-                await session.commit()
-                await redis.set(dedup_key, "1", ex=7200)  # 2h TTL
+            # Lead-Triage laeuft: eskalieren, sobald das Board-Fenster um ist.
+            # (Legacy-Bestand ohne Triage-Payload eskaliert genauso — der
+            # Kommentar-Fallback in escalate_blocker_to_operator greift.)
+            board = await session.get(Board, task.board_id)
+            triage_minutes = getattr(board, "blocker_triage_minutes", 15) if board else 15
+            if age_minutes < max(triage_minutes, 1):
+                continue
 
-                await emit_event(
-                    session, "task.blocked_reminder",
-                    f"Blocked-Reminder: '{task.title}' ({assigned_name}) — {int(age_minutes)}min",
-                    board_id=task.board_id, task_id=task.id,
+            # Dedup: Eskalation nur einmal pro 2h anstossen (escalate selbst
+            # ist zusaetzlich idempotent gegen existierende pending Approvals).
+            dedup_key = f"mc:watchdog:blocker_escalated:{task.id}"
+            if await redis.get(dedup_key):
+                continue
+            await redis.set(dedup_key, "1", ex=7200)
+
+            approval = await escalate_blocker_to_operator(
+                session, task=task, reason="triage_timeout",
+            )
+            if approval:
+                logger.info(
+                    "Blocker-Triage abgelaufen (%dmin > %dmin): '%s' → Operator",
+                    int(age_minutes), triage_minutes, task.title,
                 )
-                logger.info("Blocked reminder posted for '%s' (%dmin)", task.title, int(age_minutes))
 
     async def _check_dependency_zombies(self, session: AsyncSession) -> None:
         """Find tasks waiting on impossible dependencies (zombie prevention).

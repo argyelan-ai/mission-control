@@ -55,6 +55,10 @@ class Board(SQLModel, table=True):
     require_review_before_done: bool = False
     only_lead_can_change_status: bool = False
     auto_dispatch_enabled: bool = False
+    # Lead-first Blocker-Triage: Minuten, die der Board-Lead Zeit hat, einen
+    # Blocker selbst zu loesen, bevor der Operator ein Approval bekommt.
+    # 0 = Triage aus (jeder Blocker geht direkt an den Operator).
+    blocker_triage_minutes: int = Field(default=15, nullable=False)
 
     # Goal tracking
     objective: str | None = None
