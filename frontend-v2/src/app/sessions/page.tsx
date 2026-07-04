@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import {
   MonitorPlay,
@@ -18,6 +17,7 @@ import {
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME } from "@/lib/colors";
+import { TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -228,8 +228,10 @@ function TerminalPanel({ agent }: { agent: AgentWithState }) {
 
 function TerminalPanelRunning({ agent }: { agent: Agent }) {
   const termRef = useRef<HTMLDivElement>(null);
+  const outerRef = useRef<HTMLDivElement>(null);
   const [term, setTerm] = useState<XTerm | null>(null);
   const [viewMode, setViewMode] = useState<"terminal" | "structured">("terminal");
+  const [termView, setTermView] = useState<TermViewMode>("fit");
 
   useEffect(() => {
     setViewMode("terminal");
@@ -246,25 +248,22 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
       fontSize: 14,
       lineHeight: 1.4,
     });
-    const fit = new FitAddon();
-    t.loadAddon(fit);
     t.open(termRef.current);
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      fit.fit();
-      t.focus();
-    }));
+    // Canonical size for every viewer — the shared tmux window must not be
+    // reshaped per browser/phone (see lib/terminalScale.ts).
+    t.resize(TERM_COLS, TERM_ROWS);
+    requestAnimationFrame(() => requestAnimationFrame(() => t.focus()));
 
     const parent = termRef.current.parentElement!;
-    const ro = new ResizeObserver(() => fit.fit());
-    ro.observe(parent);
     const onContainerClick = () => t.focus();
     parent.addEventListener("click", onContainerClick);
 
     setTerm(t);
-    return () => { t.dispose(); ro.disconnect(); parent.removeEventListener("click", onContainerClick); };
+    return () => { t.dispose(); parent.removeEventListener("click", onContainerClick); };
   }, []);
 
   const connected = useAgentTerminal(agent, term);
+  const { scale, size } = useTerminalScale(outerRef, term, termView);
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden bg-[#0d0d0d]">
@@ -292,7 +291,26 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           mc-agent-{agent.name}
         </span>
         <div
-          className="flex items-center rounded-md overflow-hidden ml-auto"
+          className="flex items-center rounded-md overflow-hidden ml-auto mr-2"
+          style={{ border: "1px solid rgba(255,255,255,0.08)" }}
+        >
+          {(["fit", "native"] as const).map((m) => (
+            <button
+              key={m}
+              onClick={() => setTermView(m)}
+              className="px-2.5 py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+              style={{
+                background: termView === m ? C.accentSubtle : "transparent",
+                color: termView === m ? C.accent : C.textMuted,
+                borderRight: m === "fit" ? "1px solid rgba(255,255,255,0.06)" : undefined,
+              }}
+            >
+              {m === "fit" ? "Fit" : "1:1"}
+            </button>
+          ))}
+        </div>
+        <div
+          className="flex items-center rounded-md overflow-hidden"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
         >
           {(["terminal", "structured"] as const).map((mode) => (
@@ -317,7 +335,20 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           className="flex-1 min-h-0 relative"
           style={{ display: viewMode === "terminal" ? "flex" : "none" }}
         >
-          <div ref={termRef} className="absolute inset-0 p-1" />
+          <div ref={outerRef} className="absolute inset-0 overflow-auto">
+            <div
+              style={{
+                width: size ? size.w : undefined,
+                height: size ? size.h * scale : undefined,
+              }}
+            >
+              <div
+                ref={termRef}
+                className="p-1"
+                style={{ transform: `scale(${scale})`, transformOrigin: "top left" }}
+              />
+            </div>
+          </div>
         </div>
         {viewMode === "structured" && (
           <StructuredSessionView selected={{ agent_id: agent.id, agent_name: agent.name, agent_slug: agent.name, session: agent.name, task_id: agent.id, elapsed_seconds: 0, permanent: true, shell: false }} />
