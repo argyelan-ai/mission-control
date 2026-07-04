@@ -44,7 +44,7 @@ const RUNTIME_TYPE_COLOR: Record<string, string> = {
   cloud: C.textDim,          // #6E6E6E — external, neutral
   // Phase 24 (Hermes) — mirror of RuntimePill.RUNTIME_TYPE_COLOR. Single-SoT
   // extraction is deferred to v0.9 per 24-CONTEXT.md L-F.
-  hermes: "#14B8A6",         // distinct teal variant — intentional, not MC-palette
+  hermes: C.accentHover, // hermes — helle Teal-Stufe
 };
 
 function MiniRuntimeChip({ runtime }: { runtime: RuntimeSwitchSummary }) {

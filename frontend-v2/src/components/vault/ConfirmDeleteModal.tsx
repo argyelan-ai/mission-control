@@ -19,6 +19,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { STATUS_TEXT } from "@/lib/colors";
 
 interface ConfirmDeleteModalProps {
   /** Vault-relative path of the note. When null, the modal is closed. */
@@ -117,7 +118,7 @@ export function ConfirmDeleteModal({
                     border: "1px solid rgba(239,68,68,0.25)",
                   }}
                 >
-                  <Trash2 size={16} style={{ color: "#fca5a5" }} />
+                  <Trash2 size={16} style={{ color: STATUS_TEXT.error }} />
                 </div>
                 <div className="min-w-0">
                   <div
@@ -210,14 +211,14 @@ export function ConfirmDeleteModal({
                 >
                   <AlertTriangle
                     size={14}
-                    style={{ color: "#fbbf24", marginTop: "1px", flexShrink: 0 }}
+                    style={{ color: STATUS_TEXT.warning, marginTop: "1px", flexShrink: 0 }}
                   />
                   <div className="min-w-0">
                     <div
                       style={{
                         fontSize: "12.5px",
                         fontWeight: 600,
-                        color: "#fbbf24",
+                        color: STATUS_TEXT.warning,
                         marginBottom: "3px",
                       }}
                     >
@@ -280,7 +281,7 @@ export function ConfirmDeleteModal({
                     background: "rgba(239,68,68,0.08)",
                     border: "1px solid rgba(239,68,68,0.25)",
                     fontSize: "12px",
-                    color: "#fca5a5",
+                    color: STATUS_TEXT.error,
                   }}
                 >
                   Löschen fehlgeschlagen:{" "}
@@ -323,7 +324,7 @@ export function ConfirmDeleteModal({
                     ? "rgba(239,68,68,0.18)"
                     : "rgba(239,68,68,0.14)",
                   border: "1px solid rgba(239,68,68,0.45)",
-                  color: "#fca5a5",
+                  color: STATUS_TEXT.error,
                   cursor: deleteMutation.isPending ? "default" : "pointer",
                 }}
               >
@@ -331,7 +332,7 @@ export function ConfirmDeleteModal({
                   <>
                     <span
                       className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
-                      style={{ borderColor: "#fca5a5", borderTopColor: "transparent" }}
+                      style={{ borderColor: STATUS_TEXT.error, borderTopColor: "transparent" }}
                     />
                     Löschen…
                   </>

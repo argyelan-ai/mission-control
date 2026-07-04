@@ -78,9 +78,9 @@ const RUN_STATUS_META: Record<
   },
   paused: {
     label: "Paused",
-    text: "#F59E0B",
-    border: "rgba(245,158,11,0.35)",
-    bg: "rgba(245,158,11,0.1)",
+    text: C.warning,
+    border: "rgba(184,135,10,0.35)",
+    bg: "rgba(184,135,10,0.1)",
   },
   completed: {
     label: "Completed",
@@ -90,9 +90,9 @@ const RUN_STATUS_META: Record<
   },
   partial: {
     label: "Partial",
-    text: "#F59E0B",
-    border: "rgba(245,158,11,0.35)",
-    bg: "rgba(245,158,11,0.1)",
+    text: C.warning,
+    border: "rgba(184,135,10,0.35)",
+    bg: "rgba(184,135,10,0.1)",
   },
   failed: {
     label: "Failed",
@@ -138,9 +138,9 @@ const STEP_STATUS_META: Record<
   },
   skipped: {
     label: "Skipped",
-    text: "#F59E0B",
-    border: "rgba(245,158,11,0.35)",
-    bg: "rgba(245,158,11,0.1)",
+    text: C.warning,
+    border: "rgba(184,135,10,0.35)",
+    bg: "rgba(184,135,10,0.1)",
   },
   failed: {
     label: "Failed",
@@ -1385,9 +1385,9 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                 <span
                   className="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium"
                   style={{
-                    color: "#F59E0B",
-                    border: "1px solid rgba(245,158,11,0.28)",
-                    backgroundColor: "rgba(245,158,11,0.1)",
+                    color: C.warning,
+                    border: "1px solid rgba(184,135,10,0.28)",
+                    backgroundColor: "rgba(184,135,10,0.1)",
                   }}
                 >
                   Unsaved
@@ -3445,9 +3445,9 @@ export default function WorkflowDetailClient({ workflowId }: { workflowId: strin
                           disabled={pauseMutation.isPending}
                           className="inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm"
                           style={{
-                            color: "#F59E0B",
-                            backgroundColor: "rgba(245,158,11,0.1)",
-                            border: "1px solid rgba(245,158,11,0.22)",
+                            color: C.warning,
+                            backgroundColor: "rgba(184,135,10,0.1)",
+                            border: "1px solid rgba(184,135,10,0.22)",
                           }}
                         >
                           <Pause size={14} />

@@ -22,7 +22,7 @@ export const metadata: Metadata = {
     title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
   },
   other: {
-    "theme-color": "#020203",
+    "theme-color": "#050505", // C.bgDeep
   },
 };
 

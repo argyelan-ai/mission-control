@@ -19,7 +19,7 @@ import { PluginsShellTab } from "@/components/plugins/PluginsShellTab";
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { MCPAddServerModal } from "@/components/mcp/MCPAddServerModal";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 
 const SK = {
   bg: "rgba(255,255,255,0.03)",
@@ -31,10 +31,10 @@ type SkillsListResponse = { skills?: LocalSkill[]; total?: number };
 
 const CATEGORY_META: Record<string, { icon: React.ElementType; color: string }> = {
   "MC Custom":  { icon: Zap,       color: C.accent },
-  "Git":        { icon: GitBranch, color: "#F59E0B" },
+  "Git":        { icon: GitBranch, color: C.warning },
   "Database":   { icon: Database,  color: C.info },
-  "Web":        { icon: Globe,     color: "#00CC88" },
-  "Coding":     { icon: Code2,     color: "#F97316" },
+  "Web":        { icon: Globe,     color: C.online },
+  "Coding":     { icon: Code2,     color: STATUS_TEXT.warning },
   "AI":         { icon: Cpu,       color: C.accent },
   "Content":    { icon: FileText,  color: C.info },
   "System":     { icon: Box,       color: C.textSecondary },

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Search, Sparkles, Loader2, X } from "lucide-react";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { LAYER_COLORS } from "@/components/memory/graphConfig";
 
 /**
@@ -127,7 +127,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             animate={{ opacity: 1, height: "auto" }}
             exit={{ opacity: 0, height: 0 }}
             className="mt-2 px-4 py-2 text-xs rounded-lg"
-            style={{ background: "rgba(239,68,68,0.1)", color: "#FCA5A5" }}
+            style={{ background: "rgba(194,56,56,0.12)", color: STATUS_TEXT.error }}
           >
             {error}
           </motion.div>
@@ -144,7 +144,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
               <span className="text-xs text-white/40">
                 {totalHits} Treffer fuer &ldquo;{result.query}&rdquo;
                 {result.fallback && (
-                  <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(245,158,11,0.15)", color: "#FCD34D" }}>
+                  <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
                     keyword fallback
                   </span>
                 )}
@@ -191,7 +191,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                               className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                               style={{
                                 background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "rgba(255,255,255,0.05)",
-                                color: hit.score > 0.75 ? "#4ADE80" : "#9CA3AF",
+                                color: hit.score > 0.75 ? C.online : C.textSecondary,
                               }}
                             >
                               {hit.score.toFixed(3)}

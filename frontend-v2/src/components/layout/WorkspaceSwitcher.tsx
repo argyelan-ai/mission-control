@@ -8,15 +8,7 @@ import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { cn, slugify } from "@/lib/utils";
 import type { Board } from "@/lib/types";
-import { C } from "@/lib/colors";
-
-// Board color swatches — user-choosable board identities stored in board.color.
-// Lila/indigo/cyan from TOKEN-MAP replaced with tokens; pink/orange/blue kept
-// for palette variety (board-customization, not MC structural colors).
-const BOARD_COLORS = [
-  C.accent, C.info, C.online, C.warning, C.error,
-  "#EC4899", "#F97316", C.accentHover, "#3B82F6", C.online,
-];
+import { C, WORKSPACE_COLORS as BOARD_COLORS } from "@/lib/colors";
 
 const BOARD_ICONS = ["🚀", "⚡", "🛠", "🎯", "🧠", "💡", "🔥", "📦", "🌍", "🤖"];
 

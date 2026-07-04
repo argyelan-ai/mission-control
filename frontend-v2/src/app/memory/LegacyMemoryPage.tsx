@@ -42,7 +42,7 @@ const TYPE_CONFIG: Record<MemoryType, { color: string; label: string; pill: stri
   journal:       { color: C.online, label: "Journal",       pill: "rgba(0,204,136,0.10)" },
   knowledge:     { color: _C.textSecondary, label: "Knowledge",    pill: `${_C.textSecondary}1F` },
   weekly_review: { color: _C.textSecondary, label: "Weekly",       pill: `${_C.textSecondary}1F` },
-  research:      { color: "#5E9EF7", label: "Research",     pill: "rgba(94,158,247,0.12)" },
+  research:      { color: STATUS_TEXT.info, label: "Research",     pill: "rgba(46,111,216,0.12)" },
   insight:       { color: C.online, label: "Insight",       pill: "rgba(0,204,136,0.10)" },
 };
 

@@ -165,42 +165,6 @@ body {
 }
 
 /* ============================================================
-   Glass Card
-   ============================================================ */
-
-.glass-card {
-  position: relative;
-  background: rgba(255, 255, 255, 0.03);
-  backdrop-filter: blur(var(--blur-glass));
-  -webkit-backdrop-filter: blur(var(--blur-glass));
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-}
-
-.glass-card::before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.08) 30%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.08) 70%, transparent);
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  pointer-events: none;
-}
-
-.glass-card-hover {
-  transition: background var(--duration-normal) var(--ease-spring), border-color var(--duration-normal) var(--ease-spring), box-shadow var(--duration-normal) var(--ease-spring);
-}
-
-.glass-card-hover:hover {
-  background: rgba(255, 255, 255, 0.05);
-  border-color: var(--color-border-strong);
-  box-shadow: var(--shadow-elevated);
-}
-
-/* ============================================================
    Keyframe Animations
    ============================================================ */
 

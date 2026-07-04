@@ -99,7 +99,7 @@ export function EpisodicTimeline({
                   {/* Dot */}
                   <div
                     className="absolute -left-7 top-4 w-2.5 h-2.5 rounded-full border-2"
-                    style={{ background: color, borderColor: "#0A0A0A" }}
+                    style={{ background: color, borderColor: C.bgBase }}
                   />
 
                   {/* Card */}

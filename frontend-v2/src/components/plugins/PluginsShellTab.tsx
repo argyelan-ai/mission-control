@@ -6,7 +6,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
 import "@xterm/xterm/css/xterm.css";
 
 export function PluginsShellTab() {
@@ -70,21 +70,7 @@ export function PluginsShellTab() {
     if (!termRef.current || termInstance.current) return;
 
     const term = new XTerm({
-      theme: {
-        background: "#0d0d0d",
-        foreground: "#e5e5e5",
-        cursor: C.accent,
-        cursorAccent: "#0d0d0d",
-        selectionBackground: `${C.accent}4D`,
-        black: "#1a1a1a",
-        green: C.online,
-        red: C.error,
-        yellow: C.warning,
-        blue: C.info,
-        magenta: C.accent,
-        cyan: "#22D3EE",
-        white: "#e5e5e5",
-      },
+      theme: XTERM_THEME,
       scrollback: 5000,
       convertEol: true,
       fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
@@ -243,7 +229,7 @@ export function PluginsShellTab() {
       <div
         className="rounded-xl overflow-hidden flex-1"
         style={{
-          backgroundColor: "#0d0d0d",
+          backgroundColor: XTERM_THEME.background,
           border: "1px solid rgba(255,255,255,0.06)",
           height: "calc(100dvh - 240px)",
           minHeight: "300px",

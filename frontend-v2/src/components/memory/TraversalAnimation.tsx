@@ -5,7 +5,7 @@
  *
  * When `fromPath` and `toPath` are both set:
  *   1. Immediately notifies the parent to set `traversalEdge` on MemoryGraph2D
- *      → the edge glows brand-purple (handled via prop, Option A).
+ *      → the edge glows accent-teal (handled via prop, Option A).
  *   2. After 200 ms: calls graphRef.current.zoomToNodes([toPath]) — camera flies
  *      to the target node (1.2 s spring).
  *   3. After 1500 ms: calls onComplete() — parent clears traversalEdge + updates
@@ -54,7 +54,7 @@ export function TraversalAnimation({
   useEffect(() => {
     if (!fromPath || !toPath) return;
 
-    // Step 1 — immediately light up the edge (brand-purple glow via prop).
+    // Step 1 — immediately light up the edge (accent-teal glow via prop).
     onTraversalEdge({ source: fromPath, target: toPath });
 
     // Step 2 — after short delay, fly camera to the target node.

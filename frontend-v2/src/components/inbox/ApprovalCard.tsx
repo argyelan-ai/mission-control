@@ -91,7 +91,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
   const isBlocker = approval.action_type === "blocker_decision";
   const typeConfig = APPROVAL_TYPE_CONFIG[approval.action_type];
   const label = typeConfig?.label ?? approval.action_type;
-  const badgeColor = typeConfig?.color ?? "#5A5E66";
+  const badgeColor = typeConfig?.color ?? C.textDim;
   const BadgeIcon = typeConfig?.icon ?? AlertTriangle;
 
   return (
@@ -122,7 +122,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
               {approval.autonomy_level && (
                 <Pill
-                  color={AUTONOMY_COLORS[approval.autonomy_level] ?? "#5A5E66"}
+                  color={AUTONOMY_COLORS[approval.autonomy_level] ?? C.textDim}
                   size="sm"
                 >
                   {approval.autonomy_level}

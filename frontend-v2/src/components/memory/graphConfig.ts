@@ -9,9 +9,9 @@ import type { VaultNoteType } from "@/lib/types";
 import { C } from "@/lib/colors";
 
 // ── Accent alias — single source for selected/hover/highlight states ──────────
-// (Was BRAND_PURPLE = "#7C3AED"; replaced with teal per Lila-Null-Regel)
+// (Was purple #7C3AED; replaced with teal per Lila-Null-Regel)
 
-export const BRAND_PURPLE = C.accent; // teal #0FA3A3 — kept name for MemoryGraph2D compat
+export const GRAPH_SELECTED = C.accent; // teal #0FA3A3
 
 // ── Memory layer color schema — consistent tokens, defined once ───────────────
 // Consumers (MemoryLayerTabs, MemoryQueryBar, etc.) import from here.

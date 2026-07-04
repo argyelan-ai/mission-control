@@ -96,7 +96,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
 
               {approval.autonomy_level && (
                 <Pill
-                  color={AUTONOMY_COLORS[approval.autonomy_level] ?? "#5A5E66"}
+                  color={AUTONOMY_COLORS[approval.autonomy_level] ?? C.textDim}
                   size="sm"
                 >
                   {approval.autonomy_level}

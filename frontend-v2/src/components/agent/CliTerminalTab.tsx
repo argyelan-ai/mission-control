@@ -9,7 +9,7 @@ import "@xterm/xterm/css/xterm.css";
 import { Loader2, Square, Send, MonitorOff, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, XTERM_THEME } from "@/lib/colors";
 
 interface CliSession {
   task_id: string;
@@ -207,23 +207,7 @@ function TerminalPanel({
     if (!termRef.current) return;
 
     const t = new Terminal({
-      theme: {
-        background: "#0d0d0d",
-        foreground: "#e5e5e5",
-        cursor: C.accent,
-        black: "#1a1a1a",
-        brightBlack: "#444444",
-        white: "#e5e5e5",
-        brightWhite: "#ffffff",
-        blue: "#60A5FA",
-        brightBlue: "#93C5FD",
-        green: "#00CC88",
-        brightGreen: "#34D399",
-        red: "#EF4444",
-        yellow: "#F59E0B",
-        magenta: "#A855F7",
-        cyan: "#06B6D4",
-      },
+      theme: XTERM_THEME,
       scrollback: 5000,
       convertEol: true,
       fontFamily: '"JetBrains Mono", "Fira Code", monospace',

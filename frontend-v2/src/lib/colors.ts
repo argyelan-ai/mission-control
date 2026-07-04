@@ -125,6 +125,41 @@ export const BRAND: Record<string, string> = {
   env: "#ECD53F",
 };
 
+// ── Terminal (xterm.js) theme — „Der Leitstand" ANSI set ────────────────────
+// Shared by the Sessions page, Agent CLI tab and Plugins shell. ANSI colors
+// stay distinguishable (terminal content fidelity) but desaturated to match
+// the Leitstand palette — and magenta is magenta, not the banned AI-violet.
+export const XTERM_THEME = {
+  background: "#0D0D0D",
+  foreground: "#E5E5E5",
+  cursor: C.accent,
+  cursorAccent: "#0D0D0D",
+  black: "#1A1A1A",
+  brightBlack: "#444444",
+  red: "#D05F5F",
+  brightRed: "#E08080",
+  green: "#3FA96C",
+  brightGreen: "#5FC98C",
+  yellow: "#C9A227",
+  brightYellow: "#E0BE55",
+  blue: "#5A8CE0",
+  brightBlue: "#88AEE8",
+  magenta: "#C06BB0",
+  brightMagenta: "#D68CC8",
+  cyan: "#14C4C4",
+  brightCyan: "#4ED9D9",
+  white: "#E5E5E5",
+  brightWhite: "#FFFFFF",
+} as const;
+
+// ── Workspace identity colors — user-choosable board identities (board.color).
+// Deliberate small palette for variety beyond the app's structural tokens;
+// pink/orange/blue are intentional extras, not structural (no purple).
+export const WORKSPACE_COLORS = [
+  C.accent, C.info, C.online, C.warning, C.error,
+  "#EC4899", "#F97316", C.accentHover, "#3B82F6", C.online,
+];
+
 // ── Animation ────────────────────────────────────────────────────────────────
 
 export const sectionVariants = {

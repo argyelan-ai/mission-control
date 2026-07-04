@@ -339,7 +339,7 @@ export function VaultGraphPage({
     ? "relative flex h-full w-full overflow-hidden rounded-2xl"
     : "relative flex h-[calc(100dvh-4rem)] w-full overflow-hidden rounded-2xl";
 
-  // Glass-panel surface — translucent dark with a subtle violet halo at top.
+  // Glass-panel surface — translucent dark, no accent halo.
   // Operator feedback: solid var(--color-bg-base) was "extremely dark and
   // hurts the eye". Now the AppShell deep tone shows through, the panel reads as
   // a lit surface instead of a black brick.

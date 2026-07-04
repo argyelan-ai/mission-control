@@ -436,7 +436,7 @@ function TrashRow({
           }
           className="rounded-md p-2 transition-colors"
           style={{
-            color: restorable ? "#34d399" : "rgba(255,255,255,0.18)",
+            color: restorable ? C.online : "rgba(255,255,255,0.18)",
             background: "transparent",
             border: "1px solid",
             borderColor: restorable ? "rgba(52,211,153,0.25)" : "rgba(255,255,255,0.04)",
@@ -456,7 +456,7 @@ function TrashRow({
           {isRestoring ? (
             <span
               className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
-              style={{ borderColor: "#34d399", borderTopColor: "transparent" }}
+              style={{ borderColor: C.online, borderTopColor: "transparent" }}
             />
           ) : (
             <RotateCcw size={13} />

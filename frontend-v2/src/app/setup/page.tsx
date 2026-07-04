@@ -94,7 +94,7 @@ export default function SetupWizardPage() {
         slug: "demo-product-launch",
         description: "Demo-Board — gefahrlos loeschbar.",
         objective: "Ship v1.0 publicly: site live, docs done, launch thread out.",
-        color: "#0FA3A3",
+        color: C.accent,
       });
       for (const [title, status, priority] of DEMO_TASKS) {
         await api.tasks.create(board.id, { title, status, priority });

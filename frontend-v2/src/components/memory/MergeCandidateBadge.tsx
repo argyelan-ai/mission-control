@@ -3,7 +3,7 @@
 /**
  * Phase 5 MSY-02 — MergeCandidateBadge.
  *
- * Small violet pill on a memory card header indicating the entry has a
+ * Small teal pill on a memory card header indicating the entry has a
  * cosine-similarity candidate (merge_candidate_id !== null). Click navigates
  * to / opens the entry's modal where the MergeResolutionPanel auto-expands
  * with the 3 user-confirm actions.

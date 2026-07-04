@@ -5,10 +5,10 @@
  *
  * Inline expansion inside MemoryModal body when the displayed entry has
  * `merge_candidate_id !== null`. Renders:
- *   - heading "Mögliches Duplikat" (light-violet)
+ *   - heading "Mögliches Duplikat" (teal)
  *   - candidate preview card (clickable navigation hint via title + content)
  *   - 3 action buttons:
- *       1. "In bestehenden zusammenführen" (primary, violet gradient)
+ *       1. "In bestehenden zusammenführen" (primary, teal gradient)
  *          → POST /knowledge/{id}/merge_into/{candidate_id}
  *          → window.confirm before destructive merge (UI-SPEC accepts for v0.5)
  *       2. "Beide behalten" (neutral ghost)
@@ -19,9 +19,9 @@
  * Motion contract — height + opacity via AnimatePresence; spring-physics
  * 300ms expand. useReducedMotion guard per the operator's Design-DNA.
  *
- * Color: violet accent reserved for the primary CTA only (per UI-SPEC
- * "Accent reserved for" #3). Surface uses violet-tinted glass (the operator's Design-DNA
- * "no purple-on-white AI gradient" — gradient lives only on dark surface).
+ * Color: teal accent reserved for the primary CTA only (per UI-SPEC
+ * "Accent reserved for" #3). Surface uses teal-tinted glass on a dark
+ * background (the operator's Design-DNA "no purple" rule).
  */
 
 import { useState } from "react";

@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
-import { C } from "@/lib/colors";
+import { C, XTERM_THEME } from "@/lib/colors";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -237,23 +237,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
   useEffect(() => {
     if (!termRef.current) return;
     const t = new XTerm({
-      theme: {
-        background: "#0d0d0d",
-        foreground: "#e5e5e5",
-        cursor: C.accent,
-        black: "#1a1a1a",
-        brightBlack: "#444444",
-        white: "#e5e5e5",
-        brightWhite: "#ffffff",
-        blue: "#60A5FA",
-        brightBlue: "#93C5FD",
-        green: "#00CC88",
-        brightGreen: "#34D399",
-        red: "#EF4444",
-        yellow: "#F59E0B",
-        magenta: "#A855F7",
-        cyan: "#06B6D4",
-      },
+      theme: XTERM_THEME,
       scrollback: 5000,
       cursorBlink: true,
       convertEol: true,

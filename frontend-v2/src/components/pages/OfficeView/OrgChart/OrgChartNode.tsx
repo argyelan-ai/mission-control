@@ -3,16 +3,16 @@
 import { motion } from "framer-motion";
 import { Container, HardDrive, Radio, UserRound } from "lucide-react";
 import type { OrgNode, OrgRuntime, OrgStatus } from "./types";
-import { C } from "@/lib/colors";
+import { C, STATUS as STATUS_TOKENS } from "@/lib/colors";
 
 // ── Status palette ────────────────────────────────────────────────────────
 
 const STATUS: Record<OrgStatus, { color: string; label: string; pulse: boolean }> = {
-  online:  { color: C.online,   label: "online",  pulse: false },
-  working: { color: C.accent,   label: "working", pulse: true  },
-  offline: { color: "#3A3A3A",  label: "offline", pulse: false },
-  warning: { color: C.warning,  label: "warning", pulse: true  },
-  error:   { color: C.error,    label: "error",   pulse: true  },
+  online:  { color: C.online,          label: "online",  pulse: false },
+  working: { color: C.accent,          label: "working", pulse: true  },
+  offline: { color: STATUS_TOKENS.offline, label: "offline", pulse: false },
+  warning: { color: C.warning,         label: "warning", pulse: true  },
+  error:   { color: C.error,           label: "error",   pulse: true  },
 };
 
 // ── Runtime badge config ──────────────────────────────────────────────────
@@ -180,7 +180,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               background:
                 `linear-gradient(140deg, ${C.accent} 0%, ${C.accentHover} 100%)`,
               boxShadow: "0 8px 22px -6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.18)",
-              color: "#fafafa",
+              color: C.textPrimary,
             }}
           >
             <Icon size={28} strokeWidth={2} />

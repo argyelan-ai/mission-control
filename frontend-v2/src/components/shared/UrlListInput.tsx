@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Plus, X } from "lucide-react";
+import { C } from "@/lib/colors";
 
 interface UrlListInputProps {
   value: string[];
@@ -17,11 +18,11 @@ interface UrlListInputProps {
 export function UrlListInput({
   value,
   onChange,
-  textPrimary = "#EDEDEF",
-  textMuted = "#888888",
+  textPrimary = C.textPrimary,
+  textMuted = C.textMuted,
   border = "rgba(255,255,255,0.06)",
-  deep = "#020203",
-  accent = "#0FA3A3",
+  deep = C.bgDeep,
+  accent = C.accent,
 }: UrlListInputProps) {
   const [input, setInput] = useState("");
 

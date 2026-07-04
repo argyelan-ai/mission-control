@@ -113,7 +113,7 @@ export function DeleteFilesDialog({
           onClick={() => mutation.mutate()}
           disabled={mutation.isPending}
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-opacity cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
-          style={{ background: C.error, color: "#FFFFFF" }}
+          style={{ background: C.error, color: C.textPrimary }}
         >
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />
