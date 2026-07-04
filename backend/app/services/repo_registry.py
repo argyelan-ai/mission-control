@@ -102,3 +102,25 @@ async def get_repo_rules_for_project(
     if repo and repo.rules_md and repo.rules_md.strip():
         return repo.full_name, repo.rules_md.strip()
     return None
+
+
+async def get_repo_rules_for_task(
+    session: AsyncSession, task, project: Project | None
+) -> tuple[str, str] | None:
+    """Regel-Lookup mit Task-Vorrang (ADR-052).
+
+    Explizit am Task gewähltes Registry-Repo gewinnt; sonst gilt der
+    Projekt-Pfad (repo_id → Legacy-Name-Fallback).
+    """
+    repo_id = getattr(task, "repo_id", None)
+    if repo_id:
+        try:
+            repo = await session.get(Repo, repo_id)
+        except Exception:
+            logger.warning("Task-Repo-Regel-Lookup fehlgeschlagen", exc_info=True)
+            repo = None
+        if repo and repo.rules_md and repo.rules_md.strip():
+            return repo.full_name, repo.rules_md.strip()
+        if repo is not None:
+            return None  # explizites Repo ohne Regeln — Projekt-Regeln gelten NICHT
+    return await get_repo_rules_for_project(session, project)

@@ -32,6 +32,11 @@ class RepoCreate(BaseModel):
     full_name: str  # "owner/name" — must exist on GitHub (imported via gh view)
 
 
+class RepoNew(BaseModel):
+    name: str  # simple repo name — created under GITHUB_OWNER (private)
+    description: str | None = None
+
+
 class RepoUpdate(BaseModel):
     description: str | None = None
     rules_md: str | None = None
@@ -157,6 +162,58 @@ async def import_repo(
     except IntegrityError:
         # Concurrent double-import: the unique index on full_name wins the
         # race — surface the same 409 as the pre-check instead of a 500.
+        await session.rollback()
+        raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
+    await session.refresh(repo)
+    return _serialize(repo, [])
+
+
+@router.post("/repos/new", status_code=status.HTTP_201_CREATED)
+async def create_new_repo(
+    payload: RepoNew,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Create a brand-new private GitHub repo AND register it (ADR-052).
+
+    One canonical path for repo creation from the task mask — replaces the
+    old per-task throwaway-repo toggle."""
+    from app.services.git_service import (
+        GitService, require_github_owner, slugify_project,
+    )
+
+    slug = slugify_project(payload.name)
+    if not slug:
+        raise HTTPException(status_code=400, detail="Ungültiger Repo-Name")
+    try:
+        full_name = f"{require_github_owner()}/{slug}"
+    except RuntimeError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    existing = await get_repo_by_full_name(session, full_name)
+    if existing:
+        raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
+
+    git = GitService()
+    try:
+        clone_url = await git.create_repo(slug, payload.description or "")
+        # Initial commit — an empty repo has no main branch and would break
+        # the ensure_workspace clone/checkout path.
+        await git.init_repo_files(slug, project_type="free", readme_title=payload.name)
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=f"GitHub-Repo-Erstellung fehlgeschlagen: {e}")
+
+    repo = await upsert_repo(
+        session,
+        full_name=full_name,
+        url=clone_url,
+        description=payload.description,
+        source="mc",
+    )
+    repo.last_synced_at = utcnow()
+    try:
+        await session.commit()
+    except IntegrityError:
         await session.rollback()
         raise HTTPException(status_code=409, detail="Repo ist bereits registriert")
     await session.refresh(repo)

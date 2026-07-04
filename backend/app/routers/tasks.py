@@ -160,7 +160,8 @@ class TaskCreate(BaseModel):
     # Task model but had been dropped from TaskCreate schema, so the UI
     # was sending them and pydantic silently discarded them.
     phase_id: uuid.UUID | None = None
-    use_separate_repo: bool | None = None
+    use_separate_repo: bool | None = None  # deprecated — repo_id (ADR-052)
+    repo_id: uuid.UUID | None = None  # Registry-Repo für Ad-hoc-Tasks (ADR-052)
     # planner_mode was removed by Migration 0071; accept+ignore here so
     # older UI code doesn't trigger a 422 while the deprecation finishes.
     planner_mode: str | None = None
@@ -500,6 +501,16 @@ async def create_task(
                 status_code=422,
                 detail=f"Delegation Contract '{payload.delegation_type}' nicht erfuellt: "
                        + "; ".join(hard_errors),
+            )
+
+    # Registry-Repo-Auswahl (ADR-052): existiert + aktiv?
+    if payload.repo_id:
+        from app.models.repo import Repo
+        chosen_repo = await session.get(Repo, payload.repo_id)
+        if not chosen_repo or not chosen_repo.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail="repo_id verweist auf kein aktives Registry-Repo",
             )
 
     # `planner_mode` is accepted for UI backward compat but has no

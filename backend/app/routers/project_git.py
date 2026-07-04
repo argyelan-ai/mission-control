@@ -19,6 +19,9 @@ class ProjectGitInfoResponse(BaseModel):
     repo_name: str | None
     repo_url: str | None
     branches: list[str]
+    # ADR-052: Registry-Anbindung für die Task-Maske (Regeln-Badge + Link)
+    repo_id: str | None = None
+    has_rules: bool = False
 
 
 @router.get("/git-info", response_model=ProjectGitInfoResponse)
@@ -41,11 +44,16 @@ async def get_project_git_info(
     git = GitService()
     branches = await git.list_repo_branches(project.github_repo_name)
 
+    from app.services.repo_registry import resolve_repo_for_project
+    registry_repo = await resolve_repo_for_project(session, project)
+
     return ProjectGitInfoResponse(
         has_repo=True,
         repo_name=project.github_repo_name,
         repo_url=project.github_repo_url,
         branches=branches,
+        repo_id=str(registry_repo.id) if registry_repo else None,
+        has_rules=bool(registry_repo and (registry_repo.rules_md or "").strip()),
     )
 
 
