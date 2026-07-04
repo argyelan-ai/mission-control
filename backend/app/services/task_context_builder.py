@@ -342,6 +342,9 @@ async def _ensure_task_workspace(
     return base
 
 
+MAX_REFERENCE_FILES_IN_BRIEF = 15  # Directive-Grösse schützen (ADR-053)
+
+
 # ── DispatchContext ─────────────────────────────────────────────────────
 @dataclass
 class DispatchContext:
@@ -362,6 +365,7 @@ class DispatchContext:
     dependency_context: str = ""
     repo_rules_context: str = ""  # per-repo Arbeitsregeln (ADR-050)
     repo_rules_repo_name: str = ""
+    reference_files_context: str = ""  # hochgeladene Referenz-Dateien (ADR-053)
     project: Project | None = None
     project_tags: list[str] = field(default_factory=list)
     team_agents: list[Agent] = field(default_factory=list)
@@ -709,6 +713,35 @@ async def _load_dispatch_context(
                 ctx.repo_rules_repo_name, ctx.repo_rules_context = rules
         except Exception:
             pass
+
+    # Referenz-Dateien (ADR-053): eigene + vom Projekt geerbte. Agenten lesen
+    # die Pfade direkt (1:1 ~/.mc-Mount). Best-effort.
+    try:
+        import os as _os
+        from app.models.reference_file import ReferenceFile
+        from app.services.fs_roots import mc_home as _mc_home
+        conds = [ReferenceFile.task_id == task.id]
+        if task.project_id:
+            conds.append(ReferenceFile.project_id == task.project_id)
+        from sqlalchemy import or_ as _or
+        refs = (await session.exec(
+            select(ReferenceFile).where(_or(*conds)).order_by(ReferenceFile.created_at)
+        )).all()
+        if refs:
+            root = str(_mc_home() / "references")
+            lines = []
+            for r in refs[:MAX_REFERENCE_FILES_IN_BRIEF]:
+                origin = "project" if r.project_id else "task"
+                note = f" — {r.note}" if r.note else ""
+                lines.append(
+                    f"- `{_os.path.join(root, r.rel_path)}` "
+                    f"({r.original_name}, {origin}){note}"
+                )
+            if len(refs) > MAX_REFERENCE_FILES_IN_BRIEF:
+                lines.append(f"- … {len(refs) - MAX_REFERENCE_FILES_IN_BRIEF} weitere (siehe /files → References)")
+            ctx.reference_files_context = "\n".join(lines)
+    except Exception:
+        pass
 
     # Resolve vault credential (sequential, since credential_id is rarely set).
     # _inherited_credential_id is set by the _build_dispatch_message inheritance

@@ -1729,6 +1729,10 @@ async def delete_task(
     from app.services.loop_runner import handle_round_task_deleted
     await handle_round_task_deleted(session, task_id)
 
+    # 6h. Referenz-Dateien (ADR-053): Rows + Dateien mitlöschen.
+    from app.services.reference_cleanup import delete_references_for
+    await delete_references_for(session, task_id=task_id)
+
     # 7. Clear agent current_task_id
     agent_result = await session.exec(
         select(Agent).where(Agent.current_task_id == task_id)
