@@ -382,6 +382,11 @@ async def resolve_approval(
                 agent_id=approval.agent_id,
             )
 
+    # ── Loop-Gate (ADR-051): geteilter Pfad mit Telegram-Quick-Resolve ──
+    if approval.action_type == "loop_gate":
+        from app.services.loop_runner import apply_loop_gate_decision
+        await apply_loop_gate_decision(session, approval, payload.status)
+
     # ── Boss Spawn-Approval: approved → create + provision agent ──
     if approval.action_type == "spawn_agent":
         import re as _re
@@ -805,6 +810,12 @@ async def quick_resolve_confirm(
                     changed_by="user", reason="telegram_blocker_rejected",
                 )
                 await session.commit()
+
+    # Loop-Gate (ADR-051): geteilter Pfad mit resolve_approval — ohne diesen
+    # Aufruf wäre ein Telegram-Approve fürs Loop-Gate wirkungslos.
+    if approval.action_type == "loop_gate":
+        from app.services.loop_runner import apply_loop_gate_decision
+        await apply_loop_gate_decision(session, approval, status)
 
     # Update Telegram message
     try:

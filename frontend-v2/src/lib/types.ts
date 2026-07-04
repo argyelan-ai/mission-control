@@ -1141,6 +1141,73 @@ export interface WorkflowRunDetail {
   steps: WorkflowStepRun[];
 }
 
+// ── Loops (ADR-051) ──────────────────────────────────────────────────────────
+// Outcome-driven task loops: a runner spins up one normal parent task per
+// round, then decides continue/pause/escalate/done once the round ends.
+
+export type LoopStatus = "draft" | "running" | "waiting_gate" | "paused" | "done" | "failed";
+export type LoopBacklogSource = "markdown" | "project" | "tag" | "open_ended";
+export type LoopRoundOutcome = "done" | "failed" | null;
+
+export interface Loop {
+  id: string;
+  board_id: string;
+  project_id: string | null;
+  name: string;
+  goal: string;
+  backlog_source: LoopBacklogSource;
+  backlog_md: string | null;
+  backlog_tag: string | null;
+  round_brief: string | null;
+  human_every_n_rounds: number;
+  pause_on_failed_rounds: number;
+  escalate_on: string | null;
+  max_rounds: number | null;
+  max_duration_minutes: number | null;
+  stop_on_backlog_empty: boolean;
+  status: LoopStatus;
+  rounds_completed: number;
+  consecutive_failed_rounds: number;
+  current_round_no: number | null;
+  current_task_id: string | null;
+  last_error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LoopRound {
+  id: string;
+  round_no: number;
+  task_id: string;
+  outcome: LoopRoundOutcome;
+  report: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface LoopDetail extends Loop {
+  rounds: LoopRound[];
+}
+
+export interface LoopCreate {
+  board_id: string;
+  name: string;
+  goal: string;
+  project_id?: string;
+  backlog_source?: LoopBacklogSource;
+  backlog_md?: string;
+  round_brief?: string;
+  human_every_n_rounds?: number;
+  pause_on_failed_rounds?: number;
+  max_rounds?: number;
+  max_duration_minutes?: number;
+  stop_on_backlog_empty?: boolean;
+}
+
+export type LoopUpdate = Partial<Omit<LoopCreate, "board_id">>;
+
 // ── Henry / Playbooks ───────────────────────────────────────────────────────
 
 export interface PlaybookCatalogOption {

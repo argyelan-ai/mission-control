@@ -1713,6 +1713,11 @@ async def delete_task(
     for item in checklist_result.all():
         await session.delete(item)
 
+    # 6g. Loops (ADR-051): gelöschter Runden-Task = Fehlrunde (volle Wertung
+    # inkl. Circuit-Breaker) + FK-Referenzen lösen. Blockiert den Delete nie.
+    from app.services.loop_runner import handle_round_task_deleted
+    await handle_round_task_deleted(session, task_id)
+
     # 7. Clear agent current_task_id
     agent_result = await session.exec(
         select(Agent).where(Agent.current_task_id == task_id)

@@ -796,6 +796,11 @@ async def agent_delete_task(
         ag.current_task_id = None
         session.add(ag)
 
+    # Loops (ADR-051): geloeschter Runden-Task = Fehlrunde (volle Wertung
+    # inkl. Circuit-Breaker) + FK-Referenzen loesen.
+    from app.services.loop_runner import handle_round_task_deleted
+    await handle_round_task_deleted(session, task_id)
+
     await session.delete(task)
     await session.commit()
 
