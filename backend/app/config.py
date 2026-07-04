@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # MC no longer dials an OpenClaw Gateway. OPENCLAW_WS_URL / OPENCLAW_TOKEN
     # in `.env` are now ignored (BaseSettings `extra="ignore"` keeps them inert).
 
+    # Budget warnings (cost_collector) — thresholds on model_usage_events.
+    # cost_usd is a list-price equivalent (subscription plans don't bill per
+    # token); the warnings catch runaway consumption, not an invoice.
+    # Env: BUDGET_DAILY_WARNING_TOKENS / BUDGET_MONTHLY_WARNING_USD.
+    budget_daily_warning_tokens: int = 400_000_000
+    budget_monthly_warning_usd: float = 10_000.0
+
     # JWT Auth
     jwt_secret_key: str = "change-me-in-production"
     jwt_access_token_expire_minutes: int = 480  # 8 hours

@@ -155,20 +155,29 @@ class TestBudgetWarnings:
         assert len(warnings) == 0
 
     @pytest.mark.asyncio
-    async def test_daily_token_warning(self, session: AsyncSession, make_agent, fake_redis):
-        """Over 500k tokens/day → warning."""
+    async def test_daily_token_warning(self, session: AsyncSession, make_agent, fake_redis, monkeypatch):
+        """Over the daily threshold → warning (reads model_usage_events, 07/2026)."""
         from unittest.mock import patch, AsyncMock
+        from app.config import settings
+        from app.models.model_usage import ModelUsageEvent
         from app.services.cost_collector import check_budget_warnings
+        from app.utils import utcnow
 
         board_id = uuid.uuid4()
         agent = await make_agent("HighCostAgent", board_id=board_id, role="developer")
 
-        session.add(CostEvent(
+        monkeypatch.setattr(settings, "budget_daily_warning_tokens", 500_000)
+        session.add(ModelUsageEvent(
             agent_id=agent.id,
-            session_key="agent:test:main",
-            tokens_in=400_000,
-            tokens_out=200_000,
+            harness="cli-bridge",
+            model="claude-sonnet-4-6",
+            session_id="s-highcost",
+            message_uuid=str(uuid.uuid4()),
+            input_tokens=400_000,
+            output_tokens=200_000,
             cost_usd=2.50,
+            ts=utcnow(),
+            source_file="/tmp/test.jsonl",
         ))
         await session.commit()
 
@@ -178,7 +187,7 @@ class TestBudgetWarnings:
         with patch("app.services.cost_collector.get_redis", _fake_get_redis):
             with patch("app.services.cost_collector.emit_event", new_callable=AsyncMock):
                 warnings = await check_budget_warnings(session)
-        assert any("Tagesverbrauch" in w for w in warnings)
+        assert any("Daily usage" in w for w in warnings)
 
 
 # ── Security ─────────────────────────────────────────────────────────────
