@@ -32,7 +32,9 @@ from app.utils import utcnow
 
 logger = logging.getLogger("mc.loop_runner")
 
-TERMINAL_TASK_STATUSES = ("done", "failed")
+# "aborted" ist terminal: sonst hängt der Loop für immer an einer
+# abgebrochenen Runde (Stop-Bedingungen werden nur an Rundengrenzen geprüft).
+TERMINAL_TASK_STATUSES = ("done", "failed", "aborted")
 REPORT_HISTORY_ROUNDS = 3  # wie viele Runden-Reports in den nächsten Brief wandern
 
 LOCK_KEY = "mc:loop_runner:cycle_lock"

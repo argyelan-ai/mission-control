@@ -435,3 +435,25 @@ async def test_detail_includes_rounds(auth_client: AsyncClient):
     assert body["name"] == loop.name
     assert len(body["rounds"]) == 1
     assert body["rounds"][0]["report"] == "R1"
+
+
+@pytest.mark.asyncio
+async def test_aborted_round_is_terminal_and_counts_as_failed(fake_redis):
+    """An aborted round task must not hang the loop forever — it completes
+    the round with outcome 'aborted' and counts toward the circuit breaker."""
+    board = await _mk_board()
+    loop = await _mk_loop(board)
+    await _tick(fake_redis)  # startet Runde 1
+
+    fresh = await _get_loop(loop.id)
+    await _set_task_status(fresh.current_task_id, "aborted")
+    await _tick(fake_redis)  # wertet die abgebrochene Runde aus
+
+    fresh = await _get_loop(loop.id)
+    assert fresh.rounds_completed == 1
+    assert fresh.consecutive_failed_rounds == 1
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        rounds = (await s.exec(
+            select(LoopRound).where(LoopRound.loop_id == loop.id)
+        )).all()
+    assert rounds[0].outcome == "aborted"
