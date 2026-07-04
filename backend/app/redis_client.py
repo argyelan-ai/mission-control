@@ -250,3 +250,24 @@ class RedisKeys:
     @staticmethod
     def obsidian_export_lock() -> str:
         return "mc:obsidian_export:lock"
+
+    # ── Runtime Watcher (ADR-053) ───────────────────────────────────────
+    @staticmethod
+    def runtime_watcher_lock() -> str:
+        return "mc:runtime-watcher:lock"
+
+    @staticmethod
+    def runtime_live(slug: str) -> str:
+        return f"mc:runtime-live:{slug}"
+
+    @staticmethod
+    def runtime_drift_candidate(slug: str) -> str:
+        return f"mc:runtime-drift:{slug}"
+
+    @staticmethod
+    def agent_switch_progress(agent_id: str) -> str:
+        return f"mc:agent:{agent_id}:runtime-switch-progress"
+
+    @staticmethod
+    def agent_model_sync_fails(agent_id: str) -> str:
+        return f"mc:agent:{agent_id}:model-sync-fails"

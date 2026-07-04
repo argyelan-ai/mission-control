@@ -111,6 +111,13 @@ async def _cache_delete(slug: str) -> None:
         logger.debug("resolver cache delete failed for %s: %s", slug, exc)
 
 
+async def invalidate_cached_model(slug: str) -> None:
+    """Public cache invalidation — used by the runtime watcher after it
+    persists a drift-confirmed model change, so resolver consumers stop
+    serving the stale identifier within the same tick."""
+    await _cache_delete(slug)
+
+
 async def get_active_model_for_runtime(
     session: AsyncSession,
     slug_or_id: str,
