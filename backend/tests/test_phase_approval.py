@@ -781,3 +781,114 @@ async def test_push_callback_no_board_lead_logs_warning(async_session):
         )
     )
     assert result.first() is None
+
+
+@pytest.mark.asyncio
+async def test_rewrite_respects_dependency_topology(async_session, board_with_agents):
+    """Fix C (Incident 2026-07-04): Rewrite ueber eine Dependency-Kette
+    (Code ← Deploy ← Verify) darf NUR den Upstream sofort dispatchen.
+    Dependents gehen auf `inbox` (Kaskaden-Dispatch nach Upstream-done) und
+    bekommen einen Warte-Hinweis in ihrer Rewrite-Directive.
+
+    Der alte parallele Re-Dispatch liess den Verifier vor dem Fix laufen →
+    falscher Blocker + Operator-Approval.
+    """
+    from unittest.mock import patch, AsyncMock
+    from app.models.task import TaskDependency
+
+    board = board_with_agents["board"]
+    boss = board_with_agents["boss"]
+    developer = board_with_agents["developer"]
+
+    parent = Task(
+        board_id=board.id, title="Game", status="in_progress",
+        assigned_agent_id=boss.id,
+    )
+    async_session.add(parent)
+    await async_session.commit()
+    await async_session.refresh(parent)
+
+    code = Task(board_id=board.id, title="Code", status="done",
+                parent_task_id=parent.id, assigned_agent_id=developer.id)
+    deploy = Task(board_id=board.id, title="Deploy", status="done",
+                  parent_task_id=parent.id, assigned_agent_id=developer.id)
+    verify = Task(board_id=board.id, title="Verify", status="done",
+                  parent_task_id=parent.id, assigned_agent_id=developer.id)
+    async_session.add_all([code, deploy, verify])
+    await async_session.commit()
+    for t in (code, deploy, verify):
+        await async_session.refresh(t)
+
+    async_session.add_all([
+        TaskDependency(task_id=deploy.id, depends_on_task_id=code.id),
+        TaskDependency(task_id=verify.id, depends_on_task_id=deploy.id),
+    ])
+    await async_session.commit()
+
+    approval = Task(
+        board_id=board.id, title="Phase Approval: Game", status="in_progress",
+        parent_task_id=parent.id, assigned_agent_id=boss.id,
+        delegation_type="phase_approval",
+    )
+    async_session.add(approval)
+    await async_session.commit()
+    await async_session.refresh(approval)
+
+    rewrite_content = (
+        f"subtask: {code.id}, grund: Bug in Kernmechanik fixen\n"
+        f"subtask: {deploy.id}, grund: Nach Fix erneut deployen\n"
+        f"subtask: {verify.id}, grund: Nach Re-Deploy erneut verifizieren\n"
+    )
+
+    dispatch_calls: list = []
+
+    async def _capture_dispatch(task_id, board_id):
+        dispatch_calls.append(task_id)
+
+    with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock), \
+         patch("app.services.dispatch_attempt_audit.clear_dispatch_attempt_id",
+               new_callable=AsyncMock), \
+         patch("app.services.dispatch.auto_dispatch_task", new=_capture_dispatch):
+        from app.services.task_lifecycle import handle_phase_approval_decision
+        result = await handle_phase_approval_decision(
+            async_session, approval, boss,
+            comment_type="phase_rewrite_request",
+            comment_content=rewrite_content,
+        )
+        import asyncio as _asyncio
+        await _asyncio.sleep(0)
+
+    assert result["decision"] == "rewrite"
+    assert set(result["reopened"]) == {code.id, deploy.id, verify.id}
+
+    for t in (code, deploy, verify):
+        await async_session.refresh(t)
+
+    # Upstream startet sofort, Dependents warten in inbox
+    assert code.status == "in_progress"
+    assert deploy.status == "inbox", "Dependent darf NICHT sofort laufen"
+    assert verify.status == "inbox", "Dependent darf NICHT sofort laufen"
+    assert dispatch_calls == [code.id], (
+        f"Nur der Upstream wird sofort dispatcht, got: {dispatch_calls}"
+    )
+
+    # Warte-Hinweis nur bei den Dependents
+    cmt_result = await async_session.exec(
+        select(TaskComment).where(
+            TaskComment.task_id == verify.id,
+            TaskComment.comment_type == "feedback",
+        )
+    )
+    verify_directive = cmt_result.first()
+    assert verify_directive is not None
+    assert "NICHT SOFORT STARTEN" in verify_directive.content
+
+    cmt_result = await async_session.exec(
+        select(TaskComment).where(
+            TaskComment.task_id == code.id,
+            TaskComment.comment_type == "feedback",
+        )
+    )
+    code_directive = cmt_result.first()
+    assert code_directive is not None
+    assert "NICHT SOFORT STARTEN" not in code_directive.content

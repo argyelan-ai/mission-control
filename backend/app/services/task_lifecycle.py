@@ -1687,66 +1687,96 @@ async def handle_phase_approval_decision(
         from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
         from app.services.dispatch import auto_dispatch_task
 
-        reopened_ids: list[uuid.UUID] = []
-        for st in all_subtasks:
-            if st.delegation_type == "phase_approval":
-                continue
-            if str(st.id) in mentioned_ids:
-                # done → in_progress (the DB CHECK constraint doesn't allow
-                # done → inbox — that was a well-known hard crash before 2026-04-23).
-                #
-                # Full dispatch-state reset — analog handle_review_handoff
-                # (Z.687-762). Old behavior preserved dispatched_at/ack_at
-                # because the watchdog would have re-dispatched the subtask
-                # on its own. But the watchdog never did, and the agent's
-                # poll.sh / launchd saw the subtask as "already delivered",
-                # so the agent never received a wakeup. We now re-dispatch
-                # explicitly via auto_dispatch_task() and post a per-subtask
-                # rewrite-directive TaskComment so the agent sees WHAT to
-                # fix in its next dispatch context. Incident 2026-05-20:
-                # researcher subtask 6a65a509 hung silently for 1h after a rewrite
-                # request — live proof of the gap.
-                st.status = "in_progress"
-                st.completed_at = None
-                st.dispatched_at = None
-                st.ack_at = None
-                clear_spawn_tracking(st)
-                await clear_dispatch_attempt_id(
-                    session, st,
-                    caller="task_lifecycle.phase_rewrite",
-                    reason="phase_rewrite_request",
-                )
-                st.updated_at = utcnow()
-                session.add(st)
+        # Pass 1: sammeln, wer reopened wird (fuer die Topologie-Entscheidung
+        # muessen alle Reopen-Kandidaten VOR dem Statuswechsel bekannt sein).
+        to_reopen = [
+            st for st in all_subtasks
+            if st.delegation_type != "phase_approval" and str(st.id) in mentioned_ids
+        ]
+        reopen_ids_set = {st.id for st in to_reopen}
 
-                # Per-subtask rewrite directive — extracted from the
-                # multi-subtask brief Board Lead may have posted.
-                reason_text = _extract_rewrite_reason(comment_content, st.id)
-                directive = TaskComment(
-                    task_id=st.id,
-                    author_type="agent",
-                    author_agent_id=agent.id,
-                    comment_type="feedback",
-                    content=(
-                        f"**Rewrite-Auftrag von {agent.name}**\n\n"
-                        f"{reason_text}\n\n"
-                        "_Dein Task wurde von der Phase-Approval-Review wieder "
-                        "geoeffnet. Bitte arbeite die Punkte ab und schliesse "
-                        "erneut mit `mc done` ab._"
-                    ),
-                )
-                session.add(directive)
-                reopened_ids.append(st.id)
+        from app.models.task import TaskDependency
+
+        reopened_ids: list[uuid.UUID] = []
+        dispatch_now: list[uuid.UUID] = []
+        for st in to_reopen:
+            # ── Topologie-Ordnung (Fix C, Incident 2026-07-04) ─────────
+            # Der alte parallele Re-Dispatch liess den Verifier VOR dem
+            # Fix des Coders laufen → falscher Blocker + Operator-Approval.
+            # Ein Subtask "wartet", wenn einer seiner Vorgaenger ebenfalls
+            # reopened wird oder ohnehin nicht done ist.
+            dep_rows = (await session.exec(
+                select(TaskDependency).where(TaskDependency.task_id == st.id)
+            )).all()
+            waits_on_upstream = False
+            for dep in dep_rows:
+                if dep.depends_on_task_id in reopen_ids_set:
+                    waits_on_upstream = True
+                    break
+                dep_task = await session.get(Task, dep.depends_on_task_id)
+                if dep_task is not None and dep_task.status != "done":
+                    waits_on_upstream = True
+                    break
+
+            # Wartende Dependents gehen auf `inbox` — die bestehende
+            # Done-Kaskade (agent_task_status/task_lifecycle) dispatcht sie
+            # automatisch, sobald der Vorgaenger erneut done ist. Sofort
+            # startbare Subtasks behalten das alte Verhalten (in_progress +
+            # expliziter Re-Dispatch; Incident 2026-05-20: ohne aktiven
+            # Dispatch hing ein reopened Subtask 1h still).
+            st.status = "inbox" if waits_on_upstream else "in_progress"
+            st.completed_at = None
+            st.dispatched_at = None
+            st.ack_at = None
+            clear_spawn_tracking(st)
+            await clear_dispatch_attempt_id(
+                session, st,
+                caller="task_lifecycle.phase_rewrite",
+                reason="phase_rewrite_request",
+            )
+            st.updated_at = utcnow()
+            session.add(st)
+
+            # Per-subtask rewrite directive — extracted from the
+            # multi-subtask brief Board Lead may have posted.
+            reason_text = _extract_rewrite_reason(comment_content, st.id)
+            wait_notice = (
+                "⚠️ **NICHT SOFORT STARTEN** — dein Vorgaenger-Task wird "
+                "zuerst neu bearbeitet. Du wirst automatisch re-dispatcht, "
+                "sobald er fertig ist. Bis dahin: nichts tun.\n\n"
+            ) if waits_on_upstream else ""
+            directive = TaskComment(
+                task_id=st.id,
+                author_type="agent",
+                author_agent_id=agent.id,
+                comment_type="feedback",
+                content=(
+                    f"**Rewrite-Auftrag von {agent.name}**\n\n"
+                    f"{wait_notice}"
+                    f"{reason_text}\n\n"
+                    "_Dein Task wurde von der Phase-Approval-Review wieder "
+                    "geoeffnet. Bitte arbeite die Punkte ab und schliesse "
+                    "erneut mit `mc done` ab._"
+                ),
+            )
+            session.add(directive)
+            reopened_ids.append(st.id)
+            if not waits_on_upstream:
+                dispatch_now.append(st.id)
 
         await session.commit()
         result["reopened"] = reopened_ids
 
-        # Re-dispatch each re-opened subtask. auto_dispatch_task picks the
-        # right runtime (cli-bridge poll.sh / host launchd) and the agent
-        # will receive a fresh dispatch message; the feedback-comment posted
-        # above is included in the recovery-recap so the agent sees WHY.
-        for sid in reopened_ids:
+        # Re-dispatch ONLY subtasks whose dependencies are met — the rest is
+        # woken by the done-cascade in topological order. auto_dispatch_task
+        # additionally gates on dependencies_met() (defense in depth).
+        for sid in dispatch_now:
             asyncio.create_task(auto_dispatch_task(sid, parent.board_id))
+        if len(dispatch_now) < len(reopened_ids):
+            logger.info(
+                "Phase-Rewrite: %d/%d Subtasks warten auf Vorgaenger (Kaskaden-Dispatch)",
+                len(reopened_ids) - len(dispatch_now), len(reopened_ids),
+            )
 
         try:
             await emit_event(
