@@ -18,7 +18,7 @@ const makeRepo = (over: Partial<Repo> = {}): Repo => ({
   full_name: "owner/name",
   url: "https://github.com/owner/name",
   default_branch: "main",
-  description: "Ein Testrepo",
+  description: "A test repo",
   rules_md: null,
   visibility: "private",
   is_active: true,
@@ -38,31 +38,31 @@ describe("RepoDetailPanel", () => {
 
     renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
 
-    expect(await screen.findByLabelText(/Arbeitsregeln/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Working rules/)).toBeInTheDocument();
     expect(
-      screen.getByText("Diese Regeln werden jedem Agenten-Dispatch in diesem Repo mitgegeben.")
+      screen.getByText("These rules are included in every agent dispatch for this repo.")
     ).toBeInTheDocument();
     // Save is disabled until something actually changes
-    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
   it("saves edited rules via PATCH and shows a confirmation", async () => {
     vi.spyOn(api.repos, "get").mockResolvedValue(makeRepo());
-    const updateSpy = vi.spyOn(api.repos, "update").mockResolvedValue(makeRepo({ rules_md: "# Regeln" }));
+    const updateSpy = vi.spyOn(api.repos, "update").mockResolvedValue(makeRepo({ rules_md: "# Rules" }));
 
     renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
 
-    const textarea = await screen.findByLabelText(/Arbeitsregeln/);
-    await userEvent.type(textarea, "# Regeln");
+    const textarea = await screen.findByLabelText(/Working rules/);
+    await userEvent.type(textarea, "# Rules");
 
-    const saveBtn = screen.getByRole("button", { name: "Speichern" });
+    const saveBtn = screen.getByRole("button", { name: "Save" });
     expect(saveBtn).toBeEnabled();
     await userEvent.click(saveBtn);
 
     await waitFor(() =>
-      expect(updateSpy).toHaveBeenCalledWith("repo-1", { description: "Ein Testrepo", rules_md: "# Regeln" })
+      expect(updateSpy).toHaveBeenCalledWith("repo-1", { description: "A test repo", rules_md: "# Rules" })
     );
-    expect(await screen.findByText("Gespeichert")).toBeInTheDocument();
+    expect(await screen.findByText("Saved")).toBeInTheDocument();
   });
 
   it("shows the linked projects with an unlink control", async () => {
@@ -73,7 +73,7 @@ describe("RepoDetailPanel", () => {
     renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
 
     expect(await screen.findByText("Feature X")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Feature X entkoppeln" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unlink Feature X" })).toBeInTheDocument();
   });
 
   it("shows the backend's 409 error text when delete is blocked by linked projects", async () => {
@@ -87,10 +87,10 @@ describe("RepoDetailPanel", () => {
     renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
 
     // Open the confirm dialog from the panel's danger zone
-    await userEvent.click(await screen.findByRole("button", { name: "Löschen" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Delete" }));
 
-    // The confirm dialog renders its own "Löschen" button after the panel's trigger
-    const deleteButtons = await screen.findAllByRole("button", { name: "Löschen" });
+    // The confirm dialog renders its own "Delete" button after the panel's trigger
+    const deleteButtons = await screen.findAllByRole("button", { name: "Delete" });
     await userEvent.click(deleteButtons[deleteButtons.length - 1]);
 
     expect(
@@ -104,7 +104,7 @@ describe("RepoDetailPanel", () => {
 
     renderWithQuery(<RepoDetailPanel repoId="repo-1" open onClose={vi.fn()} />);
 
-    await userEvent.click(await screen.findByRole("button", { name: /Archivieren/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Archive/ }));
 
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith("repo-1", { is_active: false }));
   });

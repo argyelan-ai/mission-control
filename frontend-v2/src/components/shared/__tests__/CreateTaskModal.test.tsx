@@ -33,7 +33,7 @@ describe("CreateTaskModal — Repo-Default", () => {
   it("defaults to 'kein eigenes Repo' with no project preselected", async () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Neuer Auftrag" }));
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
 
     const checkbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
     expect(checkbox.checked).toBe(false);
@@ -42,17 +42,17 @@ describe("CreateTaskModal — Repo-Default", () => {
   it("keeps the ad-hoc default after cancelling and reopening the modal", async () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Neuer Auftrag" }));
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
     const firstCheckbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
     expect(firstCheckbox.checked).toBe(false);
 
     // Flip it on, then close without submitting.
     await userEvent.click(firstCheckbox);
     expect(firstCheckbox.checked).toBe(true);
-    await userEvent.click(screen.getByRole("button", { name: "Schließen" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
     // Reopen — the form must have reset to the ad-hoc default, not remember the toggle.
-    await userEvent.click(screen.getByRole("button", { name: "Neuer Auftrag" }));
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
     const secondCheckbox = (await screen.findByRole("checkbox", { name: /Eigenes Repo/ })) as HTMLInputElement;
     expect(secondCheckbox.checked).toBe(false);
   });
@@ -60,7 +60,7 @@ describe("CreateTaskModal — Repo-Default", () => {
   it("renders the Projekt section directly after title/description, before Zuweisung", async () => {
     renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Neuer Auftrag" }));
+    await userEvent.click(screen.getByRole("button", { name: "New task" }));
     await screen.findByRole("checkbox", { name: /Eigenes Repo/ });
 
     const headings = screen.getAllByText(/^(Projekt|Zuweisung|Ausführung)$/).map((el) => el.textContent);

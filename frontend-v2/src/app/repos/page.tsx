@@ -1,11 +1,11 @@
 "use client";
 
 /**
- * Repos Registry (ADR-050) — GitHub-Repos verwalten + per-Repo Arbeitsregeln.
+ * Repos registry (ADR-050) — manage GitHub repos + per-repo working rules.
  *
- * Ein Repo kann von mehreren Projekten geteilt werden; rules_md wird bei
- * jedem Agenten-Dispatch in diesem Repo mitgegeben (dispatch_message_builder).
- * Löschen entfernt nur die MC-Registry-Zeile — GitHub bleibt unberührt.
+ * A repo can be shared by multiple projects; rules_md is included in every
+ * agent dispatch for that repo (dispatch_message_builder). Deleting only
+ * removes the MC registry row — GitHub is untouched.
  */
 
 import { useState } from "react";
@@ -86,7 +86,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
                   letterSpacing: "0.06em",
                 }}
               >
-                Archiviert
+                Archived
               </span>
             )}
           </div>
@@ -102,13 +102,13 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             {repo.rules_md ? (
-              <span className="text-xs" style={{ color: C.accent }}>Regeln ✓</span>
+              <span className="text-xs" style={{ color: C.accent }}>Rules ✓</span>
             ) : (
-              <span className="text-xs" style={{ color: C.textDim }}>Keine Regeln</span>
+              <span className="text-xs" style={{ color: C.textDim }}>No rules</span>
             )}
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs" style={{ color: C.textDim }}>
-              {repo.last_synced_at ? `Sync ${timeAgo(repo.last_synced_at)}` : "Noch nie synchronisiert"}
+              {repo.last_synced_at ? `Synced ${timeAgo(repo.last_synced_at)}` : "Never synced"}
             </span>
           </div>
           {shownProjects.length > 0 && (
@@ -161,7 +161,7 @@ export default function ReposPage() {
               Repos
             </h1>
             <p className="text-sm mt-0.5" style={{ color: C.textMuted }}>
-              GitHub-Repos und ihre Arbeitsregeln für Agenten
+              GitHub repos and their working rules for agents
             </p>
           </div>
           <button
@@ -174,7 +174,7 @@ export default function ReposPage() {
             }}
           >
             <Plus size={11} />
-            Repo importieren
+            Import repo
           </button>
         </div>
 
@@ -189,13 +189,13 @@ export default function ReposPage() {
             onChange={(e) => setIncludeInactive(e.target.checked)}
             style={{ accentColor: C.accent }}
           />
-          Archivierte Repos anzeigen
+          Show archived repos
         </label>
 
         {isLoading && (
           <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
             <Loader2 size={13} className="animate-spin" />
-            <span className="text-xs">Lade Repos...</span>
+            <span className="text-xs">Loading repos...</span>
           </div>
         )}
 
@@ -207,10 +207,10 @@ export default function ReposPage() {
             <FolderGit2 size={28} style={{ color: C.textDim }} />
             <div>
               <p className="text-sm font-medium" style={{ color: C.textSecondary }}>
-                Noch keine Repos registriert
+                No repos registered yet
               </p>
               <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-                Importiere ein bestehendes GitHub-Repo, um Arbeitsregeln zu vergeben.
+                Import an existing GitHub repo to assign working rules.
               </p>
             </div>
             <button
@@ -223,7 +223,7 @@ export default function ReposPage() {
               }}
             >
               <Plus size={11} />
-              Repo importieren
+              Import repo
             </button>
           </div>
         )}

@@ -70,8 +70,8 @@ describe("ReposPage", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: "Repos" })).toBeInTheDocument();
-    expect(await screen.findByText("Noch keine Repos registriert")).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Repo importieren/ }).length).toBeGreaterThan(0);
+    expect(await screen.findByText("No repos registered yet")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Import repo/ }).length).toBeGreaterThan(0);
   });
 
   it("renders repo cards with visibility badge, branch, rules indicator and linked project chips", async () => {
@@ -81,7 +81,7 @@ describe("ReposPage", () => {
         id: "repo-2",
         full_name: "acme/data-pipeline",
         visibility: "public",
-        rules_md: "# Regeln\n- immer Tests schreiben",
+        rules_md: "# Rules\n- always write tests",
         linked_projects: [
           { id: "p1", name: "Report Composer", status: "active", board_id: "b1" },
         ],
@@ -98,8 +98,8 @@ describe("ReposPage", () => {
     expect(screen.getByText("Public")).toBeInTheDocument();
 
     // Rules indicator differs per repo
-    expect(screen.getByText("Keine Regeln")).toBeInTheDocument();
-    expect(screen.getByText("Regeln ✓")).toBeInTheDocument();
+    expect(screen.getByText("No rules")).toBeInTheDocument();
+    expect(screen.getByText("Rules ✓")).toBeInTheDocument();
 
     // Linked project chip
     expect(screen.getByText("Report Composer")).toBeInTheDocument();
@@ -115,7 +115,7 @@ describe("ReposPage", () => {
     await userEvent.click(card);
 
     // Rules editor from RepoDetailPanel appears once the repo loads into the drawer
-    expect(await screen.findByLabelText(/Arbeitsregeln/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Working rules/)).toBeInTheDocument();
   });
 
   it("opens the import dialog and lists GitHub repos not yet registered", async () => {
@@ -135,10 +135,10 @@ describe("ReposPage", () => {
 
     renderPage();
 
-    await userEvent.click((await screen.findAllByRole("button", { name: /Repo importieren/ }))[0]);
+    await userEvent.click((await screen.findAllByRole("button", { name: /Import repo/ }))[0]);
 
     expect(await screen.findByText("acme/new-repo")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Importieren" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Import" })).toBeInTheDocument();
   });
 
   it("registers a repo via the import dialog and shows it as imported", async () => {
@@ -158,10 +158,10 @@ describe("ReposPage", () => {
 
     renderPage();
 
-    await userEvent.click((await screen.findAllByRole("button", { name: /Repo importieren/ }))[0]);
-    await userEvent.click(await screen.findByRole("button", { name: "Importieren" }));
+    await userEvent.click((await screen.findAllByRole("button", { name: /Import repo/ }))[0]);
+    await userEvent.click(await screen.findByRole("button", { name: "Import" }));
 
     await waitFor(() => expect(registerSpy).toHaveBeenCalledWith("acme/new-repo"));
-    expect(await screen.findByText("Importiert")).toBeInTheDocument();
+    expect(await screen.findByText("Imported")).toBeInTheDocument();
   });
 });
