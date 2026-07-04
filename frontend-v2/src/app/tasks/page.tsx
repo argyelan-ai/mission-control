@@ -16,7 +16,6 @@ import {
   AlertTriangle,
   Clock,
   GitBranch,
-  ExternalLink,
   Brain,
 } from "lucide-react";
 import Link from "next/link";
@@ -25,7 +24,8 @@ import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { Pill } from "@/components/shared/Pill";
 import AppShell from "@/components/layout/AppShell";
-import TaskDetailPanel from "@/components/task/TaskDetailPanel";
+import TaskListColumn from "@/components/tasks/TaskListColumn";
+import { TaskDetailBody } from "@/components/task/TaskDetailBody";
 import type { Task, TaskStatus, Agent, Project, Tag, ProjectPhase } from "@/lib/types";
 import { C, LANE } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -351,7 +351,7 @@ function TaskRow({
           {isStale && (
             <span
               className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded"
-              title={`Keine Aktivitaet seit ${staleMins} Minuten`}
+              title={`No activity for ${staleMins} minutes`}
               style={{
                 color: isCritical ? C.error : C.warning,
                 backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
@@ -400,10 +400,10 @@ function TaskRow({
         >
           <div className="flex items-center gap-1.5 mb-2 font-medium" style={{ color: C.warning }}>
             <AlertTriangle size={12} />
-            Task bereits erledigt
+            Task already done
           </div>
           <p className="mb-2" style={{ color: C.textSecondary }}>
-            Trotzdem erneut dispatchen?
+            Dispatch again anyway?
           </p>
           <div className="flex gap-2">
             <button
@@ -412,14 +412,14 @@ function TaskRow({
               className="px-2 py-1 rounded text-[11px] font-medium cursor-pointer"
               style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
             >
-              Ja, erneut
+              Yes, dispatch
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setShowDoneWarning(false); }}
               className="px-2 py-1 rounded text-[11px] cursor-pointer"
               style={{ color: C.textMuted }}
             >
-              Abbrechen
+              Cancel
             </button>
           </div>
         </div>
@@ -536,7 +536,7 @@ function PhaseSection({
             >
               {subtasks.length === 0 && (
                 <div className="py-2 px-3 text-xs" style={{ color: C.textMuted }}>
-                  Keine Subtasks
+                  No subtasks
                 </div>
               )}
               {subtasks.map((task) => (
@@ -719,7 +719,7 @@ function RevisionSection({
       {/* Revision list */}
       {revisions.length === 0 && !showForm && (
         <p className="text-xs italic" style={{ color: C.textMuted }}>
-          Keine Revisions
+          No revisions
         </p>
       )}
       <div className="space-y-1">
@@ -919,7 +919,7 @@ function ProjectDetail({
             className="text-sm text-center py-8"
             style={{ color: C.textMuted }}
           >
-            Keine Tasks in diesem Projekt
+            No tasks in this project
           </div>
         )}
 
@@ -972,372 +972,24 @@ function ProjectDetail({
   );
 }
 
-// ── Project List (left sidebar) ────────────────────────────────────────────────
-
-const PHASE_STATUS_ICON: Record<string, string> = {
-  active: "●",
-  pending: "○",
-  completed: "✓",
-  blocked: "🔒",
-  awaiting_approval: "⏳",
-};
-
-function ProjectList({
-  projects,
-  allTasks,
-  boardId,
-  selectedProjectId,
-  projectTags,
-  phases,
-  selectedPhaseId,
-  onSelect,
-  onSelectPhase,
-  onDeleted,
-}: {
-  projects: Project[];
-  allTasks: Task[];
-  boardId: string;
-  selectedProjectId: string | null;
-  projectTags: Record<string, Tag[]>;
-  phases: ProjectPhase[];
-  selectedPhaseId: string | null;
-  onSelect: (id: string) => void;
-  onSelectPhase: (id: string | null) => void;
-  onDeleted: (id: string) => void;
-}) {
-  const qc = useQueryClient();
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  const [activeFilters, setActiveFilters] = useState<Set<string>>(new Set());
-
-  const deleteMutation = useMutation({
-    mutationFn: (projectId: string) => api.projects.delete(boardId, projectId),
-    onSuccess: (_, projectId) => {
-      qc.invalidateQueries({ queryKey: ["projects", boardId] });
-      qc.invalidateQueries({ queryKey: ["tasks", boardId] });
-      onDeleted(projectId);
-      setConfirmDeleteId(null);
-    },
-  });
-
-  const allUsedTags = useMemo(() => {
-    const tagMap = new Map<string, Tag>();
-    for (const tags of Object.values(projectTags)) {
-      for (const tag of tags) tagMap.set(tag.id, tag);
-    }
-    return Array.from(tagMap.values()).sort((a, b) =>
-      a.name.localeCompare(b.name)
-    );
-  }, [projectTags]);
-
-  const filteredProjects = useMemo(() => {
-    if (activeFilters.size === 0) return projects;
-    return projects.filter((p) => {
-      const tags = projectTags[p.id] || [];
-      const tagIds = new Set(tags.map((t) => t.id));
-      return Array.from(activeFilters).every((fId) => tagIds.has(fId));
-    });
-  }, [projects, projectTags, activeFilters]);
-
-  function toggleFilter(tagId: string) {
-    setActiveFilters((prev) => {
-      const next = new Set(prev);
-      if (next.has(tagId)) next.delete(tagId);
-      else next.add(tagId);
-      return next;
-    });
-  }
-
-  const projectProgress = (projectId: string) => {
-    const ptasks = allTasks.filter((t) => t.project_id === projectId);
-    if (ptasks.length === 0) return 0;
-    return Math.round(
-      (ptasks.filter((t) => t.status === "done").length / ptasks.length) * 100
-    );
-  };
-
-  const projectStatus = (projectId: string): "active" | "done" | "idle" => {
-    const ptasks = allTasks.filter((t) => t.project_id === projectId);
-    if (ptasks.every((t) => t.status === "done") && ptasks.length > 0) return "done";
-    if (ptasks.some((t) => t.status === "in_progress")) return "active";
-    return "idle";
-  };
-
-  return (
-    <div
-      className="w-full md:w-56 shrink-0 border-r flex flex-col h-full"
-      style={{ borderColor: C.border }}
-    >
-      <div
-        className="px-4 py-3 border-b text-[10px] font-semibold uppercase tracking-[0.08em] shrink-0"
-        style={{
-          color: C.textMuted,
-          borderColor: C.border,
-        }}
-      >
-        <h1 className="text-[10px] font-semibold uppercase tracking-[0.08em]">Projekte</h1>
-      </div>
-
-      {/* Tag Filters */}
-      {allUsedTags.length > 0 && (
-        <div
-          className="px-2 py-2 border-b flex flex-wrap gap-1 shrink-0"
-          style={{ borderColor: C.border }}
-        >
-          {allUsedTags.map((tag) => {
-            const isActive = activeFilters.has(tag.id);
-            const color = tag.color || C.accent;
-            return (
-              <button
-                key={tag.id}
-                onClick={() => toggleFilter(tag.id)}
-                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium transition-all cursor-pointer"
-                style={{
-                  backgroundColor: isActive ? `${color}30` : "transparent",
-                  color: isActive ? color : C.textMuted,
-                  border: `1px solid ${isActive ? `${color}60` : C.border}`,
-                }}
-              >
-                {tag.name}
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      <div className="flex-1 overflow-y-auto py-2 px-1">
-        {filteredProjects.map((project) => {
-          const prog = projectProgress(project.id);
-          const st = projectStatus(project.id);
-          const dotColor =
-            st === "active" ? C.accent :
-            st === "done" ? C.online :
-            C.textMuted;
-          const isConfirming = confirmDeleteId === project.id;
-
-          return (
-            <div key={project.id}>
-            {/* Kein <button>-Container (nested-interactive): Name-Button deckt
-                per ::after die Zeile ab, Lösch-Controls liegen mit z darüber. */}
-            <div
-              className={cn(
-                "group relative flex items-center gap-2 px-3 py-2 text-left transition-all rounded-lg w-full",
-                selectedProjectId === project.id && !isConfirming
-                  ? "bg-[rgba(255,255,255,0.05)]"
-                  : "hover:bg-[rgba(255,255,255,0.03)]"
-              )}
-              style={{
-                color:
-                  selectedProjectId === project.id
-                    ? C.textPrimary
-                    : C.textSecondary,
-              }}
-            >
-              <span
-                className="w-2 h-2 rounded-full shrink-0 mt-0.5"
-                style={{
-                  backgroundColor: isConfirming ? C.error : dotColor,
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => !isConfirming && onSelect(project.id)}
-                className="flex-1 min-w-0 text-left cursor-pointer after:absolute after:inset-0 after:content-[''] after:rounded-lg"
-                style={{ color: "inherit" }}
-              >
-                <span className="block truncate text-xs">
-                  {isConfirming ? "Delete?" : project.name}
-                </span>
-                {!isConfirming && projectTags[project.id]?.length > 0 && (
-                  <div className="flex flex-wrap gap-0.5 mt-0.5">
-                    {projectTags[project.id].slice(0, 3).map((tag) => (
-                      <TagChip key={tag.id} tag={tag} size="xs" />
-                    ))}
-                  </div>
-                )}
-              </button>
-
-              {isConfirming ? (
-                <div
-                  className="flex items-center gap-1.5 shrink-0 relative z-20"
-                  onClick={(e) => { e.stopPropagation(); e.preventDefault(); }}
-                  onMouseDown={(e) => { e.stopPropagation(); e.preventDefault(); }}
-                  onPointerDown={(e) => { e.stopPropagation(); }}
-                >
-                  <button
-                    type="button"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      deleteMutation.mutate(project.id);
-                    }}
-                    disabled={deleteMutation.isPending}
-                    className="text-[10px] px-2.5 py-1 rounded font-semibold transition-opacity disabled:opacity-50 cursor-pointer"
-                    style={{ backgroundColor: C.error, color: C.textPrimary }}
-                  >
-                    Ja
-                  </button>
-                  <button
-                    type="button"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                      setConfirmDeleteId(null);
-                    }}
-                    className="text-[10px] px-2.5 py-1 rounded transition-colors cursor-pointer"
-                    style={{ color: C.textMuted, backgroundColor: C.bgElevated }}
-                  >
-                    Nein
-                  </button>
-                </div>
-              ) : (
-                <>
-                  {prog > 0 && prog < 100 && (
-                    <span
-                      className="text-[10px] shrink-0 group-hover:hidden"
-                      style={{ color: C.textMuted }}
-                    >
-                      {prog}%
-                    </span>
-                  )}
-                  {prog === 100 && (
-                    <Check
-                      size={11}
-                      style={{ color: C.online }}
-                      className="shrink-0 group-hover:hidden"
-                    />
-                  )}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmDeleteId(project.id);
-                    }}
-                    className="hidden group-hover:flex items-center justify-center w-4 h-4 shrink-0 rounded transition-colors cursor-pointer relative z-[1] touch-visible"
-                    style={{ color: C.textMuted }}
-                    title="Delete project"
-                    aria-label={`Delete project: ${project.name}`}
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </>
-              )}
-            </div>
-
-            {/* Phase tree under selected project */}
-            {project.id === selectedProjectId && phases.length > 0 && (
-              <div className="ml-3 border-l pl-2" style={{ borderColor: C.border }}>
-                {phases.map((phase) => (
-                  <button
-                    key={phase.id}
-                    onClick={() => onSelectPhase(selectedPhaseId === phase.id ? null : phase.id)}
-                    className="w-full text-left px-2 py-1.5 text-xs rounded flex items-center gap-2 transition-colors cursor-pointer"
-                    style={{
-                      color: selectedPhaseId === phase.id ? C.accentHover : C.textSecondary,
-                      backgroundColor: selectedPhaseId === phase.id ? C.accentSubtle : "transparent",
-                    }}
-                  >
-                    <span className="shrink-0">{PHASE_STATUS_ICON[phase.status] ?? "○"}</span>
-                    <span className="flex-1 truncate">{phase.title}</span>
-                    {phase.git_branch && (
-                      <span
-                        className="shrink-0 flex items-center gap-0.5 text-[9px] font-mono px-1 py-0.5 rounded"
-                        style={{ color: C.textMuted, background: C.accentSubtle, border: `1px solid ${C.borderSubtle}` }}
-                        title={phase.git_branch}
-                      >
-                        <GitBranch size={8} />
-                      </span>
-                    )}
-                  </button>
-                ))}
-              </div>
-            )}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// ── Ad-hoc Tasks Section ──────────────────────────────────────────────────────
-
-function AdHocSection({
-  tasks,
-  agents,
-  boardId,
-  onTaskClick,
-}: {
-  tasks: Task[];
-  agents: Agent[];
-  boardId: string;
-  onTaskClick: (task: Task) => void;
-}) {
-  if (tasks.length === 0) return null;
-
-  return (
-    <div className="flex-1 flex flex-col min-h-0">
-      <div
-        className="px-6 py-4 border-b shrink-0"
-        style={{ borderColor: C.border }}
-      >
-        <h2
-          className="text-lg font-semibold"
-          style={{ color: C.textPrimary, letterSpacing: "-0.02em" }}
-        >
-          Ad-hoc Tasks
-        </h2>
-        <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-          Tasks ohne Projekt-Zuordnung
-        </p>
-      </div>
-      <div className="flex-1 overflow-y-auto p-4">
-        {tasks.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            agents={agents}
-            boardId={boardId}
-            onClick={() => onTaskClick(task)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Main Page ──────────────────────────────────────────────────────────────────
+// ── Main Page (Redesign 07/2026 — task list first, projects as groups) ─────────
+//
+// The task is the primary unit: TaskListColumn sits next to the sidebar,
+// grouped by status (operational) or project (structural, Ad-hoc first).
+// The right pane switches between task detail (TaskDetailBody), the
+// project/phase view (ProjectDetail via the group header link) and an
+// empty state. Mobile keeps the stack navigation (list → detail).
 
 function TasksPageContent() {
   const { activeBoardId } = useAppStore();
-  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [showAdHoc, setShowAdHoc] = useState(false);
-  const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null);
+  const qc = useQueryClient();
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [projectViewId, setProjectViewId] = useState<string | null>(null);
+  const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
   // Mobile (<md) stack navigation: which pane fills the screen. Desktop (≥md)
-  // ignores this and always shows the split (sidebar + detail). Kept separate
-  // from `selectedProjectId` so the auto-select effect below can prime the
-  // desktop detail without dragging the mobile user straight into a project's
-  // task list (iPhone-Befund Operator: "erster Task öffnet sich sofort"). Default
-  // "list" = mobile lands on the project overview, detail only after a tap.
+  // always shows the split. Default "list" = mobile lands on the task list,
+  // detail only after a tap (iPhone-Befund Operator).
   const [mobileView, setMobileView] = useState<"list" | "detail">("list");
-
-  const { data: projects = [] } = useQuery({
-    queryKey: ["projects", activeBoardId],
-    queryFn: () => api.projects.list(activeBoardId!),
-    enabled: !!activeBoardId,
-  });
-
-  const { data: phases = [] } = useQuery({
-    queryKey: ["phases", selectedProjectId],
-    queryFn: () => api.projects.phases(selectedProjectId!),
-    enabled: !!selectedProjectId,
-    staleTime: 30_000,
-  });
-
-  // Auto-select first project
-  useEffect(() => {
-    if (projects.length > 0 && !selectedProjectId) {
-      setSelectedProjectId(projects[0].id);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projects.length]);
 
   const { data: allTasks = [] } = useQuery({
     queryKey: ["tasks", activeBoardId],
@@ -1352,211 +1004,202 @@ function TasksPageContent() {
     enabled: !!activeBoardId,
   });
 
-  // Tags for all projects
-  const tagQueries = useQuery({
-    queryKey: ["all-project-tags", projects.map((p) => p.id).join(",")],
-    queryFn: async () => {
-      const entries = await Promise.all(
-        projects.map(async (p) => {
-          const tags = await api.tags.forProject(p.id);
-          return [p.id, tags] as const;
-        })
-      );
-      return Object.fromEntries(entries) as Record<string, Tag[]>;
-    },
-    enabled: projects.length > 0,
+  const { data: projects = [] } = useQuery({
+    queryKey: ["projects", activeBoardId],
+    queryFn: () => api.projects.list(activeBoardId!),
+    enabled: !!activeBoardId,
   });
-  const projectTagsMap = tagQueries.data ?? {};
 
-  const selectedProject =
-    projects.find((p) => p.id === selectedProjectId) ?? null;
-  const selectedProjectTags = selectedProjectId
-    ? (projectTagsMap[selectedProjectId] ?? [])
-    : [];
+  // Tags only matter for the project view header
+  const { data: projectTags = [] } = useQuery({
+    queryKey: ["project-tags", projectViewId],
+    queryFn: () => api.tags.forProject(projectViewId!),
+    enabled: !!projectViewId,
+  });
 
-  const projectTasks = useMemo(() => {
-    if (!selectedProjectId) return [];
-    const forProject = allTasks.filter((t) => t.project_id === selectedProjectId);
-    if (!selectedPhaseId) return forProject;
-    // Include tasks of selected phase + their parent tasks (phase headers for ProjectDetail grouping)
-    const phaseTasks = forProject.filter((t) => t.phase_id === selectedPhaseId);
-    const parentIds = new Set(phaseTasks.map((t) => t.parent_task_id).filter(Boolean));
-    const parents = forProject.filter((t) => parentIds.has(t.id));
-    return [...parents, ...phaseTasks];
-  }, [allTasks, selectedProjectId, selectedPhaseId]);
+  const deleteProjectMutation = useMutation({
+    mutationFn: (projectId: string) => api.projects.delete(activeBoardId!, projectId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", activeBoardId] });
+      qc.invalidateQueries({ queryKey: ["tasks", activeBoardId] });
+      setProjectViewId(null);
+      setConfirmDeleteProject(false);
+      setMobileView("list");
+    },
+  });
 
-  // Ad-hoc tasks (no project_id AND no parent_task_id)
-  const adHocTasks = useMemo(
-    () => allTasks.filter((t) => !t.project_id && !t.parent_task_id),
-    [allTasks]
+  // Selected task always derives fresh from the query cache — a status change
+  // in the detail header must not render against a stale snapshot.
+  const selectedTask = useMemo(
+    () => (selectedTaskId ? (allTasks.find((t) => t.id === selectedTaskId) ?? null) : null),
+    [allTasks, selectedTaskId],
   );
 
-  function handleSelectProject(id: string) {
-    setSelectedProjectId(id);
-    setSelectedTask(null);
-    setShowAdHoc(false);
-    setSelectedPhaseId(null);
-    setMobileView("detail"); // mobile: explicit tap → show the project's detail
+  const projectView = projectViewId ? (projects.find((p) => p.id === projectViewId) ?? null) : null;
+  const projectViewTasks = useMemo(
+    () => (projectViewId ? allTasks.filter((t) => t.project_id === projectViewId) : []),
+    [allTasks, projectViewId],
+  );
+
+  function handleSelectTask(task: Task) {
+    setSelectedTaskId(task.id);
+    setProjectViewId(null);
+    setMobileView("detail");
   }
 
-  function handleShowAdHoc() {
-    setShowAdHoc(true);
-    setSelectedProjectId(null);
-    setMobileView("detail"); // mobile: ad-hoc is a detail-level view too
+  function handleOpenProject(projectId: string) {
+    setProjectViewId(projectId);
+    setSelectedTaskId(null);
+    setConfirmDeleteProject(false);
+    setMobileView("detail");
+  }
+
+  function handleCloseDetail() {
+    setSelectedTaskId(null);
+    setProjectViewId(null);
+    setMobileView("list");
   }
 
   if (!activeBoardId) {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-sm" style={{ color: C.textMuted }}>
-          Kein Board ausgewaehlt
+          No board selected
         </div>
       </div>
     );
   }
 
+  const detailOpen = !!selectedTask || !!projectView;
+
   return (
     <div className="flex md:-m-6 md:h-[calc(100dvh-theme(spacing.6)*2)]">
-
-      {/* ── Desktop: Project Navigator (permanent sidebar) ── */}
-      <div className="hidden md:block">
-        <ProjectList
+      {/* ── Task list (primary column) ── */}
+      <div
+        className={`${mobileView === "list" ? "flex" : "hidden"} md:flex flex-1 md:flex-none md:w-[340px] md:border-r min-h-0`}
+        style={{ borderColor: C.border }}
+      >
+        <TaskListColumn
+          tasks={allTasks}
           projects={projects}
-          allTasks={allTasks}
+          agents={agents}
           boardId={activeBoardId}
-          selectedProjectId={showAdHoc ? null : selectedProjectId}
-          projectTags={projectTagsMap}
-          phases={phases}
-          selectedPhaseId={selectedPhaseId}
-          onSelect={handleSelectProject}
-          onSelectPhase={setSelectedPhaseId}
-          onDeleted={(id) => {
-            if (selectedProjectId === id) setSelectedProjectId(null);
-          }}
+          selectedTaskId={selectedTaskId}
+          onSelectTask={handleSelectTask}
+          onOpenProject={handleOpenProject}
         />
       </div>
 
-      {/* ── Mobile: Project list as the default landing view (stack nav) ──
-          Shown only in "list" view on <md. Desktop (≥md) always uses the
-          permanent sidebar above, so this stays hidden there. */}
-      <div className={`${mobileView === "list" ? "flex" : "hidden"} md:hidden flex-1 min-h-0`}>
-        <ProjectList
-          projects={projects}
-          allTasks={allTasks}
-          boardId={activeBoardId}
-          selectedProjectId={showAdHoc ? null : selectedProjectId}
-          projectTags={projectTagsMap}
-          phases={phases}
-          selectedPhaseId={selectedPhaseId}
-          onSelect={handleSelectProject}
-          onSelectPhase={setSelectedPhaseId}
-          onDeleted={(id) => {
-            if (selectedProjectId === id) setSelectedProjectId(null);
-          }}
-        />
-      </div>
-
-      {/* ── Right: Project Detail / Ad-hoc ──
-          Mobile: visible only in "detail" view. Desktop: always. */}
+      {/* ── Right pane: task detail / project view / empty state ── */}
       <div className={`${mobileView === "detail" ? "flex" : "hidden"} md:flex flex-1 flex-col min-h-0 min-w-0`}>
-
-        {/* Mobile: Header bar — back to the project list + ad-hoc shortcut */}
-        <div
-          className="flex items-center gap-3 px-4 py-3 border-b shrink-0 md:hidden"
-          style={{ borderColor: C.border }}
-        >
-          <button
-            onClick={() => setMobileView("list")}
-            aria-label="Back to project list"
-            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
-            style={{
-              backgroundColor: C.bgSurface,
-              color: C.textSecondary,
-              border: `1px solid ${C.border}`,
-            }}
+        {/* Mobile: back to the list */}
+        {detailOpen && (
+          <div
+            className="flex items-center gap-3 px-4 py-3 border-b shrink-0 md:hidden"
+            style={{ borderColor: C.border }}
           >
-            <ChevronRight size={14} className="rotate-180" style={{ color: C.textMuted }} />
-            <FolderKanban size={14} />
-            <span className="truncate max-w-[120px]">
-              {showAdHoc ? "Ad-hoc" : (selectedProject?.name ?? "Projects")}
-            </span>
-          </button>
-
-          {adHocTasks.length > 0 && !showAdHoc && (
             <button
-              onClick={handleShowAdHoc}
-              className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs transition-colors cursor-pointer min-h-[44px]"
+              onClick={handleCloseDetail}
+              aria-label="Back to task list"
+              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
               style={{
-                backgroundColor: C.accentSubtle,
-                color: C.accentHover,
-                border: `1px solid ${C.borderAccent}`,
+                backgroundColor: C.bgSurface,
+                color: C.textSecondary,
+                border: `1px solid ${C.border}`,
               }}
             >
-              Ad-hoc
-              <span
-                className="px-1 py-0.5 rounded-full text-[9px] font-semibold"
-                style={{ backgroundColor: C.accentSubtle }}
-              >
-                {adHocTasks.length}
-              </span>
+              <ChevronRight size={14} className="rotate-180" style={{ color: C.textMuted }} />
+              Tasks
             </button>
-          )}
-        </div>
-
-        {showAdHoc ? (
-          <AdHocSection
-            tasks={adHocTasks}
-            agents={agents}
-            boardId={activeBoardId}
-            onTaskClick={setSelectedTask}
-          />
-        ) : (
-          <ProjectDetail
-            project={selectedProject}
-            tasks={projectTasks}
-            agents={agents}
-            boardId={activeBoardId}
-            tags={selectedProjectTags}
-            onTaskClick={setSelectedTask}
-          />
+            <span className="text-sm truncate" style={{ color: C.textPrimary }}>
+              {selectedTask?.title ?? projectView?.name ?? ""}
+            </span>
+          </div>
         )}
 
-        {/* Ad-hoc toggle at bottom — Desktop only */}
-        {adHocTasks.length > 0 && !showAdHoc && (
-          <button
-            onClick={handleShowAdHoc}
-            className="hidden md:flex mx-6 mb-4 px-3 py-2 rounded-lg text-xs font-medium items-center gap-2 transition-colors cursor-pointer"
-            style={{
-              backgroundColor: C.bgSurface,
-              color: C.textSecondary,
-              border: `1px solid ${C.border}`,
-            }}
-          >
-            Ad-hoc Tasks
-            <span
-              className="px-1.5 py-0.5 rounded-full text-[10px]"
-              style={{
-                backgroundColor: C.accentSubtle,
-                color: C.accentHover,
-              }}
+        {selectedTask ? (
+          <div className="flex-1 flex flex-col min-h-0" style={{ backgroundColor: C.bgBase }}>
+            <TaskDetailBody
+              task={selectedTask}
+              agents={agents}
+              boardId={activeBoardId}
+              onClose={handleCloseDetail}
+            />
+          </div>
+        ) : projectView ? (
+          <div className="flex-1 flex flex-col min-h-0">
+            {/* Project pane header: back to list context + delete */}
+            <div
+              className="hidden md:flex items-center gap-2 px-6 py-2 border-b shrink-0"
+              style={{ borderColor: C.border }}
             >
-              {adHocTasks.length}
-            </span>
-          </button>
+              <button
+                onClick={handleCloseDetail}
+                className="text-[11px] px-2 py-1 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.05)]"
+                style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+              >
+                ← All tasks
+              </button>
+              <span className="text-[11px]" style={{ color: C.textDim }}>
+                Project view
+              </span>
+              <span className="ml-auto flex items-center gap-2">
+                {confirmDeleteProject ? (
+                  <>
+                    <span className="text-[11px]" style={{ color: C.warning }}>
+                      Delete project? Tasks stay (become ad-hoc).
+                    </span>
+                    <button
+                      onClick={() => deleteProjectMutation.mutate(projectView.id)}
+                      disabled={deleteProjectMutation.isPending}
+                      className="px-2 py-1 rounded text-[11px] font-semibold cursor-pointer"
+                      style={{ backgroundColor: `${C.error}26`, color: "#D05F5F" }}
+                    >
+                      {deleteProjectMutation.isPending ? "…" : "Delete project"}
+                    </button>
+                    <button
+                      onClick={() => setConfirmDeleteProject(false)}
+                      className="px-2 py-1 rounded text-[11px] cursor-pointer"
+                      style={{ color: C.textMuted }}
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDeleteProject(true)}
+                    aria-label="Delete project"
+                    title="Delete project"
+                    className="p-1.5 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.05)]"
+                    style={{ color: C.textMuted }}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </span>
+            </div>
+            <ProjectDetail
+              project={projectView}
+              tasks={projectViewTasks}
+              agents={agents}
+              boardId={activeBoardId}
+              tags={projectTags}
+              onTaskClick={handleSelectTask}
+            />
+          </div>
+        ) : (
+          <div className="flex-1 hidden md:flex items-center justify-center">
+            <div className="text-center">
+              <div className="text-sm" style={{ color: C.textMuted }}>
+                Select a task from the list
+              </div>
+              <div className="text-xs mt-1" style={{ color: C.textDim }}>
+                Group by project to reach the phase view of a project
+              </div>
+            </div>
+          </div>
         )}
       </div>
-
-      {/* Task Detail Panel */}
-      <AnimatePresence>
-        {selectedTask && (
-          <TaskDetailPanel
-            task={selectedTask}
-            agents={agents}
-            boardId={activeBoardId}
-            onClose={() => setSelectedTask(null)}
-          />
-        )}
-      </AnimatePresence>
     </div>
   );
 }

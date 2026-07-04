@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import type { CommitDiff, CommitDiffFile } from "@/lib/types";
@@ -105,7 +105,6 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
         style={{
           background: open ? `${C.accent}0A` : `${C.borderSubtle}`,
           border: "none",
-          borderLeft: `2px solid ${open ? `${C.accent}80` : C.border}`,
           cursor: "pointer",
         }}
         onMouseEnter={(e) => { (e.currentTarget as HTMLElement).style.background = `${C.accent}0F`; }}
@@ -178,9 +177,9 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                   {file.hunks.map((hunk, hi) => {
                     const lines = truncated && hi === 0 ? hunk.lines.slice(0, MAX_LINES) : hunk.lines;
                     return (
-                      <>
+                      <Fragment key={`hunk-${hi}`}>
                         {/* Hunk header — uses info tone for structure, not lila */}
-                        <tr key={`hunk-${hi}`}>
+                        <tr>
                           <td
                             colSpan={4}
                             className="text-[10px] select-none"
@@ -275,7 +274,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                             </tr>
                           );
                         })}
-                      </>
+                      </Fragment>
                     );
                   })}
 
@@ -286,7 +285,7 @@ function FileDiff({ file, defaultOpen = true }: { file: CommitDiffFile; defaultO
                         className="text-[10px] text-center"
                         style={{ padding: "6px 12px", color: C.textMuted, background: C.borderSubtle }}
                       >
-                        … {allLines.length - MAX_LINES} weitere Zeilen
+                        … {allLines.length - MAX_LINES} more lines hidden
                       </td>
                     </tr>
                   )}
