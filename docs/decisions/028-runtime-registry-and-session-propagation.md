@@ -1,6 +1,6 @@
 # ADR-028 — Runtime Registry Konsolidierung + Session-Env-Propagation
 
-**Status:** Accepted
+**Status:** Accepted (D-22 superseded by [ADR-053](053-runtime-watcher.md), 2026-07-05)
 **Datum:** 2026-04-29
 **Scope:** Backend/Runtime, Backend/DB, Frontend/Runtimes
 **Erweitert:** ADR-027 (Universal Agent ↔ Runtime Binding)
@@ -36,7 +36,7 @@ Phase 16 erweitert ADR-027 in fünf abgegrenzten Punkten:
 - **Live-JSON statt DB.** `runtimes.json` weiter als SSoT, jede Mutation schreibt zurück. Verworfen — bricht atomare Transaktionen, blockiert Multi-Worker-Konsistenz, und die DB-Tabelle existiert seit ADR-017 ohnehin.
 - **Container-Hot-Reload statt respawn-window.** openclaude und claude haben kein Public Reload-API. tmux respawn-window war die kleinste Lösung, die ohne Container-Neustart neue Env-Vars im Prozess landet.
 - **`staleTime: Infinity` + manuelles Refresh.** Verworfen — der ganze Punkt ist, dass nach einer Mutation die Liste sofort frisch ist. `0` + targeted invalidate liefert das ohne Polling-Druck.
-- **Periodisches Background-Probing aller Runtimes.** Verworfen (D-22) — Cost/Benefit ungünstig, der Operator probet bei Bedarf manuell. Re-probe-Button macht das auf einen Klick zugänglich.
+- **Periodisches Background-Probing aller Runtimes.** Verworfen (D-22) — Cost/Benefit ungünstig, der Operator probet bei Bedarf manuell. Re-probe-Button macht das auf einen Klick zugänglich. **Superseded 2026-07-05 by [ADR-053](053-runtime-watcher.md):** "engine leads, MC follows" turned out to require exactly the active observation D-22 rejected — the `RuntimeWatcher` now probes every 90s with two-probe drift confirmation.
 
 ## Konsequenzen
 

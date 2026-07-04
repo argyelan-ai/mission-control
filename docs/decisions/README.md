@@ -71,6 +71,7 @@ Jedes ADR hat folgende Sektionen:
 | [051](051-loops.md) | Loops — ergebnisgesteuerte Task-Schleifen als Meta-Controller über normale Tasks (`loops`+`loop_rounds`, Loop-Runner, `loop_gate`-Approval, `/loops`; L1 mit Runden-/Zeitbudget, Circuit-Breaker 2 Fehlrunden, 1 Loop/Board) | Accepted | 2026-07-04 | Backend/DB · Backend/Services · Backend/Approvals · Frontend/Pages |
 | [052](052-task-repo-select.md) | Einheitliche Repo-Auswahl in der Task-Maske — `tasks.repo_id` (Registry-Repo, Vorrang Task > Projekt > mc-workspace), `POST /repos/new`, `use_separate_repo` deprecated (registriert jetzt mit), Regeln-Badge via git-info | Accepted | 2026-07-04 | Backend/DB · Backend/Dispatch · Frontend/Task-Maske |
 | [053](053-reference-files.md) | Referenz-Dateien für Tasks & Projekte — `reference_files` + Files-Root `references`, Upload-API mit Vererbung (Projekt→Task), absolute `~/.mc`-Pfade in der Dispatch-Directive (Agenten lesen direkt vom Mount), Kaskaden in allen Delete-Pfaden | Accepted | 2026-07-04 | Backend/DB · Backend/Files · Backend/Dispatch · Frontend/Task-Maske |
+| [054](054-runtime-watcher.md) | Runtime Watcher — periodic model-drift probing (90s, two-probe confirmation), auto-propagation to bound agents via `docker restart` (not `respawn_window_only`), busy agents synced on next watcher tick, circuit breaker after 3 failed syncs; supersedes D-22 | Accepted | 2026-07-05 | Backend/Runtime · Backend/DB · Backend/Services · Frontend/Runtimes |
 
 ## Neue ADRs schreiben
 

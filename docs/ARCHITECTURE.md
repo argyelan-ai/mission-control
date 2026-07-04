@@ -307,6 +307,55 @@ UI: Dropdown im Config-Tab + RuntimeSwitchModal (dry-run preview, Image-Banner, 
 
 **Migration Pfad:** JSON (`backend/config/runtimes.json`) ist nur noch Seed-Source. Beim Startup seeded der Lifespan-Hook `_seed_runtimes` alle fehlenden Einträge nach Slug in die DB (idempotent). UI/API CRUD-Endpoints: `POST/PATCH/DELETE /api/v1/runtimes/db`.
 
+#### Runtime Watcher — model-drift auto-detection (NEU 2026-07-05, ADR-053)
+
+"Engine leads, MC follows": `services/runtime_watcher.py` is a singleton
+background loop (same pattern as `intelligence.py` — asyncio task, Redis
+lock for multi-worker dedup, `settings.runtime_watcher_enabled` kill-switch,
+`settings.runtime_watcher_interval` default 90s) that supersedes **D-22**
+(ADR-028's "no periodic background probing" call — see ADR-053 for the
+full reversal rationale). Every tick it probes all `enabled` runtimes of a
+probeable `runtime_type` (`vllm_docker`, `lmstudio`, `openai_compatible`,
+`unsloth`) via `GET {endpoint}/v1/models` (reuses the Phase-15
+`probe_runtime_model` helper) and writes a live snapshot to Redis
+(`mc:runtime-live:{slug}`, TTL 3×interval — `reachable`, `served_model`,
+`latency_ms`, `last_probe_at`), feeding the `/runtimes` cockpit live-dot
+via `GET /api/v1/runtimes/live-status`.
+
+Drift (`served_model != runtime.model_identifier`) is only acted on after
+**two consecutive identical probes** (guards against flapping during
+engine warm-up); a confirmed drift persists `model_identifier`, invalidates
+the resolver cache, emits `runtime.model_changed`, and flags every bound
+cli-bridge agent `pending_runtime_sync = true`
+(`services/runtime_propagation.py::mark_agents_for_sync`, column added by
+Migration `0141`). Unreachable endpoints only update live status;
+`runtime.unreachable` fires after 3 consecutive failed probes.
+
+**Propagation** (`services/runtime_propagation.py`) runs a sync pass at the
+end of every tick: idle flagged agents get `sync_docker_agent_files()` +
+a **plain `docker restart`** (re-runs the container entrypoint →
+`/internal/bootstrap` → fresh `OPENAI_MODEL`/`OPENAI_BASE_URL`) —
+deliberately **not** `respawn_window_only` (ADR-028's same-image fast
+path), because a window respawn keeps the stale tmux environment and would
+never pick up the new model. Busy agents (`current_task_id` set) stay
+flagged and are retried by the *next* watcher tick (≤90s after the task
+ends) rather than via a `task_lifecycle` hook — no new coupling into the
+task-completion path. A Redis failure counter trips a circuit breaker after
+3 failed sync attempts (`agent.model_sync_failed`, agent left as-is — no
+restart-loop). Force path for operators who don't want to wait:
+`POST /runtimes/db/{slug}/sync-agents`.
+
+**omp** provider was renamed `qwen-spark` → `mc-openai` and its hardcoded
+Spark model defaults removed from the seeds (`runtimes.json`,
+`register-omp-runtime.sh` now ship `model_identifier: null`) — the first
+probe fills it in, closing the last "MC leads" hole in the omp boot path.
+
+**Runtime-Switch-Progress (NEU, ADR-053):** `RuntimeSwitchModal` polls
+`GET /api/v1/agents/{id}/runtime-switch-progress` (published by
+`agent_runtime_switch.publish_switch_progress`) for an explicit stepper —
+`rendering → restarting → waiting_healthy → done | rolled_back` — instead
+of a fire-and-forget confirm dialog.
+
 ---
 
 ## Zentrale Flows
@@ -480,6 +529,27 @@ Singleton-Loop alle 5min (konfigurierbar). Rule-based Analyse parallel via `asyn
 
 Frontend `/insights`: 7 Sektionen (KPIs, Agent-Performance BarChart, Task-Duration-Balken, Error-Pattern PieChart, Anomalies Cards, Daily LLM Reports).
 
+### Runtime-Drift & Propagation (NEU 2026-07-05, ADR-053)
+
+```
+vLLM / LM Studio: model changed at the engine
+  → Watcher probe (≤90s): served_model ≠ runtime.model_identifier
+  → two-probe confirmation (guards against warm-up flapping)
+  → Runtime row updated + resolver cache invalidated + runtime.model_changed event
+  → agents bound to this runtime (agent.runtime_id == runtime.id):
+      idle  → sync_docker_agent_files() + docker restart (re-bootstrap) → agent.model_synced
+      busy  → pending_runtime_sync=true → banner → synced on next watcher tick (≤90s after task ends)
+      3 failed sync attempts → circuit breaker → agent.model_sync_failed (manual restart required)
+  → /runtimes cockpit shows live model + drift-/pending-sync badges until synced
+```
+
+Down-detection is separate: an unreachable endpoint only updates the live
+status (`mc:runtime-live:{slug}`); `runtime.unreachable` fires after 3
+consecutive failed probes, and the `runtimes` row is left untouched (no
+false "drift to nothing"). Host agents (Boss/Hermes/Jarvis) are excluded
+from auto-sync — launchd-managed, they only get the activity event. Siehe
+ADR-053 (supersedes D-22, ADR-028).
+
 ### Vault (Karpathy-Wiki Memory) — live (M.1-M.5 + Boss/Jarvis on main 2026-05-15)
 
 - **Pfad:** `~/.mc/vault/`
@@ -577,6 +647,8 @@ Alle ADRs in `docs/decisions/`:
 | Dispatch-Verhalten | `backend/app/services/dispatch.py` | Watchdog + Task Runner ggf. anpassen |
 | Neue Task-Status / Workflow | `backend/app/models/task.py` + Routers + Frontend types | Watchdog + Task Lifecycle |
 | Runtime-Wechsel pro Agent | `backend/app/services/agent_runtime_switch.py` (atomic) | Tests + UI-Modal in `RuntimeSwitchModal.tsx` |
+| Runtime-Drift-Probing / -Intervall | `backend/app/services/runtime_watcher.py` (`settings.runtime_watcher_interval`/`_enabled`) | ADR-053 — 2-Probe-Confirm, `/runtimes/live-status` |
+| Agent-Model-Sync nach Drift | `backend/app/services/runtime_propagation.py` (`docker restart`, kein respawn) | ADR-053 — Circuit-Breaker 3 Fehlversuche, Force-Route `POST /runtimes/db/{slug}/sync-agents` |
 | Docker-Compose Image-Mapping | `backend/app/services/compose_renderer.py` (DB-driven) | `docker/docker-compose.agents.yml` ist generator-managed |
 | Hermes Worker (host-side) | `scripts/hermes-bridge.py` + `~/.openclaw/agents/hermes/` | ADR-029 — eigene Bridge, NICHT cli-bridge.py |
 | Per-Agent Timeout-Overrides | `agents.dispatch_config` JSON-Keys (`ack_timeout_minutes`, `idle_timeout_minutes`) + neue Alembic-Migration | Idempotente Migration analog zu 0096/0097; `task_runner._idle_threshold_for(agent)` liest 4-stufige Prio. Siehe ADR-031. |
@@ -608,6 +680,7 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-07-05** — **Runtime Watcher & Model-Propagation (ADR-053, supersedes D-22):** `services/runtime_watcher.py` singleton loop (90s default) probes enabled probeable runtimes (`vllm_docker`/`lmstudio`/`openai_compatible`/`unsloth`) via `/v1/models`, publishes live status to Redis (`mc:runtime-live:{slug}`), and confirms model drift with two consecutive identical probes before persisting `model_identifier` + invalidating the resolver cache + emitting `runtime.model_changed`. `services/runtime_propagation.py` syncs bound cli-bridge agents: idle agents get `sync_docker_agent_files()` + a plain `docker restart` (re-bootstrap, **not** `respawn_window_only` — that would keep the stale tmux env); busy agents stay `pending_runtime_sync` until the next watcher tick (Migration `0141`). Circuit breaker after 3 failed syncs (`agent.model_sync_failed`). New routes: `GET /runtimes/live-status`, `POST /runtimes/probe-endpoint` (wizard backend), `POST /runtimes/db/{slug}/sync-agents` (force), `GET /agents/{id}/runtime-switch-progress` (stepper: `rendering → restarting → waiting_healthy → done|rolled_back`). `/runtimes` cockpit: live-dot, "Engine serves" model, drift/pending badges, force sync, guided Add-Runtime wizard. omp provider renamed `qwen-spark` → `mc-openai`; seeds ship `model_identifier: null`. ADR-053.
 - **2026-07-04** — **Einheitliche Repo-Auswahl in der Task-Maske (ADR-052):** `tasks.repo_id` (Migration 0139) — Ad-hoc-Aufträge wählen ihr Repo aus der Registry (Vorrang Task > Projekt > mc-workspace für Clone UND Regel-Injektion; Clone-Fehler blockt wie beim Projekt-Repo). `POST /repos/new` als einziger Neu-Anlage-Pfad (privat + Initial-Commit + registriert). `use_separate_repo` deprecated: registriert sein Repo jetzt mit (keine Schatten-Repos). `git-info` liefert `repo_id`+`has_rules` → Regeln-Badge in der Maske; Projekt ohne Repo kann bestehendes Registry-Repo verknüpfen. Scheduler reicht `project_id`/`repo_id` aus Job-Templates durch (verwarf sie vorher still). ADR-052.
 - **2026-07-04** — **Loops L1 (ADR-051):** Ergebnisgesteuerte Task-Schleifen als **Meta-Controller über normale Tasks** — pro Runde erzeugt `services/loop_runner.py` (Singleton, 30s-Tick, Per-Cycle-Redis-Lock) einen normalen Parent-Task (Board-Lead-first via `create_task_internal`) und wertet dessen Ausgang aus: Circuit-Breaker (Default 2 Fehlrunden → paused + `loop_gate`-Approval mit Telegram-Quick-Resolve), Stop-Bedingungen (max_rounds, max_duration, »BACKLOG LEER«-Reflexion), optionales Human-Gate (`human_every_n_rounds`, Default 0 — Marks Entscheid: Gates nur bei Problemen/Merges), sonst nächste Runde mit Report-Kontinuität (letzte 3 Runden-Reports im Brief). Tabellen `loops`+`loop_rounds` (Migration 0138), API `/api/v1/loops` (CRUD + start/pause/stop, 1 aktiver Loop pro Board), Frontend `/loops`. Task-Delete-Endpoints lösen die neuen nullable Loop-FKs. L2 (Telegram-Reports, Schedule-Trigger, project/tag-Backlogs), L3 (Token-Budget via cost_collector-Revival), L4 (Lessons) folgen. ADR-051.
 - **2026-07-04** — **Repos Registry (ADR-050):** GitHub-Repos werden first-class: neue Tabelle `repos` (Migration 0137, `full_name` kanonisch `owner/name`, `rules_md`, `source`, `is_active`) + `projects.repo_id` FK mit Backfill aus den Legacy-Strings. **Per-Repo-Arbeitsregeln** fliessen automatisch in jede Worker-Directive (`task_context_builder` löst Repo via `repo_id`/Legacy-Name auf → `dispatch_message_builder` hängt „Repository-Arbeitsregeln — BINDEND" an die Git-Sektion). Legacy-Sync-Kontrakt: `services/repo_registry.apply_repo_link` hält `github_repo_url/_name` konsistent — alle Clone-/PR-/Merge-Flows unverändert. API `/api/v1/repos` (CRUD, `gh repo list`-Import, Sync, Link/Unlink; Delete löscht NIE auf GitHub), Frontend-Seite `/repos` (Liste, Regeln-Editor, Import-Dialog). Bugfix nebenbei: `init-repo` schrieb `github_repo_name` ohne Owner-Präfix → brach `gh --repo`-Aufrufe. ADR-050.
