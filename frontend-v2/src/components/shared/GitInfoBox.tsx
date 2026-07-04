@@ -33,7 +33,7 @@ export function GitInfoBox({
   onInitRepo,
   initLoading,
   adHocMode = false,
-  useSeparateRepo = true,
+  useSeparateRepo = false,
   onUseSeparateRepoChange,
   accent = "#0FA3A3",
   textPrimary = "#EDEDEF",

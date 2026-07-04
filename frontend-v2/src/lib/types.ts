@@ -1719,6 +1719,52 @@ export interface SparkMetrics {
   ram_total_mb: number | null;
 }
 
+// ── Repos (Repo Registry, ADR-050) ───────────────────────────────────────────
+
+export type RepoVisibility = "private" | "public";
+export type RepoSource = "mc" | "imported";
+
+export interface RepoLinkedProject {
+  id: string;
+  name: string;
+  status: ProjectStatus;
+  board_id: string;
+}
+
+export interface Repo {
+  id: string;
+  full_name: string;
+  url: string;
+  default_branch: string;
+  description: string | null;
+  rules_md: string | null;
+  visibility: RepoVisibility;
+  is_active: boolean;
+  source: RepoSource;
+  last_synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+  linked_projects: RepoLinkedProject[];
+}
+
+/** GitHub repos of the configured owner that are not yet registered in MC. */
+export interface RepoImportCandidate {
+  full_name: string;
+  url: string;
+  description: string | null;
+  visibility: RepoVisibility;
+  default_branch: string;
+  is_archived: boolean;
+  pushed_at: string | null;
+}
+
+export interface RepoUpdate {
+  description?: string | null;
+  rules_md?: string | null;
+  default_branch?: string | null;
+  is_active?: boolean;
+}
+
 // ── Hosts (Host Registry, ADR-048) ───────────────────────────────────────────
 
 export type HostKind = "ssh" | "flask_wol" | "local";

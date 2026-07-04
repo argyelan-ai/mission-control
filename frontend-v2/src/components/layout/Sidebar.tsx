@@ -16,6 +16,7 @@ import {
   PenLine,
   Puzzle,
   GitBranch,
+  FolderGit2,
   Server,
   Terminal,
   Building2,
@@ -54,6 +55,7 @@ export const NAV_ITEMS = [
         { href: "/news", icon: Newspaper, label: "News" },
       ]
     : []),
+  { href: "/repos", icon: FolderGit2, label: "Repos" },
   { href: "/skills", icon: Puzzle, label: "Skills" },
   { href: "/runtimes", icon: Server, label: "Runtimes" },
   { href: "/sessions", icon: Terminal, label: "Sessions" },
