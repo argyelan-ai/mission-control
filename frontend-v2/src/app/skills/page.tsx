@@ -235,7 +235,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
         onClick={() => skill.description && setExpanded((x) => !x)}
         onMouseEnter={(e) => (e.currentTarget.style.background = SK.bgHover)}
         onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}>
-        <div className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: C.online, minHeight: 20 }} />
+        <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: C.online }} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>{skill.name}</span>
@@ -248,7 +248,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={(e) => { e.stopPropagation(); setShowContent(true); }}
             className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 cursor-pointer touch-visible"
-            style={{ color: "var(--color-text-muted)" }} title="SKILL.md anzeigen">
+            style={{ color: "var(--color-text-muted)" }} title="Show SKILL.md">
             <FileText size={12} />
           </button>
           {skill.description && (
@@ -264,7 +264,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
         {expanded && (
           <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }} className="overflow-hidden">
-            <div className="px-5 pb-4 pt-1 ml-[7px]" style={{ borderLeft: `2px solid ${C.borderSubtle}` }}>
+            <div className="px-5 pb-4 pt-1 ml-[7px]" style={{ borderLeft: `1px solid ${C.borderSubtle}` }}>
               <p className="text-xs leading-relaxed" style={{ color: "var(--color-text-secondary)" }}>{skill.description}</p>
             </div>
           </motion.div>

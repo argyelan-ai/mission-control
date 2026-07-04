@@ -1128,11 +1128,13 @@ function AgentRosterRow({
       {/* Metric columns */}
       {model && (
         <span
-          className="font-mono text-[10px] truncate max-w-[120px] shrink-0 max-md:hidden"
+          className="font-mono text-[10px] shrink-0 max-md:hidden"
           style={{ color: C.textMuted }}
           title={agent.model ?? undefined}
         >
-          {model}
+          {/* Middle-ellipsis: the tail (quant/runtime suffix) is what tells
+              models apart — end-truncation hid exactly that. */}
+          {model.length > 26 ? `${model.slice(0, 12)}…${model.slice(-12)}` : model}
         </span>
       )}
       <span className="text-[10px] shrink-0 max-lg:hidden" style={{ color: C.textDim }}>

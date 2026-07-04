@@ -1803,14 +1803,8 @@ function SettingsContent() {
                       }
                     }}
                   >
-                    {isActive && (
-                      <motion.div
-                        layoutId="settings-section-indicator"
-                        className="absolute left-0 top-1/2 -translate-y-1/2 w-[3px] h-5 rounded-r-full"
-                        style={{ backgroundColor: C.accent }}
-                        transition={{ type: "spring", stiffness: 380, damping: 30 }}
-                      />
-                    )}
+                    {/* Active state = accent-subtle surface + teal icon (DESIGN.md
+                        navigation pattern) — no side-stripe indicator on top. */}
                     <Icon
                       size={16}
                       style={{

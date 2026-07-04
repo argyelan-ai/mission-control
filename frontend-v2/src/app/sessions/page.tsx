@@ -89,8 +89,9 @@ function useAgentTerminal(
       ws.onclose = (evt) => {
         setConnected(false);
         if (!destroyedRef.current && evt.code !== 1000) {
-          // Auto-reconnect after 3s
-          term.writeln("\r\n\x1b[33m[Reconnecting...]\x1b[0m");
+          // Auto-reconnect after 3s. Status lives in the header badge —
+          // writing "[Reconnecting...]" into the scrollback spammed the
+          // terminal content on every retry.
           reconnectTimer.current = setTimeout(connect, 3000);
         }
       };

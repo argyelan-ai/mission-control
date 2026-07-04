@@ -167,7 +167,7 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
           <blockquote
             className="pl-4 italic my-4"
             style={{
-              borderLeft: `2px solid ${C.accent}`,
+              borderLeft: `2px solid ${C.borderActive}`,
               color: "var(--color-text-secondary)",
             }}
           >
