@@ -16,7 +16,7 @@ import type { ModelPrice, ModelPriceCreate, UnmatchedModel } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
-// Shared styles (1:1 aus settings/page.tsx)
+// Shared styles (1:1 from settings/page.tsx)
 const cardStyle = {
   background: C.bgSurface,
   border: `1px solid ${C.border}`,
@@ -26,7 +26,7 @@ const cardStyle = {
 const inputBaseClasses =
   "w-full rounded-lg px-3 py-2.5 text-sm outline-none transition-all duration-200";
 
-// ── Input-Hilfskomponenten ────────────────────────────────────────────────
+// ── Input helper components ───────────────────────────────────────────────
 
 function InputNumber({
   value,
@@ -102,7 +102,7 @@ function TextInput({
   );
 }
 
-// ── Preis-Zeile (readonly) ────────────────────────────────────────────────
+// ── Price row (readonly) ──────────────────────────────────────────────────
 
 function PriceRow({
   price,
@@ -169,7 +169,7 @@ function PriceRow({
         <div className="flex items-center gap-1">
           <button
             onClick={onEdit}
-            aria-label={`Preis fuer ${price.model_pattern} bearbeiten`}
+            aria-label={`Edit price for ${price.model_pattern}`}
             className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
             style={{
               color: "var(--color-text-secondary)",
@@ -177,11 +177,11 @@ function PriceRow({
               minWidth: 32,
             }}
           >
-            Bearb.
+            Edit
           </button>
           <button
             onClick={onDelete}
-            aria-label={`Preis fuer ${price.model_pattern} loeschen`}
+            aria-label={`Delete price for ${price.model_pattern}`}
             className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
             style={{ color: C.error, minHeight: 32, minWidth: 32 }}
           >
@@ -193,7 +193,7 @@ function PriceRow({
   );
 }
 
-// ── Add/Edit-Formular ─────────────────────────────────────────────────────
+// ── Add/edit form ──────────────────────────────────────────────────────────
 
 const EMPTY_FORM: ModelPriceCreate = {
   model_pattern: "",
@@ -231,7 +231,7 @@ function AddPriceForm({
         className="text-xs font-semibold uppercase tracking-wider mb-2"
         style={{ color: C.accent }}
       >
-        {initial?.model_pattern ? "Preis bearbeiten" : "Neuer Preis"}
+        {initial?.model_pattern ? "Edit Price" : "New Price"}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -239,13 +239,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Modell-Pattern
+            Model Pattern
           </label>
           <TextInput
             value={form.model_pattern}
             onChange={(v) => update({ model_pattern: v })}
-            placeholder="claude-sonnet-4-* oder exakt"
-            ariaLabel="Modell-Pattern"
+            placeholder="claude-sonnet-4-* or exact"
+            ariaLabel="Model pattern"
           />
         </div>
         <div>
@@ -253,13 +253,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Notiz (optional)
+            Note (optional)
           </label>
           <TextInput
             value={form.note ?? ""}
             onChange={(v) => update({ note: v || null })}
-            placeholder="z.B. lokal / Flatrate"
-            ariaLabel="Notiz"
+            placeholder="e.g. local / flat rate"
+            ariaLabel="Note"
           />
         </div>
       </div>
@@ -294,12 +294,12 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Prioritaet
+            Priority
           </label>
           <InputNumber
             value={form.priority}
             onChange={(v) => update({ priority: Math.round(v) })}
-            ariaLabel="Prioritaet (hoeher = spezifischer)"
+            ariaLabel="Priority (higher = more specific)"
             step="1"
           />
         </div>
@@ -308,13 +308,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Gueltig ab
+            Valid From
           </label>
           <input
             type="date"
             value={form.valid_from.slice(0, 10)}
             onChange={(e) => update({ valid_from: e.target.value + "T00:00:00Z" })}
-            aria-label="Gueltig ab (Datum)"
+            aria-label="Valid from (date)"
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -331,7 +331,7 @@ function AddPriceForm({
         <button
           onClick={() => onSave(form)}
           disabled={!form.model_pattern || isLoading}
-          aria-label="Preis speichern"
+          aria-label="Save price"
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
@@ -339,11 +339,11 @@ function AddPriceForm({
           }}
         >
           {isLoading ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          Speichern
+          Save
         </button>
         <button
           onClick={onCancel}
-          aria-label="Abbrechen"
+          aria-label="Cancel"
           className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm cursor-pointer"
           style={{
             color: "var(--color-text-muted)",
@@ -351,14 +351,14 @@ function AddPriceForm({
             minHeight: 44,
           }}
         >
-          <X size={14} /> Abbrechen
+          <X size={14} /> Cancel
         </button>
       </div>
     </div>
   );
 }
 
-// ── Hauptkomponente ───────────────────────────────────────────────────────
+// ── Main component ────────────────────────────────────────────────────────
 
 export function CostPricesTab() {
   const qc = useQueryClient();
@@ -412,7 +412,7 @@ export function CostPricesTab() {
   });
 
   const handleDelete = (price: ModelPrice) => {
-    if (window.confirm(`Preis fuer "${price.model_pattern}" wirklich loeschen?`)) {
+    if (window.confirm(`Really delete the price for "${price.model_pattern}"?`)) {
       deleteMutation.mutate(price.id);
     }
   };
@@ -426,7 +426,7 @@ export function CostPricesTab() {
 
   return (
     <div className="space-y-6">
-      {/* ── Preistabelle ── */}
+      {/* ── Price table ── */}
       <div className="mc-card" style={cardStyle}>
         <div
           className="px-5 py-4 flex items-center justify-between border-b"
@@ -434,15 +434,15 @@ export function CostPricesTab() {
         >
           <div>
             <div className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              Modell-Preistabelle
+              Model Price Table
             </div>
             <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-              USD / 1M Tokens. Glob-Pattern: spezifischeres Pattern (hoehere Prioritaet) gewinnt.
+              USD / 1M tokens. Glob pattern: the more specific pattern (higher priority) wins.
             </div>
           </div>
           <button
             onClick={() => setShowAddForm(!showAddForm)}
-            aria-label={showAddForm ? "Formular schliessen" : "Neuen Preis hinzufuegen"}
+            aria-label={showAddForm ? "Close form" : "Add new price"}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer transition-all duration-200"
             style={{
               background: showAddForm
@@ -454,11 +454,11 @@ export function CostPricesTab() {
             }}
           >
             {showAddForm ? <X size={12} /> : <Plus size={12} />}
-            {showAddForm ? "Abbrechen" : "Hinzufuegen"}
+            {showAddForm ? "Cancel" : "Add"}
           </button>
         </div>
 
-        {/* Add-Formular */}
+        {/* Add form */}
         {showAddForm && (
           <div id="cost-add-form" className="p-4 border-b" style={{ borderColor: C.borderSubtle }}>
             <AddPriceForm
@@ -469,7 +469,7 @@ export function CostPricesTab() {
           </div>
         )}
 
-        {/* Tabelle — horizontal scrollbar auf Mobile */}
+        {/* Table — horizontal scrollbar on mobile */}
         {loadingPrices ? (
           <div className="flex items-center justify-center py-10">
             <Loader2
@@ -483,7 +483,7 @@ export function CostPricesTab() {
             className="px-5 py-10 text-center text-sm"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Noch keine Preise konfiguriert.
+            No prices configured yet.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -497,8 +497,8 @@ export function CostPricesTab() {
                     "Cache-R $/M",
                     "Cache-W $/M",
                     "Prio",
-                    "Ab",
-                    "Notiz",
+                    "From",
+                    "Note",
                     "",
                   ].map((h, i) => (
                     <th
@@ -545,7 +545,7 @@ export function CostPricesTab() {
         )}
       </div>
 
-      {/* ── Modelle ohne Preis ── */}
+      {/* ── Models without a price ── */}
       {(unmatched?.length ?? 0) > 0 && (
         <div className="mc-card" style={cardStyle}>
           <div className="px-5 py-4 border-b" style={{ borderColor: C.borderSubtle }}>
@@ -555,7 +555,7 @@ export function CostPricesTab() {
                 className="text-sm font-semibold"
                 style={{ color: "var(--color-text-primary)" }}
               >
-                Erkannte Modelle ohne Preis
+                Detected Models Without a Price
               </span>
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded tabular-nums"
@@ -565,8 +565,8 @@ export function CostPricesTab() {
               </span>
             </div>
             <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Diese Modelle haben Events, aber keinen matchenden Preis-Eintrag → Kosten werden als
-              NULL gerechnet.
+              These models have events but no matching price entry, so costs are calculated as
+              NULL.
             </p>
           </div>
           <div className="divide-y" style={{ borderColor: C.borderSubtle }}>
@@ -583,13 +583,13 @@ export function CostPricesTab() {
                     {m.model}
                   </code>
                   <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    {m.event_count.toLocaleString("de-CH")} Events ·{" "}
-                    {m.total_input_tokens.toLocaleString("de-CH")} Input-Tokens
+                    {m.event_count.toLocaleString("de-CH")} events ·{" "}
+                    {m.total_input_tokens.toLocaleString("de-CH")} input tokens
                   </div>
                 </div>
                 <button
                   onClick={() => handleAddFromUnmatched(m)}
-                  aria-label={`Preis fuer ${m.model} anlegen`}
+                  aria-label={`Create price for ${m.model}`}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer shrink-0"
                   style={{
                     backgroundColor: C.accentSubtle,
@@ -597,7 +597,7 @@ export function CostPricesTab() {
                     minHeight: 36,
                   }}
                 >
-                  <Plus size={12} /> Preis anlegen
+                  <Plus size={12} /> Create Price
                 </button>
               </div>
             ))}
@@ -605,21 +605,21 @@ export function CostPricesTab() {
         </div>
       )}
 
-      {/* ── Kosten neu berechnen ── */}
+      {/* ── Recompute costs ── */}
       <div
         className="mc-card p-5 flex items-center justify-between"
         style={cardStyle}
       >
         <div>
           <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Kosten neu berechnen
+            Recompute Costs
           </div>
           <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-            cost_usd aller Events mit der aktuellen Preistabelle neu rechnen (nach Preisaenderungen).
+            Recalculate cost_usd for all events with the current price table (after price changes).
           </p>
           {recomputeResult !== null && (
             <p className="text-xs mt-1" style={{ color: C.online }}>
-              {recomputeResult.toLocaleString("de-CH")} Events aktualisiert.
+              {recomputeResult.toLocaleString("de-CH")} events updated.
             </p>
           )}
         </div>
@@ -627,14 +627,14 @@ export function CostPricesTab() {
           onClick={() => {
             if (
               window.confirm(
-                "Alle Event-Kosten mit der aktuellen Preistabelle neu berechnen?"
+                "Recompute all event costs with the current price table?"
               )
             ) {
               recomputeMutation.mutate();
             }
           }}
           disabled={recomputeMutation.isPending}
-          aria-label="Kosten neu berechnen"
+          aria-label="Recompute costs"
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             backgroundColor: "transparent",
@@ -651,10 +651,10 @@ export function CostPricesTab() {
             <RefreshCw size={14} />
           )}
           {recomputeMutation.isPending
-            ? "Berechne..."
+            ? "Computing..."
             : recomputeResult !== null
-            ? "Erledigt"
-            : "Jetzt berechnen"}
+            ? "Done"
+            : "Recompute Now"}
         </button>
       </div>
     </div>
