@@ -687,3 +687,129 @@ async def test_visual_verify_no_login_field_does_not_break(client, fake_redis):
         )
 
     assert r.status_code == 200, r.text
+
+
+# ── G4 (Incident 2026-07-04): Screenshot-Doppel an den Operator ─────────
+
+
+async def _setup_nonverifier_with_task():
+    """Deployer-artiger Agent (Freitext-Rolle ohne test/qa/review)."""
+    from app.models.board import Board
+    from app.models.agent import Agent
+    from app.models.task import Task
+    from app.auth import generate_agent_token
+
+    board_id = uuid.uuid4()
+    agent_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Board(id=board_id, name="VerifyTest", slug=f"vt-{uuid.uuid4().hex[:6]}"))
+        token_raw, token_hash = generate_agent_token()
+        s.add(Agent(
+            id=agent_id, name="DeployerLike",
+            role="Deployment Specialist — Vercel, Docker, CI/CD",
+            board_id=board_id, agent_token_hash=token_hash,
+            scopes=["tasks:read", "tasks:write", "chat:write"],
+            provision_status="provisioned",
+        ))
+        s.add(Task(
+            id=task_id, board_id=board_id, title="Deploy Task",
+            status="in_progress",
+            assigned_agent_id=agent_id, owner_agent_id=agent_id,
+        ))
+        await s.commit()
+
+    return {"board_id": board_id, "agent_id": agent_id, "task_id": task_id, "token": token_raw}
+
+
+@pytest.mark.asyncio
+async def test_visual_verify_nonverifier_selfcheck_is_silent(client, fake_redis, monkeypatch):
+    """Selbst-Check eines Nicht-Verifiers (Deployer) → kein Telegram,
+    Screenshots trotzdem als Deliverables registriert."""
+    await _patch_agent_scoped_redis(monkeypatch, fake_redis)
+    data = await _setup_nonverifier_with_task()
+    fake = _fake_verify_result()
+
+    mock_reports = MagicMock()
+    mock_reports.configured = True
+    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+
+    with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
+         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+        r = await client.post(
+            f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
+            json={"url": "https://preview.example.com"},
+            headers={"Authorization": f"Bearer {data['token']}"},
+        )
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["telegram_sent"] is False
+    assert body["telegram_skipped"] == "not_verifier"
+    assert body["deliverables_registered"] == 5, "Deliverables muessen trotzdem registriert werden"
+    mock_reports.send_media_group.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_visual_verify_nonverifier_force_resend_overrides(client, fake_redis, monkeypatch):
+    """force_telegram_resend=true erlaubt auch Nicht-Verifiern den Versand."""
+    await _patch_agent_scoped_redis(monkeypatch, fake_redis)
+    data = await _setup_nonverifier_with_task()
+    fake = _fake_verify_result()
+
+    mock_reports = MagicMock()
+    mock_reports.configured = True
+    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+
+    with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
+         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+        r = await client.post(
+            f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
+            json={"url": "https://preview.example.com", "force_telegram_resend": True},
+            headers={"Authorization": f"Bearer {data['token']}"},
+        )
+
+    assert r.json()["telegram_sent"] is True
+    mock_reports.send_media_group.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_visual_verify_url_window_dedup_across_tasks(client, fake_redis, monkeypatch):
+    """Incident-Fall: zweiter Task, GLEICHE URL, im 30min-Fenster →
+    board-weiter URL-Dedup verhindert die Doppel-Meldung."""
+    await _patch_agent_scoped_redis(monkeypatch, fake_redis)
+    data1 = await _setup_agent_with_task()
+
+    from app.models.task import Task
+    task2_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(Task(
+            id=task2_id, board_id=data1["board_id"], title="Zweiter Verify-Task",
+            status="in_progress",
+            assigned_agent_id=data1["agent_id"], owner_agent_id=data1["agent_id"],
+        ))
+        await s.commit()
+
+    fake = _fake_verify_result()
+    mock_reports = MagicMock()
+    mock_reports.configured = True
+    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+
+    with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
+         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+        r1 = await client.post(
+            f"/api/v1/agent/tasks/{data1['task_id']}/visual-verify",
+            json={"url": "https://same.example.com"},
+            headers={"Authorization": f"Bearer {data1['token']}"},
+        )
+        r2 = await client.post(
+            f"/api/v1/agent/tasks/{task2_id}/visual-verify",
+            json={"url": "https://same.example.com"},
+            headers={"Authorization": f"Bearer {data1['token']}"},
+        )
+
+    assert r1.json()["telegram_sent"] is True
+    assert r2.json()["telegram_sent"] is False
+    assert r2.json()["telegram_skipped"] == "url_recently_sent"
+    assert mock_reports.send_media_group.await_count == 1

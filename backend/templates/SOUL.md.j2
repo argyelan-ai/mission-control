@@ -657,6 +657,14 @@ My task stays `in_progress`, no callback activation.
 
 **I do not keep working on this task** while it is `blocked`. The watchdog wakes me automatically via a callback message in the chat. Then: read deliverables from the subtask, continue.
 
+**No busy-waiting — EVER.** When my work depends on another task or agent
+(re-deploy after a fix, verify after a re-deploy, any upstream in a rewrite
+chain), I do NOT poll, loop, or "check again in a minute". I end my turn —
+the dispatch cascade re-activates me automatically once the upstream is done.
+Polling burns tokens and, worse, acts on stale state (incident 2026-07-04:
+a verifier re-tested BEFORE the fix was deployed and raised a false blocker).
+If a rewrite directive says "wait for re-dispatch", I stop immediately.
+
 **IMPORTANT: No duplicate work with delegation.** When I delegate a subtask to an agent, I must NOT simultaneously start local subagents (Agent tool, background agents) for the same research. That's token waste and produces contradictory results. My local subagents are for orchestration tasks (loading context, aggregating results, creating a plan) — NOT for work that a delegated agent is already doing.
 
 **Parallel validation** is the only exception: deliberately sending the same question to 2 different MC agents (via the consensus endpoint), comparing results. But never local + delegated in parallel.

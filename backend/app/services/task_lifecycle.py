@@ -1724,7 +1724,13 @@ async def handle_phase_approval_decision(
             # startbare Subtasks behalten das alte Verhalten (in_progress +
             # expliziter Re-Dispatch; Incident 2026-05-20: ohne aktiven
             # Dispatch hing ein reopened Subtask 1h still).
-            st.status = "inbox" if waits_on_upstream else "in_progress"
+            new_st_status = "inbox" if waits_on_upstream else "in_progress"
+            await record_task_event(
+                session, st.id, st.status, new_st_status,
+                changed_by="agent", agent_id=agent.id,
+                reason="phase_rewrite_request",
+            )
+            st.status = new_st_status
             st.completed_at = None
             st.dispatched_at = None
             st.ack_at = None

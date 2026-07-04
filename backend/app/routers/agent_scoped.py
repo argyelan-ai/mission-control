@@ -1237,8 +1237,34 @@ async def agent_clarification(
     session.add(approval)
 
     # 4. Block task
+    from app.services.task_lifecycle import record_task_event
+    await record_task_event(
+        session, current_task.id, current_task.status, "blocked",
+        changed_by="agent", agent_id=agent.id, reason="clarification_question",
+    )
     current_task.status = "blocked"
     session.add(current_task)
+
+    # 5. Lead-FYI (G1): Der Lead darf antworten, wenn er die Antwort kennt —
+    # sein Unblock supersedet das Approval (approval_cleanup). Die Frage
+    # selbst bleibt ein Operator-Fall (Telegram laeuft wie bisher).
+    from app.services.blocker_triage import find_board_lead
+    _lead = await find_board_lead(session, board_id)
+    if _lead is not None and _lead.id != agent.id:
+        from app.models.task import TaskComment as _TC
+        session.add(_TC(
+            task_id=current_task.id,
+            author_type="system",
+            content=(
+                f"KLAERUNGSFRAGE: {agent.name} bei \"{current_task.title}\"\n\n"
+                f"{payload.question[:1000]}\n\n"
+                f"Der Operator wurde gefragt. Kennst DU die Antwort, darfst du "
+                f"sie als `resolution`-Kommentar posten und den Task via PATCH "
+                f"auf `in_progress` setzen — das Approval schliesst sich dann "
+                f"automatisch."
+            ),
+            comment_type="blocker_lead_notify",
+        ))
 
     await session.commit()
     await session.refresh(approval)
@@ -2958,16 +2984,46 @@ async def agent_visual_verify(
     tg_result = None
     tg_sent = False
     tg_skipped_reason: str | None = None
-    if body.send_to_telegram:
+
+    # G4 (Incident 2026-07-04): Operator bekam dieselben Screenshots doppelt —
+    # zwei Agenten (Selbst-Check nach Deploy + offizielle QA) verifizierten
+    # dieselbe URL im Abstand von 2 Minuten; der Dedup war nur pro Task.
+    # 1) Rollen-Default: Telegram nur vom designierten Verifier (QA/Test/
+    #    Review-Rolle oder Board-Lead). Selbst-Checks anderer Agenten laufen
+    #    silent — die Screenshots sind trotzdem als Deliverables registriert.
+    # 2) URL-Fenster: gleiche URL im selben Board → max. 1 Telegram-Meldung
+    #    pro 30min, egal von welchem Task.
+    # Override fuer beide: force_telegram_resend=true.
+    def _is_designated_verifier() -> bool:
+        if agent.is_board_lead:
+            return True
+        role_text = (agent.role or "").lower()
+        return any(k in role_text for k in ("test", "qa", "review", "verify"))
+
+    if body.send_to_telegram and not _is_designated_verifier() and not body.force_telegram_resend:
+        tg_skipped_reason = "not_verifier"
+        logger.info(
+            "visual-verify telegram skipped: agent=%s ist kein designierter "
+            "Verifier (Selbst-Check laeuft silent). "
+            "Use force_telegram_resend=true to override.",
+            agent.name,
+        )
+    elif body.send_to_telegram:
         # Redis dedup — fail-open on Redis errors (container issue / tests),
         # so the Telegram send doesn't fail without reason.
+        import hashlib as _hashlib
         redis = None
         already_sent = False
+        url_recently_sent = False
+        url_key = None
         try:
             from app.redis_client import get_redis as _get_redis
             redis = await _get_redis()
             dedup_key = f"mc:visual_verify:telegram_sent:{task_id}"
             already_sent = bool(await redis.get(dedup_key))
+            _url_hash = _hashlib.sha256(body.url.encode()).hexdigest()[:16]
+            url_key = f"mc:visual_verify:telegram_url:{agent.board_id}:{_url_hash}"
+            url_recently_sent = bool(await redis.get(url_key))
         except Exception as e:  # noqa: BLE001
             logger.warning("visual-verify dedup redis unavailable — sending anyway: %s", e)
             redis = None
@@ -2979,6 +3035,13 @@ async def agent_visual_verify(
                 "Use force_telegram_resend=true to override.",
                 task_id, agent.name,
             )
+        elif url_recently_sent and not body.force_telegram_resend:
+            tg_skipped_reason = "url_recently_sent"
+            logger.info(
+                "visual-verify telegram dedup: URL wurde in den letzten 30min "
+                "bereits an Telegram gemeldet (board-weit), skipping. agent=%s",
+                agent.name,
+            )
         else:
             caption_html = body.caption or ""
             metrics_block = format_metrics_summary(result)
@@ -2987,10 +3050,13 @@ async def agent_visual_verify(
             tg_result = await send_screenshots_to_telegram(result, caption=caption_html or None)
             tg_sent = tg_result is not None and (tg_result.get("ok") if isinstance(tg_result, dict) else False)
             if tg_sent and redis is not None:
-                # TTL 24h — long enough for a normal task lifecycle, short enough
-                # that tasks reopened after a long time still get 1 send.
+                # Task-Key TTL 24h — long enough for a normal task lifecycle,
+                # short enough that tasks reopened after a long time still get
+                # 1 send. URL-Key TTL 30min (board-weites Doppel-Fenster, G4).
                 try:
                     await redis.set(dedup_key, "1", ex=24 * 3600)
+                    if url_key is not None:
+                        await redis.set(url_key, "1", ex=30 * 60)
                 except Exception as e:  # noqa: BLE001
                     logger.warning("visual-verify dedup redis.set failed: %s", e)
 
