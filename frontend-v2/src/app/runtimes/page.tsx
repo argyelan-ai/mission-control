@@ -28,6 +28,7 @@ import AppShell from "@/components/layout/AppShell";
 import { cn } from "@/lib/utils";
 import { RuntimeScheduleTab } from "./RuntimeScheduleTab";
 import { VllmContainerCatalog } from "./VllmContainerCatalog";
+import { AddRuntimeModal } from "./AddRuntimeModal";
 import { HostMetricsBar, HostsSection } from "./HostsSection";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
 import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
@@ -1498,6 +1499,7 @@ function KvResetScheduleToggle() {
 
 export default function RuntimesPage() {
   const queryClient = useQueryClient();
+  const [addOpen, setAddOpen] = useState(false);
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ["runtimes"],
@@ -1552,18 +1554,32 @@ export default function RuntimesPage() {
             </p>
           </div>
 
-          <button
-            onClick={() => refetch()}
-            className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
-            style={{
-              color: C.textMuted,
-              border: `1px solid ${C.borderSubtle}`,
-              background: C.borderSubtle,
-            }}
-          >
-            <RotateCcw size={11} />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setAddOpen(true)}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              style={{
+                color: C.accent,
+                border: `1px solid ${C.borderAccent}`,
+                background: C.accentSubtle,
+              }}
+            >
+              <Plus size={11} />
+              Add runtime
+            </button>
+            <button
+              onClick={() => refetch()}
+              className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer"
+              style={{
+                color: C.textMuted,
+                border: `1px solid ${C.borderSubtle}`,
+                background: C.borderSubtle,
+              }}
+            >
+              <RotateCcw size={11} />
+              Refresh
+            </button>
+          </div>
         </div>
 
         {/* Host metrics — one bar per enabled host (ADR-048) */}
@@ -1682,6 +1698,8 @@ export default function RuntimesPage() {
         {/* Hosts Registry (ADR-048) */}
         <HostsSection />
       </div>
+
+      <AddRuntimeModal open={addOpen} onClose={() => setAddOpen(false)} />
     </AppShell>
   );
 }
