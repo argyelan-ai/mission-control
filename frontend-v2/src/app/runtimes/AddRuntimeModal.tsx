@@ -29,6 +29,13 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+// Strip trailing slashes first, then ensure a single "/v1" suffix — avoids
+// double-appending when the pasted URL already ends in "/v1/".
+function normalizeEndpoint(url: string): string {
+  const trimmed = url.replace(/\/+$/, "");
+  return trimmed.endsWith("/v1") ? trimmed : `${trimmed}/v1`;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -67,7 +74,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
         slug: slugify(name),
         display_name: name,
         runtime_type: probe!.detected_type!,
-        endpoint: url.endsWith("/v1") ? url : `${url.replace(/\/$/, "")}/v1`,
+        endpoint: normalizeEndpoint(url),
         model_identifier: model ?? undefined,
         enabled: true,
       }),
@@ -252,7 +259,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
 
                   <button
                     onClick={() => createMutation.mutate()}
-                    disabled={!name.trim() || !model || createMutation.isPending}
+                    disabled={!name.trim() || slugify(name) === "" || !model || createMutation.isPending}
                     className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2.5 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                     style={{
                       color: C.accent,

@@ -99,4 +99,61 @@ describe("AddRuntimeModal", () => {
       })
     );
   });
+
+  it("normalizes a URL ending in /v1/ to a single /v1 suffix (no double-append)", async () => {
+    const probeResult: ProbeEndpointResult = {
+      reachable: true,
+      models: ["m1"],
+      detected_type: "vllm_docker",
+      suggested_model: "m1",
+      error: null,
+    };
+    vi.spyOn(api.runtimes, "probeEndpoint").mockResolvedValue(probeResult);
+    const createSpy = vi
+      .spyOn(api.runtimes.db, "create")
+      .mockResolvedValue({ id: "rt-1" } as Runtime);
+
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(/http/i), "http://192.0.2.10:8000/v1/");
+    await userEvent.click(screen.getByRole("button", { name: /probe/i }));
+
+    await screen.findByText("vLLM");
+
+    const nameInput = screen.getByPlaceholderText(/name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Spark vLLM");
+
+    await userEvent.click(screen.getByRole("button", { name: /add runtime/i }));
+
+    await waitFor(() =>
+      expect(createSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ endpoint: "http://192.0.2.10:8000/v1" })
+      )
+    );
+  });
+
+  it("disables the submit button when the name slugifies to an empty string", async () => {
+    const probeResult: ProbeEndpointResult = {
+      reachable: true,
+      models: ["m1"],
+      detected_type: "vllm_docker",
+      suggested_model: "m1",
+      error: null,
+    };
+    vi.spyOn(api.runtimes, "probeEndpoint").mockResolvedValue(probeResult);
+
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(/http/i), "http://192.0.2.10:8000/v1");
+    await userEvent.click(screen.getByRole("button", { name: /probe/i }));
+
+    await screen.findByText("vLLM");
+
+    const nameInput = screen.getByPlaceholderText(/name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "###");
+
+    expect(screen.getByRole("button", { name: /add runtime/i })).toBeDisabled();
+  });
 });
