@@ -374,18 +374,22 @@ async def agent_add_comment(
     # nicht abwarten.
     if (
         payload.comment_type == "escalate_to_operator"
-        and agent.is_board_lead
         and task.status == "blocked"
     ):
-        from app.services.blocker_triage import escalate_blocker_to_operator
-        try:
-            await escalate_blocker_to_operator(
-                session, task=task, reason="lead_escalated",
+        from app.services.blocker_triage import escalate_blocker_to_operator, is_lead_agent
+        if not is_lead_agent(agent):
+            logger.info(
+                "escalate_to_operator ignoriert: %s ist kein Lead", agent.name,
             )
-        except Exception as e:
-            logger.warning(
-                "Lead-Eskalation fehlgeschlagen fuer Task %s: %s", task.id, e,
-            )
+        else:
+            try:
+                await escalate_blocker_to_operator(
+                    session, task=task, reason="lead_escalated",
+                )
+            except Exception as e:
+                logger.warning(
+                    "Lead-Eskalation fehlgeschlagen fuer Task %s: %s", task.id, e,
+                )
 
     # Phase Approval Workflow: phase_approved / phase_rewrite_request trigger parent action
     if (

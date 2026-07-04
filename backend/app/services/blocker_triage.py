@@ -83,6 +83,17 @@ async def clear_triage_payload(task_id: uuid.UUID) -> None:
         logger.debug("Triage-Payload delete fehlgeschlagen (%s): %s", task_id, exc)
 
 
+def is_lead_agent(agent: Agent) -> bool:
+    """Einheitliche Lead-Erkennung fuer Triage-Rechte (Gate-Ausnahme,
+    escalate_to_operator). `is_board_lead` UND role='lead' zaehlen — die
+    Triage-Benachrichtigung laeuft ueber find_agent_by_role(LEAD), das auf
+    `role` matcht; wer benachrichtigt wird, muss auch loesen duerfen
+    (sonst 403 fuer den zustaendigen Lead = Incident-Reproduktion)."""
+    if agent.is_board_lead:
+        return True
+    return (agent.role or "").strip().lower() == "lead"
+
+
 async def find_board_lead(
     session: AsyncSession, board_id: uuid.UUID,
 ) -> Agent | None:

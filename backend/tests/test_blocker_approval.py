@@ -40,7 +40,13 @@ async def _create_blocker_data(*, task_status="in_progress"):
     task_id = uuid.uuid4()
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        board = Board(id=board_id, name="Blocker Board", slug="blocker")
+        # blocker_triage_minutes=0: diese Datei pinnt den DIREKT-Operator-Flow
+        # (Legacy-Verhalten). Der Lead-first-Triage-Pfad (Default 15min) ist in
+        # test_blocker_triage.py + test_incident_replay_2026_07_04.py gepinnt.
+        board = Board(
+            id=board_id, name="Blocker Board", slug="blocker",
+            blocker_triage_minutes=0,
+        )
         s.add(board)
 
         dev_token_raw, dev_token_hash = generate_agent_token()
@@ -132,7 +138,9 @@ async def test_blocked_creates_approval(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_guard_blocks_unblock_with_pending_approval(client, fake_redis):
-    """Board lead gets 403 when setting blocked → in_progress while approval is pending."""
+    """Worker: 403 bei blocked→in_progress mit pending Approval.
+    Lead: DARF entblocken und supersedet dabei das Approval (Fix A —
+    das alte Lead-403 war der Autonomie-Killer im Incident 2026-07-04)."""
     data = await _create_blocker_data(task_status="blocked")
 
     # Manually create approval (simulates what happens on blocked)
@@ -154,14 +162,38 @@ async def test_guard_blocks_unblock_with_pending_approval(client, fake_redis):
         await s.commit()
 
     with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        # Worker bleibt gegated (403) — fuer BEIDE Wege aus blocked heraus.
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
+            json={"status": "in_progress"},
+            headers={"Authorization": f"Bearer {data['dev_token']}"},
+        )
+        assert resp.status_code == 403
+        assert "Blocker-Approval" in resp.json()["detail"]
+
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
+            json={"status": "inbox"},
+            headers={"Authorization": f"Bearer {data['dev_token']}"},
+        )
+        assert resp.status_code == 403, "inbox-Loophole muss geschlossen sein"
+
+        # Lead darf loesen — Approval wird dabei superseded (Fix A).
         resp = await client.patch(
             f"/api/v1/agent/boards/{data['board'].id}/tasks/{data['task'].id}",
             json={"status": "in_progress"},
             headers={"Authorization": f"Bearer {data['lead_token']}"},
         )
+        assert resp.status_code == 200, resp.text
 
-    assert resp.status_code == 403
-    assert "Blocker-Approval" in resp.json()["detail"]
+    from app.models.approval import Approval as _Ap
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        result = await s.exec(
+            select(_Ap).where(_Ap.task_id == data["task"].id)
+        )
+        approvals = list(result.all())
+    assert len(approvals) == 1
+    assert approvals[0].status == "superseded"
 
 
 @pytest.mark.asyncio
@@ -362,7 +394,7 @@ async def test_lead_gets_info_rpc_without_options(client, fake_redis):
 
     # MUST contain: info that an approval was created
     assert "Approval" in msg
-    assert "Operator entscheidet" in msg
+    assert "Operator-Entscheid" in msg
     # MUST NOT contain: action options
     assert "Optionen:" not in msg
     assert "Task einem anderen Agent zuweisen" not in msg

@@ -1558,7 +1558,8 @@ async def agent_update_task(
                 )
             )).first()
             if pending_approval:
-                if agent.is_board_lead:
+                from app.services.blocker_triage import is_lead_agent
+                if is_lead_agent(agent):
                     pending_approval.status = "superseded"
                     pending_approval.resolved_at = utcnow()
                     pending_approval.resolver_note = f"Vom Board-Lead {agent.name} geloest"
@@ -1888,8 +1889,10 @@ async def agent_update_task(
         )
         for dep in dep_result.all():
             dependent_task = await session.get(Task, dep.task_id)
+            # in_progress + dispatched_at=NULL = reopened Rewrite-Dependent
+            # (Fix C — done→inbox verbietet der Prod-Transition-Trigger).
             if (dependent_task
-                    and dependent_task.status == "inbox"
+                    and dependent_task.status in ("inbox", "in_progress")
                     and not dependent_task.dispatched_at
                     and await dependencies_met(session, dependent_task)):
                 import asyncio as _aio

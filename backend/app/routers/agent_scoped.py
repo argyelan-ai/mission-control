@@ -1217,7 +1217,9 @@ async def agent_clarification(
         if project:
             project_name = project.name
 
-    # 3. Create approval
+    # 3. Create approval — mit expires_at, damit das Fix-E-Renewal (24h-
+    # Reminder statt stilles Vergessen) auch fuer Klaerungsfragen greift.
+    from datetime import timedelta as _timedelta
     approval = Approval(
         id=uuid.uuid4(),
         board_id=board_id,
@@ -1233,6 +1235,7 @@ async def agent_clarification(
             "agent_name": agent.name,
         },
         status="pending",
+        expires_at=utcnow() + _timedelta(hours=24),
     )
     session.add(approval)
 
@@ -3022,7 +3025,8 @@ async def agent_visual_verify(
             dedup_key = f"mc:visual_verify:telegram_sent:{task_id}"
             already_sent = bool(await redis.get(dedup_key))
             _url_hash = _hashlib.sha256(body.url.encode()).hexdigest()[:16]
-            url_key = f"mc:visual_verify:telegram_url:{agent.board_id}:{_url_hash}"
+            _board_scope = agent.board_id or "global"
+            url_key = f"mc:visual_verify:telegram_url:{_board_scope}:{_url_hash}"
             url_recently_sent = bool(await redis.get(url_key))
         except Exception as e:  # noqa: BLE001
             logger.warning("visual-verify dedup redis unavailable — sending anyway: %s", e)

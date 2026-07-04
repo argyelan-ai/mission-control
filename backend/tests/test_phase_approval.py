@@ -787,8 +787,9 @@ async def test_push_callback_no_board_lead_logs_warning(async_session):
 async def test_rewrite_respects_dependency_topology(async_session, board_with_agents):
     """Fix C (Incident 2026-07-04): Rewrite ueber eine Dependency-Kette
     (Code ← Deploy ← Verify) darf NUR den Upstream sofort dispatchen.
-    Dependents gehen auf `inbox` (Kaskaden-Dispatch nach Upstream-done) und
-    bekommen einen Warte-Hinweis in ihrer Rewrite-Directive.
+    Dependents bleiben in_progress-undispatched (done→inbox verbietet der
+    Prod-Transition-Trigger enforce_task_transition!) und bekommen einen
+    Warte-Hinweis; die Done-Kaskade dispatcht sie nach Upstream-done.
 
     Der alte parallele Re-Dispatch liess den Verifier vor dem Fix laufen →
     falscher Blocker + Operator-Approval.
@@ -864,10 +865,12 @@ async def test_rewrite_respects_dependency_topology(async_session, board_with_ag
     for t in (code, deploy, verify):
         await async_session.refresh(t)
 
-    # Upstream startet sofort, Dependents warten in inbox
+    # Upstream startet sofort; Dependents warten als in_progress-undispatched
     assert code.status == "in_progress"
-    assert deploy.status == "inbox", "Dependent darf NICHT sofort laufen"
-    assert verify.status == "inbox", "Dependent darf NICHT sofort laufen"
+    assert deploy.status == "in_progress"
+    assert deploy.dispatched_at is None, "Dependent darf NICHT dispatcht werden"
+    assert verify.status == "in_progress"
+    assert verify.dispatched_at is None, "Dependent darf NICHT dispatcht werden"
     assert dispatch_calls == [code.id], (
         f"Nur der Upstream wird sofort dispatcht, got: {dispatch_calls}"
     )

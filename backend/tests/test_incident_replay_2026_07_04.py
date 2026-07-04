@@ -142,10 +142,14 @@ async def test_incident_replay_zero_operator_approvals(client: AsyncClient, fake
         code_f = await s.get(Task, code.id)
         deploy_f = await s.get(Task, deploy.id)
         verify_f = await s.get(Task, verify.id)
-    # Fix C: Nur der Upstream startet — kein Verifier-Race mehr.
+    # Fix C: Nur der Upstream startet — kein Verifier-Race mehr. Dependents
+    # bleiben in_progress-undispatched (done→inbox verbietet der Prod-
+    # Transition-Trigger).
     assert code_f.status == "in_progress"
-    assert deploy_f.status == "inbox"
-    assert verify_f.status == "inbox"
+    assert deploy_f.status == "in_progress"
+    assert deploy_f.dispatched_at is None
+    assert verify_f.status == "in_progress"
+    assert verify_f.dispatched_at is None
     assert dispatched == [code.id]
     assert await _pending_approvals(board_id) == []
 
@@ -210,6 +214,41 @@ async def test_incident_replay_zero_operator_approvals(client: AsyncClient, fake
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         code_f = await s.get(Task, code.id)
     assert code_f.status == "in_progress"
+
+    # ── Akt 5: Coder liefert den Fix → Done-Kaskade weckt den wartenden
+    # Dependent (in_progress-undispatched) ──────────────────────────────
+    dispatched.clear()
+    with triage_redis, telegram, \
+         patch("app.services.dispatch.auto_dispatch_task", new=_capture_dispatch):
+        r = await client.post(
+            f"/api/v1/agent/boards/{board_id}/tasks/{code.id}/comments",
+            headers={"Authorization": f"Bearer {tokens['Coder']}"},
+            json={
+                "content": (
+                    "## Was wurde gemacht\nintersectBoxes durch intersectObjects "
+                    "ersetzt und gepusht.\n\n## Was hat funktioniert\nFix + "
+                    "lokale Verifikation via grep.\n\n## Was war unklar\n"
+                    "Nichts.\n\n## Lesson fuer Agent-Memory\nAPI-Existenz vor "
+                    "Nutzung gegen die Docs pruefen."
+                ),
+                "comment_type": "reflection",
+            },
+        )
+        assert r.status_code in (200, 201), r.text
+        r = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{code.id}",
+            headers={"Authorization": f"Bearer {tokens['Coder']}"},
+            json={"status": "done"},
+        )
+        assert r.status_code == 200, r.text
+        import asyncio as _aio2
+        await _aio2.sleep(0)
+    assert deploy.id in dispatched, (
+        "Done-Kaskade muss den wartenden Rewrite-Dependent dispatchen"
+    )
+    assert verify.id not in dispatched, (
+        "Verify wartet weiter auf Deploy (Topologie-Ordnung)"
+    )
 
     # ── Finale Assertion: der gesamte Vorfall lief OHNE Operator ────────
     async with AsyncSession(test_engine, expire_on_commit=False) as s:

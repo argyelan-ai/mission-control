@@ -761,14 +761,23 @@ class TaskMonitorMixin:
 
             # Dedup: Eskalation nur einmal pro 2h anstossen (escalate selbst
             # ist zusaetzlich idempotent gegen existierende pending Approvals).
+            # Key erst NACH erfolgreichem Escalate setzen — sonst unterdrueckt
+            # ein Commit-Fehler die Eskalation fuer 2h (genau der stille Tod,
+            # den Fix E verhindert).
             dedup_key = f"mc:watchdog:blocker_escalated:{task.id}"
             if await redis.get(dedup_key):
                 continue
-            await redis.set(dedup_key, "1", ex=7200)
 
-            approval = await escalate_blocker_to_operator(
-                session, task=task, reason="triage_timeout",
-            )
+            try:
+                approval = await escalate_blocker_to_operator(
+                    session, task=task, reason="triage_timeout",
+                )
+            except Exception as e:  # noqa: BLE001 — naechster Tick versucht erneut
+                logger.warning(
+                    "Blocker-Eskalation fehlgeschlagen fuer '%s': %s", task.title, e,
+                )
+                continue
+            await redis.set(dedup_key, "1", ex=7200)
             if approval:
                 logger.info(
                     "Blocker-Triage abgelaufen (%dmin > %dmin): '%s' → Operator",

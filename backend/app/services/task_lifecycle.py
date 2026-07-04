@@ -644,8 +644,11 @@ async def execute_review_decision(
         )
         for dep in dep_result.all():
             dependent_task = await session.get(Task, dep.task_id)
+            # in_progress + dispatched_at=NULL = reopened Rewrite-Dependent,
+            # der auf diesen Upstream gewartet hat (Fix C — done→inbox ist
+            # durch den Prod-Transition-Trigger verboten).
             if (dependent_task
-                    and dependent_task.status == "inbox"
+                    and dependent_task.status in ("inbox", "in_progress")
                     and not dependent_task.dispatched_at
                     and await dependencies_met(session, dependent_task)):
                 from app.utils import create_tracked_task
@@ -1718,19 +1721,21 @@ async def handle_phase_approval_decision(
                     waits_on_upstream = True
                     break
 
-            # Wartende Dependents gehen auf `inbox` — die bestehende
-            # Done-Kaskade (agent_task_status/task_lifecycle) dispatcht sie
-            # automatisch, sobald der Vorgaenger erneut done ist. Sofort
-            # startbare Subtasks behalten das alte Verhalten (in_progress +
-            # expliziter Re-Dispatch; Incident 2026-05-20: ohne aktiven
-            # Dispatch hing ein reopened Subtask 1h still).
-            new_st_status = "inbox" if waits_on_upstream else "in_progress"
+            # Alle reopneten Subtasks gehen auf `in_progress` — Marks Prod-DB
+            # hat einen enforce_task_transition-Trigger, der aus `done` NUR
+            # `in_progress` erlaubt (done→inbox = check_violation; von den
+            # SQLite-Tests nicht abgedeckt!). Wartende Dependents bleiben
+            # dispatched_at=NULL und werden NICHT dispatcht — die Done-Kaskade
+            # weckt sie, sobald der Vorgaenger erneut done ist; der Watchdog
+            # _check_undispatched_tasks ist das Safety-Net. Sofort startbare
+            # Subtasks behalten den expliziten Re-Dispatch (Incident
+            # 2026-05-20: ohne aktiven Dispatch hing ein reopened Subtask 1h).
             await record_task_event(
-                session, st.id, st.status, new_st_status,
+                session, st.id, st.status, "in_progress",
                 changed_by="agent", agent_id=agent.id,
                 reason="phase_rewrite_request",
             )
-            st.status = new_st_status
+            st.status = "in_progress"
             st.completed_at = None
             st.dispatched_at = None
             st.ack_at = None
