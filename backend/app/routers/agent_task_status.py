@@ -796,6 +796,16 @@ async def agent_delete_task(
         ag.current_task_id = None
         session.add(ag)
 
+    # Loops (ADR-051): nullable FKs loesen — Runner wertet geloeschte
+    # laufende Runde als Fehlrunde.
+    from app.models.loop import Loop, LoopRound
+    for lp in (await session.exec(select(Loop).where(Loop.current_task_id == task_id))).all():
+        lp.current_task_id = None
+        session.add(lp)
+    for lr in (await session.exec(select(LoopRound).where(LoopRound.task_id == task_id))).all():
+        lr.task_id = None
+        session.add(lr)
+
     await session.delete(task)
     await session.commit()
 

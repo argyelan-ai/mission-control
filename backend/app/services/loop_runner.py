@@ -1,0 +1,419 @@
+"""Loop-Runner — Meta-Controller für ergebnisgesteuerte Task-Schleifen (ADR-051, L1).
+
+Der Runner führt selbst NICHTS aus. Pro Runde erzeugt er einen normalen
+Parent-Task (Board-Lead-first via create_task_internal, kein assigned_agent_id)
+und beobachtet dessen Ausgang. Danach entscheidet er:
+
+    Runde terminal → auswerten (LoopRound.outcome + Report)
+      → Circuit-Breaker (N Fehlrunden in Folge → paused + loop_gate-Approval)
+      → Stop-Bedingungen (max_rounds, max_duration, backlog_empty bei project)
+      → Human-Gate (human_every_n_rounds → waiting_gate + loop_gate-Approval)
+      → sonst: nächste Runde starten.
+
+Leitplanken (Workspace-Praxis): jede Runde läuft durch die vollen Gates der
+Task-Pipeline (Review-Pflicht, Watchdog, Approvals); der Runner startet keine
+neue Runde, solange die letzte nicht terminal ist; 1 aktiver Loop pro Board.
+"""
+
+import asyncio
+import logging
+from datetime import timedelta
+
+from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from app.database import engine
+from app.models.approval import Approval
+from app.models.loop import Loop, LoopRound
+from app.models.task import Task, TaskComment
+from app.redis_client import get_redis
+from app.services.activity import emit_event
+from app.utils import utcnow
+
+logger = logging.getLogger("mc.loop_runner")
+
+TERMINAL_TASK_STATUSES = ("done", "failed")
+REPORT_HISTORY_ROUNDS = 3  # wie viele Runden-Reports in den nächsten Brief wandern
+
+LOCK_KEY = "mc:loop_runner:cycle_lock"
+
+
+def _short(text: str | None, limit: int = 500) -> str:
+    if not text:
+        return ""
+    text = text.strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+class LoopRunnerService:
+    """Singleton nach Watchdog-Muster: Intervall-Tick mit Per-Cycle-Redis-Lock."""
+
+    def __init__(self, interval: int = 30) -> None:
+        self.interval = interval
+        self._running = False
+        self._task: asyncio.Task | None = None
+
+    async def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._task = asyncio.create_task(self._run_loop())
+        logger.info("Loop-Runner gestartet (Intervall %ss)", self.interval)
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._task:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+        logger.info("Loop-Runner gestoppt")
+
+    async def _run_loop(self) -> None:
+        await asyncio.sleep(15)  # Boot-Grace, DB/Redis hochfahren lassen
+        while self._running:
+            try:
+                redis = await get_redis()
+                got_lock = await redis.set(
+                    LOCK_KEY, "1", nx=True, ex=self.interval * 3
+                )
+                if got_lock:
+                    async with AsyncSession(engine, expire_on_commit=False) as session:
+                        await self.tick(session)
+                    await redis.delete(LOCK_KEY)
+            except Exception:  # noqa: BLE001 — ein Fehler darf den Runner nie killen
+                logger.exception("Loop-Runner-Tick fehlgeschlagen")
+            await asyncio.sleep(self.interval)
+
+    # ── Kern-Tick (separat aufrufbar für Tests) ─────────────────────────
+
+    async def tick(self, session: AsyncSession) -> None:
+        result = await session.exec(select(Loop).where(Loop.status == "running"))
+        for loop in list(result.all()):
+            try:
+                await self._advance(session, loop)
+            except Exception:  # noqa: BLE001
+                logger.exception("Loop %s: advance fehlgeschlagen", loop.id)
+
+    async def _advance(self, session: AsyncSession, loop: Loop) -> None:
+        if loop.current_task_id is None:
+            # Frisch gestartet oder nach Gate/Resume: nächste Runde fällig.
+            await self._start_round(session, loop)
+            return
+
+        task = await session.get(Task, loop.current_task_id)
+        if task is None:
+            # Runden-Task wurde gelöscht → als Fehlrunde werten.
+            await self._complete_round(session, loop, outcome="failed",
+                                       note="Runden-Task wurde gelöscht")
+            return
+        if task.status not in TERMINAL_TASK_STATUSES:
+            return  # Runde läuft — volle Gates der Task-Pipeline gelten.
+
+        await self._complete_round(session, loop, outcome=task.status, task=task)
+
+    # ── Runde starten ───────────────────────────────────────────────────
+
+    async def _start_round(self, session: AsyncSession, loop: Loop) -> None:
+        from app.services.task_create import create_task_internal
+
+        round_no = loop.current_round_no + 1
+        brief = await self._build_round_brief(session, loop, round_no)
+        title = f"Loop round {round_no}/{loop.max_rounds}: {loop.name}"
+
+        task = await create_task_internal(
+            session,
+            board_id=loop.board_id,
+            title=title,
+            description=brief,
+            project_id=loop.project_id,
+            is_auto_created=True,
+            auto_reason=f"loop:{loop.id}:round:{round_no}",
+            # KEIN assigned_agent_id → Board-Lead-first-Dispatch greift.
+        )
+
+        session.add(LoopRound(
+            loop_id=loop.id, round_no=round_no, task_id=task.id,
+            started_at=utcnow(),
+        ))
+        loop.current_round_no = round_no
+        loop.current_task_id = task.id
+        loop.updated_at = utcnow()
+        session.add(loop)
+        await session.commit()
+
+        await emit_event(
+            session, "loop.round_started",
+            f"Loop '{loop.name}': Runde {round_no}/{loop.max_rounds} gestartet",
+            board_id=loop.board_id, task_id=task.id,
+            detail={"loop_id": str(loop.id), "round_no": round_no},
+        )
+
+    async def _build_round_brief(
+        self, session: AsyncSession, loop: Loop, round_no: int,
+    ) -> str:
+        parts = [
+            f"# Loop: {loop.name} — Runde {round_no}/{loop.max_rounds}",
+            "",
+            "## Ziel des Loops",
+            loop.goal.strip(),
+        ]
+
+        # Backlog-Quelle
+        if loop.backlog_source == "markdown" and loop.backlog_md:
+            parts += ["", "## Backlog",
+                      loop.backlog_md.strip(),
+                      "",
+                      "Nimm das NÄCHSTE noch offene Item aus dem Backlog. "
+                      "Genau EIN Item pro Runde — nicht mehrere."]
+        elif loop.backlog_source == "project":
+            parts += ["", "## Backlog",
+                      "Das Backlog sind die offenen Tasks dieses Projekts. "
+                      "Nimm den wichtigsten offenen Task als Runden-Thema "
+                      "(genau EINEN)."]
+        else:  # open_ended (und tag → L2, verhält sich bis dahin wie open_ended)
+            parts += ["", "## Backlog",
+                      "Open-ended: Finde selbst das nächste sinnvollste Item "
+                      "im Sinne des Loop-Ziels (z.B. den nächsten Bug, die "
+                      "nächste Verbesserung). Genau EIN Item pro Runde."]
+
+        if loop.round_brief:
+            parts += ["", "## Runden-Anweisungen", loop.round_brief.strip()]
+
+        # Kontinuität: Reports der letzten N Runden
+        reports = (await session.exec(
+            select(LoopRound)
+            .where(LoopRound.loop_id == loop.id, LoopRound.report != None)  # noqa: E711
+            .order_by(LoopRound.round_no.desc())  # type: ignore[union-attr]
+            .limit(REPORT_HISTORY_ROUNDS)
+        )).all()
+        if reports:
+            parts += ["", f"## Reports der letzten {len(reports)} Runden"]
+            for r in sorted(reports, key=lambda x: x.round_no):
+                parts += [f"### Runde {r.round_no}", (r.report or "").strip()]
+
+        parts += [
+            "",
+            "## Loop-Kontrakt (BINDEND)",
+            "- Diese Runde ist Teil einer autonomen Schleife. Arbeite GENAU ein "
+            "Backlog-Item ab — kein Scope-Creep.",
+            "- Ist das Backlog vollständig abgearbeitet oder das Loop-Ziel "
+            "erreicht, schreibe das EXPLIZIT in die Abschluss-Reflexion "
+            "(»BACKLOG LEER« bzw. »ZIEL ERREICHT«).",
+            "- Merges/destruktive Aktionen laufen über die normalen Gates.",
+        ]
+        return "\n".join(parts)
+
+    # ── Runde auswerten ──────────────────────────────────────────────────
+
+    async def _complete_round(
+        self, session: AsyncSession, loop: Loop, *,
+        outcome: str, task: Task | None = None, note: str = "",
+    ) -> None:
+        round_row = (await session.exec(
+            select(LoopRound).where(
+                LoopRound.loop_id == loop.id,
+                LoopRound.round_no == loop.current_round_no,
+            )
+        )).first()
+
+        report = await self._build_round_report(session, loop, outcome, task, note)
+        goal_reached = False
+        if task is not None:
+            reflection = await self._last_reflection(session, task)
+            up = (reflection or "").upper()
+            goal_reached = "BACKLOG LEER" in up or "ZIEL ERREICHT" in up
+
+        if round_row:
+            round_row.outcome = outcome
+            round_row.report = report
+            round_row.finished_at = utcnow()
+            session.add(round_row)
+
+        loop.rounds_completed += 1
+        loop.current_task_id = None
+        if outcome == "done":
+            loop.consecutive_failed_rounds = 0
+        else:
+            loop.consecutive_failed_rounds += 1
+        loop.updated_at = utcnow()
+        session.add(loop)
+        await session.commit()
+
+        await emit_event(
+            session, "loop.round_completed",
+            f"Loop '{loop.name}': Runde {loop.current_round_no} → {outcome}",
+            board_id=loop.board_id, task_id=task.id if task else None,
+            severity="info" if outcome == "done" else "warning",
+            detail={"loop_id": str(loop.id), "round_no": loop.current_round_no,
+                    "outcome": outcome},
+        )
+
+        # 1) Circuit-Breaker: N Fehlrunden in Folge → Pause + Eskalation.
+        if loop.consecutive_failed_rounds >= max(loop.pause_on_failed_rounds, 1):
+            await self._pause_with_gate(
+                session, loop,
+                reason="circuit_breaker",
+                description=(
+                    f"Loop '{loop.name}' pausiert: "
+                    f"{loop.consecutive_failed_rounds} Fehlrunden in Folge"
+                ),
+            )
+            return
+
+        # 2) Stop-Bedingungen (an Rundengrenzen geprüft).
+        stop_reason = None
+        if goal_reached and loop.stop_on_backlog_empty:
+            stop_reason = "backlog_empty"
+        elif loop.rounds_completed >= loop.max_rounds:
+            stop_reason = "max_rounds"
+        elif (
+            loop.max_duration_minutes and loop.started_at
+            and utcnow() - loop.started_at >= timedelta(minutes=loop.max_duration_minutes)
+        ):
+            stop_reason = "max_duration"
+        if stop_reason:
+            await self._finish(session, loop, reason=stop_reason)
+            return
+
+        # 3) Human-Gate nach Zeitplan (Default 0 = nie; Marks Entscheid:
+        #    Gates nur bei Problemen/Merges — Merges gated die Task-Pipeline).
+        if (
+            loop.human_every_n_rounds > 0
+            and loop.rounds_completed % loop.human_every_n_rounds == 0
+        ):
+            await self._wait_for_gate(session, loop)
+            return
+
+        # 4) Weiter: nächste Runde sofort.
+        await self._start_round(session, loop)
+
+    async def _build_round_report(
+        self, session: AsyncSession, loop: Loop,
+        outcome: str, task: Task | None, note: str,
+    ) -> str:
+        lines = [f"**Outcome:** {outcome}"]
+        if note:
+            lines.append(f"**Hinweis:** {note}")
+        if task is not None:
+            lines.append(f"**Task:** {task.title} (`{task.id}`)")
+            from app.models.deliverable import TaskDeliverable
+            deliverables = (await session.exec(
+                select(TaskDeliverable).where(TaskDeliverable.task_id == task.id)
+            )).all()
+            if deliverables:
+                lines.append(
+                    "**Deliverables:** "
+                    + "; ".join(_short(d.title, 80) for d in deliverables[:5])
+                )
+            reflection = await self._last_reflection(session, task)
+            if reflection:
+                lines.append(f"**Reflexion:** {_short(reflection)}")
+        return "\n".join(lines)
+
+    async def _last_reflection(self, session: AsyncSession, task: Task) -> str | None:
+        comment = (await session.exec(
+            select(TaskComment)
+            .where(
+                TaskComment.task_id == task.id,
+                TaskComment.comment_type.in_(["reflection", "progress"]),  # type: ignore[attr-defined]
+            )
+            .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        return comment.content if comment else None
+
+    # ── Gates / Pause / Finish ───────────────────────────────────────────
+
+    async def _create_gate_approval(
+        self, session: AsyncSession, loop: Loop, *, reason: str, description: str,
+    ) -> Approval:
+        approval = Approval(
+            board_id=loop.board_id,
+            task_id=None,
+            agent_id=None,
+            action_type="loop_gate",
+            description=description,
+            payload={
+                "loop_id": str(loop.id),
+                "loop_name": loop.name,
+                "round_no": loop.current_round_no,
+                "rounds_completed": loop.rounds_completed,
+                "max_rounds": loop.max_rounds,
+                "reason": reason,
+                "consecutive_failed_rounds": loop.consecutive_failed_rounds,
+            },
+            expires_at=utcnow() + timedelta(hours=24),
+        )
+        session.add(approval)
+        await session.commit()
+        await session.refresh(approval)
+
+        try:
+            from app.services.telegram_bot import telegram_bot
+            await telegram_bot.send_approval_telegram(
+                approval.id, f"Loop '{loop.name}'", description,
+                f"Runde {loop.rounds_completed}/{loop.max_rounds} — "
+                f"Approve = weiterlaufen, Reject = pausiert lassen.",
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Loop-Gate-Telegram fehlgeschlagen: %s", e)
+        return approval
+
+    async def _pause_with_gate(
+        self, session: AsyncSession, loop: Loop, *, reason: str, description: str,
+    ) -> None:
+        loop.status = "paused"
+        loop.updated_at = utcnow()
+        session.add(loop)
+        await session.commit()
+        await self._create_gate_approval(
+            session, loop, reason=reason, description=description,
+        )
+        await emit_event(
+            session, "loop.paused", description,
+            board_id=loop.board_id, severity="warning",
+            detail={"loop_id": str(loop.id), "reason": reason},
+        )
+
+    async def _wait_for_gate(self, session: AsyncSession, loop: Loop) -> None:
+        loop.status = "waiting_gate"
+        loop.updated_at = utcnow()
+        session.add(loop)
+        await session.commit()
+        await self._create_gate_approval(
+            session, loop,
+            reason="scheduled_gate",
+            description=(
+                f"Loop '{loop.name}': Gate nach Runde {loop.rounds_completed} — "
+                "weiterlaufen?"
+            ),
+        )
+        await emit_event(
+            session, "loop.gate_requested",
+            f"Loop '{loop.name}' wartet auf dein Go (Runde {loop.rounds_completed})",
+            board_id=loop.board_id, severity="info",
+            detail={"loop_id": str(loop.id)},
+        )
+
+    async def _finish(
+        self, session: AsyncSession, loop: Loop, *, reason: str,
+    ) -> None:
+        loop.status = "done"
+        loop.finished_at = utcnow()
+        loop.last_error = None
+        loop.updated_at = utcnow()
+        session.add(loop)
+        await session.commit()
+        await emit_event(
+            session, "loop.finished",
+            f"Loop '{loop.name}' abgeschlossen ({reason}) — "
+            f"{loop.rounds_completed} Runden",
+            board_id=loop.board_id,
+            detail={"loop_id": str(loop.id), "reason": reason},
+        )
+
+
+loop_runner = LoopRunnerService()

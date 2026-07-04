@@ -72,6 +72,7 @@ from app.routers import (
     mcp_servers,
     model_prices,
     models,
+    loops,
     project_git,
     projects,
     repos,
@@ -98,6 +99,7 @@ from app.services.obsidian_export import obsidian_export
 from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.task_runner import task_runner
+from app.services.loop_runner import loop_runner
 from app.services.telegram_bot import telegram_bot
 from app.services.watchdog import watchdog
 # Vault Memory (M.1 Read Foundation + M.2 Write Path) — services + router.
@@ -135,6 +137,7 @@ async def lifespan(app: FastAPI):
     await scheduler.start()
     await watchdog.start()
     await task_runner.start()
+    await loop_runner.start()  # Loops L1 (ADR-051) — Runden-Meta-Controller
     await intelligence.start()
     # Portability fail-loud: warn (don't crash) if the MC home mount is absent.
     from app.services.fs_roots import mc_home as _mc_home
@@ -352,6 +355,7 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "obsidian_export_started", False):
         await obsidian_export.stop()
     await runtime_schedule_service.stop()
+    await loop_runner.stop()
     await task_runner.stop()
     await watchdog.stop()
     await scheduler.stop()
@@ -691,6 +695,7 @@ app.include_router(models.router)
 app.include_router(runtimes.router)
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
+app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)

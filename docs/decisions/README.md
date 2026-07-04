@@ -68,6 +68,7 @@ Jedes ADR hat folgende Sektionen:
 | [048](048-host-registry.md) | Host-Registry — generische Multi-Host Control-Plane statt neuer runtime_type pro Box | Accepted | 2026-07-02 | Backend/Runtime · Backend/DB · Frontend/Runtimes · Infra/Runtime |
 | [049](049-omp-native-tui-session.md) | omp Native-TUI Session — echte scrollbare omp-CLI auf der Sessions-Seite (Hook-Completion + `@file`-Inject + SIGKILL-Watchdog + Per-Task-Isolation), ersetzt das ADR-045-Headless-Modell | Proposed | 2026-07-04 | Infra/Runtime · Backend/Runtime |
 | [050](050-repos-registry.md) | Repos Registry — first-class Repo-Modell (`repos` + `projects.repo_id`), per-Repo-Arbeitsregeln in der Dispatch-Directive, `/repos`-Verwaltungsseite, Legacy-Sync-Kontrakt | Accepted | 2026-07-04 | Backend/DB · Backend/Dispatch · Frontend/Pages |
+| [051](051-loops.md) | Loops — ergebnisgesteuerte Task-Schleifen als Meta-Controller über normale Tasks (`loops`+`loop_rounds`, Loop-Runner, `loop_gate`-Approval, `/loops`; L1 mit Runden-/Zeitbudget, Circuit-Breaker 2 Fehlrunden, 1 Loop/Board) | Accepted | 2026-07-04 | Backend/DB · Backend/Services · Backend/Approvals · Frontend/Pages |
 
 ## Neue ADRs schreiben
 

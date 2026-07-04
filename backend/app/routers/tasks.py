@@ -1702,6 +1702,22 @@ async def delete_task(
     for item in checklist_result.all():
         await session.delete(item)
 
+    # 6g. Loops (ADR-051): nullable FKs auf tasks — Referenzen lösen.
+    # Der Loop-Runner wertet eine gelöschte laufende Runde als Fehlrunde.
+    from app.models.loop import Loop, LoopRound
+    loop_result = await session.exec(
+        select(Loop).where(Loop.current_task_id == task_id)
+    )
+    for lp in loop_result.all():
+        lp.current_task_id = None
+        session.add(lp)
+    loop_round_result = await session.exec(
+        select(LoopRound).where(LoopRound.task_id == task_id)
+    )
+    for lr in loop_round_result.all():
+        lr.task_id = None
+        session.add(lr)
+
     # 7. Clear agent current_task_id
     agent_result = await session.exec(
         select(Agent).where(Agent.current_task_id == task_id)
