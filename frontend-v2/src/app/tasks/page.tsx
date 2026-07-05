@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, Suspense } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
+import { useRouter, useSearchParams } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FolderKanban,
@@ -983,6 +984,8 @@ function ProjectDetail({
 function TasksPageContent() {
   const { activeBoardId } = useAppStore();
   const qc = useQueryClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [projectViewId, setProjectViewId] = useState<string | null>(null);
   const [confirmDeleteProject, setConfirmDeleteProject] = useState(false);
@@ -991,12 +994,53 @@ function TasksPageContent() {
   // detail only after a tap (iPhone-Befund Operator).
   const [mobileView, setMobileView] = useState<"list" | "detail">("list");
 
-  const { data: allTasks = [] } = useQuery({
+  // Deep-link consumption: /tasks?taskId=<uuid> (from LoopDetailPanel's "View
+  // task" and VoicePreviewSheet). Read the id once, strip it from the URL
+  // immediately so reload/back stays clean, then keep it around only long
+  // enough for TaskListColumn to expand its (possibly collapsed) group and
+  // scroll the row into view.
+  const deepLinkReadRef = useRef(false);
+  const [deepLinkTaskId, setDeepLinkTaskId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (deepLinkReadRef.current) return;
+    deepLinkReadRef.current = true;
+    const id = searchParams.get("taskId");
+    if (!id) return;
+    setDeepLinkTaskId(id);
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("taskId");
+    const qs = params.toString();
+    router.replace(qs ? `/tasks?${qs}` : "/tasks", { scroll: false });
+  }, [searchParams, router]);
+
+  const { data: allTasks = [], isSuccess: tasksLoaded } = useQuery({
     queryKey: ["tasks", activeBoardId],
     queryFn: () => api.tasks.list(activeBoardId!),
     enabled: !!activeBoardId,
     refetchInterval: 15_000,
   });
+
+  // Once the tasks query has settled, try to resolve the deep-linked task.
+  // Found → select it (opens TaskDetailBody). Not found → drop it silently,
+  // no toast, no crash. Only fires once tasksLoaded so an empty first render
+  // of `allTasks` (query still in flight) doesn't read as "not found".
+  useEffect(() => {
+    if (!deepLinkTaskId || !tasksLoaded) return;
+    const target = allTasks.find((t) => t.id === deepLinkTaskId);
+    if (target) {
+      setSelectedTaskId(target.id);
+      setProjectViewId(null);
+      setMobileView("detail");
+    } else {
+      setDeepLinkTaskId(null);
+    }
+  }, [deepLinkTaskId, allTasks, tasksLoaded]);
+
+  // TaskListColumn only needs to try expanding a group once real task data is
+  // in — handing it the id earlier (while `tasks` is still []) would make it
+  // conclude "not found" and clear the id before the effect above ever runs.
+  const focusTaskId = tasksLoaded ? deepLinkTaskId : null;
 
   const { data: agents = [] } = useQuery({
     queryKey: ["agents", activeBoardId],
@@ -1087,6 +1131,8 @@ function TasksPageContent() {
           selectedTaskId={selectedTaskId}
           onSelectTask={handleSelectTask}
           onOpenProject={handleOpenProject}
+          focusTaskId={focusTaskId}
+          onFocusHandled={() => setDeepLinkTaskId(null)}
         />
       </div>
 
@@ -1206,7 +1252,9 @@ function TasksPageContent() {
 export default function TasksPage() {
   return (
     <AppShell>
-      <TasksPageContent />
+      <Suspense fallback={null}>
+        <TasksPageContent />
+      </Suspense>
     </AppShell>
   );
 }

@@ -292,6 +292,8 @@ export default function TaskListColumn({
   selectedTaskId,
   onSelectTask,
   onOpenProject,
+  focusTaskId,
+  onFocusHandled,
 }: {
   tasks: Task[];
   projects: Project[];
@@ -300,6 +302,9 @@ export default function TaskListColumn({
   selectedTaskId: string | null;
   onSelectTask: (task: Task) => void;
   onOpenProject: (projectId: string) => void;
+  /** Deep-link target (e.g. from /tasks?taskId=…): expand its group + scroll to it once. */
+  focusTaskId?: string | null;
+  onFocusHandled?: () => void;
 }) {
   // First visit (nothing stored): project view, all groups collapsed —
   // a scannable project overview instead of a wall of status lanes.
@@ -417,6 +422,42 @@ export default function TaskListColumn({
     [tasks],
   );
 
+  // Deep-link focus: expand whichever group currently hides focusTaskId, then
+  // scroll its row into view. Subtasks never appear here (visible filters
+  // them out) — the effect just no-ops for those, TaskDetailBody still opens
+  // via the page-level selection. One-shot per id: onFocusHandled clears the
+  // prop upstream so this doesn't re-fire on every 15s task refetch.
+  useEffect(() => {
+    if (!focusTaskId) return;
+    const group = groups.find((g) => g.tasks.some((t) => t.id === focusTaskId));
+    if (!group) {
+      onFocusHandled?.();
+      return;
+    }
+    const isCollapsed = defaultCollapsed(group) !== toggled.has(group.key);
+    if (isCollapsed) {
+      setToggled((prev) => {
+        const next = new Set(prev);
+        if (next.has(group.key)) next.delete(group.key);
+        else next.add(group.key);
+        return next;
+      });
+    }
+    // Paginated groups (e.g. Done) only render the first DONE_PAGE rows —
+    // bump the limit so the target is actually in the DOM before scrolling.
+    const index = group.tasks.findIndex((t) => t.id === focusTaskId);
+    const currentLimit = limits[group.key] ?? DONE_PAGE;
+    if (index >= currentLimit) {
+      setLimits((m) => ({ ...m, [group.key]: index + 1 }));
+    }
+    const raf = requestAnimationFrame(() => {
+      document.getElementById(`task-row-${focusTaskId}`)?.scrollIntoView?.({ block: "center" });
+    });
+    onFocusHandled?.();
+    return () => cancelAnimationFrame(raf);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusTaskId]);
+
   return (
     <div className="flex flex-col h-full min-h-0 w-full">
       {/* Header */}
@@ -517,16 +558,17 @@ export default function TaskListColumn({
               {!isCollapsed && (
                 <div className="px-1">
                   {shown.map((t) => (
-                    <ListRow
-                      key={t.id}
-                      task={t}
-                      agents={agents}
-                      boardId={boardId}
-                      selected={t.id === selectedTaskId}
-                      showProject={mode === "status"}
-                      projectName={t.project_id ? (projectName.get(t.project_id) ?? null) : null}
-                      onClick={() => onSelectTask(t)}
-                    />
+                    <div key={t.id} id={`task-row-${t.id}`}>
+                      <ListRow
+                        task={t}
+                        agents={agents}
+                        boardId={boardId}
+                        selected={t.id === selectedTaskId}
+                        showProject={mode === "status"}
+                        projectName={t.project_id ? (projectName.get(t.project_id) ?? null) : null}
+                        onClick={() => onSelectTask(t)}
+                      />
+                    </div>
                   ))}
                   {g.tasks.length > limit && (
                     <button
