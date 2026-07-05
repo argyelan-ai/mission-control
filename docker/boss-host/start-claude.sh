@@ -49,8 +49,8 @@ unset OPENAI_API_KEY
 unset OPENAI_MODEL
 unset CLAUDE_CODE_USE_OPENAI
 
-# Modell explizit auf Opus 4.7
-export ANTHROPIC_MODEL="claude-opus-4-7"
+# Modell explizit auf Opus 4.8
+export ANTHROPIC_MODEL="claude-opus-4-8"
 
 # --dangerously-skip-permissions matcht aktuelles Container-Verhalten.
 # Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =
