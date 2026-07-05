@@ -14,6 +14,7 @@ import asyncio
 import json
 import logging
 import os
+import socket
 from typing import Optional
 from urllib.parse import urlparse
 
@@ -32,17 +33,32 @@ router = APIRouter(prefix="/api/v1/browser-live", tags=["browser-live"])
 CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
 
 
-def _rewrite_ws_url(ws_url: str, base_url: str) -> str:
+def _resolve_cdp_netloc(base_url: str = None) -> str:
+    """Chromium's debug endpoint rejects any Host header that is not an IP
+    or localhost ("Host header is specified and is not an IP address or
+    localhost", live finding 05.07.). Resolve the service name to its
+    container IP per call — IPs change on container recreate."""
+    parsed = urlparse(base_url or CDP_BASE_URL)
+    host = parsed.hostname or "cdp-browser"
+    port = parsed.port or 9223
+    try:
+        host = socket.gethostbyname(host)
+    except OSError:
+        pass  # tests / exotic setups: keep the name, let the call fail loudly
+    return f"{host}:{port}"
+
+
+def _rewrite_ws_url(ws_url: str, netloc: str) -> str:
     """CDP reports webSocketDebuggerUrl with its OWN idea of host (127.0.0.1)
     — rewrite host:port to the address we actually reach it under."""
-    base = urlparse(base_url)
     parsed = urlparse(ws_url)
-    return parsed._replace(netloc=base.netloc).geturl()
+    return parsed._replace(netloc=netloc).geturl()
 
 
 async def _list_page_targets() -> list[dict]:
+    netloc = _resolve_cdp_netloc()
     async with httpx.AsyncClient(timeout=5.0) as client:
-        resp = await client.get(f"{CDP_BASE_URL}/json/list")
+        resp = await client.get(f"http://{netloc}/json/list")
         resp.raise_for_status()
         targets = resp.json()
     pages = [t for t in targets if t.get("type") == "page"]
@@ -110,7 +126,7 @@ async def browser_live_ws(
         return
 
     page = next((p for p in pages if p.get("id") == target), pages[0])
-    ws_url = _rewrite_ws_url(page["webSocketDebuggerUrl"], CDP_BASE_URL)
+    ws_url = _rewrite_ws_url(page["webSocketDebuggerUrl"], _resolve_cdp_netloc())
 
     import websockets
 

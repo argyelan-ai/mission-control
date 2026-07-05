@@ -8,10 +8,22 @@ from app.routers.browser_live import _rewrite_ws_url
 
 
 def test_rewrite_ws_url_replaces_host():
-    out = _rewrite_ws_url(
-        "ws://127.0.0.1:9222/devtools/page/AB12", "http://cdp-browser:9223",
-    )
-    assert out == "ws://cdp-browser:9223/devtools/page/AB12"
+    out = _rewrite_ws_url("ws://127.0.0.1:9222/devtools/page/AB12", "10.0.0.7:9223")
+    assert out == "ws://10.0.0.7:9223/devtools/page/AB12"
+
+
+def test_resolve_cdp_netloc_falls_back_to_name(monkeypatch):
+    """Nicht auflösbarer Hostname → Name behalten (Fehler kommt dann laut
+    vom eigentlichen Call, nicht leise vom Resolver)."""
+    from app.routers.browser_live import _resolve_cdp_netloc
+    assert _resolve_cdp_netloc("http://definitely-not-resolvable-xyz:9223").endswith(":9223")
+
+
+def test_resolve_cdp_netloc_resolves_ip(monkeypatch):
+    import socket as _socket
+    from app.routers import browser_live as bl
+    monkeypatch.setattr(_socket, "gethostbyname", lambda h: "172.20.0.9")
+    assert bl._resolve_cdp_netloc("http://cdp-browser:9223") == "172.20.0.9:9223"
 
 
 @pytest.mark.asyncio

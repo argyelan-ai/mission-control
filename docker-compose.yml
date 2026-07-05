@@ -80,6 +80,9 @@ services:
     build: ./backend
     restart: unless-stopped
     logging: *default-logging
+    networks:
+      - default
+      - cdpnet
     depends_on:
       db:
         condition: service_healthy
@@ -88,6 +91,7 @@ services:
       docker-socket-proxy:
         condition: service_started
     environment:
+      CDP_BROWSER_URL: http://172.30.99.10:9223
       DATABASE_URL: postgresql+asyncpg://mc:${DB_PASSWORD}@db:5432/mission_control
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       AUTH_MODE: local
@@ -368,6 +372,10 @@ services:
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
+    networks:
+      default: {}
+      cdpnet:
+        ipv4_address: 172.30.99.10
     command:
       - --no-sandbox
       - --headless=new
@@ -405,12 +413,15 @@ services:
     depends_on:
       - cdp-browser
       - cdp-socat
+    networks:
+      - default
+      - cdpnet
     # Default entrypoint is `node /app/cli.js --headless --browser chromium --no-sandbox`
     # — we override only the trailing args. Since the live-view feature the
     # browser itself runs in the cdp-browser service (connected via CDP);
     # playwright-mcp no longer launches its own.
     command: [
-      "--cdp-endpoint", "http://cdp-browser:9223",
+      "--cdp-endpoint", "http://172.30.99.10:9223",
       "--port", "8931",
       "--host", "0.0.0.0",
       "--isolated",
@@ -453,3 +464,12 @@ volumes:
 networks:
   default:
     name: mission-control_default
+  # Dedicated subnet so cdp-browser gets a STATIC IP: Chromium's debug
+  # endpoint rejects hostname Host headers (only IPs/localhost) — both
+  # playwright-mcp and the backend must address it by IP (live finding
+  # 05.07., see routers/browser_live.py).
+  cdpnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.99.0/24
