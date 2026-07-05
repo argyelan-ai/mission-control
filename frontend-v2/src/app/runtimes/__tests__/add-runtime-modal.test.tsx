@@ -258,4 +258,74 @@ describe("AddRuntimeModal", () => {
 
     expect(await screen.findByText(/endpoint verlangt einen api-key/i)).toBeInTheDocument();
   });
+
+  it("derives a hyphen-free, backend-valid secret key for a multi-word runtime name", async () => {
+    const probeResult: ProbeEndpointResult = {
+      reachable: true,
+      models: ["m1"],
+      detected_type: "vllm_docker",
+      suggested_model: "m1",
+      error: null,
+    };
+    vi.spyOn(api.runtimes, "probeEndpoint").mockResolvedValue(probeResult);
+    const secretSpy = vi
+      .spyOn(api.secrets, "create")
+      .mockResolvedValue({ id: "sec-1" } as SecretEntry);
+    vi.spyOn(api.runtimes.db, "create").mockResolvedValue({ id: "rt-1" } as Runtime);
+
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(/http/i), "http://192.0.2.10:8000/v1");
+    await userEvent.click(screen.getByRole("button", { name: /probe/i }));
+    await screen.findByText("vLLM");
+
+    const nameInput = screen.getByPlaceholderText(/name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Spark vLLM Prod");
+
+    await userEvent.click(screen.getByLabelText(/neuer key/i));
+    // Prefilled key derived from the multi-word name — no hyphens.
+    const keyInput = screen.getByLabelText(/^name$/i) as HTMLInputElement;
+    expect(keyInput.value).not.toContain("-");
+    expect(keyInput.value).toMatch(/^[a-z0-9_]+$/);
+
+    await userEvent.type(screen.getByLabelText(/^wert$/i), "sk-secret-value");
+    await userEvent.click(screen.getByRole("button", { name: /add runtime/i }));
+
+    await waitFor(() => expect(secretSpy).toHaveBeenCalled());
+    const sentKey = secretSpy.mock.calls[0][0].key;
+    expect(sentKey).not.toContain("-");
+    expect(sentKey).toMatch(/^[a-z0-9_]+$/);
+  });
+
+  it("disables submit and shows a hint when the manual secret key contains invalid characters", async () => {
+    const probeResult: ProbeEndpointResult = {
+      reachable: true,
+      models: ["m1"],
+      detected_type: "vllm_docker",
+      suggested_model: "m1",
+      error: null,
+    };
+    vi.spyOn(api.runtimes, "probeEndpoint").mockResolvedValue(probeResult);
+
+    renderWithQuery(<AddRuntimeModal open={true} onClose={vi.fn()} />);
+
+    await userEvent.type(screen.getByPlaceholderText(/http/i), "http://192.0.2.10:8000/v1");
+    await userEvent.click(screen.getByRole("button", { name: /probe/i }));
+    await screen.findByText("vLLM");
+
+    const nameInput = screen.getByPlaceholderText(/name/i);
+    await userEvent.clear(nameInput);
+    await userEvent.type(nameInput, "Spark vLLM");
+
+    await userEvent.click(screen.getByLabelText(/neuer key/i));
+    await userEvent.type(screen.getByLabelText(/^wert$/i), "sk-secret-value");
+
+    const keyInput = screen.getByLabelText(/^name$/i);
+    await userEvent.clear(keyInput);
+    await userEvent.type(keyInput, "my-invalid key!");
+
+    expect(await screen.findByText(/nur kleinbuchstaben, zahlen und _/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /add runtime/i })).toBeDisabled();
+  });
 });

@@ -31,6 +31,18 @@ function slugify(name: string): string {
     .replace(/^-+|-+$/g, "");
 }
 
+// Backend SecretCreate.key requires ^[a-z0-9_]+$ — slugify's hyphens are not
+// valid there, so multi-word runtime names need underscores instead.
+function secretKeyify(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+const SECRET_KEY_PATTERN = /^[a-z0-9_]+$/;
+
 // Strip trailing slashes first, then ensure a single "/v1" suffix — avoids
 // double-appending when the pasted URL already ends in "/v1/".
 function normalizeEndpoint(url: string): string {
@@ -65,6 +77,11 @@ export function AddRuntimeModal({ open, onClose }: Props) {
 
   const requiresApiKeyHint = !!probe?.error && /40[13]/.test(probe.error);
 
+  // Resolved key that would actually be sent to the backend — either the
+  // user's manual override or the auto-derived fallback used at submit time.
+  const effectiveNewSecretKey = newSecretName.trim() || `${secretKeyify(name)}_api_key`;
+  const newSecretKeyInvalid = keyMode === "new" && !SECRET_KEY_PATTERN.test(effectiveNewSecretKey);
+
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeEndpoint(url),
     onSuccess: (res) => {
@@ -88,12 +105,22 @@ export function AddRuntimeModal({ open, onClose }: Props) {
       // the runtime is never created (no orphaned api_key_secret_id).
       let secretId: string | undefined;
       if (keyMode === "new") {
-        const secret = await api.secrets.create({
-          key: newSecretName.trim() || `${slugify(name)}_api_key`,
-          value: newSecretValue,
-          label: `${name} API-Key`,
-        });
-        secretId = secret.id;
+        try {
+          const secret = await api.secrets.create({
+            key: effectiveNewSecretKey,
+            value: newSecretValue,
+            label: `${name} API-Key`,
+          });
+          secretId = secret.id;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("409") || msg.includes("existiert bereits")) {
+            throw new Error(
+              'Key existiert bereits (evtl. aus einem vorherigen Versuch) — wähle ihn unter „Vorhandener Key" aus.',
+            );
+          }
+          throw err;
+        }
       } else if (keyMode === "existing") {
         secretId = existingSecretId || undefined;
       }
@@ -312,7 +339,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                             onChange={() => {
                               setKeyMode(opt.value);
                               if (opt.value === "new" && !newSecretName.trim()) {
-                                setNewSecretName(`${slugify(name)}_api_key`);
+                                setNewSecretName(`${secretKeyify(name)}_api_key`);
                               }
                             }}
                           />
@@ -348,14 +375,19 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                           aria-label="Name"
                           value={newSecretName}
                           onChange={(e) => setNewSecretName(e.target.value)}
-                          placeholder={`${slugify(name)}_api_key`}
+                          placeholder={`${secretKeyify(name)}_api_key`}
                           className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
                           style={{
                             backgroundColor: C.bgSurface,
-                            border: `1px solid ${C.border}`,
+                            border: `1px solid ${newSecretKeyInvalid ? C.error : C.border}`,
                             color: C.textPrimary,
                           }}
                         />
+                        {newSecretKeyInvalid && (
+                          <div className="text-[11px]" style={{ color: STATUS_TEXT.error }}>
+                            Nur Kleinbuchstaben, Zahlen und _
+                          </div>
+                        )}
                         <input
                           type="password"
                           aria-label="Wert"
@@ -390,7 +422,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       slugify(name) === "" ||
                       !model ||
                       createMutation.isPending ||
-                      (keyMode === "new" && !newSecretValue.trim()) ||
+                      (keyMode === "new" && (!newSecretValue.trim() || newSecretKeyInvalid)) ||
                       (keyMode === "existing" && !existingSecretId)
                     }
                     className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2.5 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
