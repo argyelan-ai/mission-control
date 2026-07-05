@@ -8,6 +8,7 @@ import type {
   Board,
   BoardGroup,
   BoardMemory,
+  BrowserLiveTarget,
   Credential,
   CostOverview,
   DiscordChannel,
@@ -1759,7 +1760,22 @@ export const api = {
       return `${ws}/api/v1/host-agents/${agentId}/terminal?token=${getToken()}`;
     },
   },
+
+  // ── Browser Live View (view-only CDP screencast) ─────────────────────────
+  browserLive: {
+    // 502 when the shared cdp-browser container isn't running (browser profile).
+    targets: (): Promise<BrowserLiveTarget[]> => request("/api/v1/browser-live/targets"),
+  },
 };
+
+// Separate helper (not on `api`, mirrors cliSessions.*WsUrl) so components can
+// build the WS URL without an extra network round-trip.
+export function browserLiveWsUrl(targetId?: string): string {
+  const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
+  const ws = base.replace(/^http/, "ws");
+  const targetParam = targetId ? `&target=${encodeURIComponent(targetId)}` : "";
+  return `${ws}/api/v1/browser-live/ws?token=${getToken()}${targetParam}`;
+}
 
 // ── SSE URLs ──────────────────────────────────────────────────────────────────
 export const sseUrls = {

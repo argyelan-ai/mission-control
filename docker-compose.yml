@@ -359,17 +359,58 @@ services:
       MC_BACKEND_URL: http://backend:8000
       VOICE_VOICE_ID: ${VOICE_VOICE_ID:-ara}
 
+  # Dedicated CDP-exposing Chromium for the agent browser workflow. Replaces
+  # playwright-mcp's internal browser so MC can attach a SECOND CDP session to
+  # the same pages for the live screencast view (the internal browser runs
+  # over --remote-debugging-pipe and is unreachable from outside).
+  cdp-browser:
+    image: zenika/alpine-chrome:latest
+    profiles: ["browser"]
+    restart: unless-stopped
+    logging: *default-logging
+    command:
+      - --no-sandbox
+      - --headless=new
+      - --disable-gpu
+      - --disable-dev-shm-usage
+      - --remote-debugging-port=9222
+      - --remote-debugging-address=0.0.0.0
+      - --remote-allow-origins=*
+      - about:blank
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9222/json/version >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Chromium >= M113 forces the debugging listener onto 127.0.0.1 even when
+  # --remote-debugging-address=0.0.0.0 is set. This socat shares the browser's
+  # network namespace and re-exposes the port on 0.0.0.0:9223 — other
+  # containers reach it as cdp-browser:9223.
+  cdp-socat:
+    image: alpine/socat:latest
+    profiles: ["browser"]
+    restart: unless-stopped
+    logging: *default-logging
+    network_mode: "service:cdp-browser"
+    depends_on:
+      - cdp-browser
+    command: ["TCP-LISTEN:9223,fork,reuseaddr", "TCP:127.0.0.1:9222"]
+
   playwright-mcp:
     image: mcr.microsoft.com/playwright/mcp:latest
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
+    depends_on:
+      - cdp-browser
+      - cdp-socat
     # Default entrypoint is `node /app/cli.js --headless --browser chromium --no-sandbox`
-    # — we override only the trailing args to add HTTP transport + isolation.
+    # — we override only the trailing args. Since the live-view feature the
+    # browser itself runs in the cdp-browser service (connected via CDP);
+    # playwright-mcp no longer launches its own.
     command: [
-      "--headless",
-      "--browser", "chromium",
-      "--no-sandbox",
+      "--cdp-endpoint", "http://cdp-browser:9223",
       "--port", "8931",
       "--host", "0.0.0.0",
       "--isolated",

@@ -18,6 +18,7 @@ import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
+import { BrowserLiveView } from "@/components/shared/BrowserLiveView";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -501,6 +502,9 @@ export default function SessionsPage() {
   // back button can return to the list without nulling `selected` (which would
   // immediately re-trigger the auto-select effect below and snap back).
   const [mobileView, setMobileView] = useState<"list" | "terminal">("list");
+  // Right-pane content switch — the shared agent browser lives alongside the
+  // per-agent terminal, not per-agent itself (one CDP session for the fleet).
+  const [rightPane, setRightPane] = useState<"terminal" | "browser">("terminal");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [restartTick, setRestartTick] = useState<Record<string, number>>({});
 
@@ -614,6 +618,27 @@ export default function SessionsPage() {
           >
             {agents.length}
           </span>
+
+          {/* Terminal / Agent browser tab switch */}
+          <div
+            className="ml-auto flex items-center rounded-md overflow-hidden"
+            style={{ border: `1px solid ${C.border}` }}
+          >
+            {(["terminal", "browser"] as const).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setRightPane(mode)}
+                className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+                style={{
+                  background: rightPane === mode ? C.accentSubtle : "transparent",
+                  color: rightPane === mode ? C.accent : C.textMuted,
+                  borderRight: mode === "terminal" ? `1px solid ${C.border}` : undefined,
+                }}
+              >
+                {mode === "terminal" ? "Terminal" : "Agent browser"}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Split Layout */}
@@ -638,9 +663,11 @@ export default function SessionsPage() {
             />
           </div>
 
-          {/* Terminal — mobile: visible only in terminal view; desktop: always */}
+          {/* Right pane — mobile: visible only in terminal view; desktop: always */}
           <div className={`flex-1 overflow-hidden flex-col min-h-0 ${mobileView === "terminal" ? "flex" : "hidden"} md:flex`}>
-            {selected ? (
+            {rightPane === "browser" ? (
+              <BrowserLiveView />
+            ) : selected ? (
               <>
                 {/* Mobile: back button — returns to the agent list (stack nav) */}
                 <button

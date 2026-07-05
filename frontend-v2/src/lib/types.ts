@@ -2055,3 +2055,12 @@ export interface GraphFilter {
   type?: VaultNoteType | VaultNoteType[];
   tag?: string;
 }
+
+// ── Live Browser View (view-only CDP screencast) ──────────────────────────────
+
+/** One open page target from GET /api/v1/browser-live/targets */
+export interface BrowserLiveTarget {
+  id: string;
+  title: string;
+  url: string;
+}
