@@ -12,7 +12,7 @@
  *  - "project": structural view — Ad-hoc first, then projects incl. progress
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
@@ -278,6 +278,12 @@ export type TaskGroupMode = "status" | "project";
 
 const DONE_PAGE = 30;
 
+// User's view choice (group mode + collapse toggles) survives reloads.
+// Search + agent filter stay ephemeral on purpose — they're filters, not a view.
+const VIEW_STORAGE_KEY = "mc:tasks:view";
+
+type StoredView = { mode?: TaskGroupMode; toggled?: string[] };
+
 export default function TaskListColumn({
   tasks,
   projects,
@@ -295,12 +301,42 @@ export default function TaskListColumn({
   onSelectTask: (task: Task) => void;
   onOpenProject: (projectId: string) => void;
 }) {
-  const [mode, setMode] = useState<TaskGroupMode>("status");
+  // First visit (nothing stored): project view, all groups collapsed —
+  // a scannable project overview instead of a wall of status lanes.
+  const [mode, setMode] = useState<TaskGroupMode>("project");
   const [query, setQuery] = useState("");
   const [agentFilter, setAgentFilter] = useState<string>("");
   // Collapse state as inversion of the per-group default: done/aborted and
   // project groups start collapsed (Ad-hoc stays open), user toggles flip it.
   const [toggled, setToggled] = useState<Set<string>>(() => new Set());
+  // Restore after mount (SSR has no localStorage); don't persist until restored,
+  // otherwise the initial render would overwrite the stored view with defaults.
+  const viewRestored = useRef(false);
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(VIEW_STORAGE_KEY);
+      if (raw) {
+        const v = JSON.parse(raw) as StoredView;
+        if (v.mode === "status" || v.mode === "project") setMode(v.mode);
+        if (Array.isArray(v.toggled)) {
+          setToggled(new Set(v.toggled.filter((k): k is string => typeof k === "string")));
+        }
+      }
+    } catch {
+      // corrupted entry: fall back to defaults
+    }
+    viewRestored.current = true;
+  }, []);
+
+  useEffect(() => {
+    if (!viewRestored.current) return;
+    try {
+      localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify({ mode, toggled: [...toggled] }));
+    } catch {
+      // storage full/unavailable — view just won't persist
+    }
+  }, [mode, toggled]);
   // Per-group render limit — 168 expanded ad-hoc rows must not land in the DOM at once
   const [limits, setLimits] = useState<Record<string, number>>({});
   // Project references dialog (ADR-053) — paperclip icon in project group headers
