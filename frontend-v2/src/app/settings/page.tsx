@@ -987,7 +987,7 @@ function IntelligenceSection() {
 
 // ── API Keys Section (Admin only) ─────────────────────────────────────────────
 
-function ApiKeysSection() {
+function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void }) {
   const queryClient = useQueryClient();
   const [addingKey, setAddingKey] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
@@ -1034,6 +1034,14 @@ function ApiKeysSection() {
 
   const secretsByKey = new Map(secrets?.map((s) => [s.key, s]) ?? []);
 
+  // GitHub credentials (github_owner / github_token) have their own dedicated
+  // "GitHub" section (ADR-055) — keep them out of the generic API Keys list
+  // so there is exactly one place to edit them (ADR-055-Review MINOR 3).
+  const nonGithubProviders = (providers ?? []).filter((tmpl) => tmpl.provider !== "github");
+  const hasGithubSecret = (secrets ?? []).some(
+    (s) => s.provider === "github" || s.key === "github_owner" || s.key === "github_token"
+  );
+
   return (
     <SectionMotion sectionKey="apikeys">
       <SectionHeader
@@ -1047,7 +1055,32 @@ function ApiKeysSection() {
         </div>
       ) : (
         <div className="space-y-3">
-          {(providers ?? []).map((tmpl) => {
+          {hasGithubSecret && (
+            <div className="mc-card p-4" style={cardStyle}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Github size={14} style={{ color: "var(--color-text-muted)" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                      GitHub
+                    </span>
+                  </div>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                    GitHub credentials are managed in the GitHub section.
+                  </p>
+                </div>
+                <button
+                  onClick={onNavigateToGithub}
+                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+                >
+                  Go to GitHub
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+          {nonGithubProviders.map((tmpl) => {
             const existing = secretsByKey.get(tmpl.key);
             const isSet = !!existing;
             const isAdding = addingKey === tmpl.key;
@@ -2089,7 +2122,9 @@ function SettingsContent() {
               {activeSection === "security" && <SecuritySection />}
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
               {activeSection === "intelligence" && isAdmin && <IntelligenceSection />}
-              {activeSection === "apikeys" && isAdmin && <ApiKeysSection />}
+              {activeSection === "apikeys" && isAdmin && (
+                <ApiKeysSection onNavigateToGithub={() => setActiveSection("github")} />
+              )}
               {activeSection === "github" && isAdmin && <GithubSection />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
