@@ -1763,6 +1763,13 @@ async def delete_task(
     # 6h. Referenz-Dateien (ADR-053): Rows + Dateien mitlöschen.
     from app.services.reference_cleanup import delete_references_for
     await delete_references_for(session, task_id=task_id)
+    # E2E-Medien (Playwright-MCP-Videos/Screenshots) des Tasks miträumen —
+    # best-effort, blockiert den Delete nie (Fund 05.07.).
+    from app.services.mcp_media_cleanup import delete_mcp_media_for_task
+    try:
+        delete_mcp_media_for_task(task_id)
+    except Exception:
+        pass
 
     # 6i. file_index: task_id-Provenance lösen — der FK blockte sonst den
     # Task-Delete (Live-Smoke-Fund; betraf latent auch Deliverable-Captures).

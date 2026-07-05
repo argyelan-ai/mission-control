@@ -180,7 +180,9 @@ services:
       - mc_shared_deliverables:/shared-deliverables:ro
       # MCP Screenshots (Microsoft Playwright MCP Sidecar) — read-only fuer
       # Backend's `mc deliverable from-mcp` Validierung + FileResponse.
-      - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
+      # rw seit 05.07.: Task-Delete räumt /shared-mcp/<task_id>/ mit
+      # (E2E-Videos/Screenshots, services/mcp_media_cleanup.py) — vorher ro.
+      - ${HOME}/.mc/mcp-screenshots:/shared-mcp
       # Token-Harvester liest Boss-Transkripte (read-only — keine Schreibzugriffe).
       # Boss schreibt seine JSONL-Sessions in ~/.claude/projects/ (Host-native).
       # Boss-Attribution via cwd/gitBranch-Heuristik verhindert, dass private
