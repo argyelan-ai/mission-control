@@ -27,6 +27,7 @@ from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.agent_runtime_switch import _acquire_lock, _release_lock, is_agent_busy
+from app.services.harness_compat import derive_harness
 from app.services.docker_agent_sync import (
     restart_docker_agent_container,
     sync_docker_agent_files,
@@ -175,3 +176,137 @@ async def _clear_failures(key: str) -> None:
         await redis.delete(key)
     except Exception:  # noqa: BLE001
         pass
+
+
+# ── CLI-Tool-Updates: rolling recreate propagation ──────────────────────────
+#
+# When a newer CLI-tool image is built for a harness, every cli-bridge agent on
+# that harness must pick it up. Unlike a model change (a plain restart re-reads
+# the DB row), a new image needs a full ``--force-recreate`` so the container
+# runs the rebuilt binary. Same idle-flagging + circuit-breaker shape as the
+# model-sync pass above; a separate flag and failure key keep the two passes
+# independent (an agent can be pending on both at once).
+
+_RECREATE_HEALTH_TIMEOUT = 90  # cold recreate (image pull + bootstrap) is slow
+
+
+async def mark_agents_for_recreate(session: AsyncSession, harness: str) -> int:
+    """Flag every cli-bridge agent on ``harness`` for a container recreate.
+
+    Effective harness = ``agent.harness`` if set, else ``derive_harness`` from
+    the bound runtime (legacy NULL rows, ADR-056). Host agents (launchd) are
+    skipped — they don't run the cli-bridge image. Returns the flag count.
+    """
+    result = await session.exec(select(Agent))
+    flagged = 0
+    for agent in result.all():
+        if agent.agent_runtime != "cli-bridge":
+            continue
+        effective = agent.harness
+        if effective is None:
+            runtime = (
+                await session.get(Runtime, agent.runtime_id)
+                if agent.runtime_id
+                else None
+            )
+            effective = derive_harness(runtime)
+        if effective != harness:
+            continue
+        agent.pending_recreate = True
+        session.add(agent)
+        flagged += 1
+    if flagged:
+        await session.commit()
+    return flagged
+
+
+async def recreate_pending_agents(
+    session: AsyncSession,
+    *,
+    force: bool = False,
+) -> None:
+    """Recreate every flagged agent that is idle (or all flagged when ``force``).
+
+    Busy agents stay flagged for the next tick. A held runtime-switch lock skips
+    the agent without bumping its failure counter.
+    """
+    result = await session.exec(select(Agent).where(Agent.pending_recreate.is_(True)))
+    for agent in result.all():
+        if is_agent_busy(agent) and not force:
+            continue
+        await _recreate_one(session, agent)
+
+
+async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
+    runtime = (
+        await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+    )
+
+    # Same lock guard as _sync_one: never recreate while a manual runtime switch
+    # holds mc:agent:{id}:runtime-switch. Skip the tick WITHOUT bumping the
+    # failure counter — the agent stays flagged and retries once the lock frees.
+    if not await _acquire_lock(agent.id):
+        logger.info(
+            "recreate for %s skipped — runtime-switch lock is held", agent.name
+        )
+        return
+
+    try:
+        fail_key = RedisKeys.agent_recreate_fails(str(agent.id))
+        try:
+            # force_recreate=True → docker compose up --force-recreate (blocking
+            # subprocess) → run off the event loop so the watcher loop isn't
+            # stalled. The compose file is unchanged (same image tag, rebuilt
+            # content), so no write_compose_agents() is needed here.
+            result = await asyncio.to_thread(
+                restart_docker_agent_container, agent, force_recreate=True
+            )
+            status = str(result.get("status", ""))
+            if status.startswith("error"):
+                raise RuntimeError(f"container recreate failed: {status}")
+            ready = _OMP_READY_SIGNALS if (
+                runtime and runtime.runtime_type == "omp"
+            ) else None
+            health = await wait_for_agent_healthy(
+                agent,
+                timeout=_RECREATE_HEALTH_TIMEOUT,
+                respawn_mode=False,
+                ready_signals=ready,
+            )
+            if not health.get("healthy"):
+                raise RuntimeError(f"health check failed: {health.get('reason')}")
+        except Exception as exc:  # noqa: BLE001 — every failure feeds the breaker
+            fails = await _bump_failures(fail_key)
+            logger.warning(
+                "recreate for %s failed (%s/%s): %s",
+                agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
+            )
+            if fails >= MAX_SYNC_ATTEMPTS:
+                agent.pending_recreate = False
+                session.add(agent)
+                await session.commit()
+                await emit_event(
+                    session,
+                    "agent.recreate_failed",
+                    f"{agent.name}: CLI-update recreate failed {fails}× — giving "
+                    f"up (manual recreate required)",
+                    severity="error",
+                    agent_id=agent.id,
+                    detail={"reason": str(exc)},
+                )
+            return
+
+        await _clear_failures(fail_key)
+        agent.pending_recreate = False
+        session.add(agent)
+        await session.commit()
+        await emit_event(
+            session,
+            "agent.recreated",
+            f"{agent.name}: container recreated — CLI update applied",
+            severity="info",
+            agent_id=agent.id,
+            detail={"harness": agent.harness or (derive_harness(runtime) or "")},
+        )
+    finally:
+        await _release_lock(agent.id)

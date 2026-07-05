@@ -41,6 +41,7 @@ from app.services.runtime_model_resolver import (
 )
 from app.services.runtime_propagation import (
     mark_agents_for_sync,
+    recreate_pending_agents,
     sync_pending_agents,
 )
 
@@ -123,6 +124,10 @@ class RuntimeWatcher:
         for runtime in result.all():
             await self._probe_one(session, runtime)
         await sync_pending_agents(session)
+        # CLI-Tool-Updates: recreate agents flagged by the CLI update check.
+        # Runs after the model-sync pass so a same-tick model change is applied
+        # by a plain restart before we (potentially) force-recreate.
+        await recreate_pending_agents(session)
 
     async def _probe_one(self, session: AsyncSession, runtime: Runtime) -> None:
         started = time.monotonic()
