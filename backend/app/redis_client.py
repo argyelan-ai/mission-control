@@ -288,3 +288,12 @@ class RedisKeys:
     @staticmethod
     def cli_update_notified(tool: str, version: str) -> str:
         return f"mc:cli:notified:{tool}:{version}"
+
+    # ── CLI Tool Update Orchestration (Task 6) ───────────────────────────
+    @staticmethod
+    def cli_update_lock() -> str:
+        return "mc:cli:update-lock"
+
+    @staticmethod
+    def cli_update_progress() -> str:
+        return "mc:cli:update-progress"
