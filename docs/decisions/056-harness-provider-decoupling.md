@@ -29,7 +29,7 @@ single source of truth for "is this combination even valid?".
 **Two independent axes: `agents.harness` (which CLI) and `runtimes.*`
 (which provider/protocol), reconciled through one central matrix.**
 
-1. **`agents.harness`** (migration `0142`, nullable string: `claude` |
+1. **`agents.harness`** (migration `0143`, nullable string: `claude` |
    `openclaude` | `omp`) is the agent-level source of truth for which CLI
    binary runs in the container. It is independent of `runtime_id`.
 2. **`harness_compat.py`** (`backend/app/services/harness_compat.py`) is
@@ -86,7 +86,7 @@ single source of truth for "is this combination even valid?".
    and per-incompatible-harness `incompat_reason` text — the frontend
    harness selector (runtime switch modal, add-runtime wizard) reads this
    instead of re-deriving compatibility client-side.
-7. **Migration `0142` backfill** derives `harness` for every existing
+7. **Migration `0143` backfill** derives `harness` for every existing
    cli-bridge agent from its current runtime binding (mirrors
    `derive_harness`'s logic in SQL) so the rollout is a no-op for running
    agents; `harness` only gets materialized going forward on the **first**
@@ -136,7 +136,7 @@ single source of truth for "is this combination even valid?".
   model still can't do it until the LiteLLM-proxy shim (v2) exists.
   `incompat_reason` gives a clear German explanation rather than a bare
   422, but the capability itself is deferred.
-- Migration `0142` adds one more nullable string column on the already-wide
+- Migration `0143` adds one more nullable string column on the already-wide
   `agents` table.
 - Hot-swap (changing the harness of a running container without any
   restart) is explicitly out of scope — a harness switch still goes
@@ -154,7 +154,7 @@ single source of truth for "is this combination even valid?".
   `api_key_secret_id`), `backend/app/routers/internal.py` (bootstrap uses
   `resolve_provider_credentials`), `backend/app/models/agent.py`
   (`harness` column), `backend/app/models/runtime.py`
-  (`api_key_secret_id` column), `backend/alembic/versions/0142_agent_harness.py`,
+  (`api_key_secret_id` column), `backend/alembic/versions/0143_agent_harness.py`,
   `docker/omp-bridge/entrypoint.sh` (renders `models.yml` `apiKey` when the
   resolved provider is keyed), frontend: `RuntimeSwitchModal` (harness
   selector + compat wiring), add-runtime wizard (api-key step), agent card

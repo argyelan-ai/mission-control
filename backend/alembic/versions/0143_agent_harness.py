@@ -1,4 +1,4 @@
-"""0142 — agents.harness (Harness/Provider decoupling, ADR-056).
+"""0143 — agents.harness (Harness/Provider decoupling, ADR-056).
 
 Backfill derives the harness from the agent's current runtime binding so
 existing cli-bridge agents keep their exact behaviour:
@@ -11,14 +11,14 @@ runtime types (e.g. hermes) stay NULL — the openclaude backfill is scoped
 to exactly the runtime types that were coupled to the openclaude image
 before ADR-056, so nothing outside that set is silently migrated.
 
-Revision ID: 0142
-Revises: 0141
+Revision ID: 0143
+Revises: 0142
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0142"
-down_revision = "0141"
+revision = "0143"
+down_revision = "0142"
 branch_labels = None
 depends_on = None
 
