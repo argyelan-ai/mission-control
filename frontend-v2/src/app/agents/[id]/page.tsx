@@ -745,9 +745,10 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
         onClose={() => setModalOpen(false)}
         agent={agent}
         targetRuntimeId={selected}
-        onConfirm={async ({ force_when_in_progress }) => {
+        onConfirm={async ({ force_when_in_progress, harness }) => {
           const res = await api.agents.switchRuntime(agentId, selected, {
             force_when_in_progress,
+            harness,
           });
           qc.invalidateQueries({ queryKey: ["agent", agentId] });
           qc.invalidateQueries({ queryKey: ["agents"] });

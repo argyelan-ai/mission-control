@@ -490,6 +490,10 @@ export interface GatewayMessage {
   timestamp: string | null;
 }
 
+// Harness/Provider-Decoupling (ADR-056) — the CLI harness driving an agent's
+// session, independent of the LLM runtime/protocol behind it.
+export type Harness = "claude" | "openclaude" | "omp";
+
 export interface Agent {
   id: string;
   board_id: string | null;
@@ -543,6 +547,9 @@ export interface Agent {
   // the agent falls back to docker-compose env defaults.
   runtime_id: string | null;
   pending_runtime_sync: boolean;
+  // Harness/Provider-Decoupling (ADR-056) — explicit CLI harness override.
+  // NULL means the harness is derived from the runtime's protocol.
+  harness?: Harness | null;
   created_at: string;
   updated_at: string;
 }
@@ -1640,6 +1647,26 @@ export interface RuntimesResponse {
 export interface RuntimeActionResult {
   ok: boolean;
   message: string;
+}
+
+// Harness/Provider-Decoupling (ADR-056) — compat matrix for the harness
+// selector in RuntimeSwitchModal.
+export interface CompatMatrixHarness {
+  key: Harness;
+  label: string;
+}
+
+export interface CompatMatrixRuntime {
+  slug: string;
+  display_name: string;
+  protocol: "openai" | "anthropic" | null;
+  compatible_harnesses: Harness[];
+  reasons: Record<string, string>;
+}
+
+export interface CompatMatrix {
+  harnesses: CompatMatrixHarness[];
+  runtimes: CompatMatrixRuntime[];
 }
 
 // ── Runtime Schedules ─────────────────────────────────────────────────────────────

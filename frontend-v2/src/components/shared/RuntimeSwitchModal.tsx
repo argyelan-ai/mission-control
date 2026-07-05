@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { AlertTriangle, Check, Loader2, Lock, RotateCcw, X, Zap, Box } from "lucide-react";
-import type { Agent, RuntimeSwitchPreview, RuntimeSwitchSummary } from "@/lib/types";
+import type { Agent, Harness, RuntimeSwitchPreview, RuntimeSwitchSummary } from "@/lib/types";
 import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
@@ -40,7 +40,7 @@ interface Props {
   onSwitched?: (result: RuntimeSwitchPreview | null) => void;
   /** Mutation function — caller controls retry/error display via this fn.
    *  Must throw on failure so we can surface the message. */
-  onConfirm: (params: { force_when_in_progress: boolean }) => Promise<RuntimeSwitchPreview | null>;
+  onConfirm: (params: { force_when_in_progress: boolean; harness?: Harness }) => Promise<RuntimeSwitchPreview | null>;
 }
 
 const RUNTIME_TYPE_COLOR: Record<string, string> = {
@@ -87,20 +87,33 @@ export function RuntimeSwitchModal({
   const [error, setError] = useState<string | null>(null);
   const [longSwitch, setLongSwitch] = useState(false);
   const [completed, setCompleted] = useState<RuntimeSwitchPreview | null>(null);
+  const [selectedHarness, setSelectedHarness] = useState<Harness | undefined>(agent.harness ?? undefined);
   const longSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ADR-056 — harness x runtime compatibility matrix, backs the harness
+  // selector above the preview.
+  const { data: compatMatrix, isLoading: compatMatrixLoading } = useQuery({
+    queryKey: ["compat-matrix"],
+    queryFn: () => api.runtimes.compatMatrix(),
+    staleTime: 60_000,
+  });
 
   // Dry-run preview — runs as soon as the modal opens.
   const { data: preview, isLoading: previewLoading, error: previewError } = useQuery({
-    queryKey: ["runtime-switch-preview", agent.id, targetRuntimeId],
+    queryKey: ["runtime-switch-preview", agent.id, targetRuntimeId, selectedHarness],
     queryFn: () =>
       api.agents.previewRuntimeSwitch(agent.id, {
         runtime_id: targetRuntimeId!,
         force_when_in_progress: true, // preview always allowed; we gate at submit
+        harness: selectedHarness,
       }),
     enabled: open && !!targetRuntimeId,
     staleTime: 0,  // D-07: jeder Modal-Open triggert frischen Probe
     retry: false,
   });
+
+  // Compat-matrix entry for the switch target, keyed by preview's runtime slug.
+  const targetCompat = compatMatrix?.runtimes.find((r) => r.slug === preview?.new_runtime?.slug);
 
   // Live switch progress — polled only while a submit is in flight.
   const { data: progress } = useQuery({
@@ -121,8 +134,10 @@ export function RuntimeSwitchModal({
         clearTimeout(longSwitchTimer.current);
         longSwitchTimer.current = null;
       }
+    } else {
+      setSelectedHarness(agent.harness ?? undefined);
     }
-  }, [open]);
+  }, [open, agent.harness]);
 
   const isBusy = !!agent.current_task_id;
   const previewErrMsg = previewError ? (previewError as Error).message : null;
@@ -138,7 +153,7 @@ export function RuntimeSwitchModal({
     setError(null);
     longSwitchTimer.current = setTimeout(() => setLongSwitch(true), 10_000);
     try {
-      const result = await onConfirm({ force_when_in_progress: forceWhenInProgress });
+      const result = await onConfirm({ force_when_in_progress: forceWhenInProgress, harness: selectedHarness });
       onSwitched?.(result ?? null);
       setCompleted(result ?? preview ?? null);
     } catch (e) {
@@ -226,6 +241,48 @@ export function RuntimeSwitchModal({
                 <>
               {/* Body */}
               <div className="p-5 space-y-4 overflow-y-auto flex-1">
+                {/* Harness selector (ADR-056) */}
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="harness-select"
+                    className="text-[12px] font-medium"
+                    style={{ color: "var(--color-text-secondary)" }}
+                  >
+                    Harness
+                  </label>
+                  <select
+                    id="harness-select"
+                    value={selectedHarness ?? ""}
+                    onChange={(e) => setSelectedHarness((e.target.value || undefined) as Harness | undefined)}
+                    disabled={agent.harness == null && compatMatrixLoading}
+                    className="w-full text-[12px] px-2.5 py-1.5 rounded-lg cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{
+                      backgroundColor: "var(--color-bg-elevated)",
+                      border: "1px solid rgba(255,255,255,0.1)",
+                      color: "var(--color-text-primary)",
+                    }}
+                  >
+                    {agent.harness == null && compatMatrixLoading && (
+                      <option value="">Standard (aus Provider abgeleitet)</option>
+                    )}
+                    {compatMatrix?.harnesses.map((h) => {
+                      const incompatible = targetCompat ? !targetCompat.compatible_harnesses.includes(h.key) : false;
+                      const reason = targetCompat?.reasons[h.key];
+                      return (
+                        <option
+                          key={h.key}
+                          value={h.key}
+                          disabled={incompatible}
+                          title={incompatible ? reason : undefined}
+                        >
+                          {h.label}
+                          {incompatible ? " — nicht kompatibel" : ""}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+
                 {/* Side-by-side runtime preview */}
                 {previewLoading && (
                   <div className="flex items-center gap-2 text-[12px] text-[var(--color-text-muted)]">
