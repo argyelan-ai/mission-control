@@ -110,6 +110,44 @@ sed_i() { if sed --version >/dev/null 2>&1; then sed -i "$@"; else sed -i '' "$@
 ask "Your name (how agents address you)" "Operator"
 if grep -q '^OPERATOR_NAME=' .env; then sed_i "s|^OPERATOR_NAME=.*|OPERATOR_NAME=$REPLY|" .env; else echo "OPERATOR_NAME=$REPLY" >> .env; fi
 
+# GitHub integration (optional but recommended): MC creates one private repo
+# per project and one branch per task; agents push their work and open PRs
+# you review. Without it, tasks still run — just without version control.
+say ""
+say "GitHub integration (optional, recommended):"
+say "  MC creates a private repo per project, a branch per task, and agents"
+say "  open pull requests for your review. Skip now and connect later in"
+say "  Settings → GitHub — everything else works without it."
+# set_env_var KEY VALUE — replace-or-append without sed (a token containing
+# sed metacharacters like & or \ would silently corrupt the .env otherwise).
+set_env_var() {
+  grep -v "^$1=" .env > .env.tmp 2>/dev/null || true
+  mv .env.tmp .env
+  printf '%s=%s\n' "$1" "$2" >> .env
+}
+
+ask "GitHub user/org for MC-created repos (empty = skip)" ""
+GITHUB_OWNER_INPUT="$REPLY"
+if [ -n "$GITHUB_OWNER_INPUT" ]; then
+  set_env_var GITHUB_OWNER "$GITHUB_OWNER_INPUT"
+  # Silent read — the token must not echo into the terminal/scrollback.
+  if [ "$INTERACTIVE" = 1 ]; then
+    printf 'GitHub token (fine-grained PAT or `gh auth token`; empty = set later in Settings → GitHub): ' >/dev/tty
+    stty -echo </dev/tty 2>/dev/null || true
+    IFS= read -r GH_TOKEN_INPUT </dev/tty || GH_TOKEN_INPUT=""
+    stty echo </dev/tty 2>/dev/null || true
+    printf '\n' >/dev/tty
+  else
+    GH_TOKEN_INPUT=""
+  fi
+  if [ -n "$GH_TOKEN_INPUT" ]; then
+    set_env_var GH_TOKEN "$GH_TOKEN_INPUT"
+    say "✓ GitHub configured ($GITHUB_OWNER_INPUT) — verify under Settings → GitHub after start"
+  else
+    say "✓ GitHub owner set ($GITHUB_OWNER_INPUT) — add the token later in Settings → GitHub"
+  fi
+fi
+
 PROFILES=""
 ask "Enable voice stack (LiveKit — needs API keys later)? y/N" "n"
 case "$REPLY" in y|Y|yes) PROFILES="voice" ;; esac

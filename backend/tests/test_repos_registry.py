@@ -1,4 +1,5 @@
 """Repos registry (ADR-050): CRUD, import, project linking, rules injection."""
+import os
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -177,7 +178,7 @@ async def test_init_repo_creates_registry_row(auth_client: AsyncClient):
     with patch(
         "app.services.git_service.GitService.create_project_repo",
         new=AsyncMock(return_value="https://github.com/testowner/mc-proj-x.git"),
-    ), patch("app.services.git_service.GITHUB_OWNER", "testowner"):
+    ), patch.dict(os.environ, {"GITHUB_OWNER": "testowner"}):
         r = await auth_client.post(
             f"/api/v1/boards/{board.id}/projects/{project.id}/init-repo"
         )

@@ -98,13 +98,34 @@ the browser — the same Claude Code (or local-LLM) REPL the agent itself uses.
 
 ### Git integration — rules that travel with the code
 
-Mission Control manages GitHub the way a team would: one repo per project,
-one branch per task, automatic PRs and squash-merges via the GitHub CLI.
-Repos live in a shared registry — import an existing GitHub repo or let
-Mission Control create one, link it to multiple projects, and write **work
-rules** once (test commands, branch policy, house style). Those rules are
-injected into every dispatch for that codebase, so an agent working on repo
-X always sees X's conventions instead of a generic default.
+Mission Control manages GitHub the way a team would: **one repo per
+project, one branch per task.** An agent picking up a task clones (or
+already has) the project's repo, works on `task/<slug>`, and on review opens
+a PR via the GitHub CLI; a reviewer agent or a human merges (squash) and the
+branch is deleted. Ad-hoc tasks with no project share a single
+`mc-workspace` repo instead of leaving orphaned branches around.
+
+Repos live in a shared registry (**`/repos`**) — import an existing GitHub
+repo or let Mission Control create one, link it to multiple projects, and
+write **work rules** once (test commands, branch policy, house style).
+Those rules are injected into every dispatch for that codebase, so an agent
+working on repo X always sees X's conventions instead of a generic default.
+
+**Connecting GitHub:** none of this needs GitHub to be reachable — MC runs
+fine without it, just without version control for task work. Once you want
+it, there are three equivalent ways to connect, in order of precedence:
+
+1. **Settings → GitHub** — owner + token, applies live, no restart. A
+   "Test connection" button checks login, owner reachability and rate
+   limit against the live API.
+2. **`install.sh`** — asks for owner + token interactively during setup
+   (token entry is silent, both optional/skippable).
+3. **`.env`** — classic `GITHUB_OWNER` + `GH_TOKEN`.
+
+The first-run setup wizard also has an optional "Connect GitHub" step, and
+`/repos` shows an onboarding banner until a connection is configured.
+Step-by-step guide (token scopes, verifying the connection,
+troubleshooting): [docs/setup/github.md](docs/setup/github.md).
 
 <details>
 <summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
@@ -214,9 +235,9 @@ sessions); host-level fleet extras need the manual install above.
 
 ### Optional integrations
 
-| Feature | What you set in `.env` |
+| Feature | How to configure it |
 |---|---|
-| Agent git workflow (repos, PRs, merges) | `GH_TOKEN`, `GITHUB_OWNER` |
+| Agent git workflow (repos, PRs, merges) | Settings → GitHub (in-app) or `GH_TOKEN`+`GITHUB_OWNER` in `.env` |
 | Discord notifications + per-agent channels | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
 | Telegram approvals / reports | `TELEGRAM_*` tokens + chat IDs |
 | Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN` |

@@ -477,16 +477,17 @@ async def _seed_hosts() -> None:
 
 
 async def _seed_github_token() -> None:
-    """Seed Vault with GH_TOKEN from backend env on first startup.
+    """Seed Vault with GH_TOKEN + GITHUB_OWNER from backend env on first startup.
 
-    Idempotent: checks if a Secret with key='github_token' already exists
-    in the vault. If not, and $GH_TOKEN is set in the backend process
-    env, creates it encrypted. This is the only path a secret needs to
-    travel from .env into the vault; subsequent rotations happen via the
-    normal /api/v1/secrets admin API.
+    Idempotent per key: only creates the vault Secret (github_token /
+    github_owner) when it does not exist yet AND the corresponding env var
+    is set. This is the only path these values travel from .env into the
+    vault; subsequent edits happen via Settings → GitHub or /api/v1/secrets
+    (ADR-055). Finally primes the github_config cache so sync consumers
+    (template rendering) see the resolved owner right after boot.
 
-    Non-fatal: a missing or invalid GH_TOKEN is logged as warning —
-    backend still boots, agents just can't push to GitHub autonomously.
+    Non-fatal: a missing or invalid value is logged as warning — backend
+    still boots, agents just can't push to GitHub autonomously.
     """
     import os
     try:
@@ -495,28 +496,44 @@ async def _seed_github_token() -> None:
         from app.models.secret import Secret
         from app.services.encryption import encrypt
 
-        gh_token = os.environ.get("GH_TOKEN")
-        if not gh_token:
-            logger.info("_seed_github_token: GH_TOKEN env var not set — skip")
-            return
-
+        seeds = [
+            (
+                "github_token",
+                os.environ.get("GH_TOKEN"),
+                "GitHub Personal Access Token",
+                "Delivered to agents via bootstrap for autonomous git push + gh CLI operations.",
+            ),
+            (
+                "github_owner",
+                os.environ.get("GITHUB_OWNER"),
+                "GitHub Owner",
+                "GitHub user/org under which MC creates project repos (not secret, "
+                "stored here so Settings → GitHub edits apply without restart).",
+            ),
+        ]
         async with AsyncSession(engine, expire_on_commit=False) as session:
-            existing = (await session.exec(
-                _select(Secret).where(Secret.key == "github_token")
-            )).first()
-            if existing:
-                logger.debug("_seed_github_token: already in vault")
-                return
-            secret = Secret(
-                key="github_token",
-                encrypted_value=encrypt(gh_token),
-                provider="github",
-                label="GitHub Personal Access Token",
-                description="Delivered to agents via bootstrap for autonomous git push + gh CLI operations.",
-            )
-            session.add(secret)
-            await session.commit()
-            logger.info("_seed_github_token: seeded Vault with GH_TOKEN from env")
+            for key, value, label, description in seeds:
+                if not value:
+                    logger.info("_seed_github_token: %s env var not set — skip", key)
+                    continue
+                existing = (await session.exec(
+                    _select(Secret).where(Secret.key == key)
+                )).first()
+                if existing:
+                    logger.debug("_seed_github_token: %s already in vault", key)
+                    continue
+                session.add(Secret(
+                    key=key,
+                    encrypted_value=encrypt(value),
+                    provider="github",
+                    label=label,
+                    description=description,
+                ))
+                await session.commit()
+                logger.info("_seed_github_token: seeded Vault with %s from env", key)
+
+        from app.services.github_config import resolve_github_config
+        await resolve_github_config(fresh=True)
     except Exception as e:
         logger.warning("_seed_github_token failed (non-critical): %s", e)
 

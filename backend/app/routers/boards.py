@@ -353,10 +353,10 @@ async def init_project_repo(
 
     # Register in the repos registry (ADR-050) + link — apply_repo_link
     # syncs the legacy github_repo_* fields with the canonical owner/name.
-    from app.services.git_service import require_github_owner
+    from app.services.github_config import require_github_owner
     from app.services.repo_registry import apply_repo_link, upsert_repo
 
-    full_name = f"{require_github_owner()}/mc-{slug}"
+    full_name = f"{await require_github_owner(session)}/mc-{slug}"
     repo = await upsert_repo(
         session,
         full_name=full_name,

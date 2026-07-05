@@ -13,7 +13,7 @@ import { AUTH_TOKEN_KEY, api } from "@/lib/api";
 import { AmbientBackground } from "@/components/layout/AmbientBackground";
 import { C } from "@/lib/colors";
 
-import type { Priority, TaskStatus } from "@/lib/types";
+import type { GithubConfigUpdate, Priority, TaskStatus } from "@/lib/types";
 
 const DEMO_TASKS: Array<[string, TaskStatus, Priority]> = [
   ["Draft launch announcement blog post", "done", "high"],
@@ -36,7 +36,7 @@ const inputStyle = {
 
 export default function SetupWizardPage() {
   const router = useRouter();
-  const [step, setStep] = useState<2 | 3>(2);
+  const [step, setStep] = useState<2 | 3 | 4>(2);
 
   // Provider key (step 2)
   const [providers, setProviders] = useState<
@@ -48,7 +48,15 @@ export default function SetupWizardPage() {
   const [keySaved, setKeySaved] = useState(false);
   const [error, setError] = useState("");
 
-  // Demo board (step 3)
+  // Connect GitHub (step 3)
+  const [githubOwner, setGithubOwner] = useState("");
+  const [githubToken, setGithubToken] = useState("");
+  const [githubSaving, setGithubSaving] = useState(false);
+  const [githubSaved, setGithubSaved] = useState(false);
+  const [githubSkipped, setGithubSkipped] = useState(false);
+  const [githubError, setGithubError] = useState("");
+
+  // Demo board (step 4)
   const [seeding, setSeeding] = useState(false);
   const [seeded, setSeeded] = useState(false);
 
@@ -85,6 +93,23 @@ export default function SetupWizardPage() {
     }
   }
 
+  async function saveGithub() {
+    setGithubSaving(true);
+    setGithubError("");
+    try {
+      const payload: GithubConfigUpdate = {};
+      if (githubOwner.trim()) payload.owner = githubOwner.trim();
+      if (githubToken.trim()) payload.token = githubToken.trim();
+      await api.repos.setGithubConfig(payload);
+      setGithubSaved(true);
+      setStep(4);
+    } catch (err) {
+      setGithubError(err instanceof Error ? err.message : "Failed to save.");
+    } finally {
+      setGithubSaving(false);
+    }
+  }
+
   async function seedDemo() {
     setSeeding(true);
     setError("");
@@ -110,7 +135,8 @@ export default function SetupWizardPage() {
   const steps = [
     { n: 1, label: "Admin", done: true },
     { n: 2, label: "Provider Key", done: keySaved || step > 2 },
-    { n: 3, label: "Get Started", done: false },
+    { n: 3, label: "Connect GitHub", done: githubSaved || githubSkipped || step > 3 },
+    { n: 4, label: "Get Started", done: false },
   ];
 
   return (
@@ -245,6 +271,85 @@ export default function SetupWizardPage() {
           )}
 
           {step === 3 && (
+            <>
+              <div>
+                <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
+                  Connect GitHub
+                </h2>
+                <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
+                  Lets agents create a private repo per project, branch per task, and
+                  open pull requests on their own. Changeable later under Settings →
+                  GitHub.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-nav" htmlFor="gh-owner">Owner</label>
+                <input
+                  id="gh-owner"
+                  value={githubOwner}
+                  onChange={(e) => setGithubOwner(e.target.value)}
+                  placeholder="your-github-user-or-org"
+                  className={inputClasses}
+                  style={inputStyle}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-accent)")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-nav" htmlFor="gh-token">Personal access token</label>
+                <input
+                  id="gh-token"
+                  type="password"
+                  value={githubToken}
+                  onChange={(e) => setGithubToken(e.target.value)}
+                  placeholder="ghp_..."
+                  className={`${inputClasses} font-mono`}
+                  style={inputStyle}
+                  onFocus={(e) => (e.currentTarget.style.borderColor = "var(--color-accent)")}
+                  onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
+                />
+              </div>
+
+              {githubError && (
+                <p
+                  className="text-xs rounded-lg px-3 py-2"
+                  style={{
+                    color: "var(--color-error)",
+                    backgroundColor: "rgba(239, 68, 68, 0.08)",
+                    border: "1px solid rgba(239, 68, 68, 0.15)",
+                  }}
+                >
+                  {githubError}
+                </p>
+              )}
+
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={saveGithub}
+                  disabled={githubSaving || (!githubOwner.trim() && !githubToken.trim())}
+                  className="flex-1 text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
+                >
+                  {githubSaving && <Loader2 className="animate-spin" size={14} />}
+                  Save & continue
+                </button>
+                <button
+                  onClick={() => { setGithubSkipped(true); setStep(4); }}
+                  className="text-sm px-3 py-2.5 cursor-pointer"
+                  style={{ color: "var(--color-text-muted)" }}
+                >
+                  Skip for now
+                </button>
+              </div>
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                You can connect later in Settings → GitHub.
+              </p>
+            </>
+          )}
+
+          {step === 4 && (
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>

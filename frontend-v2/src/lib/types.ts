@@ -1778,6 +1778,39 @@ export interface RepoUpdate {
   is_active?: boolean;
 }
 
+// ── GitHub connection (ADR-055) ──────────────────────────────────────────────
+
+export type GithubConfigSource = "vault" | "env" | null;
+
+/** GET /api/v1/repos/github-status. Without ?probe=true, connected/login/…
+ * are always null (fast config-only view); with probe, a live `gh api` check
+ * runs (up to ~15s) and fills them in (or sets connected=false + error). */
+export interface GithubStatus {
+  owner: string | null;
+  owner_source: GithubConfigSource;
+  token_set: boolean;
+  token_source: GithubConfigSource;
+  configured: boolean;
+  connected: boolean | null;
+  login: string | null;
+  owner_type: string | null;
+  rate_limit_remaining: number | null;
+  rate_limit_total: number | null;
+  error: string | null;
+}
+
+/** Config-only slice returned by PUT /api/v1/repos/github-config. */
+export type GithubConfigStatus = Pick<
+  GithubStatus,
+  "owner" | "owner_source" | "token_set" | "token_source" | "configured"
+>;
+
+/** null/omitted = leave unchanged; "" = clear (falls back to .env). */
+export interface GithubConfigUpdate {
+  owner?: string | null;
+  token?: string | null;
+}
+
 // ── Hosts (Host Registry, ADR-048) ───────────────────────────────────────────
 
 export type HostKind = "ssh" | "flask_wol" | "local";

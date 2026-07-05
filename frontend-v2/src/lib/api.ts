@@ -71,6 +71,9 @@ import type {
   Repo,
   RepoImportCandidate,
   RepoUpdate,
+  GithubStatus,
+  GithubConfigStatus,
+  GithubConfigUpdate,
   ReferenceFile,
   Host,
   HostCreate,
@@ -1709,6 +1712,11 @@ export const api = {
       request(`/api/v1/repos/${id}/link-project`, { method: "POST", body: JSON.stringify({ project_id: projectId }) }),
     unlinkProject: (id: string, projectId: string): Promise<Repo> =>
       request(`/api/v1/repos/${id}/link-project/${projectId}`, { method: "DELETE" }),
+    // GitHub connection (ADR-055) — probe=true runs a live gh api check (~15s).
+    githubStatus: (probe = false): Promise<GithubStatus> =>
+      request(`/api/v1/repos/github-status${probe ? "?probe=true" : ""}`),
+    setGithubConfig: (data: GithubConfigUpdate): Promise<GithubConfigStatus> =>
+      request("/api/v1/repos/github-config", { method: "PUT", body: JSON.stringify(data) }),
   },
 
   // ── Hosts (Host Registry, ADR-048) ─────────────────────────────────────────

@@ -1,18 +1,34 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, Loader2, Lock, Search, Globe2 } from "lucide-react";
+import { CheckCircle2, Github, Loader2, Lock, Search, Globe2 } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
-import type { RepoImportCandidate } from "@/lib/types";
+import type { GithubStatus, RepoImportCandidate } from "@/lib/types";
 
 interface ImportRepoDialogProps {
   open: boolean;
   onClose: () => void;
+}
+
+/** Best-effort extraction of the FastAPI `detail` message from a failed
+ * `request()` call — its Error.message is `API <status>: <raw body>`. */
+function extractErrorDetail(err: unknown): string | null {
+  if (!(err instanceof Error)) return null;
+  const match = err.message.match(/^API \d+: ([\s\S]*)$/);
+  const body = match ? match[1] : err.message;
+  try {
+    const parsed = JSON.parse(body);
+    if (typeof parsed?.detail === "string") return parsed.detail;
+  } catch {
+    // not JSON — fall through to the raw text
+  }
+  return body || null;
 }
 
 /**
@@ -30,6 +46,15 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
     queryKey: ["repo-import-candidates"],
     queryFn: api.repos.importCandidates,
     enabled: open,
+  });
+
+  // Shares the ["github-status"] cache with ReposPage/Settings — used to tell
+  // "GitHub isn't connected" apart from a generic candidates-fetch failure.
+  const { data: githubStatus } = useQuery<GithubStatus>({
+    queryKey: ["github-status"],
+    queryFn: () => api.repos.githubStatus(),
+    enabled: open,
+    staleTime: 30_000,
   });
 
   const importMutation = useMutation({
@@ -90,14 +115,33 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
           </div>
         )}
 
-        {error && (
+        {error && githubStatus && !githubStatus.configured ? (
+          <div
+            className="flex flex-col gap-2 text-xs px-3 py-3 rounded-lg"
+            style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}` }}
+          >
+            <div className="flex items-center gap-2" style={{ color: C.textPrimary }}>
+              <Github size={13} style={{ color: C.accent }} />
+              GitHub is not connected yet.
+            </div>
+            <p style={{ color: C.textMuted }}>
+              Connect a GitHub owner + token to list and import repos.
+            </p>
+            <Link href="/settings?section=github" className="w-fit font-medium" style={{ color: C.accent }}>
+              Connect GitHub →
+            </Link>
+          </div>
+        ) : error ? (
           <div
             className="text-xs px-3 py-2 rounded-lg"
             style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
           >
-            Could not load GitHub repos.
+            <p>Could not load GitHub repos.</p>
+            {extractErrorDetail(error) && (
+              <p className="mt-1 opacity-80">{extractErrorDetail(error)}</p>
+            )}
           </div>
-        )}
+        ) : null}
 
         {!isLoading && !error && filtered.length === 0 && (
           <div className="text-xs text-center py-6" style={{ color: C.textMuted }}>

@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.board import Project
 from app.models.repo import Repo
@@ -109,6 +109,148 @@ async def list_import_candidates(
     return [r for r in gh_repos if r["full_name"] not in known and not r["is_archived"]]
 
 
+# ── GitHub connection (ADR-055) ──────────────────────────────────────────────
+
+_OWNER_PATTERN = r"^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$"
+
+
+def _github_config_body(cfg) -> dict:
+    return {
+        "owner": cfg.owner or None,
+        "owner_source": cfg.owner_source,
+        "token_set": bool(cfg.token),
+        "token_source": cfg.token_source,
+        "configured": cfg.configured,
+    }
+
+
+@router.get("/repos/github-status")
+async def github_status(
+    probe: bool = False,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """GitHub connection status. With ?probe=true the token is verified live
+    against the GitHub API (login, owner reachability, rate limit)."""
+    import asyncio
+    import json
+    import re
+
+    from app.services.github_config import resolve_github_config
+
+    cfg = await resolve_github_config(session, fresh=True)
+    body = {
+        **_github_config_body(cfg),
+        "connected": None,
+        "login": None,
+        "owner_type": None,
+        "rate_limit_remaining": None,
+        "rate_limit_total": None,
+        "error": None,
+    }
+    if not probe:
+        return body
+    # Live probes spawn up to 3 gh subprocesses (15s timeout each) and burn
+    # GitHub rate limit — admin-only (review finding, ADR-055). The plain
+    # config view above stays available to every user (/repos banner).
+    from app.auth import ROLE_HIERARCHY
+    if ROLE_HIERARCHY.get(getattr(current_user, "role", None), 0) < ROLE_HIERARCHY[Role.ADMIN]:
+        raise HTTPException(status_code=403, detail="Probe requires admin role")
+    if not cfg.configured:
+        body["connected"] = False
+        body["error"] = (
+            "GitHub ist nicht vollständig konfiguriert — Owner und Token setzen."
+            if not (cfg.owner or cfg.token)
+            else ("GitHub-Token fehlt." if not cfg.token else "GitHub-Owner fehlt.")
+        )
+        return body
+
+    from app.services.git_service import GitService
+
+    git = GitService()
+    try:
+        user_out = await asyncio.wait_for(git._run_cmd("gh", "api", "user"), timeout=15)
+        body["login"] = json.loads(user_out).get("login")
+        if re.match(_OWNER_PATTERN, cfg.owner):
+            owner_out = await asyncio.wait_for(
+                git._run_cmd("gh", "api", f"users/{cfg.owner}"), timeout=15,
+            )
+            body["owner_type"] = json.loads(owner_out).get("type")
+        else:
+            raise RuntimeError(f"Ungültiger GitHub-Owner: {cfg.owner!r}")
+        rate_out = await asyncio.wait_for(git._run_cmd("gh", "api", "rate_limit"), timeout=15)
+        core = json.loads(rate_out).get("resources", {}).get("core", {})
+        body["rate_limit_remaining"] = core.get("remaining")
+        body["rate_limit_total"] = core.get("limit")
+        body["connected"] = True
+    except asyncio.TimeoutError:
+        body["connected"] = False
+        body["error"] = "GitHub nicht erreichbar (Timeout nach 15s)."
+    except (RuntimeError, ValueError) as e:
+        body["connected"] = False
+        body["error"] = str(e)[:300]
+    return body
+
+
+class GithubConfigUpdate(BaseModel):
+    """None = Feld unverändert lassen; "" = Vault-Eintrag löschen (→ .env-Fallback)."""
+    owner: str | None = None
+    token: str | None = None
+
+
+@router.put("/repos/github-config")
+async def update_github_config(
+    payload: GithubConfigUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_role(Role.ADMIN)),
+):
+    """Set GitHub owner/token in the vault (live, no restart — ADR-055)."""
+    import re
+
+    from app.models.secret import Secret
+    from app.services.github_config import (
+        OWNER_SECRET_KEY,
+        TOKEN_SECRET_KEY,
+        invalidate_github_config_cache,
+        resolve_github_config,
+    )
+    from app.services.secrets_helper import upsert_secret_by_key
+
+    if payload.owner is not None and payload.owner.strip():
+        if not re.match(_OWNER_PATTERN, payload.owner.strip()):
+            raise HTTPException(
+                status_code=400,
+                detail="Ungültiger GitHub-Owner (nur Buchstaben, Ziffern, Bindestriche).",
+            )
+
+    updates = (
+        (OWNER_SECRET_KEY, payload.owner, "GitHub Owner",
+         "GitHub user/org under which MC creates project repos."),
+        (TOKEN_SECRET_KEY, payload.token, "GitHub Personal Access Token",
+         "Delivered to agents via bootstrap for autonomous git push + gh CLI operations."),
+    )
+    changed = False
+    for key, value, label, description in updates:
+        if value is None:
+            continue
+        value = value.strip()
+        if value == "":
+            existing = (await session.exec(select(Secret).where(Secret.key == key))).first()
+            if existing:
+                await session.delete(existing)
+                await session.commit()
+        else:
+            await upsert_secret_by_key(
+                session, key, value, provider="github", label=label, description=description,
+            )
+        changed = True
+
+    if changed:
+        invalidate_github_config_cache()
+    cfg = await resolve_github_config(session, fresh=True)
+    return _github_config_body(cfg)
+
+
 @router.get("/repos/{repo_id}")
 async def get_repo(
     repo_id: uuid.UUID,
@@ -178,15 +320,14 @@ async def create_new_repo(
 
     One canonical path for repo creation from the task mask — replaces the
     old per-task throwaway-repo toggle."""
-    from app.services.git_service import (
-        GitService, require_github_owner, slugify_project,
-    )
+    from app.services.git_service import GitService, slugify_project
+    from app.services.github_config import require_github_owner
 
     slug = slugify_project(payload.name)
     if not slug:
         raise HTTPException(status_code=400, detail="Ungültiger Repo-Name")
     try:
-        full_name = f"{require_github_owner()}/{slug}"
+        full_name = f"{await require_github_owner(session)}/{slug}"
     except RuntimeError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

@@ -3,7 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import type { Repo, RepoImportCandidate } from "@/lib/types";
+import type { GithubStatus, Repo, RepoImportCandidate } from "@/lib/types";
 
 // next/navigation is mocked so AppShell's auth guard + Sidebar/MobileNav render
 // without a real Next router (same convention as FilesPage.test.tsx).
@@ -24,6 +24,20 @@ function renderPage() {
     </QueryClientProvider>
   );
 }
+
+const CONFIGURED_GITHUB_STATUS: GithubStatus = {
+  owner: "acme",
+  owner_source: "vault",
+  token_set: true,
+  token_source: "vault",
+  configured: true,
+  connected: null,
+  login: null,
+  owner_type: null,
+  rate_limit_remaining: null,
+  rate_limit_total: null,
+  error: null,
+};
 
 const makeRepo = (over: Partial<Repo> = {}): Repo => ({
   id: "repo-1",
@@ -62,6 +76,9 @@ describe("ReposPage", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })
     );
+
+    // Default: GitHub connected — the onboarding banner tests override this.
+    vi.spyOn(api.repos, "githubStatus").mockResolvedValue(CONFIGURED_GITHUB_STATUS);
   });
 
   it("shows the empty state and an import CTA when there are 0 repos", async () => {
@@ -163,5 +180,31 @@ describe("ReposPage", () => {
 
     await waitFor(() => expect(registerSpy).toHaveBeenCalledWith("acme/new-repo"));
     expect(await screen.findByText("Imported")).toBeInTheDocument();
+  });
+
+  it("shows the GitHub onboarding banner when GitHub is not connected", async () => {
+    vi.spyOn(api.repos, "githubStatus").mockResolvedValue({
+      ...CONFIGURED_GITHUB_STATUS,
+      owner: null,
+      token_set: false,
+      configured: false,
+    });
+    vi.spyOn(api.repos, "list").mockResolvedValue([makeRepo()]);
+
+    renderPage();
+
+    expect(await screen.findByText(/GitHub is not connected/)).toBeInTheDocument();
+    const link = screen.getByRole("link", { name: "Connect GitHub" });
+    expect(link).toHaveAttribute("href", "/settings?section=github");
+  });
+
+  it("hides the GitHub onboarding banner when GitHub is connected", async () => {
+    vi.spyOn(api.repos, "githubStatus").mockResolvedValue(CONFIGURED_GITHUB_STATUS);
+    vi.spyOn(api.repos, "list").mockResolvedValue([makeRepo()]);
+
+    renderPage();
+
+    await screen.findByText("acme/mc-workspace");
+    expect(screen.queryByText(/GitHub is not connected/)).not.toBeInTheDocument();
   });
 });
