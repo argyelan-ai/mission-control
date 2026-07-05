@@ -26,7 +26,12 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
-from app.services.agent_runtime_switch import _acquire_lock, _release_lock, is_agent_busy
+from app.services.agent_runtime_switch import (
+    _acquire_lock,
+    _lock_key,
+    _release_lock,
+    is_agent_busy,
+)
 from app.services.harness_compat import derive_harness
 from app.services.docker_agent_sync import (
     restart_docker_agent_container,
@@ -251,6 +256,16 @@ async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
         )
         return
 
+    # The base lock TTL (120s) is shorter than a worst-case recreate
+    # (force-recreate subprocess up to 90s + health wait up to 90s). Extend it
+    # so a concurrently started manual runtime switch cannot grab the expired
+    # lock while this container operation is still in flight.
+    try:
+        redis = await get_redis()
+        await redis.expire(_lock_key(agent.id), 300)
+    except Exception:  # noqa: BLE001 — best effort, base TTL still applies
+        pass
+
     try:
         fail_key = RedisKeys.agent_recreate_fails(str(agent.id))
         try:
@@ -258,6 +273,9 @@ async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
             # subprocess) → run off the event loop so the watcher loop isn't
             # stalled. The compose file is unchanged (same image tag, rebuilt
             # content), so no write_compose_agents() is needed here.
+            # sync_docker_agent_files is deliberately NOT called (unlike
+            # _sync_one): a CLI update changes no rendered config — the .env /
+            # settings on disk are current; the recreate only swaps the image.
             result = await asyncio.to_thread(
                 restart_docker_agent_container, agent, force_recreate=True
             )
