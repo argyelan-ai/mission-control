@@ -233,6 +233,7 @@ export interface Task {
   autonomy_level: "advise_only" | "draft_only" | "execute_low_risk" | "execute_with_approval_on_risk" | "manual_dispatch_required" | null;
   publish_allowed: boolean | null;
   needs_browser: boolean | null;
+  e2e_test_required?: boolean | null;
   use_separate_repo: boolean;
   repo_id: string | null;
   credential_consent: boolean | null;

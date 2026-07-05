@@ -563,10 +563,14 @@ async def execute_review_decision(
             )
             _has_children = _children_result.first() is not None
 
-        # user_test only for browser-relevant phase tasks
-        _needs_test = _has_children and (
-            getattr(task, "needs_browser", None)
-            or getattr(task, "delegation_type", None) == "visual_proof"
+        # user_test for browser-relevant phase tasks — or whenever the
+        # operator explicitly requested E2E testing in the task mask
+        # (e2e_test_required works for single tasks without children too).
+        _needs_test = bool(getattr(task, "e2e_test_required", None)) or (
+            _has_children and (
+                getattr(task, "needs_browser", None)
+                or getattr(task, "delegation_type", None) == "visual_proof"
+            )
         )
 
         if _needs_test:
@@ -606,6 +610,26 @@ async def execute_review_decision(
                 tester = await handle_test_handoff(session, task, board_id)
                 if tester:
                     logger.info("Test-Handoff: '%s' → %s", task.title[:40], tester.name)
+                elif bool(getattr(task, "e2e_test_required", None)):
+                    # Operator explicitly requested E2E — a silent skip would
+                    # fake a passed gate. Block visibly instead.
+                    task.status = "blocked"
+                    await apply_terminal_unassign(session, task, "blocked")
+                    session.add(TaskComment(
+                        task_id=task.id,
+                        author_type="system",
+                        comment_type="blocker",
+                        content=(
+                            "**E2E-Test angefordert, aber kein Tester-Agent auf diesem Board.**\n\n"
+                            "Der Auftrag verlangt human-simulating E2E-Testing "
+                            "(Toggle in der Auftragsmaske), es ist aber kein Agent "
+                            "mit Rolle `tester` verfuegbar.\n\n"
+                            "**Question for @Operator** — Tester-Agent anlegen/aktivieren "
+                            "oder das E2E-Gate fuer diesen Task aufheben?"
+                        ),
+                    ))
+                    session.add(task)
+                    await session.commit()
             except Exception as e:
                 logger.warning("Test-Handoff fehlgeschlagen: %s", e)
 
@@ -777,9 +801,14 @@ async def handle_test_handoff(
     Analogous to handle_review_handoff, but for QA/user testing.
     The tester checks via browser whether the result works from the user's perspective.
     """
+    from app.scopes import AgentRole
     from app.services.dispatch import find_agent_by_role
 
-    tester = await find_agent_by_role(session, board_id, "tester")
+    # Latent bug until 2026-07-05: the string "tester" was passed here, but
+    # find_agent_by_role does role.value → AttributeError on EVERY handoff,
+    # silently swallowed by the caller's try/except. user_test tasks never
+    # got a tester dispatched.
+    tester = await find_agent_by_role(session, board_id, AgentRole.TESTER)
     if not tester:
         logger.info("Test-Handoff: kein Tester-Agent fuer Board %s", board_id)
         return None
