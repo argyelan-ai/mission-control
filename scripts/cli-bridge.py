@@ -687,6 +687,12 @@ def _build_log_tail(n=80) -> str:
 def _run_agent_image_build(tool: str, version: str, sha256: Optional[str]):
     """Läuft im Hintergrund-Thread — führt build-agent-images.sh aus, schreibt Log."""
     env = os.environ.copy()
+    # launchd startet die Bridge mit minimalem PATH (kein /usr/local/bin) —
+    # ohne diese Ergänzung endet der Build mit "docker: command not found"
+    # (returncode 127, live gesehen beim ersten E2E 2026-07-05).
+    extra_paths = ("/usr/local/bin", "/opt/homebrew/bin")
+    path_parts = env.get("PATH", "").split(":")
+    env["PATH"] = ":".join(path_parts + [p for p in extra_paths if p not in path_parts])
     if tool == "openclaude":
         env["OPENCLAUDE_VERSION"] = version
     elif tool == "claude":
