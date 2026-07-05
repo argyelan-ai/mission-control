@@ -137,7 +137,7 @@ providers:
     models:
       - id: ${_MODEL}
         name: MC model
-        # Without this flag omp renders vLLM's separated `reasoning` deltas
+        # Without this flag omp renders vLLM's separated reasoning deltas
         # as plain assistant text instead of a collapsible thinking block.
         # Harmless for non-reasoning models (the field simply never arrives).
         reasoning: true
