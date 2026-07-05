@@ -6,6 +6,8 @@ scattered across internal.py, docker_agent_sync.py and compose_renderer.py.
 """
 from __future__ import annotations
 
+import logging
+
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
@@ -14,6 +16,8 @@ from app.services.secrets_helper import (
     get_secret_plaintext_by_id,
     get_secret_plaintext_by_key,
 )
+
+logger = logging.getLogger(__name__)
 
 HARNESSES: tuple[str, ...] = ("claude", "openclaude", "omp")
 HARNESS_LABELS: dict[str, str] = {
@@ -110,6 +114,11 @@ async def resolve_provider_credentials(
         key = await get_secret_plaintext_by_id(session, agent.secret_id)
         if key:
             return {"OPENAI_API_KEY": key}
+        logger.warning(
+            "resolve_provider_credentials: agent %s has secret_id set but it "
+            "did not resolve — falling back to runtime/global key",
+            agent.name,
+        )
     if runtime is not None and runtime.api_key_secret_id:
         key = await get_secret_plaintext_by_id(session, runtime.api_key_secret_id)
         if key:

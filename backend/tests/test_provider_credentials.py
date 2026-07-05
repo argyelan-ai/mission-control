@@ -108,3 +108,21 @@ async def test_anthropic_missing_oauth_returns_empty(async_session):
                AsyncMock(return_value=None)):
         creds = await resolve_provider_credentials(async_session, _agent(), rt)
     assert creds == {}
+
+
+@pytest.mark.asyncio
+async def test_dangling_agent_secret_id_warns_and_falls_back(async_session, caplog):
+    """agent.secret_id set but stage 1 resolves to None → falls back to
+    global vault key AND logs exactly one warning naming the agent."""
+    sid = uuid.uuid4()
+    agent = _agent(secret_id=sid)
+    with caplog.at_level("WARNING", logger="app.services.harness_compat"), \
+         patch("app.services.harness_compat.get_secret_plaintext_by_id",
+               AsyncMock(return_value=None)), \
+         patch("app.services.harness_compat.get_secret_plaintext_by_key",
+               AsyncMock(return_value="global-key")):
+        creds = await resolve_provider_credentials(async_session, agent, _rt())
+    assert creds == {"OPENAI_API_KEY": "global-key"}
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert agent.name in warnings[0].getMessage()
