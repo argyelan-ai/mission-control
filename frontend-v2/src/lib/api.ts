@@ -742,6 +742,17 @@ export const api = {
           `/api/v1/boards/${boardId}/tasks/${taskId}/deliverables/${deliverableId}/directory${subpath ? `?subpath=${encodeURIComponent(subpath)}` : ""}`,
         ),
     },
+    workspace: {
+      list: (boardId: string, taskId: string, subpath?: string) =>
+        request<import("./types").TaskWorkspaceListing>(
+          `/api/v1/boards/${boardId}/tasks/${taskId}/workspace/list${subpath ? `?subpath=${encodeURIComponent(subpath)}` : ""}`,
+        ),
+      contentUrl: (boardId: string, taskId: string, subpath: string, download = false): string => {
+        const qs = new URLSearchParams({ subpath });
+        if (download) qs.set("download", "true");
+        return `${BASE_URL}/api/v1/boards/${boardId}/tasks/${taskId}/workspace/content?${qs.toString()}`;
+      },
+    },
     checklist: {
       list: (boardId: string, taskId: string) =>
         request<TaskChecklistItem[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/checklist`),

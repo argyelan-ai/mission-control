@@ -37,6 +37,7 @@ import { TaskHistory } from "./TaskHistory";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
 import { E2ETab } from "./E2ETab";
+import { WorkspaceTab } from "./WorkspaceTab";
 import { GitPanel } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
@@ -429,7 +430,7 @@ export function TaskDetailBody({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"comments" | "history" | "transcript" | "deliverables" | "e2e">("comments");
+  const [activeTab, setActiveTab] = useState<"comments" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
 
@@ -548,6 +549,7 @@ export function TaskDetailBody({
   const tabs: { key: typeof activeTab; label: string }[] = [
     { key: "comments", label: "Comments" },
     { key: "deliverables", label: "Deliverables" },
+    ...(task.workspace_path ? [{ key: "workspace" as const, label: "Workspace" }] : []),
     ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: "E2E" }] : []),
     ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: "Transcript" }] : []),
     { key: "history", label: "History" },
@@ -863,6 +865,8 @@ export function TaskDetailBody({
             <TaskTranscript taskId={task.id} isLive={task.status === "in_progress" || task.status === "review"} />
           ) : activeTab === "deliverables" ? (
             <DeliverablesTab deliverables={deliverables ?? []} boardId={boardId} taskId={task.id} />
+          ) : activeTab === "workspace" ? (
+            <WorkspaceTab task={task} boardId={boardId} />
           ) : activeTab === "e2e" ? (
             <E2ETab task={task} boardId={boardId} />
           ) : (
