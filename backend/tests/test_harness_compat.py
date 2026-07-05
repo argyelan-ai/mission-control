@@ -24,6 +24,13 @@ def test_protocol_openai_types():
     for t in ("vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud", "omp"):
         assert runtime_protocol(_rt(runtime_type=t)) == "openai", t
 
+def test_protocol_slug_prefix_is_exact_anthropic_claude():
+    """The slug arm must match the exact legacy prefix 'anthropic-claude-', not
+    a broad 'anthropic-'. An 'anthropic-proxy-*' OpenAI-compatible shim on an
+    openai runtime_type must classify as openai, not anthropic (regression)."""
+    rt = _rt(slug="anthropic-proxy-x", runtime_type="openai_compatible")
+    assert runtime_protocol(rt) == "openai"
+
 def test_protocol_unknown_type_is_none():
     assert runtime_protocol(_rt(runtime_type="hermes")) is None
     assert runtime_protocol(None) is None

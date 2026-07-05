@@ -47,7 +47,12 @@ def runtime_protocol(runtime: Runtime | None) -> str | None:
     """
     if runtime is None:
         return None
-    if (runtime.slug or "").startswith("anthropic-") or (
+    # Slug arm uses the exact legacy prefix "anthropic-claude-" (the seed
+    # convention for Claude OAuth runtimes). A broader "anthropic-" would
+    # misclassify e.g. an "anthropic-proxy-*" OpenAI-compatible shim as the
+    # anthropic protocol. The runtime_type arm still matches any "anthropic*"
+    # type (anthropic_cloud, anthropic_vertex, …).
+    if (runtime.slug or "").startswith("anthropic-claude-") or (
         runtime.runtime_type or ""
     ).startswith("anthropic"):
         return "anthropic"

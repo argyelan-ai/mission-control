@@ -209,3 +209,85 @@ async def test_legacy_null_harness_derives_from_target(async_session):
     assert agent.harness == "openclaude"  # materialised on first switch
     assert result.image_switched is False
     assert result.to_dict()["harness"] == "openclaude"
+
+
+# ── 6. omp same-image switch must docker-restart, not tmux-respawn ──────────
+
+
+def _capturing_restart():
+    """restart_docker_agent_container stub that records its call kwargs.
+
+    Returns (patch_context, calls_list). calls_list[-1] holds the kwargs of
+    the last invocation so a test can assert on respawn_window_only /
+    force_recreate.
+    """
+    calls: list[dict] = []
+
+    def _fake(agent, **kwargs):
+        calls.append(kwargs)
+        return {"status": "restarted", "container": "x", "mode": "restart"}
+
+    return patch(
+        "app.services.agent_runtime_switch.restart_docker_agent_container",
+        side_effect=_fake,
+    ), calls
+
+
+@pytest.mark.asyncio
+async def test_omp_same_image_switch_forces_docker_restart(async_session):
+    """omp renders its provider config only in entrypoint.sh at container start.
+    A same-image provider switch (omp runtime → cloud runtime, harness stays
+    omp) must therefore trigger a full docker restart, NOT a tmux respawn —
+    otherwise the container keeps the old endpoint/model. Contract: restart is
+    called with respawn_window_only=False AND force_recreate=False.
+    """
+    rt_old = await _mk_runtime(async_session, slug="omp-si", runtime_type="omp")
+    rt_new = await _mk_runtime(async_session, slug="cloud-si", runtime_type="cloud")
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+    agent.harness = "omp"
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    restart_patch, calls = _capturing_restart()
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         restart_patch, \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy", AsyncMock(return_value={"healthy": True, "reason": "ok"})), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "false"})):
+        result = await switch_agent_runtime(async_session, agent, rt_new.id)
+
+    assert result.image_switched is False  # omp → omp, same image
+    assert calls, "restart_docker_agent_container was not called"
+    assert calls[-1]["respawn_window_only"] is False, (
+        "omp same-image switch must docker-restart, not tmux-respawn"
+    )
+    assert calls[-1]["force_recreate"] is False  # same image, no recreate
+
+
+@pytest.mark.asyncio
+async def test_openclaude_same_image_switch_keeps_respawn(async_session):
+    """Contrast to the omp case: an openclaude same-image provider switch
+    (openai runtime → openai runtime, harness stays openclaude) still uses the
+    fast tmux respawn path — openclaude re-reads its .env on respawn, so no
+    full container restart is needed. Contract: respawn_window_only=True,
+    force_recreate=False.
+    """
+    rt_old = await _mk_runtime(async_session, slug="lms-si", runtime_type="lmstudio")
+    rt_new = await _mk_runtime(async_session, slug="cloud-oc", runtime_type="cloud")
+    agent = await _mk_agent(async_session, runtime_id=rt_old.id, cli_plugins=[])
+    agent.harness = "openclaude"
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    restart_patch, calls = _capturing_restart()
+    with patch("app.services.agent_runtime_switch.sync_docker_agent_files", AsyncMock(return_value={})), \
+         restart_patch, \
+         patch("app.services.agent_runtime_switch.wait_for_agent_healthy", AsyncMock(return_value={"healthy": True, "reason": "ok"})), \
+         patch("app.services.agent_runtime_switch.write_compose_agents", AsyncMock(return_value={"changed": "false"})):
+        result = await switch_agent_runtime(async_session, agent, rt_new.id)
+
+    assert result.image_switched is False  # openclaude → openclaude, same image
+    assert calls, "restart_docker_agent_container was not called"
+    assert calls[-1]["respawn_window_only"] is True
+    assert calls[-1]["force_recreate"] is False

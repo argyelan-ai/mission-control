@@ -2,10 +2,14 @@
 
 Backfill derives the harness from the agent's current runtime binding so
 existing cli-bridge agents keep their exact behaviour:
-  runtime_type == "omp"                 -> "omp"
-  runtime slug LIKE "anthropic-claude-%" -> "claude"
-  any other bound runtime               -> "openclaude"
-Host agents / agents without runtime stay NULL (not switchable anyway).
+  runtime_type == "omp"                                          -> "omp"
+  runtime slug LIKE "anthropic-claude-%"                         -> "claude"
+  runtime_type IN (vllm_docker, lmstudio, openai_compatible,
+                   unsloth, cloud)                               -> "openclaude"
+Host agents / agents without runtime / agents on unknown or special
+runtime types (e.g. hermes) stay NULL — the openclaude backfill is scoped
+to exactly the runtime types that were coupled to the openclaude image
+before ADR-056, so nothing outside that set is silently migrated.
 
 Revision ID: 0142
 Revises: 0141
@@ -47,6 +51,7 @@ def upgrade() -> None:
         WHERE agents.runtime_id = r.id
           AND agents.agent_runtime = 'cli-bridge'
           AND agents.harness IS NULL
+          AND r.runtime_type IN ('vllm_docker','lmstudio','openai_compatible','unsloth','cloud')
         """
     )
 

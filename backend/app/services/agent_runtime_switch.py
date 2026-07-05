@@ -547,11 +547,20 @@ async def switch_agent_runtime(
         # Step 8 — restart / recreate container.
         # D-11: same-image switches use tmux respawn-window (15-30s saved);
         # cross-image switches still need force_recreate to pull the new image.
+        #
+        # ADR-056 exception: omp agents render their provider config
+        # (models.yml / omp.env) ONLY in entrypoint.sh at container start. A
+        # tmux respawn-window re-execs Window 0 but keeps the container's
+        # existing environment, so the old endpoint/model would survive a
+        # same-image switch INTO omp. Force a full `docker restart` (not a
+        # respawn) whenever the effective target harness is omp — the
+        # entrypoint then re-runs bootstrap and emits a fresh models.yml,
+        # mirroring the ADR-054 watcher's docker-restart mechanism.
         await publish_switch_progress(agent.id, "restarting")
         restart_result = restart_docker_agent_container(
             agent,
             force_recreate=image_change,
-            respawn_window_only=(not image_change),
+            respawn_window_only=(not image_change and effective_new_harness != "omp"),
         )
         status = restart_result.get("status", "")
         if status.startswith("error"):

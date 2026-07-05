@@ -159,6 +159,50 @@ async def test_env_recycler_disabled_per_agent(async_session, tmp_agent_dir):
 
 
 @pytest.mark.asyncio
+async def test_no_secret_error_for_anthropic_runtime(async_session, tmp_agent_dir):
+    """ADR-056: an agent bound to an anthropic-protocol runtime uses OAuth and
+    has no OPENAI_API_KEY by design. Even with a secret_id set (whose lookup
+    yields no OPENAI key), sync must NOT record `.env_secret_error` — that would
+    be a false alarm.
+
+    Uses a *disabled* anthropic runtime so `is_anthropic` is False and the
+    non-anthropic else-branch is actually reached, exercising the protocol
+    guard on the `.env_secret_error` line (regression: pre-fix this recorded
+    the error because only `agent.secret_id` was checked).
+    """
+    import uuid as _uuid
+
+    from app.services.docker_agent_sync import sync_docker_agent_files
+
+    rt = Runtime(
+        slug="anthropic-claude-opus",
+        display_name="Claude Opus",
+        runtime_type="anthropic_oauth",
+        endpoint="https://api.anthropic.com",
+        model_identifier="claude-opus",
+        enabled=False,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    agent = await _make_agent(async_session, name="Boss2", runtime_id=rt.id)
+    # secret_id points at a non-existent secret → no OPENAI key resolves.
+    agent.secret_id = _uuid.uuid4()
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    claude_dir = tmp_agent_dir / "boss2" / "claude-config"
+    claude_dir.mkdir(parents=True)
+
+    with patch("app.services.docker_agent_sync.render_agent_file", return_value="rendered"):
+        results = await sync_docker_agent_files(async_session, agent)
+
+    assert ".env_secret_error" not in results, f"results={results}"
+
+
+@pytest.mark.asyncio
 async def test_host_runtime_skipped(async_session, tmp_agent_dir):
     from app.services.docker_agent_sync import sync_docker_agent_files
 

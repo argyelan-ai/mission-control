@@ -326,12 +326,21 @@ async def sync_docker_agent_files(
             if "OPENAI_API_KEY" in creds:
                 env_lines.append(f"OPENAI_API_KEY={_sanitize_env_val(creds['OPENAI_API_KEY'])}")
                 env_notes.append("secret=set")
-            elif agent.secret_id:
+            elif agent.secret_id and runtime_protocol(runtime) != "anthropic":
                 # agent has a secret bound but decryption/lookup failed — keep
                 # the loud error marker so operators see it in the sync result.
                 # We still write the recycler line + any runtime keys (the write
                 # block below persists env_lines); previously env_lines was set
                 # to None and the whole write was skipped (Phase-3 regression).
+                #
+                # ADR-056: only openai-protocol agents need an OPENAI_API_KEY.
+                # An agent bound to an anthropic-protocol runtime uses OAuth and
+                # legitimately has no OPENAI key — flagging .env_secret_error
+                # there is a false alarm. `is_anthropic` already gates the
+                # enabled case (this whole else-branch is non-anthropic); the
+                # explicit protocol check additionally covers a *disabled*
+                # anthropic runtime, where is_anthropic is False but the agent
+                # still shouldn't be treated as an openai provider.
                 results[".env_secret_error"] = "secret not found or decryption failed"
         except ValueError as e:
             # Newline injection detected in a runtime field — log and surface,
