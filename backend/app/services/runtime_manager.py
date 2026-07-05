@@ -364,6 +364,12 @@ _verify_poll_interval = 1.0  # seconds between "did it appear?" polls
 
 # Matches sparkrun's single-model container naming: sparkrun_<hash>_solo.
 _SOLO_NAME_FILTER = "name=sparkrun_.*_solo"
+# The canonical name used by MANUAL engine starts on the Spark
+# (spark-vllm-docker/run-recipe.py names its container `vllm_node`). Without
+# this sweep the cockpit stop button reports success but stops nothing when
+# the engine was started by hand (live failure 2026-07-05: manual PrismaQuant
+# survived both the stop button and a recipe switch to DeepSeek).
+_MANUAL_NAME_FILTER = "name=vllm_node"
 
 
 def _sanitize_slug(slug: str) -> str:
@@ -376,7 +382,8 @@ def _sanitize_slug(slug: str) -> str:
 def _running_solo_query(slug: str | None = None) -> str:
     """Build a single remote command that prints the ids of running Spark model
     containers — both label-matched (``mc.runtime.slug=<slug>``) and
-    ``sparkrun_*_solo`` name-matched — deduplicated. One SSH round-trip.
+    ``sparkrun_*_solo`` name-matched, plus the manual-start name
+    ``vllm_node`` — deduplicated. One SSH round-trip.
 
     docker ANDs multiple ``--filter`` values, so label and name must be two
     separate ``docker ps`` calls unioned via ``{ ...; ...; } | sort -u``.
@@ -393,7 +400,8 @@ def _running_solo_query(slug: str | None = None) -> str:
     )
     inner = (
         f"{{ {label_part}"
-        f"docker ps -q --filter {shlex_quote(_SOLO_NAME_FILTER)}; }} | sort -u"
+        f"docker ps -q --filter {shlex_quote(_SOLO_NAME_FILTER)}; "
+        f"docker ps -q --filter {shlex_quote(_MANUAL_NAME_FILTER)}; }} | sort -u"
     )
     # shlex_quote produces a safely single-quoted argument for bash -c, handling
     # any single quotes embedded by the inner shlex_quote calls.

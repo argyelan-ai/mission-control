@@ -132,3 +132,20 @@ async def test_restart_with_container_name_calls_docker_restart_directly():
     assert ssh.await_count == 1
     cmd = ssh.call_args.args[0]
     assert cmd == "docker restart sparkrun_abc123_solo"
+
+
+def test_running_solo_query_sweeps_manual_vllm_node():
+    """The evict/stop sweep must also catch manually started engines: the
+    canonical manual container name on the Spark is `vllm_node` (started via
+    spark-vllm-docker/run-recipe.py, no mc.runtime.slug label). Live failure
+    2026-07-05: the cockpit stop button reported success but the manual
+    PrismaQuant engine kept running through a recipe switch."""
+    from app.services.runtime_manager import _running_solo_query
+
+    q = _running_solo_query("qwen-general")
+    assert "mc.runtime.slug=qwen-general" in q
+    assert "sparkrun_.*_solo" in q
+    assert "vllm_node" in q
+
+    q_no_slug = _running_solo_query(None)
+    assert "vllm_node" in q_no_slug
