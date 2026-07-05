@@ -188,6 +188,9 @@ class Task(SQLModel, table=True):
     # approval the task goes through the user_test gate (tester agent drives
     # real flows via Playwright MCP) even without subtasks/needs_browser.
     e2e_test_required: bool | None = None
+    # If True, the review handoff skips the agent reviewer — the task waits
+    # in `review` for a human (appears in Inbox) and pings Mark via Telegram.
+    human_review_required: bool | None = None
 
     sort_order: int = 0
     is_auto_created: bool = False

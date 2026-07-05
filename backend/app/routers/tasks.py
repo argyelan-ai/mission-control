@@ -69,6 +69,16 @@ async def _enforce_board_rules(
         if not children_ok:
             raise HTTPException(status_code=400, detail=children_detail)
 
+    # Rule 2b: human_review_required is a HARD GATE on done — independent of
+    # the board's require_review_before_done flag. A task explicitly routed
+    # to Mark must not be closeable by skipping review/user_test.
+    if new_status == "done" and task.status not in ("review", "user_test"):
+        if getattr(task, "human_review_required", None):
+            raise HTTPException(
+                status_code=400,
+                detail="Task erfordert Human-Review (Mark) bevor es auf Done gesetzt werden kann",
+            )
+
     # Rule 3: task must go through review before it can be set to done
     # Exception: parent tasks with all subtasks done (review happened at subtask level)
     if board.require_review_before_done:
@@ -157,6 +167,7 @@ class TaskCreate(BaseModel):
     needs_browser: bool | None = None
     credential_consent: bool | None = None
     e2e_test_required: bool | None = None
+    human_review_required: bool | None = None
     # Fields restored after review FB-2 (2026-04-21) — they exist on
     # Task model but had been dropped from TaskCreate schema, so the UI
     # was sending them and pydantic silently discarded them.
@@ -1542,9 +1553,15 @@ async def update_task(
         )
         new_status = updates["status"]
 
-        # User sets task to review → find reviewer and notify via push
+        # User sets task to review → find reviewer and notify via push,
+        # unless the task is routed to human_review_required — then Mark
+        # is the reviewer, no Rex dispatch (mirrors agent_task_status.py).
         if new_status == "review" and old_status == "in_progress":
-            await handle_review_handoff(session, task, board_id)
+            if not getattr(task, "human_review_required", None):
+                await handle_review_handoff(session, task, board_id)
+            else:
+                from app.services.task_lifecycle import handle_human_review_handoff
+                await handle_human_review_handoff(session, task, board_id)
 
         # User rejects review → back to original developer
         # Also catch done→in_progress (re-open after accidental done)

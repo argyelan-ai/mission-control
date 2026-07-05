@@ -41,6 +41,14 @@ const TEMPLATE_CHIP_META: Record<string, { label: string; icon: typeof Bug; colo
   research: { label: "Research", icon: SearchIcon, color: C.info },
 };
 
+// New, manually created tasks default to human review ON (Mark, 05.07.) —
+// he reviews his own tasks unless he opts out. TaskFormFields' own default
+// stays `false` so other consumers (e.g. JobModal-scheduled tasks) are unaffected.
+const INITIAL_TASK_PAYLOAD: TaskFormPayload = {
+  ...EMPTY_TASK_FORM_PAYLOAD,
+  humanReviewRequired: true,
+};
+
 interface CreateTaskModalProps {
   activeBoardId: string | null;
   agents: Agent[] | undefined;
@@ -61,7 +69,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
 
   // Single payload state — was 30+ individual useState calls before.
-  const [payload, setPayload] = useState<TaskFormPayload>(EMPTY_TASK_FORM_PAYLOAD);
+  const [payload, setPayload] = useState<TaskFormPayload>(INITIAL_TASK_PAYLOAD);
 
   // Reference files (ADR-053) — staged in TaskFormFields, mirrored here so
   // handleSubmit can upload them once the task (and its task_id) exists.
@@ -138,7 +146,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
     !!payload.desiredOutput.trim();
 
   const resetForm = useCallback(() => {
-    setPayload(EMPTY_TASK_FORM_PAYLOAD);
+    setPayload(INITIAL_TASK_PAYLOAD);
     setStagedReferenceFiles([]);
     setReferenceNote("");
     setReferenceUploadErrors([]);
@@ -181,6 +189,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
           ...(payload.approvalPolicy && { approval_policy: payload.approvalPolicy as Task["approval_policy"] }),
           ...(payload.needsBrowser && { needs_browser: true }),
           ...(payload.e2eTestRequired && { e2e_test_required: true }),
+          human_review_required: payload.humanReviewRequired,
           ...(payload.requiresAuth && { requires_auth: true }),
           ...(payload.requiresAuth && payload.credentialMode === "vault" && payload.credentialId && { credential_id: payload.credentialId }),
           ...(payload.requiresAuth && payload.credentialMode === "inline" && payload.inlineCredentials.trim() && { credentials: payload.inlineCredentials.trim() }),

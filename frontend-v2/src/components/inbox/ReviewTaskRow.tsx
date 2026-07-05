@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   CheckCircle, XCircle, ChevronDown, ChevronRight,
-  ExternalLink, MessageSquare, Pause,
+  ExternalLink, MessageSquare, Pause, UserCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn, timeAgo } from "@/lib/utils";
@@ -144,6 +144,18 @@ export function ReviewTaskRow({
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
               <Pill color={C.accent} size="sm">review</Pill>
+              {task.human_review_required && (
+                <span
+                  className="text-[10px] font-medium px-2 py-1 rounded-full inline-flex items-center gap-1"
+                  style={{
+                    color: C.accent,
+                    backgroundColor: `${C.accent}1A`,
+                    border: `1px solid ${C.accent}40`,
+                  }}
+                >
+                  <UserCheck size={10} /> Your review
+                </span>
+              )}
               <span
                 className="text-[10px] uppercase font-semibold"
                 style={{ color: priorityColor }}

@@ -791,6 +791,72 @@ async def handle_review_handoff(
     return reviewer
 
 
+async def handle_human_review_handoff(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+    developer: Agent | None = None,
+) -> None:
+    """Human review handoff: skip the agent reviewer, leave the task for Mark.
+
+    Mirrors handle_review_handoff's non-dispatch side effects (release the
+    developer lock, reset the review-round bookkeeping, clear spawn/dispatch-
+    attempt tracking) but assigns no reviewer agent — the task stays in
+    `review` with assigned_agent_id=None, which is enough for the Inbox
+    query (filters on status=review) to surface it. Mark decides via the
+    existing POST .../review endpoint.
+    """
+    # Release the developer lock (clear current_task_id) — same as the
+    # agent-reviewer path, the developer is done with this task either way.
+    if developer and developer.current_task_id == task.id:
+        developer.current_task_id = None
+        session.add(developer)
+
+    task.assigned_agent_id = None
+    task.ack_at = None
+    task.dispatched_at = None
+    task.completed_at = None  # Reset in case it was set from a previous cycle
+    task.review_decision = None  # New review round starts clean
+    task.review_decided_at = None
+    task.dispatch_intent = "human_review"
+    task.updated_at = utcnow()
+    clear_spawn_tracking(task)
+    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    await clear_dispatch_attempt_id(
+        session, task,
+        caller="task_lifecycle", reason="human_review_handoff",
+    )
+    session.add(task)
+
+    comment = TaskComment(
+        task_id=task.id,
+        author_type="system",
+        comment_type="handoff",
+        content=(
+            f"Human-Review angefordert fuer '{task.title}' — wartet auf Mark "
+            "(kein Agent-Reviewer dispatcht)."
+        ),
+    )
+    session.add(comment)
+    await session.commit()
+
+    await emit_event(
+        session, "task.human_review_requested",
+        f"Human-Review angefordert: '{task.title}' wartet auf Mark",
+        board_id=board_id, task_id=task.id,
+    )
+
+    from app.services.telegram_bot import telegram_bot
+    from app.config import phone_test_url
+    if telegram_bot.configured:
+        tailscale_url = phone_test_url()
+        await telegram_bot.send_message(
+            f"<b>Human-Review angefordert: {task.title}</b>\n\n"
+            f"Bitte selbst freigeben:\n{tailscale_url}\n\n"
+            f"Task-ID: {task.id}"
+        )
+
+
 async def handle_test_handoff(
     session: AsyncSession,
     task: Task,
