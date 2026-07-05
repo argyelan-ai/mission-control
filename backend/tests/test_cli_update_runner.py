@@ -73,11 +73,18 @@ async def _harness(
     latest: dict,
     handler,
     phases: list | None = None,
+    mark: AsyncMock | None = None,
+    read_override=None,
 ):
     """Patch out redis, manifest, upstream, bridge, propagation and sleep for a
-    run_update call. Records phase order into ``phases`` if provided."""
-    mark = AsyncMock(return_value=1)
+    run_update call. Records phase order into ``phases`` if provided.
+
+    ``mark`` overrides the mark_agents_for_recreate mock (e.g. to raise).
+    ``read_override`` replaces read_manifest (e.g. to raise before the try)."""
+    if mark is None:
+        mark = AsyncMock(return_value=1)
     recreate = AsyncMock(return_value=None)
+    read_fn = read_override if read_override is not None else manifest.read
 
     orig_write = runner._write_progress
 
@@ -91,7 +98,7 @@ async def _harness(
 
     with patch.object(runner, "get_redis", _fake_get_redis(fake_redis)), \
             patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)), \
-            patch.object(runner, "read_manifest", manifest.read), \
+            patch.object(runner, "read_manifest", read_fn), \
             patch.object(runner, "bump_manifest", manifest.bump), \
             patch.object(runner, "restore_manifest_entry", manifest.restore), \
             patch.object(runner, "fetch_latest", _fetch_latest), \
@@ -329,7 +336,7 @@ async def test_build_timeout_fails_and_rolls_back(async_session, fake_redis):
 async def test_start_update_unknown_tool(async_session, fake_redis):
     with patch.object(runner, "get_redis", _fake_get_redis(fake_redis)):
         with pytest.raises(runner.UnknownTool):
-            await runner.start_update(async_session, "nope")
+            await runner.start_update("nope")
 
 
 async def test_start_update_double_start_raises(async_session, fake_redis):
@@ -343,13 +350,14 @@ async def test_start_update_double_start_raises(async_session, fake_redis):
 
     with patch.object(runner, "get_redis", _fake_get_redis(fake_redis)), \
             patch.object(runner.asyncio, "create_task", _fake_create_task):
-        await runner.start_update(async_session, "claude")
+        token = await runner.start_update("claude")
         # lock is now held → second start rejected
         with pytest.raises(runner.UpdateAlreadyRunning):
-            await runner.start_update(async_session, "claude")
+            await runner.start_update("claude")
 
     assert len(created) == 1
-    assert await fake_redis.get(RedisKeys.cli_update_lock()) == "claude"
+    # lock value is the returned per-run token, not the tool name
+    assert await fake_redis.get(RedisKeys.cli_update_lock()) == token
 
 
 async def test_start_update_spawns_task_and_holds_lock(async_session, fake_redis):
@@ -362,7 +370,154 @@ async def test_start_update_spawns_task_and_holds_lock(async_session, fake_redis
 
     with patch.object(runner, "get_redis", _fake_get_redis(fake_redis)), \
             patch.object(runner.asyncio, "create_task", _fake_create_task):
-        await runner.start_update(async_session, "omp")
+        token = await runner.start_update("omp")
 
     assert len(spawned) == 1
-    assert await fake_redis.get(RedisKeys.cli_update_lock()) == "omp"
+    # lock is held under the returned token with a bounded TTL
+    assert await fake_redis.get(RedisKeys.cli_update_lock()) == token
+    assert 0 < await fake_redis.ttl(RedisKeys.cli_update_lock()) <= runner._LOCK_TTL
+
+
+# ── Finding 1: no rollback after a successful build ───────────────────────
+
+async def test_recreate_failure_keeps_manifest_bumped(async_session, fake_redis):
+    """Build succeeded → the image is already the new version. A failure in the
+    post-build tail (recreate/emit) must leave the manifest bumped, not roll it
+    back, and flag the failure as a post-build one."""
+    manifest = FakeManifest({"claude": {"version": "2.0.0"}})
+    mark = AsyncMock(side_effect=RuntimeError("recreate marking blew up"))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/agent-images/build":
+            return httpx.Response(200, json={"status": "started"})
+        if request.url.path == "/agent-images/build/status":
+            return httpx.Response(200, json={
+                "state": "success", "returncode": 0, "log_tail": "done",
+            })
+        return httpx.Response(404)
+
+    async with _harness(
+        fake_redis, manifest=manifest,
+        latest={"version": "2.1.0", "sha256": None},
+        handler=handler, mark=mark,
+    ):
+        await runner.run_update("claude", session=async_session)
+
+    prog = await _read_progress(fake_redis)
+    assert prog["phase"] == "failed"
+    assert "Build ok" in prog["error"]
+    # manifest stays at the freshly-built version — NOT rolled back
+    assert manifest.data["claude"]["version"] == "2.1.0"
+
+    events = await _events(async_session)
+    assert any(e.event_type == "cli.update_failed" for e in events)
+    # lock still released
+    assert await fake_redis.get(RedisKeys.cli_update_lock()) is None
+
+
+# ── Finding 2: early failure (read_manifest) still frees the lock ─────────
+
+async def test_read_manifest_failure_releases_lock(async_session, fake_redis):
+    manifest = FakeManifest({"claude": {"version": "2.0.0"}})
+    await fake_redis.set(RedisKeys.cli_update_lock(), "tok", ex=runner._LOCK_TTL)
+
+    def boom():
+        raise RuntimeError("manifest unreadable")
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    async with _harness(
+        fake_redis, manifest=manifest,
+        latest={"version": "2.1.0", "sha256": None},
+        handler=handler, read_override=boom,
+    ):
+        await runner.run_update("claude", token="tok", session=async_session)
+
+    # lock freed despite the failure happening before the phase machine started
+    assert await fake_redis.get(RedisKeys.cli_update_lock()) is None
+    prog = await _read_progress(fake_redis)
+    assert prog["phase"] == "failed"
+
+
+# ── Finding 3: progress records carry a TTL ───────────────────────────────
+
+async def test_progress_written_with_ttl(async_session, fake_redis):
+    manifest = FakeManifest({"claude": {"version": "2.0.0"}})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/agent-images/build":
+            return httpx.Response(200, json={"status": "started"})
+        if request.url.path == "/agent-images/build/status":
+            return httpx.Response(200, json={
+                "state": "success", "returncode": 0, "log_tail": "done",
+            })
+        return httpx.Response(404)
+
+    async with _harness(
+        fake_redis, manifest=manifest,
+        latest={"version": "2.1.0", "sha256": None},
+        handler=handler,
+    ):
+        await runner.run_update("claude", session=async_session)
+
+    ttl = await fake_redis.ttl(RedisKeys.cli_update_progress())
+    assert 0 < ttl <= runner._PROGRESS_TTL
+
+
+# ── Finding 4: owner-checked lock release + TTL renewal ────────────────────
+
+async def test_release_lock_respects_owner_token(fake_redis):
+    key = RedisKeys.cli_update_lock()
+
+    # foreign token → never deleted
+    await fake_redis.set(key, "other")
+    await runner._release_lock(fake_redis, "mine")
+    assert await fake_redis.get(key) == "other"
+
+    # own token → released
+    await runner._release_lock(fake_redis, "other")
+    assert await fake_redis.get(key) is None
+
+    # token None (direct test calls) → unconditional delete, no-op when absent
+    await fake_redis.set(key, "x")
+    await runner._release_lock(fake_redis, None)
+    assert await fake_redis.get(key) is None
+
+
+async def test_poll_renews_lock_ttl(fake_redis):
+    """A long build must refresh its own lock TTL so it doesn't expire mid-run."""
+    key = RedisKeys.cli_update_lock()
+    await fake_redis.set(key, "mine", ex=50)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "success", "log_tail": "ok"})
+
+    with patch.object(runner, "_client", _mock_transport(handler)), \
+            patch.object(runner, "_LOCK_RENEW_EVERY", 0), \
+            patch.object(runner.asyncio, "sleep", AsyncMock()):
+        await runner._poll_build(
+            fake_redis, "claude", "2.0.0", "2.1.0", token="mine",
+        )
+
+    # TTL bumped from the initial 50s back up toward the full lease
+    assert await fake_redis.ttl(key) > 100
+
+
+async def test_poll_does_not_renew_foreign_lock(fake_redis):
+    """If the lock is already held by a different token, don't extend it."""
+    key = RedisKeys.cli_update_lock()
+    await fake_redis.set(key, "other", ex=50)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"state": "success", "log_tail": "ok"})
+
+    with patch.object(runner, "_client", _mock_transport(handler)), \
+            patch.object(runner, "_LOCK_RENEW_EVERY", 0), \
+            patch.object(runner.asyncio, "sleep", AsyncMock()):
+        await runner._poll_build(
+            fake_redis, "claude", "2.0.0", "2.1.0", token="mine",
+        )
+
+    # foreign lease untouched (still counting down from ~50s)
+    assert 0 < await fake_redis.ttl(key) <= 50

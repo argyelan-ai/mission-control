@@ -18,7 +18,10 @@ progress record with a German reason, and emits ``cli.update_failed``.
 
 A Redis lock (``mc:cli:update-lock``, TTL 1800s, ``set nx``) serializes
 updates: a second start while one is running raises ``UpdateAlreadyRunning``.
-The lock is always released in ``run_update``'s ``finally``.
+The lock value is a per-run uuid token; ``run_update``'s ``finally`` releases
+it only if the stored token is still ours (a run whose lock TTL-expired mid-way
+must not delete a second run's lock). The build poll loop refreshes the TTL
+every ~60s so a build longer than 1800s doesn't drop its own lock.
 
 Same self-contained-session pattern as ``cli_update_check.tick``: the router
 acquires the lock synchronously via ``start_update`` and spawns
@@ -30,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
 import httpx
@@ -53,6 +57,8 @@ from app.services.runtime_propagation import (
 logger = logging.getLogger(__name__)
 
 _LOCK_TTL = 1800  # 30 min — a stuck update self-heals via TTL expiry
+_LOCK_RENEW_EVERY = 60  # refresh the lock TTL at most this often while polling
+_PROGRESS_TTL = 1800  # progress record expires so a hard crash can't pin "build"
 
 # Build poll cadence + ceiling. Module-level so tests can shrink them.
 POLL_INTERVAL = 5
@@ -135,7 +141,9 @@ async def _write_progress(
     if error is not None:
         payload["error"] = error
     try:
-        await redis.set(RedisKeys.cli_update_progress(), json.dumps(payload))
+        await redis.set(
+            RedisKeys.cli_update_progress(), json.dumps(payload), ex=_PROGRESS_TTL
+        )
     except Exception:  # noqa: BLE001 — progress is advisory, never fail the run on it
         logger.warning("cli update: could not write progress (%s)", phase)
 
@@ -174,9 +182,11 @@ def _error_detail(resp: httpx.Response) -> str:
         return str(resp.status_code)
 
 
-async def start_update(session: AsyncSession, tool: str) -> None:
+async def start_update(tool: str) -> str:
     """Synchronous guard for the router: validates the tool, acquires the
-    update lock, and spawns the background ``run_update`` task.
+    update lock with a per-run token, and spawns the background ``run_update``
+    task. Returns the lock token (handed to ``run_update`` for owner-checked
+    release).
 
     Raises ``UnknownTool`` / ``UpdateAlreadyRunning`` so the caller can return
     a 4xx immediately. The spawned task owns lock release.
@@ -184,36 +194,65 @@ async def start_update(session: AsyncSession, tool: str) -> None:
     if tool not in TOOLS:
         raise UnknownTool(tool)
     redis = await get_redis()
+    token = uuid.uuid4().hex
     acquired = await redis.set(
-        RedisKeys.cli_update_lock(), tool, nx=True, ex=_LOCK_TTL
+        RedisKeys.cli_update_lock(), token, nx=True, ex=_LOCK_TTL
     )
     if not acquired:
         raise UpdateAlreadyRunning()
-    asyncio.create_task(run_update(tool))
+    asyncio.create_task(run_update(tool, token=token))
+    return token
 
 
-async def run_update(tool: str, session: AsyncSession | None = None) -> None:
+async def _release_lock(redis, token: str | None) -> None:
+    """Owner-checked release: only delete the lock if it still holds our token.
+    Without this a run whose lock already TTL-expired (and was re-acquired by a
+    second run) would delete the second run's lock. ``token is None`` (direct
+    ``run_update`` calls in tests, no lock acquired) falls back to a plain
+    delete, which is a no-op when the key is absent."""
+    try:
+        if token is None:
+            await redis.delete(RedisKeys.cli_update_lock())
+            return
+        current = await redis.get(RedisKeys.cli_update_lock())
+        if current == token:
+            await redis.delete(RedisKeys.cli_update_lock())
+    except Exception:  # noqa: BLE001 — lock self-heals via TTL
+        logger.warning("cli update: could not release update lock")
+
+
+async def run_update(
+    tool: str, token: str | None = None, session: AsyncSession | None = None
+) -> None:
     """Background entry point. Uses the passed session (tests) or a
-    self-contained one (``session_scope``). Assumes the update lock is held;
-    always releases it in ``finally``."""
+    self-contained one (``session_scope``). Assumes the update lock is held
+    under ``token``; always releases it (owner-checked) in ``finally``."""
     if session is not None:
-        await _run_update(session, tool)
+        await _run_update(session, tool, token)
         return
     from app.services.runtime_model_resolver import session_scope
 
     async with session_scope() as own_session:
-        await _run_update(own_session, tool)
+        await _run_update(own_session, tool, token)
 
 
-async def _run_update(session: AsyncSession, tool: str) -> None:
-    redis = await get_redis()
+async def _run_update(
+    session: AsyncSession, tool: str, token: str | None = None
+) -> None:
     harness = TOOL_HARNESS.get(tool, tool)
-    from_version = read_manifest().get(tool, {}).get("version")
+    redis = None
+    from_version: str | None = None
     to_version: str | None = None
     manifest_bumped = False
+    rollback_enabled = True  # cleared once the build succeeds (image is new)
     old_entry: dict = {}
 
     try:
+        # get_redis + read_manifest live INSIDE the try so an early failure
+        # still writes a failed progress and releases the lock in finally.
+        redis = await get_redis()
+        from_version = read_manifest().get(tool, {}).get("version")
+
         # ── Phase: manifest ──────────────────────────────────────────────
         latest = await _resolve_latest(tool, redis)
         to_version = latest["version"]
@@ -238,7 +277,11 @@ async def _run_update(session: AsyncSession, tool: str) -> None:
         if resp.status_code != 200:
             raise UpdateError(f"Bridge lehnte den Build ab: {_error_detail(resp)}")
 
-        await _poll_build(redis, tool, from_version, to_version)
+        await _poll_build(redis, tool, from_version, to_version, token=token)
+
+        # Build succeeded → the rebuilt image now matches the bumped manifest.
+        # From here on a failure must NOT roll the manifest back.
+        rollback_enabled = False
 
         # ── Phase: recreate ──────────────────────────────────────────────
         await _write_progress(redis, "recreate", tool, from_version, to_version)
@@ -261,14 +304,19 @@ async def _run_update(session: AsyncSession, tool: str) -> None:
 
     except Exception as exc:  # noqa: BLE001 — every failure path is uniform
         reason = str(exc) if isinstance(exc, UpdateError) else f"Unerwarteter Fehler: {exc}"
-        if manifest_bumped:
+        if manifest_bumped and rollback_enabled:
             try:
                 restore_manifest_entry(tool, old_entry)
             except Exception:  # noqa: BLE001 — rollback best-effort
                 logger.exception("cli update: manifest rollback failed for %s", tool)
-        await _write_progress(
-            redis, "failed", tool, from_version, to_version, error=reason
-        )
+        elif not rollback_enabled:
+            # Build already produced the new image; the manifest stays bumped.
+            # Flag that the failure is in the post-build tail, not the update.
+            reason = f"Build ok, Recreate/Abschluss fehlgeschlagen: {reason}"
+        if redis is not None:
+            await _write_progress(
+                redis, "failed", tool, from_version, to_version, error=reason
+            )
         logger.warning("cli update failed for %s: %s", tool, reason)
         try:
             await emit_event(
@@ -286,20 +334,26 @@ async def _run_update(session: AsyncSession, tool: str) -> None:
         except Exception:  # noqa: BLE001 — never mask the original failure
             logger.exception("cli update: could not emit cli.update_failed")
     finally:
-        try:
-            await redis.delete(RedisKeys.cli_update_lock())
-        except Exception:  # noqa: BLE001 — lock self-heals via TTL
-            logger.warning("cli update: could not release update lock")
+        if redis is not None:
+            await _release_lock(redis, token)
 
 
 async def _poll_build(
-    redis, tool: str, from_version: str | None, to_version: str | None
+    redis,
+    tool: str,
+    from_version: str | None,
+    to_version: str | None,
+    *,
+    token: str | None = None,
 ) -> None:
     """Poll the bridge build status until success. Mirrors ``log_tail`` into
-    the progress record each tick. Raises ``UpdateError`` on build failure or
-    after ``BUILD_TIMEOUT`` seconds."""
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + BUILD_TIMEOUT
+    the progress record each tick and refreshes the update lock's TTL every
+    ``_LOCK_RENEW_EVERY`` seconds (a build can outlast the initial 1800s lease).
+    Raises ``UpdateError`` on build failure or after ``BUILD_TIMEOUT`` seconds."""
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    deadline = start + BUILD_TIMEOUT
+    last_renew = start
     while True:
         resp = await _bridge_get("/agent-images/build/status")
         data = resp.json() if resp.status_code == 200 else {}
@@ -308,11 +362,27 @@ async def _poll_build(
             redis, "build", tool, from_version, to_version,
             log_tail=data.get("log_tail"),
         )
+        now = loop.time()
+        if now - last_renew >= _LOCK_RENEW_EVERY:
+            await _renew_lock(redis, token)
+            last_renew = now
         if state == "success":
             return
         if state == "failed":
             rc = data.get("returncode")
             raise UpdateError(f"Image-Build fehlgeschlagen (returncode={rc}).")
-        if loop.time() >= deadline:
+        if now >= deadline:
             raise UpdateError(f"Image-Build Timeout nach {BUILD_TIMEOUT}s.")
         await asyncio.sleep(POLL_INTERVAL)
+
+
+async def _renew_lock(redis, token: str | None) -> None:
+    """Owner-checked TTL refresh for the update lock during a long build."""
+    if token is None:
+        return
+    try:
+        current = await redis.get(RedisKeys.cli_update_lock())
+        if current == token:
+            await redis.expire(RedisKeys.cli_update_lock(), _LOCK_TTL)
+    except Exception:  # noqa: BLE001 — advisory; the run continues regardless
+        logger.warning("cli update: could not renew update lock TTL")
