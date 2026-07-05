@@ -185,3 +185,45 @@ describe("CreateTaskModal — Repo-Auswahl (ADR-052)", () => {
     await waitFor(() => expect(linkSpy).toHaveBeenCalledWith(repo.id, project.id));
   });
 });
+
+describe("CreateTaskModal — Human review default (05.07.)", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("[]", { status: 200, headers: { "Content-Type": "application/json" } })
+    );
+    vi.spyOn(api.projects, "list").mockResolvedValue([]);
+    vi.spyOn(api.credentials, "list").mockResolvedValue([]);
+    vi.spyOn(api.repos, "list").mockResolvedValue([]);
+  });
+
+  it("defaults new tasks to human_review_required: true in the create call", async () => {
+    const createSpy = vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-1" } as Task);
+
+    renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
+
+    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Default review task");
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalled());
+    const [, body] = createSpy.mock.calls[0];
+    expect(body).toMatchObject({ human_review_required: true });
+  });
+
+  it("sends human_review_required: false when the pill is toggled off", async () => {
+    const createSpy = vi.spyOn(api.tasks, "create").mockResolvedValue({ id: "task-1" } as Task);
+
+    renderWithQuery(<CreateTaskModal activeBoardId="board-1" agents={[]} />);
+    await openModal();
+
+    await userEvent.type(screen.getByPlaceholderText("Kurzer, klarer Aufgabentitel"), "Agent-reviewed task");
+    await userEvent.click(screen.getByRole("button", { name: /erweitert/i }));
+    await userEvent.click(screen.getByRole("button", { name: /human review/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Create task" }));
+
+    await waitFor(() => expect(createSpy).toHaveBeenCalled());
+    const [, body] = createSpy.mock.calls[0];
+    expect(body).toMatchObject({ human_review_required: false });
+  });
+});

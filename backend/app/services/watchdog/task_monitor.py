@@ -927,6 +927,11 @@ class TaskMonitorMixin:
             if task.review_decision == "hold":
                 continue
 
+            # ── Human-review tasks wait on Mark by design — no "hanging
+            # reviewer" nudge/escalation (there is no agent reviewer to nudge).
+            if getattr(task, "human_review_required", None):
+                continue
+
             # ── Don't escalate operationally stopped tasks ──
             if task.run_control in ("stopped", "manual_hold"):
                 continue

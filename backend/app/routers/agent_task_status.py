@@ -2075,8 +2075,12 @@ async def agent_update_task(
         # (Pitfall H: marker comment written before reviewer is notified).
         if new_status == "review" and old_status == "in_progress":
             await handle_review_pr_creation(session, task, agent)
-            from app.services.task_lifecycle import handle_review_handoff
-            await handle_review_handoff(session, task, board_id, developer=agent)
+            if not getattr(task, "human_review_required", None):
+                from app.services.task_lifecycle import handle_review_handoff
+                await handle_review_handoff(session, task, board_id, developer=agent)
+            else:
+                from app.services.task_lifecycle import handle_human_review_handoff
+                await handle_human_review_handoff(session, task, board_id, developer=agent)
 
         # Merge PR on real completion (after review/test gate — REF-02: agent_git.py)
         if new_status == "done" and old_status in ("review", "user_test"):

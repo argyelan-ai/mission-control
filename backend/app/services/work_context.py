@@ -359,6 +359,16 @@ async def enforce_board_rules_agent(
                 detail=f"Task kann nicht abgeschlossen werden: {'; '.join(errors)}",
             )
 
+    # Rule 1b: human_review_required is a HARD GATE on done — independent of
+    # board flag, project.review_policy, or skip_review. Checked BEFORE those
+    # shortcuts below so none of them can be used to route around Mark.
+    if new_status == "done" and task.status not in ("review", "user_test"):
+        if getattr(task, "human_review_required", None):
+            raise HTTPException(
+                status_code=400,
+                detail="Task erfordert Human-Review (Mark) bevor es auf Done gesetzt werden kann",
+            )
+
     # ADR-023: reflection is an independent lever — independent of any
     # review policy (board flag, project.review_policy, task.skip_review).
     # So check FIRST, BEFORE any early return skips the rest.
