@@ -59,6 +59,7 @@ from app.routers import (
     boards,
     clawhub,
     cli_plugins,
+    cli_tools,
     browser_live,
     cli_terminal,
     consensus,
@@ -95,6 +96,7 @@ from app.routers import (
     webhooks,
 )
 from app.services.embedding_retry import embedding_retry
+from app.services.cli_update_check import cli_update_checker
 from app.services.intelligence import intelligence
 from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
@@ -181,6 +183,7 @@ async def lifespan(app: FastAPI):
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
     await runtime_schedule_service.start()
     await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
+    await cli_update_checker.start()  # CLI Tool Updates — periodic version check
     await telegram_bot.start()
     # Defense-in-depth: agents that call `gh repo create` without --private
     # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
@@ -359,6 +362,7 @@ async def lifespan(app: FastAPI):
     if getattr(app.state, "obsidian_export_started", False):
         await obsidian_export.stop()
     await runtime_watcher.stop()
+    await cli_update_checker.stop()
     await runtime_schedule_service.stop()
     await loop_runner.stop()
     await task_runner.stop()
@@ -736,6 +740,7 @@ app.include_router(settings_router.router)
 app.include_router(webhooks.router)
 app.include_router(deploy.router)
 app.include_router(cli_plugins.router)
+app.include_router(cli_tools.router)  # /api/v1/cli-tools — CLI update cockpit (Task 7)
 app.include_router(browser_live.router)
 app.include_router(cli_terminal.router)
 app.include_router(consensus.router)

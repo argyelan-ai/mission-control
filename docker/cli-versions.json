@@ -1,0 +1,12 @@
+{
+  "openclaude": {
+    "version": "0.7.0"
+  },
+  "claude": {
+    "version": "2.1.201"
+  },
+  "omp": {
+    "version": "16.2.13",
+    "sha256": "7cc62ef691d38c837141d7040c0730ed9c66da16a2d77ae5ccec025c099ea89d"
+  }
+}

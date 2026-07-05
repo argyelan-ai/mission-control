@@ -180,6 +180,16 @@ class Agent(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # CLI-Tool-Updates: set by the CLI update check when a newer CLI-tool image
+    # was built for this agent's harness. The runtime watcher's recreate pass
+    # force-recreates the container once the agent is idle (picking up the fresh
+    # image), then clears this. Distinct from pending_runtime_sync, which is a
+    # plain restart for a model change; a CLI update needs a full recreate.
+    pending_recreate: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     requires_git_workflow: bool = Field(default=True)
     # Response language towards the operator (short code, e.g. "en", "de").
     # Templates are English; this only steers how the agent replies.

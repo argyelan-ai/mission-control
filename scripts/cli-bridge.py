@@ -19,6 +19,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import shlex
 import shutil
 import struct
@@ -646,6 +647,129 @@ def list_sessions() -> list[dict]:
     return sessions
 
 
+# --- Agent-Image Build Endpoints (Task 4, CLI-Tool-Updates) -----------------
+#
+# Baut mc-claude-agent / mc-agent-base / mc-omp-agent Images via
+# scripts/build-agent-images.sh im Hintergrund-Thread. Version wird als
+# env-Override gesetzt (Task-1-Kontrakt: OPENCLAUDE_VERSION / CLAUDE_VERSION /
+# OMP_VERSION / OMP_SHA256 gewinnen über docker/cli-versions.json).
+BUILD_LOG_FILE = HOME / ".mc" / "logs" / "agent-image-build.log"
+BUILD_SCRIPT = Path(__file__).parent / "build-agent-images.sh"
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+_HARNESS_ARG = {"openclaude": "openclaude", "claude": "claude", "omp": "omp"}
+
+# Versions-Strings fliessen in env-Overrides und (omp-sha256) in eine
+# GitHub-Download-URL — striktes Charset verhindert Pfad-Tricks (`../`)
+# innerhalb der URL. Defense-in-Depth, kein Ersatz für die Allowlist oben.
+_VERSION_RE = re.compile(r"^[0-9A-Za-z._-]{1,64}$")
+
+# Hängender `docker build` würde sonst state=running + Thread für immer
+# halten und jeden Folge-Build bis zum Bridge-Neustart blockieren.
+_BUILD_TIMEOUT_S = 1800
+
+_build_lock = threading.Lock()
+_build_state = {
+    "state": "idle",  # idle|running|success|failed
+    "tool": None,
+    "returncode": None,
+    "thread": None,
+}
+
+
+def _build_log_tail(n=80) -> str:
+    if not BUILD_LOG_FILE.exists():
+        return ""
+    lines = BUILD_LOG_FILE.read_text(errors="replace").splitlines()
+    return "\n".join(lines[-n:])
+
+
+def _run_agent_image_build(tool: str, version: str, sha256: Optional[str]):
+    """Läuft im Hintergrund-Thread — führt build-agent-images.sh aus, schreibt Log."""
+    env = os.environ.copy()
+    if tool == "openclaude":
+        env["OPENCLAUDE_VERSION"] = version
+    elif tool == "claude":
+        env["CLAUDE_VERSION"] = version
+    elif tool == "omp":
+        env["OMP_VERSION"] = version
+        if sha256:
+            env["OMP_SHA256"] = sha256
+
+    harness_arg = _HARNESS_ARG[tool]
+    log(f"Agent image build started: tool={tool} version={version}")
+    try:
+        with open(BUILD_LOG_FILE, "w") as logf:
+            proc = _sp.run(
+                ["bash", str(BUILD_SCRIPT), harness_arg],
+                cwd=str(REPO_ROOT), env=env,
+                stdout=logf, stderr=_sp.STDOUT,
+                timeout=_BUILD_TIMEOUT_S,
+            )
+        returncode = proc.returncode
+    except _sp.TimeoutExpired:
+        log(f"ERROR agent image build timed out after {_BUILD_TIMEOUT_S}s (tool={tool})")
+        with open(BUILD_LOG_FILE, "a") as logf:
+            logf.write(f"\n[bridge] ERROR build timed out after {_BUILD_TIMEOUT_S}s — killed\n")
+        returncode = -1
+    except Exception as e:
+        log(f"ERROR running agent image build: {e}")
+        with open(BUILD_LOG_FILE, "a") as logf:
+            logf.write(f"\n[bridge] ERROR launching build: {e}\n")
+        returncode = -1
+
+    with _build_lock:
+        _build_state["returncode"] = returncode
+        _build_state["state"] = "success" if returncode == 0 else "failed"
+    log(f"Agent image build finished: tool={tool} returncode={returncode}")
+
+
+def _start_agent_image_build(tool: str, version: str, sha256: Optional[str]) -> Optional[str]:
+    """Startet Build-Thread. Gibt Fehlermeldung zurück wenn bereits ein Build läuft."""
+    with _build_lock:
+        thread = _build_state.get("thread")
+        if thread is not None and thread.is_alive():
+            return "build läuft bereits"
+        BUILD_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        BUILD_LOG_FILE.write_text("")  # truncate pro Lauf
+        _build_state["state"] = "running"
+        _build_state["tool"] = tool
+        _build_state["returncode"] = None
+        new_thread = threading.Thread(
+            target=_run_agent_image_build, args=(tool, version, sha256), daemon=True,
+        )
+        _build_state["thread"] = new_thread
+        new_thread.start()
+    return None
+
+
+def _fetch_omp_sha256(version: str) -> dict:
+    """Lädt das omp-Release-Binary temporär, berechnet sha256, löscht es wieder (TOFU)."""
+    import hashlib
+    import tempfile
+    import urllib.request
+    import urllib.error
+
+    url = f"https://github.com/can1357/oh-my-pi/releases/download/v{version}/omp-linux-arm64"
+    fd, tmp_path = tempfile.mkstemp(prefix="omp-sha256-")
+    os.close(fd)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "mission-control-cli-bridge"})
+        with urllib.request.urlopen(req, timeout=120) as resp, open(tmp_path, "wb") as out:
+            shutil.copyfileobj(resp, out)
+        h = hashlib.sha256()
+        with open(tmp_path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return {"ok": True, "sha256": h.hexdigest()}
+    except (urllib.error.URLError, OSError, TimeoutError) as e:
+        log(f"ERROR omp-sha256 download failed (version={version}): {e}")
+        return {"ok": False, "error": str(e)}
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         log(f"{self.address_string()} {fmt % args}")
@@ -699,6 +823,16 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/provision/"):
             agent_name = self.path.split("/provision/")[1]
             self._json(_provision_status(agent_name))
+
+        elif self.path == "/agent-images/build/status":
+            with _build_lock:
+                state = _build_state["state"]
+                tool = _build_state["tool"]
+                returncode = _build_state["returncode"]
+            self._json({
+                "state": state, "tool": tool, "returncode": returncode,
+                "log_tail": _build_log_tail(),
+            })
 
         elif self.path == "/plugins":
             master = PLUGINS_DIR / "installed_plugins.json"
@@ -869,6 +1003,46 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"ok": result.returncode == 0, "output": result.stdout, "error": result.stderr or None})
             except Exception as e:
                 self._json({"ok": False, "error": str(e)})
+
+        elif self.path == "/agent-images/build":
+            try:
+                body = self._read_json()
+            except Exception as e:
+                self.send_error(400, str(e))
+                return
+            tool = body.get("tool", "")
+            version = body.get("version", "")
+            sha256 = body.get("sha256")
+            if tool not in _HARNESS_ARG:
+                self._json({"error": f"unbekanntes tool: {tool}"}, status=400)
+                return
+            if not version or not _VERSION_RE.match(version):
+                self._json({"error": "version required (charset [0-9A-Za-z._-], max 64)"}, status=400)
+                return
+            if sha256 is not None and not _VERSION_RE.match(str(sha256)):
+                self._json({"error": "sha256 hat ungültiges Format"}, status=400)
+                return
+            error = _start_agent_image_build(tool, version, sha256)
+            if error:
+                self._json({"error": error}, status=409)
+                return
+            self._json({"status": "started"})
+
+        elif self.path == "/agent-images/omp-sha256":
+            try:
+                body = self._read_json()
+            except Exception as e:
+                self.send_error(400, str(e))
+                return
+            version = body.get("version", "")
+            if not version or not _VERSION_RE.match(version):
+                self._json({"error": "version required (charset [0-9A-Za-z._-], max 64)"}, status=400)
+                return
+            result = _fetch_omp_sha256(version)
+            if result["ok"]:
+                self._json({"sha256": result["sha256"]})
+            else:
+                self._json({"error": result["error"]}, status=502)
 
         elif self.path == "/restart":
             self._json({"ok": True, "message": "Bridge wird neu gestartet..."})
