@@ -350,6 +350,14 @@ export interface FsEntry {
   is_directory: boolean;
 }
 
+// ── Task Workspace (read-only browser over task.workspace_path) ────────────
+
+export interface TaskWorkspaceListing {
+  exists: boolean;
+  subpath: string;
+  entries: FsEntry[];
+}
+
 export interface FsMeta {
   root: string;
   subpath: string;

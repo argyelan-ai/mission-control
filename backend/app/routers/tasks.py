@@ -1212,6 +1212,77 @@ async def list_deliverable_directory(
     }
 
 
+# ── Task Workspace (User-facing, read-only browser over task.workspace_path) ─
+
+@router.get("/boards/{board_id}/tasks/{task_id}/workspace/list")
+async def list_task_workspace(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    subpath: str = "",
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """List a task workspace directory for the Workspace tab.
+
+    Returns ``exists: false`` (200, not 404) whenever ``workspace_path`` is
+    unset or the directory has since vanished — the frontend renders a hint
+    instead of an error in that case.
+    """
+    from dataclasses import asdict
+    from app.services import task_workspace_files
+    from app.services.fs_service import FsAccessError, FsNotFound
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        exists, entries = task_workspace_files.list_workspace(task.workspace_path, subpath)
+    except FsAccessError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    except FsNotFound:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    if not exists:
+        return {"exists": False, "subpath": "", "entries": []}
+    return {"exists": True, "subpath": subpath, "entries": [asdict(e) for e in entries]}
+
+
+@router.get("/boards/{board_id}/tasks/{task_id}/workspace/content")
+async def get_task_workspace_content(
+    board_id: uuid.UUID,
+    task_id: uuid.UUID,
+    subpath: str,
+    download: bool = False,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Stream a single file out of a task's workspace (preview or download)."""
+    import mimetypes
+    from fastapi.responses import FileResponse
+    from app.services import task_workspace_files
+    from app.services.fs_service import FsAccessError, FsNotFound
+
+    task = await session.get(Task, task_id)
+    if not task or task.board_id != board_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    try:
+        target = task_workspace_files.resolve_workspace_file(task.workspace_path, subpath)
+    except FsAccessError:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    except FsNotFound:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    mime = mimetypes.guess_type(target.name)[0] or "application/octet-stream"
+    return FileResponse(
+        path=str(target),
+        media_type=mime,
+        filename=target.name if download else None,
+        headers={"X-Content-Type-Options": "nosniff"},
+    )
+
+
 # ── Checklist (User-facing, read-only) ───────────────────────────────────────
 
 @router.get("/boards/{board_id}/tasks/{task_id}/checklist")
