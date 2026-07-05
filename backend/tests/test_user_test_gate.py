@@ -237,6 +237,16 @@ async def test_tester_message_uses_playwright_mcp(make_board, make_agent, make_t
     assert "Login funktioniert" in msg  # acceptance criteria als Flows
     assert "TEST_PASS" in msg and "TEST_FAIL" in msg
 
+    # Video recording of the E2E run (Playwright MCP video tools)
+    assert "browser_start_video" in msg and "browser_video_show_actions" in msg
+    assert "browser_stop_video" in msg
+    assert f"{task_row.id}/e2e-run.webm" in msg
+    assert '"deliverable_type": "video"' in msg
+    assert "/api/v1/agent/me/deliverable" in msg
+    assert "**Recording:**" in msg
+    # Recording must start right after ACK, before any navigation
+    assert msg.index("browser_start_video") < msg.index("browser_navigate")
+
 
 @pytest.mark.anyio
 async def test_test_handoff_finds_tester(make_board, make_agent, make_task):

@@ -20,7 +20,7 @@ class TaskDeliverable(SQLModel, table=True):
     # agent token — the operator via UI or Hermes via MCP using admin JWT.
     agent_id: uuid.UUID | None = Field(default=None, foreign_key="agents.id")
 
-    deliverable_type: str  # screenshot | file | url | artifact | document | data
+    deliverable_type: str  # screenshot | file | url | artifact | document | data | video
 
     title: str
     path: str | None = None

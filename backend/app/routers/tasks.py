@@ -847,7 +847,7 @@ async def list_task_deliverables(
 
 class AdminDeliverableCreate(BaseModel):
     """Admin-scoped deliverable create payload — superset of agent's DeliverableCreate."""
-    deliverable_type: Literal["screenshot", "file", "url", "artifact", "document", "data"]
+    deliverable_type: Literal["screenshot", "file", "url", "artifact", "document", "data", "video"]
     title: str
     path: str | None = None
     description: str | None = None
