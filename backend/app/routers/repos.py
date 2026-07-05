@@ -150,6 +150,12 @@ async def github_status(
     }
     if not probe:
         return body
+    # Live probes spawn up to 3 gh subprocesses (15s timeout each) and burn
+    # GitHub rate limit — admin-only (review finding, ADR-055). The plain
+    # config view above stays available to every user (/repos banner).
+    from app.auth import ROLE_HIERARCHY
+    if ROLE_HIERARCHY.get(getattr(current_user, "role", None), 0) < ROLE_HIERARCHY[Role.ADMIN]:
+        raise HTTPException(status_code=403, detail="Probe requires admin role")
     if not cfg.configured:
         body["connected"] = False
         body["error"] = (

@@ -59,9 +59,16 @@ class GitService:
         # Set early to prevent recursion via _run_cmd
         self._auth_token_hash = token_hash
         self._token = token
-        if not token:
-            return
         cred_path = os.path.join(os.path.expanduser("~"), ".git-credentials")
+        if not token:
+            # Token→empty rotation must actually revoke git access — a stale
+            # credentials file would keep pushing with the old token (review
+            # finding, ADR-055).
+            try:
+                os.remove(cred_path)
+            except FileNotFoundError:
+                pass
+            return
         with open(cred_path, "w") as f:
             f.write(f"https://x-access-token:{token}@github.com\n")
         os.chmod(cred_path, 0o600)

@@ -136,6 +136,28 @@ async def test_status_probe_success(auth_client: AsyncClient, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_status_probe_admin_only(client: AsyncClient, monkeypatch):
+    """Review-Fix: Probe spawnt gh-Subprozesse + verbraucht Rate-Limit —
+    nur Admins; die reine Config-Sicht bleibt für alle User offen."""
+    import uuid as _uuid
+
+    from app.auth import create_access_token
+    from app.models.user import User
+
+    uid = _uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(User(id=uid, email=f"viewer-{uid.hex[:8]}@mc.local", name="Viewer",
+                   role="viewer", is_active=True))
+        await s.commit()
+    headers = {"Authorization": f"Bearer {create_access_token(str(uid), 'viewer')}"}
+
+    r = await client.get("/api/v1/repos/github-status?probe=true", headers=headers)
+    assert r.status_code == 403
+    r2 = await client.get("/api/v1/repos/github-status", headers=headers)
+    assert r2.status_code == 200  # Config-Sicht ohne Probe bleibt offen
+
+
+@pytest.mark.asyncio
 async def test_status_probe_bad_token(auth_client: AsyncClient, monkeypatch):
     monkeypatch.setenv("GITHUB_OWNER", "acme")
     monkeypatch.setenv("GH_TOKEN", "ghp_expired")
@@ -206,3 +228,10 @@ async def test_git_auth_rewrites_credentials_on_token_change(tmp_path, monkeypat
         invalidate_github_config_cache()
         await git._ensure_git_auth()
         assert "tok-two" in (tmp_path / ".git-credentials").read_text()
+
+        # Review-Fix: Token→leer muss den git-Zugriff wirklich entziehen —
+        # eine stale Credentials-Datei würde weiter mit tok-two pushen.
+        monkeypatch.delenv("GH_TOKEN", raising=False)
+        invalidate_github_config_cache()
+        await git._ensure_git_auth()
+        assert not (tmp_path / ".git-credentials").exists()
