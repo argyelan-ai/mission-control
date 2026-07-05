@@ -310,6 +310,10 @@ async def test_router_requires_backlog_tag_for_tag_source(auth_client: AsyncClie
 @pytest.mark.asyncio
 async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClient):
     board = await _mk_board()
+    from app.models.tag import Tag
+    async with AsyncSession(test_engine, expire_on_commit=False) as _s:
+        _s.add(Tag(name="Polish", slug="polish"))
+        await _s.commit()
     r = await auth_client.post("/api/v1/loops", json={
         "board_id": str(board.id), "name": "x", "goal": "g",
         "backlog_source": "tag", "backlog_tag": "polish",
