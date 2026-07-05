@@ -9,7 +9,7 @@ import { Loader2, Square, Send, MonitorOff, RotateCcw } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, XTERM_THEME } from "@/lib/colors";
-import { TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale } from "@/lib/terminalScale";
+import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale } from "@/lib/terminalScale";
 
 interface CliSession {
   task_id: string;
@@ -209,6 +209,7 @@ function TerminalPanel({
 
     const t = new Terminal({
       theme: XTERM_THEME,
+      minimumContrastRatio: TERM_MIN_CONTRAST,
       scrollback: 5000,
       convertEol: true,
       fontFamily: TERM_FONT_FAMILY,
