@@ -1582,6 +1582,42 @@ export interface RuntimeAgentsResponse {
   agents: RuntimeAgentRef[];
 }
 
+// CLI-Tool-Updates (Task 7) — /api/v1/cli-tools cockpit.
+export type CliUpdatePhase = "manifest" | "build" | "recreate" | "done" | "failed";
+
+export interface CliToolAgentRef {
+  id: string;
+  name: string;
+  busy: boolean;
+}
+
+export interface CliToolStatus {
+  tool: string; // "openclaude" | "claude" | "omp"
+  image: string;
+  installed: string | null;
+  target: string | null;
+  latest: string | null;
+  update_available: boolean;
+  checked_at: string | null;
+  agents_affected: CliToolAgentRef[];
+  // Current update phase for this tool if one is in flight, else null.
+  build_state: CliUpdatePhase | null;
+}
+
+export interface CliToolsResponse {
+  tools: CliToolStatus[];
+}
+
+export interface CliUpdateProgress {
+  phase: CliUpdatePhase | "idle";
+  tool?: string;
+  from_version?: string | null;
+  to_version?: string | null;
+  log_tail?: string | null;
+  error?: string | null;
+  updated_at?: string;
+}
+
 // Phase 15 T2.1 — return shape of switch_agent_runtime() service. Used by
 // both POST /agents/{id}/preview-runtime-switch (dry_run=true) and the
 // `_switch` summary attached to PATCH /agents/{id} when runtime_id changes.

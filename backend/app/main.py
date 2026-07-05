@@ -59,6 +59,7 @@ from app.routers import (
     boards,
     clawhub,
     cli_plugins,
+    cli_tools,
     browser_live,
     cli_terminal,
     consensus,
@@ -739,6 +740,7 @@ app.include_router(settings_router.router)
 app.include_router(webhooks.router)
 app.include_router(deploy.router)
 app.include_router(cli_plugins.router)
+app.include_router(cli_tools.router)  # /api/v1/cli-tools — CLI update cockpit (Task 7)
 app.include_router(browser_live.router)
 app.include_router(cli_terminal.router)
 app.include_router(consensus.router)

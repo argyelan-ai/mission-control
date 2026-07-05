@@ -1657,6 +1657,17 @@ export const api = {
         request(`/api/v1/runtimes/${runtimeId}/schedules/${scheduleId}/runs`),
     },
   },
+  // CLI-Tool-Updates (Task 7) — /api/v1/cli-tools cockpit.
+  cliTools: {
+    list: (): Promise<import("@/lib/types").CliToolsResponse> =>
+      request("/api/v1/cli-tools"),
+    check: (): Promise<import("@/lib/types").CliToolsResponse> =>
+      request("/api/v1/cli-tools/check", { method: "POST" }),
+    updateStatus: (): Promise<import("@/lib/types").CliUpdateProgress> =>
+      request("/api/v1/cli-tools/update-status"),
+    update: (tool: string): Promise<{ status: string }> =>
+      request(`/api/v1/cli-tools/${tool}/update`, { method: "POST" }),
+  },
   lmstudio: {
     list: (): Promise<LMStudioModelsResponse> =>
       request("/api/v1/runtimes/lmstudio/models"),
