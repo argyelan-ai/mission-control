@@ -758,7 +758,12 @@ def restart_docker_agent_container(
             ["docker", "restart", "-t", "5", container_name],
             capture_output=True,
             text=True,
-            timeout=20,
+            # 60s: a cold omp container (puppeteer natives, model bootstrap)
+            # can exceed the old 20s budget right after a recreate — the
+            # restart then SUCCEEDED while the switch reported failure and
+            # rolled back. The switch flow has its own health wait after
+            # this call; this timeout only guards a wedged docker daemon.
+            timeout=60,
         )
     except subprocess.TimeoutExpired:
         return {
