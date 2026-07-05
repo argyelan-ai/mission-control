@@ -31,6 +31,26 @@ from app.services.host_resolver import (
 )
 from app.services.runtime_manager import add_lmstudio_runtime
 from app.services.runtime_propagation import sync_pending_agents
+from app.services import activity
+from app.services.runtime_autostart import (
+    AutostartHostUnreachable,
+    get_autostart_status,
+    set_autostart,
+)
+
+_AUTOSTART_FLAG_PATH_PATTERN = _re.compile(r"^/[\w./\-]{1,511}$")
+
+
+def _validate_autostart_flag_path(v: str | None) -> str | None:
+    """Must be an absolute path with only safe characters (ADR-057) — this
+    string is shell-quoted before use, but rejecting anything exotic up front
+    keeps the operator honest and avoids surprising remote-path bugs."""
+    if v is not None and not _AUTOSTART_FLAG_PATH_PATTERN.match(v):
+        raise ValueError(
+            "autostart_flag_path muss ein absoluter Pfad sein "
+            "(nur Buchstaben, Ziffern, '.', '_', '-', '/')"
+        )
+    return v
 
 router = APIRouter(prefix="/api/v1/runtimes", tags=["runtimes"])
 
@@ -125,6 +145,8 @@ class RuntimeCreate(BaseModel):
     startup_notes: str | None = None
     ui_order: int = 999
     enabled: bool = True
+    autostart_supported: bool = False  # ADR-057: Engine Control v0
+    autostart_flag_path: str | None = None
 
     @field_validator("control_url")
     @classmethod
@@ -132,6 +154,11 @@ class RuntimeCreate(BaseModel):
         if v is not None and not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("control_url muss mit http:// oder https:// beginnen")
         return v
+
+    @field_validator("autostart_flag_path")
+    @classmethod
+    def _validate_autostart_flag_path_create(cls, v: str | None) -> str | None:
+        return _validate_autostart_flag_path(v)
 
 
 class RuntimeUpdate(BaseModel):
@@ -168,6 +195,8 @@ class RuntimeUpdate(BaseModel):
     startup_notes: str | None = None
     ui_order: int | None = None
     enabled: bool | None = None
+    autostart_supported: bool | None = None  # ADR-057: Engine Control v0
+    autostart_flag_path: str | None = None
 
     @field_validator("control_url")
     @classmethod
@@ -175,6 +204,11 @@ class RuntimeUpdate(BaseModel):
         if v is not None and not (v.startswith("http://") or v.startswith("https://")):
             raise ValueError("control_url muss mit http:// oder https:// beginnen")
         return v
+
+    @field_validator("autostart_flag_path")
+    @classmethod
+    def _validate_autostart_flag_path_update(cls, v: str | None) -> str | None:
+        return _validate_autostart_flag_path(v)
 
 
 _MODEL_ID_PATTERN = _re.compile(r'^[\w.\-/]{1,200}$')
@@ -939,3 +973,92 @@ async def force_sync_runtime_agents(
         raise HTTPException(status_code=404, detail=f"Runtime '{slug}' not found")
     await sync_pending_agents(session, force=True, runtime_id=rt.id)
     return {"synced": True}
+
+
+# ── Engine Control v0: Autostart Toggle (ADR-057) ────────────────────────────
+
+
+async def _load_autostart_runtime(session: AsyncSession, slug: str) -> Runtime:
+    rt = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
+    if not rt:
+        raise HTTPException(status_code=404, detail=f"Runtime '{slug}' not found")
+    if not rt.autostart_supported:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Runtime '{slug}' unterstützt kein Autostart-Flag "
+            f"(autostart_supported=false — PATCH /runtimes/db/{slug} zum Aktivieren)",
+        )
+    if not rt.autostart_flag_path:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Runtime '{slug}' hat keinen autostart_flag_path konfiguriert "
+            f"(PATCH /runtimes/db/{slug})",
+        )
+    return rt
+
+
+@router.get("/db/{slug}/autostart")
+async def get_runtime_autostart(
+    slug: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Live status of the autostart flag file on the runtime's bound host.
+
+    On-demand, not part of the 90s watcher tick (ADR-054) — this touches SSH
+    and should only run when someone looks at the /runtimes page or hits the
+    button, not on a fleet-wide timer.
+    """
+    rt = await _load_autostart_runtime(session, slug)
+    host = await resolve_host_for_runtime(session, rt)
+    status = await get_autostart_status(rt.autostart_flag_path, host=host)
+    return {
+        "slug": rt.slug,
+        "flag_path": rt.autostart_flag_path,
+        "enabled": status.enabled,
+        "reachable": status.reachable,
+    }
+
+
+class SetAutostartBody(BaseModel):
+    enabled: bool
+
+
+@router.post("/db/{slug}/autostart")
+async def post_runtime_autostart(
+    slug: str,
+    body: SetAutostartBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Touches/removes the autostart flag file over SSH, then reads it back
+    to confirm — never trusts the write blindly, never leaks a stack trace
+    into the UI when the host is unreachable."""
+    rt = await _load_autostart_runtime(session, slug)
+    host = await resolve_host_for_runtime(session, rt)
+    try:
+        status = await set_autostart(rt.autostart_flag_path, body.enabled, host=host)
+    except AutostartHostUnreachable:
+        raise HTTPException(
+            status_code=502,
+            detail="Host nicht erreichbar — Autostart-Status unbekannt",
+        )
+    await activity.emit_event(
+        session,
+        "runtime.autostart_changed",
+        f"{rt.slug}: Autostart {'aktiviert' if body.enabled else 'deaktiviert'}"
+        + ("" if status.enabled == body.enabled else " (Verifikation fehlgeschlagen)"),
+        severity="info" if status.enabled == body.enabled else "warning",
+        detail={
+            "slug": rt.slug,
+            "requested_enabled": body.enabled,
+            "confirmed_enabled": status.enabled,
+            "flag_path": rt.autostart_flag_path,
+        },
+    )
+    return {
+        "slug": rt.slug,
+        "flag_path": rt.autostart_flag_path,
+        "enabled": status.enabled,
+        "reachable": status.reachable,
+    }

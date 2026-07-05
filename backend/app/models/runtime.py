@@ -70,6 +70,20 @@ class Runtime(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # ── Engine Control v0: Autostart-Flag via SSH (ADR-057) ──────────────────
+    # First building block of Cockpit v2 ("MC follows the engine" → "MC steers
+    # the engine"). autostart_supported opts a runtime into the toggle on the
+    # /runtimes card; autostart_flag_path is the file whose presence a systemd
+    # unit on the bound host (host_id → hosts table, ADR-048) checks on boot.
+    # Real values are set by the operator at runtime (PATCH /runtimes/db/{slug}
+    # or the UI toggle) — never seeded, so the public repo carries no real
+    # paths/hosts.
+    autostart_supported: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+    autostart_flag_path: str | None = Field(default=None, max_length=512)
+
     role_tags: list[str] = Field(default_factory=list, sa_column=Column(JSON))
 
     supports_tools: bool = Field(default=False, sa_column=Column(Boolean, server_default=text("false"), nullable=False))

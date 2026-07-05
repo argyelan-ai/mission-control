@@ -8,6 +8,12 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ### Added
 
+- **Runtime autostart toggle (Engine Control v0, ADR-057):** runtimes with
+  `autostart_supported=true` show an "Autostart bei Boot" toggle on
+  `/runtimes` that flips a flag file on the bound host over SSH (a
+  systemd unit checks it at boot to decide whether to start the inference
+  engine). Three states — on / off / host unreachable — never optimistic;
+  the toggle only flips after the backend reads the file back to confirm.
 - **One-click agent creation:** "New Agent" now provisions cli-bridge
   agents automatically (host-helper render → config sync → container
   start) and can bind the LLM runtime directly in the create dialog.
