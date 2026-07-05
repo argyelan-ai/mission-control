@@ -8,7 +8,7 @@ force-recreates each once idle. Mirrors the pending_runtime_sync mechanic
 Revision ID: 0147
 Revises: 0146
 
-Renumbered to 0146 after rebase onto origin/main (0144 loop_telegram_reports and 0145 loop_budget landed from parallel sessions — collision lessons #4 + #5 (0146_runtime_autostart landed mid-branch)).
+Renumbered twice (0145→0146→0147): parallel sessions merged 0144/0145 and later 0146_runtime_autostart while this branch was in flight — migration-number collisions #4 and #5.
 """
 import sqlalchemy as sa
 from alembic import op
