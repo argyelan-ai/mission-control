@@ -79,7 +79,28 @@ PROVIDER_TEMPLATES = [
         "description": "Auth-Token für den OpenClaw Gateway",
         "placeholder": "oc-...",
     },
+    {
+        "provider": "github",
+        "key": "github_token",
+        "label": "GitHub Personal Access Token",
+        "description": "Für den Agent-Git-Workflow (Repos, Branches, PRs) — auch via Settings → GitHub setzbar",
+        "placeholder": "ghp_... / github_pat_...",
+    },
+    {
+        "provider": "github",
+        "key": "github_owner",
+        "label": "GitHub Owner",
+        "description": "GitHub-User/Org, unter dem MC Projekt-Repos anlegt — auch via Settings → GitHub setzbar",
+        "placeholder": "my-github-user",
+    },
 ]
+
+
+def _maybe_invalidate_github_cache(key: str) -> None:
+    """github_owner/github_token edits must apply live (ADR-055)."""
+    if key in ("github_owner", "github_token"):
+        from app.services.github_config import invalidate_github_config_cache
+        invalidate_github_config_cache()
 
 
 class SecretCreate(BaseModel):
@@ -151,6 +172,7 @@ async def create_secret(
     session.add(secret)
     await session.commit()
     await session.refresh(secret)
+    _maybe_invalidate_github_cache(secret.key)
 
     return {
         "id": str(secret.id),
@@ -184,6 +206,7 @@ async def update_secret(
     secret.updated_at = datetime.now(timezone.utc)
     session.add(secret)
     await session.commit()
+    _maybe_invalidate_github_cache(secret.key)
 
     decrypted = safe_decrypt(secret.encrypted_value)
     return {
@@ -209,3 +232,4 @@ async def delete_secret(
 
     await session.delete(secret)
     await session.commit()
+    _maybe_invalidate_github_cache(key)

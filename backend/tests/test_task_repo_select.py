@@ -1,4 +1,5 @@
 """ADR-052: einheitliche Repo-Auswahl aus der Registry in der Task-Maske."""
+import os
 import uuid
 from unittest.mock import AsyncMock, patch
 
@@ -208,7 +209,7 @@ async def test_git_info_exposes_rules_badge(auth_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_create_new_repo_registers(auth_client: AsyncClient):
-    with patch("app.services.git_service.GITHUB_OWNER", "acme"), \
+    with patch.dict(os.environ, {"GITHUB_OWNER": "acme"}), \
          patch("app.services.git_service.GitService.create_repo",
                new=AsyncMock(return_value="https://github.com/acme/fresh-tool.git")), \
          patch("app.services.git_service.GitService.init_repo_files",
@@ -221,6 +222,6 @@ async def test_create_new_repo_registers(auth_client: AsyncClient):
     init_mock.assert_awaited_once()  # leeres Repo hätte keinen main-Branch
 
     # Doppelt anlegen → 409
-    with patch("app.services.git_service.GITHUB_OWNER", "acme"):
+    with patch.dict(os.environ, {"GITHUB_OWNER": "acme"}):
         r2 = await auth_client.post("/api/v1/repos/new", json={"name": "Fresh Tool"})
     assert r2.status_code == 409

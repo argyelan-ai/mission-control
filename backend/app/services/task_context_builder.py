@@ -241,11 +241,10 @@ async def setup_git_workspace_for_dispatch(
         try:
             from app.services.git_service import (
                 ADHOC_REPO,
-                GITHUB_OWNER,
                 git_service,
-                require_github_owner,
                 slugify_project,
             )
+            from app.services.github_config import require_github_owner
 
             if task.use_separate_repo:
                 # Dedicated repo for this task (deprecated Pfad, ADR-052 —
@@ -258,7 +257,7 @@ async def setup_git_workspace_for_dispatch(
                     from app.services.repo_registry import upsert_repo
                     created = await upsert_repo(
                         session,
-                        full_name=f"{require_github_owner()}/{repo_slug}",
+                        full_name=f"{await require_github_owner(session)}/{repo_slug}",
                         url=repo_url,
                         source="mc",
                     )
@@ -270,8 +269,8 @@ async def setup_git_workspace_for_dispatch(
             else:
                 # Shared mc-workspace repo (previous behavior).
                 # Fail loud instead of a silent warning fallback for a missing owner.
-                require_github_owner()
-                repo_url = f"https://github.com/{GITHUB_OWNER}/{ADHOC_REPO}.git"
+                _owner = await require_github_owner(session)
+                repo_url = f"https://github.com/{_owner}/{ADHOC_REPO}.git"
                 repo_slug = ADHOC_REPO
                 await git_service.ensure_adhoc_repo()
 

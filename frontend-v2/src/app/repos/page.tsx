@@ -9,12 +9,13 @@
  */
 
 import { useState } from "react";
+import Link from "next/link";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
-import { FolderGit2, GitBranch, Loader2, Lock, Globe2, Plus } from "lucide-react";
+import { FolderGit2, GitBranch, Github, Loader2, Lock, Globe2, Plus } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { api } from "@/lib/api";
-import type { Repo } from "@/lib/types";
+import type { GithubStatus, Repo } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { RepoDetailPanel } from "./RepoDetailPanel";
@@ -137,6 +138,32 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
   );
 }
 
+// ── GitHub onboarding banner ───────────────────────────────────────────────────
+
+function GithubOnboardingBanner() {
+  return (
+    <div
+      className="flex items-center justify-between gap-3 px-4 py-3 mb-4 rounded-xl"
+      style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}` }}
+    >
+      <div className="flex items-center gap-3 min-w-0">
+        <Github size={16} style={{ color: C.accent }} className="shrink-0" />
+        <p className="text-xs min-w-0" style={{ color: C.textSecondary }}>
+          GitHub is not connected — the registry works locally, but importing and
+          creating repos needs a GitHub owner + token.
+        </p>
+      </div>
+      <Link
+        href="/settings?section=github"
+        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
+        style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
+      >
+        Connect GitHub
+      </Link>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReposPage() {
@@ -147,6 +174,12 @@ export default function ReposPage() {
   const { data: repos, isLoading } = useQuery<Repo[]>({
     queryKey: ["repos", includeInactive],
     queryFn: () => api.repos.list(includeInactive),
+  });
+
+  const { data: githubStatus } = useQuery<GithubStatus>({
+    queryKey: ["github-status"],
+    queryFn: () => api.repos.githubStatus(),
+    staleTime: 30_000,
   });
 
   const list = repos ?? [];
@@ -177,6 +210,8 @@ export default function ReposPage() {
             Import repo
           </button>
         </div>
+
+        {githubStatus && !githubStatus.configured && <GithubOnboardingBanner />}
 
         {/* Include-archived toggle */}
         <label

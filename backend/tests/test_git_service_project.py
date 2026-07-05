@@ -1,7 +1,9 @@
 """Tests for GitService project methods (subprocess mocked)."""
 import pytest
 from unittest.mock import AsyncMock, patch, MagicMock
-from app.services.git_service import GitService, GITHUB_OWNER
+from app.services.git_service import GitService
+
+GITHUB_OWNER = "acme"  # nur fuer Mock-URLs — echter Owner kommt aus github_config (ADR-055)
 
 
 @pytest.fixture

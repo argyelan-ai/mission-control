@@ -11,21 +11,10 @@ import logging
 import os
 import re
 
+from app.services.github_config import require_github_owner, resolve_github_config
+
 logger = logging.getLogger("mc.git")
 
-# GitHub owner (user or org) under which MC creates project repos.
-# Required for the agent git workflow — set GITHUB_OWNER in .env.
-GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "")
-
-
-def require_github_owner() -> str:
-    """Fail fast with a clear message instead of building '/repo' slugs."""
-    if not GITHUB_OWNER:
-        raise RuntimeError(
-            "GITHUB_OWNER is not configured — set it in .env (the GitHub "
-            "user/org under which MC creates project repos)."
-        )
-    return GITHUB_OWNER
 ADHOC_REPO = "mc-workspace"
 
 
@@ -54,14 +43,22 @@ class GitService:
     """Executes Git/GitHub operations via CLI."""
 
     def __init__(self) -> None:
-        self._configured = False
+        self._auth_token_hash: str | None = None
+        self._token = ""
 
     async def _ensure_git_auth(self) -> None:
-        """Configure Git HTTPS auth via GH_TOKEN (for Docker)."""
-        if self._configured:
+        """Configure Git HTTPS auth from the resolved GitHub token (vault > env).
+
+        Re-runs whenever the token changes (rotation via Settings → GitHub):
+        the credentials file is rewritten in place, no restart needed.
+        """
+        token = (await resolve_github_config()).token
+        token_hash = hashlib.sha256(token.encode()).hexdigest() if token else ""
+        if token_hash == self._auth_token_hash:
             return
-        self._configured = True  # Set early to prevent recursion via _run_cmd
-        token = os.environ.get("GH_TOKEN", "")
+        # Set early to prevent recursion via _run_cmd
+        self._auth_token_hash = token_hash
+        self._token = token
         if not token:
             return
         cred_path = os.path.join(os.path.expanduser("~"), ".git-credentials")
@@ -73,16 +70,22 @@ class GitService:
         await self._run_cmd("git", "config", "--global", "user.name", "Mission Control")
         await self._run_cmd("git", "config", "--global", "user.email", "mc@mc.local")
         await self._run_cmd("git", "config", "--global", "init.defaultBranch", "main")
-        logger.info("Git HTTPS auth konfiguriert via GH_TOKEN")
+        logger.info("Git HTTPS auth konfiguriert (Token-Quelle: vault/env)")
 
     async def _run_cmd(self, *args: str, cwd: str | None = None) -> str:
         """Execute a shell command, return stdout."""
         await self._ensure_git_auth()
+        env = None
+        if self._token:
+            # A vault-set token must beat any stale GH_TOKEN in the process
+            # env — gh reads GH_TOKEN/GITHUB_TOKEN before the credential store.
+            env = {**os.environ, "GH_TOKEN": self._token, "GITHUB_TOKEN": self._token}
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=cwd,
+            env=env,
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
@@ -94,7 +97,7 @@ class GitService:
 
     async def create_repo(self, repo_name: str, description: str = "") -> str:
         """Create GitHub repo (private). Returns: clone URL."""
-        full_name = f"{require_github_owner()}/{repo_name}"
+        full_name = f"{await require_github_owner()}/{repo_name}"
         try:
             url = await self._run_cmd(
                 "gh", "repo", "create", full_name,
@@ -116,7 +119,7 @@ class GitService:
         """Initial commit: push .gitignore + README + .mc-scratch/.gitkeep."""
         import tempfile
 
-        full_name = f"{require_github_owner()}/{repo_name}"
+        full_name = f"{await require_github_owner()}/{repo_name}"
         gitignore = self._gitignore_for(project_type)
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -218,7 +221,7 @@ class GitService:
         """
         import json
 
-        owner = require_github_owner()
+        owner = await require_github_owner()
         out = await self._run_cmd(
             "gh", "repo", "list", owner,
             "--limit", str(limit),
@@ -260,7 +263,7 @@ class GitService:
         """Initial commit: push .gitignore + briefing.md to the repo."""
         import tempfile
 
-        full_name = f"{require_github_owner()}/{repo_name}"
+        full_name = f"{await require_github_owner()}/{repo_name}"
         briefing_content = f"""# {project_slug} — Project Briefing
 
 **Status:** active

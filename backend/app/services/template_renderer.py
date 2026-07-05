@@ -19,9 +19,9 @@ logger = logging.getLogger("mc.template_renderer")
 
 
 def _github_owner() -> str:
-    """Lazy import — git_service itself doesn't import anything heavy."""
-    from app.services.git_service import GITHUB_OWNER
-    return GITHUB_OWNER
+    """Sync render context — last resolved owner (vault > env, ADR-055)."""
+    from app.services.github_config import get_cached_owner
+    return get_cached_owner()
 
 # /app/templates/ in the Docker container (backend/templates/ locally)
 TEMPLATES_DIR = Path(__file__).parent.parent.parent / "templates"

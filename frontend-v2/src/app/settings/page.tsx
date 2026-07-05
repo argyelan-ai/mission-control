@@ -1,6 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -9,6 +11,7 @@ import {
   Users,
   Key,
   KeyRound,
+  Github,
   Zap,
   SlidersHorizontal,
   Keyboard,
@@ -29,12 +32,19 @@ import {
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
 import { useAppStore, type AuthUser } from "@/lib/store";
-import type { IntelligenceConfig, ProviderTemplate, SecretEntry } from "@/lib/types";
+import type {
+  IntelligenceConfig,
+  ProviderTemplate,
+  SecretEntry,
+  GithubStatus,
+  GithubConfigUpdate,
+} from "@/lib/types";
 import { cn } from "@/lib/utils";
 import AppShell from "@/components/layout/AppShell";
 import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
-import { C } from "@/lib/colors";
+import { StatusDot } from "@/components/shared/StatusDot";
+import { C, STATUS_TEXT } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 
@@ -51,6 +61,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "autonomy", label: "Autonomy", icon: SlidersHorizontal, adminOnly: true },
   { id: "intelligence", label: "Intelligence", icon: Zap, adminOnly: true },
   { id: "apikeys", label: "API Keys", icon: Key, adminOnly: true },
+  { id: "github", label: "GitHub", icon: Github, adminOnly: true },
   { id: "credentials", label: "Credentials", icon: KeyRound, adminOnly: true },
   { id: "costs", label: "Costs", icon: DollarSign, adminOnly: true },
   { id: "users", label: "Users", icon: Users, adminOnly: true },
@@ -1229,6 +1240,245 @@ function ApiKeysSection() {
   );
 }
 
+// ── GitHub Section (ADR-055, admin only) ──────────────────────────────────────
+
+function GithubSourceBadge({ source }: { source: "vault" | "env" | null }) {
+  if (!source) return null;
+  return (
+    <span
+      className="text-[10px] px-1.5 py-0.5 rounded uppercase"
+      style={{ backgroundColor: "rgba(255, 255, 255, 0.04)", color: "var(--color-text-muted)" }}
+    >
+      {source === "vault" ? "App" : ".env"}
+    </span>
+  );
+}
+
+function GithubSection() {
+  const queryClient = useQueryClient();
+  const [owner, setOwner] = useState("");
+  const [ownerTouched, setOwnerTouched] = useState(false);
+  const [token, setToken] = useState("");
+  const [probing, setProbing] = useState(false);
+  const [probeResult, setProbeResult] = useState<GithubStatus | null>(null);
+  const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const { data: status, isLoading } = useQuery<GithubStatus>({
+    queryKey: ["github-status"],
+    queryFn: () => api.repos.githubStatus(),
+  });
+
+  useEffect(() => {
+    if (status && !ownerTouched) setOwner(status.owner ?? "");
+  }, [status, ownerTouched]);
+
+  const saveMutation = useMutation({
+    mutationFn: (payload: GithubConfigUpdate) => api.repos.setGithubConfig(payload),
+    onSuccess: async () => {
+      setToken("");
+      setOwnerTouched(false);
+      setProbeResult(null);
+      setSaveError(null);
+      setSaveMessage("Saved.");
+      await queryClient.invalidateQueries({ queryKey: ["github-status"] });
+    },
+    onError: (err) => {
+      setSaveMessage(null);
+      setSaveError(err instanceof Error ? err.message : "Failed to save.");
+    },
+  });
+
+  function handleSave() {
+    setSaveMessage(null);
+    setSaveError(null);
+    const payload: GithubConfigUpdate = {};
+    const trimmedOwner = owner.trim();
+    if (ownerTouched) {
+      // Empty only counts as an explicit delete if the field previously had a value.
+      if (trimmedOwner === "" && status?.owner) payload.owner = "";
+      else if (trimmedOwner !== "" && trimmedOwner !== (status?.owner ?? "")) payload.owner = trimmedOwner;
+    }
+    if (token.trim()) payload.token = token.trim();
+
+    if (Object.keys(payload).length === 0) {
+      setSaveMessage("Nothing changed.");
+      return;
+    }
+    saveMutation.mutate(payload);
+  }
+
+  async function handleTest() {
+    setProbing(true);
+    setSaveMessage(null);
+    setSaveError(null);
+    try {
+      const result = await api.repos.githubStatus(true);
+      setProbeResult(result);
+    } catch (err) {
+      setProbeResult({
+        owner: status?.owner ?? null,
+        owner_source: status?.owner_source ?? null,
+        token_set: status?.token_set ?? false,
+        token_source: status?.token_source ?? null,
+        configured: status?.configured ?? false,
+        connected: false,
+        login: null,
+        owner_type: null,
+        rate_limit_remaining: null,
+        rate_limit_total: null,
+        error: err instanceof Error ? err.message : "Test connection failed.",
+      });
+    } finally {
+      setProbing(false);
+    }
+  }
+
+  const effective = probeResult ?? status ?? null;
+  const connected = effective?.connected ?? null;
+  const dotStatus: "online" | "error" | "idle" =
+    connected === true ? "online" : connected === false ? "error" : "idle";
+  const statusLabel =
+    connected === true
+      ? "Connected"
+      : connected === false
+      ? "Connection failed"
+      : effective?.configured
+      ? "Not tested"
+      : "Not connected";
+
+  return (
+    <SectionMotion sectionKey="github">
+      <SectionHeader
+        title="GitHub"
+        description="Connect a GitHub owner + token so agents can create repos, branch per task, and open pull requests."
+      />
+
+      <p className="text-sm mb-4" style={{ color: "var(--color-text-secondary)" }}>
+        Once connected, MC can create a private repo per project and a branch per task,
+        agents open PRs directly from their workspace, and each repo can carry its own
+        working rules that are included in every dispatch. Manage the registry under{" "}
+        <Link href="/repos" className="underline" style={{ color: C.accent }}>
+          Repos
+        </Link>
+        .
+      </p>
+
+      {isLoading ? (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="animate-spin" size={20} style={{ color: "var(--color-text-muted)" }} />
+        </div>
+      ) : (
+        <div className="space-y-4">
+          {/* Status card */}
+          <div className="mc-card p-4 space-y-2.5" style={cardStyle}>
+            <div className="flex items-center gap-2">
+              <StatusDot status={dotStatus} size="sm" />
+              <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                {statusLabel}
+              </span>
+              {probing && <Loader2 size={12} className="animate-spin" style={{ color: "var(--color-text-muted)" }} />}
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <span style={{ color: "var(--color-text-muted)" }}>Owner</span>
+              <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>
+                {effective?.owner ?? "—"}
+              </span>
+              <GithubSourceBadge source={effective?.owner_source ?? null} />
+            </div>
+
+            <div className="flex items-center gap-2 text-xs">
+              <span style={{ color: "var(--color-text-muted)" }}>Token</span>
+              <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>
+                {effective?.token_set ? "Set ••••" : "Not set"}
+              </span>
+              <GithubSourceBadge source={effective?.token_source ?? null} />
+            </div>
+
+            {connected !== null && (
+              <div className="pt-2 mt-1 space-y-1 text-xs" style={{ borderTop: `1px solid ${C.borderSubtle}`, color: "var(--color-text-muted)" }}>
+                {effective?.login && (
+                  <div>authenticated as <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.login}</span></div>
+                )}
+                {effective?.owner_type && (
+                  <div>owner type <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.owner_type}</span></div>
+                )}
+                {effective?.rate_limit_total != null && (
+                  <div>
+                    rate limit{" "}
+                    <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>
+                      {effective.rate_limit_remaining}/{effective.rate_limit_total}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {effective?.error && (
+              <p className="text-xs pt-1" style={{ color: STATUS_TEXT.error }}>
+                {effective.error}
+              </p>
+            )}
+
+            <button
+              onClick={handleTest}
+              disabled={probing}
+              className="mt-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 transition-all"
+              style={{ background: "rgba(255, 255, 255, 0.04)", color: "var(--color-text-secondary)" }}
+            >
+              {probing ? "Testing (up to 15s)…" : "Test connection"}
+            </button>
+          </div>
+
+          {/* Form */}
+          <div className="mc-card p-4 space-y-3" style={cardStyle}>
+            <div>
+              <FieldLabel>Owner</FieldLabel>
+              <InputField
+                value={owner}
+                onChange={(v) => { setOwner(v); setOwnerTouched(true); }}
+                placeholder="your-github-user-or-org"
+                ariaLabel="GitHub owner"
+              />
+            </div>
+            <div>
+              <FieldLabel>Token</FieldLabel>
+              <InputField
+                type="password"
+                value={token}
+                onChange={setToken}
+                placeholder={status?.token_set ? "unchanged — paste to rotate" : "ghp_..."}
+                ariaLabel="GitHub token"
+              />
+            </div>
+
+            {saveError && (
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
+                {saveError}
+              </p>
+            )}
+            {saveMessage && (
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: "rgba(43, 154, 74, 0.1)" }}>
+                <Check size={12} /> {saveMessage}
+              </p>
+            )}
+
+            <button
+              onClick={handleSave}
+              disabled={saveMutation.isPending}
+              className="text-xs px-3 py-2 rounded-lg font-medium cursor-pointer disabled:opacity-40 text-white"
+              style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
+            >
+              {saveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : "Save"}
+            </button>
+          </div>
+        </div>
+      )}
+    </SectionMotion>
+  );
+}
+
 // ── Users Section (Admin only) ────────────────────────────────────────────────
 
 function UsersSection() {
@@ -1738,7 +1988,19 @@ function AboutSection() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SettingsContent() {
-  const [activeSection, setActiveSection] = useState("profile");
+  // Deep-link support: /settings?section=github lets other pages link
+  // straight into a section (e.g. the /repos onboarding banner).
+  const searchParams = useSearchParams();
+  const sectionParam = searchParams.get("section");
+  const [activeSection, setActiveSection] = useState(
+    sectionParam && SECTIONS.some((s) => s.id === sectionParam) ? sectionParam : "profile"
+  );
+  useEffect(() => {
+    if (sectionParam && SECTIONS.some((s) => s.id === sectionParam)) {
+      setActiveSection(sectionParam);
+    }
+  }, [sectionParam]);
+
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
 
@@ -1828,6 +2090,7 @@ function SettingsContent() {
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
               {activeSection === "intelligence" && isAdmin && <IntelligenceSection />}
               {activeSection === "apikeys" && isAdmin && <ApiKeysSection />}
+              {activeSection === "github" && isAdmin && <GithubSection />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
@@ -1844,7 +2107,9 @@ function SettingsContent() {
 export default function SettingsPage() {
   return (
     <AppShell>
-      <SettingsContent />
+      <Suspense fallback={null}>
+        <SettingsContent />
+      </Suspense>
     </AppShell>
   );
 }

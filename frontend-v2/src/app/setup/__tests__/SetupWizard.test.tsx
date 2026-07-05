@@ -50,7 +50,7 @@ describe("First-Run-Wizard", () => {
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/login"));
   });
 
-  it("saves the provider key and advances to step 3", async () => {
+  it("saves the provider key and advances to the Connect GitHub step", async () => {
     mockAuthed();
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     const create = vi.spyOn(api.secrets, "create").mockResolvedValue({} as never);
@@ -61,7 +61,7 @@ describe("First-Run-Wizard", () => {
     await userEvent.type(screen.getByLabelText("Key"), "sk-ant-oat01-xyz");
     await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
 
-    await screen.findByText("Ready to get started");
+    await screen.findByRole("heading", { name: "Connect GitHub" });
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "claude_code_oauth_token",
@@ -71,7 +71,7 @@ describe("First-Run-Wizard", () => {
     );
   });
 
-  it("skip goes to step 3; demo seed creates board + 8 tasks", async () => {
+  it("skip provider key, skip GitHub, then demo seed creates board + 8 tasks", async () => {
     mockAuthed();
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     const board = vi
@@ -83,6 +83,10 @@ describe("First-Run-Wizard", () => {
     await screen.findByText("Connect an LLM provider");
     await userEvent.click(screen.getByRole("button", { name: "Skip" }));
 
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    await userEvent.click(screen.getByRole("button", { name: "Skip for now" }));
+
+    await screen.findByText("Ready to get started");
     await userEvent.click(
       screen.getByRole("button", { name: /Create demo board/ }),
     );
@@ -92,5 +96,23 @@ describe("First-Run-Wizard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /Go to command center/ }));
     expect(replace).toHaveBeenCalledWith("/");
+  });
+
+  it("Connect GitHub step saves owner + token via PUT github-config and advances", async () => {
+    mockAuthed();
+    vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
+    const setGithub = vi.spyOn(api.repos, "setGithubConfig").mockResolvedValue({} as never);
+
+    render(<SetupWizardPage />);
+    await screen.findByText("Connect an LLM provider");
+    await userEvent.click(screen.getByRole("button", { name: "Skip" }));
+
+    await screen.findByRole("heading", { name: "Connect GitHub" });
+    await userEvent.type(screen.getByLabelText("Owner"), "acme");
+    await userEvent.type(screen.getByLabelText("Personal access token"), "ghp_xyz123");
+    await userEvent.click(screen.getByRole("button", { name: /Save & continue/ }));
+
+    await screen.findByText("Ready to get started");
+    expect(setGithub).toHaveBeenCalledWith({ owner: "acme", token: "ghp_xyz123" });
   });
 });

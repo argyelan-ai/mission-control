@@ -99,6 +99,15 @@ async def setup_db():
         await conn.run_sync(SQLModel.metadata.drop_all)
 
 
+@pytest.fixture(autouse=True)
+def reset_github_config_cache():
+    """The github_config TTL cache must never leak between tests (ADR-055)."""
+    from app.services.github_config import invalidate_github_config_cache
+    invalidate_github_config_cache()
+    yield
+    invalidate_github_config_cache()
+
+
 @pytest.fixture
 async def session() -> AsyncGenerator[AsyncSession, None]:
     """DB session for tests that access the DB directly."""
