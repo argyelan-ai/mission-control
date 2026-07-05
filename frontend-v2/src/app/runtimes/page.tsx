@@ -20,6 +20,8 @@ import {
   Settings2,
   Plus,
   X,
+  Pencil,
+  Check,
   type LucideIcon,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -1082,6 +1084,136 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
   );
 }
 
+// Inline model_identifier editor for non-probeable runtimes (cloud/Anthropic).
+// These have no watcher-driven live model, so their static DB value is the only
+// source of truth — and needs a manual edit path (e.g. Opus 4.7 → 4.8). Probeable
+// runtimes edit their model via Re-probe instead, so this is not rendered there.
+function RuntimeModelEditor({
+  runtime,
+  onMessage,
+}: {
+  runtime: Runtime;
+  onMessage?: (msg: string) => void;
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(runtime.model_identifier ?? "");
+
+  const mutation = useMutation({
+    mutationFn: (model: string) =>
+      api.runtimes.db.update(runtime.slug ?? runtime.id, { model_identifier: model }),
+    onSuccess: (data) => {
+      setEditing(false);
+      queryClient.invalidateQueries({ queryKey: ["runtimes"] });
+      queryClient.invalidateQueries({ queryKey: ["agents"] });
+      onMessage?.(
+        `Modell auf „${data.model_identifier ?? "—"}" gesetzt — gebundene Agents werden beim nächsten Watcher-Tick neu gestartet.`
+      );
+    },
+    onError: () => onMessage?.("Modell-Update fehlgeschlagen."),
+  });
+
+  const save = () => {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === (runtime.model_identifier ?? "")) {
+      setEditing(false);
+      return;
+    }
+    mutation.mutate(trimmed);
+  };
+
+  const cancel = () => {
+    setValue(runtime.model_identifier ?? "");
+    setEditing(false);
+  };
+
+  const iconBtn = (color: string) => ({
+    padding: "3px",
+    borderRadius: "5px",
+    background: "transparent" as const,
+    border: "1px solid transparent",
+    color,
+    cursor: "pointer" as const,
+    display: "flex" as const,
+    alignItems: "center" as const,
+  });
+
+  if (editing) {
+    return (
+      <div className="flex items-center gap-1.5 mt-1">
+        <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
+          Modell:
+        </span>
+        <input
+          autoFocus
+          aria-label="Modell-Identifier"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") save();
+            if (e.key === "Escape") cancel();
+          }}
+          className="font-mono text-xs px-1.5 py-1 rounded min-w-0 flex-1"
+          style={{
+            background: C.bgDeep,
+            border: `1px solid ${C.borderAccent}`,
+            color: C.textPrimary,
+            outline: "none",
+          }}
+        />
+        <button
+          onClick={save}
+          disabled={mutation.isPending}
+          title="Speichern"
+          aria-label="Speichern"
+          style={iconBtn(C.accent)}
+        >
+          {mutation.isPending ? (
+            <Loader2 size={13} className="animate-spin" />
+          ) : (
+            <Check size={13} />
+          )}
+        </button>
+        <button
+          onClick={cancel}
+          disabled={mutation.isPending}
+          title="Abbrechen"
+          aria-label="Abbrechen"
+          style={iconBtn(C.textMuted)}
+        >
+          <X size={13} />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-1.5 mt-1">
+      <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
+        Modell:
+      </span>
+      <span
+        className="font-mono text-xs truncate"
+        style={{ color: C.textSecondary }}
+        title={runtime.model_identifier ?? undefined}
+      >
+        {runtime.model_identifier ?? "—"}
+      </span>
+      <button
+        onClick={() => {
+          setValue(runtime.model_identifier ?? "");
+          setEditing(true);
+        }}
+        title="Modell bearbeiten"
+        aria-label="Modell bearbeiten"
+        style={iconBtn(C.textMuted)}
+      >
+        <Pencil size={12} />
+      </button>
+    </div>
+  );
+}
+
 export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeGb?: number; live?: RuntimeLiveStatus }) {
   const queryClient = useQueryClient();
   const [actionMsg, setActionMsg] = useState<string | null>(null);
@@ -1263,6 +1395,9 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
               </>
             )}
           </div>
+          {!isProbeable && (
+            <RuntimeModelEditor runtime={runtime} onMessage={setActionMsg} />
+          )}
           {live && (
             <div className="flex items-center gap-2 text-xs mt-0.5" style={{ color: C.textSecondary }}>
               <span

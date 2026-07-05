@@ -30,7 +30,8 @@ from app.services.host_resolver import (
     resolve_host_for_runtime,
 )
 from app.services.runtime_manager import add_lmstudio_runtime
-from app.services.runtime_propagation import sync_pending_agents
+from app.services.runtime_model_resolver import invalidate_cached_model
+from app.services.runtime_propagation import mark_agents_for_sync, sync_pending_agents
 from app.services import activity
 from app.services.runtime_autostart import (
     AutostartHostUnreachable,
@@ -895,18 +896,41 @@ async def update_runtime_db(
     changes = body.model_dump(exclude_none=True)
     changes.pop("host_id", None)
     changes.pop("api_key_secret_id", None)
+    # A manual model_identifier edit must propagate exactly like the watcher's
+    # drift detection (ADR-054): flag bound cli-bridge agents for a re-sync and
+    # emit runtime.model_changed. Non-probeable cloud runtimes (Anthropic) have
+    # no watcher, so this PATCH is their only path to a fresh model.
+    old_model = rt.model_identifier
+    for k, v in changes.items():
+        setattr(rt, k, v)
     if "host_id" in body.model_fields_set:
         if body.host_id is not None:
             await _validate_host_id(session, body.host_id)
         rt.host_id = body.host_id
     if "api_key_secret_id" in body.model_fields_set:
         rt.api_key_secret_id = body.api_key_secret_id
-    for k, v in changes.items():
-        setattr(rt, k, v)
     rt.updated_at = datetime.utcnow()
     session.add(rt)
     await session.commit()
     await session.refresh(rt)
+
+    model_changed = "model_identifier" in changes and rt.model_identifier != old_model
+    if model_changed:
+        await invalidate_cached_model(rt.slug)
+        await activity.emit_event(
+            session,
+            "runtime.model_changed",
+            f"{rt.slug}: {old_model or 'n/a'} → {rt.model_identifier}",
+            severity="info",
+            detail={
+                "slug": rt.slug,
+                "old_model": old_model,
+                "new_model": rt.model_identifier,
+                "source": "manual_edit",
+            },
+        )
+        await mark_agents_for_sync(session, rt)
+
     return await _runtime_row_response(session, rt)
 
 
