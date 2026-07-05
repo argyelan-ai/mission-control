@@ -270,37 +270,42 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
   return (
     <div className="flex flex-col flex-1 overflow-hidden bg-[#0d0d0d]">
       {/* Header */}
+      {/* flex-wrap: on phones the two toggles drop to their own row instead of
+          getting crushed next to the status badge + agent name */}
       <div
-        className="flex items-center gap-3 px-4 py-2.5 border-b shrink-0"
+        className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b shrink-0"
         style={{ borderColor: "rgba(255,255,255,0.06)" }}
       >
-        {connected ? (
-          <Wifi size={12} style={{ color: C.online, flexShrink: 0 }} />
-        ) : (
-          <WifiOff size={12} style={{ color: C.error, flexShrink: 0 }} />
-        )}
-        <span
-          className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
-          style={{
-            background: connected ? `${C.online}1A` : `${C.error}1A`,
-            color: connected ? C.online : C.error,
-            border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
-          }}
-        >
-          {connected ? "connected" : "disconnected"}
-        </span>
-        <span className="text-[11px] font-mono truncate" style={{ color: "var(--color-text-secondary)" }}>
-          mc-agent-{agent.name}
-        </span>
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          {connected ? (
+            <Wifi size={12} style={{ color: C.online, flexShrink: 0 }} />
+          ) : (
+            <WifiOff size={12} style={{ color: C.error, flexShrink: 0 }} />
+          )}
+          <span
+            className="text-[9px] px-1.5 py-0.5 rounded font-mono shrink-0"
+            style={{
+              background: connected ? `${C.online}1A` : `${C.error}1A`,
+              color: connected ? C.online : C.error,
+              border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
+            }}
+          >
+            {connected ? "connected" : "disconnected"}
+          </span>
+          <span className="text-[11px] font-mono truncate min-w-0" style={{ color: "var(--color-text-secondary)" }}>
+            mc-agent-{agent.name}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0 ml-auto">
         <div
-          className="flex items-center rounded-md overflow-hidden ml-auto mr-2"
+          className="flex items-center rounded-md overflow-hidden shrink-0"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
         >
           {(["fit", "native"] as const).map((m) => (
             <button
               key={m}
               onClick={() => setTermView(m)}
-              className="px-2.5 py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+              className="px-2.5 py-1.5 md:py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer whitespace-nowrap"
               style={{
                 background: termView === m ? C.accentSubtle : "transparent",
                 color: termView === m ? C.accent : C.textMuted,
@@ -312,14 +317,14 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
           ))}
         </div>
         <div
-          className="flex items-center rounded-md overflow-hidden"
+          className="flex items-center rounded-md overflow-hidden shrink-0"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
         >
           {(["terminal", "structured"] as const).map((mode) => (
             <button
               key={mode}
               onClick={() => setViewMode(mode)}
-              className="px-2.5 py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+              className="px-2.5 py-1.5 md:py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer whitespace-nowrap"
               style={{
                 background: viewMode === mode ? C.accentSubtle : "transparent",
                 color: viewMode === mode ? C.accent : C.textMuted,
@@ -329,6 +334,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
               {mode === "terminal" ? "Terminal" : "Structured"}
             </button>
           ))}
+        </div>
         </div>
       </div>
       {/* Body */}
@@ -601,7 +607,7 @@ export default function SessionsPage() {
         )}
         {/* Page Header */}
         <div
-          className="flex items-center gap-3 px-6 py-4 border-b shrink-0"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 md:px-6 py-3 md:py-4 border-b shrink-0"
           style={{ borderColor: "var(--color-border-subtle)" }}
         >
           <MonitorPlay size={18} style={{ color: "var(--color-text-secondary)" }} />
@@ -621,14 +627,14 @@ export default function SessionsPage() {
 
           {/* Terminal / Agent browser tab switch */}
           <div
-            className="ml-auto flex items-center rounded-md overflow-hidden"
+            className="ml-auto flex items-center rounded-md overflow-hidden shrink-0"
             style={{ border: `1px solid ${C.border}` }}
           >
             {(["terminal", "browser"] as const).map((mode) => (
               <button
                 key={mode}
                 onClick={() => setRightPane(mode)}
-                className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide transition-colors cursor-pointer"
+                className="px-2.5 py-1.5 text-[10px] font-medium uppercase tracking-wide transition-colors cursor-pointer whitespace-nowrap"
                 style={{
                   background: rightPane === mode ? C.accentSubtle : "transparent",
                   color: rightPane === mode ? C.accent : C.textMuted,
