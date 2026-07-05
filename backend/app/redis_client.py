@@ -271,3 +271,16 @@ class RedisKeys:
     @staticmethod
     def agent_model_sync_fails(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:model-sync-fails"
+
+    # ── CLI Tool Update Check ────────────────────────────────────────────
+    @staticmethod
+    def cli_update_check_lock() -> str:
+        return "mc:cli:check-lock"
+
+    @staticmethod
+    def cli_versions_cache() -> str:
+        return "mc:cli:versions"
+
+    @staticmethod
+    def cli_update_notified(tool: str, version: str) -> str:
+        return f"mc:cli:notified:{tool}:{version}"

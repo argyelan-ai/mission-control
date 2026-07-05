@@ -191,6 +191,10 @@ class Settings(BaseSettings):
     runtime_watcher_enabled: bool = True
     runtime_watcher_interval: int = 90  # seconds between probe ticks
 
+    # CLI Tool Updates — periodic check of installed vs. pinned vs. latest
+    # upstream CLI tool versions (openclaude/claude/omp). 0 = disabled.
+    cli_update_check_interval: int = 21600  # 6 hours
+
     # Lifecycle Safety Watchdog (ADR-046) — global kill-switch for the
     # silent-abort auto-block check (task_runner._check_stuck_in_progress).
     # The idle THRESHOLD stays per-agent in agents.dispatch_config
