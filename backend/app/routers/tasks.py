@@ -1819,6 +1819,52 @@ async def delete_task(
     await session.commit()
 
 
+# ── Usage / Cost Attribution (Token Harvester task_id join) ────────────────
+
+
+@router.get("/tasks/{task_id}/usage")
+async def get_task_usage(
+    task_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Token/cost usage attributed to this task (model_usage_events.task_id).
+
+    Events are attributed by the Token Harvester matching transcript cwd
+    against the task's workspace_path — see services/token_harvester.py.
+    """
+    from sqlalchemy import func
+
+    from app.models.model_usage import ModelUsageEvent
+
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    result = await session.exec(
+        select(
+            func.count(ModelUsageEvent.id),
+            func.coalesce(func.sum(ModelUsageEvent.input_tokens), 0),
+            func.coalesce(func.sum(ModelUsageEvent.output_tokens), 0),
+            func.coalesce(func.sum(ModelUsageEvent.cache_read_tokens), 0),
+            func.coalesce(func.sum(ModelUsageEvent.cache_write_tokens), 0),
+            func.coalesce(func.sum(ModelUsageEvent.cost_usd), 0.0),
+        ).where(ModelUsageEvent.task_id == task_id)
+    )
+    event_count, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cost_usd = result.one()
+
+    return {
+        "task_id": str(task_id),
+        "event_count": event_count,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+        "total_tokens": input_tokens + output_tokens + cache_read_tokens + cache_write_tokens,
+        "cost_usd": round(cost_usd, 6),
+    }
+
+
 # ── Transcript ────────────────────────────────────────────────────────────────
 
 
