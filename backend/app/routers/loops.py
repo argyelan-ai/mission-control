@@ -41,6 +41,8 @@ class LoopCreate(BaseModel):
     human_every_n_rounds: int = 0
     pause_on_failed_rounds: int = 2
     max_rounds: int = 10
+    budget_usd: float | None = None
+    budget_tokens: int | None = None
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool = True
     telegram_reports: bool = True
@@ -55,6 +57,8 @@ class LoopUpdate(BaseModel):
     human_every_n_rounds: int | None = None
     pause_on_failed_rounds: int | None = None
     max_rounds: int | None = None
+    budget_usd: float | None = None
+    budget_tokens: int | None = None
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool | None = None
     telegram_reports: bool | None = None
@@ -98,6 +102,10 @@ async def create_loop(
             )
     if payload.max_rounds < 1:
         raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
+    if payload.budget_usd is not None and payload.budget_usd <= 0:
+        raise HTTPException(status_code=400, detail="budget_usd muss > 0 sein")
+    if payload.budget_tokens is not None and payload.budget_tokens <= 0:
+        raise HTTPException(status_code=400, detail="budget_tokens muss > 0 sein")
     board = await session.get(Board, payload.board_id)
     if not board:
         raise HTTPException(status_code=404, detail="Board not found")

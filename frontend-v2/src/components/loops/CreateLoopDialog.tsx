@@ -33,6 +33,8 @@ interface FormState {
   backlogTag: string;
   projectId: string;
   maxRounds: number;
+  budgetUsd: string;
+  budgetTokens: string;
   pauseOnFailedRounds: number;
   humanEveryNRounds: number;
   maxDurationMinutes: string;
@@ -50,6 +52,8 @@ function defaultForm(boardId: string): FormState {
     backlogTag: "",
     projectId: "",
     maxRounds: 10,
+    budgetUsd: "",
+    budgetTokens: "",
     pauseOnFailedRounds: 2,
     humanEveryNRounds: 0,
     maxDurationMinutes: "",
@@ -119,6 +123,8 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
       ...(form.backlogSource === "project" ? { project_id: form.projectId } : {}),
       ...(form.backlogSource === "tag" ? { backlog_tag: form.backlogTag.trim() } : {}),
       max_rounds: form.maxRounds,
+      ...(form.budgetUsd.trim() ? { budget_usd: Number(form.budgetUsd) } : {}),
+      ...(form.budgetTokens.trim() ? { budget_tokens: Number(form.budgetTokens) } : {}),
       pause_on_failed_rounds: form.pauseOnFailedRounds,
       human_every_n_rounds: form.humanEveryNRounds,
       ...(form.maxDurationMinutes.trim() ? { max_duration_minutes: Number(form.maxDurationMinutes) } : {}),
@@ -272,6 +278,29 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                         min={1}
                         value={form.maxRounds}
                         onChange={(e) => setForm((p) => ({ ...p, maxRounds: Math.max(1, Number(e.target.value)) }))}
+                        className={inputCls}
+                        style={inputStyle}
+                      />
+                    </Label>
+                    <Label text="Budget (USD, optional)">
+                      <input
+                        type="number"
+                        min={0}
+                        step="0.5"
+                        placeholder="e.g. 5"
+                        value={form.budgetUsd}
+                        onChange={(e) => setForm((p) => ({ ...p, budgetUsd: e.target.value }))}
+                        className={inputCls}
+                        style={inputStyle}
+                      />
+                    </Label>
+                    <Label text="Budget (tokens, optional)">
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="e.g. 500000"
+                        value={form.budgetTokens}
+                        onChange={(e) => setForm((p) => ({ ...p, budgetTokens: e.target.value }))}
                         className={inputCls}
                         style={inputStyle}
                       />

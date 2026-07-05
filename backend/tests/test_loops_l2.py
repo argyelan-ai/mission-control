@@ -333,3 +333,72 @@ async def test_create_tag_loop_rejects_unknown_tag(auth_client, make_board):
     })
     assert r.status_code == 400
     assert "existiert nicht" in r.json()["detail"]
+
+
+# ── L3: Budget-Stop an der Rundengrenze ───────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_budget_usd_stops_loop(make_board, make_task, fake_redis):
+    """Runden-Tasks haben attribuierte Kosten über Budget → budget_exceeded."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.models.loop import Loop, LoopRound
+    from app.models.model_usage import ModelUsageEvent
+    from app.services.loop_runner import LoopRunnerService
+
+    board = await make_board()
+    task = await make_task(board.id, title="Runde 1", status="done")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        loop = Loop(board_id=board.id, name="B", goal="g", backlog_source="markdown",
+                    backlog_md="- x", status="running", budget_usd=1.0,
+                    rounds_completed=0, current_round_no=1, current_task_id=task.id)
+        s.add(loop)
+        await s.commit(); await s.refresh(loop)
+        s.add(LoopRound(loop_id=loop.id, round_no=1, task_id=task.id, status="running"))
+        from app.utils import utcnow as _now
+        s.add(ModelUsageEvent(agent_id=None, task_id=task.id, harness="claude",
+                              model="m", session_id="s1", message_uuid="bgt-1",
+                              input_tokens=10, output_tokens=10, cost_usd=1.5,
+                              ts=_now(), source_file="test.jsonl"))
+        await s.commit()
+
+        runner = LoopRunnerService()
+        with patch("app.services.loop_runner.emit_event", new_callable=AsyncMock) as emitted, \
+             patch("app.services.activity.broadcast", new_callable=AsyncMock), \
+             patch.object(runner, "_send_round_telegram_report", new_callable=AsyncMock):
+            fresh_task = await s.get(type(task), task.id)
+            await runner._complete_round(s, loop, outcome="done", task=fresh_task)
+        await s.refresh(loop)
+    assert loop.status == "done"
+    reasons = [c.kwargs.get("detail", {}).get("reason") for c in emitted.call_args_list]
+    assert "budget_exceeded" in reasons
+
+
+@pytest.mark.asyncio
+async def test_no_budget_no_stop(make_board, make_task, fake_redis):
+    """Ohne Budget-Felder ändert sich das Rundenverhalten nicht (nächste Runde)."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.models.loop import Loop, LoopRound
+    from app.services.loop_runner import LoopRunnerService
+
+    board = await make_board()
+    task = await make_task(board.id, title="R1", status="done")
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        loop = Loop(board_id=board.id, name="B2", goal="g", backlog_source="markdown",
+                    backlog_md="- x", status="running", max_rounds=5,
+                    rounds_completed=0, current_round_no=1, current_task_id=task.id)
+        s.add(loop)
+        await s.commit(); await s.refresh(loop)
+        s.add(LoopRound(loop_id=loop.id, round_no=1, task_id=task.id, status="running"))
+        await s.commit()
+
+        runner = LoopRunnerService()
+        with patch("app.services.activity.emit_event", new_callable=AsyncMock), \
+             patch("app.services.activity.broadcast", new_callable=AsyncMock), \
+             patch.object(runner, "_send_round_telegram_report", new_callable=AsyncMock), \
+             patch.object(runner, "_start_round", new_callable=AsyncMock) as next_round:
+            fresh_task = await s.get(type(task), task.id)
+            await runner._complete_round(s, loop, outcome="done", task=fresh_task)
+            next_round.assert_called_once()
