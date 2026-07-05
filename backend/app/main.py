@@ -59,6 +59,7 @@ from app.routers import (
     boards,
     clawhub,
     cli_plugins,
+    browser_live,
     cli_terminal,
     consensus,
     credentials,
@@ -735,6 +736,7 @@ app.include_router(settings_router.router)
 app.include_router(webhooks.router)
 app.include_router(deploy.router)
 app.include_router(cli_plugins.router)
+app.include_router(browser_live.router)
 app.include_router(cli_terminal.router)
 app.include_router(consensus.router)
 app.include_router(schedule.router)
