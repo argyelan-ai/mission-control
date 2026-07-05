@@ -82,8 +82,20 @@ async def create_loop(
         raise HTTPException(status_code=400, detail=f"backlog_source muss eines von {BACKLOG_SOURCES} sein")
     if payload.backlog_source == "markdown" and not (payload.backlog_md or "").strip():
         raise HTTPException(status_code=400, detail="backlog_md ist Pflicht bei backlog_source=markdown")
-    if payload.backlog_source == "tag" and not (payload.backlog_tag or "").strip():
-        raise HTTPException(status_code=400, detail="backlog_tag ist Pflicht bei backlog_source=tag")
+    if payload.backlog_source == "tag":
+        if not (payload.backlog_tag or "").strip():
+            raise HTTPException(status_code=400, detail="backlog_tag ist Pflicht bei backlog_source=tag")
+        # Review-Fund L2: Tag wird gegen Tag.slug gematcht — ohne Existenz-
+        # Check läuft ein Tippfehler auf ein still-leeres Backlog pro Runde.
+        from app.models.tag import Tag
+        tag_row = (await session.exec(
+            select(Tag).where(Tag.slug == payload.backlog_tag.strip())
+        )).first()
+        if not tag_row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tag '{payload.backlog_tag}' existiert nicht (erwartet wird der Tag-SLUG)",
+            )
     if payload.max_rounds < 1:
         raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
     board = await session.get(Board, payload.board_id)

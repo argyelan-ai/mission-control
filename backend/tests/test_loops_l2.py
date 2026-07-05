@@ -317,3 +317,15 @@ async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClie
     assert r.status_code == 201
     assert r.json()["backlog_tag"] == "polish"
     assert r.json()["telegram_reports"] is True
+
+
+@pytest.mark.asyncio
+async def test_create_tag_loop_rejects_unknown_tag(auth_client, make_board):
+    """Review-Fund: unbekannter Tag-Slug → 400 statt still-leerem Backlog."""
+    board = await make_board()
+    r = await auth_client.post("/api/v1/loops", json={
+        "board_id": str(board.id), "name": "L", "goal": "g",
+        "backlog_source": "tag", "backlog_tag": "gibt-es-nicht",
+    })
+    assert r.status_code == 400
+    assert "existiert nicht" in r.json()["detail"]
