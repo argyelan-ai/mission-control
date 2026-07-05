@@ -206,6 +206,9 @@ function ImageLightbox({ src, alt, onClose }: { src: string; alt: string; onClos
 const VIDEO_EXT = /\.(webm|mp4)$/i;
 
 function isVideoDeliverable(d: TaskDeliverable): boolean {
+  // "video" ist der dedizierte Typ des Tester-Briefs; file/artifact bleiben
+  // als Fallback fuer manuell registrierte Aufnahmen.
+  if (d.deliverable_type === "video") return true;
   if (d.deliverable_type !== "file" && d.deliverable_type !== "artifact") return false;
   return VIDEO_EXT.test(d.path ?? "") || VIDEO_EXT.test(d.title ?? "");
 }

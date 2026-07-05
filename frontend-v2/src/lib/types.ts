@@ -269,7 +269,7 @@ export interface TaskDeliverable {
   task_id: string;
   agent_id: string;
   agent_name?: string;
-  deliverable_type: "screenshot" | "file" | "url" | "artifact" | "document" | "data";
+  deliverable_type: "screenshot" | "file" | "url" | "artifact" | "document" | "data" | "video";
   title: string;
   path: string | null;
   description: string | null;
