@@ -360,6 +360,58 @@ probe fills it in, closing the last "MC leads" hole in the omp boot path.
 `rendering → restarting → waiting_healthy → done | rolled_back` — instead
 of a fire-and-forget confirm dialog.
 
+#### CLI-Tool-Updates — Manifest + Host-Bridge-Build + Rolling Recreate (NEU 2026-07-05, ADR-058)
+
+Die drei Agent-CLI-Tools (`openclaude`, `claude`, `omp`) waren bisher
+uneinheitlich in den Dockerfiles gepinnt (`openclaude` als Literal, `claude`
+ungepinnt/`latest`, nur `omp` bereits versioniert per `ARG`+sha256). Ein
+Update verlangte Dockerfile-Edit + manuellen Rebuild + manuelles Recreate.
+Seit ADR-058 ist `docker/cli-versions.json` die **Single Source of Truth**
+für Soll-Versionen (+ `omp`-sha256): `scripts/build-agent-images.sh` liest
+sie für die Build-Args, jedes Image trägt zusätzlich die OCI-Labels
+`mc.cli.name`/`mc.cli.version`/`mc.image.built-at` für den Ist-Stand
+(`docker image inspect`, kein separates Tracking).
+
+`services/cli_update_check.py` läuft als Singleton-Loop (Muster wie
+`runtime_watcher.py`, `settings.cli_update_check_interval` Default 6h,
+`0` = aus) und cached `{installed, target, latest, update_available}` je Tool
+in Redis (`mc:cli:versions`) — Quellen sind die npm-Registry
+(`openclaude`/`claude`) und GitHub Releases (`omp`, `can1357/oh-my-pi`).
+`target=None` zählt bewusst nicht als Update-Signal, und ein Fund löst nur
+das dedupte Event `cli.update_available` aus — kein Auto-Update.
+
+**Build läuft auf dem Host, nie im Backend-Container** — der
+Docker-Socket-Proxy hat `BUILD: 0` (ADR-047). `scripts/cli-bridge.py`
+(dieselbe Bridge, über die auch Plugin-Installs laufen, Port 18792) bekommt
+dafür `POST /agent-images/build` (Hintergrund-Subprozess, Log-Datei, 409 bei
+laufendem Build), `GET /agent-images/build/status` (Polling) und
+`POST /agent-images/omp-sha256` (TOFU-Digest, falls die GitHub-Release keinen
+Asset-Digest liefert).
+
+`services/cli_update_runner.py` orchestriert den Klick-Ablauf hinter einem
+Redis-Lock (`mc:cli:update-lock`, TTL 1800s): Manifest bumpen → Bridge-Build
+triggern + Fortschritt nach `mc:cli:update-progress` pollen → bei
+Build-Fehlschlag Manifest-Rollback (alter Image-Tag bleibt unberührt, Event
+`cli.update_failed`) → bei Erfolg Rolling Recreate der betroffenen
+Harness-Agents (`agents.harness`, ADR-056): idle sofort `force_recreate`,
+busy → `agents.pending_recreate = true` (Migration `0146`,
+`services/runtime_propagation.mark_agents_for_recreate`/
+`recreate_pending_agents`, läuft im selben Watcher-Tick nach
+`sync_pending_agents` — dieselbe ADR-054-Propagationsmechanik, aber
+`force_recreate` statt `docker restart`, weil sich das Image geändert hat).
+Circuit-Breaker nach 3 Fehlversuchen wie ADR-054. Erfolg emittiert
+`cli.updated`; die Manifest-Änderung bleibt bewusst uncommitted im Repo —
+Commit ist Sache des Users.
+
+API `routers/cli_tools.py` unter `/api/v1/cli-tools`: `GET ""` (Liste,
+`require_user`), `POST /check`, `GET /update-status` (Polling), `POST
+/{tool}/update` (202, nur `operator`-Rolle, 409 bei laufendem Update).
+Frontend: neue Sektion "CLI-Tools" auf `/runtimes`
+(`CliToolsSection.tsx`) — Ist/Latest/Update-Badge je Tool, Bestätigungsdialog,
+Fortschrittsanzeige (Phasen: Manifest → Build (Log-Tail) → Recreate).
+**Nicht in v1:** GHCR-Publish der Agent-Images, Auto-Update-Policy,
+Changelog-Anzeige im Dialog.
+
 ---
 
 ## Zentrale Flows
@@ -686,6 +738,7 @@ Alle ADRs in `docs/decisions/`:
 ## Änderungshistorie (high-level)
 
 - **2026-07-05** — **Engine Control v0: Autostart-Flag via SSH (ADR-057):** Erster Baustein von Cockpit v2 ("MC folgt der Engine" → "MC steuert die Engine"). Neue Spalten `runtimes.autostart_supported`/`autostart_flag_path` (Migration 0146, additive, Default aus) — Operator setzt sie zur Laufzeit via `PATCH /runtimes/db/{slug}` oder UI, nie geseeded. `services/runtime_autostart.py` führt `test -f`/`touch`/`rm -f` über den bestehenden `runtime_manager._ssh_run()` + Host-Registry-Resolver (`host_id` → `hosts`, ADR-048) aus — keine zweite SSH-Implementierung, kein separates Host/User-Feld pro Runtime. `GET/POST /runtimes/db/{slug}/autostart` (on-demand, nicht Teil des 90s-Watcher-Takts, ADR-054-Präzedenzfall): POST touched/entfernt die Flag-Datei und liest sie zur Verifikation zurück, emittiert `runtime.autostart_changed`; ein unerreichbarer Host liefert `enabled: null, reachable: false` bzw. bei POST einen 502 mit klarer Meldung statt Stacktrace. Frontend `AutostartToggle.tsx` auf der `/runtimes`-Karte (nur wenn `autostart_supported=true`): 3 Zustände an/aus/unbekannt, disabled bei unbekanntem Host, kein optimistisches UI. ADR-057.
+- **2026-07-05** — **CLI-Tool-Updates aus User-Sicht (ADR-058, Migration 0147):** `docker/cli-versions.json` wird Single Source of Truth für die Soll-Versionen der drei Agent-CLIs (`openclaude`/`claude`/`omp`), gelesen von `build-agent-images.sh` (Build-Args) und `services/cli_versions.py` (Ist-Stand via OCI-Labels `mc.cli.name`/`mc.cli.version`). `services/cli_update_check.py` prüft periodisch (6h, npm/GitHub-Releases) auf neue Versionen, kein Auto-Update. Ein UI-Klick auf `/runtimes` → CLI-Tools löst `services/cli_update_runner.py` aus: Manifest bumpen → Build via `cli-bridge.py` `POST /agent-images/build` auf dem Host (Docker-Socket-Proxy-Regel `BUILD: 0`, ADR-047) → bei Fehlschlag Manifest-Rollback, bei Erfolg Rolling Recreate der betroffenen Harness-Agents (idle sofort, busy → `agents.pending_recreate`, abgearbeitet vom nächsten Runtime-Watcher-Tick — ADR-054-Propagationsmechanik wiederverwendet). Neue API `/api/v1/cli-tools`, neue Frontend-Sektion `CliToolsSection` auf `/runtimes`. Bewusst nicht v1: GHCR-Publish, Auto-Update-Policy, Changelog-Anzeige.
 - **2026-07-05** — **Human-simulating E2E-Toggle (Migration 0142):** Auftragsmaske bekommt die Toggle-Pill »E2E test« (`tasks.e2e_test_required`) — nach Review-Approve geht der Task durchs bestehende `user_test`-Gate auch OHNE Subtasks/needs_browser; der Tester-Agent fährt echte User-Flows über den Playwright-MCP (`browser_navigate/click/type/snapshot`, Screenshots inline). Dabei zwei Altlasten gefixt: (1) **`handle_test_handoff` übergab den String `tester` an `find_agent_by_role`, das `role.value` aufruft → JEDER Test-Handoff crashte seit jeher still** (try/except-Warning), user_test-Tasks bekamen nie einen Tester — jetzt `AgentRole.TESTER` + Regression-Test; (2) die Tester-Directive (`_build_test_message`) hardcodierte den toten `dev-browser`-CLI-Heredoc — jetzt Playwright-MCP-Flow, konsistent mit SOUL.md. Fail-loud: explizit angefordertes E2E ohne verfügbaren Tester-Agent → `blocked` + Operator-Blocker-Kommentar statt stillem Skip (implizites Gate behält Legacy-Verhalten).
 - **2026-07-05** — **GitHub-Verbindung als First-Class-Anschluss (ADR-055):** Neuer zentraler Resolver `services/github_config.py` löst Owner + Token auf (Vault-Keys `github_owner`/`github_token` > Env `GITHUB_OWNER`/`GH_TOKEN`, 30s-TTL-Cache, Invalidierung bei Vault-Writes) — die beim Import eingefrorene Modul-Konstante `git_service.GITHUB_OWNER` und das Einmal-Auth-Flag sind weg: `_ensure_git_auth` schreibt `~/.git-credentials` bei Token-Wechsel neu und injiziert den aufgelösten Token in jede `gh`/`git`-Subprozess-Env (UI-Rotation gilt sofort, ohne Neustart). Sichtbarkeit: `GET /repos/github-status[?probe=true]` (Quellen + Live-Check login/owner/rate-limit), `PUT /repos/github-config` (admin, Vault-Upsert; `""` löscht → Env-Fallback), Settings-Sektion **GitHub** (Statuskarte + Test connection), optionaler Connect-GitHub-Step im Setup-Wizard, Onboarding-Banner auf `/repos`, interaktive Owner/Token-Abfrage in `install.sh` (Token no-echo). Startup-Seed erweitert (`GITHUB_OWNER` → Vault, Cache-Priming für sync-Renderkontexte); `github_visibility_monitor` loopt jetzt statt beim Boot aufzugeben und aktiviert sich live, sobald ein Owner konfiguriert wird. Secrets-API invalidiert den Resolver-Cache bei `github_*`-Writes; Provider-Templates um `github` ergänzt. Doku: `docs/setup/github.md`. ADR-055.
 - **2026-07-05** — **Runtime Watcher & Model-Propagation (ADR-054, supersedes D-22):** `services/runtime_watcher.py` singleton loop (90s default) probes enabled probeable runtimes (`vllm_docker`/`lmstudio`/`openai_compatible`/`unsloth`) via `/v1/models`, publishes live status to Redis (`mc:runtime-live:{slug}`), and confirms model drift with two consecutive identical probes before persisting `model_identifier` + invalidating the resolver cache + emitting `runtime.model_changed`. `services/runtime_propagation.py` syncs bound cli-bridge agents: idle agents get `sync_docker_agent_files()` + a plain `docker restart` (re-bootstrap, **not** `respawn_window_only` — that would keep the stale tmux env); busy agents stay `pending_runtime_sync` until the next watcher tick (Migration `0141`). Circuit breaker after 3 failed syncs (`agent.model_sync_failed`). New routes: `GET /runtimes/live-status`, `POST /runtimes/probe-endpoint` (wizard backend), `POST /runtimes/db/{slug}/sync-agents` (force), `GET /agents/{id}/runtime-switch-progress` (stepper: `rendering → restarting → waiting_healthy → done|rolled_back`). `/runtimes` cockpit: live-dot, "Engine serves" model, drift/pending badges, force sync, guided Add-Runtime wizard. omp provider renamed `qwen-spark` → `mc-openai`; seeds ship `model_identifier: null`. ADR-054.

@@ -25,6 +25,36 @@ Pick `claude` if you'll authenticate with an Anthropic Pro/Max subscription,
 `openclaude` if you'll point agents at an OpenAI-compatible endpoint. Build
 both if you're not sure yet — it costs a few minutes, not a decision.
 
+### CLI versions & updates
+
+The version each image builds against comes from one file,
+`docker/cli-versions.json` — not a hardcoded value in the Dockerfile:
+
+```json
+{
+  "openclaude": { "version": "0.7.0" },
+  "claude":     { "version": "2.1.201" },
+  "omp":        { "version": "16.2.13", "sha256": "7cc62ef..." }
+}
+```
+
+`build-agent-images.sh` reads it for the build args; you can still override
+one-off with `--version X` on the command line. It's a committed, plain file
+(no secrets) — edit it and rebuild if you want to pin a specific version
+yourself.
+
+Once you have a running stack, **Runtimes → CLI-Tools** shows the installed
+vs. latest version for all three tools (checked against npm/GitHub every 6h,
+`settings.cli_update_check_interval` — `0` disables the check) and lets an
+operator trigger a one-click update: it bumps the manifest, rebuilds the
+image on the host via the CLI-Bridge helper (step 3 below — image builds
+never run inside the backend container), and rolls the new image out to
+every agent on that CLI (immediately if idle, after their current task if
+busy). A failed build leaves the old image and the old manifest version
+untouched. The manifest bump itself is **not** auto-committed to the repo —
+commit `docker/cli-versions.json` yourself afterwards if you want the new
+pin to survive a fresh clone/deploy.
+
 ## 2. Get LLM credentials into the vault
 
 Agent containers fetch their credentials from the backend at startup
