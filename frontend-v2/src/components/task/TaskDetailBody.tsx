@@ -36,6 +36,7 @@ import { TaskComments } from "./TaskComments";
 import { TaskHistory } from "./TaskHistory";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
+import { E2ETab } from "./E2ETab";
 import { GitPanel } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
@@ -428,7 +429,7 @@ export function TaskDetailBody({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"comments" | "history" | "transcript" | "deliverables">("comments");
+  const [activeTab, setActiveTab] = useState<"comments" | "history" | "transcript" | "deliverables" | "e2e">("comments");
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
 
@@ -471,6 +472,15 @@ export function TaskDetailBody({
     queryFn: () => api.tasks.deliverables.list(boardId, task.id, { includeSubtasks: true, depth: 2 }),
     enabled: activeTab === "deliverables",
   });
+
+  // Shared query key with TaskComments — cache hit there, only fetched here
+  // to decide whether the E2E tab should show up for tasks that weren't
+  // flagged `e2e_test_required` but still received a test result comment.
+  const { data: comments } = useQuery({
+    queryKey: ["task-comments", task.id],
+    queryFn: () => api.tasks.comments.list(boardId, task.id),
+  });
+  const hasE2EResult = (comments ?? []).some((c) => /\*\*Result:\*\*\s*TEST_(PASS|FAIL)/.test(c.content));
 
   const { data: gitInfo } = useQuery<TaskGitInfo>({
     queryKey: ["task-git-info", boardId, task.id],
@@ -538,6 +548,7 @@ export function TaskDetailBody({
   const tabs: { key: typeof activeTab; label: string }[] = [
     { key: "comments", label: "Comments" },
     { key: "deliverables", label: "Deliverables" },
+    ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: "E2E" }] : []),
     ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: "Transcript" }] : []),
     { key: "history", label: "History" },
   ];
@@ -852,6 +863,8 @@ export function TaskDetailBody({
             <TaskTranscript taskId={task.id} isLive={task.status === "in_progress" || task.status === "review"} />
           ) : activeTab === "deliverables" ? (
             <DeliverablesTab deliverables={deliverables ?? []} boardId={boardId} taskId={task.id} />
+          ) : activeTab === "e2e" ? (
+            <E2ETab task={task} boardId={boardId} />
           ) : (
             <TaskHistory events={(events as TaskEvent[]) ?? []} isLoading={isEventsLoading} />
           )}
