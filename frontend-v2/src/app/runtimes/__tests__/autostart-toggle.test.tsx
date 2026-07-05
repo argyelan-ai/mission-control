@@ -56,7 +56,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
   it("shows 'an' state when the host reports the flag file present", async () => {
     vi.spyOn(api.runtimes.db, "autostartStatus").mockResolvedValue({
       slug: "spark-vllm",
-      flag_path: "/home/marknx/scripts/vllm-autostart.enabled",
+      flag_path: "/home/mcuser/scripts/vllm-autostart.enabled",
       enabled: true,
       reachable: true,
     } satisfies RuntimeAutostartStatus);
@@ -71,7 +71,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
   it("shows disabled 'unbekannt' state when the host is unreachable", async () => {
     vi.spyOn(api.runtimes.db, "autostartStatus").mockResolvedValue({
       slug: "spark-vllm",
-      flag_path: "/home/marknx/scripts/vllm-autostart.enabled",
+      flag_path: "/home/mcuser/scripts/vllm-autostart.enabled",
       enabled: null,
       reachable: false,
     } satisfies RuntimeAutostartStatus);
@@ -86,13 +86,13 @@ describe("AutostartToggle (via RuntimeCard)", () => {
   it("clicking the toggle calls setAutostart with the flipped value and reflects the confirmed state", async () => {
     vi.spyOn(api.runtimes.db, "autostartStatus").mockResolvedValue({
       slug: "spark-vllm",
-      flag_path: "/home/marknx/scripts/vllm-autostart.enabled",
+      flag_path: "/home/mcuser/scripts/vllm-autostart.enabled",
       enabled: false,
       reachable: true,
     } satisfies RuntimeAutostartStatus);
     const setAutostart = vi.spyOn(api.runtimes.db, "setAutostart").mockResolvedValue({
       slug: "spark-vllm",
-      flag_path: "/home/marknx/scripts/vllm-autostart.enabled",
+      flag_path: "/home/mcuser/scripts/vllm-autostart.enabled",
       enabled: true,
       reachable: true,
     } satisfies RuntimeAutostartStatus);

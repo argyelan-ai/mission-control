@@ -61,7 +61,7 @@ async def test_get_autostart_422_when_no_flag_path(auth_client):
 async def test_get_autostart_status_ok(auth_client):
     rt = await _make_runtime(
         autostart_supported=True,
-        autostart_flag_path="/home/marknx/scripts/vllm-autostart.enabled",
+        autostart_flag_path="/home/mcuser/scripts/vllm-autostart.enabled",
     )
     with patch(
         "app.routers.runtimes.get_autostart_status",
@@ -79,7 +79,7 @@ async def test_get_autostart_status_ok(auth_client):
 async def test_post_autostart_enables_and_emits_activity_event(auth_client):
     rt = await _make_runtime(
         autostart_supported=True,
-        autostart_flag_path="/home/marknx/scripts/vllm-autostart.enabled",
+        autostart_flag_path="/home/mcuser/scripts/vllm-autostart.enabled",
     )
     with patch(
         "app.routers.runtimes.set_autostart",
@@ -102,7 +102,7 @@ async def test_post_autostart_enables_and_emits_activity_event(auth_client):
 async def test_post_autostart_host_unreachable_returns_502_no_stacktrace(auth_client):
     rt = await _make_runtime(
         autostart_supported=True,
-        autostart_flag_path="/home/marknx/scripts/vllm-autostart.enabled",
+        autostart_flag_path="/home/mcuser/scripts/vllm-autostart.enabled",
     )
     with patch(
         "app.routers.runtimes.set_autostart",
@@ -125,13 +125,13 @@ async def test_patch_runtime_sets_autostart_fields(auth_client):
         f"/api/v1/runtimes/db/{rt.slug}",
         json={
             "autostart_supported": True,
-            "autostart_flag_path": "/home/marknx/scripts/vllm-autostart.enabled",
+            "autostart_flag_path": "/home/mcuser/scripts/vllm-autostart.enabled",
         },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["autostart_supported"] is True
-    assert body["autostart_flag_path"] == "/home/marknx/scripts/vllm-autostart.enabled"
+    assert body["autostart_flag_path"] == "/home/mcuser/scripts/vllm-autostart.enabled"
 
 
 @pytest.mark.asyncio
