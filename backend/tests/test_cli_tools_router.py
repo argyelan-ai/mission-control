@@ -174,7 +174,13 @@ async def test_check_triggers_run_check_once(async_session, auth_client, fake_re
         resp = await auth_client.post("/api/v1/cli-tools/check")
     assert resp.status_code == 200
     mock_check.assert_awaited_once()
-    assert resp.json()["tools"]["claude"]["installed"] == "2.0.0"
+    # /check returns the SAME enriched list shape as GET / — one response
+    # contract for the frontend client (review finding Task 7).
+    tools = resp.json()["tools"]
+    assert isinstance(tools, list)
+    claude = next(t for t in tools if t["tool"] == "claude")
+    assert claude["installed"] == "2.0.0"
+    assert "agents_affected" in claude and "build_state" in claude
 
 
 # ── /update-status ───────────────────────────────────────────────────────

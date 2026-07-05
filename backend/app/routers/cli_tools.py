@@ -90,15 +90,9 @@ async def _build_state_for(redis, tool: str) -> str | None:
     return data.get("phase")
 
 
-@router.get("")
-async def list_cli_tools(
-    session: AsyncSession = Depends(get_session),
-    current_user=Depends(require_user),
-):
-    """Per-tool status for the cockpit: versions, whether an update is
-    available, which agents run it, and the current build phase (if any)."""
-    redis = await get_redis()
-    cache = await _load_versions_cache(session, redis)
+async def _enriched_tools(session: AsyncSession, redis, cache: dict) -> list[dict]:
+    """The cockpit list shape shared by GET / and POST /check — one response
+    contract, so the frontend client can treat both identically."""
     tools = []
     for tool, config in TOOLS.items():
         entry = cache.get(tool, {})
@@ -115,7 +109,24 @@ async def list_cli_tools(
                 "build_state": await _build_state_for(redis, tool),
             }
         )
-    return {"tools": tools}
+    return tools
+
+
+@router.get("")
+async def list_cli_tools(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Per-tool status for the cockpit: versions, whether an update is
+    available, which agents run it, and the current build phase (if any).
+
+    NOTE: a cold/corrupt cache triggers run_check_once inline — up to
+    ~25s/tool worst case (HTTP 15s + docker inspect 10s, sequential). The
+    periodic checker keeps the cache warm, so this is a first-boot path.
+    """
+    redis = await get_redis()
+    cache = await _load_versions_cache(session, redis)
+    return {"tools": await _enriched_tools(session, redis, cache)}
 
 
 @router.post("/check")
@@ -123,9 +134,14 @@ async def check_cli_tools(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_role(Role.OPERATOR)),
 ):
-    """Force an immediate re-check of all tools (the "Jetzt prüfen" button)."""
-    result = await cli_update_check.run_check_once(session)
-    return {"tools": result}
+    """Force an immediate re-check of all tools (the "Jetzt prüfen" button).
+
+    Returns the same enriched list shape as GET / so the frontend can reuse
+    one response type for both calls.
+    """
+    redis = await get_redis()
+    cache = await cli_update_check.run_check_once(session)
+    return {"tools": await _enriched_tools(session, redis, cache)}
 
 
 @router.get("/update-status")
