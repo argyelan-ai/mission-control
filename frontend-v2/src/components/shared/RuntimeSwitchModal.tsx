@@ -115,6 +115,13 @@ export function RuntimeSwitchModal({
   // Compat-matrix entry for the switch target, keyed by preview's runtime slug.
   const targetCompat = compatMatrix?.runtimes.find((r) => r.slug === preview?.new_runtime?.slug);
 
+  // ADR-056 follow-up — a preselected harness (e.g. inherited from agent.harness)
+  // can be incompatible with the switch target even though the <select> keeps
+  // it as its value. Block submit in that case and surface the reason.
+  const selectedHarnessIncompatible =
+    !!selectedHarness && !!targetCompat && !targetCompat.compatible_harnesses.includes(selectedHarness);
+  const selectedHarnessIncompatibleReason = selectedHarness ? targetCompat?.reasons[selectedHarness] : undefined;
+
   // Live switch progress — polled only while a submit is in flight.
   const { data: progress } = useQuery({
     queryKey: ["runtime-switch-progress", agent.id],
@@ -262,7 +269,7 @@ export function RuntimeSwitchModal({
                       color: "var(--color-text-primary)",
                     }}
                   >
-                    {agent.harness == null && compatMatrixLoading && (
+                    {agent.harness == null && (
                       <option value="">Standard (aus Provider abgeleitet)</option>
                     )}
                     {compatMatrix?.harnesses.map((h) => {
@@ -281,6 +288,15 @@ export function RuntimeSwitchModal({
                       );
                     })}
                   </select>
+                  {selectedHarnessIncompatible && (
+                    <div
+                      className="text-[11px]"
+                      style={{ color: STATUS_TEXT.error }}
+                      data-testid="harness-incompatible-reason"
+                    >
+                      {selectedHarnessIncompatibleReason ?? "Dieser Harness ist mit der Ziel-Runtime nicht kompatibel."}
+                    </div>
+                  )}
                 </div>
 
                 {/* Side-by-side runtime preview */}
@@ -520,12 +536,15 @@ export function RuntimeSwitchModal({
                     submitting ||
                     !!previewErrMsg ||
                     singleInstanceBlocked ||
+                    selectedHarnessIncompatible ||
                     (isBusy && !forceWhenInProgress)
                   }
                   title={
                     singleInstanceBlocked
                       ? "Single-instance runtime — switch not possible"
-                      : undefined
+                      : selectedHarnessIncompatible
+                        ? (selectedHarnessIncompatibleReason ?? "Harness incompatible with target runtime")
+                        : undefined
                   }
                   className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
                   style={{ backgroundColor: C.accent, color: C.textPrimary }}

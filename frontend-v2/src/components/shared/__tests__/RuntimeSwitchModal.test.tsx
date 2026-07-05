@@ -356,7 +356,10 @@ describe("RuntimeSwitchModal", () => {
   });
 
   describe("harness selector (ADR-056)", () => {
-    it("renders all 3 harness options from the compat matrix", async () => {
+    // mkAgent() has no `harness` set → the select also renders the explicit
+    // "Standard (aus Provider abgeleitet)" placeholder option (review finding 2),
+    // on top of the 3 harnesses from the compat matrix.
+    it("renders all 3 harness options from the compat matrix plus the standard placeholder", async () => {
       vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
         mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
       );
@@ -371,7 +374,7 @@ describe("RuntimeSwitchModal", () => {
         />,
       );
       const select = await screen.findByLabelText(/harness/i);
-      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
     });
 
     it("disables the option incompatible with the target runtime and shows the reason as a title", async () => {
@@ -389,7 +392,7 @@ describe("RuntimeSwitchModal", () => {
         />,
       );
       const select = await screen.findByLabelText(/harness/i);
-      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
       const claudeOption = within(select).getByRole("option", { name: /claude code.*nicht kompatibel/i });
       expect(claudeOption).toBeDisabled();
       expect(claudeOption).toHaveAttribute(
@@ -414,12 +417,64 @@ describe("RuntimeSwitchModal", () => {
         />,
       );
       const select = await screen.findByLabelText(/harness/i);
-      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
       await userEvent.selectOptions(select, "omp");
       await userEvent.click(screen.getByRole("button", { name: /switch/i }));
       await waitFor(() =>
         expect(onConfirm).toHaveBeenCalledWith({ force_when_in_progress: false, harness: "omp" }),
       );
+    });
+
+    it("blocks submission when the preselected harness is incompatible with the target runtime and shows the reason", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      const onConfirm = vi.fn().mockResolvedValue(mkPreview());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent({ harness: "claude" })}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      expect(select).toHaveValue("claude");
+
+      const submit = screen.getByRole("button", { name: /switch/i });
+      await waitFor(() => expect(submit).toBeDisabled());
+      expect(
+        screen.getByText("Claude Code unterstützt nur Anthropic-Protokoll-Runtimes"),
+      ).toBeInTheDocument();
+
+      await userEvent.click(submit);
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    it("shows the explicit standard placeholder option, selected, when agent.harness is null", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() =>
+        expect(
+          within(select).getByRole("option", { name: "Standard (aus Provider abgeleitet)" }),
+        ).toBeInTheDocument(),
+      );
+      expect(select).toHaveValue("");
     });
   });
 });
