@@ -17,6 +17,9 @@
 import { useEffect, useState, type RefObject } from "react";
 import type { Terminal } from "@xterm/xterm";
 
+export const TERM_FONT_FAMILY =
+  '"JetBrains Mono", "Symbols Nerd Font Mono", "Fira Code", monospace';
+
 export const TERM_COLS = 168;
 export const TERM_ROWS = 45;
 

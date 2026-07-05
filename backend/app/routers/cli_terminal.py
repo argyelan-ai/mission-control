@@ -586,9 +586,13 @@ async def agent_terminal_ws(
     master_fd, slave_fd = pty.openpty()
 
     # 4. Start docker exec — tmux attach-session onto the container session
+    # -e LANG + `tmux -u`: without a UTF-8 locale tmux treats the attaching
+    # client as ASCII-only and substitutes every icon/block glyph with "_"
+    # (line chars survive via ACS) — the browser then never receives the real
+    # characters at all (omp logo, Nerd-Font status icons).
     proc = await asyncio.create_subprocess_exec(
-        "docker", "exec", "-itu", "agent", container_name,
-        "tmux", "attach-session", "-dt", tmux_session,
+        "docker", "exec", "-e", "LANG=C.UTF-8", "-itu", "agent", container_name,
+        "tmux", "-u", "attach-session", "-dt", tmux_session,
         stdin=slave_fd,
         stdout=slave_fd,
         stderr=slave_fd,

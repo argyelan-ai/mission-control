@@ -7,6 +7,7 @@ import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
+import { TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
 
 export function PluginsShellTab() {
@@ -73,7 +74,7 @@ export function PluginsShellTab() {
       theme: XTERM_THEME,
       scrollback: 5000,
       convertEol: true,
-      fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", monospace',
+      fontFamily: TERM_FONT_FAMILY,
       fontSize: 12,
       lineHeight: 1.4,
       cursorBlink: true,
