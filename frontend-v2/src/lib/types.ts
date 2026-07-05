@@ -469,25 +469,16 @@ export interface TaskPipelineResponse {
 export type ProvisionStatus = "local" | "provisioning" | "provisioned" | "error" | "offline";
 
 /**
- * NOTE: Despite the historical name, these are the Anthropic chat-history
- * shapes (assistant.message.content blocks). No coupling to the deleted
- * OpenClaw Gateway. Rename candidate for follow-up cleanup:
- * AssistantMessage / AssistantMessagePart. Tracked for Phase 32+.
+ * Task transcript entry as returned by GET /tasks/{id}/transcript. Since the
+ * Phase 29 Gateway removal, the transcript is reconstructed from TaskComment
+ * rows (runtime-agnostic) rather than Anthropic chat-history blocks — plain
+ * `content` text, not `parts`.
  */
-export interface GatewayMessagePart {
-  type: "text" | "thinking" | "tool_call" | "tool_result";
-  text?: string;
-  tool?: string;
-  summary?: string;
-  tool_use_id?: string;
-  id?: string;
-  is_error?: boolean;
-}
-
-export interface GatewayMessage {
-  role: "user" | "assistant" | "tool_result";
-  parts: GatewayMessagePart[];
-  timestamp: string | null;
+export interface TranscriptMessage {
+  role: string;
+  content: string;
+  ts: string | null;
+  comment_type: string;
 }
 
 // Harness/Provider-Decoupling (ADR-056) — the CLI harness driving an agent's
@@ -1315,10 +1306,10 @@ export interface MeetingMessage {
 // ── Task Transcript ──────────────────────────────────────────────────────────
 
 export interface TaskTranscriptResponse {
-  transcript_mode: "direct" | "reconstructed" | "unavailable";
+  transcript_mode: "direct" | "reconstructed" | "unavailable" | "taskcomment";
   session_role: "work" | "review" | null;
   session_key: string | null;
-  messages: GatewayMessage[];
+  messages: TranscriptMessage[];
 }
 
 export interface TaskSessionInfo {
