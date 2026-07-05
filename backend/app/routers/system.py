@@ -576,6 +576,53 @@ async def costs_by_task(
     ]
 
 
+@router.post("/api/v1/admin/usage/backfill-attribution")
+async def backfill_usage_attribution(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Triggers a task_id backfill for existing model_usage_events.
+
+    The Token Harvester (services/token_harvester.py) only reads each JSONL
+    transcript from its stored offset onward — already-harvested lines never
+    come back into view, so events that predate a task's workspace_path
+    being set (or predate the harvester's task-attribution feature) never
+    get re-attributed on their own.
+
+    This endpoint resets ModelUsageHarvestState for every known file
+    (processed_lines=0, mtime=0.0), forcing the next regular harvest cycle
+    (watchdog, every ~5 cycles / ~2.5min) to re-scan every still-present
+    JSONL from the start. Re-scanned lines whose message_uuid is already in
+    the DB are never re-inserted (dedup) — but if their event still has
+    task_id IS NULL, the harvester's backfill pass UPDATEs it once the
+    current task_workspace_map resolves a match. Events whose source JSONL
+    has since been deleted are not reachable and stay NULL — never guessed.
+
+    Runs asynchronously: this endpoint only flips the offset state, the
+    actual attribution happens on the harvester's own schedule.
+    """
+    from sqlmodel import select
+
+    from app.models.model_usage import ModelUsageHarvestState
+
+    result = await session.exec(select(ModelUsageHarvestState))
+    states = list(result.all())
+    for state in states:
+        state.processed_lines = 0
+        state.mtime = 0.0
+        session.add(state)
+    await session.commit()
+
+    return {
+        "reset_file_count": len(states),
+        "note": (
+            "Backfill runs asynchronously on the next Token Harvester cycle "
+            "(watchdog, ~2.5min interval) — task_id is only updated for "
+            "events whose JSONL file still exists on disk."
+        ),
+    }
+
+
 # ── System Mode (Operational Controls) ─────────────────────────────
 
 class SystemModeUpdate(BaseModel):

@@ -15,16 +15,21 @@ import json
 import logging
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import text, update
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.model_usage import ModelPrice, ModelUsageEvent, ModelUsageHarvestState
+
+# Grace window added to a task's completed_at when checking whether an
+# event's ts falls "inside" the task's active lifetime (agents keep writing
+# transcript lines briefly after PATCH status: done/review).
+_TASK_WINDOW_GRACE = timedelta(hours=1)
 
 logger = logging.getLogger("mc.token_harvester")
 
@@ -272,12 +277,103 @@ async def _build_agent_slug_map(session: AsyncSession) -> dict[str, Any]:
     return {_slugify_agent_name(a.name): a.id for a in result.all()}
 
 
+def _normalize_workspace_path(p: str) -> str:
+    """Realpath-normalizes a cwd/workspace_path for exact-match comparison.
+
+    Tolerates trailing slashes and relative segments. Safe on paths that
+    don't exist on this filesystem (os.path.realpath never raises for a
+    missing path — it just normalizes the components it can).
+    """
+    if not p:
+        return ""
+    return os.path.realpath(p.rstrip("/"))
+
+
+async def _build_task_workspace_map(session: AsyncSession) -> dict[str, list[dict[str, Any]]]:
+    """{normalized workspace_path: [candidate task dicts]} for attribution.
+
+    Only tasks with a non-null workspace_path are loaded (one query per
+    harvest cycle, same pattern as _build_agent_slug_map). Multiple tasks
+    can share a workspace_path (re-runs reuse the same worktree dir) — all
+    candidates are kept here, disambiguated later by _resolve_task_id.
+    """
+    from app.models.task import Task
+    from app.services.git_service import slugify_workspace_slug
+
+    result = await session.exec(
+        select(Task.id, Task.title, Task.workspace_path, Task.created_at, Task.completed_at)
+        .where(Task.workspace_path.is_not(None))
+    )
+
+    workspace_map: dict[str, list[dict[str, Any]]] = {}
+    for task_id, title, workspace_path, created_at, completed_at in result.all():
+        norm = _normalize_workspace_path(workspace_path)
+        if not norm:
+            continue
+        workspace_map.setdefault(norm, []).append({
+            "task_id": task_id,
+            "branch": f"task/{slugify_workspace_slug(title)}",
+            "created_at": created_at,
+            "completed_at": completed_at,
+        })
+    return workspace_map
+
+
+def _aware(dt: datetime) -> datetime:
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc)
+
+
+def _resolve_task_id(
+    candidates: list[dict[str, Any]],
+    git_branch: str | None,
+    ts: datetime,
+) -> Any | None:
+    """Picks the task_id for an event given same-workspace_path candidates.
+
+    Cascade:
+    1. Exactly one candidate → that one (the common case, no collision).
+    2. gitBranch == 'task/{slug}' narrows to matching candidates; if that's
+       down to exactly one, use it.
+    3. Among the remaining candidates, the one whose lifetime window
+       (created_at .. completed_at + grace, open-ended if not completed)
+       contains the event ts, newest created_at first.
+    4. Otherwise: newest created_at wins.
+    """
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]["task_id"]
+
+    pool = candidates
+    if git_branch:
+        branch_matches = [c for c in pool if c["branch"] == git_branch]
+        if len(branch_matches) == 1:
+            return branch_matches[0]["task_id"]
+        if branch_matches:
+            pool = branch_matches
+
+    ts_aware = _aware(ts)
+    window_matches = []
+    for c in pool:
+        start = _aware(c["created_at"])
+        end = _aware(c["completed_at"]) + _TASK_WINDOW_GRACE if c["completed_at"] else None
+        if start <= ts_aware and (end is None or ts_aware <= end):
+            window_matches.append(c)
+    if window_matches:
+        window_matches.sort(key=lambda c: c["created_at"], reverse=True)
+        return window_matches[0]["task_id"]
+
+    newest = max(pool, key=lambda c: c["created_at"])
+    return newest["task_id"]
+
+
 async def run_harvest(
     session: AsyncSession,
     *,
     agent_base_paths: list[str] | None = None,
     boss_base_paths: list[str] | None = None,
     agent_slug_map: dict[str, Any] | None = None,
+    task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
 ) -> dict[str, int]:
     """Scans all JSONL files, parses assistant lines, and inserts events.
 
@@ -286,9 +382,13 @@ async def run_harvest(
                         (default: settings.token_harvest_paths, expanduser)
     - boss_base_paths: paths to ~/.claude/projects-like directories
     - agent_slug_map: {slug: agent_id} for agent lookup (optional)
+    - task_workspace_map: {normalized workspace_path: [candidate task dicts]}
+                          for task attribution (optional, built from DB if
+                          omitted — see _build_task_workspace_map)
 
     Returns:
-        {"files_scanned": N, "new_events": M, "skipped_private": K}
+        {"files_scanned": N, "new_events": M, "skipped_private": K,
+         "backfilled_task_id": L}
     """
     from app.config import settings as app_settings
 
@@ -306,6 +406,9 @@ async def run_harvest(
         # Default: attribution from the agents table (slug = name-based)
         agent_slug_map = await _build_agent_slug_map(session)
 
+    if task_workspace_map is None:
+        task_workspace_map = await _build_task_workspace_map(session)
+
     # Boss agent for ~/.claude attribution (host agent, slug starts with "boss")
     boss_agent_id = next(
         (aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")),
@@ -322,7 +425,12 @@ async def run_harvest(
         s.file_path: s for s in state_result.all()
     }
 
-    stats = {"files_scanned": 0, "new_events": 0, "skipped_private": 0}
+    stats = {
+        "files_scanned": 0,
+        "new_events": 0,
+        "skipped_private": 0,
+        "backfilled_task_id": 0,
+    }
 
     # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl ────
     for base_str in agent_base_paths:
@@ -350,6 +458,7 @@ async def run_harvest(
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
+                task_workspace_map=task_workspace_map,
             )
 
     # ── Boss paths: ~/.claude/projects/**/*.jsonl ───────────────────────────
@@ -367,6 +476,7 @@ async def run_harvest(
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
+                task_workspace_map=task_workspace_map,
                 # boss_agent_id gets reloaded later if needed
             )
 
@@ -378,10 +488,11 @@ async def run_harvest(
         await session.rollback()
 
     logger.info(
-        "run_harvest: files=%d new=%d skipped_private=%d",
+        "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d",
         stats["files_scanned"],
         stats["new_events"],
         stats["skipped_private"],
+        stats["backfilled_task_id"],
     )
     return stats
 
@@ -395,6 +506,7 @@ async def _process_jsonl_file(
     all_prices: list[ModelPrice],
     state_map: dict[str, ModelUsageHarvestState],
     stats: dict[str, int],
+    task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
 ) -> None:
     """Processes a single JSONL file (offset resume, batch insert)."""
     stats["files_scanned"] += 1
@@ -419,16 +531,32 @@ async def _process_jsonl_file(
         await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
         return
 
-    # Batch dedup: which uuids are already in the DB?
+    # Batch dedup: which uuids are already in the DB, and which of those
+    # still have task_id IS NULL (candidates for the backfill pass below)?
     candidate_uuids = [r["uuid"] for r in records]
     existing_result = await session.exec(
-        select(ModelUsageEvent.message_uuid).where(
-            ModelUsageEvent.message_uuid.in_(candidate_uuids)
-        )
+        select(
+            ModelUsageEvent.message_uuid,
+            ModelUsageEvent.id,
+            ModelUsageEvent.task_id,
+        ).where(ModelUsageEvent.message_uuid.in_(candidate_uuids))
     )
-    existing_uuids: set[str] = set(existing_result.all())
+    existing_rows = existing_result.all()
+    existing_uuids: set[str] = {row[0] for row in existing_rows}
+    # uuid → event.id, only for rows still missing task_id
+    existing_untasked: dict[str, Any] = {
+        row[0]: row[1] for row in existing_rows if row[2] is None
+    }
 
     new_records = [r for r in records if r["uuid"] not in existing_uuids]
+    task_workspace_map = task_workspace_map or {}
+
+    def _resolve_task_for_rec(rec: dict[str, Any], ts: datetime) -> Any | None:
+        norm_cwd = _normalize_workspace_path(rec.get("cwd", ""))
+        candidates = task_workspace_map.get(norm_cwd)
+        if not candidates:
+            return None
+        return _resolve_task_id(candidates, rec.get("git_branch"), ts)
 
     # For boss paths: decide attribution per line
     new_events_count = 0
@@ -459,11 +587,12 @@ async def _process_jsonl_file(
             )
 
         provider = _provider_from_model(model)
+        task_id = _resolve_task_for_rec(rec, ts)
 
         event = ModelUsageEvent(
             id=uuid.uuid4(),
             agent_id=eff_agent_id,
-            task_id=None,
+            task_id=task_id,
             harness=harness,
             model=model,
             provider=provider,
@@ -490,6 +619,27 @@ async def _process_jsonl_file(
             logger.debug("harvest: duplicate uuid %s (UNIQUE conflict) — skipped", rec["uuid"])
 
     stats["new_events"] += new_events_count
+
+    # Backfill pass: lines already harvested (dedup-skipped above) whose
+    # event still has task_id IS NULL get re-attributed now that the task
+    # workspace map may know about them (e.g. re-harvest after a task's
+    # workspace_path was set). Orphaned events whose JSONL no longer exists
+    # are simply never visited here and stay NULL — never guessed.
+    if existing_untasked:
+        for rec in records:
+            event_id = existing_untasked.get(rec["uuid"])
+            if event_id is None:
+                continue
+            ts = _parse_ts(rec["timestamp"])
+            task_id = _resolve_task_for_rec(rec, ts)
+            if task_id is None:
+                continue
+            await session.exec(
+                update(ModelUsageEvent)
+                .where(ModelUsageEvent.id == event_id)
+                .values(task_id=task_id)
+            )
+            stats["backfilled_task_id"] += 1
 
     # Update harvest state
     total_lines = _count_lines(path)

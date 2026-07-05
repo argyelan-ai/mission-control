@@ -768,3 +768,298 @@ async def test_build_agent_slug_map_und_boss_attribution(session, tmp_path):
     by_uuid = {e.message_uuid: e for e in events}
     assert by_uuid["u-rex-1"].agent_id == rex.id
     assert by_uuid["u-boss-1"].agent_id == boss.id
+
+
+# ── Task Attribution (cwd == workspace_path join) ──────────────────────────
+
+
+@pytest.mark.asyncio
+class TestTaskAttribution:
+
+    async def test_event_gets_task_id_when_cwd_matches_workspace_path(
+        self, tmp_path, session, make_task,
+    ):
+        """(a) Event with cwd == task.workspace_path gets task_id set."""
+        from app.services.token_harvester import run_harvest
+
+        board_id = uuid.uuid4()
+        workspace = str(tmp_path / "workspace" / "some-task")
+        task = await make_task(board_id, title="Some Task", workspace_path=workspace)
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        (rex_dir / "s.jsonl").write_text(
+            _make_line(uuid_="attr-001", cwd=workspace, git_branch="task/some-task") + "\n"
+        )
+
+        stats = await run_harvest(
+            session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+        assert stats["new_events"] == 1
+
+        event = (await session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "attr-001")
+        )).one()
+        assert event.task_id == task.id
+
+    async def test_event_task_id_null_when_cwd_unknown(self, tmp_path, session):
+        """(b) Unknown cwd (no matching task.workspace_path) → task_id stays NULL."""
+        from app.services.token_harvester import run_harvest
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        (rex_dir / "s.jsonl").write_text(
+            _make_line(uuid_="attr-002", cwd=str(tmp_path / "no-such-workspace")) + "\n"
+        )
+
+        await run_harvest(
+            session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+
+        event = (await session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "attr-002")
+        )).one()
+        assert event.task_id is None
+
+    async def test_backfill_updates_existing_null_task_id(
+        self, tmp_path, session, make_task,
+    ):
+        """(c) Re-harvest (offset reset) backfills task_id on an already-harvested
+        event that previously had no matching task."""
+        from app.services.token_harvester import run_harvest
+        from app.models.model_usage import ModelUsageHarvestState
+
+        board_id = uuid.uuid4()
+        workspace = str(tmp_path / "workspace" / "backfill-task")
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        jsonl = rex_dir / "s.jsonl"
+        jsonl.write_text(
+            _make_line(uuid_="attr-003", cwd=workspace, git_branch="task/backfill-task") + "\n"
+        )
+
+        # First harvest: no task exists yet with this workspace_path → NULL
+        await run_harvest(
+            session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+        event = (await session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "attr-003")
+        )).one()
+        assert event.task_id is None
+
+        # Task shows up afterward (workspace_path set post-hoc), then the
+        # JSONL is re-scanned (operator resets the offset state). mtime must
+        # also move forward — the harvester's mtime-skip otherwise short-
+        # circuits the file entirely, offset reset or not.
+        task = await make_task(board_id, title="Backfill Task", workspace_path=workspace)
+        state = (await session.exec(select(ModelUsageHarvestState))).one()
+        state.processed_lines = 0
+        state.mtime = 0.0
+        session.add(state)
+        await session.commit()
+
+        stats = await run_harvest(
+            session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+        assert stats["backfilled_task_id"] == 1
+
+        await session.refresh(event)
+        event = (await session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "attr-003")
+        )).one()
+        assert event.task_id == task.id
+
+    async def test_collision_tie_breaker_prefers_git_branch_match(
+        self, tmp_path, session, make_task,
+    ):
+        """(d) Two tasks share the same workspace_path (re-run) → the one whose
+        derived branch ('task/{slug}') matches the event's gitBranch wins."""
+        from app.services.token_harvester import run_harvest
+
+        board_id = uuid.uuid4()
+        workspace = str(tmp_path / "workspace" / "same-slug-task")
+
+        older = await make_task(
+            board_id, title="Same Slug Task", workspace_path=workspace,
+        )
+        # A different task whose slugified title coincidentally collides on
+        # workspace_path but not on branch.
+        newer = await make_task(
+            board_id, title="Same Slug Task Rerun", workspace_path=workspace,
+        )
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        (rex_dir / "s.jsonl").write_text(
+            _make_line(uuid_="attr-004", cwd=workspace, git_branch="task/same-slug-task") + "\n"
+        )
+
+        await run_harvest(
+            session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+
+        event = (await session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "attr-004")
+        )).one()
+        assert event.task_id == older.id
+        assert event.task_id != newer.id
+
+
+# ── GET /tasks/{task_id}/usage ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_task_usage_endpoint_sums_attributed_events(
+    auth_client, session, make_task,
+):
+    """(e) The usage endpoint sums tokens/cost for events attributed to a task."""
+    board_id = uuid.uuid4()
+    task = await make_task(board_id, title="Usage Endpoint Task")
+    other_task = await make_task(board_id, title="Other Task")
+
+    now = datetime(2026, 7, 1, 12, 0, 0, tzinfo=timezone.utc)
+    event1 = ModelUsageEvent(
+        id=uuid.uuid4(), task_id=task.id, harness="cli-bridge",
+        model="claude-sonnet-4-6", session_id="s1", message_uuid="usage-001",
+        input_tokens=1000, output_tokens=500, cache_read_tokens=100,
+        cache_write_tokens=50, cost_usd=0.01, ts=now, source_file="/x.jsonl",
+    )
+    event2 = ModelUsageEvent(
+        id=uuid.uuid4(), task_id=task.id, harness="cli-bridge",
+        model="claude-sonnet-4-6", session_id="s2", message_uuid="usage-002",
+        input_tokens=2000, output_tokens=1000, cache_read_tokens=0,
+        cache_write_tokens=0, cost_usd=0.02, ts=now, source_file="/x2.jsonl",
+    )
+    other_event = ModelUsageEvent(
+        id=uuid.uuid4(), task_id=other_task.id, harness="cli-bridge",
+        model="claude-sonnet-4-6", session_id="s3", message_uuid="usage-other",
+        input_tokens=99999, output_tokens=99999, cost_usd=99.0, ts=now,
+        source_file="/other.jsonl",
+    )
+    session.add(event1)
+    session.add(event2)
+    session.add(other_event)
+    await session.commit()
+
+    resp = await auth_client.get(f"/api/v1/tasks/{task.id}/usage")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["event_count"] == 2
+    assert data["input_tokens"] == 3000
+    assert data["output_tokens"] == 1500
+    assert data["cache_read_tokens"] == 100
+    assert data["cache_write_tokens"] == 50
+    assert data["total_tokens"] == 4650
+    assert abs(data["cost_usd"] - 0.03) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_task_usage_endpoint_404_for_unknown_task(auth_client):
+    resp = await auth_client.get(f"/api/v1/tasks/{uuid.uuid4()}/usage")
+    assert resp.status_code == 404
+
+
+# ── POST /admin/usage/backfill-attribution ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_backfill_endpoint_resets_state_and_reharvest_fills_task_id(
+    auth_client, session, make_task, tmp_path,
+):
+    """Full backfill flow: admin trigger resets harvest offsets, the next
+    (here: manually invoked) harvest cycle re-scans the JSONL, dedup prevents
+    duplicate rows, and the backfill pass fills task_id."""
+    from app.services.token_harvester import run_harvest
+    from app.models.model_usage import ModelUsageHarvestState
+
+    board_id = uuid.uuid4()
+    workspace = str(tmp_path / "workspace" / "endpoint-backfill-task")
+
+    agents_dir = tmp_path / "agents"
+    rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+    rex_dir.mkdir(parents=True)
+    (rex_dir / "s.jsonl").write_text(
+        _make_line(
+            uuid_="endpoint-backfill-001", cwd=workspace, git_branch="task/endpoint-backfill-task",
+        ) + "\n"
+    )
+
+    # Initial harvest: no matching task yet → task_id stays NULL.
+    stats1 = await run_harvest(
+        session,
+        agent_base_paths=[str(agents_dir)],
+        boss_base_paths=[],
+        agent_slug_map={},
+    )
+    assert stats1["new_events"] == 1
+    event = (await session.exec(
+        select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "endpoint-backfill-001")
+    )).one()
+    assert event.task_id is None
+
+    # Task appears afterward with the matching workspace_path.
+    task = await make_task(board_id, title="Endpoint Backfill Task", workspace_path=workspace)
+
+    # Sanity: without a reset, a second harvest changes nothing (mtime-skip).
+    stats_noop = await run_harvest(
+        session,
+        agent_base_paths=[str(agents_dir)],
+        boss_base_paths=[],
+        agent_slug_map={},
+    )
+    assert stats_noop["new_events"] == 0
+    assert stats_noop["backfilled_task_id"] == 0
+
+    # Trigger the admin backfill endpoint — resets harvest state.
+    resp = await auth_client.post("/api/v1/admin/usage/backfill-attribution")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["reset_file_count"] >= 1
+
+    state = (await session.exec(select(ModelUsageHarvestState))).one()
+    assert state.processed_lines == 0
+    assert state.mtime == 0.0
+
+    # Next harvest cycle (simulated here — normally the watchdog) re-scans
+    # the file: dedup prevents a duplicate row, backfill fills task_id.
+    stats2 = await run_harvest(
+        session,
+        agent_base_paths=[str(agents_dir)],
+        boss_base_paths=[],
+        agent_slug_map={},
+    )
+    assert stats2["new_events"] == 0
+    assert stats2["backfilled_task_id"] == 1
+
+    all_events = (await session.exec(
+        select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "endpoint-backfill-001")
+    )).all()
+    assert len(all_events) == 1  # no duplicate row
+    assert all_events[0].task_id == task.id
+
+
+@pytest.mark.asyncio
+async def test_backfill_endpoint_requires_admin(client):
+    """Non-admin (unauthenticated) requests are rejected."""
+    resp = await client.post("/api/v1/admin/usage/backfill-attribution")
+    assert resp.status_code in (401, 403)
