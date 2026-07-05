@@ -834,6 +834,14 @@ async def update_agent(
         except SwitchHealthCheckFailed as e:
             raise HTTPException(status_code=503, detail=str(e))
         await session.refresh(agent)
+    elif harness_change_present and new_harness and agent.runtime_id is None:
+        # Harness-only change, but the agent has no runtime binding to
+        # re-switch onto — without this guard the request above would fall
+        # through silently (200, nothing applied).
+        raise HTTPException(
+            status_code=422,
+            detail="Agent hat keine Runtime-Bindung — Harness kann nicht gewechselt werden. Zuerst eine Runtime zuweisen.",
+        )
     elif restart:
         # Plain restart path (no runtime change) — keep existing semantics for
         # callers that just want a container bounce after touching e.g. soul_md.
