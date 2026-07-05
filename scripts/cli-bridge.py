@@ -19,6 +19,7 @@ import fcntl
 import json
 import os
 import pty
+import re
 import shlex
 import shutil
 import struct
@@ -658,6 +659,15 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 _HARNESS_ARG = {"openclaude": "openclaude", "claude": "claude", "omp": "omp"}
 
+# Versions-Strings fliessen in env-Overrides und (omp-sha256) in eine
+# GitHub-Download-URL — striktes Charset verhindert Pfad-Tricks (`../`)
+# innerhalb der URL. Defense-in-Depth, kein Ersatz für die Allowlist oben.
+_VERSION_RE = re.compile(r"^[0-9A-Za-z._-]{1,64}$")
+
+# Hängender `docker build` würde sonst state=running + Thread für immer
+# halten und jeden Folge-Build bis zum Bridge-Neustart blockieren.
+_BUILD_TIMEOUT_S = 1800
+
 _build_lock = threading.Lock()
 _build_state = {
     "state": "idle",  # idle|running|success|failed
@@ -694,8 +704,14 @@ def _run_agent_image_build(tool: str, version: str, sha256: Optional[str]):
                 ["bash", str(BUILD_SCRIPT), harness_arg],
                 cwd=str(REPO_ROOT), env=env,
                 stdout=logf, stderr=_sp.STDOUT,
+                timeout=_BUILD_TIMEOUT_S,
             )
         returncode = proc.returncode
+    except _sp.TimeoutExpired:
+        log(f"ERROR agent image build timed out after {_BUILD_TIMEOUT_S}s (tool={tool})")
+        with open(BUILD_LOG_FILE, "a") as logf:
+            logf.write(f"\n[bridge] ERROR build timed out after {_BUILD_TIMEOUT_S}s — killed\n")
+        returncode = -1
     except Exception as e:
         log(f"ERROR running agent image build: {e}")
         with open(BUILD_LOG_FILE, "a") as logf:
@@ -1000,8 +1016,11 @@ class Handler(BaseHTTPRequestHandler):
             if tool not in _HARNESS_ARG:
                 self._json({"error": f"unbekanntes tool: {tool}"}, status=400)
                 return
-            if not version:
-                self._json({"error": "version required"}, status=400)
+            if not version or not _VERSION_RE.match(version):
+                self._json({"error": "version required (charset [0-9A-Za-z._-], max 64)"}, status=400)
+                return
+            if sha256 is not None and not _VERSION_RE.match(str(sha256)):
+                self._json({"error": "sha256 hat ungültiges Format"}, status=400)
                 return
             error = _start_agent_image_build(tool, version, sha256)
             if error:
@@ -1016,8 +1035,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400, str(e))
                 return
             version = body.get("version", "")
-            if not version:
-                self._json({"error": "version required"}, status=400)
+            if not version or not _VERSION_RE.match(version):
+                self._json({"error": "version required (charset [0-9A-Za-z._-], max 64)"}, status=400)
                 return
             result = _fetch_omp_sha256(version)
             if result["ok"]:
