@@ -1056,116 +1056,6 @@ export interface ScheduleFiringPreview {
   description: string;  // human-readable e.g. "Mo, Mi, Fr um 09:00"
 }
 
-// ── Workflows ────────────────────────────────────────────────────────────────
-
-export interface WorkflowStepDefinition {
-  key: string;
-  name: string;
-  step_type: "llm" | "deterministic" | "local";
-  execution_mode: "single" | "swarm";
-  input_template?: string | null;
-  timeout_seconds?: number;
-  on_error?: "abort" | "retry" | "skip";
-  retry_max_attempts?: number;
-  retry_delay_seconds?: number;
-  retry_backoff?: "linear" | "exponential";
-  output_type?: "text" | "json";
-  executor_type?: string | null;
-  executor_config?: Record<string, unknown> | null;
-  agent_id?: string | null;
-  skill_key?: string | null;
-  evaluation_contract?: Record<string, unknown> | null;
-}
-
-export interface WorkflowDefinition {
-  steps: WorkflowStepDefinition[];
-}
-
-export interface WorkflowTemplate {
-  id: string;
-  board_id: string | null;
-  project_id: string | null;
-  name: string;
-  description: string | null;
-  trigger_type: "manual" | "scheduled" | "event";
-  trigger_config: Record<string, unknown> | null;
-  status: "draft" | "validated" | "active" | "archived";
-  current_version: number;
-  current_definition: WorkflowDefinition;
-  max_runtime_minutes: number;
-  policy_profile: string;
-  execution_policy: Record<string, unknown> | null;
-  delivery_config: Record<string, unknown> | null;
-  reflect_on: string;
-  next_run_at: string | null;
-  last_validated_at: string | null;
-  created_by: string;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface WorkflowTemplateVersion {
-  id: string;
-  workflow_id: string;
-  version: number;
-  definition_snapshot: Record<string, unknown>;
-  change_reason: string | null;
-  created_by: string;
-  created_at: string;
-}
-
-export interface WorkflowRun {
-  id: string;
-  workflow_id: string;
-  workflow_version: number;
-  definition_snapshot: Record<string, unknown>;
-  triggered_by: string;
-  trigger_payload: Record<string, unknown> | null;
-  started_at: string;
-  completed_at: string | null;
-  status: "running" | "paused" | "completed" | "partial" | "failed" | "stopped" | "force_stopped";
-  current_step_key: string | null;
-  context: Record<string, unknown>;
-  total_cost_tokens: number;
-  delivery_status: "pending" | "sent" | "skipped" | "warning" | "failed" | null;
-  delivery_error: string | null;
-  delivered_at: string | null;
-  created_at: string;
-}
-
-export interface WorkflowStepRun {
-  id: string;
-  run_id: string;
-  step_key: string;
-  step_index: number;
-  step_name: string;
-  step_type: "llm" | "deterministic" | "local";
-  execution_mode: "single" | "swarm";
-  executor_type: string | null;
-  attempt: number;
-  status: "pending" | "running" | "done" | "skipped" | "failed" | "interrupted";
-  rendered_input: string | null;
-  session_key: string | null;
-  output_text: string | null;
-  output_json: unknown;
-  stdout: string | null;
-  stderr: string | null;
-  exit_code: number | null;
-  http_status: number | null;
-  artifacts: Record<string, unknown> | null;
-  evaluation_result: Record<string, unknown> | null;
-  error_code: string | null;
-  error_message: string | null;
-  started_at: string | null;
-  completed_at: string | null;
-  tokens_used: number;
-}
-
-export interface WorkflowRunDetail {
-  run: WorkflowRun;
-  steps: WorkflowStepRun[];
-}
-
 // ── Loops (ADR-051) ──────────────────────────────────────────────────────────
 // Outcome-driven task loops: a runner spins up one normal parent task per
 // round, then decides continue/pause/escalate/done once the round ends.
@@ -1358,7 +1248,8 @@ export interface SkillCandidate {
 }
 
 export interface PlaybookRunProjection {
-  run: WorkflowRun;
+  run: Record<string, unknown>; // raw workflow-engine run — no typed client since the UI was removed
+
   playbook: Playbook | null;
   automation: Automation | null;
 }

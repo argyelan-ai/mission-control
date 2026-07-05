@@ -49,11 +49,6 @@ import type {
   SystemMetrics,
   SystemStatus,
   Automation,
-  WorkflowDefinition,
-  WorkflowRun,
-  WorkflowRunDetail,
-  WorkflowTemplate,
-  WorkflowTemplateVersion,
   Tag,
   Task,
   TaskChecklistItem,
@@ -640,7 +635,7 @@ export const api = {
       request<Automation>(`/api/v1/automations/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     activate: (id: string) => request<Automation>(`/api/v1/automations/${id}/activate`, { method: "POST" }),
     pause: (id: string) => request<Automation>(`/api/v1/automations/${id}/pause`, { method: "POST" }),
-    run: (id: string) => request<WorkflowRun>(`/api/v1/automations/${id}/run`, { method: "POST" }),
+    run: (id: string) => request<unknown>(`/api/v1/automations/${id}/run`, { method: "POST" }),
   },
 
   skillLab: {
@@ -1287,52 +1282,6 @@ export const api = {
   // dropped in Phase 30. Discord channel management now lives under
   // api.discord (see below) — channels come from settings.discord_guild_id.
 
-  // ── Workflows ──────────────────────────────────────────────────────────────
-  workflows: {
-    streamUrl: () => `${BASE_URL}/api/v1/workflows/stream`,
-    list: () => request<WorkflowTemplate[]>("/api/v1/workflows"),
-    create: (data: {
-      name: string;
-      description?: string | null;
-      board_id?: string | null;
-      project_id?: string | null;
-      trigger_type?: "manual" | "scheduled" | "event";
-      trigger_config?: Record<string, unknown> | null;
-      status?: "draft" | "validated" | "active" | "archived";
-      current_definition?: WorkflowDefinition;
-      max_runtime_minutes?: number;
-      policy_profile?: string;
-      execution_policy?: Record<string, unknown> | null;
-      delivery_config?: Record<string, unknown> | null;
-      reflect_on?: string;
-      change_reason?: string | null;
-    }) => request<WorkflowTemplate>("/api/v1/workflows", { method: "POST", body: JSON.stringify(data) }),
-    get: (id: string) => request<WorkflowTemplate>(`/api/v1/workflows/${id}`),
-    update: (id: string, data: Record<string, unknown>) =>
-      request<WorkflowTemplate>(`/api/v1/workflows/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    archive: (id: string) => request<void>(`/api/v1/workflows/${id}`, { method: "DELETE" }),
-    versions: (id: string) => request<WorkflowTemplateVersion[]>(`/api/v1/workflows/${id}/versions`),
-    createVersion: (id: string, changeReason?: string | null) =>
-      request<WorkflowTemplateVersion>(`/api/v1/workflows/${id}/versions`, {
-        method: "POST",
-        body: JSON.stringify({ change_reason: changeReason ?? null }),
-      }),
-    deleteVersion: (id: string, version: number) =>
-      request<void>(`/api/v1/workflows/${id}/versions/${version}`, { method: "DELETE" }),
-    rollback: (id: string, version: number) =>
-      request<WorkflowTemplate>(`/api/v1/workflows/${id}/rollback/${version}`, { method: "POST" }),
-    run: (id: string, triggerPayload?: Record<string, unknown>) =>
-      request<WorkflowRun>(`/api/v1/workflows/${id}/run`, {
-        method: "POST",
-        body: JSON.stringify({ trigger_payload: triggerPayload ?? null }),
-      }),
-    runs: (id: string, limit?: number) =>
-      request<WorkflowRun[]>(`/api/v1/workflows/${id}/runs${limit ? `?limit=${limit}` : ""}`),
-    runDetail: (runId: string) => request<WorkflowRunDetail>(`/api/v1/workflows/runs/${runId}`),
-    pauseRun: (runId: string) => request<{ status: string; signal: string; run_id: string }>(`/api/v1/workflows/runs/${runId}/pause`, { method: "POST" }),
-    resumeRun: (runId: string) => request<WorkflowRun>(`/api/v1/workflows/runs/${runId}/resume`, { method: "POST" }),
-    stopRun: (runId: string) => request<{ status: string; signal: string; run_id: string }>(`/api/v1/workflows/runs/${runId}/stop`, { method: "POST" }),
-  },
 
   // Loops (ADR-051) — outcome-driven task loops.
   loops: {
@@ -1812,6 +1761,5 @@ export const sseUrls = {
   activity: () => `${BASE_URL}/api/v1/activity/stream`,
   memory: (boardId: string) => `${BASE_URL}/api/v1/boards/${boardId}/memory/stream`,
   schedule: () => `${BASE_URL}/api/v1/schedule/stream`,
-  workflows: () => `${BASE_URL}/api/v1/workflows/stream`,
   meetings: () => `${BASE_URL}/api/v1/meetings/stream`,
 };
