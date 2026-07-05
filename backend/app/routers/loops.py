@@ -13,15 +13,20 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import require_user
 from app.database import get_session
-from app.models.approval import Approval
 from app.models.board import Board
-from app.models.loop import BACKLOG_SOURCES, Loop, LoopRound, TERMINAL_LOOP_STATUSES
+from app.models.loop import ACTIVE_LOOP_STATUSES, BACKLOG_SOURCES, Loop, LoopRound, TERMINAL_LOOP_STATUSES
 from app.services.activity import emit_event
+from app.services.loop_runner import (
+    LoopAlreadyActiveError,
+    active_loop_on_board as _active_loop_on_board,
+    start_loop as _start_loop_service,
+    supersede_pending_gates as _supersede_pending_gates,
+)
 from app.utils import utcnow
 
 router = APIRouter(prefix="/api/v1", tags=["loops"])
 
-ACTIVE_STATUSES = ("running", "waiting_gate")
+ACTIVE_STATUSES = ACTIVE_LOOP_STATUSES
 
 
 class LoopCreate(BaseModel):
@@ -31,51 +36,28 @@ class LoopCreate(BaseModel):
     project_id: uuid.UUID | None = None
     backlog_source: str = "markdown"
     backlog_md: str | None = None
+    backlog_tag: str | None = None
     round_brief: str | None = None
     human_every_n_rounds: int = 0
     pause_on_failed_rounds: int = 2
     max_rounds: int = 10
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool = True
+    telegram_reports: bool = True
 
 
 class LoopUpdate(BaseModel):
     name: str | None = None
     goal: str | None = None
     backlog_md: str | None = None
+    backlog_tag: str | None = None
     round_brief: str | None = None
     human_every_n_rounds: int | None = None
     pause_on_failed_rounds: int | None = None
     max_rounds: int | None = None
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool | None = None
-
-
-async def _active_loop_on_board(
-    session: AsyncSession, board_id: uuid.UUID, exclude: uuid.UUID | None = None,
-) -> Loop | None:
-    query = select(Loop).where(
-        Loop.board_id == board_id,
-        Loop.status.in_(ACTIVE_STATUSES),  # type: ignore[attr-defined]
-    )
-    if exclude:
-        query = query.where(Loop.id != exclude)
-    return (await session.exec(query)).first()
-
-
-async def _supersede_pending_gates(session: AsyncSession, loop_id: uuid.UUID) -> None:
-    """Operator-Aktion via UI ersetzt offene loop_gate-Approvals."""
-    pending = (await session.exec(
-        select(Approval).where(
-            Approval.action_type == "loop_gate",
-            Approval.status == "pending",
-        )
-    )).all()
-    for a in pending:
-        if (a.payload or {}).get("loop_id") == str(loop_id):
-            a.status = "superseded"
-            a.resolved_at = utcnow()
-            session.add(a)
+    telegram_reports: bool | None = None
 
 
 @router.get("/loops")
@@ -100,6 +82,20 @@ async def create_loop(
         raise HTTPException(status_code=400, detail=f"backlog_source muss eines von {BACKLOG_SOURCES} sein")
     if payload.backlog_source == "markdown" and not (payload.backlog_md or "").strip():
         raise HTTPException(status_code=400, detail="backlog_md ist Pflicht bei backlog_source=markdown")
+    if payload.backlog_source == "tag":
+        if not (payload.backlog_tag or "").strip():
+            raise HTTPException(status_code=400, detail="backlog_tag ist Pflicht bei backlog_source=tag")
+        # Review-Fund L2: Tag wird gegen Tag.slug gematcht — ohne Existenz-
+        # Check läuft ein Tippfehler auf ein still-leeres Backlog pro Runde.
+        from app.models.tag import Tag
+        tag_row = (await session.exec(
+            select(Tag).where(Tag.slug == payload.backlog_tag.strip())
+        )).first()
+        if not tag_row:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Tag '{payload.backlog_tag}' existiert nicht (erwartet wird der Tag-SLUG)",
+            )
     if payload.max_rounds < 1:
         raise HTTPException(status_code=400, detail="max_rounds muss >= 1 sein")
     board = await session.get(Board, payload.board_id)
@@ -167,31 +163,12 @@ async def start_loop(
     loop = await session.get(Loop, loop_id)
     if not loop:
         raise HTTPException(status_code=404, detail="Loop not found")
-    if loop.status not in ("draft", "paused", "waiting_gate"):
-        raise HTTPException(status_code=409, detail=f"Loop kann aus Status '{loop.status}' nicht gestartet werden")
-
-    other = await _active_loop_on_board(session, loop.board_id, exclude=loop.id)
-    if other:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Auf diesem Board läuft bereits Loop '{other.name}' — nur 1 aktiver Loop pro Board",
-        )
-
-    loop.status = "running"
-    if loop.started_at is None:
-        loop.started_at = utcnow()
-    loop.consecutive_failed_rounds = 0
-    loop.updated_at = utcnow()
-    await _supersede_pending_gates(session, loop.id)
-    session.add(loop)
-    await session.commit()
-    await session.refresh(loop)
-    await emit_event(
-        session, "loop.started",
-        f"Loop '{loop.name}' gestartet ({loop.rounds_completed}/{loop.max_rounds} Runden)",
-        board_id=loop.board_id, detail={"loop_id": str(loop.id)},
-    )
-    return loop
+    try:
+        return await _start_loop_service(session, loop)
+    except LoopAlreadyActiveError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
 
 
 @router.post("/loops/{loop_id}/pause")

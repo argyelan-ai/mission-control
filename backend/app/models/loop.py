@@ -21,6 +21,7 @@ from sqlmodel import Column, Field, SQLModel
 #              ↘ paused ↗ (Operator oder Circuit-Breaker)
 LOOP_STATUSES = ("draft", "running", "waiting_gate", "paused", "done", "failed")
 TERMINAL_LOOP_STATUSES = ("done", "failed")
+ACTIVE_LOOP_STATUSES = ("running", "waiting_gate")
 
 BACKLOG_SOURCES = ("markdown", "project", "tag", "open_ended")
 
@@ -46,6 +47,9 @@ class Loop(SQLModel, table=True):
     escalate_on: list | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )  # z.B. ["merge_decision", "scope_change", "destructive"]
+
+    # ── Reporting (L2) ──────────────────────────────────────────────────
+    telegram_reports: bool = True  # Opt-out: kompakter Report nach jeder Runde
 
     # ── Stop-Bedingungen (L1: Runden + Zeit; Token/USD = L3) ───────────
     max_rounds: int = 10

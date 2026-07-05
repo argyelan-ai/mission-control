@@ -30,12 +30,14 @@ interface FormState {
   goal: string;
   backlogSource: LoopBacklogSource;
   backlogMd: string;
+  backlogTag: string;
   projectId: string;
   maxRounds: number;
   pauseOnFailedRounds: number;
   humanEveryNRounds: number;
   maxDurationMinutes: string;
   stopOnBacklogEmpty: boolean;
+  telegramReports: boolean;
 }
 
 function defaultForm(boardId: string): FormState {
@@ -45,12 +47,14 @@ function defaultForm(boardId: string): FormState {
     goal: "",
     backlogSource: "markdown",
     backlogMd: "",
+    backlogTag: "",
     projectId: "",
     maxRounds: 10,
     pauseOnFailedRounds: 2,
     humanEveryNRounds: 0,
     maxDurationMinutes: "",
     stopOnBacklogEmpty: true,
+    telegramReports: true,
   };
 }
 
@@ -102,6 +106,9 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
     if (form.backlogSource === "project" && !form.projectId) {
       return setError("Choose a project to pull the backlog from.");
     }
+    if (form.backlogSource === "tag" && !form.backlogTag.trim()) {
+      return setError("Enter a tag to pull the backlog from.");
+    }
 
     const payload: LoopCreate = {
       board_id: form.boardId,
@@ -110,11 +117,13 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
       backlog_source: form.backlogSource,
       ...(form.backlogSource === "markdown" ? { backlog_md: form.backlogMd.trim() } : {}),
       ...(form.backlogSource === "project" ? { project_id: form.projectId } : {}),
+      ...(form.backlogSource === "tag" ? { backlog_tag: form.backlogTag.trim() } : {}),
       max_rounds: form.maxRounds,
       pause_on_failed_rounds: form.pauseOnFailedRounds,
       human_every_n_rounds: form.humanEveryNRounds,
       ...(form.maxDurationMinutes.trim() ? { max_duration_minutes: Number(form.maxDurationMinutes) } : {}),
       stop_on_backlog_empty: form.stopOnBacklogEmpty,
+      telegram_reports: form.telegramReports,
     };
     createMutation.mutate(payload);
   };
@@ -181,6 +190,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
           >
             <option value="markdown">Markdown list</option>
             <option value="project">Project tasks</option>
+            <option value="tag">Tag</option>
             <option value="open_ended">Open-ended</option>
           </select>
         </Label>
@@ -214,6 +224,19 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                 </option>
               ))}
             </select>
+          </Label>
+        )}
+
+        {form.backlogSource === "tag" && (
+          <Label text="Tag *">
+            <input
+              type="text"
+              value={form.backlogTag}
+              onChange={(e) => setForm((p) => ({ ...p, backlogTag: e.target.value }))}
+              placeholder="polish"
+              className={inputCls}
+              style={inputStyle}
+            />
           </Label>
         )}
 
@@ -298,6 +321,16 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                       style={{ accentColor: C.accent }}
                     />
                     Stop when the backlog is empty
+                  </label>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm" style={{ color: C.textSecondary }}>
+                    <input
+                      type="checkbox"
+                      checked={form.telegramReports}
+                      onChange={(e) => setForm((p) => ({ ...p, telegramReports: e.target.checked }))}
+                      className="h-3.5 w-3.5 cursor-pointer"
+                      style={{ accentColor: C.accent }}
+                    />
+                    Send a Telegram report after every round
                   </label>
                 </div>
               </motion.div>
