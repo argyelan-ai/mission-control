@@ -31,6 +31,7 @@ import { VllmContainerCatalog } from "./VllmContainerCatalog";
 import { AddRuntimeModal } from "./AddRuntimeModal";
 import { HostMetricsBar, HostsSection } from "./HostsSection";
 import { AutostartToggle } from "./AutostartToggle";
+import { CliToolsSection } from "@/components/shared/CliToolsSection";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
 import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
 import Link from "next/link";
@@ -1709,6 +1710,9 @@ export default function RuntimesPage() {
 
         {/* Hosts Registry (ADR-048) */}
         <HostsSection />
+
+        {/* CLI-Tools (festgebackene Agent-Werkzeuge) */}
+        <CliToolsSection />
       </div>
 
       <AddRuntimeModal open={addOpen} onClose={() => setAddOpen(false)} />
