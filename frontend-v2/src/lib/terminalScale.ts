@@ -20,6 +20,11 @@ import type { Terminal } from "@xterm/xterm";
 export const TERM_FONT_FAMILY =
   '"JetBrains Mono", "Symbols Nerd Font Mono", "Fira Code", monospace';
 
+// xterm brightens too-dark foregrounds against the bg automatically —
+// same mechanism as VS Code's terminal (default there is 4.5 as well).
+// Fixes barely-readable dim/gray TUI text without changing the background.
+export const TERM_MIN_CONTRAST = 4.5;
+
 export const TERM_COLS = 168;
 export const TERM_ROWS = 45;
 

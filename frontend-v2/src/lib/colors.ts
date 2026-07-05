@@ -135,7 +135,7 @@ export const XTERM_THEME = {
   cursor: C.accent,
   cursorAccent: "#0D0D0D",
   black: "#1A1A1A",
-  brightBlack: "#444444",
+  brightBlack: "#6E6E6E",
   red: "#D05F5F",
   brightRed: "#E08080",
   green: "#3FA96C",

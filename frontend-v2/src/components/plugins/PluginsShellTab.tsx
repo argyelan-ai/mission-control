@@ -7,7 +7,7 @@ import { Terminal, Power, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
-import { TERM_FONT_FAMILY } from "@/lib/terminalScale";
+import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
 
 export function PluginsShellTab() {
@@ -72,6 +72,7 @@ export function PluginsShellTab() {
 
     const term = new XTerm({
       theme: XTERM_THEME,
+      minimumContrastRatio: TERM_MIN_CONTRAST,
       scrollback: 5000,
       convertEol: true,
       fontFamily: TERM_FONT_FAMILY,

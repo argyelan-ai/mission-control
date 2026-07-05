@@ -17,7 +17,7 @@ import {
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME } from "@/lib/colors";
-import { TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
+import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -241,6 +241,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
     if (!termRef.current) return;
     const t = new XTerm({
       theme: XTERM_THEME,
+      minimumContrastRatio: TERM_MIN_CONTRAST,
       scrollback: 5000,
       cursorBlink: true,
       convertEol: true,
