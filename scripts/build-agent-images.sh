@@ -25,6 +25,35 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLI_SRC="$ROOT/scripts/mc-cli"
 SHARED_POLL_SRC="$ROOT/docker/shared/poll.sh"
 SHARED_RECYCLER_LIB_SRC="$ROOT/docker/shared/recycler-lib.sh"
+VERSIONS_MANIFEST="$ROOT/docker/cli-versions.json"
+
+# Reads docker/cli-versions.json (Single Source of Truth for pinned CLI
+# versions) and exports OPENCLAUDE_VERSION / CLAUDE_VERSION / OMP_VERSION /
+# OMP_SHA256. Env-var overrides win over the manifest, so callers can still
+# do `OMP_VERSION=16.3.0 scripts/build-agent-images.sh omp` without touching
+# the file.
+read_manifest() {
+  local manifest_json
+  manifest_json="$(python3 -c '
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+print(data["openclaude"]["version"])
+print(data["claude"]["version"])
+print(data["omp"]["version"])
+print(data["omp"]["sha256"])
+' "$VERSIONS_MANIFEST")"
+
+  local manifest_openclaude manifest_claude manifest_omp manifest_omp_sha256
+  { read -r manifest_openclaude; read -r manifest_claude; read -r manifest_omp; read -r manifest_omp_sha256; } <<<"$manifest_json"
+
+  OPENCLAUDE_VERSION="${OPENCLAUDE_VERSION:-$manifest_openclaude}"
+  CLAUDE_VERSION="${CLAUDE_VERSION:-$manifest_claude}"
+  OMP_VERSION="${OMP_VERSION:-$manifest_omp}"
+  OMP_SHA256="${OMP_SHA256:-$manifest_omp_sha256}"
+}
+
+read_manifest
 
 WHICH="both"
 DOCKER_ARGS=()
@@ -63,6 +92,8 @@ sync_recycler_lib_into() {
 
 build_image() {
   local tag="$1" ctx="$2"
+  shift 2
+  local version_args=("$@")
   echo "→ Syncing mc-cli into $ctx"
   sync_cli_into "$ctx"
   echo "→ Syncing shared poll.sh into $ctx"
@@ -70,7 +101,7 @@ build_image() {
   echo "→ Syncing shared recycler-lib.sh into $ctx"
   sync_recycler_lib_into "$ctx"
   echo "→ Building $tag from $ctx"
-  docker build "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+  docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
 }
 
 # omp image (ADR-045): a headless bridge, no poll.sh / recycler-lib.sh — it ships
@@ -78,30 +109,32 @@ build_image() {
 # `mc ack|finish|blocked` contract is byte-identical to the rest of the fleet.
 build_image_omp() {
   local tag="$1" ctx="$2"
+  shift 2
+  local version_args=("$@")
   echo "→ Syncing mc-cli into $ctx"
   sync_cli_into "$ctx"
   echo "→ Building $tag from $ctx"
-  docker build "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+  docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
 }
 
 case "$WHICH" in
   claude)
-    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent"
+    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
     ;;
   openclaude)
-    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base"
+    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base" --build-arg "OPENCLAUDE_VERSION=$OPENCLAUDE_VERSION"
     ;;
   omp|mc-omp-agent)
-    build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge"
+    build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge" --build-arg "OMP_VERSION=$OMP_VERSION" --build-arg "OMP_SHA256=$OMP_SHA256"
     ;;
   both)
-    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent"
-    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base"
+    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
+    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base" --build-arg "OPENCLAUDE_VERSION=$OPENCLAUDE_VERSION"
     ;;
   all)
-    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent"
-    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base"
-    build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge"
+    build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
+    build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base" --build-arg "OPENCLAUDE_VERSION=$OPENCLAUDE_VERSION"
+    build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge" --build-arg "OMP_VERSION=$OMP_VERSION" --build-arg "OMP_SHA256=$OMP_SHA256"
     ;;
 esac
 

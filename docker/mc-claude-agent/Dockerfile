@@ -94,10 +94,14 @@ WORKDIR /home/agent
 
 # Claude Code CLI — Anthropic's native installer. Lädt Linux-arm64 oder
 # Linux-amd64 Binary nach ~/.local/bin/claude, keine Node-Dep für das CLI
-# selbst. Auto-Update ist in Containern deaktiviert (wir pinnen die Version
-# nicht explizit, aber Image-Rebuild gibt Kontrolle).
-RUN curl -fsSL https://claude.ai/install.sh | bash
+# selbst. Version aus docker/cli-versions.json (Single Source of Truth);
+# scripts/build-agent-images.sh setzt den build-arg, das Default hier ist nur
+# der Fallback fuer manuelle `docker build`-Aufrufe. install.sh akzeptiert
+# [stable|latest|VERSION] als $1.
+ARG CLAUDE_VERSION=2.1.201
+RUN curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_VERSION}"
 ENV PATH="/home/agent/.local/bin:${PATH}"
+LABEL mc.cli.name="claude" mc.cli.version="${CLAUDE_VERSION}"
 
 # Config-Dir für claude-code. WICHTIG: getrennt vom Default ~/.claude, damit
 # MC-Templates (SOUL.md, TOOLS.md, HEARTBEAT.md) nicht mit OAuth-Credentials

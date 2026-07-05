@@ -53,6 +53,7 @@ RUN curl -fsSL \
     && echo "${OMP_SHA256}  /usr/local/bin/omp" | sha256sum -c - \
     && chmod +x /usr/local/bin/omp \
     && /usr/local/bin/omp --version
+LABEL mc.cli.name="omp" mc.cli.version="${OMP_VERSION}"
 
 # Non-root user (mirrors mc-agent-base).
 RUN groupadd -r agent && useradd -r -g agent -s /bin/bash -m agent

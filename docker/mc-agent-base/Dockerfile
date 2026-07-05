@@ -32,8 +32,12 @@ RUN if [ "$INSTALL_VERCEL" = "true" ]; then \
     npm install -g vercel@latest; \
     fi
 
-# openclaude — exakte Version, kein auto-update
-RUN npm install -g @gitlawb/openclaude@0.7.0
+# openclaude — exakte Version, kein auto-update. Version aus docker/cli-versions.json
+# (Single Source of Truth); scripts/build-agent-images.sh setzt den build-arg, das
+# Default hier ist nur der Fallback fuer manuelle `docker build`-Aufrufe.
+ARG OPENCLAUDE_VERSION=0.7.0
+RUN npm install -g @gitlawb/openclaude@${OPENCLAUDE_VERSION}
+LABEL mc.cli.name="openclaude" mc.cli.version="${OPENCLAUDE_VERSION}"
 
 # Ollama Web Search Plugin — offizielles openclaude-Plugin von Ollama.
 # Registriert die Tools `web_search` und `web_fetch` gegen Ollama Cloud.
