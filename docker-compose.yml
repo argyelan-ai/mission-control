@@ -93,6 +93,8 @@ services:
       AUTH_MODE: local
       LOCAL_AUTH_TOKEN: ${LOCAL_AUTH_TOKEN}
       JWT_SECRET_KEY: ${JWT_SECRET_KEY:-change-me-in-production}
+      # User session lifetime; override in .env (e.g. 43200 = 30 days on a Tailscale-only install)
+      JWT_ACCESS_TOKEN_EXPIRE_MINUTES: ${JWT_ACCESS_TOKEN_EXPIRE_MINUTES:-480}
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
       DISCORD_WEBHOOK_OPS: ${DISCORD_WEBHOOK_OPS:-}
       DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
