@@ -188,8 +188,16 @@ async def test_manifest_unreadable_does_not_crash_and_target_is_none(async_sessi
 
     for entry in result.values():
         assert entry["target"] is None
-        # any latest > None target counts as an update
-        assert entry["update_available"] is True
+        # a missing/unreadable manifest is NOT an update — flagging it would
+        # fire cli.update_available for all tools on a transient hiccup
+        assert entry["update_available"] is False
+
+    from sqlmodel import select
+    from app.models.activity import ActivityEvent
+    events = (await async_session.exec(
+        select(ActivityEvent).where(ActivityEvent.event_type == "cli.update_available")
+    )).all()
+    assert events == []
 
 
 @pytest.mark.asyncio

@@ -48,9 +48,14 @@ def _version_tuple(version: str) -> tuple[int, ...]:
 
 
 def _version_gt(latest: str, target: str | None) -> bool:
-    """True if `latest` is strictly newer than `target` (or target unknown)."""
+    """True if `latest` is strictly newer than `target`.
+
+    target=None (tool missing from manifest, or manifest transiently
+    unreadable) is NOT an update: flagging it would fire
+    ``cli.update_available`` for every tool on a mere manifest hiccup.
+    """
     if not target:
-        return True
+        return False
     try:
         from packaging.version import Version
 
