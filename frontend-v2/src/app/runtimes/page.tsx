@@ -30,6 +30,7 @@ import { RuntimeScheduleTab } from "./RuntimeScheduleTab";
 import { VllmContainerCatalog } from "./VllmContainerCatalog";
 import { AddRuntimeModal } from "./AddRuntimeModal";
 import { HostMetricsBar, HostsSection } from "./HostsSection";
+import { AutostartToggle } from "./AutostartToggle";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
 import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
 import Link from "next/link";
@@ -1252,6 +1253,12 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
                 <span className="text-xs tabular-nums" style={{ color: C.online }}>
                   {fmtCtx(storedCtx)} ctx
                 </span>
+              </>
+            )}
+            {runtime.autostart_supported && (
+              <>
+                <span style={{ color: C.borderSubtle }}>·</span>
+                <AutostartToggle slug={runtime.slug ?? runtime.id} />
               </>
             )}
           </div>

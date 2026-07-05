@@ -1553,6 +1553,20 @@ export interface Runtime {
   // Harness/Provider-Decoupling (ADR-056): API key the runtime authenticates
   // with, stored as a `secrets` row reference (never the raw value).
   api_key_secret_id?: string | null;
+  // Engine Control v0 (ADR-057): autostart flag file toggled over SSH on the
+  // bound host. autostart_supported opts the runtime into the /runtimes
+  // toggle; autostart_flag_path is the file a systemd unit checks on boot.
+  autostart_supported?: boolean;
+  autostart_flag_path?: string | null;
+}
+
+// Engine Control v0 (ADR-057) — GET/POST .../db/{slug}/autostart response.
+// enabled: null = host unreachable, autostart state unknown.
+export interface RuntimeAutostartStatus {
+  slug: string;
+  flag_path: string | null;
+  enabled: boolean | null;
+  reachable: boolean;
 }
 
 export interface RuntimeAgentRef {
@@ -1647,6 +1661,10 @@ export interface RuntimeCreate {
   enabled?: boolean;
   /** Harness/Provider-Decoupling (ADR-056): bind an existing `secrets` row as this runtime's API key. */
   api_key_secret_id?: string | null;
+  /** Engine Control v0 (ADR-057): opt this runtime into the autostart toggle. */
+  autostart_supported?: boolean;
+  /** ADR-057: absolute path on the bound host checked by its autostart systemd unit. */
+  autostart_flag_path?: string | null;
 }
 
 export interface RuntimesResponse {

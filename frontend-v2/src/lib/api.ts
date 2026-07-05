@@ -1620,6 +1620,17 @@ export const api = {
         request<{ synced: boolean }>(`/api/v1/runtimes/db/${slug}/sync-agents`, {
           method: "POST",
         }),
+      // Engine Control v0 (ADR-057): autostart flag file on the bound host.
+      autostartStatus: (slug: string): Promise<import("@/lib/types").RuntimeAutostartStatus> =>
+        request(`/api/v1/runtimes/db/${slug}/autostart`),
+      setAutostart: (
+        slug: string,
+        enabled: boolean
+      ): Promise<import("@/lib/types").RuntimeAutostartStatus> =>
+        request(`/api/v1/runtimes/db/${slug}/autostart`, {
+          method: "POST",
+          body: JSON.stringify({ enabled }),
+        }),
     },
     schedules: {
       list: (runtimeId: string): Promise<RuntimeSchedule[]> =>
