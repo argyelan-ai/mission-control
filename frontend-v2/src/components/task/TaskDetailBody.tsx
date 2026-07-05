@@ -523,6 +523,7 @@ export function TaskDetailBody({
         { label: "Risks", value: task.risk_notes },
         { label: "Criteria", value: task.acceptance_criteria },
         { label: "Browser", value: task.needs_browser ? "Yes" : null },
+        { label: "E2E test", value: task.e2e_test_required ? "Required" : null },
         { label: "Credentials", value: task.requires_auth ? "Yes" : null },
         { label: "Approval", value: task.approval_policy },
         { label: "Autonomy", value: task.autonomy_level },

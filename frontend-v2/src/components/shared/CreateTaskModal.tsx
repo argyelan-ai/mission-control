@@ -180,6 +180,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
           ...(payload.referenceUrls.length > 0 && { reference_urls: payload.referenceUrls }),
           ...(payload.approvalPolicy && { approval_policy: payload.approvalPolicy as Task["approval_policy"] }),
           ...(payload.needsBrowser && { needs_browser: true }),
+          ...(payload.e2eTestRequired && { e2e_test_required: true }),
           ...(payload.requiresAuth && { requires_auth: true }),
           ...(payload.requiresAuth && payload.credentialMode === "vault" && payload.credentialId && { credential_id: payload.credentialId }),
           ...(payload.requiresAuth && payload.credentialMode === "inline" && payload.inlineCredentials.trim() && { credentials: payload.inlineCredentials.trim() }),

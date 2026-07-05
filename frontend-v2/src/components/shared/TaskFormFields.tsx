@@ -20,8 +20,7 @@ import {
   Globe, KeyRound, MessageSquare, Calendar,
   Bug, Sparkles, Search as SearchIcon, Zap, Settings2,
   FolderKanban, Users, ChevronDown, ChevronRight, ClipboardList,
-  CircleAlert, Wand2, Paperclip, X,
-} from "lucide-react";
+  CircleAlert, Wand2, Paperclip, X, MousePointerClick } from "lucide-react";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -194,6 +193,7 @@ export interface TaskFormPayload {
   referenceUrls: string[];
   approvalPolicy: string;
   needsBrowser: boolean;
+  e2eTestRequired: boolean;
   requiresAuth: boolean;
   credentialMode: "vault" | "inline";
   credentialId: string | null;
@@ -236,6 +236,7 @@ export const EMPTY_TASK_FORM_PAYLOAD: TaskFormPayload = {
   referenceUrls: [],
   approvalPolicy: "",
   needsBrowser: false,
+  e2eTestRequired: false,
   requiresAuth: false,
   credentialMode: "vault",
   credentialId: null,
@@ -892,6 +893,7 @@ export function TaskFormFields({
                       <button type="button" onClick={() => patch({ needsBrowser: !value.needsBrowser })} aria-pressed={value.needsBrowser} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.needsBrowser, C.info)}><Globe size={11} />Browser</button>
                       <button type="button" onClick={() => patch({ requiresAuth: !value.requiresAuth })} aria-pressed={value.requiresAuth} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.requiresAuth, C.warning)}><KeyRound size={11} />Auth</button>
                       <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />Report-Back</button>
+                      <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title="After review, a tester agent drives the real user flows in a browser before the task can complete" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />E2E test</button>
                     </div>
                     <AnimatePresence>
                       {value.requiresAuth && (
@@ -1481,6 +1483,20 @@ export function TaskFormFields({
             >
               <Globe size={11} />
               Browser
+            </button>
+            <button
+              type="button"
+              onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })}
+              title="After review, a tester agent drives the real user flows in a browser before the task can complete"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              style={{
+                backgroundColor: value.e2eTestRequired ? `${C.accent}22` : "transparent",
+                color: value.e2eTestRequired ? C.accent : C.textMuted,
+                border: value.e2eTestRequired ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+              }}
+            >
+              <MousePointerClick size={11} />
+              E2E test
             </button>
             <button
               type="button"

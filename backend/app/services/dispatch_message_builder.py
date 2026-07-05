@@ -493,6 +493,11 @@ async def _build_test_message(
 
 You are the QA tester. PASS only if everything works when you USE it.
 
+You test through the **Playwright MCP server** (tools `mcp__playwright__browser_*`).
+The browser session is STATEFUL — one context until `browser_close`. Screenshots
+come back inline in the tool response, so you SEE what you verify. Save them
+under your task ID so they get captured as deliverables.
+
 ### Mandatory workflow
 
 **Step 1: ACK the task**
@@ -500,52 +505,35 @@ You are the QA tester. PASS only if everything works when you USE it.
 {ack_curl}
 ```
 
-**Step 2: Desktop test**
-```bash
-dev-browser <<'EOF'
-const page = await browser.getPage("desktop");
-await page.goto("{_test_url}");
-await page.waitForLoadState("networkidle");
-const buf = await page.screenshot({{ fullPage: true }});
-const path = await saveScreenshot(buf, "test-desktop.png");
-console.log(path);
-EOF
+**Step 2: Load the page (desktop)**
 ```
-Check: Does the page load? Are all elements visible? Is the layout correct? Colors/fonts OK?
+browser_navigate(url="{_test_url}")
+browser_take_screenshot(filename="{task.id}/test-desktop.png")
+```
+Check: page loads, all elements visible, layout/colors/fonts correct.
 
-**Step 3: Test interactions**
-- Fill in and submit forms
-- Click buttons and links
-- Check navigation
-```bash
-dev-browser <<'EOF'
-const page = await browser.getPage("desktop");
-const result = await page.snapshotForAI();
-console.log(result.full);
-EOF
-# Click/fill an element based on the snapshot:
-dev-browser <<'EOF'
-const page = await browser.getPage("desktop");
-await page.fill("#email", "test@example.com");
-await page.getByRole("button", {{ name: "Submit" }}).click();
-const buf = await page.screenshot({{ fullPage: true }});
-const path = await saveScreenshot(buf, "test-interaction.png");
-console.log(path);
-EOF
+**Step 3: Drive the real user flows (the core of this test)**
+Work through the acceptance criteria above as flows a human would perform —
+navigate, click, type, submit. Base every interaction on element refs from a
+fresh snapshot:
 ```
+browser_snapshot()                                  # accessibility tree with refs
+browser_click(element="Submit button", ref="<ref>")
+browser_type(element="Email field", ref="<ref>", text="test@example.com")
+browser_fill_form(fields=[...])                     # several fields at once
+browser_wait_for(text="Saved")                      # wait for the visible result
+browser_take_screenshot(filename="{task.id}/test-interaction.png")
+```
+Verify the OUTCOME of each flow (visible result, navigation, persisted data
+after reload) — not just that clicking didn't crash.
 
-**Step 4: Mobile test**
-```bash
-dev-browser <<'EOF'
-const page = await browser.getPage("mobile");
-await page.setViewportSize({{ width: 402, height: 874 }});
-await page.goto("{_test_url}");
-await page.waitForLoadState("networkidle");
-const buf = await page.screenshot({{ fullPage: true }});
-const path = await saveScreenshot(buf, "test-mobile.png");
-console.log(path);
-EOF
+**Step 4: Mobile pass**
 ```
+browser_resize(width=402, height=874)
+browser_navigate(url="{_test_url}")
+browser_take_screenshot(filename="{task.id}/test-mobile.png")
+```
+Then `browser_close()` when done.
 
 **Step 5: Document the result**
 ```bash
@@ -555,17 +543,17 @@ EOF
 On PASS:
 ```
 **Result:** TEST_PASS
-**Desktop:** /tmp/test-desktop.png — OK
-**Mobile:** /tmp/test-mobile.png — OK
-**Interactions:** [what was tested] — OK
+**Desktop:** {task.id}/test-desktop.png — OK
+**Mobile:** {task.id}/test-mobile.png — OK
+**Flows tested:** [each flow + outcome]
 **Summary:** Everything works as expected
 ```
 
 On FAIL:
 ```
 **Result:** TEST_FAIL
-**Problem:** [which element] — expected: [X], actual: [Y]
-**Screenshots:** [paths]
+**Problem:** [which flow/element] — expected: [X], actual: [Y]
+**Screenshots:** [filenames]
 **Recommendation:** [what the builder needs to fix]
 ```
 

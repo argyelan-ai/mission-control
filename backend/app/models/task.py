@@ -184,6 +184,10 @@ class Task(SQLModel, table=True):
     publish_allowed: bool | None = None      # Is publishing allowed?
     needs_browser: bool | None = None        # Is browser interaction needed? (separate from requires_auth)
     credential_consent: bool | None = None   # Operator has approved credential usage for this task
+    # Operator explicitly requested human-simulating E2E testing: after review
+    # approval the task goes through the user_test gate (tester agent drives
+    # real flows via Playwright MCP) even without subtasks/needs_browser.
+    e2e_test_required: bool | None = None
 
     sort_order: int = 0
     is_auto_created: bool = False

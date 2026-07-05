@@ -156,6 +156,7 @@ class TaskCreate(BaseModel):
     publish_allowed: bool | None = None
     needs_browser: bool | None = None
     credential_consent: bool | None = None
+    e2e_test_required: bool | None = None
     # Fields restored after review FB-2 (2026-04-21) — they exist on
     # Task model but had been dropped from TaskCreate schema, so the UI
     # was sending them and pydantic silently discarded them.
