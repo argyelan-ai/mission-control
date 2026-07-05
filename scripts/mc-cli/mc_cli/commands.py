@@ -970,7 +970,7 @@ def _add_deliverable_args(p):
     p.add_argument(
         "--type",
         dest="type",
-        choices=["screenshot", "file", "url", "artifact", "document", "data"],
+        choices=["screenshot", "file", "url", "artifact", "document", "data", "video"],
         default="file",
     )
     p.add_argument("--description")
