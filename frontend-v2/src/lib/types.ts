@@ -494,6 +494,12 @@ export interface GatewayMessage {
 // session, independent of the LLM runtime/protocol behind it.
 export type Harness = "claude" | "openclaude" | "omp";
 
+export const HARNESS_LABELS: Record<Harness, string> = {
+  claude: "Claude Code",
+  openclaude: "OpenClaude",
+  omp: "omp",
+};
+
 export interface Agent {
   id: string;
   board_id: string | null;
@@ -1546,6 +1552,9 @@ export interface Runtime {
   // Host Registry (ADR-048): resolved host binding via runtime.host_id.
   // null/absent = no host bound (legacy string fallback or settings fallback).
   host?: HostRef | null;
+  // Harness/Provider-Decoupling (ADR-056): API key the runtime authenticates
+  // with, stored as a `secrets` row reference (never the raw value).
+  api_key_secret_id?: string | null;
 }
 
 export interface RuntimeAgentRef {
@@ -1638,6 +1647,8 @@ export interface RuntimeCreate {
   startup_notes?: string;
   ui_order?: number;
   enabled?: boolean;
+  /** Harness/Provider-Decoupling (ADR-056): bind an existing `secrets` row as this runtime's API key. */
+  api_key_secret_id?: string | null;
 }
 
 export interface RuntimesResponse {

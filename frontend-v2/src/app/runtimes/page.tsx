@@ -1178,8 +1178,13 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
         />
         {/* Name + meta */}
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-sm truncate" style={{ color: C.textPrimary }}>
-            {runtime.display_name}
+          <div className="font-medium text-sm truncate flex items-center gap-1.5" style={{ color: C.textPrimary }}>
+            <span className="truncate">{runtime.display_name}</span>
+            {runtime.api_key_secret_id && (
+              <span title="API-Key hinterlegt" className="shrink-0 text-xs leading-none">
+                🔑
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 mt-0.5">
             {sizeGb != null && sizeGb > 0 && (

@@ -22,6 +22,7 @@ import { SkillBadges } from "@/components/agent/AgentCard";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Agent, AgentTemplate, Board, ModelCatalog } from "@/lib/types";
+import { HARNESS_LABELS } from "@/lib/types";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -1105,6 +1106,9 @@ function AgentRosterRow({
           </span>
           {agent.provision_status !== "provisioned" && (
             <Pill color={prov.color} size="sm">{prov.label}</Pill>
+          )}
+          {agent.harness && (
+            <Pill color={C.textMuted} size="sm">{HARNESS_LABELS[agent.harness]}</Pill>
           )}
           {showAllAgents && (
             <span

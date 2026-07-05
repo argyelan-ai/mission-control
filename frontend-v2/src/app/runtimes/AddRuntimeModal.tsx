@@ -8,12 +8,14 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import type { ProbeEndpointResult } from "@/lib/types";
+
+type KeyMode = "none" | "existing" | "new";
 
 const TYPE_LABEL: Record<string, string> = {
   vllm_docker: "vLLM",
@@ -47,9 +49,21 @@ export function AddRuntimeModal({ open, onClose }: Props) {
   const [probe, setProbe] = useState<ProbeEndpointResult | null>(null);
   const [model, setModel] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [keyMode, setKeyMode] = useState<KeyMode>("none");
+  const [existingSecretId, setExistingSecretId] = useState("");
+  const [newSecretName, setNewSecretName] = useState("");
+  const [newSecretValue, setNewSecretValue] = useState("");
 
   // iOS-safe scroll lock (matches BindAgentModal)
   useBodyScrollLock(open);
+
+  const secretsQuery = useQuery({
+    queryKey: ["secrets"],
+    queryFn: api.secrets.list,
+    enabled: open && keyMode === "existing",
+  });
+
+  const requiresApiKeyHint = !!probe?.error && /40[13]/.test(probe.error);
 
   const probeMutation = useMutation({
     mutationFn: () => api.runtimes.probeEndpoint(url),
@@ -69,15 +83,31 @@ export function AddRuntimeModal({ open, onClose }: Props) {
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      api.runtimes.db.create({
+    mutationFn: async () => {
+      // Secret must exist before the runtime references it — if this throws,
+      // the runtime is never created (no orphaned api_key_secret_id).
+      let secretId: string | undefined;
+      if (keyMode === "new") {
+        const secret = await api.secrets.create({
+          key: newSecretName.trim() || `${slugify(name)}_api_key`,
+          value: newSecretValue,
+          label: `${name} API-Key`,
+        });
+        secretId = secret.id;
+      } else if (keyMode === "existing") {
+        secretId = existingSecretId || undefined;
+      }
+
+      return api.runtimes.db.create({
         slug: slugify(name),
         display_name: name,
         runtime_type: probe!.detected_type!,
         endpoint: normalizeEndpoint(url),
         model_identifier: model ?? undefined,
         enabled: true,
-      }),
+        ...(secretId ? { api_key_secret_id: secretId } : {}),
+      });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       handleClose();
@@ -90,6 +120,10 @@ export function AddRuntimeModal({ open, onClose }: Props) {
     setProbe(null);
     setModel(null);
     setName("");
+    setKeyMode("none");
+    setExistingSecretId("");
+    setNewSecretName("");
+    setNewSecretValue("");
     probeMutation.reset();
     createMutation.reset();
   }
@@ -247,6 +281,98 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                     />
                   </div>
 
+                  {requiresApiKeyHint && (
+                    <div
+                      className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg"
+                      style={{ color: STATUS_TEXT.warning, background: `${C.warning}0F`, border: `1px solid ${C.warning}26` }}
+                    >
+                      <AlertCircle size={13} className="shrink-0" />
+                      Endpoint verlangt einen API-Key
+                    </div>
+                  )}
+
+                  <div>
+                    <label className="text-[11px] font-medium block mb-1.5" style={{ color: C.textMuted }}>
+                      API-Key (optional)
+                    </label>
+                    <div className="flex gap-3 mb-2">
+                      {(
+                        [
+                          { value: "none", label: "Kein Key" },
+                          { value: "existing", label: "Vorhandener Key" },
+                          { value: "new", label: "Neuer Key" },
+                        ] as { value: KeyMode; label: string }[]
+                      ).map((opt) => (
+                        <label key={opt.value} className="flex items-center gap-1.5 text-[12px] cursor-pointer" style={{ color: C.textSecondary }}>
+                          <input
+                            type="radio"
+                            name="key-mode"
+                            value={opt.value}
+                            checked={keyMode === opt.value}
+                            onChange={() => {
+                              setKeyMode(opt.value);
+                              if (opt.value === "new" && !newSecretName.trim()) {
+                                setNewSecretName(`${slugify(name)}_api_key`);
+                              }
+                            }}
+                          />
+                          {opt.label}
+                        </label>
+                      ))}
+                    </div>
+
+                    {keyMode === "existing" && (
+                      <select
+                        value={existingSecretId}
+                        onChange={(e) => setExistingSecretId(e.target.value)}
+                        className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
+                        style={{
+                          backgroundColor: C.bgSurface,
+                          border: `1px solid ${C.border}`,
+                          color: C.textPrimary,
+                        }}
+                      >
+                        <option value="">— auswählen —</option>
+                        {(secretsQuery.data ?? []).map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {(s.label ?? s.key)} · {s.value_masked}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+
+                    {keyMode === "new" && (
+                      <div className="space-y-2">
+                        <input
+                          type="text"
+                          aria-label="Name"
+                          value={newSecretName}
+                          onChange={(e) => setNewSecretName(e.target.value)}
+                          placeholder={`${slugify(name)}_api_key`}
+                          className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
+                          style={{
+                            backgroundColor: C.bgSurface,
+                            border: `1px solid ${C.border}`,
+                            color: C.textPrimary,
+                          }}
+                        />
+                        <input
+                          type="password"
+                          aria-label="Wert"
+                          value={newSecretValue}
+                          onChange={(e) => setNewSecretValue(e.target.value)}
+                          placeholder="API-Key-Wert"
+                          className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
+                          style={{
+                            backgroundColor: C.bgSurface,
+                            border: `1px solid ${C.border}`,
+                            color: C.textPrimary,
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+
                   {createMutation.isError && (
                     <div
                       className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg"
@@ -259,7 +385,14 @@ export function AddRuntimeModal({ open, onClose }: Props) {
 
                   <button
                     onClick={() => createMutation.mutate()}
-                    disabled={!name.trim() || slugify(name) === "" || !model || createMutation.isPending}
+                    disabled={
+                      !name.trim() ||
+                      slugify(name) === "" ||
+                      !model ||
+                      createMutation.isPending ||
+                      (keyMode === "new" && !newSecretValue.trim()) ||
+                      (keyMode === "existing" && !existingSecretId)
+                    }
                     className="w-full flex items-center justify-center gap-1.5 text-xs px-3 py-2.5 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                     style={{
                       color: C.accent,
