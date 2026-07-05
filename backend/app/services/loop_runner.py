@@ -24,7 +24,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.database import engine
 from app.models.approval import Approval
-from app.models.loop import Loop, LoopRound
+from app.models.loop import ACTIVE_LOOP_STATUSES, Loop, LoopRound, TERMINAL_LOOP_STATUSES
+from app.models.tag import Tag, TagAssignment
 from app.models.task import Task, TaskComment
 from app.redis_client import get_redis
 from app.services.activity import emit_event
@@ -36,8 +37,81 @@ logger = logging.getLogger("mc.loop_runner")
 # abgebrochenen Runde (Stop-Bedingungen werden nur an Rundengrenzen geprüft).
 TERMINAL_TASK_STATUSES = ("done", "failed", "aborted")
 REPORT_HISTORY_ROUNDS = 3  # wie viele Runden-Reports in den nächsten Brief wandern
+TAG_BACKLOG_LIMIT = 20  # wie viele offene Tag-Tasks maximal in den Brief wandern
 
 LOCK_KEY = "mc:loop_runner:cycle_lock"
+
+
+class LoopAlreadyActiveError(Exception):
+    """Auf dem Board läuft bereits ein anderer aktiver Loop (1 pro Board, ADR-051)."""
+
+    def __init__(self, other_loop_name: str) -> None:
+        self.other_loop_name = other_loop_name
+        super().__init__(
+            f"Auf diesem Board läuft bereits Loop '{other_loop_name}' — "
+            "nur 1 aktiver Loop pro Board"
+        )
+
+
+async def active_loop_on_board(
+    session: AsyncSession, board_id, exclude=None,
+) -> Loop | None:
+    query = select(Loop).where(
+        Loop.board_id == board_id,
+        Loop.status.in_(ACTIVE_LOOP_STATUSES),  # type: ignore[attr-defined]
+    )
+    if exclude:
+        query = query.where(Loop.id != exclude)
+    return (await session.exec(query)).first()
+
+
+async def supersede_pending_gates(session: AsyncSession, loop_id) -> None:
+    """Operator-Aktion (UI oder Scheduler-Trigger) ersetzt offene loop_gate-Approvals."""
+    pending = (await session.exec(
+        select(Approval).where(
+            Approval.action_type == "loop_gate",
+            Approval.status == "pending",
+        )
+    )).all()
+    for a in pending:
+        if (a.payload or {}).get("loop_id") == str(loop_id):
+            a.status = "superseded"
+            a.resolved_at = utcnow()
+            session.add(a)
+
+
+async def start_loop(session: AsyncSession, loop: Loop) -> Loop:
+    """Startet einen Loop (draft/paused/waiting_gate → running).
+
+    Geteilter Pfad für den Router-Endpoint (Operator-UI) UND den
+    Scheduler-Trigger `start_loop`-Action (ADR-051 L2) — beide sollen exakt
+    dasselbe Verhalten haben statt eine zweite Implementierung zu pflegen.
+    Raises ValueError bei ungültigem Status, LoopAlreadyActiveError bei
+    Board-Konflikt — der Aufrufer übersetzt das in HTTPException bzw.
+    einen Job-Fehler.
+    """
+    if loop.status not in ("draft", "paused", "waiting_gate"):
+        raise ValueError(f"Loop kann aus Status '{loop.status}' nicht gestartet werden")
+
+    other = await active_loop_on_board(session, loop.board_id, exclude=loop.id)
+    if other:
+        raise LoopAlreadyActiveError(other.name)
+
+    loop.status = "running"
+    if loop.started_at is None:
+        loop.started_at = utcnow()
+    loop.consecutive_failed_rounds = 0
+    loop.updated_at = utcnow()
+    await supersede_pending_gates(session, loop.id)
+    session.add(loop)
+    await session.commit()
+    await session.refresh(loop)
+    await emit_event(
+        session, "loop.started",
+        f"Loop '{loop.name}' gestartet ({loop.rounds_completed}/{loop.max_rounds} Runden)",
+        board_id=loop.board_id, detail={"loop_id": str(loop.id)},
+    )
+    return loop
 
 
 def _short(text: str | None, limit: int = 500) -> str:
@@ -181,7 +255,20 @@ class LoopRunnerService:
                       "Das Backlog sind die offenen Tasks dieses Projekts. "
                       "Nimm den wichtigsten offenen Task als Runden-Thema "
                       "(genau EINEN)."]
-        else:  # open_ended (und tag → L2, verhält sich bis dahin wie open_ended)
+        elif loop.backlog_source == "tag":
+            tag_tasks = await self._open_tag_backlog(session, loop)
+            if tag_tasks:
+                listing = "\n".join(f"- {title} (`{tid}`)" for tid, title in tag_tasks)
+                parts += ["", "## Backlog",
+                          f"Offene Tasks mit Tag `{loop.backlog_tag}` auf diesem Board:",
+                          listing, "",
+                          "Nimm GENAU EINEN dieser Tasks als Runden-Thema."]
+            else:
+                parts += ["", "## Backlog",
+                          f"Kein offener Task mit Tag `{loop.backlog_tag}` gefunden. "
+                          "Prüfe, ob das Tag-Backlog vollständig abgearbeitet ist — "
+                          "falls ja, schreibe »BACKLOG LEER« in die Abschluss-Reflexion."]
+        else:  # open_ended
             parts += ["", "## Backlog",
                       "Open-ended: Finde selbst das nächste sinnvollste Item "
                       "im Sinne des Loop-Ziels (z.B. den nächsten Bug, die "
@@ -229,6 +316,7 @@ class LoopRunnerService:
 
         report = await self._build_round_report(session, loop, outcome, task, note)
         goal_reached = False
+        reflection = None
         if task is not None:
             reflection = await self._last_reflection(session, task)
             up = (reflection or "").upper()
@@ -258,6 +346,12 @@ class LoopRunnerService:
             detail={"loop_id": str(loop.id), "round_no": loop.current_round_no,
                     "outcome": outcome},
         )
+
+        if loop.telegram_reports:
+            await self._send_round_telegram_report(
+                loop, round_no=loop.current_round_no, outcome=outcome,
+                reflection=reflection, note=note,
+            )
 
         # 1) Circuit-Breaker: N Fehlrunden in Folge → Pause + Eskalation.
         if loop.consecutive_failed_rounds >= max(loop.pause_on_failed_rounds, 1):
@@ -332,6 +426,52 @@ class LoopRunnerService:
             .limit(1)
         )).first()
         return comment.content if comment else None
+
+    async def _open_tag_backlog(
+        self, session: AsyncSession, loop: Loop,
+    ) -> list[tuple]:
+        """Offene, nicht dispatchte Board-Tasks mit `loop.backlog_tag` (L2)."""
+        if not loop.backlog_tag:
+            return []
+        rows = (await session.exec(
+            select(Task.id, Task.title)
+            .join(TagAssignment, TagAssignment.task_id == Task.id)
+            .join(Tag, Tag.id == TagAssignment.tag_id)
+            .where(
+                Tag.slug == loop.backlog_tag,
+                Task.board_id == loop.board_id,
+                Task.status == "inbox",
+                Task.dispatched_at.is_(None),  # type: ignore[union-attr]
+            )
+            .limit(TAG_BACKLOG_LIMIT)
+        )).all()
+        return list(rows)
+
+    async def _send_round_telegram_report(
+        self, loop: Loop, *, round_no: int, outcome: str,
+        reflection: str | None, note: str,
+    ) -> None:
+        """Kompakter Telegram-Report nach jeder Runde (L2, Opt-out via
+        `loop.telegram_reports`). Fehler dürfen den Runner nie stören."""
+        try:
+            from app.services.telegram_reports import telegram_reports
+            if not telegram_reports.configured:
+                return
+            lines = [
+                f"🔁 <b>{loop.name}</b> — Runde {round_no}/{loop.max_rounds}: "
+                f"<b>{outcome.upper()}</b>",
+            ]
+            excerpt = _short(reflection or note, 220)
+            if excerpt:
+                lines.append(excerpt)
+            if loop.max_rounds:
+                remaining = max(loop.max_rounds - loop.rounds_completed, 0)
+                lines.append(
+                    f"Verbleibend: {remaining} Runde{'n' if remaining != 1 else ''}"
+                )
+            await telegram_reports.send("\n".join(lines))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Loop-Runden-Telegram-Report fehlgeschlagen: %s", e)
 
     # ── Gates / Pause / Finish ───────────────────────────────────────────
 

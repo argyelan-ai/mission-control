@@ -377,6 +377,9 @@ class SchedulerService:
                     async with AsyncSession(engine, expire_on_commit=False) as meet_session:
                         success, error, detail = await self._do_run_meeting(meet_session, job)
 
+                elif job.action_type == "start_loop":
+                    success, error, detail = await self._do_start_loop(session, job)
+
                 else:
                     # Legacy action_type (chat_send, session_reset, api_call) — no longer supported
                     logger.warning(
@@ -670,6 +673,45 @@ class SchedulerService:
             return False, str(e), {}
         except Exception as e:
             return False, str(e), {}
+
+    async def _do_start_loop(
+        self, session: AsyncSession, job: ScheduledJob
+    ) -> tuple[bool, str | None, dict]:
+        """Starts a Loop (ADR-051 L2) via the shared start service — same
+        code path as the operator's /loops/{id}/start endpoint. A loop
+        that's already running is a no-op (not an error): the schedule may
+        simply fire again while a previous run is still in progress."""
+        from app.models.loop import Loop, TERMINAL_LOOP_STATUSES
+        from app.services.loop_runner import LoopAlreadyActiveError, start_loop
+
+        payload = job.task_payload or {}
+        # Tolerant camelCase/snake_case like project_id/repo_id above (ADR-052 lesson).
+        loop_id_raw = payload.get("loop_id") or payload.get("loopId")
+        if not loop_id_raw:
+            return False, f"Job {job.id} (start_loop) hat keine loop_id in task_payload", {}
+        try:
+            loop_id = uuid.UUID(str(loop_id_raw))
+        except (ValueError, TypeError):
+            return False, f"Ungültige loop_id: {loop_id_raw!r}", {}
+
+        loop = await session.get(Loop, loop_id)
+        if not loop:
+            return False, f"Loop {loop_id} nicht gefunden", {}
+
+        if loop.status == "running":
+            logger.info("Scheduler start_loop: Loop %s läuft bereits — no-op", loop.id)
+            return True, None, {"loop_id": str(loop.id), "action": "noop_already_running"}
+        if loop.status in TERMINAL_LOOP_STATUSES:
+            return False, (
+                f"Loop '{loop.name}' ist abgeschlossen ({loop.status}) — "
+                "kann nicht gestartet werden"
+            ), {}
+
+        try:
+            await start_loop(session, loop)
+        except (LoopAlreadyActiveError, ValueError) as e:
+            return False, str(e), {}
+        return True, None, {"loop_id": str(loop.id), "action": "started"}
 
     async def _resolve_agent_id(self, session: AsyncSession, job: ScheduledJob) -> str | None:
         """Get agent_id from the job, or look it up by name."""

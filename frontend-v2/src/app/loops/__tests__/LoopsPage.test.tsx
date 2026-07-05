@@ -73,6 +73,7 @@ const makeLoop = (over: Partial<Loop> = {}): Loop => ({
   max_rounds: 10,
   max_duration_minutes: null,
   stop_on_backlog_empty: true,
+  telegram_reports: true,
   status: "draft",
   rounds_completed: 0,
   consecutive_failed_rounds: 0,

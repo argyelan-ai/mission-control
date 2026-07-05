@@ -1094,6 +1094,7 @@ export interface Loop {
   max_rounds: number | null;
   max_duration_minutes: number | null;
   stop_on_backlog_empty: boolean;
+  telegram_reports: boolean;
   status: LoopStatus;
   rounds_completed: number;
   consecutive_failed_rounds: number;
@@ -1127,12 +1128,14 @@ export interface LoopCreate {
   project_id?: string;
   backlog_source?: LoopBacklogSource;
   backlog_md?: string;
+  backlog_tag?: string;
   round_brief?: string;
   human_every_n_rounds?: number;
   pause_on_failed_rounds?: number;
   max_rounds?: number;
   max_duration_minutes?: number;
   stop_on_backlog_empty?: boolean;
+  telegram_reports?: boolean;
 }
 
 export type LoopUpdate = Partial<Omit<LoopCreate, "board_id">>;

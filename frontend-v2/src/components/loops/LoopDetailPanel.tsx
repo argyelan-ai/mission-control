@@ -112,12 +112,20 @@ export function LoopDetailPanel({
               Configuration
             </h3>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <ConfigRow label="Backlog" value={BACKLOG_SOURCE_LABEL[loop.backlog_source] ?? loop.backlog_source} />
+              <ConfigRow
+                label="Backlog"
+                value={
+                  loop.backlog_source === "tag" && loop.backlog_tag
+                    ? `Tag: ${loop.backlog_tag}`
+                    : BACKLOG_SOURCE_LABEL[loop.backlog_source] ?? loop.backlog_source
+                }
+              />
               <ConfigRow label="Max rounds" value={loop.max_rounds ? String(loop.max_rounds) : "Unlimited"} />
               <ConfigRow label="Human gate every" value={loop.human_every_n_rounds > 0 ? `${loop.human_every_n_rounds} rounds` : "Never"} />
               <ConfigRow label="Pause after" value={`${loop.pause_on_failed_rounds} failed rounds`} />
               <ConfigRow label="Max duration" value={loop.max_duration_minutes ? `${loop.max_duration_minutes} min` : "No limit"} />
               <ConfigRow label="Stop on empty backlog" value={loop.stop_on_backlog_empty ? "Yes" : "No"} />
+              <ConfigRow label="Telegram reports" value={loop.telegram_reports ? "On" : "Off"} />
             </div>
           </section>
 

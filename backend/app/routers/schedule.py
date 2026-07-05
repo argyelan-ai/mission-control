@@ -35,7 +35,7 @@ class JobCreate(BaseModel):
     schedule_weekdays: list[int] | None = None
     start_date: str | None = None   # ISO date string, e.g. "2026-06-01"
     end_date: str | None = None
-    action_type: Literal["chat_send", "api_call", "create_task", "session_reset"]
+    action_type: Literal["chat_send", "api_call", "create_task", "session_reset", "start_loop"]
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
     message: str | None = None
@@ -74,7 +74,7 @@ class JobUpdate(BaseModel):
     schedule_weekdays: list[int] | None = None
     start_date: str | None = None
     end_date: str | None = None
-    action_type: Literal["chat_send", "api_call", "create_task", "session_reset"] | None = None
+    action_type: Literal["chat_send", "api_call", "create_task", "session_reset", "start_loop"] | None = None
     agent_id: uuid.UUID | None = None
     agent_name: str | None = None
     message: str | None = None
