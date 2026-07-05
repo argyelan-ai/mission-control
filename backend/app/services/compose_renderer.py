@@ -60,6 +60,12 @@ OPENCLAUDE_IMAGE = "mc-agent-base:latest"
 # of an interactive openclaude pane. Selected by runtime_type == "omp".
 OMP_IMAGE = "mc-omp-agent:latest"
 
+HARNESS_IMAGES: dict[str, str] = {
+    "claude": CLAUDE_IMAGE,
+    "openclaude": OPENCLAUDE_IMAGE,
+    "omp": OMP_IMAGE,
+}
+
 # Token-hardening (fix/agent-token-recreate-hardening):
 # MC_TOKEN_<AGENTNAME> vars live in docker/.env.agents (symlink under
 # ~/.mc/secrets/…/docker/.env.agents).  By emitting this env_file for every
@@ -115,17 +121,31 @@ def pick_image_for_runtime(runtime: Runtime | None) -> str | None:
     return None
 
 
+def pick_image_for_harness(harness: str | None, runtime: Runtime | None) -> str | None:
+    """Image selection under ADR-056: the harness decides the image.
+
+    harness None = legacy row (pre-backfill / host agents) -> old
+    runtime-type coupling via pick_image_for_runtime.
+    """
+    if harness in HARNESS_IMAGES:
+        return HARNESS_IMAGES[harness]
+    return pick_image_for_runtime(runtime)
+
+
 def detect_image_change(
     old_runtime: Runtime | None,
     new_runtime: Runtime | None,
+    *,
+    old_harness: str | None = None,
+    new_harness: str | None = None,
 ) -> bool:
     """True when switching old → new requires a docker image swap.
 
     None on either side counts as "unknown — assume yes" so callers force a
     recreate (safe default during first-time bind).
     """
-    old_img = pick_image_for_runtime(old_runtime)
-    new_img = pick_image_for_runtime(new_runtime)
+    old_img = pick_image_for_harness(old_harness, old_runtime)
+    new_img = pick_image_for_harness(new_harness, new_runtime)
     if old_img is None or new_img is None:
         return True
     return old_img != new_img
@@ -562,7 +582,7 @@ async def render_compose_agents(
         # Image overrides require a runtime binding; vault scope does not.
         if ag.runtime_id is not None:
             rt = await session.get(Runtime, ag.runtime_id)
-            resolved_image = pick_image_for_runtime(rt)
+            resolved_image = pick_image_for_harness(getattr(ag, "harness", None), rt)
             if resolved_image is not None:
                 overrides[slug] = resolved_image
 

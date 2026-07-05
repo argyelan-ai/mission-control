@@ -19,8 +19,11 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.services.compose_renderer import (
     CLAUDE_IMAGE,
+    HARNESS_IMAGES,
+    OMP_IMAGE,
     OPENCLAUDE_IMAGE,
     detect_image_change,
+    pick_image_for_harness,
     pick_image_for_runtime,
     render_compose_agents,
     write_compose_agents,
@@ -179,6 +182,42 @@ def test_detect_image_change_with_none_returns_true():
     rt = Runtime(slug="anthropic-claude-opus", display_name="a", runtime_type="cloud", endpoint="x", enabled=True)
     assert detect_image_change(None, rt) is True
     assert detect_image_change(rt, None) is True
+
+
+# ── pick_image_for_harness / detect_image_change (harness axis, ADR-056) ──
+
+
+def _mk_runtime_obj(*, runtime_type="cloud", slug="harness-rt", **kw) -> Runtime:
+    return Runtime(
+        slug=slug,
+        display_name=slug,
+        runtime_type=runtime_type,
+        endpoint="https://x",
+        enabled=True,
+        **kw,
+    )
+
+
+def test_pick_image_for_harness_explicit():
+    assert pick_image_for_harness("claude", None) == CLAUDE_IMAGE
+    assert pick_image_for_harness("openclaude", None) == OPENCLAUDE_IMAGE
+    assert pick_image_for_harness("omp", None) == OMP_IMAGE
+
+
+def test_pick_image_for_harness_falls_back_to_runtime():
+    rt = _mk_runtime_obj(runtime_type="cloud")
+    assert pick_image_for_harness(None, rt) == OPENCLAUDE_IMAGE
+    assert pick_image_for_harness(None, None) is None
+
+
+def test_detect_image_change_harness_axis():
+    rt = _mk_runtime_obj(runtime_type="cloud")
+    # gleicher Provider, Harness omp -> openclaude = Image-Wechsel
+    assert detect_image_change(rt, rt, old_harness="omp", new_harness="openclaude") is True
+    # gleicher Provider, gleiches Harness = kein Wechsel
+    assert detect_image_change(rt, rt, old_harness="omp", new_harness="omp") is False
+    # Legacy (kein Harness): unveraendertes Verhalten
+    assert detect_image_change(rt, rt) is False
 
 
 # ── render_compose_agents ──────────────────────────────────────────────────
