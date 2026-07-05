@@ -296,7 +296,9 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
             mc-agent-{agent.name}
           </span>
         </div>
-        <div className="flex items-center gap-2 shrink-0 ml-auto">
+        {/* w-full forces the toggles onto their own row on phones — the status
+            group has flex-basis 0 (flex-1), so flex-wrap alone never fires */}
+        <div className="flex items-center gap-2 shrink-0 w-full md:w-auto md:ml-auto">
         <div
           className="flex items-center rounded-md overflow-hidden shrink-0"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
