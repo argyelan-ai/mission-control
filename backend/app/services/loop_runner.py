@@ -376,6 +376,19 @@ class LoopRunnerService:
             and utcnow() - loop.started_at >= timedelta(minutes=loop.max_duration_minutes)
         ):
             stop_reason = "max_duration"
+        elif loop.budget_usd is not None or loop.budget_tokens is not None:
+            # L3: Budget an der Rundengrenze — Summe der task-attribuierten
+            # Usage-Events aller Runden-Tasks. Ohne Attribution ist die
+            # Summe 0 (Budget greift dann schlicht nie, kein False-Stop).
+            used_tokens, used_usd = await self._loop_usage(session, loop)
+            if loop.budget_usd is not None and used_usd >= loop.budget_usd:
+                logger.info("Loop '%s': Budget erreicht (%.2f/%.2f USD)",
+                            loop.name, used_usd, loop.budget_usd)
+                stop_reason = "budget_exceeded"
+            elif loop.budget_tokens is not None and used_tokens >= loop.budget_tokens:
+                logger.info("Loop '%s': Budget erreicht (%d/%d Tokens)",
+                            loop.name, used_tokens, loop.budget_tokens)
+                stop_reason = "budget_exceeded"
         if stop_reason:
             await self._finish(session, loop, reason=stop_reason)
             return
@@ -545,6 +558,34 @@ class LoopRunnerService:
             board_id=loop.board_id, severity="info",
             detail={"loop_id": str(loop.id)},
         )
+
+    async def _loop_usage(self, session, loop) -> tuple[int, float]:
+        """Summe (input+output tokens, cost_usd) der Events aller Runden-Tasks.
+
+        Cache-Tokens zählen bewusst NICHT in budget_tokens (sie würden das
+        Budget um Größenordnungen verzerren); cost_usd enthält sie über die
+        Preisberechnung ohnehin korrekt gewichtet.
+        """
+        from sqlalchemy import func as sa_func
+
+        from app.models.loop import LoopRound
+        from app.models.model_usage import ModelUsageEvent
+
+        task_ids = (await session.exec(
+            select(LoopRound.task_id).where(
+                LoopRound.loop_id == loop.id, LoopRound.task_id != None,  # noqa: E711
+            )
+        )).all()
+        if not task_ids:
+            return 0, 0.0
+        row = (await session.exec(
+            select(
+                sa_func.coalesce(sa_func.sum(
+                    ModelUsageEvent.input_tokens + ModelUsageEvent.output_tokens), 0),
+                sa_func.coalesce(sa_func.sum(ModelUsageEvent.cost_usd), 0.0),
+            ).where(ModelUsageEvent.task_id.in_(task_ids))  # type: ignore[union-attr]
+        )).one()
+        return int(row[0]), float(row[1])
 
     async def _finish(
         self, session: AsyncSession, loop: Loop, *, reason: str,

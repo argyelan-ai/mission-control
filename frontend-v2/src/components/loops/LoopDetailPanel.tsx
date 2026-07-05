@@ -126,6 +126,8 @@ export function LoopDetailPanel({
               <ConfigRow label="Max duration" value={loop.max_duration_minutes ? `${loop.max_duration_minutes} min` : "No limit"} />
               <ConfigRow label="Stop on empty backlog" value={loop.stop_on_backlog_empty ? "Yes" : "No"} />
               <ConfigRow label="Telegram reports" value={loop.telegram_reports ? "On" : "Off"} />
+              {loop.budget_usd != null && <ConfigRow label="Budget" value={`$${loop.budget_usd}`} />}
+              {loop.budget_tokens != null && <ConfigRow label="Token budget" value={loop.budget_tokens.toLocaleString()} />}
             </div>
           </section>
 

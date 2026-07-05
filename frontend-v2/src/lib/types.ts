@@ -1083,6 +1083,8 @@ export interface Loop {
   pause_on_failed_rounds: number;
   escalate_on: string | null;
   max_rounds: number | null;
+  budget_usd?: number | null;
+  budget_tokens?: number | null;
   max_duration_minutes: number | null;
   stop_on_backlog_empty: boolean;
   telegram_reports: boolean;
@@ -1124,6 +1126,8 @@ export interface LoopCreate {
   human_every_n_rounds?: number;
   pause_on_failed_rounds?: number;
   max_rounds?: number;
+  budget_usd?: number | null;
+  budget_tokens?: number | null;
   max_duration_minutes?: number;
   stop_on_backlog_empty?: boolean;
   telegram_reports?: boolean;

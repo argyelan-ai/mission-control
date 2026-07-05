@@ -52,6 +52,10 @@ class Loop(SQLModel, table=True):
     telegram_reports: bool = True  # Opt-out: kompakter Report nach jeder Runde
 
     # ── Stop-Bedingungen (L1: Runden + Zeit; Token/USD = L3) ───────────
+    # L3: Kosten-Budget — geprüft an Rundengrenzen (Summe der
+    # model_usage_events aller Runden-Tasks; braucht Task-Attribution).
+    budget_usd: float | None = None
+    budget_tokens: int | None = None
     max_rounds: int = 10
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool = True
