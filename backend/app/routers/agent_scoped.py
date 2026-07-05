@@ -1317,7 +1317,7 @@ async def agent_clarification(
 
 class DeliverableCreate(BaseModel):
     """Agent registers a deliverable — a result artifact."""
-    deliverable_type: Literal["screenshot", "file", "url", "artifact", "document", "data"]
+    deliverable_type: Literal["screenshot", "file", "url", "artifact", "document", "data", "video"]
     title: str
     path: str | None = None
     description: str | None = None
@@ -1488,6 +1488,7 @@ async def agent_create_deliverable(
         "file": "reference",
         "artifact": "reference",
         "screenshot": "reference",
+        "video": "reference",
     }
     memory_type = _TYPE_TO_MEMORY_TYPE.get(payload.deliverable_type, "reference")
 

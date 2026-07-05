@@ -106,6 +106,26 @@ async def test_host_path_resolved_form_accepted(client: AsyncClient, monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_mcp_video_deliverable_accepted(client: AsyncClient):
+    """Playwright MCP sidecar records to /shared-mcp/<task_id>/*.webm — the
+    tester registers it with deliverable_type='video' (E2E recording feature)."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board, agent, task, token = await _create_test_data(s)
+
+    with patch("app.routers.agent_scoped.emit_event", new_callable=AsyncMock):
+        resp = await client.post(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}/deliverables",
+            json={
+                "deliverable_type": "video",
+                "title": "E2E test recording",
+                "path": f"/shared-mcp/{task.id}/e2e-run.webm",
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert resp.status_code == 201, resp.text
+
+
+@pytest.mark.asyncio
 async def test_docker_path_still_accepted(client: AsyncClient):
     """No regression: existing /deliverables/<task_id>/ form still 201."""
     async with AsyncSession(test_engine, expire_on_commit=False) as s:

@@ -465,6 +465,11 @@ async def _build_test_message(
     reject_curl = _curl("PATCH", task_path, token, '{"status": "in_progress"}')
     comment_curl = _curl("POST", f"{task_path}/comments", token,
                          '{"content": "...", "comment_type": "progress"}')
+    video_curl = _curl(
+        "POST", "/api/v1/agent/me/deliverable", token,
+        '{"deliverable_type": "video", "title": "E2E test recording", '
+        f'"path": "/shared-mcp/{task.id}/e2e-run.webm"}}',
+    )
 
     msg = f"# QA Test: {task.title}\n\n"
     msg += f"**Task ID:** {task.id}\n"
@@ -505,14 +510,23 @@ under your task ID so they get captured as deliverables.
 {ack_curl}
 ```
 
-**Step 2: Load the page (desktop)**
+**Step 2: Start recording — BEFORE you navigate anywhere**
+```
+browser_start_video(filename="{task.id}/e2e-run.webm")
+browser_video_show_actions()
+```
+This captures your whole run (with action overlays) as a video the operator
+can watch afterwards. Do this immediately after the ACK, before any
+navigation, so nothing is missed.
+
+**Step 3: Load the page (desktop)**
 ```
 browser_navigate(url="{_test_url}")
 browser_take_screenshot(filename="{task.id}/test-desktop.png")
 ```
 Check: page loads, all elements visible, layout/colors/fonts correct.
 
-**Step 3: Drive the real user flows (the core of this test)**
+**Step 4: Drive the real user flows (the core of this test)**
 Work through the acceptance criteria above as flows a human would perform —
 navigate, click, type, submit. Base every interaction on element refs from a
 fresh snapshot:
@@ -527,7 +541,7 @@ browser_take_screenshot(filename="{task.id}/test-interaction.png")
 Verify the OUTCOME of each flow (visible result, navigation, persisted data
 after reload) — not just that clicking didn't crash.
 
-**Step 4: Mobile pass**
+**Step 5: Mobile pass**
 ```
 browser_resize(width=402, height=874)
 browser_navigate(url="{_test_url}")
@@ -535,7 +549,17 @@ browser_take_screenshot(filename="{task.id}/test-mobile.png")
 ```
 Then `browser_close()` when done.
 
-**Step 5: Document the result**
+**Step 6: Stop recording and register it as a deliverable**
+```
+browser_stop_video()
+```
+```bash
+{video_curl}
+```
+Do this for both PASS and FAIL runs — the operator wants to see the run
+either way.
+
+**Step 7: Document the result**
 ```bash
 {comment_curl}
 ```
@@ -546,6 +570,7 @@ On PASS:
 **Desktop:** {task.id}/test-desktop.png — OK
 **Mobile:** {task.id}/test-mobile.png — OK
 **Flows tested:** [each flow + outcome]
+**Recording:** {task.id}/e2e-run.webm
 **Summary:** Everything works as expected
 ```
 
@@ -554,10 +579,11 @@ On FAIL:
 **Result:** TEST_FAIL
 **Problem:** [which flow/element] — expected: [X], actual: [Y]
 **Screenshots:** [filenames]
+**Recording:** {task.id}/e2e-run.webm
 **Recommendation:** [what the builder needs to fix]
 ```
 
-**Step 6: Decision**
+**Step 8: Decision**
 - TEST_PASS → done:
 ```bash
 {done_curl}

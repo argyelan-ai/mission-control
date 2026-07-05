@@ -23,6 +23,7 @@ HOME = str(Path.home())
     f"/shared-deliverables/{TASK_ID}/generated.pdf",
     f"/shared-deliverables/{TASK_ID}/screenshot.png",
     f"/shared-mcp/{TASK_ID}/capture.png",
+    f"/shared-mcp/{TASK_ID}/e2e-run.webm",
     f"~/.mc/deliverables/{TASK_ID}/output.md",
     f"{HOME}/.mc/deliverables/{TASK_ID}/output.md",
 ])
