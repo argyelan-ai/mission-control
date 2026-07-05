@@ -62,7 +62,18 @@ HEALTH_TIMEOUT_RESTART = 30
 
 # OpenAI-compatible runtime types where a `/models` probe is meaningful.
 # Cloud (Anthropic, Ollama) already ship a model_identifier from the seed.
-_PROBEABLE_RUNTIME_TYPES = {"vllm_docker", "lmstudio", "openai_compatible", "unsloth", "unsloth_porsche"}
+_PROBEABLE_RUNTIME_TYPES = {
+    "vllm_docker",
+    "lmstudio",
+    "openai_compatible",
+    "unsloth",
+    "unsloth_porsche",
+    # omp is a CLI harness, but its runtime row points at an OpenAI-compatible
+    # endpoint (the same vLLM the TUI talks to). Without this entry the runtime
+    # watcher never probes omp rows, so engine-side model drift never reaches
+    # omp-bound agents.
+    "omp",
+}
 
 
 async def probe_runtime_model(runtime: Runtime) -> str | None:

@@ -106,3 +106,36 @@ async def test_unreachable_engine_never_touches_row(async_session, fake_redis):
     status = json.loads(await fake_redis.get(RedisKeys.runtime_live("down-rt")))
     assert status["reachable"] is False
     assert status["consecutive_failures"] >= 3
+
+
+@pytest.mark.asyncio
+async def test_omp_runtime_is_probed_for_drift(async_session, fake_redis):
+    """Regression: omp rows point at an OpenAI-compatible endpoint and MUST be
+    watched — otherwise engine-side model swaps never reach omp-bound agents."""
+    rt = Runtime(
+        slug="omp-drift-rt", display_name="omp", runtime_type="omp",
+        endpoint="http://spark:8000/v1", model_identifier="old-model", enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    watcher = RuntimeWatcher(interval=90)
+
+    import app.services.sse as sse_mod
+
+    with patch(
+        "app.services.runtime_watcher.probe_runtime_model",
+        new=AsyncMock(return_value="new-model"),
+    ), patch(
+        "app.services.runtime_watcher.mark_agents_for_sync",
+        new=AsyncMock(return_value=0),
+    ), patch(
+        "app.services.runtime_watcher.get_redis", _fake_get_redis(fake_redis),
+    ), patch.object(
+        sse_mod, "get_redis", _fake_get_redis(fake_redis),
+    ):
+        await watcher.tick(session=async_session)
+        await watcher.tick(session=async_session)
+
+    await async_session.refresh(rt)
+    assert rt.model_identifier == "new-model"
