@@ -84,6 +84,10 @@ class Agent(SQLModel, table=True):
         ),
     )
 
+    # Harness (CLI) decoupled from provider runtime (ADR-056).
+    # "claude" | "openclaude" | "omp" — None = legacy (derived from runtime).
+    harness: str | None = Field(default=None)
+
     # Config (managed via UI)
     heartbeat_config: dict[str, Any] = Field(
         default_factory=lambda: {"interval": "5m", "target": "last"},
