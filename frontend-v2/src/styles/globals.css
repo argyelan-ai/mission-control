@@ -1,3 +1,30 @@
+
+/* ── Terminal fonts (bundled, public/fonts/) ─────────────────────────────────
+   JetBrains Mono + Symbols Nerd Font Mono: agent TUIs (Claude Code, omp)
+   draw logos/status lines with block elements and Nerd-Font icons — without
+   bundled fonts the browser falls back to a system mono lacking those glyphs. */
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Symbols Nerd Font Mono";
+  src: url("/fonts/SymbolsNerdFontMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 @import "tailwindcss";
 
 /* ============================================================

@@ -17,7 +17,7 @@ import {
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
 import { C, XTERM_THEME } from "@/lib/colors";
-import { TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
+import { TERM_FONT_FAMILY, TERM_COLS, TERM_ROWS, useTerminalScale, type TermViewMode } from "@/lib/terminalScale";
 
 type AgentWithState = Agent & {
   container_state?: string;     // for cli-bridge / docker runtime
@@ -244,7 +244,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
       scrollback: 5000,
       cursorBlink: true,
       convertEol: true,
-      fontFamily: '"JetBrains Mono", "Fira Code", monospace',
+      fontFamily: TERM_FONT_FAMILY,
       fontSize: 14,
       lineHeight: 1.4,
     });
