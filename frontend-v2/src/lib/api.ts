@@ -683,7 +683,7 @@ export const api = {
     subtasks: (boardId: string, parentTaskId: string) =>
       request<Task[]>(`/api/v1/boards/${boardId}/tasks?parent_task_id=${parentTaskId}`),
     /** `defer_dispatch: true` skips the server's normal auto-dispatch-on-create
-     *  (ADR-053 follow-up, C2 review fix) — used when reference files are
+     *  (ADR-054 follow-up, C2 review fix) — used when reference files are
      *  staged so the agent brief isn't built before they've been uploaded.
      *  Follow up with `dispatchDeferred` once the uploads are done. */
     create: (boardId: string, data: Partial<Task> & { defer_dispatch?: boolean }) =>
@@ -773,7 +773,7 @@ export const api = {
       ),
   },
 
-  // ── Reference Files (ADR-053) ────────────────────────────────────────────────
+  // ── Reference Files (ADR-054) ────────────────────────────────────────────────
   // Operator-uploaded example/asset files for tasks & projects. Agents read
   // them directly — their paths flow into the dispatch directive automatically.
   references: {
@@ -875,6 +875,10 @@ export const api = {
             force_when_in_progress: opts?.force_when_in_progress ?? false,
           }),
         },
+      ),
+    runtimeSwitchProgress: (id: string) =>
+      request<import("@/lib/types").RuntimeSwitchProgress>(
+        `/api/v1/agents/${id}/runtime-switch-progress`
       ),
     delete: (id: string) => request<void>(`/api/v1/agents/${id}`, { method: "DELETE" }),
     config: {
@@ -1613,6 +1617,13 @@ export const api = {
       changed: boolean;
     }> =>
       request(`/api/v1/runtimes/${runtimeId}/probe-model`, { method: "POST" }),
+    liveStatus: () =>
+      request<import("@/lib/types").RuntimesLiveResponse>("/api/v1/runtimes/live-status"),
+    probeEndpoint: (url: string) =>
+      request<import("@/lib/types").ProbeEndpointResult>("/api/v1/runtimes/probe-endpoint", {
+        method: "POST",
+        body: JSON.stringify({ url }),
+      }),
     // Sparkrun recipe management (Phase 35) — applies to vllm_docker runtimes
     // whose launch_command invokes `sparkrun run <recipe>`.
     sparkrun: {
@@ -1647,6 +1658,10 @@ export const api = {
         request(`/api/v1/runtimes/db/${slug}`, { method: "DELETE" }),
       agents: (slug: string): Promise<import("@/lib/types").RuntimeAgentsResponse> =>
         request(`/api/v1/runtimes/db/${slug}/agents`),
+      syncAgents: (slug: string) =>
+        request<{ synced: boolean }>(`/api/v1/runtimes/db/${slug}/sync-agents`, {
+          method: "POST",
+        }),
     },
     schedules: {
       list: (runtimeId: string): Promise<RuntimeSchedule[]> =>

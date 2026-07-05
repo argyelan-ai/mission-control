@@ -109,9 +109,10 @@ describe("RuntimeSwitchModal", () => {
     expect(screen.getByLabelText(/switch anyway/i)).toBeInTheDocument();
   });
 
-  it("submit calls onConfirm with force flag value and closes", async () => {
+  it("submit calls onConfirm with force flag value and shows the success state (no auto-close)", async () => {
     vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
-    const onConfirm = vi.fn().mockResolvedValue(null);
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "done" });
+    const onConfirm = vi.fn().mockResolvedValue(mkPreview());
     const onClose = vi.fn();
     renderWithQuery(
       <RuntimeSwitchModal
@@ -125,7 +126,104 @@ describe("RuntimeSwitchModal", () => {
     await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: /switch/i }));
     await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({ force_when_in_progress: false }));
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByText(/switch complete/i)).toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: /close/i }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("polls runtimeSwitchProgress while submitting and highlights the active step", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "restarting" });
+    let resolveConfirm: (v: RuntimeSwitchPreview | null) => void = () => {};
+    const onConfirm = vi.fn(
+      () => new Promise<RuntimeSwitchPreview | null>((resolve) => (resolveConfirm = resolve)),
+    );
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByText("Restarting container")).toBeInTheDocument());
+    resolveConfirm(null);
+  });
+
+  it("shows a red rolled_back banner with the error when the switch fails and rolls back", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({
+      step: "rolled_back",
+      error: "health check failed",
+    });
+    let rejectConfirm: (e: Error) => void = () => {};
+    const onConfirm = vi.fn(
+      () => new Promise<RuntimeSwitchPreview | null>((_resolve, reject) => (rejectConfirm = reject)),
+    );
+    renderWithQuery(
+      <RuntimeSwitchModal
+        open
+        onClose={() => {}}
+        agent={mkAgent()}
+        targetRuntimeId="rt-new"
+        onConfirm={onConfirm}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByText(/health check failed/i)).toBeInTheDocument());
+    expect(screen.getByTestId("rolled-back-banner")).toBeInTheDocument();
+    rejectConfirm(new Error("health check failed"));
+  });
+
+  it("resets the completed success state when the modal is closed and reopened", async () => {
+    vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+    vi.spyOn(api.agents, "runtimeSwitchProgress").mockResolvedValue({ step: "done" });
+    const onConfirm = vi.fn().mockResolvedValue(mkPreview());
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+    await waitFor(() => expect(screen.getByText(/switch complete/i)).toBeInTheDocument());
+
+    rerender(
+      <QueryClientProvider client={qc}>
+        <RuntimeSwitchModal
+          open={false}
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />
+      </QueryClientProvider>,
+    );
+    rerender(
+      <QueryClientProvider client={qc}>
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+    expect(screen.queryByText(/switch complete/i)).not.toBeInTheDocument();
   });
 
   it("shows verbatim D-10 lock banner when target.single_instance is true", async () => {

@@ -175,14 +175,29 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
     fastapi_app.dependency_overrides[get_session] = override_get_session
     fastapi_app.dependency_overrides[get_redis] = override_get_redis
 
+    # Also seed the module-level singleton so any code (including test
+    # modules) that does `from app.redis_client import get_redis` and calls
+    # it directly gets the fake client instead of trying a real connection.
+    original_redis_singleton = app.redis_client._redis
+    app.redis_client._redis = fake_redis
+
     # get_redis() is also called directly (not via Depends).
     # Must be patched in every module that imported it.
     import app.routers.system as system_mod
+    import app.routers.agents as agents_mod
+    import app.routers.runtimes as runtimes_mod
     import app.services.sse as sse_mod
+    import app.services.agent_runtime_switch as switch_mod
     original_system_get_redis = system_mod.get_redis
+    original_agents_get_redis = agents_mod.get_redis
+    original_runtimes_get_redis = runtimes_mod.get_redis
     original_sse_get_redis = sse_mod.get_redis
+    original_switch_get_redis = switch_mod.get_redis
     system_mod.get_redis = override_get_redis
+    agents_mod.get_redis = override_get_redis
+    runtimes_mod.get_redis = override_get_redis
     sse_mod.get_redis = override_get_redis  # broadcast() calls get_redis() directly
+    switch_mod.get_redis = override_get_redis
 
     transport = ASGITransport(app=fastapi_app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
@@ -190,7 +205,11 @@ async def client(fake_redis) -> AsyncGenerator[AsyncClient, None]:
 
     fastapi_app.dependency_overrides.clear()
     system_mod.get_redis = original_system_get_redis
+    agents_mod.get_redis = original_agents_get_redis
+    runtimes_mod.get_redis = original_runtimes_get_redis
     sse_mod.get_redis = original_sse_get_redis
+    switch_mod.get_redis = original_switch_get_redis
+    app.redis_client._redis = original_redis_singleton
 
 
 @pytest.fixture

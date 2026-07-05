@@ -17,11 +17,18 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { AlertTriangle, Loader2, Lock, RotateCcw, X, Zap, Box } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Lock, RotateCcw, X, Zap, Box } from "lucide-react";
 import type { Agent, RuntimeSwitchPreview, RuntimeSwitchSummary } from "@/lib/types";
 import { api } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
-import { C, STATUS_TEXT } from "@/lib/colors";
+import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+
+const SWITCH_STEPS: Array<{ key: string; label: string }> = [
+  { key: "rendering", label: "Rendering config" },
+  { key: "restarting", label: "Restarting container" },
+  { key: "waiting_healthy", label: "Waiting for agent health" },
+  { key: "done", label: "Done" },
+];
 
 interface Props {
   open: boolean;
@@ -79,6 +86,7 @@ export function RuntimeSwitchModal({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [longSwitch, setLongSwitch] = useState(false);
+  const [completed, setCompleted] = useState<RuntimeSwitchPreview | null>(null);
   const longSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Dry-run preview — runs as soon as the modal opens.
@@ -94,12 +102,21 @@ export function RuntimeSwitchModal({
     retry: false,
   });
 
+  // Live switch progress — polled only while a submit is in flight.
+  const { data: progress } = useQuery({
+    queryKey: ["runtime-switch-progress", agent.id],
+    queryFn: () => api.agents.runtimeSwitchProgress(agent.id),
+    enabled: open && submitting,
+    refetchInterval: 1_500,
+  });
+
   useEffect(() => {
     if (!open) {
       setForceWhenInProgress(false);
       setSubmitting(false);
       setError(null);
       setLongSwitch(false);
+      setCompleted(null);
       if (longSwitchTimer.current) {
         clearTimeout(longSwitchTimer.current);
         longSwitchTimer.current = null;
@@ -123,7 +140,7 @@ export function RuntimeSwitchModal({
     try {
       const result = await onConfirm({ force_when_in_progress: forceWhenInProgress });
       onSwitched?.(result ?? null);
-      onClose();
+      setCompleted(result ?? preview ?? null);
     } catch (e) {
       setError((e as Error).message ?? "Switch failed");
     } finally {
@@ -184,6 +201,29 @@ export function RuntimeSwitchModal({
                 </button>
               </div>
 
+              {completed !== null ? (
+                <div className="flex flex-col items-center gap-2 py-10 px-5">
+                  <span className="text-sm font-medium" style={{ color: STATUS_TEXT.online }}>
+                    ✓ Switch complete
+                  </span>
+                  <span className="text-sm text-center" style={{ color: C.textSecondary }}>
+                    {agent.name} now runs{" "}
+                    {completed.new_runtime.model_identifier ?? completed.new_runtime.display_name} on{" "}
+                    {completed.new_runtime.display_name}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setCompleted(null);
+                      onClose();
+                    }}
+                    className="mt-3 text-[12px] px-4 py-1.5 rounded-lg cursor-pointer transition-all"
+                    style={{ backgroundColor: C.accent, color: C.textPrimary }}
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : (
+                <>
               {/* Body */}
               <div className="p-5 space-y-4 overflow-y-auto flex-1">
                 {/* Side-by-side runtime preview */}
@@ -332,6 +372,58 @@ export function RuntimeSwitchModal({
                   </div>
                 )}
 
+                {/* Live progress stepper */}
+                {submitting && progress?.step !== "rolled_back" && (
+                  <div className="space-y-1.5" data-testid="switch-progress-stepper">
+                    {SWITCH_STEPS.map((step, i) => {
+                      const activeIdx = SWITCH_STEPS.findIndex((s) => s.key === progress?.step);
+                      const isDone = activeIdx >= 0 && i < activeIdx;
+                      const isActive = i === activeIdx;
+                      return (
+                        <div
+                          key={step.key}
+                          className="flex items-center gap-2 text-[12px]"
+                          style={{
+                            color: isDone
+                              ? STATUS_TEXT.online
+                              : isActive
+                                ? C.accent
+                                : C.textSecondary,
+                          }}
+                        >
+                          {isDone ? (
+                            <Check size={12} style={{ color: STATUS.online }} />
+                          ) : isActive ? (
+                            <Loader2 size={12} className="animate-spin" />
+                          ) : (
+                            <span className="w-3 h-3 inline-block" />
+                          )}
+                          {step.label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Rolled-back banner */}
+                {progress?.step === "rolled_back" && (
+                  <div
+                    className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
+                    style={{
+                      backgroundColor: "rgba(239,68,68,0.08)",
+                      border: "1px solid rgba(239,68,68,0.25)",
+                      color: STATUS_TEXT.error,
+                    }}
+                    data-testid="rolled-back-banner"
+                  >
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    <div>
+                      <div className="font-medium">Rolled back to previous runtime</div>
+                      {progress.error && <div className="opacity-80">{progress.error}</div>}
+                    </div>
+                  </div>
+                )}
+
                 {/* Long-switch hint */}
                 {longSwitch && (
                   <div className="flex items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
@@ -385,6 +477,8 @@ export function RuntimeSwitchModal({
                   Switch
                 </button>
               </div>
+                </>
+              )}
           </motion.div>
         </motion.div>
       )}

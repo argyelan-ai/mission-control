@@ -306,7 +306,7 @@ export interface DeliverableDirectory {
   entries: DeliverableDirectoryEntry[];
 }
 
-// ── Reference Files (ADR-053) ────────────────────────────────────────────────
+// ── Reference Files (ADR-054) ────────────────────────────────────────────────
 // Operator-uploaded example/asset files for tasks & projects. Agents read
 // them directly — `abs_path` is baked into the dispatch directive.
 
@@ -541,6 +541,7 @@ export interface Agent {
   // Per-agent runtime selection (cli-bridge only — Phase 2). NULL means
   // the agent falls back to docker-compose env defaults.
   runtime_id: string | null;
+  pending_runtime_sync: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -1652,6 +1653,7 @@ export interface RuntimeAgentRef {
   id: string;
   name: string;
   agent_runtime: string;
+  pending_runtime_sync?: boolean;
 }
 
 export interface RuntimeAgentsResponse {
@@ -1681,6 +1683,35 @@ export interface RuntimeSwitchPreview {
   warnings: string[];
   dry_run: boolean;
   health: { healthy?: boolean; reason?: string } | null;
+}
+
+export interface RuntimeLiveStatus {
+  reachable: boolean;
+  served_model: string | null;
+  latency_ms: number | null;
+  last_probe_at: string;
+  consecutive_failures: number;
+  drift: boolean;
+}
+
+export interface RuntimesLiveResponse {
+  live: Record<string, RuntimeLiveStatus>;
+  watcher_enabled: boolean;
+  interval: number;
+}
+
+export interface ProbeEndpointResult {
+  reachable: boolean;
+  models: string[];
+  detected_type: "lmstudio" | "vllm_docker" | "openai_compatible" | null;
+  suggested_model: string | null;
+  error: string | null;
+}
+
+export interface RuntimeSwitchProgress {
+  step: "rendering" | "restarting" | "waiting_healthy" | "done" | "rolled_back" | null;
+  error?: string | null;
+  ts?: number;
 }
 
 export interface RuntimeCreate {

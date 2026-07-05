@@ -174,11 +174,16 @@ def test_container_workspace_path():
 
 def test_default_model_selector():
     assert bridge._default_model_selector("nvidia/Qwen3.6-35B-A3B-NVFP4") == (
-        "qwen-spark/nvidia/Qwen3.6-35B-A3B-NVFP4"
+        "mc-openai/nvidia/Qwen3.6-35B-A3B-NVFP4"
     )
-    assert bridge._default_model_selector("") .startswith("qwen-spark/")
+    # No baked-in fallback (ADR-054): missing model is a boot error.
+    try:
+        bridge._default_model_selector("")
+        raise AssertionError("expected RuntimeError for empty model")
+    except RuntimeError:
+        pass
     # already provider-qualified stays as-is.
-    assert bridge._default_model_selector("qwen-spark/foo") == "qwen-spark/foo"
+    assert bridge._default_model_selector("mc-openai/foo") == "mc-openai/foo"
     print("PASS test_default_model_selector")
 
 

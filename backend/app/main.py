@@ -99,6 +99,7 @@ from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
 from app.services.scheduler import scheduler
 from app.services.runtime_schedule_service import runtime_schedule_service
+from app.services.runtime_watcher import runtime_watcher
 from app.services.task_runner import task_runner
 from app.services.loop_runner import loop_runner
 from app.services.telegram_bot import telegram_bot
@@ -178,6 +179,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("Qdrant payload index setup failed (non-fatal): %s", e)
     await runtime_schedule_service.start()
+    await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
     await telegram_bot.start()
     # Defense-in-depth: agents that call `gh repo create` without --private
     # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
@@ -355,6 +357,7 @@ async def lifespan(app: FastAPI):
     await embedding_retry.stop()
     if getattr(app.state, "obsidian_export_started", False):
         await obsidian_export.stop()
+    await runtime_watcher.stop()
     await runtime_schedule_service.stop()
     await loop_runner.stop()
     await task_runner.stop()
@@ -697,7 +700,7 @@ app.include_router(runtimes.router)
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
-app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-053)
+app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-054)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)

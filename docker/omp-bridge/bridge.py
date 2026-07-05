@@ -1279,16 +1279,20 @@ def serve_loop(
 def _default_model_selector(openai_model: Optional[str]) -> str:
     """Build omp's fully-qualified `<provider>/<model>` selector.
 
-    entrypoint.sh renders a `qwen-spark` models.yml provider from OPENAI_MODEL,
-    so the selector is `qwen-spark/<OPENAI_MODEL>`. Never a bare token — that
-    mis-resolves against omp's built-in provider catalog.
+    entrypoint.sh renders the `mc-openai` provider from OPENAI_MODEL, so the
+    selector is `mc-openai/<OPENAI_MODEL>`. Never a bare token — that
+    mis-resolves against omp's built-in provider catalog. No baked-in
+    default: a missing model is a boot error, not a silent fallback to a
+    stale model (ADR-054).
     """
     m = (openai_model or "").strip()
     if not m:
-        return "qwen-spark/nvidia/Qwen3.6-35B-A3B-NVFP4"
-    if "/" in m and m.split("/", 1)[0] in ("qwen-spark", "lm-studio", "openai"):
+        raise RuntimeError(
+            "OPENAI_MODEL not set — entrypoint must render models.yml first"
+        )
+    if "/" in m and m.split("/", 1)[0] in ("mc-openai", "lm-studio", "openai"):
         return m  # already provider-qualified
-    return f"qwen-spark/{m}"
+    return f"mc-openai/{m}"
 
 
 def _make_http_poll(api_url: str, token: str) -> Callable[[], Optional[dict]]:

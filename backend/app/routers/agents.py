@@ -1268,6 +1268,24 @@ async def get_agent_metrics_summary(
     }
 
 
+@router.get("/agents/{agent_id}/runtime-switch-progress")
+async def runtime_switch_progress(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Live progress of an in-flight runtime switch (polled by the modal)."""
+    agent = await session.get(Agent, agent_id)
+    if agent is None:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    redis = await get_redis()
+    raw = await redis.get(RedisKeys.agent_switch_progress(str(agent_id)))
+    if raw is None:
+        return {"step": None}
+    import json as _json
+    return _json.loads(raw)
+
+
 # ── Token Reset ───────────────────────────────────────────────────────────────
 
 

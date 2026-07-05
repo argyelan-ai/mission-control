@@ -29,7 +29,8 @@ CWD="${1:-${OMP_DEFAULT_CWD:-/workspace}}"
 [ -d "$CWD" ] || CWD="$HOME"
 
 HOOK="${OMP_HOOK_FILE:-/opt/omp-bridge/turn-end-hook.mjs}"
-SELECTOR="${OMP_MODEL_SELECTOR:-qwen-spark/${OPENAI_MODEL:-nvidia/Qwen3.6-35B-A3B-NVFP4}}"
+# Selector comes from the entrypoint-rendered env — never a baked-in model.
+SELECTOR="${OMP_MODEL_SELECTOR:-mc-openai/${OPENAI_MODEL:?OPENAI_MODEL not set — entrypoint must render models.yml first}}"
 
 # --approval-mode yolo: the agent runs unattended (no human at the pane to
 #   approve tool calls). --allow-home: some ad-hoc tasks have no workspace and
