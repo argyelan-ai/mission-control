@@ -10,6 +10,7 @@ import WorkspaceSwitcher from "./WorkspaceSwitcher";
 import MobileNav from "./MobileNav";
 import StatusBar from "./StatusBar";
 import CommandPalette from "@/components/shared/CommandPalette";
+import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
 
@@ -108,6 +109,9 @@ export default function AppShell({
       {/* Voice Assistant Overlay (Drawer + Error-Toast). Button selbst ist
           in MobileNav (mobile) und Sidebar (desktop) integriert. */}
       <VoiceOverlay />
+
+      {/* Toast notifications (app-wide, driven by lib/notify.ts) */}
+      <ToastRenderer />
     </div>
     </VoiceProvider>
   );

@@ -39,6 +39,9 @@ vi.mock("@/lib/store", () => ({
       selector ? selector(mockAppState.state) : mockAppState.state,
     { setState: (partial: Partial<typeof mockAppState.state>) => Object.assign(mockAppState.state, partial) }
   ),
+  // AppShell mounts ToastRenderer, which reads notifications via this selector.
+  useNotificationStore: (selector?: (s: { notifications: unknown[] }) => unknown) =>
+    selector ? selector({ notifications: [] }) : { notifications: [] },
 }));
 
 import LoopsPage from "../page";
