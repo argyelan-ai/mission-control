@@ -153,10 +153,11 @@ async def agent_bootstrap(
         rt_env = await build_runtime_env(runtime, session)
         tokens.update(rt_env)
 
-    # Provider auth (ADR-056): agent secret > runtime secret > global fallback
-    # for openai protocol; CLAUDE_CODE_OAUTH_TOKEN for anthropic. Single source
-    # shared with the .env render so the two can never drift. Agents WITHOUT a
-    # runtime still get the ollama_api_key fallback (runtime=None → openai chain).
+    # Provider auth (ADR-056, amended 2026-07-05): agent secret > runtime
+    # secret for openai protocol; CLAUDE_CODE_OAUTH_TOKEN for anthropic. No
+    # global vault fallback — an agent with neither secret bound simply gets
+    # no OPENAI_API_KEY. Single source shared with the .env render so the two
+    # can never drift.
     from app.services.harness_compat import resolve_provider_credentials
     creds = await resolve_provider_credentials(session, agent, runtime)
     tokens.update(creds)

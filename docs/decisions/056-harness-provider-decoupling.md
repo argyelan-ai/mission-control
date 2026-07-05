@@ -69,7 +69,7 @@ single source of truth for "is this combination even valid?".
    runtime) are rejected with `incompat_reason` before any DB/container
    mutation; the switch snapshot/rollback path now restores `agent.harness`
    alongside `agent.runtime_id` on failure.
-5. **Three-stage provider credential resolution**
+5. **Provider credential resolution**
    (`harness_compat.resolve_provider_credentials`), the single source used
    by both `/internal/bootstrap` and the `.env` render so the two can never
    drift:
@@ -77,10 +77,19 @@ single source of truth for "is this combination even valid?".
      secret).
    - OpenAI protocol → **(1)** `agent.secret_id` (per-agent key) → **(2)**
      `runtime.api_key_secret_id` (new writable column on `runtimes`,
-     `routers/runtimes.py` compat-matrix/patch endpoints) → **(3)** global
-     `ollama_api_key` fallback. Each stage falls through on a resolution
-     miss (e.g. an agent secret_id that no longer resolves logs a warning
-     and falls back) rather than hard-failing.
+     `routers/runtimes.py` compat-matrix/patch endpoints). Each stage falls
+     through on a resolution miss (e.g. an agent secret_id that no longer
+     resolves logs a warning and falls back to stage 2) rather than
+     hard-failing. Neither stage resolving → no `OPENAI_API_KEY` at all.
+
+     > **Amendment (2026-07-05, Secret-Hygiene):** originally specified as a
+     > three-stage chain with a **(3)** global `ollama_api_key` fallback.
+     > Removed: it meant any OpenAI-protocol runtime — including a keyless
+     > local vLLM/LM Studio runtime that never bound a secret — silently
+     > inherited the Ollama Cloud key as its Bearer token, risking an
+     > unnoticed fallback from a free local agent onto a paid cloud key. No
+     > fallback is scoped by default; callers already treat "no key" as a
+     > valid state for local runtimes.
 6. **`GET /runtimes/compat-matrix`** (`routers/runtimes.py`) exposes
    `HARNESSES`/`HARNESS_LABELS` plus, per runtime, `compatible_harnesses`
    and per-incompatible-harness `incompat_reason` text — the frontend

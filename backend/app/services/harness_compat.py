@@ -99,9 +99,15 @@ async def resolve_provider_credentials(
     """Resolve auth material for (agent, runtime) — single source for the
     internal bootstrap AND the .env render, so the two can never drift.
 
-    OpenAI-protocol order: agent.secret_id > runtime.api_key_secret_id >
-    global vault fallback ("ollama_api_key"). Anthropic protocol uses the
-    global OAuth token ("claude_code_oauth_token").
+    OpenAI-protocol order: agent.secret_id > runtime.api_key_secret_id. No
+    global vault fallback — removed 2026-07-05 (ADR-056 amendment, Finding 5):
+    a global "ollama_api_key" fallback meant ANY openai-protocol runtime
+    (including local, keyless vLLM/LM Studio) silently inherited a paid cloud
+    key as its Bearer token. Neither stage resolving → no OPENAI_API_KEY is
+    set at all, matching how local runtimes without a bound secret already
+    behave. Anthropic protocol uses the global OAuth token
+    ("claude_code_oauth_token") — that's the regular OAuth path, not a
+    fallback, and is unaffected by this change.
 
     agent=None is allowed (the bootstrap helper has no agent context at one
     call site) — stage 1 (agent.secret_id) is simply skipped then.
@@ -111,25 +117,21 @@ async def resolve_provider_credentials(
         oauth = await get_secret_plaintext_by_key(session, "claude_code_oauth_token")
         return {"CLAUDE_CODE_OAUTH_TOKEN": oauth} if oauth else {}
 
-    # openai protocol — also the legacy default when runtime is unknown/None but
-    # an agent-level secret exists (pre-ADR-056 behaviour). Agents WITHOUT a
-    # runtime still fall through to the ollama_api_key global fallback, matching
-    # today's bootstrap behaviour.
+    # openai protocol — also the legacy default when runtime is unknown/None.
     if agent is not None and agent.secret_id:
         key = await get_secret_plaintext_by_id(session, agent.secret_id)
         if key:
             return {"OPENAI_API_KEY": key}
         logger.warning(
             "resolve_provider_credentials: agent %s has secret_id set but it "
-            "did not resolve — falling back to runtime/global key",
+            "did not resolve — falling back to runtime key",
             agent.name,
         )
     if runtime is not None and runtime.api_key_secret_id:
         key = await get_secret_plaintext_by_id(session, runtime.api_key_secret_id)
         if key:
             return {"OPENAI_API_KEY": key}
-    key = await get_secret_plaintext_by_key(session, "ollama_api_key")
-    return {"OPENAI_API_KEY": key} if key else {}
+    return {}
 
 
 def derive_harness(runtime: Runtime | None) -> str | None:

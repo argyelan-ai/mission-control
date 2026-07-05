@@ -317,8 +317,9 @@ async def sync_docker_agent_files(
             elif agent.runtime_id:
                 env_notes.append("runtime_missing")
 
-            # Provider auth (ADR-056): agent secret > runtime secret > global
-            # fallback, resolved centrally so bootstrap + .env can never drift.
+            # Provider auth (ADR-056, amended 2026-07-05): agent secret >
+            # runtime secret. No global fallback. Resolved centrally so
+            # bootstrap + .env can never drift.
             from app.services.harness_compat import resolve_provider_credentials
             creds = await resolve_provider_credentials(
                 session, agent, runtime if (runtime and runtime.enabled) else None
