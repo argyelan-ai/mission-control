@@ -53,7 +53,7 @@ const mockAppState = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/store", () => ({
   // ToastRenderer (AppShell) reads this store too — keep module mocks complete.
-  useNotificationStore: (selector) =>
+  useNotificationStore: (selector?: (s: { notifications: never[] }) => unknown) =>
     selector ? selector({ notifications: [] }) : { notifications: [] },
   useAppStore: Object.assign(
     (selector?: (s: typeof mockAppState.state) => unknown) =>
