@@ -40,7 +40,6 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
-from app.services.secrets_helper import get_secret_plaintext_by_id
 from app.services.template_renderer import build_agent_context, render_agent_file
 
 logger = logging.getLogger("mc.docker_agent_sync")
@@ -212,7 +211,8 @@ async def sync_docker_agent_files(
     if agent.runtime_id:
         runtime = await session.get(Runtime, agent.runtime_id)
 
-    is_anthropic = runtime and runtime.enabled and runtime.slug.startswith("anthropic-claude-")
+    from app.services.harness_compat import runtime_protocol
+    is_anthropic = bool(runtime and runtime.enabled and runtime_protocol(runtime) == "anthropic")
 
     # Sync settings.json — Bug 5 permanent fix (2026-05-13).
     #
@@ -317,19 +317,31 @@ async def sync_docker_agent_files(
             elif agent.runtime_id:
                 env_notes.append("runtime_missing")
 
-            if agent.secret_id:
-                plaintext = await get_secret_plaintext_by_id(session, agent.secret_id)
-                if plaintext:
-                    env_lines.append(f"OPENAI_API_KEY={_sanitize_env_val(plaintext)}")
-                    env_notes.append("secret=set")
-                else:
-                    # Secret decryption error — we still write the
-                    # recycler line + any runtime keys, but log the error
-                    # explicitly as ".env_secret_error" so the render result
-                    # is visible. Previously env_lines was set to None and
-                    # the whole write was skipped — that would swallow the
-                    # recycler line (Phase-3 regression).
-                    results[".env_secret_error"] = "secret not found or decryption failed"
+            # Provider auth (ADR-056): agent secret > runtime secret > global
+            # fallback, resolved centrally so bootstrap + .env can never drift.
+            from app.services.harness_compat import resolve_provider_credentials
+            creds = await resolve_provider_credentials(
+                session, agent, runtime if (runtime and runtime.enabled) else None
+            )
+            if "OPENAI_API_KEY" in creds:
+                env_lines.append(f"OPENAI_API_KEY={_sanitize_env_val(creds['OPENAI_API_KEY'])}")
+                env_notes.append("secret=set")
+            elif agent.secret_id and runtime_protocol(runtime) != "anthropic":
+                # agent has a secret bound but decryption/lookup failed — keep
+                # the loud error marker so operators see it in the sync result.
+                # We still write the recycler line + any runtime keys (the write
+                # block below persists env_lines); previously env_lines was set
+                # to None and the whole write was skipped (Phase-3 regression).
+                #
+                # ADR-056: only openai-protocol agents need an OPENAI_API_KEY.
+                # An agent bound to an anthropic-protocol runtime uses OAuth and
+                # legitimately has no OPENAI key — flagging .env_secret_error
+                # there is a false alarm. `is_anthropic` already gates the
+                # enabled case (this whole else-branch is non-anthropic); the
+                # explicit protocol check additionally covers a *disabled*
+                # anthropic runtime, where is_anthropic is False but the agent
+                # still shouldn't be treated as an openai provider.
+                results[".env_secret_error"] = "secret not found or decryption failed"
         except ValueError as e:
             # Newline injection detected in a runtime field — log and surface,
             # but continue: the recycler line is still written so Window 2 works.

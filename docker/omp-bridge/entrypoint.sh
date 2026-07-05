@@ -127,13 +127,21 @@ if [ -z "${OPENAI_BASE_URL:-}" ] || [ -z "${OPENAI_MODEL:-}" ]; then
 fi
 _BASE_URL="${OPENAI_BASE_URL}"
 _MODEL="${OPENAI_MODEL}"
+# Auth line for the rendered provider: keyed endpoints (e.g. Ollama Cloud)
+# get the bootstrap-delivered OPENAI_API_KEY; keyless local vLLM keeps
+# auth: none. Rendered as a single pre-built line to keep the heredoc simple.
+if [ -n "${OPENAI_API_KEY:-}" ]; then
+    _AUTH_LINE="    apiKey: ${OPENAI_API_KEY}"
+else
+    _AUTH_LINE="    auth: none"
+fi
 cat > "${MODELS_DIR}/models.yml" <<YAML
 providers:
   mc-openai:
     name: MC OpenAI-compatible endpoint
     baseUrl: ${_BASE_URL}
     api: openai-completions
-    auth: none
+${_AUTH_LINE}
     models:
       - id: ${_MODEL}
         name: MC model

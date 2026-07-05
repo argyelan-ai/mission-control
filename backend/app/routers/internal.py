@@ -29,9 +29,10 @@ async def build_runtime_env(
 
     Phase 16 (D-14/D-15/D-16/D-17):
       - runtime is None or enabled=False  → empty dict
-      - slug starts with "anthropic-claude-" → CLAUDE_CODE_OAUTH_TOKEN from vault
-        (key: claude_code_oauth_token), NO OPENAI_* keys
-      - all other slugs → OPENAI_BASE_URL (from runtime.endpoint) +
+      - anthropic protocol → empty dict here; provider auth
+        (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
+        resolve_provider_credentials (ADR-056), NO OPENAI_* keys
+      - all other runtimes → OPENAI_BASE_URL (from runtime.endpoint) +
         OPENAI_MODEL (from runtime.model_identifier if set)
 
     Phase 24 (HERM-04, ADR-029):
@@ -65,15 +66,17 @@ async def build_runtime_env(
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         return tokens
-    if runtime.slug.startswith("anthropic-claude-"):
-        oauth = await get_secret_plaintext_by_key(session, "claude_code_oauth_token")
-        if oauth:
-            tokens["CLAUDE_CODE_OAUTH_TOKEN"] = oauth
-    else:
-        if runtime.endpoint:
-            tokens["OPENAI_BASE_URL"] = runtime.endpoint
-        if runtime.model_identifier:
-            tokens["OPENAI_MODEL"] = runtime.model_identifier
+    from app.services.harness_compat import runtime_protocol
+    if runtime_protocol(runtime) == "anthropic":
+        # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
+        # resolve_provider_credentials (ADR-056) — no longer loaded here to
+        # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
+        # the claude binary talks to api.anthropic.com directly.
+        return tokens
+    if runtime.endpoint:
+        tokens["OPENAI_BASE_URL"] = runtime.endpoint
+    if runtime.model_identifier:
+        tokens["OPENAI_MODEL"] = runtime.model_identifier
     return tokens
 
 
@@ -108,16 +111,8 @@ async def agent_bootstrap(
     else:
         logger.warning("bootstrap(%s): mc_token_%s nicht im Vault", agent_name, slug)
 
-    # OPENAI_API_KEY: first agent.secret_id (per-agent override), then fallback to ollama_api_key
-    if agent.secret_id:
-        from app.services.secrets_helper import get_secret_plaintext_by_id
-        api_key = await get_secret_plaintext_by_id(session, agent.secret_id)
-        if api_key:
-            tokens["OPENAI_API_KEY"] = api_key
-    if "OPENAI_API_KEY" not in tokens:
-        api_key = await get_secret_plaintext_by_key(session, "ollama_api_key")
-        if api_key:
-            tokens["OPENAI_API_KEY"] = api_key
+    # OPENAI_API_KEY / CLAUDE_CODE_OAUTH_TOKEN are resolved together below,
+    # after the runtime is loaded, via resolve_provider_credentials (ADR-056).
 
     # GH_TOKEN: global GitHub Personal Access Token for autonomous git ops
     # (push, PR, etc.). Lives once in the vault (key="github_token") and is
@@ -151,11 +146,20 @@ async def agent_bootstrap(
     # runtime is disabled the same fallback applies, so a misconfiguration
     # doesn't leave the agent in an unstartable state.
     # Phase 16 (D-17): routing logic consolidated in build_runtime_env().
+    runtime = None
     if agent.runtime_id:
         from app.models.runtime import Runtime
         runtime = await session.get(Runtime, agent.runtime_id)
         rt_env = await build_runtime_env(runtime, session)
         tokens.update(rt_env)
+
+    # Provider auth (ADR-056): agent secret > runtime secret > global fallback
+    # for openai protocol; CLAUDE_CODE_OAUTH_TOKEN for anthropic. Single source
+    # shared with the .env render so the two can never drift. Agents WITHOUT a
+    # runtime still get the ollama_api_key fallback (runtime=None → openai chain).
+    from app.services.harness_compat import resolve_provider_credentials
+    creds = await resolve_provider_credentials(session, agent, runtime)
+    tokens.update(creds)
 
     # Phase 3 — Claude-Process Recycler kill-switch (MEM-01). Always set,
     # independent of runtime. Container reads this once at start and decides

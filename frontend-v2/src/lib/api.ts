@@ -849,7 +849,7 @@ export const api = {
      */
     previewRuntimeSwitch: (
       id: string,
-      data: { runtime_id: string; force_when_in_progress?: boolean },
+      data: { runtime_id: string; force_when_in_progress?: boolean; harness?: import("@/lib/types").Harness },
     ) =>
       request<import("@/lib/types").RuntimeSwitchPreview>(
         `/api/v1/agents/${id}/preview-runtime-switch`,
@@ -863,7 +863,7 @@ export const api = {
     switchRuntime: (
       id: string,
       runtime_id: string | null,
-      opts?: { force_when_in_progress?: boolean },
+      opts?: { force_when_in_progress?: boolean; harness?: import("@/lib/types").Harness },
     ) =>
       request<Agent & { _switch?: import("@/lib/types").RuntimeSwitchPreview }>(
         `/api/v1/agents/${id}`,
@@ -872,6 +872,7 @@ export const api = {
           body: JSON.stringify({
             runtime_id,
             force_when_in_progress: opts?.force_when_in_progress ?? false,
+            ...(opts?.harness ? { harness: opts.harness } : {}),
           }),
         },
       ),
@@ -1534,6 +1535,10 @@ export const api = {
   runtimes: {
     list: (): Promise<RuntimesResponse> =>
       request("/api/v1/runtimes"),
+    // ADR-056 — harness x runtime compatibility matrix for the harness
+    // selector in RuntimeSwitchModal.
+    compatMatrix: (): Promise<import("@/lib/types").CompatMatrix> =>
+      request("/api/v1/runtimes/compat-matrix"),
     addLmstudio: (data: { lms_identifier: string; display_name: string; endpoint?: string }): Promise<Runtime> =>
       request("/api/v1/runtimes", { method: "POST", body: JSON.stringify(data) }),
     vllm: {

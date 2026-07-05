@@ -172,9 +172,10 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
           }}
           agent={pickedAgent}
           targetRuntimeId={runtime.id}
-          onConfirm={async ({ force_when_in_progress }) => {
+          onConfirm={async ({ force_when_in_progress, harness }) => {
             const res = await api.agents.switchRuntime(pickedAgent.id, runtime.id, {
               force_when_in_progress,
+              harness,
             });
             return res._switch ?? null;
           }}

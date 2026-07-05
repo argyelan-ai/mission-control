@@ -190,6 +190,12 @@ class SwitchResult:
     warnings: list[str]
     dry_run: bool = False
     health: dict[str, Any] = field(default_factory=dict)
+    # ADR-056: the second switch axis. `harness` is the effective target
+    # harness (new_harness or agent.harness or derive_harness(new_runtime)),
+    # `old_harness` the pre-switch effective harness — both surfaced so the UI
+    # can render the harness change alongside the runtime change.
+    harness: str | None = None
+    old_harness: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -200,6 +206,8 @@ class SwitchResult:
             "warnings": list(self.warnings),
             "dry_run": self.dry_run,
             "health": self.health or None,
+            "harness": self.harness,
+            "old_harness": self.old_harness,
         }
 
 
@@ -370,6 +378,7 @@ async def switch_agent_runtime(
     new_runtime_id: uuid.UUID,
     *,
     force_when_in_progress: bool = False,
+    new_harness: str | None = None,
     dry_run: bool = False,
 ) -> SwitchResult:
     """Atomically switch ``agent`` to ``new_runtime_id``.
@@ -420,6 +429,28 @@ async def switch_agent_runtime(
 
     warnings = await validate_compatibility(session, agent, new_runtime)
 
+    # ADR-056: harness/provider decoupling — the second switch axis. The
+    # effective harness resolves through the explicit request, then the agent's
+    # current harness, then a runtime-derived legacy fallback (so unmigrated
+    # NULL rows behave exactly as before). Matrix validation only fires when we
+    # actually have an effective harness — legacy NULL keeps the old behaviour.
+    from app.services.harness_compat import (
+        derive_harness,
+        incompat_reason,
+        is_compatible,
+    )
+
+    effective_old_harness = agent.harness or derive_harness(old_runtime)
+    effective_new_harness = new_harness or agent.harness or derive_harness(new_runtime)
+    if effective_new_harness is not None and not is_compatible(
+        effective_new_harness, new_runtime
+    ):
+        raise RuntimeIncompatibleError(
+            incompat_reason(effective_new_harness, new_runtime)
+            or f"Harness '{effective_new_harness}' ist mit Runtime "
+            f"'{new_runtime.slug}' nicht kompatibel."
+        )
+
     if is_agent_busy(agent) and not force_when_in_progress:
         raise AgentBusyError(
             f"Agent {agent.name} hat eine aktive Task ({agent.current_task_id}). "
@@ -427,7 +458,12 @@ async def switch_agent_runtime(
             current_task_id=agent.current_task_id,
         )
 
-    image_change = detect_image_change(old_runtime, new_runtime)
+    image_change = detect_image_change(
+        old_runtime,
+        new_runtime,
+        old_harness=effective_old_harness,
+        new_harness=effective_new_harness,
+    )
 
     if dry_run:
         elapsed_ms = int((time.monotonic() - started_at) * 1000)
@@ -439,6 +475,8 @@ async def switch_agent_runtime(
             warnings=warnings,
             dry_run=True,
             health={},
+            harness=effective_new_harness,
+            old_harness=effective_old_harness,
         )
 
     acquired = await _acquire_lock(agent.id)
@@ -449,6 +487,7 @@ async def switch_agent_runtime(
         )
 
     snapshot_old_runtime_id = agent.runtime_id
+    snapshot_old_harness = agent.harness
     await publish_switch_progress(agent.id, "rendering")
 
     try:
@@ -459,6 +498,7 @@ async def switch_agent_runtime(
                 # renderer picks the correct image for this agent. Apply
                 # the DB change first, then render.
                 agent.runtime_id = new_runtime.id
+                agent.harness = effective_new_harness
                 if new_runtime.model_identifier:
                     agent.model = new_runtime.model_identifier
                 agent.updated_at = utcnow()
@@ -471,6 +511,7 @@ async def switch_agent_runtime(
                 # path for the caller — user sees rollback semantics).
                 logger.error("compose render failed for %s: %s", agent.name, e)
                 agent.runtime_id = snapshot_old_runtime_id
+                agent.harness = snapshot_old_harness
                 agent.updated_at = utcnow()
                 session.add(agent)
                 await session.commit()
@@ -488,6 +529,7 @@ async def switch_agent_runtime(
         else:
             # Same-image switch: update DB now, no compose change needed.
             agent.runtime_id = new_runtime.id
+            agent.harness = effective_new_harness
             if new_runtime.model_identifier:
                 agent.model = new_runtime.model_identifier
             agent.updated_at = utcnow()
@@ -505,15 +547,24 @@ async def switch_agent_runtime(
         # Step 8 — restart / recreate container.
         # D-11: same-image switches use tmux respawn-window (15-30s saved);
         # cross-image switches still need force_recreate to pull the new image.
+        #
+        # ADR-056 exception: omp agents render their provider config
+        # (models.yml / omp.env) ONLY in entrypoint.sh at container start. A
+        # tmux respawn-window re-execs Window 0 but keeps the container's
+        # existing environment, so the old endpoint/model would survive a
+        # same-image switch INTO omp. Force a full `docker restart` (not a
+        # respawn) whenever the effective target harness is omp — the
+        # entrypoint then re-runs bootstrap and emits a fresh models.yml,
+        # mirroring the ADR-054 watcher's docker-restart mechanism.
         await publish_switch_progress(agent.id, "restarting")
         restart_result = restart_docker_agent_container(
             agent,
             force_recreate=image_change,
-            respawn_window_only=(not image_change),
+            respawn_window_only=(not image_change and effective_new_harness != "omp"),
         )
         status = restart_result.get("status", "")
         if status.startswith("error"):
-            await _rollback(session, agent, snapshot_old_runtime_id, image_change)
+            await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
             await _emit_failure_event(
                 session, agent, old_runtime, new_runtime,
                 reason=f"container restart failed: {status}", elapsed_ms=int((time.monotonic() - started_at) * 1000),
@@ -535,7 +586,11 @@ async def switch_agent_runtime(
         # switch is cross-image (respawn_mode=False), whose docker-inspect check
         # would report healthy before the TUI is up. The glyphs match the omp
         # chat prompt box ("╭─" frame + "❯" input) shown after setup-wizard skip.
-        is_omp = new_runtime.runtime_type == "omp"
+        is_omp = (
+            effective_new_harness == "omp"
+            if effective_new_harness
+            else new_runtime.runtime_type == "omp"
+        )
         await publish_switch_progress(agent.id, "waiting_healthy")
         health = await wait_for_agent_healthy(
             agent,
@@ -544,7 +599,7 @@ async def switch_agent_runtime(
             ready_signals=("╭─", "❯") if is_omp else None,
         )
         if not health.get("healthy"):
-            await _rollback(session, agent, snapshot_old_runtime_id, image_change)
+            await _rollback(session, agent, snapshot_old_runtime_id, image_change, old_harness=snapshot_old_harness)
             await _emit_failure_event(
                 session, agent, old_runtime, new_runtime,
                 reason=f"health check failed: {health.get('reason')}",
@@ -591,6 +646,8 @@ async def switch_agent_runtime(
             warnings=warnings,
             dry_run=False,
             health=dict(health),
+            harness=effective_new_harness,
+            old_harness=effective_old_harness,
         )
 
     finally:
@@ -605,10 +662,13 @@ async def _rollback(
     agent: Agent,
     old_runtime_id: uuid.UUID | None,
     image_change: bool,
+    *,
+    old_harness: str | None = None,
 ) -> None:
     """Restore DB + files + image overlay + container to the pre-switch state."""
     try:
         agent.runtime_id = old_runtime_id
+        agent.harness = old_harness
         agent.updated_at = utcnow()
         session.add(agent)
         await session.commit()

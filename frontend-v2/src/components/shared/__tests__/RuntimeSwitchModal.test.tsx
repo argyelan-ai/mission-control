@@ -8,12 +8,30 @@
  *   4. submit calls onConfirm with force_when_in_progress and closes on success
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RuntimeSwitchModal } from "../RuntimeSwitchModal";
 import { api } from "@/lib/api";
-import type { Agent, RuntimeSwitchPreview } from "@/lib/types";
+import type { Agent, CompatMatrix, RuntimeSwitchPreview } from "@/lib/types";
+
+const mkCompatMatrix = (overrides: Partial<CompatMatrix> = {}): CompatMatrix => ({
+  harnesses: [
+    { key: "claude", label: "Claude Code" },
+    { key: "openclaude", label: "OpenClaude" },
+    { key: "omp", label: "omp" },
+  ],
+  runtimes: [
+    {
+      slug: "qwen-general",
+      display_name: "Qwen 3.6",
+      protocol: "openai",
+      compatible_harnesses: ["openclaude", "omp"],
+      reasons: { claude: "Claude Code unterstützt nur Anthropic-Protokoll-Runtimes" },
+    },
+  ],
+  ...overrides,
+});
 
 function renderWithQuery(ui: React.ReactElement) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -335,5 +353,128 @@ describe("RuntimeSwitchModal", () => {
       "agent-1",
       expect.objectContaining({ runtime_id: "rt-new" }),
     );
+  });
+
+  describe("harness selector (ADR-056)", () => {
+    // mkAgent() has no `harness` set → the select also renders the explicit
+    // "Standard (aus Provider abgeleitet)" placeholder option (review finding 2),
+    // on top of the 3 harnesses from the compat matrix.
+    it("renders all 3 harness options from the compat matrix plus the standard placeholder", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
+    });
+
+    it("disables the option incompatible with the target runtime and shows the reason as a title", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
+      const claudeOption = within(select).getByRole("option", { name: /claude code.*nicht kompatibel/i });
+      expect(claudeOption).toBeDisabled();
+      expect(claudeOption).toHaveAttribute(
+        "title",
+        "Claude Code unterstützt nur Anthropic-Protokoll-Runtimes",
+      );
+    });
+
+    it("submit passes the selected harness through onConfirm", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      const onConfirm = vi.fn().mockResolvedValue(mkPreview());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
+      await userEvent.selectOptions(select, "omp");
+      await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+      await waitFor(() =>
+        expect(onConfirm).toHaveBeenCalledWith({ force_when_in_progress: false, harness: "omp" }),
+      );
+    });
+
+    it("blocks submission when the preselected harness is incompatible with the target runtime and shows the reason", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      const onConfirm = vi.fn().mockResolvedValue(mkPreview());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent({ harness: "claude" })}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(3));
+      expect(select).toHaveValue("claude");
+
+      const submit = screen.getByRole("button", { name: /switch/i });
+      await waitFor(() => expect(submit).toBeDisabled());
+      expect(
+        screen.getByText("Claude Code unterstützt nur Anthropic-Protokoll-Runtimes"),
+      ).toBeInTheDocument();
+
+      await userEvent.click(submit);
+      expect(onConfirm).not.toHaveBeenCalled();
+    });
+
+    it("shows the explicit standard placeholder option, selected, when agent.harness is null", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({ new_runtime: { ...mkPreview().new_runtime, slug: "qwen-general" } }),
+      );
+      vi.spyOn(api.runtimes, "compatMatrix").mockResolvedValue(mkCompatMatrix());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      const select = await screen.findByLabelText(/harness/i);
+      await waitFor(() =>
+        expect(
+          within(select).getByRole("option", { name: "Standard (aus Provider abgeleitet)" }),
+        ).toBeInTheDocument(),
+      );
+      expect(select).toHaveValue("");
+    });
   });
 });

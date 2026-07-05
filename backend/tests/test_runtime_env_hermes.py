@@ -72,7 +72,13 @@ async def test_build_runtime_env_hermes_no_anthropic_tokens(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_anthropic_regression(async_session):
-    """Regression: anthropic-claude-* slug still sets CLAUDE_CODE_OAUTH_TOKEN."""
+    """ADR-056: anthropic runtime → empty dict from build_runtime_env.
+
+    CLAUDE_CODE_OAUTH_TOKEN moved into resolve_provider_credentials (single
+    source shared with the .env render). build_runtime_env sets no OAuth and
+    no OPENAI_* keys for anthropic runtimes. OAuth resolution is covered by
+    tests/test_provider_credentials.py::test_anthropic_oauth.
+    """
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -84,14 +90,9 @@ async def test_build_runtime_env_anthropic_regression(async_session):
         enabled=True,
     )
 
-    with patch(
-        "app.routers.internal.get_secret_plaintext_by_key",
-        new=AsyncMock(return_value="oauth-token-xyz"),
-    ):
-        env = await build_runtime_env(rt, async_session)
+    env = await build_runtime_env(rt, async_session)
 
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token-xyz"
-    assert "OPENAI_BASE_URL" not in env
+    assert env == {}
 
 
 @pytest.mark.asyncio

@@ -1,0 +1,60 @@
+"""0143 — agents.harness (Harness/Provider decoupling, ADR-056).
+
+Backfill derives the harness from the agent's current runtime binding so
+existing cli-bridge agents keep their exact behaviour:
+  runtime_type == "omp"                                          -> "omp"
+  runtime slug LIKE "anthropic-claude-%"                         -> "claude"
+  runtime_type IN (vllm_docker, lmstudio, openai_compatible,
+                   unsloth, cloud)                               -> "openclaude"
+Host agents / agents without runtime / agents on unknown or special
+runtime types (e.g. hermes) stay NULL — the openclaude backfill is scoped
+to exactly the runtime types that were coupled to the openclaude image
+before ADR-056, so nothing outside that set is silently migrated.
+
+Revision ID: 0143
+Revises: 0142
+"""
+import sqlalchemy as sa
+from alembic import op
+
+revision = "0143"
+down_revision = "0142"
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.add_column("agents", sa.Column("harness", sa.String(), nullable=True))
+    op.execute(
+        """
+        UPDATE agents SET harness = 'omp'
+        FROM runtimes r
+        WHERE agents.runtime_id = r.id
+          AND agents.agent_runtime = 'cli-bridge'
+          AND r.runtime_type = 'omp'
+        """
+    )
+    op.execute(
+        """
+        UPDATE agents SET harness = 'claude'
+        FROM runtimes r
+        WHERE agents.runtime_id = r.id
+          AND agents.agent_runtime = 'cli-bridge'
+          AND agents.harness IS NULL
+          AND r.slug LIKE 'anthropic-claude-%'
+        """
+    )
+    op.execute(
+        """
+        UPDATE agents SET harness = 'openclaude'
+        FROM runtimes r
+        WHERE agents.runtime_id = r.id
+          AND agents.agent_runtime = 'cli-bridge'
+          AND agents.harness IS NULL
+          AND r.runtime_type IN ('vllm_docker','lmstudio','openai_compatible','unsloth','cloud')
+        """
+    )
+
+
+def downgrade() -> None:
+    op.drop_column("agents", "harness")

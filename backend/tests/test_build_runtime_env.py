@@ -5,8 +5,6 @@ D-15: openclaude/lmstudio/vllm/openai_compatible/unsloth → OPENAI_BASE_URL + O
 D-16: ollama-cloud → OPENAI shim path (slug does not start with anthropic-claude-).
 D-17: Helper extracted from internal.py — testable.
 """
-from unittest.mock import AsyncMock, patch
-
 import pytest
 
 from app.models.runtime import Runtime
@@ -14,7 +12,14 @@ from app.models.runtime import Runtime
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_anthropic(async_session):
-    """Anthropic slug → CLAUDE_CODE_OAUTH_TOKEN, no OPENAI_*-keys (D-14)."""
+    """Anthropic runtime → empty dict here (ADR-056).
+
+    Provider auth (CLAUDE_CODE_OAUTH_TOKEN) moved ENTIRELY into
+    resolve_provider_credentials so the bootstrap + .env paths share one
+    source and can't drift. build_runtime_env no longer loads the OAuth
+    token; it returns empty for anthropic runtimes (no OPENAI_* keys, no
+    BASE_URL/MODEL). See tests/test_provider_credentials.py::test_anthropic_oauth.
+    """
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -26,15 +31,9 @@ async def test_build_runtime_env_anthropic(async_session):
         enabled=True,
     )
 
-    with patch(
-        "app.routers.internal.get_secret_plaintext_by_key",
-        new=AsyncMock(return_value="oauth-token-xyz"),
-    ):
-        env = await build_runtime_env(rt, async_session)
+    env = await build_runtime_env(rt, async_session)
 
-    assert env["CLAUDE_CODE_OAUTH_TOKEN"] == "oauth-token-xyz"
-    assert "OPENAI_BASE_URL" not in env
-    assert "OPENAI_MODEL" not in env
+    assert env == {}
 
 
 @pytest.mark.asyncio

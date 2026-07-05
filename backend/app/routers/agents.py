@@ -6,7 +6,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
@@ -82,6 +82,20 @@ class AgentUpdate(BaseModel):
     # Allow switching while the agent has `current_task_id` set. Default False
     # — caller must explicitly opt in via UI confirm modal.
     force_when_in_progress: bool | None = None
+    # ADR-056: the harness axis. When present in the PATCH body, it is passed to
+    # the switch service as `new_harness`. A harness-only change (without
+    # runtime_id) re-switches the agent onto its CURRENT runtime with the new
+    # harness. Only the three known harnesses are accepted.
+    harness: str | None = None
+
+    @field_validator("harness")
+    @classmethod
+    def _validate_harness(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("claude", "openclaude", "omp"):
+            raise ValueError(
+                "harness muss 'claude', 'openclaude' oder 'omp' sein"
+            )
+        return v
 
 
 class TriggerPayload(BaseModel):
@@ -735,6 +749,13 @@ async def update_agent(
     _unset_raw = payload.model_dump(exclude_unset=True)
     runtime_change_present = "runtime_id" in _unset_raw
     new_runtime_id = _unset_raw.get("runtime_id") if runtime_change_present else None
+    # ADR-056: the harness axis rides the same switch service. A harness-only
+    # change (without runtime_id) re-switches the agent onto its CURRENT runtime
+    # with the new harness — the switch service owns the `agent.harness` write,
+    # so pull harness OUT of the generic field-merge below.
+    harness_change_present = "harness" in _unset_raw
+    new_harness = _unset_raw.get("harness")
+    changes.pop("harness", None)
     # Remove runtime_id from changes so the generic setattr loop doesn't touch it.
     changes.pop("runtime_id", None)
     force_when_in_progress = bool(changes.pop("force_when_in_progress", False))
@@ -753,53 +774,74 @@ async def update_agent(
     switch_summary: dict[str, Any] | None = None
     restart_result: dict[str, str] | None = None
 
-    if runtime_change_present:
+    # A runtime change with an explicit target, OR a harness-only change on an
+    # agent that already has a runtime binding, both delegate to the switch
+    # service. The exception-mapping block is shared — only the resolved target
+    # runtime differs (new runtime vs. the agent's current one).
+    do_runtime_switch = runtime_change_present and new_runtime_id is not None
+    do_harness_only_switch = (
+        harness_change_present and new_harness and agent.runtime_id is not None
+    )
+
+    if runtime_change_present and new_runtime_id is None:
         # Explicit unset → simple DB-only path (clear runtime_id, no restart).
-        if new_runtime_id is None:
-            agent.runtime_id = None
-            agent.updated_at = utcnow()
-            session.add(agent)
-            await session.commit()
-            await session.refresh(agent)
+        agent.runtime_id = None
+        agent.updated_at = utcnow()
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+    elif do_runtime_switch or do_harness_only_switch:
+        from app.services.agent_runtime_switch import (
+            switch_agent_runtime,
+            AgentBusyError,
+            AgentNotSwitchableError,
+            RuntimeIncompatibleError,
+            RuntimeNotFoundError,
+            RuntimeSwitchLockTimeout,
+            SwitchHealthCheckFailed,
+        )
+        if do_runtime_switch:
+            target_id = await _resolve_runtime_id(session, new_runtime_id)
         else:
-            from app.services.agent_runtime_switch import (
-                switch_agent_runtime,
-                AgentBusyError,
-                AgentNotSwitchableError,
-                RuntimeIncompatibleError,
-                RuntimeNotFoundError,
-                RuntimeSwitchLockTimeout,
-                SwitchHealthCheckFailed,
+            # harness-only: re-switch onto the SAME runtime with the new harness.
+            target_id = agent.runtime_id
+        try:
+            result_obj = await switch_agent_runtime(
+                session,
+                agent,
+                target_id,
+                new_harness=new_harness,
+                force_when_in_progress=force_when_in_progress,
             )
-            resolved_id = await _resolve_runtime_id(session, new_runtime_id)
-            try:
-                result_obj = await switch_agent_runtime(
-                    session,
-                    agent,
-                    resolved_id,
-                    force_when_in_progress=force_when_in_progress,
-                )
-                switch_summary = result_obj.to_dict()
-            except RuntimeNotFoundError as e:
-                raise HTTPException(status_code=404, detail=str(e))
-            except AgentNotSwitchableError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-            except RuntimeIncompatibleError as e:
-                raise HTTPException(status_code=422, detail=str(e))
-            except AgentBusyError as e:
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "agent_busy",
-                        "message": str(e),
-                        "current_task_id": str(e.current_task_id) if e.current_task_id else None,
-                    },
-                )
-            except RuntimeSwitchLockTimeout as e:
-                raise HTTPException(status_code=409, detail=str(e))
-            except SwitchHealthCheckFailed as e:
-                raise HTTPException(status_code=503, detail=str(e))
-            await session.refresh(agent)
+            switch_summary = result_obj.to_dict()
+        except RuntimeNotFoundError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        except AgentNotSwitchableError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except RuntimeIncompatibleError as e:
+            raise HTTPException(status_code=422, detail=str(e))
+        except AgentBusyError as e:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "agent_busy",
+                    "message": str(e),
+                    "current_task_id": str(e.current_task_id) if e.current_task_id else None,
+                },
+            )
+        except RuntimeSwitchLockTimeout as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        except SwitchHealthCheckFailed as e:
+            raise HTTPException(status_code=503, detail=str(e))
+        await session.refresh(agent)
+    elif harness_change_present and new_harness and agent.runtime_id is None:
+        # Harness-only change, but the agent has no runtime binding to
+        # re-switch onto — without this guard the request above would fall
+        # through silently (200, nothing applied).
+        raise HTTPException(
+            status_code=422,
+            detail="Agent hat keine Runtime-Bindung — Harness kann nicht gewechselt werden. Zuerst eine Runtime zuweisen.",
+        )
     elif restart:
         # Plain restart path (no runtime change) — keep existing semantics for
         # callers that just want a container bounce after touching e.g. soul_md.
@@ -830,6 +872,10 @@ class RuntimeSwitchPreviewPayload(BaseModel):
     # response uses slug-as-id, so the dropdown often passes a slug.
     runtime_id: str
     force_when_in_progress: bool = False
+    # ADR-056: optional target harness for the preview — passed straight through
+    # as `new_harness` so the modal can show the image change a harness switch
+    # would cause. None = keep the agent's current/derived harness.
+    harness: str | None = None
 
 
 async def _resolve_runtime_id(
@@ -883,6 +929,7 @@ async def preview_runtime_switch(
             session,
             agent,
             resolved_id,
+            new_harness=payload.harness,
             force_when_in_progress=payload.force_when_in_progress,
             dry_run=True,
         )

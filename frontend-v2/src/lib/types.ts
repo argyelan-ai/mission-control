@@ -490,6 +490,16 @@ export interface GatewayMessage {
   timestamp: string | null;
 }
 
+// Harness/Provider-Decoupling (ADR-056) — the CLI harness driving an agent's
+// session, independent of the LLM runtime/protocol behind it.
+export type Harness = "claude" | "openclaude" | "omp";
+
+export const HARNESS_LABELS: Record<Harness, string> = {
+  claude: "Claude Code",
+  openclaude: "OpenClaude",
+  omp: "omp",
+};
+
 export interface Agent {
   id: string;
   board_id: string | null;
@@ -543,6 +553,9 @@ export interface Agent {
   // the agent falls back to docker-compose env defaults.
   runtime_id: string | null;
   pending_runtime_sync: boolean;
+  // Harness/Provider-Decoupling (ADR-056) — explicit CLI harness override.
+  // NULL means the harness is derived from the runtime's protocol.
+  harness?: Harness | null;
   created_at: string;
   updated_at: string;
 }
@@ -1539,6 +1552,9 @@ export interface Runtime {
   // Host Registry (ADR-048): resolved host binding via runtime.host_id.
   // null/absent = no host bound (legacy string fallback or settings fallback).
   host?: HostRef | null;
+  // Harness/Provider-Decoupling (ADR-056): API key the runtime authenticates
+  // with, stored as a `secrets` row reference (never the raw value).
+  api_key_secret_id?: string | null;
 }
 
 export interface RuntimeAgentRef {
@@ -1631,6 +1647,8 @@ export interface RuntimeCreate {
   startup_notes?: string;
   ui_order?: number;
   enabled?: boolean;
+  /** Harness/Provider-Decoupling (ADR-056): bind an existing `secrets` row as this runtime's API key. */
+  api_key_secret_id?: string | null;
 }
 
 export interface RuntimesResponse {
@@ -1640,6 +1658,26 @@ export interface RuntimesResponse {
 export interface RuntimeActionResult {
   ok: boolean;
   message: string;
+}
+
+// Harness/Provider-Decoupling (ADR-056) — compat matrix for the harness
+// selector in RuntimeSwitchModal.
+export interface CompatMatrixHarness {
+  key: Harness;
+  label: string;
+}
+
+export interface CompatMatrixRuntime {
+  slug: string;
+  display_name: string;
+  protocol: "openai" | "anthropic" | null;
+  compatible_harnesses: Harness[];
+  reasons: Record<string, string>;
+}
+
+export interface CompatMatrix {
+  harnesses: CompatMatrixHarness[];
+  runtimes: CompatMatrixRuntime[];
 }
 
 // ── Runtime Schedules ─────────────────────────────────────────────────────────────

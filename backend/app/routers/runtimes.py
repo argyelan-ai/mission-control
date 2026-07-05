@@ -110,6 +110,7 @@ class RuntimeCreate(BaseModel):
     launch_command: str | None = None
     host: str | None = None  # DEPRECATED legacy string — registry binding via host_id
     host_id: uuid.UUID | None = None  # Host registry binding (ADR-048)
+    api_key_secret_id: uuid.UUID | None = None  # ADR-056: openai-protocol runtime API key
     control_url: str | None = None  # power_managed: Flask :5555 control plane
     wol_mac_address: str | None = None  # power_managed: Wake-on-LAN target MAC
     power_managed: bool = False
@@ -149,6 +150,10 @@ class RuntimeUpdate(BaseModel):
     # way is explicit host_id=null (unbind — prerequisite for the host
     # delete guard in routers/hosts.py) distinguishable from omission.
     host_id: uuid.UUID | None = None
+    # api_key_secret_id (ADR-056) mirrors the host_id special-case: PATCH must be
+    # able to both set and clear (unbind) it, so it's handled via model_fields_set
+    # in update_runtime_db rather than exclude_none.
+    api_key_secret_id: uuid.UUID | None = None
     control_url: str | None = None
     wol_mac_address: str | None = None
     power_managed: bool | None = None
@@ -456,6 +461,33 @@ async def runtimes_live_status(
         "live": live,
         "watcher_enabled": settings.runtime_watcher_enabled,
         "interval": settings.runtime_watcher_interval,
+    }
+
+
+@router.get("/compat-matrix")
+async def get_compat_matrix(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Harness x Provider matrix for the switch UI (ADR-056)."""
+    from app.services.harness_compat import (
+        HARNESSES, HARNESS_LABELS, incompat_reason, is_compatible, runtime_protocol,
+    )
+    rows = (await session.execute(select(Runtime).where(Runtime.enabled == True))).scalars().all()  # noqa: E712
+    runtimes = []
+    for rt in rows:
+        compatible = [h for h in HARNESSES if is_compatible(h, rt)]
+        reasons = {h: incompat_reason(h, rt) for h in HARNESSES if h not in compatible}
+        runtimes.append({
+            "slug": rt.slug,
+            "display_name": rt.display_name,
+            "protocol": runtime_protocol(rt),
+            "compatible_harnesses": compatible,
+            "reasons": reasons,
+        })
+    return {
+        "harnesses": [{"key": h, "label": HARNESS_LABELS[h]} for h in HARNESSES],
+        "runtimes": runtimes,
     }
 
 
@@ -818,19 +850,23 @@ async def update_runtime_db(
 ):
     """Update fields on a DB-backed runtime.
 
-    host_id (ADR-048) goes through model_fields_set instead of exclude_none:
-    an explicit null unbinds the runtime from the host (prerequisite for
-    DELETE /api/v1/hosts/{id}, whose 409 guard only clears after unbind).
+    host_id (ADR-048) and api_key_secret_id (ADR-056) go through
+    model_fields_set instead of exclude_none: an explicit null unbinds the
+    runtime from the host/secret (prerequisite for DELETE /api/v1/hosts/{id},
+    whose 409 guard only clears after unbind).
     """
     rt = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{slug}' not found")
     changes = body.model_dump(exclude_none=True)
     changes.pop("host_id", None)
+    changes.pop("api_key_secret_id", None)
     if "host_id" in body.model_fields_set:
         if body.host_id is not None:
             await _validate_host_id(session, body.host_id)
         rt.host_id = body.host_id
+    if "api_key_secret_id" in body.model_fields_set:
+        rt.api_key_secret_id = body.api_key_secret_id
     for k, v in changes.items():
         setattr(rt, k, v)
     rt.updated_at = datetime.utcnow()

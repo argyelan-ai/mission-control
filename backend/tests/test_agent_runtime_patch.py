@@ -7,7 +7,7 @@ on the switch-service namespace.
 """
 import uuid
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.models.agent import Agent
 from app.models.runtime import Runtime
@@ -200,3 +200,84 @@ async def test_patch_runtime_id_explicit_null_clears_binding(auth_client, async_
     # Confirm DB state was actually updated.
     await async_session.refresh(agent)
     assert agent.runtime_id is None
+
+
+# ── ADR-056 harness axis (Task 5 review follow-up) ──────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_harness_only_with_runtime_delegates_to_switch(auth_client, async_session):
+    rt = await _make_runtime(async_session, slug="harness-rt")
+    agent = await _make_agent(async_session, agent_runtime="cli-bridge")
+    agent.runtime_id = rt.id
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    mock_result = MagicMock()
+    mock_result.to_dict.return_value = {"harness": "openclaude", "old_harness": "claude"}
+    mock_switch = AsyncMock(return_value=mock_result)
+
+    with patch("app.services.agent_runtime_switch.switch_agent_runtime", mock_switch):
+        resp = await auth_client.patch(
+            f"/api/v1/agents/{agent.id}",
+            json={"harness": "openclaude"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["_switch"]["harness"] == "openclaude"
+    mock_switch.assert_awaited_once()
+    assert mock_switch.call_args.args[2] == rt.id
+    assert mock_switch.call_args.kwargs["new_harness"] == "openclaude"
+
+
+@pytest.mark.asyncio
+async def test_patch_harness_invalid_value_422(auth_client, async_session):
+    agent = await _make_agent(async_session, agent_runtime="cli-bridge")
+
+    resp = await auth_client.patch(
+        f"/api/v1/agents/{agent.id}",
+        json={"harness": "foo"},
+    )
+    assert resp.status_code == 422
+    assert "harness muss 'claude', 'openclaude' oder 'omp' sein" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_patch_harness_only_without_runtime_422(auth_client, async_session):
+    agent = await _make_agent(async_session, agent_runtime="cli-bridge")
+    assert agent.runtime_id is None  # pre-condition
+
+    resp = await auth_client.patch(
+        f"/api/v1/agents/{agent.id}",
+        json={"harness": "openclaude"},
+    )
+    assert resp.status_code == 422
+    assert (
+        "Agent hat keine Runtime-Bindung — Harness kann nicht gewechselt werden. Zuerst eine Runtime zuweisen."
+        in resp.json()["detail"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_preview_runtime_switch_with_harness_dry_run(auth_client, async_session):
+    rt = await _make_runtime(async_session, slug="preview-rt")
+    agent = await _make_agent(async_session, agent_runtime="cli-bridge")
+    agent.runtime_id = rt.id
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    mock_result = MagicMock()
+    mock_result.to_dict.return_value = {"harness": "omp", "old_harness": "claude"}
+    mock_switch = AsyncMock(return_value=mock_result)
+
+    with patch("app.services.agent_runtime_switch.switch_agent_runtime", mock_switch):
+        resp = await auth_client.post(
+            f"/api/v1/agents/{agent.id}/preview-runtime-switch",
+            json={"runtime_id": str(rt.id), "harness": "omp"},
+        )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["harness"] == "omp"
+    mock_switch.assert_awaited_once()
+    assert mock_switch.call_args.kwargs["new_harness"] == "omp"
+    assert mock_switch.call_args.kwargs["dry_run"] is True
