@@ -2218,6 +2218,9 @@ async def agent_update_task(
                     and blocker_type not in OPERATOR_ONLY_BLOCKER_TYPES
                     and lead is not None
                     and lead.id != agent.id
+                    # Per-task opt-out of Boss triage: operator wants this task's
+                    # blockers directly (still sends the Lead an FYI below).
+                    and not task.blocker_to_operator
                 )
 
                 if can_triage:

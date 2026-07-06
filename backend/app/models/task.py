@@ -191,6 +191,10 @@ class Task(SQLModel, table=True):
     # If True, the review handoff skips the agent reviewer — the task waits
     # in `review` for a human (appears in Inbox) and pings Mark via Telegram.
     human_review_required: bool | None = None
+    # If True, a blocker on this task skips Board-Lead (Boss) triage and goes
+    # straight to the operator (Mark), regardless of blocker_type. Opt-in per
+    # task at creation; None/False keeps the default lead-first triage.
+    blocker_to_operator: bool | None = None
 
     sort_order: int = 0
     is_auto_created: bool = False
