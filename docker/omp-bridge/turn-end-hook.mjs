@@ -106,6 +106,24 @@ export default (api) => {
       emit({ kind: "progress", at: "tool_execution_end", ts: Date.now() })
     );
 
+    // Streaming heartbeat. turn_start / tool_execution_end fire only at turn and
+    // tool boundaries — so a SINGLE long generation (e.g. the model writing a
+    // 2000-line file as one tool call: no tool_execution_end until the args are
+    // fully generated) emits no progress for minutes, and the bridge's
+    // no-progress watchdog (OMP_TURN_IDLE_TIMEOUT, default 300s) SIGKILLs a
+    // genuinely-busy TUI mid-write. message_update fires on every streamed
+    // assistant delta (verified: 60 events over a 40-line generation on omp
+    // 16.3.8), so we stamp a THROTTLED progress heartbeat — enough to keep the
+    // watchdog's last_progress fresh without appending one line per token.
+    let lastStreamHeartbeat = 0;
+    const STREAM_HEARTBEAT_MS = 3000;
+    api.on("message_update", () => {
+      const now = Date.now();
+      if (now - lastStreamHeartbeat < STREAM_HEARTBEAT_MS) return;
+      lastStreamHeartbeat = now;
+      emit({ kind: "progress", at: "message_update", ts: now });
+    });
+
     emit({ kind: "hook_ready", ts: Date.now() });
   } catch (e) {
     emit({

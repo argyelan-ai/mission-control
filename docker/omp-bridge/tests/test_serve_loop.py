@@ -202,6 +202,67 @@ def test_ready_sentinel_printed(capfd=None):
     print("PASS test_ready_sentinel_printed")
 
 
+def test_write_task_context_env_writes_three_keys():
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "mc-context.env")
+        ok = bridge.write_task_context_env(
+            {"id": "task-1", "board_id": "board-1", "dispatch_attempt_id": "att-1"}, p
+        )
+        assert ok is True
+        body = open(p, encoding="utf-8").read()
+    assert body == "TASK_ID=task-1\nBOARD_ID=board-1\nX_DISPATCH_ATTEMPT_ID=att-1\n", body
+    print("PASS test_write_task_context_env_writes_three_keys")
+
+
+def test_write_task_context_env_missing_fields_empty():
+    # board_id/attempt absent -> empty values, never a crash (mirrors poll.sh).
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "mc-context.env")
+        bridge.write_task_context_env({"id": "task-9"}, p)
+        body = open(p, encoding="utf-8").read()
+    assert body == "TASK_ID=task-9\nBOARD_ID=\nX_DISPATCH_ATTEMPT_ID=\n", body
+    print("PASS test_write_task_context_env_missing_fields_empty")
+
+
+def test_write_task_context_env_unwritable_is_best_effort():
+    # An unwritable path must return False, not raise (serve loop must survive).
+    ok = bridge.write_task_context_env(
+        {"id": "t"}, "/nonexistent-dir-xyz/mc-context.env"
+    )
+    assert ok is False
+    print("PASS test_write_task_context_env_unwritable_is_best_effort")
+
+
+def test_serve_writes_context_env_before_run():
+    # The context file must exist with the dispatch's ids by the time the run
+    # (and its ack) executes — the model's first `mc ack` depends on it.
+    import tempfile
+    with tempfile.TemporaryDirectory() as d:
+        ctx = os.path.join(d, "mc-context.env")
+        seen = {}
+
+        def rf(task, cwd):
+            # Snapshot the file as the run begins — proves write-before-run.
+            seen["at_run"] = open(ctx, encoding="utf-8").read()
+            return _finish_outcome
+
+        it = iter([{"state": "new_task", "task": TASK}])
+        bridge.serve_loop(
+            poll_interval=0, max_iterations=1,
+            _poll_fn=lambda: next(it, {"state": "idle"}),
+            _lifecycle_factory=lambda task: RecordingLifecycle(),
+            _run_factory=rf,
+            _sleep=lambda _s: None,
+            _context_env_path=ctx,
+        )
+    assert seen["at_run"] == (
+        "TASK_ID=task-1\nBOARD_ID=board-1\nX_DISPATCH_ATTEMPT_ID=att-1\n"
+    ), seen
+    print("PASS test_serve_writes_context_env_before_run")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

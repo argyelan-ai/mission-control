@@ -18,6 +18,37 @@ Design + rationale: **[ADR-049](../../docs/decisions/049-omp-native-tui-session.
 
 ---
 
+## ⚠️ Contract for ANY agent harness (don't forget when integrating a new CLI)
+
+A harness that replaces `poll.sh` (like this one) **loses two things poll.sh did
+for free** for the claude/openclaude fleet. Every new CLI bridge (a future
+coding agent, a new TUI, etc.) MUST re-provide both, or its agents silently
+break in ways that look like model problems:
+
+1. **Write `/tmp/mc-context.env` on every dispatch.** The `mc` CLI reads
+   `TASK_ID` / `BOARD_ID` / `X_DISPATCH_ATTEMPT_ID` from this file first
+   (`scripts/mc-cli/mc_cli/config.py:from_env`). Without it the agent's own
+   `mc ack|deliverable|done` fail (*"TASK_ID … müssen gesetzt sein"*) and status
+   calls are rejected 409 (*"Missing X-Dispatch-Attempt-Id"*) → the agent can't
+   register deliverables. `poll.sh` writes it (`docker/shared/poll.sh`); here
+   `bridge.py:write_task_context_env` does. Fallback: `mc recover` rewrites it.
+
+2. **Emit a streaming progress heartbeat, not just turn/tool-boundary events.**
+   The no-progress watchdog (`OMP_TURN_IDLE_TIMEOUT`, 300s) measures liveness
+   from the hook's `progress` records. If the harness only emits at
+   `turn_start` / `tool_execution_end`, a **single long generation** (e.g. the
+   model writing a 2000-line file in one tool call — no `tool_execution_end`
+   until the args finish) looks like a hang and gets SIGKILLed mid-write. The
+   hook must heartbeat on a per-delta event (here: `message_update`, throttled —
+   see `turn-end-hook.mjs`). Verify empirically: `progress @ <delta-event>`
+   records must appear in the signal file during a long generation.
+
+Both were live bugs on the omp path (Sparky) — fixed in PR #68. See also
+`mc_cli/config.py` (the file contract) and `bridge.py:supervise_stream` /
+`run_native_turn` (the watchdog).
+
+---
+
 ## The pieces
 
 | File | What it is |

@@ -6,7 +6,7 @@
     "version": "2.1.201"
   },
   "omp": {
-    "version": "16.2.13",
-    "sha256": "7cc62ef691d38c837141d7040c0730ed9c66da16a2d77ae5ccec025c099ea89d"
+    "version": "16.3.8",
+    "sha256": "579e1b40c2abc61c6873d12176153ce14ffc0868520021ce1b9afe6392889961"
   }
 }
