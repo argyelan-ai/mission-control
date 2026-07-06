@@ -412,6 +412,66 @@ Fortschrittsanzeige (Phasen: Manifest → Build (Log-Tail) → Recreate).
 **Nicht in v1:** GHCR-Publish der Agent-Images, Auto-Update-Policy,
 Changelog-Anzeige im Dialog.
 
+#### Sparkrun Recipe-Switching — Solo-Capability-Guard (NEU 2026-07-06, ADR-059)
+
+Der DGX Spark hat **1 GPU**. `sparkrun` (die Recipe-CLI, die vLLM-Container auf
+dem Spark steuert) bietet für dasselbe Modell teils mehrere Registry-Varianten
+an — eine `@official`-Variante mit `tp=1`/`nodes=1` (solo-fähig) und
+`@eugr`/`@community`-Varianten mit `tp=2`/`tp=4` + `vllm-ray`-Backend für
+Multi-GPU-Cluster. `services/sparkrun_manager.list_recipes()` parste bisher
+nur `name`/`model`/`registry` aus `sparkrun list` und **verwarf die TP/Nodes-
+Spalten** — genau das Signal, das solo- von cluster-Recipes unterscheidet.
+`build_launch_command()` setzte nie `--tensor-parallel` (`--solo` steuert nur
+den Ray-Node-Bootstrap, nicht den tp-Wert) — ein Recipe-Switch auf eine
+tp=2-Variante schlug auf dem 1-GPU-Host still fehl ("engine unreachable").
+
+**Fix:** `list_recipes()` parst `tp`/`nodes` (Spalten 2/3, `-` → `None`) und
+berechnet `solo_capable` gegen die **tatsächliche** GPU-Zahl des Ziel-Hosts
+(`get_host_gpu_count()`, `nvidia-smi -L | wc -l`, host-scoped über den ADR-048
+`ResolvedHost`-Chain, Fallback `1` bei SSH-Fehler — nie hartkodiert).
+`switch_recipe()` konsultiert das VOR jedem Evict:
+
+- **`nodes > 1`** → Switch abgebrochen (Activity-Event
+  `runtime.recipe_switch_rejected`) **bevor** der aktuell laufende Container
+  evicted wird — ein Multi-Node-Recipe kann dieser Single-Host-Deployment nie
+  gelingen, ein unwinnbarer Switch darf nicht erst das gesunde Modell killen.
+- **`tp > host_gpu_count`, `nodes <= 1`** → `build_launch_command(...,
+  tp_override=host_gpu_count)` injiziert `--tensor-parallel <N>` und der
+  Switch läuft weiter (best-effort — ob das Modell bei weniger VRAM/GPU passt,
+  entscheidet nur vLLM selbst, siehe unten).
+- Recipe unbekannt (nicht in `sparkrun list`) oder der Guard selbst nicht
+  erreichbar (SSH-Fehler) → Switch läuft ohne Guard weiter statt auf
+  fehlender Information zu blockieren.
+
+**Zweiter Fix (derselbe Vorfall):** `runtime_manager.start_runtime()` prüfte
+bisher nur, ob ein Container mit dem `mc.runtime.slug`-Label erscheint
+(`verify_spark_container_started`) — nicht, ob vLLM darin wirklich läuft.
+Manche Launches (sparkrun-Solo-Wrapper, manuelle Container) halten PID1 als
+`sleep infinity`, während vLLM als separater, out-of-band gestarteter Prozess
+läuft — der kann sterben (falsches tp, OOM, Crash), während der Container
+"running" bleibt. Neuer zweiter Check `verify_spark_vllm_process_started`
+pollt `docker top` auf einen echten `vllm serve`-Prozess (gleicher Scan wie
+`_container_runs_vllm_server` für Discovery) bevor `start_runtime` Erfolg
+meldet — schliesst genau die Silent-Failure-Lücke aus dem Vorfall (sparkrun
+meldet `exit 0` fire-and-forget, nichts serviert tatsächlich).
+
+Frontend: `SparkRecipeSwitcher` zeigt `tp`/`nodes` als Badge und deaktiviert
+nicht-solo-fähige Recipes (Tooltip + Hinweistext), statt sie gleichwertig
+anklickbar zu lassen.
+
+Als Nebenbefund verifiziert (kein Code-Fix nötig): der Agent-Restart-
+Propagationspfad (`services/runtime_propagation.py` → `docker_agent_sync.
+restart_docker_agent_container`) kann strukturell nie einen sparkrun-Modell-
+Container treffen — der Container-Name kommt ausschliesslich vom Agent-Slug
+(`mc-agent-<slug>`), nie von einem Runtime-/Modell-Identifier. Eine
+Assertion + Regressionstest (`test_agent_restart_never_targets_runtime_
+container.py`) machen das als Tripwire fest. Der `docker restart`, der beim
+Vorfall den sparkrun-Container zurücksetzte, kam stattdessen vom manuellen
+Restart-Button (`runtime_manager.restart_runtime()`, `/runtimes/{id}/restart`)
+— erwartetes Verhalten für einen bewussten Restart-Klick, aber ein Hinweis,
+dass ein Restart auf einem sparkrun-Solo-Container den injizierten vLLM-
+Prozess killt, ohne ihn neu zu starten (v2-Kandidat, nicht in diesem Fix).
+
 ---
 
 ## Zentrale Flows
@@ -737,6 +797,7 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-07-06** — **Solo-Capability-aware Recipe Switching (ADR-059):** Behebt den "engine unreachable"-Vorfall beim Recipe-Switch auf `@eugr/qwen3.6-35b-a3b-fp8` (tp=2 auf dem 1-GPU-Spark). `sparkrun_manager.list_recipes()` parst jetzt `tp`/`nodes` aus `sparkrun list` und berechnet `solo_capable` gegen die per `get_host_gpu_count()` (`nvidia-smi -L | wc -l`, host-scoped ADR-048) ermittelte reale GPU-Zahl. `switch_recipe()` bricht Multi-Node-Recipes VOR dem Evict ab (`runtime.recipe_switch_rejected`-Event) und injiziert `--tensor-parallel <host_gpu_count>` bei reinen TP-Overages (`build_launch_command(..., tp_override=...)`) statt sich auf `--solo` zu verlassen (das nur den Ray-Bootstrap steuert, nie den tp-Wert). Zweiter, unabhängiger Fix am selben Vorfall: `runtime_manager.start_runtime()` bekommt einen zweiten Post-Launch-Check `verify_spark_vllm_process_started` (`docker top`-Scan auf einen echten `vllm serve`-Prozess) — schliesst die Lücke, dass ein Container "running" sein kann (PID1 `sleep infinity`), während der injizierte vLLM-Prozess längst gecrasht ist, und sparkrun das per `--no-follow` nie meldet. Frontend `SparkRecipeSwitcher` zeigt tp/nodes-Badges und deaktiviert nicht-solo-fähige Recipes. Als Nebenbefund verifiziert: der Agent-Restart-Propagationspfad (`runtime_propagation.py`) kann strukturell nie einen sparkrun-Container treffen (Container-Name kommt nur vom Agent-Slug) — Assertion + Regressionstest als Tripwire; der `docker restart`, der beim Vorfall den sparkrun-Container zurücksetzte, kam vom manuellen `/runtimes/{id}/restart`-Button, nicht aus der Propagation. ADR-059.
 - **2026-07-05** — **Engine Control v0: Autostart-Flag via SSH (ADR-057):** Erster Baustein von Cockpit v2 ("MC folgt der Engine" → "MC steuert die Engine"). Neue Spalten `runtimes.autostart_supported`/`autostart_flag_path` (Migration 0146, additive, Default aus) — Operator setzt sie zur Laufzeit via `PATCH /runtimes/db/{slug}` oder UI, nie geseeded. `services/runtime_autostart.py` führt `test -f`/`touch`/`rm -f` über den bestehenden `runtime_manager._ssh_run()` + Host-Registry-Resolver (`host_id` → `hosts`, ADR-048) aus — keine zweite SSH-Implementierung, kein separates Host/User-Feld pro Runtime. `GET/POST /runtimes/db/{slug}/autostart` (on-demand, nicht Teil des 90s-Watcher-Takts, ADR-054-Präzedenzfall): POST touched/entfernt die Flag-Datei und liest sie zur Verifikation zurück, emittiert `runtime.autostart_changed`; ein unerreichbarer Host liefert `enabled: null, reachable: false` bzw. bei POST einen 502 mit klarer Meldung statt Stacktrace. Frontend `AutostartToggle.tsx` auf der `/runtimes`-Karte (nur wenn `autostart_supported=true`): 3 Zustände an/aus/unbekannt, disabled bei unbekanntem Host, kein optimistisches UI. ADR-057.
 - **2026-07-05** — **CLI-Tool-Updates aus User-Sicht (ADR-058, Migration 0147):** `docker/cli-versions.json` wird Single Source of Truth für die Soll-Versionen der drei Agent-CLIs (`openclaude`/`claude`/`omp`), gelesen von `build-agent-images.sh` (Build-Args) und `services/cli_versions.py` (Ist-Stand via OCI-Labels `mc.cli.name`/`mc.cli.version`). `services/cli_update_check.py` prüft periodisch (6h, npm/GitHub-Releases) auf neue Versionen, kein Auto-Update. Ein UI-Klick auf `/runtimes` → CLI-Tools löst `services/cli_update_runner.py` aus: Manifest bumpen → Build via `cli-bridge.py` `POST /agent-images/build` auf dem Host (Docker-Socket-Proxy-Regel `BUILD: 0`, ADR-047) → bei Fehlschlag Manifest-Rollback, bei Erfolg Rolling Recreate der betroffenen Harness-Agents (idle sofort, busy → `agents.pending_recreate`, abgearbeitet vom nächsten Runtime-Watcher-Tick — ADR-054-Propagationsmechanik wiederverwendet). Neue API `/api/v1/cli-tools`, neue Frontend-Sektion `CliToolsSection` auf `/runtimes`. Bewusst nicht v1: GHCR-Publish, Auto-Update-Policy, Changelog-Anzeige.
 - **2026-07-05** — **Human-simulating E2E-Toggle (Migration 0142):** Auftragsmaske bekommt die Toggle-Pill »E2E test« (`tasks.e2e_test_required`) — nach Review-Approve geht der Task durchs bestehende `user_test`-Gate auch OHNE Subtasks/needs_browser; der Tester-Agent fährt echte User-Flows über den Playwright-MCP (`browser_navigate/click/type/snapshot`, Screenshots inline). Dabei zwei Altlasten gefixt: (1) **`handle_test_handoff` übergab den String `tester` an `find_agent_by_role`, das `role.value` aufruft → JEDER Test-Handoff crashte seit jeher still** (try/except-Warning), user_test-Tasks bekamen nie einen Tester — jetzt `AgentRole.TESTER` + Regression-Test; (2) die Tester-Directive (`_build_test_message`) hardcodierte den toten `dev-browser`-CLI-Heredoc — jetzt Playwright-MCP-Flow, konsistent mit SOUL.md. Fail-loud: explizit angefordertes E2E ohne verfügbaren Tester-Agent → `blocked` + Operator-Blocker-Kommentar statt stillem Skip (implizites Gate behält Legacy-Verhalten).
