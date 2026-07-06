@@ -1721,6 +1721,21 @@ export interface RuntimeActionResult {
   message: string;
 }
 
+// Sparkrun recipe management (ADR-059) — `tp`/`nodes` come straight from
+// `sparkrun list`'s TP/Nodes columns (null when the CLI prints `-`).
+// `solo_capable` is derived server-side against the target host's actual
+// GPU count (see sparkrun_manager.list_recipes) — a recipe needing more
+// GPUs/nodes than the host has is NOT solo-startable, even though nothing
+// about its name suggests that.
+export interface SparkrunRecipe {
+  name: string;
+  model: string | null;
+  registry: string;
+  tp: number | null;
+  nodes: number | null;
+  solo_capable: boolean;
+}
+
 // Harness/Provider-Decoupling (ADR-056) — compat matrix for the harness
 // selector in RuntimeSwitchModal.
 export interface CompatMatrixHarness {

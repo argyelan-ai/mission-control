@@ -197,9 +197,19 @@ export function SparkRecipeSwitcher({
             {listQuery.data?.recipes.map((r) => {
               const isActive = r.name === currentRecipe;
               const isConfirm = confirmRecipe === r.name;
+              const isDisabled = !r.solo_capable;
+              const gpuHint =
+                r.tp != null || r.nodes != null
+                  ? `tp=${r.tp ?? 1}${r.nodes != null ? `, nodes=${r.nodes}` : ""}`
+                  : null;
               return (
                 <div
                   key={r.name}
+                  title={
+                    isDisabled
+                      ? `Braucht ${gpuHint ?? "mehr GPUs/Nodes"} — nicht solo-startbar auf diesem Host`
+                      : undefined
+                  }
                   style={{
                     display: "flex",
                     flexDirection: "column",
@@ -210,34 +220,49 @@ export function SparkRecipeSwitcher({
                       : isConfirm
                       ? "rgba(255,178,36,0.08)"
                       : "transparent",
-                    cursor: isActive ? "default" : "pointer",
+                    opacity: isDisabled ? 0.45 : 1,
+                    cursor: isActive || isDisabled ? "default" : "pointer",
                     transition: "background 0.12s",
                   }}
                   onClick={() => {
-                    if (!isActive && !switchMutation.isPending) {
+                    if (!isActive && !isDisabled && !switchMutation.isPending) {
                       setConfirmRecipe(isConfirm ? null : r.name);
                     }
                   }}
                   onMouseEnter={(e) => {
-                    if (!isActive && !isConfirm) {
+                    if (!isActive && !isConfirm && !isDisabled) {
                       (e.currentTarget as HTMLDivElement).style.background =
                         "rgba(255,255,255,0.04)";
                     }
                   }}
                   onMouseLeave={(e) => {
-                    if (!isActive && !isConfirm) {
+                    if (!isActive && !isConfirm && !isDisabled) {
                       (e.currentTarget as HTMLDivElement).style.background = "transparent";
                     }
                   }}
                 >
                   <div className="flex items-center gap-2">
                     {isActive && <Check size={11} style={{ color: C.online, flexShrink: 0 }} />}
+                    {isDisabled && (
+                      <AlertCircle size={11} style={{ color: C.warning, flexShrink: 0 }} />
+                    )}
                     <span
                       className="font-mono text-[11px] truncate"
                       style={{ color: "var(--color-text-primary)", flex: 1 }}
                     >
                       {r.name}
                     </span>
+                    {gpuHint && (
+                      <span
+                        className="text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0"
+                        style={{
+                          background: "rgba(255,255,255,0.05)",
+                          color: "var(--color-text-muted)",
+                        }}
+                      >
+                        {gpuHint}
+                      </span>
+                    )}
                     <span
                       className="text-[9px] uppercase tracking-wider px-1.5 py-0.5 rounded shrink-0"
                       style={{
@@ -258,6 +283,14 @@ export function SparkRecipeSwitcher({
                       style={{ color: "var(--color-text-muted)", marginTop: "2px" }}
                     >
                       {r.model}
+                    </span>
+                  )}
+                  {isDisabled && (
+                    <span
+                      className="text-[10px]"
+                      style={{ color: C.warning, marginTop: "2px" }}
+                    >
+                      Braucht {gpuHint ?? "mehr GPUs/Nodes"} — nicht solo-startbar
                     </span>
                   )}
                   {isConfirm && (

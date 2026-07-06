@@ -1597,7 +1597,7 @@ export const api = {
     // whose launch_command invokes `sparkrun run <recipe>`.
     sparkrun: {
       listRecipes: (): Promise<{
-        recipes: { name: string; model: string | null; registry: string }[];
+        recipes: import("@/lib/types").SparkrunRecipe[];
       }> => request("/api/v1/runtimes/sparkrun/recipes"),
       currentRecipe: (runtimeId: string): Promise<{
         slug: string;
