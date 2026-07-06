@@ -81,12 +81,16 @@ async def _make_board_with_agents(
     return board_id, worker, worker_token, lead, lead_token
 
 
-async def _make_task(board_id, *, status="in_progress", assigned_agent_id=None):
+async def _make_task(
+    board_id, *, status="in_progress", assigned_agent_id=None,
+    blocker_to_operator=None,
+):
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = Task(
             board_id=board_id, title="Blockierbarer Task", description="x",
             status=status, assigned_agent_id=assigned_agent_id,
+            blocker_to_operator=blocker_to_operator,
         )
         s.add(task)
         await s.commit()
@@ -220,6 +224,57 @@ async def test_triage_disabled_board_goes_direct_to_operator(
     assert resp.status_code == 200, resp.text
     assert len(await _approvals_for(task.id)) == 1
     tg.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_blocker_to_operator_flag_skips_lead_triage(
+    client: AsyncClient, fake_redis,
+):
+    """task.blocker_to_operator=True → technischer Blocker geht DIREKT an den
+    Operator, obwohl ein Lead da ist und Triage aktiv wäre (das Flag gewinnt).
+    Approval + Telegram sofort, KEIN Triage-Payload in Redis."""
+    board_id, worker, worker_token, lead, _ = await _make_board_with_agents()
+    task = await _make_task(
+        board_id, assigned_agent_id=worker.id, blocker_to_operator=True,
+    )
+
+    with _patch_triage_redis(fake_redis), _patch_telegram() as tg:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{task.id}",
+            headers={"Authorization": f"Bearer {worker_token}"},
+            json=_block_payload(),  # technical_problem — würde sonst triagiert
+        )
+    assert resp.status_code == 200, resp.text
+
+    assert len(await _approvals_for(task.id)) == 1, (
+        "blocker_to_operator muss ein Operator-Approval sofort erzeugen"
+    )
+    tg.assert_awaited_once()
+    stored = await fake_redis.get(f"mc:blocker:triage:{task.id}")
+    assert stored is None, "Triage muss übersprungen sein (kein Payload)"
+
+
+@pytest.mark.asyncio
+async def test_blocker_to_operator_false_still_triages(
+    client: AsyncClient, fake_redis,
+):
+    """Regression: blocker_to_operator=False/None ändert nichts — technischer
+    Blocker geht weiter zuerst an den Lead (Triage-Payload liegt in Redis)."""
+    board_id, worker, worker_token, lead, _ = await _make_board_with_agents()
+    task = await _make_task(
+        board_id, assigned_agent_id=worker.id, blocker_to_operator=False,
+    )
+
+    with _patch_triage_redis(fake_redis), _patch_telegram() as tg:
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{task.id}",
+            headers={"Authorization": f"Bearer {worker_token}"},
+            json=_block_payload(),
+        )
+    assert resp.status_code == 200, resp.text
+    assert await _approvals_for(task.id) == []
+    tg.assert_not_awaited()
+    assert await fake_redis.get(f"mc:blocker:triage:{task.id}") is not None
 
 
 @pytest.mark.asyncio

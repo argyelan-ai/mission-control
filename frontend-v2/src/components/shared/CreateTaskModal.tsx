@@ -190,6 +190,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
           ...(payload.needsBrowser && { needs_browser: true }),
           ...(payload.e2eTestRequired && { e2e_test_required: true }),
           human_review_required: payload.humanReviewRequired,
+          ...(payload.blockerToOperator && { blocker_to_operator: true }),
           ...(payload.requiresAuth && { requires_auth: true }),
           ...(payload.requiresAuth && payload.credentialMode === "vault" && payload.credentialId && { credential_id: payload.credentialId }),
           ...(payload.requiresAuth && payload.credentialMode === "inline" && payload.inlineCredentials.trim() && { credentials: payload.inlineCredentials.trim() }),
