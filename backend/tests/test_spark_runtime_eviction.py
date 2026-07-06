@@ -175,6 +175,56 @@ async def test_verify_returns_false_when_no_container_appears():
     assert ok is False
 
 
+# ── P6 (ADR-059): process-liveness check — container up ≠ vLLM serving ───────
+# A sparkrun/manual container can appear (PID1 running, e.g. a `sleep
+# infinity` wrapper) while the actual `vllm serve` process inside never
+# started or crashed immediately (wrong tp, OOM, bad recipe args). The P2
+# container-existence check alone reports this as a success. This adds a
+# second, equally cheap check: is there an actual vllm-serve process in the
+# container's process list.
+
+
+@pytest.mark.asyncio
+async def test_verify_process_returns_true_when_vllm_serve_running():
+    ssh = AsyncMock(side_effect=[
+        ("sparkrun_new_solo", "", 0),                  # container lookup
+        ("root  1  vllm serve Qwen/Foo --port 8000", "", 0),  # docker top
+    ])
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(runtime_manager, "_verify_poll_interval", 0):
+        ok = await runtime_manager.verify_spark_vllm_process_started(
+            "qwen-general", timeout=1.0
+        )
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_verify_process_returns_false_when_process_never_appears():
+    # Container exists but `docker top` never shows a vllm serve process —
+    # e.g. it crashed instantly or the container is a bare sleep-infinity shell.
+    ssh = AsyncMock(side_effect=[
+        ("sparkrun_new_solo", "", 0),   # container lookup
+        ("root  1  sleep infinity", "", 0),  # docker top — no vllm process
+    ] * 5)
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(runtime_manager, "_verify_poll_interval", 0):
+        ok = await runtime_manager.verify_spark_vllm_process_started(
+            "qwen-general", timeout=0.05
+        )
+    assert ok is False
+
+
+@pytest.mark.asyncio
+async def test_verify_process_returns_false_when_container_never_appears():
+    ssh = AsyncMock(return_value=("", "", 0))  # container lookup: nothing
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(runtime_manager, "_verify_poll_interval", 0):
+        ok = await runtime_manager.verify_spark_vllm_process_started(
+            "qwen-general", timeout=0.05
+        )
+    assert ok is False
+
+
 # ── start_runtime: launch then verify ────────────────────────────────────────
 
 
@@ -195,16 +245,44 @@ async def test_start_runtime_verifies_launch_and_reports_log_on_failure():
 
 
 @pytest.mark.asyncio
-async def test_start_runtime_ok_when_container_appears():
+async def test_start_runtime_ok_when_container_appears_and_vllm_serves():
     ssh = AsyncMock(return_value=("", "", 0))
     with patch.object(runtime_manager, "_ssh_run", ssh), \
          patch.object(
              runtime_manager,
              "verify_spark_container_started",
              AsyncMock(return_value=True),
+         ), \
+         patch.object(
+             runtime_manager,
+             "verify_spark_vllm_process_started",
+             AsyncMock(return_value=True),
          ):
         result = await runtime_manager.start_runtime(SPARK_RT)
     assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_start_runtime_fails_when_container_appears_but_vllm_process_never_starts():
+    """The exact failure mode from the incident: container up (nohup exit 0,
+    label appears), but the vllm serve process inside never came up (wrong
+    tp/OOM/crash). Must be reported as a failure, not a silent success."""
+    ssh = AsyncMock(return_value=("", "", 0))
+    with patch.object(runtime_manager, "_ssh_run", ssh), \
+         patch.object(
+             runtime_manager,
+             "verify_spark_container_started",
+             AsyncMock(return_value=True),
+         ), \
+         patch.object(
+             runtime_manager,
+             "verify_spark_vllm_process_started",
+             AsyncMock(return_value=False),
+         ):
+        result = await runtime_manager.start_runtime(SPARK_RT)
+    assert result["ok"] is False
+    assert "vllm" in result["message"].lower()
+    assert "runtime-launch-qwen-general.log" in result["message"]
 
 
 # ── stop_runtime RC-1 hardening: empty container_name → eviction ─────────────

@@ -8,6 +8,16 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 
 ### Added
 
+- **Solo-capability-aware sparkrun recipe switching (ADR-059):** the
+  `/runtimes` recipe switcher now knows which sparkrun recipes actually fit
+  the host's GPU count. Recipes needing more physical nodes than the host
+  provides are rejected before anything is stopped; recipes needing more
+  GPUs but only one node get a best-effort `--tensor-parallel` downscale.
+  The recipe dropdown shows each entry's `tp`/`nodes` and visually disables
+  non-solo-capable ones. A second post-launch check now verifies an actual
+  `vllm serve` process came up (not just that the container exists), so a
+  crashed/OOM'd launch is reported as a failure instead of a silent
+  "unreachable" runtime.
 - **Runtime autostart toggle (Engine Control v0, ADR-057):** runtimes with
   `autostart_supported=true` show an "Autostart bei Boot" toggle on
   `/runtimes` that flips a flag file on the bound host over SSH (a

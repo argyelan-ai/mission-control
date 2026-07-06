@@ -77,6 +77,23 @@ def test_build_command_accepts_custom_flags():
     assert "--ensure" not in cmd
 
 
+def test_build_command_injects_tensor_parallel_override():
+    cmd = sparkrun_manager.build_launch_command(
+        "@eugr/qwen3.6-35b-a3b-fp8", slug="qwen-general", tp_override=1
+    )
+    assert "--tensor-parallel 1" in cmd
+    # Injected override must still come before the label so sparkrun parses it
+    # as a flag, not part of the label value.
+    assert cmd.index("--tensor-parallel 1") < cmd.index("--label")
+
+
+def test_build_command_omits_tensor_parallel_when_no_override():
+    cmd = sparkrun_manager.build_launch_command(
+        "@official/qwen3.6-35b-a3b-fp8-vllm", slug="qwen-general"
+    )
+    assert "--tensor-parallel" not in cmd
+
+
 # ── list_recipes (with mocked SSH) ───────────────────────────────────────
 
 
@@ -87,7 +104,9 @@ async def test_list_recipes_parses_sparkrun_output():
         "@official/qwen3.6-27b-fp8-mtp-vllm                       vllm-distributed   1    1       0.8       Qwen/Qwen3.6-27B-FP8                             official\n"
         "@community/nemotron-3-nano-nvfp4                         vllm-distributed   1    1       0.7       nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4      community\n"
         "@sparkrun-transitional/qwen3-1.7b-vllm                   vllm-distributed   1    1       0.7       Qwen/Qwen3-1.7B                                  community\n"
-        "@eugr/qwen3.6-35b-a3b-fp8                                vllm-distributed   1    1       0.8       Qwen/Qwen3.6-35B-A3B-FP8                         experimental"
+        "@eugr/qwen3.6-35b-a3b-fp8                                vllm-ray           2    1       0.8       Qwen/Qwen3.6-35B-A3B-FP8                         eugr\n"
+        "@eugr/nemotron-3-ultra-nvfp4                             vllm-ray           4    1       0.85      nvidia/Nemotron-3-Ultra-550B-NVFP4               eugr\n"
+        "@community/autoround-experimental                        vllm-distributed   -    -       -         some/model                                       community"
     )
 
     # Patch _ssh_run on the runtime_manager module — list_recipes does a
@@ -96,9 +115,9 @@ async def test_list_recipes_parses_sparkrun_output():
     import app.services.runtime_manager as rm
 
     with patch.object(rm, "_ssh_run", AsyncMock(return_value=(sample_output, "", 0))):
-        recipes = await sparkrun_manager.list_recipes()
+        recipes = await sparkrun_manager.list_recipes(host_gpu_count=1)
 
-    assert len(recipes) == 5
+    assert len(recipes) == 7
     assert recipes[0]["name"] == "@official/qwen3.6-35b-a3b-fp8-vllm"
     assert recipes[0]["model"] == "Qwen/Qwen3.6-35B-A3B-FP8"
     # Registry parsing is now generic — any prefix between @ and / works.
@@ -106,6 +125,38 @@ async def test_list_recipes_parses_sparkrun_output():
     assert recipes[2]["registry"] == "community"
     assert recipes[3]["registry"] == "sparkrun-transitional"
     assert recipes[4]["registry"] == "eugr"
+
+    # TP=1/Nodes=1 (or no tp column at all) → solo-capable on a 1-GPU host.
+    assert recipes[0]["tp"] == 1
+    assert recipes[0]["nodes"] == 1
+    assert recipes[0]["solo_capable"] is True
+
+    # TP=2/4 on a 1-GPU host → not solo-capable, regardless of registry.
+    assert recipes[4]["tp"] == 2
+    assert recipes[4]["solo_capable"] is False
+    assert recipes[5]["tp"] == 4
+    assert recipes[5]["solo_capable"] is False
+
+    # Dash columns ('-') parse to None, not a crash, and count as solo-capable
+    # (no TP/Nodes constraint declared).
+    assert recipes[6]["tp"] is None
+    assert recipes[6]["nodes"] is None
+    assert recipes[6]["solo_capable"] is True
+
+
+@pytest.mark.asyncio
+async def test_list_recipes_solo_capable_respects_multi_gpu_host():
+    """A recipe requiring tp=2 IS solo-capable on a 2-GPU host."""
+    sample_output = (
+        "@eugr/qwen3.6-35b-a3b-fp8   vllm-ray   2   1   0.8   Qwen/Qwen3.6-35B-A3B-FP8   eugr"
+    )
+    import app.services.runtime_manager as rm
+
+    with patch.object(rm, "_ssh_run", AsyncMock(return_value=(sample_output, "", 0))):
+        recipes = await sparkrun_manager.list_recipes(host_gpu_count=2)
+
+    assert recipes[0]["tp"] == 2
+    assert recipes[0]["solo_capable"] is True
 
 
 @pytest.mark.asyncio
@@ -115,8 +166,57 @@ async def test_list_recipes_returns_empty_on_ssh_failure():
     with patch.object(
         rm, "_ssh_run", AsyncMock(return_value=("", "ssh: command not found", 127))
     ):
-        recipes = await sparkrun_manager.list_recipes()
+        recipes = await sparkrun_manager.list_recipes(host_gpu_count=1)
     assert recipes == []
+
+
+@pytest.mark.asyncio
+async def test_list_recipes_defaults_host_gpu_count_to_probed_value():
+    """When host_gpu_count is not passed, list_recipes probes it itself."""
+    import app.services.runtime_manager as rm
+
+    sample_output = "@eugr/qwen3.6-35b-a3b-fp8   vllm-ray   2   1   0.8   Qwen/Foo   eugr"
+
+    async def fake_ssh_run(command, *, host=None, timeout=None):
+        if "nvidia-smi" in command:
+            return ("1", "", 0)
+        return (sample_output, "", 0)
+
+    with patch.object(rm, "_ssh_run", AsyncMock(side_effect=fake_ssh_run)):
+        recipes = await sparkrun_manager.list_recipes()
+
+    assert recipes[0]["tp"] == 2
+    assert recipes[0]["solo_capable"] is False  # tp=2 > probed host_gpu_count=1
+
+
+# ── get_host_gpu_count ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_host_gpu_count_parses_nvidia_smi_output():
+    import app.services.runtime_manager as rm
+
+    with patch.object(rm, "_ssh_run", AsyncMock(return_value=("1", "", 0))):
+        count = await sparkrun_manager.get_host_gpu_count()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_host_gpu_count_falls_back_to_one_on_error():
+    import app.services.runtime_manager as rm
+
+    with patch.object(rm, "_ssh_run", AsyncMock(return_value=("", "ssh failed", 255))):
+        count = await sparkrun_manager.get_host_gpu_count()
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_host_gpu_count_falls_back_to_one_on_garbage_output():
+    import app.services.runtime_manager as rm
+
+    with patch.object(rm, "_ssh_run", AsyncMock(return_value=("not-a-number", "", 0))):
+        count = await sparkrun_manager.get_host_gpu_count()
+    assert count == 1
 
 
 # ── switch_recipe (DB integration) ──────────────────────────────────────
@@ -256,3 +356,175 @@ async def test_switch_recipe_reports_start_failure(
     # DB still got updated — caller can retry start without re-confirming recipe
     await async_session.refresh(spark_runtime)
     assert "@official/qwen3.6-27b-fp8-mtp-vllm" in spark_runtime.launch_command
+
+
+# ── switch_recipe solo-capability guard ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_switch_recipe_aborts_before_evict_for_multi_node_recipe(
+    async_session: AsyncSession,
+    spark_runtime: Runtime,
+    patched_redis,
+):
+    """A recipe that needs >1 physical node can never run solo on this
+    single-host deployment — abort BEFORE evicting the current model so an
+    unwinnable switch doesn't kill a healthy running engine."""
+    recipe_list = [
+        {
+            "name": "@eugr/nemotron-3-ultra-nvfp4",
+            "model": "nvidia/Nemotron-3-Ultra-550B-NVFP4",
+            "registry": "eugr",
+            "tp": 4,
+            "nodes": 2,
+            "solo_capable": False,
+        }
+    ]
+    evict_mock = AsyncMock()
+    with (
+        patch(
+            "app.services.sparkrun_manager.get_host_gpu_count",
+            AsyncMock(return_value=1),
+        ),
+        patch(
+            "app.services.sparkrun_manager.list_recipes",
+            AsyncMock(return_value=recipe_list),
+        ),
+        patch("app.services.runtime_manager.evict_spark_runtime_containers", evict_mock),
+    ):
+        result = await sparkrun_manager.switch_recipe(
+            async_session,
+            spark_runtime,
+            "@eugr/nemotron-3-ultra-nvfp4",
+        )
+
+    assert result["ok"] is False
+    assert "node" in result["message"].lower()
+    evict_mock.assert_not_called()
+    # DB untouched — switch never got far enough to persist anything
+    await async_session.refresh(spark_runtime)
+    assert "@official/qwen3.6-35b-a3b-fp8-vllm" in spark_runtime.launch_command
+
+
+@pytest.mark.asyncio
+async def test_switch_recipe_injects_tp_override_when_recipe_exceeds_host_gpus(
+    async_session: AsyncSession,
+    spark_runtime: Runtime,
+    patched_redis,
+):
+    """A single-node recipe defaulting to tp=2 on a 1-GPU host gets a
+    downscaled `--tensor-parallel 1` injected — best-effort, not blocked."""
+    recipe_list = [
+        {
+            "name": "@eugr/qwen3.6-35b-a3b-fp8",
+            "model": "Qwen/Qwen3.6-35B-A3B-FP8",
+            "registry": "eugr",
+            "tp": 2,
+            "nodes": 1,
+            "solo_capable": False,
+        }
+    ]
+    with (
+        patch(
+            "app.services.sparkrun_manager.get_host_gpu_count",
+            AsyncMock(return_value=1),
+        ),
+        patch(
+            "app.services.sparkrun_manager.list_recipes",
+            AsyncMock(return_value=recipe_list),
+        ),
+        patch(
+            "app.services.runtime_manager.evict_spark_runtime_containers",
+            AsyncMock(return_value={"ok": True, "message": "evicted", "stopped": []}),
+        ),
+        patch(
+            "app.services.runtime_manager.start_runtime",
+            AsyncMock(return_value={"ok": True, "message": "starting"}),
+        ),
+        patch(
+            "app.services.agent_runtime_switch.probe_runtime_model",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        result = await sparkrun_manager.switch_recipe(
+            async_session,
+            spark_runtime,
+            "@eugr/qwen3.6-35b-a3b-fp8",
+        )
+
+    assert result["ok"] is True
+    assert "--tensor-parallel 1" in result["launch_command"]
+    await async_session.refresh(spark_runtime)
+    assert "--tensor-parallel 1" in spark_runtime.launch_command
+
+
+@pytest.mark.asyncio
+async def test_switch_recipe_proceeds_without_guard_when_recipe_list_unavailable(
+    async_session: AsyncSession,
+    spark_runtime: Runtime,
+    patched_redis,
+):
+    """SSH/list failures during the guard must not block the switch — the
+    post-launch readiness check is the real safety net in that case."""
+    with (
+        patch(
+            "app.services.sparkrun_manager.get_host_gpu_count",
+            AsyncMock(side_effect=RuntimeError("no host configured")),
+        ),
+        patch(
+            "app.services.runtime_manager.evict_spark_runtime_containers",
+            AsyncMock(return_value={"ok": True, "message": "evicted", "stopped": []}),
+        ),
+        patch(
+            "app.services.runtime_manager.start_runtime",
+            AsyncMock(return_value={"ok": True, "message": "starting"}),
+        ),
+        patch(
+            "app.services.agent_runtime_switch.probe_runtime_model",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        result = await sparkrun_manager.switch_recipe(
+            async_session,
+            spark_runtime,
+            "@official/qwen3.6-27b-fp8-mtp-vllm",
+        )
+
+    assert result["ok"] is True
+
+
+@pytest.mark.asyncio
+async def test_switch_recipe_skips_guard_for_unknown_recipe(
+    async_session: AsyncSession,
+    spark_runtime: Runtime,
+    patched_redis,
+):
+    """A recipe not present in `sparkrun list` (e.g. a local/custom name)
+    can't be validated — proceed without a tp override."""
+    with (
+        patch(
+            "app.services.sparkrun_manager.get_host_gpu_count",
+            AsyncMock(return_value=1),
+        ),
+        patch("app.services.sparkrun_manager.list_recipes", AsyncMock(return_value=[])),
+        patch(
+            "app.services.runtime_manager.evict_spark_runtime_containers",
+            AsyncMock(return_value={"ok": True, "message": "evicted", "stopped": []}),
+        ),
+        patch(
+            "app.services.runtime_manager.start_runtime",
+            AsyncMock(return_value={"ok": True, "message": "starting"}),
+        ),
+        patch(
+            "app.services.agent_runtime_switch.probe_runtime_model",
+            AsyncMock(return_value=None),
+        ),
+    ):
+        result = await sparkrun_manager.switch_recipe(
+            async_session,
+            spark_runtime,
+            "my-local-recipe",
+        )
+
+    assert result["ok"] is True
+    assert "--tensor-parallel" not in result["launch_command"]
