@@ -1124,6 +1124,37 @@ def start_heartbeater(
     return stop
 
 
+# Path the `mc` CLI reads task context from (mc_cli/config.py:from_env, file
+# wins over stale process env). poll.sh writes this for claude agents; the omp
+# bridge replaced poll.sh, so we write it here — see write_task_context_env.
+MC_CONTEXT_ENV_PATH = "/tmp/mc-context.env"
+
+
+def write_task_context_env(task: dict, path: str = MC_CONTEXT_ENV_PATH) -> bool:
+    """Write the per-dispatch task context the `mc` CLI needs.
+
+    The model's own `mc ack|deliverable|done` calls read TASK_ID / BOARD_ID /
+    X_DISPATCH_ATTEMPT_ID via mc_cli/config.py:from_env, which resolves this
+    file FIRST (it wins over the process env that still carries the previous
+    dispatch's ids). For claude agents poll.sh writes it on every new_task; the
+    native-TUI omp bridge dropped poll.sh, so without this the model has no task
+    context — `mc ack` fails "TASK_ID … müssen gesetzt sein" and status calls
+    are rejected "Missing X-Dispatch-Attempt-Id". Mirrors the exact 3-key
+    contract of docker/shared/poll.sh and mc_cli/commands.py:_cmd_recover.
+
+    Best-effort: an unwritable file must never crash the serve loop.
+    """
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"TASK_ID={task.get('id') or ''}\n")
+            f.write(f"BOARD_ID={task.get('board_id') or ''}\n")
+            f.write(f"X_DISPATCH_ATTEMPT_ID={task.get('dispatch_attempt_id') or ''}\n")
+        return True
+    except OSError as e:  # noqa: BLE001 — context file is best-effort
+        sys.stderr.write(f"[serve] mc-context.env write failed: {e}\n")
+        return False
+
+
 def serve_loop(
     *,
     poll_interval: float = 5.0,
@@ -1133,6 +1164,7 @@ def serve_loop(
     _run_factory: Optional[Callable[[dict, str], Callable[[], RunOutcome]]] = None,
     _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
+    _context_env_path: str = MC_CONTEXT_ENV_PATH,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -1208,6 +1240,11 @@ def serve_loop(
                 _sleep(poll_interval)
                 continue
             last_attempt_id = attempt_id
+
+            # Hydrate the task context the model's own `mc` calls read. Must
+            # happen BEFORE the run (and its ack) so the very first `mc ack`
+            # the model issues already has TASK_ID/BOARD_ID/attempt-id.
+            write_task_context_env(task, _context_env_path)
 
             cwd = container_workspace_path(task.get("workspace_path")) or "/workspace"
             prompt = wrap_prompt(task.get("prompt") or task.get("title") or "")
