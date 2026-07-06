@@ -680,6 +680,19 @@ def restart_docker_agent_container(
 
     slug = _agent_slug(agent)
     container_name = f"mc-agent-{slug}"
+    # ADR-059 guard: this function must NEVER be able to target a sparkrun
+    # model container (`sparkrun_<hash>_solo`) or the manual `vllm_node`
+    # container — those run on the Spark host via SSH/docker (runtime_manager
+    # territory), not the local Docker daemon the agent fleet runs on. The
+    # container name here is derived exclusively from the agent's own slug,
+    # never from a runtime/model identifier, so this can't happen by
+    # construction — this assertion is a tripwire against a future refactor
+    # that accidentally threads a runtime-derived name through this path.
+    assert container_name.startswith("mc-agent-"), (
+        f"refusing to restart non-agent container {container_name!r} — "
+        f"restart_docker_agent_container must only ever target mc-agent-* "
+        f"containers (cli-bridge agents), never a runtime/model container"
+    )
 
     if force_recreate:
         # Resolve repo root on the host (mounted into backend container at the
