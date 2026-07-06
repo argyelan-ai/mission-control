@@ -543,6 +543,55 @@ async def verify_spark_container_started(
             await asyncio.sleep(_verify_poll_interval)
 
 
+async def verify_spark_vllm_process_started(
+    slug: str,
+    *,
+    host: ResolvedHost | None = None,
+    timeout: float = 25.0,
+) -> bool:
+    """Poll for an actual ``vllm serve`` process inside the labelled container.
+
+    ``verify_spark_container_started`` only proves the container exists —
+    some launches (sparkrun's solo-mode wrapper, or a manually-started
+    container) keep a ``sleep infinity`` PID1 while vLLM runs as a separate
+    process inside, injected out-of-band. A wrong ``--tensor-parallel``
+    value, a bad recipe flag, or an immediate OOM can kill that process while
+    the container itself stays "running" — the exact silent-failure mode
+    behind ADR-059 (a recipe switch reported success while nothing was
+    actually serving). This is the second half of the launch-verification: it
+    reuses the same ``docker top`` process-scan ``_container_runs_vllm_server``
+    already does for discovery, but polls briefly (not the full 2-5 min model
+    warmup) right after launch so a dead-on-arrival process is caught early.
+    """
+    import asyncio
+
+    safe = _sanitize_slug(slug)
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        try:
+            out, _, ec = await _ssh_run(
+                f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}",
+                host=host,
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verify-process: container lookup raised for %s: %s", slug, exc)
+            out, ec = "", -1
+        container_id = next((x for x in out.splitlines() if x.strip()), None)
+        if ec == 0 and container_id:
+            try:
+                is_vllm, _ = await _container_runs_vllm_server(container_id, host=host)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("verify-process: docker top raised for %s: %s", slug, exc)
+                is_vllm = False
+            if is_vllm:
+                return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        if _verify_poll_interval:
+            await asyncio.sleep(_verify_poll_interval)
+
+
 # ── PORSCHE control plane (unsloth_porsche) ──────────────────────────────────
 # The PORSCHE Windows box is NOT reachable via SSH/tmux like the DGX. It runs a
 # Flask control server on :5555 (POST /powershell, GET /health) and sleeps when
@@ -841,6 +890,32 @@ async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> d
                                 f"{runtime['display_name']} gestartet, aber kein Container "
                                 f"mit Label mc.runtime.slug={slug_safe} erschienen "
                                 f"(wahrscheinlich OOM/Crash). Logs: {log_path}"
+                            ),
+                        }
+                    # ADR-059 — container existing is not enough: some launches
+                    # (sparkrun solo-mode, manual wrappers) keep PID1 alive
+                    # (e.g. `sleep infinity`) while the actual vllm serve
+                    # process inside crashed or never started (wrong tp, bad
+                    # flags, immediate OOM). This is the failure mode from the
+                    # original incident — MC reported success while nothing
+                    # was serving. Catch it here instead of discovering it via
+                    # a mysteriously "unreachable" runtime minutes later.
+                    serving = await verify_spark_vllm_process_started(
+                        str(runtime_slug), host=host
+                    )
+                    if not serving:
+                        logger.error(
+                            "Runtime %s: container appeared but no vllm serve "
+                            "process found inside it (likely bad tp/flags or "
+                            "immediate crash). Log: %s",
+                            runtime["id"], log_path,
+                        )
+                        return {
+                            "ok": False,
+                            "message": (
+                                f"{runtime['display_name']}: Container erschien, aber "
+                                f"kein vllm-serve-Prozess gestartet (wahrscheinlich "
+                                f"falsche tp/Flags oder Crash). Logs: {log_path}"
                             ),
                         }
                 logger.info(

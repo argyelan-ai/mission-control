@@ -104,6 +104,10 @@ async def test_path_b_missing_container_runs_launch_command():
             return ("", "Error: No such object: sparkrun_abc123_solo", 1)
         if "nohup" in cmd:
             return ("", "", 0)
+        if "docker top" in cmd:
+            # ADR-059 process-liveness check: a real vllm serve process is
+            # running inside the labelled container.
+            return ("root 1 vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000", "", 0)
         if "docker ps" in cmd:
             # P2 start-verification poll: labelled container appeared.
             return ("sparkrun_new_solo", "", 0)
@@ -130,6 +134,10 @@ async def test_path_b_works_without_container_name():
             raise AssertionError("docker inspect must not run when container_name is empty")
         if "nohup" in cmd:
             return ("", "", 0)
+        if "docker top" in cmd:
+            # ADR-059 process-liveness check: a real vllm serve process is
+            # running inside the labelled container.
+            return ("root 1 vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000", "", 0)
         if "docker ps" in cmd:
             # P2 start-verification poll: labelled container appeared.
             return ("sparkrun_new_solo", "", 0)
@@ -170,6 +178,8 @@ async def test_path_b_quotes_launch_command_against_shell_injection():
         captured.append(cmd)
         if "nohup" in cmd:
             return ("", "", 0)
+        if "docker top" in cmd:
+            return ("root 1 vllm serve Qwen/Qwen3.6-35B-A3B-FP8 --port 8000", "", 0)
         if "docker ps" in cmd:
             # P2 start-verification poll: pretend the container appeared.
             return ("sparkrun_new_solo", "", 0)
