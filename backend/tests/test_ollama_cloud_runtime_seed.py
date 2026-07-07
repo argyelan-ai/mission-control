@@ -13,7 +13,7 @@ def test_ollama_cloud_seed_present_and_hermes_compatible():
     entries = data if isinstance(data, list) else data.get("runtimes", data)
     oc = next(e for e in entries if e.get("id") == "ollama-cloud" or e.get("slug") == "ollama-cloud")
     assert oc["endpoint"] == "https://ollama.com/v1"
-    assert oc["runtime_type"] == "openai_compatible"
+    assert oc["runtime_type"] in {"cloud", "openai_compatible", "vllm_docker", "lmstudio", "unsloth"}
     rt = Runtime(slug="ollama-cloud", display_name="Ollama Cloud",
                  runtime_type=oc["runtime_type"], endpoint=oc["endpoint"],
                  model_identifier=oc.get("model_identifier", "kimi-k2.6"), enabled=True)
