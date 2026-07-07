@@ -38,6 +38,13 @@ fi
 "$TMUX_BIN" new-session -d -s "$SESSION" -x 220 -y 50 \
   "while true; do $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
 
+# Web-terminal scroll: forward wheel events to the native Hermes TUI so mouse
+# scroll walks the OUTPUT, not Hermes' input history. Every cli-bridge agent
+# sets `mouse on`; Hermes was the one session without it, so xterm mapped the
+# wheel to arrow keys in the alt-screen TUI (reported by Mark). Session-scoped
+# (-t "$SESSION") so other host tmux sessions are untouched.
+"$TMUX_BIN" set-option -t "$SESSION" mouse on 2>/dev/null || true
+
 # Tee the pane to a log file for scrollback replay (host-pty-bridge consumption)
 "$TMUX_BIN" pipe-pane -o -t "$SESSION":0 "cat >> $LOG_DIR/hermes.log"
 
