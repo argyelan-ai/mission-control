@@ -60,6 +60,28 @@ def _api(method: str, path: str, **kwargs) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
+# Agent PBKDF2 token, passed through from agent.env by the host runtime. Used so
+# that task actions performed by the agent are attributed to the AGENT
+# (author_type='agent') instead of the admin user shown as '👤 Du' — which also
+# stops the self-notification echo loop (own comments are filtered out on poll).
+MC_AGENT_TOKEN = os.environ.get("MC_AGENT_TOKEN", "").strip()
+
+def _api_agent(method: str, path: str, **kwargs):
+    """Call an agent-scoped endpoint AS the agent. Returns None when no agent
+    token is available so callers can fall back to the admin _api()."""
+    if not MC_AGENT_TOKEN:
+        return None
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.request(method, f"{MC_BASE}{path}",
+                          headers={"Authorization": f"Bearer {MC_AGENT_TOKEN}"}, **kwargs)
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:300]}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 def _bridge(method: str, path: str, **kwargs) -> dict:
     try:
         with httpx.Client(timeout=10) as c:
@@ -249,14 +271,25 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
 
     results = []
     if status:
-        r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
+        # Change status AS the agent via the agent-scoped state-machine endpoint
+        # (ACK handshake, review handoff, parent reactivation) — the same path
+        # Docker agents use. Falls back to the admin endpoint without a token.
+        r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}", json={"status": status})
+        if r is None or "error" in r:
+            r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
         if "error" in r:
             return f"Status-Fehler: {r['error']}"
         results.append(f"Status → {status}")
 
     if comment:
-        # Backend schema CommentCreate uses key `content` (verified 2026-05-01, tasks.py:188)
-        r = _api("POST", f"/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
+        # Post AS the agent (author_type='agent') via the agent-scoped endpoint,
+        # not the operator endpoint (which records author_type='user' → '👤 Du'
+        # and echoes the comment back to the agent as a "new user comment").
+        # The agent endpoint also auto-ACKs the task. Falls back to the admin
+        # endpoint when no agent token is present or the agent isn't on the board.
+        r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
+        if r is None or "error" in r:
+            r = _api("POST", f"/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
         if "error" in r:
             return f"Kommentar-Fehler: {r['error']}"
         results.append("Kommentar hinzugefügt")
