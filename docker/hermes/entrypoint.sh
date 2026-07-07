@@ -21,6 +21,13 @@ else
   echo "[entrypoint] WARN: $ENV_FILE missing — Hermes will start without MC env" >&2
 fi
 
+# Render model provider into ~/.hermes/config.yaml from the runtime binding
+# (OPENAI_BASE_URL / OPENAI_MODEL were just sourced above). Idempotent; ADR-060.
+PATCH_SCRIPT="${HOME}/Workspace/Projects/mission-control/scripts/hermes-config-patch.py"
+if [ -f "$PATCH_SCRIPT" ]; then
+  python3 "$PATCH_SCRIPT" || echo "[entrypoint] WARN: hermes-config-patch rc=$?" >&2
+fi
+
 # Defensive: kill any prior session so we always boot clean
 "$TMUX_BIN" kill-session -t "$SESSION" 2>/dev/null || true
 
