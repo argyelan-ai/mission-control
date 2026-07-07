@@ -170,7 +170,8 @@ async def bootstrap_hermes_agent(
     Steps (idempotent — safe to re-run):
       1. Generate fresh PBKDF2 MC_AGENT_TOKEN.
       2. Build env via ``build_hermes_agent_env`` (OPENAI_* + MC_*).
-      3. mkdir -p ``$HOME_HOST/.mc/agents/hermes`` (mode 755).
+      3. mkdir -p ``$HOME_HOST/.mc/agents/hermes`` (config) +
+         ``$HOME_HOST/.mc/workspaces/hermes`` (browsable task workspace).
       4. mkdir -p ``$HOME_HOST/.mc/agents/hermes/logs`` (mode 755).
       5. Write ``agent.env`` (mode 600) — replaces any existing file.
       6. ``launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.mc.hermes-bridge.plist``
@@ -186,9 +187,16 @@ async def bootstrap_hermes_agent(
     plist_already, tmux_session, workspace_path.
     """
     home = _home_host()
-    workspace = home / ".mc" / "agents" / "hermes"
-    env_path = workspace / "agent.env"
-    logs_dir = workspace / "logs"
+    # Config lives in the sensitive ~/.mc/agents/hermes root (env, logs,
+    # entrypoint — never browsable via the Files API). The task WORKSPACE is
+    # the browsable ~/.mc/workspaces/hermes root, matching the rest of the
+    # fleet (cli-bridge agents + Boss all use ~/.mc/workspaces/<slug>). Before
+    # this split Hermes worked inside its own config dir, so its work never
+    # showed up under Files → Workspaces.
+    config_dir = home / ".mc" / "agents" / "hermes"
+    workspace = home / ".mc" / "workspaces" / "hermes"
+    env_path = config_dir / "agent.env"
+    logs_dir = config_dir / "logs"
     plist_path = home / HERMES_PLIST_PATH_REL
 
     # 1. Token
@@ -197,7 +205,8 @@ async def bootstrap_hermes_agent(
     # 2. Env
     env = await build_hermes_agent_env(runtime, raw_token, session=session)
 
-    # 3. + 4. Directories
+    # 3. + 4. Directories (config dir + browsable workspace dir + logs)
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
     workspace.mkdir(parents=True, exist_ok=True, mode=0o755)
     logs_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
 

@@ -143,7 +143,10 @@ async def test_home_host_env_var_respected(async_session, tmp_path, monkeypatch,
     expected = fake_home / ".mc" / "agents" / "hermes" / "agent.env"
     assert expected.exists()
     assert result["env_path"] == str(expected)
-    assert result["workspace_path"] == str(expected.parent)
+    # Config stays in ~/.mc/agents/hermes; the browsable task workspace is
+    # ~/.mc/workspaces/hermes (fleet convention — shows up under Files).
+    assert result["workspace_path"] == str(fake_home / ".mc" / "workspaces" / "hermes")
+    assert (fake_home / ".mc" / "workspaces" / "hermes").is_dir()
 
 
 @pytest.mark.asyncio
@@ -291,7 +294,7 @@ async def test_provision_endpoint_dispatches_hermes_branch(
         "plist_loaded": True,
         "plist_already": False,
         "tmux_session": "hermes-worker",
-        "workspace_path": str(tmp_path / ".mc" / "agents" / "hermes"),
+        "workspace_path": str(tmp_path / ".mc" / "workspaces" / "hermes"),
     }
 
     # Dispatch now routes through HostHarnessAdapter.bootstrap(), which does its

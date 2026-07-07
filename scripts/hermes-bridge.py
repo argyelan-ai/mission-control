@@ -154,7 +154,7 @@ def _build_dispatch_prompt(task: dict) -> str:
         f'  Comment via: mc_patch_task(task_id="{task_id}", board_id="{board_id}", comment="Update: ...\\nEvidence: ...\\nNext: ...")\n'
         f'  Hand off: mc_patch_task(task_id="{task_id}", board_id="{board_id}", status="review") when done.\n'
         f"  Skill: ~/.hermes/skills/mission-control/SKILL.md\n"
-        f"  Workspace: cd ~/.mc/agents/hermes\n"
+        f"  Workspace: cd ~/.mc/workspaces/hermes  # task workspace (browsable in Files)\n"
     )
 
 
