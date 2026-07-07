@@ -38,10 +38,16 @@ HERMES_MODEL = "Qwen/Qwen3.6-35B-A3B-FP8"
 
 
 def _make_hermes_runtime() -> Runtime:
+    # ADR-060: the real Hermes agent binds a plain openai-protocol runtime
+    # (e.g. a Spark vLLM registration) — "hermes" used to be a standalone
+    # runtime_type sentinel that the pre-adapter dispatch branched on
+    # (`if runtime.runtime_type == "hermes"`), but that coupling is exactly
+    # what the HostHarnessAdapter registry replaces (Task 3/4). The harness
+    # identity now lives on `agent.harness`, not on the runtime row.
     return Runtime(
         slug="hermes-vllm",
         display_name="Hermes (vLLM)",
-        runtime_type="hermes",
+        runtime_type="vllm_docker",
         endpoint=HERMES_ENDPOINT,
         model_identifier=HERMES_MODEL,
         enabled=True,
@@ -59,6 +65,7 @@ async def _make_hermes_agent(session) -> Agent:
         id=uuid.uuid4(),
         name="Hermes",
         agent_runtime="host",
+        harness="hermes",
         runtime_id=runtime.id,
         provision_status="local",
         workspace_path="/Users/testuser/.mc/agents/hermes",
@@ -287,8 +294,12 @@ async def test_provision_endpoint_dispatches_hermes_branch(
         "workspace_path": str(tmp_path / ".mc" / "agents" / "hermes"),
     }
 
+    # Dispatch now routes through HostHarnessAdapter.bootstrap(), which does its
+    # own lazy `from app.services.agent_bootstrap import bootstrap_hermes_agent`
+    # import at call time — patch at the source module so the adapter picks up
+    # the mock regardless of which module imported the name.
     with _patch_redis(fake_redis), patch(
-        "app.routers.agents.bootstrap_hermes_agent",
+        "app.services.agent_bootstrap.bootstrap_hermes_agent",
         new=AsyncMock(return_value=fake_result),
     ) as mocked:
         resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
