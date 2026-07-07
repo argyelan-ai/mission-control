@@ -150,6 +150,10 @@ def _build_dispatch_prompt(task: dict) -> str:
         f"Every PATCH/POST against this task MUST carry the header\n"
         f'`X-Dispatch-Attempt-Id: {attempt_id}` — without it the server returns 409.\n'
         f'  ACK NOW: mc_patch_task(task_id="{task_id}", board_id="{board_id}", status="in_progress")\n'
+        f'  Checklist FIRST: mc_checklist_add(task_id="{task_id}", board_id="{board_id}", '
+        f'items=["step 1", "step 2", ...]) — it is the single source of truth for progress '
+        f'and shows in the task detail panel. Tick items off: mc_checklist_done(task_id="{task_id}", '
+        f'board_id="{board_id}", item_id="<id>"). Use the mc_checklist* tools, NOT a shell `mc checklist`.\n'
         f"  Comment format: 3 lines exactly — Update / Evidence / Next.\n"
         f'  Comment via: mc_patch_task(task_id="{task_id}", board_id="{board_id}", comment="Update: ...\\nEvidence: ...\\nNext: ...")\n'
         f'  Hand off: mc_patch_task(task_id="{task_id}", board_id="{board_id}", status="review") when done.\n'
