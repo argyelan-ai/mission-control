@@ -1486,14 +1486,20 @@ async def provision_agent_on_gateway(
         await session.commit()
 
         try:
-            if runtime.runtime_type == "hermes":
-                result = await bootstrap_hermes_agent(session, agent, runtime)
-            else:
-                # Future host worker types (Phase 25+) plug in here.
+            from app.services.harness_compat import derive_harness, is_compatible, incompat_reason
+            from app.services.host_harness_adapter import get_adapter
+
+            harness = agent.harness or derive_harness(runtime)
+            adapter = get_adapter(harness)
+            if adapter is None:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unsupported host runtime_type: {runtime.runtime_type}",
+                    detail=f"No host adapter for harness '{harness}' "
+                           f"(runtime_type={runtime.runtime_type})",
                 )
+            if not is_compatible(harness, runtime):
+                raise HTTPException(status_code=422, detail=incompat_reason(harness, runtime))
+            result = await adapter.bootstrap(session, agent, runtime)
             return {
                 "status": "provisioned",
                 "agent_id": str(agent.id),
