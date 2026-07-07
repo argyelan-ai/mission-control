@@ -110,9 +110,15 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
         return
 
     if agent.agent_runtime == "host":
-        # Host agents (launchd) never go through agent_runtime_switch (that
-        # service is cli-bridge only), so there is no switch-lock to race
-        # here — reload directly via the harness adapter (ADR-060).
+        # Host agents (launchd) DO go through agent_runtime_switch now
+        # (ADR-060 in-place switch for host+adapter agents), so this branch
+        # must hold the exact same switch-lock (mc:agent:{id}:runtime-switch,
+        # see agent_runtime_switch._lock_key) before mutating agent.env /
+        # reloading — otherwise a watcher auto-forward tick can race a manual
+        # in-place switch and interleave two SSH session restarts of the same
+        # worker. If the lock is already held, behave like the cli-bridge
+        # busy/locked case below: skip this tick without bumping the failure
+        # counter, stay flagged, and retry once the lock frees.
         from app.services.host_harness_adapter import get_adapter, sync_host_agent_model
 
         adapter = get_adapter(agent.harness or derive_harness(runtime))
@@ -121,45 +127,54 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
             session.add(agent)
             await session.commit()
             return
-        fail_key = RedisKeys.agent_model_sync_fails(str(agent.id))
-        try:
-            await sync_host_agent_model(agent, runtime, session=session)
-            await adapter.reload(agent)
-        except Exception as exc:  # noqa: BLE001 — surface via circuit breaker
-            fails = await _bump_failures(fail_key)
-            logger.warning(
-                "host model sync for %s failed (%s/%s): %s",
-                agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
+        if not await _acquire_lock(agent.id):
+            logger.info(
+                "host model sync for %s skipped — runtime-switch lock is held",
+                agent.name,
             )
-            if fails >= MAX_SYNC_ATTEMPTS:
-                agent.pending_runtime_sync = False
-                session.add(agent)
-                await session.commit()
-                await emit_event(
-                    session,
-                    "agent.model_sync_failed",
-                    f"{agent.name}: model sync failed {fails}× — giving up "
-                    f"(manual restart required)",
-                    severity="error",
-                    agent_id=agent.id,
-                    detail={"runtime": runtime.slug, "reason": str(exc)},
-                )
             return
-        await _clear_failures(fail_key)
-        agent.pending_runtime_sync = False
-        if runtime.model_identifier:
-            agent.model = runtime.model_identifier
-        session.add(agent)
-        await session.commit()
-        await emit_event(
-            session,
-            "agent.model_synced",
-            f"{agent.name}: now running "
-            f"{runtime.model_identifier or runtime.slug} ({runtime.slug})",
-            severity="info",
-            agent_id=agent.id,
-            detail={"runtime": runtime.slug, "model": runtime.model_identifier},
-        )
+        try:
+            fail_key = RedisKeys.agent_model_sync_fails(str(agent.id))
+            try:
+                await sync_host_agent_model(agent, runtime, session=session)
+                await adapter.reload(agent)
+            except Exception as exc:  # noqa: BLE001 — surface via circuit breaker
+                fails = await _bump_failures(fail_key)
+                logger.warning(
+                    "host model sync for %s failed (%s/%s): %s",
+                    agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
+                )
+                if fails >= MAX_SYNC_ATTEMPTS:
+                    agent.pending_runtime_sync = False
+                    session.add(agent)
+                    await session.commit()
+                    await emit_event(
+                        session,
+                        "agent.model_sync_failed",
+                        f"{agent.name}: model sync failed {fails}× — giving up "
+                        f"(manual restart required)",
+                        severity="error",
+                        agent_id=agent.id,
+                        detail={"runtime": runtime.slug, "reason": str(exc)},
+                    )
+                return
+            await _clear_failures(fail_key)
+            agent.pending_runtime_sync = False
+            if runtime.model_identifier:
+                agent.model = runtime.model_identifier
+            session.add(agent)
+            await session.commit()
+            await emit_event(
+                session,
+                "agent.model_synced",
+                f"{agent.name}: now running "
+                f"{runtime.model_identifier or runtime.slug} ({runtime.slug})",
+                severity="info",
+                agent_id=agent.id,
+                detail={"runtime": runtime.slug, "model": runtime.model_identifier},
+            )
+        finally:
+            await _release_lock(agent.id)
         return
 
     # Guard against racing a manual runtime switch in flight: agent_runtime_switch

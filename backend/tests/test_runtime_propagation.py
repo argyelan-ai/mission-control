@@ -208,3 +208,51 @@ async def test_sync_one_skips_when_switch_lock_held(async_session, fake_redis):
     assert agent.pending_runtime_sync is True  # stays flagged, no failure bumped
     fails = await fake_redis.get(rp.RedisKeys.agent_model_sync_fails(str(agent.id)))
     assert fails is None
+
+
+@pytest.mark.asyncio
+async def test_host_sync_skips_when_switch_lock_held(
+    async_session, fake_redis, tmp_path, monkeypatch
+):
+    """Same race guard as test_sync_one_skips_when_switch_lock_held but for the
+    host branch (ADR-060): a concurrent switch_agent_runtime() in-place switch
+    holds mc:agent:{id}:runtime-switch, so the watcher's host auto-forward tick
+    must NOT rewrite agent.env / call adapter.reload — it must leave
+    pending_runtime_sync=True and retry next tick."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    d = tmp_path / ".mc" / "agents" / "hermes"
+    d.mkdir(parents=True)
+    d.joinpath("agent.env").write_text("MC_AGENT_TOKEN='tok'\nOPENAI_MODEL='old'\n")
+    rt = await _mk_rt(async_session, model="fresh-model")
+    host = await _mk_agent(
+        async_session, rt, name="Hermes", agent_runtime="host", pending=True
+    )
+    host.harness = "hermes"
+    host.slug = "hermes"
+    await async_session.commit()
+
+    # Simulate agent_runtime_switch.switch_agent_runtime() holding its lock.
+    await fake_redis.set(switch_mod._lock_key(host.id), "1", nx=True, ex=120)
+
+    with (
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch(
+            "app.services.host_harness_adapter.HermesAdapter.reload",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as mock_reload,
+        patch(
+            "app.services.host_harness_adapter.sync_host_agent_model",
+            new=AsyncMock(),
+        ) as mock_sync_model,
+    ):
+        await rp.sync_pending_agents(async_session, force=True)
+
+    mock_sync_model.assert_not_awaited()
+    mock_reload.assert_not_awaited()
+    await async_session.refresh(host)
+    assert host.pending_runtime_sync is True  # stays flagged, no failure bumped
+    assert "OPENAI_MODEL='old'" in d.joinpath("agent.env").read_text()
+    fails = await fake_redis.get(rp.RedisKeys.agent_model_sync_fails(str(host.id)))
+    assert fails is None
