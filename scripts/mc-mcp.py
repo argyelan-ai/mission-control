@@ -282,16 +282,19 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
         results.append(f"Status → {status}")
 
     if comment:
-        # Post AS the agent (author_type='agent') via the agent-scoped endpoint,
-        # not the operator endpoint (which records author_type='user' → '👤 Du'
-        # and echoes the comment back to the agent as a "new user comment").
-        # The agent endpoint also auto-ACKs the task. Falls back to the admin
-        # endpoint when no agent token is present or the agent isn't on the board.
+        # Post AS the agent (author_type='agent') via the agent-scoped endpoint.
+        # NEVER fall back to the operator endpoint here: that records
+        # author_type='user' → the comment shows up as '👤 Du' (the logged-in
+        # operator, i.e. Mark) and echoes back to the agent as a "new user
+        # comment". A missing/invalid MC_AGENT_TOKEN is a provisioning fault to
+        # surface, not to paper over by impersonating the operator.
         r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
-        if r is None or "error" in r:
-            r = _api("POST", f"/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
+        if r is None:
+            return ("Kommentar-Fehler: kein MC_AGENT_TOKEN in der Umgebung — "
+                    "Kommentar NICHT gepostet (würde sonst als Operator '👤 Du' "
+                    "erscheinen). agent.env prüfen / Bridge neu starten.")
         if "error" in r:
-            return f"Kommentar-Fehler: {r['error']}"
+            return f"Kommentar-Fehler (Agent-Endpoint): {r['error']}"
         results.append("Kommentar hinzugefügt")
 
     return " | ".join(results) if results else "Nichts geändert"

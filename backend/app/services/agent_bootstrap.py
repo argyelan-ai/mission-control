@@ -67,6 +67,24 @@ def _format_env_file(env: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _unquote_env_value(raw: str) -> str:
+    """Exact inverse of `_format_env_file`'s single-quote escaping.
+
+    `_format_env_file` wraps every value in single quotes and rewrites each
+    embedded ``'`` as ``'"'"'``. A reader that only does ``.strip("'")`` peels
+    the outer quotes but leaves the ``'"'"'`` sequences intact — so on the next
+    write they get re-escaped, and any value carrying a literal quote grows ~3×
+    per round-trip (this is how a 64-char token ballooned to 13 KB). Reversing
+    the escaping makes the read/write round-trip idempotent, so growth can never
+    start regardless of how a stray quote got seeded.
+    """
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        return raw[1:-1].replace("'\"'\"'", "'")
+    # Unquoted / partially-quoted fallback (legacy hand-edited files).
+    return raw.strip("'")
+
+
 # ── Hermes Bootstrap ───────────────────────────────────────────────────────────
 
 

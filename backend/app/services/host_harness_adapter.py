@@ -71,7 +71,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     never regenerate the auth token). ADR-060.
     """
     from app.routers.internal import build_runtime_env
-    from app.services.agent_bootstrap import _format_env_file, _home_host
+    from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
 
     slug = agent.slug or "hermes"
     env_path = _home_host() / ".mc" / "agents" / slug / "agent.env"
@@ -80,7 +80,10 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
         for line in env_path.read_text().splitlines():
             if "=" in line and not line.lstrip().startswith("#"):
                 key, _, val = line.partition("=")
-                existing[key.strip()] = val.strip().strip("'")
+                # Reverse _format_env_file's escaping exactly — a naive
+                # .strip("'") leaves '"'"' sequences that re-escape and grow
+                # ~3× on every model-drift sync (13 KB token corruption).
+                existing[key.strip()] = _unquote_env_value(val)
     existing.update(await build_runtime_env(runtime, session))
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(_format_env_file(existing))
