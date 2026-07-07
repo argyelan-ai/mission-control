@@ -17,10 +17,11 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import { AlertTriangle, Check, Loader2, Lock, RotateCcw, X, Zap, Box } from "lucide-react";
+import { AlertTriangle, Check, Loader2, Lock, RefreshCw, RotateCcw, X, Zap, Box } from "lucide-react";
 import type { Agent, Harness, RuntimeSwitchPreview, RuntimeSwitchSummary } from "@/lib/types";
 import { api } from "@/lib/api";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { notify } from "@/lib/notify";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 
 const SWITCH_STEPS: Array<{ key: string; label: string }> = [
@@ -87,8 +88,19 @@ export function RuntimeSwitchModal({
   const [error, setError] = useState<string | null>(null);
   const [longSwitch, setLongSwitch] = useState(false);
   const [completed, setCompleted] = useState<RuntimeSwitchPreview | null>(null);
-  const [selectedHarness, setSelectedHarness] = useState<Harness | undefined>(agent.harness ?? undefined);
+  // ADR-060 — host agents with a HostHarnessAdapter (currently only Hermes)
+  // switch in place: same PATCH /agents/{id} endpoint, but the backend
+  // reloads a single host session instead of spinning up a parallel
+  // container. `agent.harness === "hermes"` is host-only and intentionally
+  // outside the cli-bridge-facing `Harness` union (see lib/types.ts) — never
+  // fed into the harness selector/compat-matrix below.
+  const isHostInplace = agent.agent_runtime === "host" && agent.harness === "hermes";
+  const [selectedHarness, setSelectedHarness] = useState<Harness | undefined>(
+    isHostInplace ? undefined : (agent.harness as Harness | undefined) ?? undefined,
+  );
+  const [reloading, setReloading] = useState(false);
   const longSwitchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qc = useQueryClient();
 
   // ADR-056 — harness x runtime compatibility matrix, backs the harness
   // selector above the preview.
@@ -142,9 +154,9 @@ export function RuntimeSwitchModal({
         longSwitchTimer.current = null;
       }
     } else {
-      setSelectedHarness(agent.harness ?? undefined);
+      setSelectedHarness(isHostInplace ? undefined : ((agent.harness ?? undefined) as Harness | undefined));
     }
-  }, [open, agent.harness]);
+  }, [open, agent.harness, isHostInplace]);
 
   const isBusy = !!agent.current_task_id;
   const previewErrMsg = previewError ? (previewError as Error).message : null;
@@ -154,6 +166,12 @@ export function RuntimeSwitchModal({
   const targetLocked = preview?.new_runtime?.single_instance === true;
   const sourceLocked = preview?.old_runtime?.single_instance === true;
   const singleInstanceBlocked = targetLocked || sourceLocked;
+  // ADR-060 — a host-inplace agent's *current* runtime row is the
+  // single-instance Hermes row itself (sourceLocked would otherwise fire on
+  // every switch). The backend's `_is_host_inplace()` bypasses that hard
+  // block for adapter-backed hosts; mirror it here instead of hard-locking
+  // the picker.
+  const blockedBySingleInstance = singleInstanceBlocked && !isHostInplace;
 
   const handleSubmit = async () => {
     setSubmitting(true);
@@ -248,7 +266,10 @@ export function RuntimeSwitchModal({
                 <>
               {/* Body */}
               <div className="p-5 space-y-4 overflow-y-auto flex-1">
-                {/* Harness selector (ADR-056) */}
+                {/* Harness selector (ADR-056) — not applicable to host-inplace
+                    agents: Hermes is fixed to the "hermes" harness, which is
+                    intentionally outside the cli-bridge compat matrix. */}
+                {!isHostInplace && (
                 <div className="space-y-1.5">
                   <label
                     htmlFor="harness-select"
@@ -298,6 +319,7 @@ export function RuntimeSwitchModal({
                     </div>
                   )}
                 </div>
+                )}
 
                 {/* Side-by-side runtime preview */}
                 {previewLoading && (
@@ -344,8 +366,9 @@ export function RuntimeSwitchModal({
                       </span>
                     </div>
 
-                    {/* Single-instance lock banner (Phase 24 / D-10) */}
-                    {singleInstanceBlocked && (
+                    {/* Single-instance lock banner (Phase 24 / D-10) — hard
+                        block for cli-bridge agents only. */}
+                    {blockedBySingleInstance && (
                       <div
                         className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
                         style={{
@@ -364,6 +387,32 @@ export function RuntimeSwitchModal({
                             {targetLocked
                               ? "Target runtime is single-instance and doesn't accept additional agents."
                               : "Source runtime is single-instance and can't be released."}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* In-place switch hint (ADR-060) — replaces the hard
+                        lock for adapter-backed host agents (Hermes). The
+                        switch reloads the single host session sequentially
+                        instead of spinning up a parallel container. */}
+                    {isHostInplace && (
+                      <div
+                        className="flex items-start gap-2 p-3 rounded-lg text-[12px]"
+                        style={{
+                          backgroundColor: "rgba(20,184,166,0.08)",
+                          border: "1px solid rgba(20,184,166,0.28)",
+                          color: C.accentHover,
+                        }}
+                        data-testid="host-inplace-hint"
+                      >
+                        <RefreshCw size={13} className="mt-0.5 shrink-0" />
+                        <div>
+                          <div className="font-medium">In-place switch</div>
+                          <div className="opacity-80">
+                            Host agent — no parallel container. The runtime binding is
+                            rewritten and the session restarts briefly (short session
+                            restart, current work is lost).
                           </div>
                         </div>
                       </div>
@@ -521,37 +570,68 @@ export function RuntimeSwitchModal({
               </div>
 
               {/* Footer */}
-              <div className="flex items-center justify-end gap-2 p-4 border-t shrink-0" style={{ borderColor: "rgba(255,255,255,0.06)", paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}>
-                <button
-                  onClick={onClose}
-                  disabled={submitting}
-                  className="text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ color: "var(--color-text-secondary)" }}
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSubmit}
-                  disabled={
-                    submitting ||
-                    !!previewErrMsg ||
-                    singleInstanceBlocked ||
-                    selectedHarnessIncompatible ||
-                    (isBusy && !forceWhenInProgress)
-                  }
-                  title={
-                    singleInstanceBlocked
-                      ? "Single-instance runtime — switch not possible"
-                      : selectedHarnessIncompatible
-                        ? (selectedHarnessIncompatibleReason ?? "Harness incompatible with target runtime")
-                        : undefined
-                  }
-                  className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
-                  style={{ backgroundColor: C.accent, color: C.textPrimary }}
-                >
-                  {submitting ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
-                  Switch
-                </button>
+              <div className="flex items-center justify-between gap-2 p-4 border-t shrink-0" style={{ borderColor: "rgba(255,255,255,0.06)", paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}>
+                <div>
+                  {/* ADR-060 — reload button for adapter-backed host agents.
+                      Same host lifecycle restart used elsewhere for Hermes
+                      (POST /agents/{id}/reset -> _host_agent_lifecycle "restart"). */}
+                  {isHostInplace && (
+                    <button
+                      onClick={async () => {
+                        setReloading(true);
+                        try {
+                          await api.agents.reset(agent.id);
+                          qc.invalidateQueries({ queryKey: ["runtimes"] });
+                          qc.invalidateQueries({ queryKey: ["agents"] });
+                          qc.invalidateQueries({ queryKey: ["agent", agent.id] });
+                          notify.success(`${agent.name} reloaded`);
+                        } catch (e) {
+                          notify.error((e as Error).message ?? "Reload failed");
+                        } finally {
+                          setReloading(false);
+                        }
+                      }}
+                      disabled={reloading || submitting}
+                      className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
+                      style={{ color: "var(--color-text-secondary)", border: "1px solid rgba(255,255,255,0.1)" }}
+                    >
+                      {reloading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                      Reload
+                    </button>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={onClose}
+                    disabled={submitting}
+                    className="text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ color: "var(--color-text-secondary)" }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSubmit}
+                    disabled={
+                      submitting ||
+                      !!previewErrMsg ||
+                      blockedBySingleInstance ||
+                      selectedHarnessIncompatible ||
+                      (isBusy && !forceWhenInProgress)
+                    }
+                    title={
+                      blockedBySingleInstance
+                        ? "Single-instance runtime — switch not possible"
+                        : selectedHarnessIncompatible
+                          ? (selectedHarnessIncompatibleReason ?? "Harness incompatible with target runtime")
+                          : undefined
+                    }
+                    className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-all disabled:cursor-not-allowed disabled:opacity-40"
+                    style={{ backgroundColor: C.accent, color: C.textPrimary }}
+                  >
+                    {submitting ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}
+                    Switch
+                  </button>
+                </div>
               </div>
                 </>
               )}

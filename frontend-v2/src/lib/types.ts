@@ -556,7 +556,11 @@ export interface Agent {
   pending_runtime_sync: boolean;
   // Harness/Provider-Decoupling (ADR-056) — explicit CLI harness override.
   // NULL means the harness is derived from the runtime's protocol.
-  harness?: Harness | null;
+  // "hermes" (ADR-060) is a host-only harness value (HostHarnessAdapter
+  // registry, backend/app/services/host_harness_adapter.py) — intentionally
+  // outside the cli-bridge-facing `Harness` union so HARNESS_LABELS etc.
+  // don't need a "hermes" entry.
+  harness?: Harness | "hermes" | null;
   created_at: string;
   updated_at: string;
 }
