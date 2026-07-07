@@ -61,8 +61,23 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip("'\"")
+            env[k.strip()] = _unquote_env_value(v)
     return env
+
+
+def _unquote_env_value(raw: str) -> str:
+    """Exact inverse of the backend's _format_env_file single-quote escaping.
+
+    A naive .strip("'") leaves '"'"' sequences intact; kept in sync with
+    backend/app/services/agent_bootstrap._unquote_env_value so a token that was
+    written escaped is read back byte-identical (see the 13 KB token bug).
+    entrypoint.sh re-sources agent.env anyway, but this keeps the pass-through
+    env correct on its own.
+    """
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        return raw[1:-1].replace("'\"'\"'", "'")
+    return raw.strip("'\"")
 
 
 def is_session_running() -> bool:
