@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   Search, RefreshCw, X, FolderOpen, Trash2, type LucideIcon,
@@ -73,6 +73,19 @@ export default function FilesPage() {
     enabled: searching,
   });
 
+  // The index refreshes on a 10-min cadence, so a freshly written file (e.g. a
+  // just-registered deliverable) isn't searchable until the next walk. Give the
+  // operator a manual trigger + refresh all file views on completion.
+  const queryClient = useQueryClient();
+  const reindex = useMutation({
+    mutationFn: () => api.files.reindex(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["files-roots"] });
+      queryClient.invalidateQueries({ queryKey: ["files-search"] });
+      queryClient.invalidateQueries({ queryKey: ["files-list"] });
+    },
+  });
+
   function switchRoot(key: string) {
     setActiveRootKey(key);
     setSubpath("");
@@ -126,6 +139,17 @@ export default function FilesPage() {
               Search deliverables, workspaces, vault, and more
             </p>
           </div>
+          <button
+            onClick={() => reindex.mutate()}
+            disabled={reindex.isPending}
+            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-60"
+            style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
+            title="Rescan the file index now — makes freshly written files searchable without waiting for the 10-min auto-walk"
+            aria-label="Reindex files"
+          >
+            <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} style={{ color: C.accent }} />
+            {reindex.isPending ? "Reindexing…" : "Reindex"}
+          </button>
         </div>
 
         {/* Search */}
