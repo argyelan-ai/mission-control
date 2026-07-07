@@ -243,6 +243,59 @@ Hermes ergänzt das `host`-Runtime-Bucket als 12. Agent (Pilot, v0.8) — siehe 
 - **Deliverable-Pfade:** Host-Worker wie Hermes können Deliverables mit Host-Pfaden registrieren (`~/.mc/deliverables/{task_id}/` oder `${HOME_HOST}/.mc/deliverables/{task_id}/`). Das ist dieselbe physische Datei via Volume-Mount (`~/.mc/deliverables:/deliverables` im Backend-Container). Der Backend-Validator akzeptiert beide Formen; der FileResponse-Resolver mappt Host-Form → Docker-interne Form vor der Slug-Expansion. Path-Traversal-Schutz gilt für alle Formen. Siehe ADR-031.
 - **Setup-Doku:** ADR-029 + (folgende Phasen) `docs/agent-state.md`
 
+#### `HostHarnessAdapter` — generischer Host-Agent-Runtime-Layer (NEU 2026-07-07, ADR-060)
+
+Vorher war Hermes' Runtime-Bindung **kosmetisch**: `agent.env` bekam `OPENAI_BASE_URL`/`OPENAI_MODEL`
+korrekt geschrieben, aber das Hermes-Binary liest nur `~/.hermes/config.yaml` — nie die Env-Vars.
+Ergebnis: Hermes lief dauerhaft auf `ollama-cloud/kimi-k2.6`, unabhängig von der gebundenen Runtime.
+`backend/app/services/host_harness_adapter.py` (neu) kapselt die einzige Variabilität zwischen
+Host-CLIs in einem `HostHarnessAdapter`-Protocol (`build_agent_env`, `bootstrap`, `reload`) + Registry
+`HOST_ADAPTERS` (`get_adapter(harness)`); geteilte Bausteine (launchctl, `agent.env`-Write,
+Workspace-Layout) bleiben unverändert.
+
+- **`HermesAdapter`** (voll implementiert, `harness="hermes"`, `protocol="openai"`) delegiert
+  `build_agent_env`/`bootstrap` an die bestehenden `build_hermes_agent_env`/`bootstrap_hermes_agent`
+  und `reload` an den bereits vorhandenen `_host_agent_lifecycle(agent, "restart")`-Pfad
+  (`routers/cli_terminal.py`, SSH → `hermes-bridge` `/restart`). `sync_host_agent_model()` schreibt
+  bei einem Modell-Sync **nur** die `OPENAI_*`-Keys in `agent.env` neu — `MC_AGENT_TOKEN` bleibt
+  erhalten.
+- **Native Config-Render:** `scripts/hermes-config-patch.py` patcht `model.provider=custom` +
+  `model.base_url` + `model.default` aus `OPENAI_BASE_URL`/`OPENAI_MODEL` in
+  `~/.hermes/config.yaml` (Hermes' eingebauter `custom`-Provider liest `base_url` direkt, kein
+  `providers`-Eintrag nötig). Guard: fehlt eine der beiden Env-Vars, bleibt der `model:`-Block
+  unangetastet (keine Regression gegen eine bewusste Handkonfig). `docker/hermes/entrypoint.sh` ruft
+  den Patcher nach `source agent.env` und vor dem Hermes-Start auf, bei **jedem** (Re-)Start —
+  der Reload-Pfad wird dadurch trivial: `agent.env` neu + Session-Neustart = neues Modell live.
+- **Provisioning-Dispatch** (`routers/agents.py`): der harte `if runtime.runtime_type == "hermes"`
+  Branch ist ersetzt durch `get_adapter(harness)` (400 bei unbekanntem Harness) +
+  `harness_compat.is_compatible(harness, runtime)` (422 bei Protokoll-Mismatch, ADR-056) — läuft
+  jetzt auch am Host-Provisioning-Einstieg.
+- **Auto-Forward auch für Host-Agents:** `runtime_propagation.mark_agents_for_sync()` (ADR-054)
+  überspringt Host-Agents nicht mehr hart, sondern flaggt sie mit, wenn ein Adapter registriert ist.
+  Idle Agents bekommen `sync_host_agent_model()` + `adapter.reload()` statt
+  `sync_docker_agent_files()` + `docker restart`; busy Agents bleiben `pending_runtime_sync` bis zum
+  nächsten Watcher-Tick (kein Task-Abbruch mitten drin, gleiches Pattern wie cli-bridge). Ein
+  manueller „Host-Agent neu laden"-Button im Frontend triggert denselben Pfad sofort.
+- **In-Place-Runtime-Switch + `single_instance`-Präzisierung (Amendment zu ADR-029):** ADR-029s
+  `single_instance` sollte „keine **parallele** Instanz" bedeuten, wurde aber als pauschaler
+  Switch-Block implementiert. `agent_runtime_switch._is_host_inplace(agent)` erkennt Host-Agents mit
+  Adapter und routet sie auf einen sequenziellen In-Place-Switch (Runtime-ID committen →
+  `sync_host_agent_model()` → `adapter.reload()` → Rollback bei Fehler) statt auf den harten 422 —
+  es existiert dabei zu keinem Zeitpunkt ein zweiter Hermes-Prozess gegen dieselbe State-DB. Der
+  `single_instance`-Check greift jetzt nur noch, wenn `not is_host_inplace` — das eigentliche
+  Schutzziel (kein **zweiter/adapterloser** Agent auf einer `single_instance`-Runtime) bleibt hart
+  gesperrt. `ollama-cloud` ist als reguläre `runtime_type: cloud`-Runtime registriert (openai-kompatibel)
+  und damit ein normales Switch-Ziel — Hermes kann zwischen Spark und ollama-cloud hin- und
+  herschalten.
+- **Kein LiteLLM/Protokoll-Shim.** Der Adapter übersetzt nichts zwischen Protokollen — ein Harness
+  bekommt nur protokoll-kompatible Runtimes angeboten (`harness_compat`, ADR-056). `protocol="anthropic"`
+  für einen künftigen Claude-Code-Host-Adapter würde weiterhin nur anthropic-kompatible Runtimes
+  zulassen.
+- **`ClaudeCodeHostAdapter` — designed, nicht implementiert.** `get_adapter("claude")` liefert
+  bewusst `None`. Boss (`docker/boss-host/start-claude.sh`, hartcodiertes Modell, reine OAuth) bleibt
+  in dieser Runde vollständig unangetastet.
+- **Setup-Doku:** ADR-060.
+
 ### 6. LLM Runtime Registry (NEU 2026-04-19)
 
 Neben den **Agent-Runtime-Typen** (cli-bridge / host — Wo läuft der Agent? — `openclaw` entfernt in v0.9) gibt es die **LLM-Runtime-Registry** (Welches Modell / welcher OpenAI-kompatible Server beantwortet Agent-Requests?).
@@ -797,6 +850,28 @@ Alle ADRs in `docs/decisions/`:
 
 ## Änderungshistorie (high-level)
 
+- **2026-07-07** — **HostHarnessAdapter — generischer Host-Agent-Runtime-Layer (ADR-060):** Behebt,
+  dass Hermes' Runtime-Bindung rein kosmetisch war — `agent.env` bekam `OPENAI_BASE_URL`/`OPENAI_MODEL`
+  korrekt, aber das Hermes-Binary liest nur `~/.hermes/config.yaml`, nie Env-Vars, lief also dauerhaft
+  auf `ollama-cloud` statt der gebundenen Spark-Runtime. Neuer `backend/app/services/host_harness_adapter.py`:
+  `HostHarnessAdapter`-Protocol + `HOST_ADAPTERS`-Registry + voll implementierter `HermesAdapter`
+  (`build_agent_env`/`bootstrap` delegieren an bestehende Hermes-Bootstrap-Funktionen, `reload` an den
+  vorhandenen `_host_agent_lifecycle`-SSH-Pfad, `sync_host_agent_model()` schreibt nur `OPENAI_*` neu,
+  `MC_AGENT_TOKEN` bleibt erhalten). `scripts/hermes-config-patch.py` patcht `model.provider=custom` +
+  `base_url`/`default` aus den `OPENAI_*`-Env-Vars in `~/.hermes/config.yaml` (Guard bei fehlenden Vars,
+  idempotent); `docker/hermes/entrypoint.sh` ruft den Patcher bei jedem (Re-)Start nach `source agent.env`
+  auf. Provisioning-Dispatch (`routers/agents.py`) ersetzt den harten `runtime_type == "hermes"`-Branch
+  durch `get_adapter(harness)` + `is_compatible()`-Gate (400/422). `runtime_propagation.mark_agents_for_sync`
+  (ADR-054) überspringt Host-Agents mit Adapter nicht mehr — idle Agents werden per
+  `sync_host_agent_model()` + `adapter.reload()` mitgezogen, busy Agents bleiben bis zum nächsten
+  Watcher-Tick `pending_runtime_sync`. **Amendment zu ADR-029:** `single_instance` bedeutet „keine
+  parallele Instanz", nicht „kein Umbinden" — `agent_runtime_switch._is_host_inplace()` routet
+  Host-Agents mit Adapter auf einen sequenziellen In-Place-Switch (kill → agent.env neu → reload,
+  nie zwei Prozesse gleichzeitig) statt auf den harten 422; der Block bleibt nur für einen
+  zweiten/adapterlosen Agent auf derselben `single_instance`-Runtime bestehen. `ollama-cloud` als
+  reguläre `cloud`-Runtime registriert (normales Switch-Ziel). Bewusst nicht Teil dieser Runde: kein
+  LiteLLM/Protokoll-Shim (Harness wählt Protokoll, übersetzt nicht), `ClaudeCodeHostAdapter` nur
+  designed (`get_adapter("claude")` → `None`), Boss vollständig unangetastet. ADR-060.
 - **2026-07-06** — **Solo-Capability-aware Recipe Switching (ADR-059):** Behebt den "engine unreachable"-Vorfall beim Recipe-Switch auf `@eugr/qwen3.6-35b-a3b-fp8` (tp=2 auf dem 1-GPU-Spark). `sparkrun_manager.list_recipes()` parst jetzt `tp`/`nodes` aus `sparkrun list` und berechnet `solo_capable` gegen die per `get_host_gpu_count()` (`nvidia-smi -L | wc -l`, host-scoped ADR-048) ermittelte reale GPU-Zahl. `switch_recipe()` bricht Multi-Node-Recipes VOR dem Evict ab (`runtime.recipe_switch_rejected`-Event) und injiziert `--tensor-parallel <host_gpu_count>` bei reinen TP-Overages (`build_launch_command(..., tp_override=...)`) statt sich auf `--solo` zu verlassen (das nur den Ray-Bootstrap steuert, nie den tp-Wert). Zweiter, unabhängiger Fix am selben Vorfall: `runtime_manager.start_runtime()` bekommt einen zweiten Post-Launch-Check `verify_spark_vllm_process_started` (`docker top`-Scan auf einen echten `vllm serve`-Prozess) — schliesst die Lücke, dass ein Container "running" sein kann (PID1 `sleep infinity`), während der injizierte vLLM-Prozess längst gecrasht ist, und sparkrun das per `--no-follow` nie meldet. Frontend `SparkRecipeSwitcher` zeigt tp/nodes-Badges und deaktiviert nicht-solo-fähige Recipes. Als Nebenbefund verifiziert: der Agent-Restart-Propagationspfad (`runtime_propagation.py`) kann strukturell nie einen sparkrun-Container treffen (Container-Name kommt nur vom Agent-Slug) — Assertion + Regressionstest als Tripwire; der `docker restart`, der beim Vorfall den sparkrun-Container zurücksetzte, kam vom manuellen `/runtimes/{id}/restart`-Button, nicht aus der Propagation. ADR-059.
 - **2026-07-05** — **Engine Control v0: Autostart-Flag via SSH (ADR-057):** Erster Baustein von Cockpit v2 ("MC folgt der Engine" → "MC steuert die Engine"). Neue Spalten `runtimes.autostart_supported`/`autostart_flag_path` (Migration 0146, additive, Default aus) — Operator setzt sie zur Laufzeit via `PATCH /runtimes/db/{slug}` oder UI, nie geseeded. `services/runtime_autostart.py` führt `test -f`/`touch`/`rm -f` über den bestehenden `runtime_manager._ssh_run()` + Host-Registry-Resolver (`host_id` → `hosts`, ADR-048) aus — keine zweite SSH-Implementierung, kein separates Host/User-Feld pro Runtime. `GET/POST /runtimes/db/{slug}/autostart` (on-demand, nicht Teil des 90s-Watcher-Takts, ADR-054-Präzedenzfall): POST touched/entfernt die Flag-Datei und liest sie zur Verifikation zurück, emittiert `runtime.autostart_changed`; ein unerreichbarer Host liefert `enabled: null, reachable: false` bzw. bei POST einen 502 mit klarer Meldung statt Stacktrace. Frontend `AutostartToggle.tsx` auf der `/runtimes`-Karte (nur wenn `autostart_supported=true`): 3 Zustände an/aus/unbekannt, disabled bei unbekanntem Host, kein optimistisches UI. ADR-057.
 - **2026-07-05** — **CLI-Tool-Updates aus User-Sicht (ADR-058, Migration 0147):** `docker/cli-versions.json` wird Single Source of Truth für die Soll-Versionen der drei Agent-CLIs (`openclaude`/`claude`/`omp`), gelesen von `build-agent-images.sh` (Build-Args) und `services/cli_versions.py` (Ist-Stand via OCI-Labels `mc.cli.name`/`mc.cli.version`). `services/cli_update_check.py` prüft periodisch (6h, npm/GitHub-Releases) auf neue Versionen, kein Auto-Update. Ein UI-Klick auf `/runtimes` → CLI-Tools löst `services/cli_update_runner.py` aus: Manifest bumpen → Build via `cli-bridge.py` `POST /agent-images/build` auf dem Host (Docker-Socket-Proxy-Regel `BUILD: 0`, ADR-047) → bei Fehlschlag Manifest-Rollback, bei Erfolg Rolling Recreate der betroffenen Harness-Agents (idle sofort, busy → `agents.pending_recreate`, abgearbeitet vom nächsten Runtime-Watcher-Tick — ADR-054-Propagationsmechanik wiederverwendet). Neue API `/api/v1/cli-tools`, neue Frontend-Sektion `CliToolsSection` auf `/runtimes`. Bewusst nicht v1: GHCR-Publish, Auto-Update-Policy, Changelog-Anzeige.
