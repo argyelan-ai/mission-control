@@ -31,9 +31,12 @@ fi
 # Defensive: kill any prior session so we always boot clean
 "$TMUX_BIN" kill-session -t "$SESSION" 2>/dev/null || true
 
-# Spawn tmux with Hermes in a watchdog while-true loop (matches Boss pattern)
+# Spawn tmux with Hermes in a watchdog while-true loop (matches Boss pattern).
+# --yolo bypasses dangerous-command approval prompts: Hermes runs as an
+# unattended MC worker, so an interactive approval prompt would hang the
+# session forever (Phase 25, ADR-030). Do not drop this flag.
 "$TMUX_BIN" new-session -d -s "$SESSION" -x 220 -y 50 \
-  "while true; do $HERMES_BIN; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
+  "while true; do $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
 
 # Tee the pane to a log file for scrollback replay (host-pty-bridge consumption)
 "$TMUX_BIN" pipe-pane -o -t "$SESSION":0 "cat >> $LOG_DIR/hermes.log"
