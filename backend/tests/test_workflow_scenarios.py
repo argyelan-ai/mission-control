@@ -500,7 +500,11 @@ async def test_invalid_transition_inbox_to_review(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_invalid_transition_failed_to_done(client, fake_redis):
-    """failed→done is not allowed → 400."""
+    """failed→done is not allowed on the AGENT path → 400.
+
+    Agents must re-open (failed→inbox) and rework; only the operator/UI path
+    may close a dead task directly (see the operator-cleanup tests below).
+    """
     data = await _create_workflow_data(
         task_status="failed", task_assigned_to="developer",
     )
@@ -513,6 +517,57 @@ async def test_invalid_transition_failed_to_done(client, fake_redis):
         )
 
     assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_operator_can_close_failed_task_as_done(client, fake_redis):
+    """Operator/UI path (agent=None): failed→done is allowed even on a
+    require_review_before_done board — deliberate cleanup opt-out."""
+    from app.routers.tasks import _enforce_board_rules
+    from app.models.board import Board
+    from app.models.task import Task
+
+    board_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(
+            id=board_id, name="Review Board", slug=f"rev-{board_id.hex[:8]}",
+            require_review_before_done=True,
+        )
+        s.add(board)
+        task = Task(
+            id=task_id, board_id=board_id, title="Dead task",
+            status="failed", human_review_required=True,
+        )
+        s.add(task)
+        await s.commit()
+
+        # Must not raise — operator closing a failed task from the UI.
+        await _enforce_board_rules(s, board_id, task, "done", agent=None)
+
+
+@pytest.mark.asyncio
+async def test_operator_failed_to_review_still_blocked(client, fake_redis):
+    """The operator widening is scoped to done/aborted — failed→review stays
+    invalid (400) so the cleanup path can't smuggle a failed task back into
+    the review lane."""
+    from fastapi import HTTPException
+    from app.routers.tasks import _enforce_board_rules
+    from app.models.board import Board
+    from app.models.task import Task
+
+    board_id = uuid.uuid4()
+    task_id = uuid.uuid4()
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(id=board_id, name="B", slug=f"b-{board_id.hex[:8]}")
+        s.add(board)
+        task = Task(id=task_id, board_id=board_id, title="Dead", status="failed")
+        s.add(task)
+        await s.commit()
+
+        with pytest.raises(HTTPException) as exc:
+            await _enforce_board_rules(s, board_id, task, "review", agent=None)
+        assert exc.value.status_code == 400
 
 
 @pytest.mark.asyncio
