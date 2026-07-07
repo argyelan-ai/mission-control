@@ -90,7 +90,7 @@
   {
     "id": "ollama-cloud",
     "display_name": "Ollama Cloud (glm-5.1)",
-    "runtime_type": "cloud",
+    "runtime_type": "openai_compatible",
     "provider": "ollama",
     "endpoint": "https://ollama.com/v1",
     "healthcheck_path": "/models",
