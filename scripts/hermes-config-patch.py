@@ -48,6 +48,24 @@ def _get_dotted(d: dict, dotted_key: str, default=None):
     return d
 
 
+def _model_patches_from_env() -> dict:
+    """Derive model.* patches from the runtime-bound OPENAI_* env vars.
+
+    Returns patches only when BOTH base_url and model are present, so a
+    hand-written model block (e.g. deliberately cloud) is never clobbered.
+    ADR-060.
+    """
+    base_url = os.environ.get("OPENAI_BASE_URL")
+    model = os.environ.get("OPENAI_MODEL")
+    if not (base_url and model):
+        return {}
+    return {
+        "model.provider": "custom",
+        "model.base_url": base_url,
+        "model.default": model,
+    }
+
+
 def main() -> int:
     if not CONFIG_PATH.exists():
         print(
@@ -77,7 +95,8 @@ def main() -> int:
             cfg = pyyaml.safe_load(f)
 
     changed = []
-    for dotted, expected in AUTONOMOUS_WORKER_PATCHES.items():
+    patches = {**AUTONOMOUS_WORKER_PATCHES, **_model_patches_from_env()}
+    for dotted, expected in patches.items():
         current = _get_dotted(cfg, dotted)
         if current != expected:
             _set_dotted(cfg, dotted, expected)
