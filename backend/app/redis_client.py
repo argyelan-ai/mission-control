@@ -221,6 +221,15 @@ class RedisKeys:
         Tier 3 (5min ACK-wait). See 06-CONTEXT.md D-18."""
         return f"mc:recovery:inprogress:{agent_id}:{task_id}"
 
+    @staticmethod
+    def bootstrap_recovery_sent(agent_id: str, task_id: str) -> str:
+        """Dedup key for the bootstrap-triggered recovery recap (restart
+        signal). Prevents crash-loop / repeated container starts from
+        spamming the task timeline with duplicate recovery_recap comments.
+        TTL 10min — a fresh bootstrap after that window is treated as a
+        new restart worth re-recapping."""
+        return f"mc:bootstrap:recovery_sent:{agent_id}:{task_id}"
+
     # ── Compaction Lock (Phase 6 CTX-02) ──────────────────────────────
     @staticmethod
     def compaction_lock(agent_id: str) -> str:
