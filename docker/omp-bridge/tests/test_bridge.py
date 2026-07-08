@@ -333,10 +333,10 @@ def test_no_run_is_ever_left_in_progress():
 # ---------------------------------------------------------------------------
 
 class _FakeProc:
-    def __init__(self, rc):
+    def __init__(self, rc, stderr=None):
         self.returncode = rc
         self.stdout = ""
-        self.stderr = "rejected" if rc else ""
+        self.stderr = stderr if stderr is not None else ("rejected" if rc else "")
 
 
 def _mc_cli_with_fake_run(run_fn):
@@ -376,6 +376,63 @@ def test_mc_cli_finish_no_fallback_on_success():
     _mc_cli_with_fake_run(fake_run)
     subs = [c[1] for c in calls if len(c) > 1]
     assert subs == ["finish"], ("clean finish must NOT spuriously block", subs)
+
+
+# ---------------------------------------------------------------------------
+# McCliLifecycle checklist-open handoff: a `mc finish` failure caused by open
+# checklist items (including out-of-role items an omp agent physically cannot
+# do, e.g. a live Vercel deploy) must route to review with a handoff comment
+# listing the pending items — NOT the generic `blocked`/technical_problem
+# fallback, which mislabels "work is genuinely done except for an out-of-role
+# item" as a technical failure. Real errors (5xx, network, unparseable) must
+# still fall back to blocked — the terminal no-silent-hang guarantee holds.
+# ---------------------------------------------------------------------------
+
+_CHECKLIST_OPEN_STDERR = (
+    "mc finish: 2 Checklist-Item(s) noch offen: ab12cd34 (Vercel Deploy), "
+    "ef56ab78 (DNS Cutover). Erst alle mit `mc checklist done <id>` schliessen, "
+    "dann `mc finish` erneut."
+)
+
+
+def test_mc_cli_finish_checklist_open_routes_to_review_not_blocked():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "finish":
+            return _FakeProc(1, stderr=_CHECKLIST_OPEN_STDERR)
+        return _FakeProc(0)
+
+    _mc_cli_with_fake_run(fake_run)
+    subs = [c[1] for c in calls if len(c) > 1]
+    assert "finish" in subs, subs
+    assert "review" in subs, ("checklist-open must route to review", subs)
+    assert "blocked" not in subs, ("checklist-open must NOT fall back to blocked", subs)
+    assert "comment" in subs, ("checklist-open must post a handoff comment", subs)
+    comment_call = next(c for c in calls if len(c) > 1 and c[1] == "comment")
+    # The handoff comment must carry the specific pending items, not a generic
+    # message, so the Board Lead/Mark sees exactly what's outstanding.
+    joined = " ".join(comment_call)
+    assert "Vercel Deploy" in joined or "ab12cd34" in joined, comment_call
+
+
+def test_mc_cli_finish_real_error_still_falls_back_to_blocked():
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "finish":
+            return _FakeProc(2, stderr="mc finish: 502 Bad Gateway from backend")
+        return _FakeProc(0)
+
+    _mc_cli_with_fake_run(fake_run)
+    subs = [c[1] for c in calls if len(c) > 1]
+    assert "finish" in subs, subs
+    assert "blocked" in subs, ("genuine errors must still fall back to blocked", subs)
+    assert "review" not in subs, ("genuine errors must NOT be routed to review", subs)
 
 
 # ---------------------------------------------------------------------------
