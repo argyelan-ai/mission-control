@@ -1065,12 +1065,29 @@ For large tasks (website, app, feature with multiple steps):
         # reaches ALL non-lead worker roles persistently. Repeating it per-task
         # was redundant boilerplate that pushed messages over the HARD cap.
 
+        # ── Checklist step (re-dispatch gate, 2026-07-08 incident fix) ──────
+        # A re-dispatched agent (recovery context attached / task already
+        # in_progress) that gets told to "create a checklist" verbatim
+        # replays every `mc checklist add` call from its previous attempt,
+        # duplicating rows — mirrors the ACK-reminder gate above. On
+        # re-dispatch, point at the existing checklist (shown in the
+        # recovery block) instead of re-seeding it.
+        if task.status != "in_progress":
+            _checklist_step = (
+                '1. `mc checklist add "..."` for every step — the checklist is the single source\n'
+                "   of truth for progress (recovery reads it)"
+            )
+        else:
+            _checklist_step = (
+                "1. Continue the EXISTING checklist shown above under Recovery — do NOT "
+                "re-create it. Only `mc checklist add \"...\"` for newly discovered steps."
+            )
+
         _add("worker_approach", f"""
 ## Approach
 
 Work independently on this task until it's done:
-1. `mc checklist add "..."` for every step — the checklist is the single source
-   of truth for progress (recovery reads it)
+{_checklist_step}
 2. Work through each item, after completing it: `mc checklist done <id>`
 3. In between: `mc comment progress "Update/Evidence/Next"` for the audit trail
 4. When everything is done: `mc {'done' if _is_subtask else 'review'}`

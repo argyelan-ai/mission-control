@@ -135,3 +135,71 @@ async def test_recovery_context_shows_progress_comments(async_session, board_wit
     assert ctx is not None
     assert "Schritt 1 fertig" in ctx
     assert "[progress" in ctx
+
+
+@pytest.mark.asyncio
+async def test_fresh_dispatch_still_instructs_checklist_creation(async_session, board_with_agents):
+    """First dispatch (no recovery context / task not yet in_progress) must
+    still tell the worker to create a checklist from scratch — no regression
+    from the redispatch gate below."""
+    from app.services.dispatch import build_agent_task_prompt
+
+    board = board_with_agents["board"]
+    developer = board_with_agents["developer"]
+
+    task = Task(
+        board_id=board.id, title="Neuer Task", status="inbox",
+        assigned_agent_id=developer.id, description="Build feature Y",
+    )
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
+
+    with patch("app.services.dispatch.emit_event", new_callable=AsyncMock):
+        prompt = await build_agent_task_prompt(task, developer, async_session)
+
+    assert 'mc checklist add "..."' in prompt
+    assert "for every step" in prompt
+
+
+@pytest.mark.asyncio
+async def test_redispatch_with_checklist_does_not_reseed(async_session, board_with_agents):
+    """Root cause of the duplicate-checklist bug: on re-dispatch (container
+    restart, manual resume, blocked→in_progress unblock) with an existing
+    checklist, the worker_approach block must NOT tell the agent to
+    (re-)create the checklist from scratch — it must tell it to continue
+    the existing one. Otherwise the agent replays every `mc checklist add`
+    call and duplicates rows."""
+    from app.services.dispatch import build_agent_task_prompt
+    from app.models.checklist import TaskChecklistItem
+
+    board = board_with_agents["board"]
+    developer = board_with_agents["developer"]
+
+    task = Task(
+        board_id=board.id, title="Laufender Task mit Checkliste", status="in_progress",
+        assigned_agent_id=developer.id,
+    )
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
+
+    items = [
+        TaskChecklistItem(task_id=task.id, title="Schritt 1", status="done", sort_order=0),
+        TaskChecklistItem(task_id=task.id, title="Schritt 2", status="pending", sort_order=1),
+    ]
+    for i in items:
+        async_session.add(i)
+    await async_session.commit()
+
+    with patch("app.services.dispatch.emit_event", new_callable=AsyncMock):
+        prompt = await build_agent_task_prompt(task, developer, async_session)
+
+    # Recovery context is present (root gate condition for this test)
+    assert "## Recovery — Du hast hier aufgehoert" in prompt
+    # The re-seed-from-scratch directive must be gone (literal phrasing from
+    # the fresh-dispatch path asserted in test_fresh_dispatch_still_instructs_checklist_creation)
+    assert "for every step" not in prompt
+    # Replaced with a continue-existing-checklist instruction
+    assert "continue" in prompt.lower()
+    assert "existing checklist" in prompt.lower()

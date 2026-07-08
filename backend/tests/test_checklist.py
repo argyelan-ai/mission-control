@@ -235,3 +235,50 @@ async def test_completed_at_cleared_on_reopen(client):
     assert resp.status_code == 200
     assert resp.json()["status"] == "pending"
     assert resp.json()["completed_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_checklist_create_is_idempotent_on_redispatch(client):
+    """Re-dispatch (container restart, manual resume, blocked→in_progress unblock)
+    re-instructs the agent to create its checklist. Replaying the exact same
+    bulk-create payload must NOT duplicate rows — this was the real incident
+    root cause (one item created 3x, others 2x, which later made `mc finish`
+    fail with a wall of open items)."""
+    ids = await _setup_checklist_scenario()
+    agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
+    payload = {"items": [
+        {"title": "Analyse", "sort_order": 0},
+        {"title": "Tests schreiben", "sort_order": 1},
+        {"title": "Implementieren", "sort_order": 2},
+    ]}
+
+    first = await client.post(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist",
+        headers=agent_headers,
+        json=payload,
+    )
+    assert first.status_code == 201, first.json()
+    assert len(first.json()) == 3
+
+    # Simulated re-dispatch: agent replays the identical "create checklist" step.
+    second = await client.post(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist",
+        headers=agent_headers,
+        json=payload,
+    )
+    assert second.status_code == 200, second.json()
+    assert len(second.json()) == 3
+
+    list_resp = await client.get(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist",
+        headers=agent_headers,
+    )
+    assert list_resp.status_code == 200
+    assert len(list_resp.json()) == 3  # NOT doubled to 6
+
+    task_resp = await client.get(
+        f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}",
+        headers=agent_headers,
+    )
+    assert task_resp.status_code == 200
+    assert task_resp.json()["checklist_total"] == 3  # NOT inflated to 6
