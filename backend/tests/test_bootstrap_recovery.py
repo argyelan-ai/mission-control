@@ -184,3 +184,49 @@ async def test_bootstrap_token_response_unchanged_by_recovery_step(client: Async
     body = resp.json()
     assert body.get("GH_TOKEN") == "gho_test_token_abcdef"
     assert "CONTEXT_MAX" in body
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_recovery_failure_never_breaks_token_delivery(
+    client: AsyncClient, monkeypatch
+):
+    """Best-effort guard: if the recovery-recap step raises, the exception
+    must be swallowed — token delivery (the thing the container's retry loop
+    blocks on) is never broken, and no half-applied recap comment is left
+    behind.
+
+    Failure is injected into build_recovery_context (imported lazily inside
+    the helper, so patching the source module reaches the live call site).
+    Removing the try/except in internal.agent_bootstrap makes this test go
+    red (the injected error propagates → 500), which is how it proves it is
+    actually exercising the guard.
+    """
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task = await _seed_agent_with_task(s)
+        s.add(Secret(
+            key="github_token",
+            encrypted_value=encrypt("gho_test_token_abcdef"),
+            provider="github",
+        ))
+        await s.commit()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("injected recovery-context failure")
+
+    import app.services.task_context_builder as tcb
+    monkeypatch.setattr(tcb, "build_recovery_context", _boom)
+
+    resp = await client.get(f"/api/v1/internal/bootstrap?agent_name={agent.name}")
+
+    # (a) response still 200 — the failure was swallowed
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # (b) token payload fully present / unchanged
+    assert body.get("GH_TOKEN") == "gho_test_token_abcdef"
+    assert "CONTEXT_MAX" in body
+
+    # (c) no recovery_recap comment — the failure was swallowed, not
+    #     half-applied
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        count = await _count_recovery_recap_comments(s, task.id)
+    assert count == 0
