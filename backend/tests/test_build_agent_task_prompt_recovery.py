@@ -203,3 +203,40 @@ async def test_redispatch_with_checklist_does_not_reseed(async_session, board_wi
     # Replaced with a continue-existing-checklist instruction
     assert "continue" in prompt.lower()
     assert "existing checklist" in prompt.lower()
+
+
+@pytest.mark.asyncio
+async def test_blocked_recovery_does_not_reseed_checklist(async_session, board_with_agents):
+    """A `blocked` task recovered via `mc recover` flows through the normal
+    worker_approach block. Since blocked != in_progress, a naive gate would
+    wrongly re-seed the checklist. With recovery context + an existing
+    checklist present, the agent must be told to CONTINUE, not re-create."""
+    from app.services.dispatch import build_agent_task_prompt
+    from app.models.checklist import TaskChecklistItem
+
+    board = board_with_agents["board"]
+    developer = board_with_agents["developer"]
+
+    task = Task(
+        board_id=board.id, title="Blockierter Task", status="blocked",
+        assigned_agent_id=developer.id,
+    )
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
+
+    items = [
+        TaskChecklistItem(task_id=task.id, title="Schritt 1", status="done", sort_order=0),
+        TaskChecklistItem(task_id=task.id, title="Schritt 2", status="pending", sort_order=1),
+    ]
+    for i in items:
+        async_session.add(i)
+    await async_session.commit()
+
+    with patch("app.services.dispatch.emit_event", new_callable=AsyncMock):
+        prompt = await build_agent_task_prompt(task, developer, async_session)
+
+    # Re-seed directive gone, continue-existing directive present.
+    assert "for every step" not in prompt
+    assert "continue" in prompt.lower()
+    assert "existing checklist" in prompt.lower()

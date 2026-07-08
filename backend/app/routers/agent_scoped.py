@@ -2541,12 +2541,24 @@ async def agent_create_checklist(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
 
+    # Dedup only against NON-TERMINAL items (pending/in_progress). An already
+    # done/skipped item with the same title must NOT swallow a genuinely new
+    # round of that step (e.g. a second "Run tests" pass) — otherwise the new
+    # work would be invisible to `mc finish` and recovery. This is only the
+    # backstop for a real double-POST of still-open items; the prompt gate in
+    # dispatch_message_builder stops re-dispatch from replaying the whole
+    # checklist in the first place.
+    _NON_TERMINAL = ("pending", "in_progress")
     existing_items = (
         await session.exec(
             select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
         )
     ).all()
-    existing_by_title = {i.title.strip().lower(): i for i in existing_items}
+    existing_by_title = {
+        i.title.strip().lower(): i
+        for i in existing_items
+        if i.status in _NON_TERMINAL
+    }
 
     items = []
     new_count = 0

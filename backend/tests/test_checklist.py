@@ -282,3 +282,48 @@ async def test_checklist_create_is_idempotent_on_redispatch(client):
     )
     assert task_resp.status_code == 200
     assert task_resp.json()["checklist_total"] == 3  # NOT inflated to 6
+
+
+@pytest.mark.asyncio
+async def test_checklist_dedup_scoped_to_non_terminal_items(client):
+    """Dedup must only fire against still-open (pending/in_progress) items.
+
+    If an item titled "Run tests" is already done and the agent legitimately
+    wants a NEW round of "Run tests", the POST must create a fresh pending
+    item — not silently return the old done row (which would hide the new
+    work from `mc finish` and recovery)."""
+    ids = await _setup_checklist_scenario()
+    agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
+    base = f"/api/v1/agent/boards/{ids['board_id']}/tasks/{ids['task_id']}/checklist"
+
+    create = await client.post(
+        base, headers=agent_headers,
+        json={"items": [{"title": "Run tests", "sort_order": 0}]},
+    )
+    assert create.status_code == 201
+    item_id = create.json()[0]["id"]
+
+    # Mark it done — it is now a terminal item.
+    done = await client.patch(
+        f"{base}/{item_id}", headers=agent_headers, json={"status": "done"},
+    )
+    assert done.status_code == 200
+    assert done.json()["status"] == "done"
+
+    # Agent wants a new round of "Run tests" → a fresh pending item must appear.
+    again = await client.post(
+        base, headers=agent_headers,
+        json={"items": [{"title": "Run tests", "sort_order": 1}]},
+    )
+    assert again.status_code == 201, again.json()
+    assert len(again.json()) == 1
+    assert again.json()[0]["status"] == "pending"
+    assert again.json()[0]["id"] != item_id
+
+    # Two rows titled "Run tests" now exist: one done, one pending.
+    list_resp = await client.get(base, headers=agent_headers)
+    assert list_resp.status_code == 200
+    run_tests = [i for i in list_resp.json() if i["title"] == "Run tests"]
+    assert len(run_tests) == 2
+    statuses = sorted(i["status"] for i in run_tests)
+    assert statuses == ["done", "pending"]

@@ -1066,13 +1066,24 @@ For large tasks (website, app, feature with multiple steps):
         # was redundant boilerplate that pushed messages over the HARD cap.
 
         # ── Checklist step (re-dispatch gate, 2026-07-08 incident fix) ──────
-        # A re-dispatched agent (recovery context attached / task already
-        # in_progress) that gets told to "create a checklist" verbatim
-        # replays every `mc checklist add` call from its previous attempt,
-        # duplicating rows — mirrors the ACK-reminder gate above. On
-        # re-dispatch, point at the existing checklist (shown in the
-        # recovery block) instead of re-seeding it.
-        if task.status != "in_progress":
+        # A re-dispatched agent (recovery context attached / task already in a
+        # worked-on lifecycle state) that gets told to "create a checklist"
+        # verbatim replays every `mc checklist add` call from its previous
+        # attempt, duplicating rows. Emit the create-from-scratch instruction
+        # ONLY on a genuine FIRST dispatch. Signals for "already worked on",
+        # any of which means continue-the-existing-checklist:
+        #   • recovery_context present — build_recovery_context() returns
+        #     truthy whenever the task has progress comments OR a checklist,
+        #     so this already covers the "existing checklist" case, and
+        #   • status in a post-inbox worked-on state (in_progress, blocked,
+        #     review) — covers a `blocked`→recovered task even if recovery
+        #     context happened to be empty. `blocked != in_progress` would
+        #     otherwise wrongly re-seed on `mc recover`.
+        _is_first_dispatch = (
+            not recovery_context
+            and task.status not in ("in_progress", "blocked", "review")
+        )
+        if _is_first_dispatch:
             _checklist_step = (
                 '1. `mc checklist add "..."` for every step — the checklist is the single source\n'
                 "   of truth for progress (recovery reads it)"
