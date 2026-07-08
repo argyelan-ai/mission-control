@@ -985,7 +985,32 @@ class McCliLifecycle(MCLifecycle):
                 ],
                 best_effort=True,
             )
-            self._run(task_id, ["review", task_id], best_effort=True)
+            review_rc, review_stderr = self._run(
+                task_id, ["review", task_id], best_effort=True,
+            )
+            if review_rc == 0:
+                return
+            # The review rescue itself failed (network/5xx/concurrent status
+            # change). We must NOT return here — that would leave the task
+            # silently in_progress, the exact hang this runtime exists to
+            # close. Fall through to the `blocked` fallback below, with a
+            # question that makes clear both finish AND review failed.
+            sys.stderr.write(
+                f"[mc-cli] review rescue failed (rc={review_rc}) after checklist-open "
+                f"finish -> falling back to blocked (task {task_id})\n"
+            )
+            self.set_blocker(
+                task_id,
+                blocker_type="technical_problem",
+                question=(
+                    "omp-bridge: `mc finish` scheiterte an offenen Checklist-Items "
+                    f"und der Rettungsversuch `mc review` schlug ebenfalls fehl "
+                    f"(exit={review_rc}). Automatisch blockiert statt still "
+                    "in_progress haengen zu lassen — bitte Ergebnis pruefen, "
+                    f"offene Items klaeren und Task erneut zuweisen. "
+                    f"Details:\n{stderr_text}"
+                ),
+            )
             return
 
         # Genuinely unexpected failure (5xx, network, unparseable output,

@@ -435,6 +435,33 @@ def test_mc_cli_finish_real_error_still_falls_back_to_blocked():
     assert "review" not in subs, ("genuine errors must NOT be routed to review", subs)
 
 
+def test_mc_cli_finish_checklist_open_falls_back_to_blocked_when_review_also_fails():
+    # Checklist-open triggers the review-handoff branch, but the `mc review`
+    # rescue itself fails (network/5xx/concurrent status change). The task must
+    # NOT be left silently in_progress — fall back to `blocked` so it still
+    # reaches a terminal, Mark-visible state (the no-silent-hang guarantee).
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        sub = cmd[1] if len(cmd) > 1 else ""
+        if sub == "finish":
+            return _FakeProc(1, stderr=_CHECKLIST_OPEN_STDERR)
+        if sub == "review":
+            return _FakeProc(2, stderr="mc review: 503 Service Unavailable")
+        return _FakeProc(0)  # comment + blocked succeed
+
+    _mc_cli_with_fake_run(fake_run)
+    subs = [c[1] for c in calls if len(c) > 1]
+    assert "finish" in subs, subs
+    assert "comment" in subs, ("handoff comment must still be posted first", subs)
+    assert "review" in subs, ("review rescue must be attempted", subs)
+    assert "blocked" in subs, (
+        "when the review rescue fails, MUST fall back to blocked, "
+        "never a silent in_progress return", subs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Standalone runner (no pytest)
 # ---------------------------------------------------------------------------
