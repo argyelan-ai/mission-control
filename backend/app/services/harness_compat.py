@@ -33,17 +33,25 @@ _OPENAI_TYPES = frozenset(
     {"vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud", "omp"}
 )
 
-# HARNESS_PROTOCOLS intentionally covers "hermes" too (ADR-060) even though
-# HARNESSES/HARNESS_LABELS stay cli-bridge-only: "hermes" is a host-only
-# harness (see host_harness_adapter.HermesAdapter) that must still answer
-# is_compatible() checks in the host provisioning/switch dispatch, but must
-# NOT appear in the cli-bridge runtime-switch matrix surfaced by
-# routers/runtimes.py (which iterates HARNESSES).
+# HARNESS_PROTOCOLS intentionally covers "hermes" + "grok" too (ADR-060/063)
+# even though HARNESSES/HARNESS_LABELS stay cli-bridge-only: these are host-only
+# harnesses (see host_harness_adapter) that must still answer is_compatible()
+# checks in the host provisioning/switch dispatch, but must NOT appear in the
+# cli-bridge runtime-switch matrix surfaced by routers/runtimes.py (which
+# iterates HARNESSES).
+#
+# "grok" is protocol-fixed: the Grok Build CLI talks ONLY to xAI cloud over its
+# own OAuth (~/.grok/auth.json) — it cannot be pointed at an OpenAI/Anthropic
+# endpoint, so it carries its own "grok" wire protocol. A grok agent therefore
+# only binds to the seed `grok-cloud` runtime (runtime_type "grok"); any
+# openai/anthropic runtime is a clean 422 mismatch. The binding is a display
+# anchor only — grok reads no provider env from it (ADR-063).
 HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     "claude": frozenset({"anthropic"}),
     "openclaude": frozenset({"openai"}),
     "omp": frozenset({"openai"}),
     "hermes": frozenset({"openai"}),
+    "grok": frozenset({"grok"}),
 }
 
 
@@ -63,6 +71,11 @@ def runtime_protocol(runtime: Runtime | None) -> str | None:
         runtime.runtime_type or ""
     ).startswith("anthropic"):
         return "anthropic"
+    # grok runtimes carry their own fixed wire protocol (xAI cloud OAuth) — they
+    # are neither openai- nor anthropic-compatible, and only the grok harness
+    # accepts them (ADR-063).
+    if (runtime.runtime_type or "").strip() == "grok":
+        return "grok"
     if (runtime.runtime_type or "").strip() in _OPENAI_TYPES:
         return "openai"
     return None
