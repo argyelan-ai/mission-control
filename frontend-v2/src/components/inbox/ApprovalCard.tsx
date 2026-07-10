@@ -140,9 +140,9 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               </span>
             </div>
 
-            <p className="text-sm mt-2.5 leading-relaxed text-[var(--color-text-primary)]">
-              {approval.description}
-            </p>
+            <div className="text-sm mt-2.5 prose-comment text-[var(--color-text-primary)]">
+              <ReactMarkdown>{approval.description}</ReactMarkdown>
+            </div>
 
             {/* Blocker details */}
             {isBlocker && approval.payload && (() => {
@@ -169,8 +169,16 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                   <span className="inline-block text-[10px] px-2 py-0.5 rounded font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
                     {blockerType.label}
                   </span>
-                  {p.description && <p className="text-[12px] text-[var(--color-text-primary)]">{p.description}</p>}
-                  {p.question && <p className="text-[12px] italic" style={{ color: C.accent }}>{p.question}</p>}
+                  {p.description && (
+                    <div className="text-[12px] prose-comment text-[var(--color-text-primary)]">
+                      <ReactMarkdown>{p.description}</ReactMarkdown>
+                    </div>
+                  )}
+                  {p.question && (
+                    <div className="text-[12px] italic prose-comment" style={{ color: C.accent }}>
+                      <ReactMarkdown>{p.question}</ReactMarkdown>
+                    </div>
+                  )}
                   {!p.description && p.blocker_comment && (
                     <div className="prose-comment text-[11px] text-[var(--color-text-secondary)]">
                       <ReactMarkdown>{p.blocker_comment}</ReactMarkdown>
@@ -199,7 +207,9 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                       {p.task_title && <span>{p.task_title}</span>}
                     </p>
                   )}
-                  <p className="text-[12px] text-[var(--color-text-primary)] font-medium">{p.question}</p>
+                  <div className="text-[12px] font-medium prose-comment text-[var(--color-text-primary)]">
+                    <ReactMarkdown>{p.question}</ReactMarkdown>
+                  </div>
                   {p.options && p.options.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1">
                       {p.options.map((opt, i) => (
