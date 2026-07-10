@@ -85,6 +85,44 @@ async def test_stage_writes_poller_and_run_sh_starts_it(home_host, async_session
 
 
 @pytest.mark.asyncio
+async def test_poll_sh_heartbeat_subprocess_receives_mc_token(home_host, async_session, monkeypatch):
+    """The heartbeat() function in poll.sh spawns a python3 subprocess that
+    reads os.environ['MC_TOKEN'] — but MC_TOKEN was assigned as a plain,
+    unexported bash variable (outside the `set -a`/`set +a` block used for
+    agent.env), so the subprocess never saw it: os.environ['MC_TOKEN'] raised
+    KeyError on every single heartbeat, silently swallowed by the trailing
+    `2>/dev/null || true`. last_seen_at only stayed fresh as a side effect of
+    require_agent() touching it on every poll() GET — heartbeats themselves
+    always failed (2026-07-10 E2E Lauf 4, Fix F)."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-token", display_name="Host RT Token", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Token Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-secret", session=async_session)
+    poll_sh = open(result.poll_script_path).read()
+
+    # MC_TOKEN must be exported (or otherwise passed into the subprocess
+    # env) — a plain unexported assignment is not visible to python3.
+    assert "export MC_TOKEN" in poll_sh
+
+    # Heartbeat failures must no longer vanish into /dev/null — isolate the
+    # heartbeat() function body and check it doesn't end in the silent
+    # swallow anymore.
+    start = poll_sh.index("heartbeat() {")
+    end = poll_sh.index("poll() {")
+    heartbeat_body = poll_sh[start:end]
+    assert "2>/dev/null || true" not in heartbeat_body
+    assert "log " in heartbeat_body
+
+
+@pytest.mark.asyncio
 async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
     home_host, async_session, monkeypatch
 ):
