@@ -241,6 +241,14 @@ class Settings(BaseSettings):
     # the loop never auto-fires; they call run_once() directly.
     file_index_interval: int = 600
 
+    # Host-agent provisioning autoload (onboarding wizard, 2026-07-10). When
+    # False (default), host provisioning only STAGES plist/env/run.sh into
+    # ~/.mc/agents/<slug>/ and returns the launchctl command for the operator
+    # to run + verify manually. When True, provisioning also copies the plist
+    # into ~/Library/LaunchAgents and runs `launchctl bootstrap`. Kept off by
+    # default because loading a launchd job is an irreversible host action.
+    host_agent_autoload_enabled: bool = False
+
     # Phase 3 — Claude-Process Recycler (MEM-01)
     # Global kill-switch. Per-agent override lives in agents.recycler_enabled.
     # See ADR-024 + .planning/phases/03-memory-leak-root-cause-fix/.

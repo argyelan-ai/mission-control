@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useRef, useMemo } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plus, X, Loader2, Bot, Users, Zap, RotateCcw, Settings, BarChart3,
-  Layout, ChevronDown, Trash2, Copy, Check, MoreVertical,
+  Layout, ChevronDown, Trash2, MoreVertical,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
@@ -21,8 +21,10 @@ import { StatusDot } from "@/components/shared/StatusDot";
 import { SkillBadges } from "@/components/agent/AgentCard";
 import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
-import type { Agent, AgentTemplate, Board, ModelCatalog } from "@/lib/types";
+import type { Agent, Board } from "@/lib/types";
 import { HARNESS_LABELS } from "@/lib/types";
+import { AgentWizard } from "./wizard/AgentWizard";
+import type { WizardState } from "./wizard/types";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
@@ -42,7 +44,6 @@ const modalCardStyle = {
   border: `1px solid ${CINEMA.border}`,
   boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
 };
-const labelClass = "text-[11px] mb-1.5 block text-[var(--color-text-muted)] uppercase tracking-wider";
 const inputStyle = {
   border: `1px solid ${CINEMA.border}`,
   color: "var(--color-text-primary)",
@@ -58,674 +59,6 @@ const selectStyle = {
 };
 
 const ease = [0.16, 1, 0.3, 1] as const;
-
-// ── Model Selector (inline) ─────────────────────────────────────────────────
-
-function ModelInput({
-  value,
-  onChange,
-  placeholder,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const { data: catalog } = useQuery<ModelCatalog>({
-    queryKey: ["model-catalog"],
-    queryFn: () => api.models.list(),
-    staleTime: 120_000,
-  });
-
-  const models = catalog?.models ?? [];
-
-  return (
-    <div className="relative">
-      <input
-        type="text"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onFocus={() => setOpen(true)}
-        onBlur={() => setTimeout(() => setOpen(false), 200)}
-        placeholder={placeholder ?? "anthropic/claude-sonnet-4-20250514"}
-        className={`${inputClass} font-mono text-[12px]`}
-        style={inputStyle}
-      />
-      {open && models.length > 0 && (
-        <div
-          className="absolute z-20 top-full left-0 right-0 mt-1 rounded-xl overflow-hidden max-h-48 overflow-y-auto"
-          style={{ backgroundColor: CINEMA.modalBg, border: `1px solid ${CINEMA.border}` }}
-        >
-          {models
-            .filter((m) => m.available)
-            .filter((m) => !value || m.id.toLowerCase().includes(value.toLowerCase()))
-            .slice(0, 12)
-            .map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  onChange(m.id);
-                  setOpen(false);
-                }}
-                className="block w-full text-left px-3 py-2 text-[11px] font-mono cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
-                style={{ color: "var(--color-text-secondary)" }}
-              >
-                {m.id}
-              </button>
-            ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Token Display (copyable) ────────────────────────────────────────────────
-
-function TokenDisplay({ token }: { token: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    await navigator.clipboard.writeText(token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  }
-
-  return (
-    <div
-      className="rounded-xl p-3 text-[11px] font-mono break-all flex items-start gap-2"
-      style={{
-        backgroundColor: CINEMA.surfaceBg,
-        color: "var(--color-text-muted)",
-        border: `1px solid ${CINEMA.borderSubtle}`,
-      }}
-    >
-      <span className="flex-1">{token}</span>
-      <button
-        onClick={copy}
-        className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
-        title="Copy token"
-      >
-        {copied ? <Check size={12} className="text-[var(--color-online)]" /> : <Copy size={12} />}
-      </button>
-    </div>
-  );
-}
-
-// ── Create Agent Modal ───────────────────────────────────────────────────────
-
-// Exported for the component test (CreateAgentModal.test.tsx).
-export function CreateAgentModal({
-  boards,
-  defaultBoardId,
-  onClose,
-  onCreated,
-}: {
-  boards: Board[];
-  defaultBoardId: string | null;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [emoji, setEmoji] = useState("");
-  const [role, setRole] = useState("");
-  const [model, setModel] = useState("");
-  const [boardId, setBoardId] = useState(defaultBoardId ?? (boards[0]?.id ?? ""));
-  const [agentRuntime, setAgentRuntime] = useState("cli-bridge");
-  const [runtimeId, setRuntimeId] = useState("");
-  const [isPending, setIsPending] = useState(false);
-  const pendingRef = useRef(false);
-  const qc = useQueryClient();
-
-  // LLM-runtime binding + bridge health: only relevant for cli-bridge agents.
-  // Binding at create time means provisioning renders the right image/env
-  // from the start — previously this lived only on the detail page and fresh
-  // agents silently fell back to docker-compose env.
-  const isCliBridge = agentRuntime === "cli-bridge";
-  const { data: runtimesData } = useQuery({
-    queryKey: ["runtimes"],
-    queryFn: () => api.runtimes.list(),
-    enabled: isCliBridge,
-  });
-  const { data: bridgeHealth } = useQuery({
-    queryKey: ["cli-bridge-health"],
-    queryFn: () => api.cliBridge.health(),
-    enabled: isCliBridge,
-    refetchInterval: 30_000,
-  });
-
-  async function handleCreate() {
-    if (!name.trim() || pendingRef.current) return;
-    pendingRef.current = true;
-    setIsPending(true);
-    try {
-      await api.agents.create({
-        name: name.trim(),
-        emoji: emoji.trim() || undefined,
-        role: role.trim() || undefined,
-        model: model.trim() || undefined,
-        board_id: boardId || undefined,
-        agent_runtime: agentRuntime,
-        runtime_id: isCliBridge && runtimeId ? runtimeId : undefined,
-      });
-      notify.success(`Agent "${name}" created`);
-      onCreated();
-      await qc.refetchQueries({ queryKey: ["agents"] });
-      onClose();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Error";
-      notify.error(`Create failed: ${msg}`);
-    } finally {
-      pendingRef.current = false;
-      setIsPending(false);
-    }
-  }
-
-  return (
-    <div className={modalOverlayClass} onClick={onClose}>
-      <div className={modalBackdropClass} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 8 }}
-        transition={{ duration: 0.2, ease }}
-        className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden max-h-[90dvh] overflow-y-auto"
-        style={modalCardStyle}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div
-          className="flex items-center justify-between px-5 py-4 border-b"
-          style={{ borderColor: CINEMA.borderSubtle }}
-        >
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            New Agent
-          </h2>
-          <button
-            onClick={onClose}
-            className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        {/* Form */}
-        <div className="p-5 space-y-4">
-          <div>
-            <label className={labelClass}>Name *</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Cody"
-              className={inputClass}
-              style={inputStyle}
-              autoFocus
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className={labelClass}>Emoji</label>
-              <input
-                type="text"
-                value={emoji}
-                onChange={(e) => setEmoji(e.target.value)}
-                placeholder="🤖"
-                className={inputClass}
-                style={inputStyle}
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Role</label>
-              <input
-                type="text"
-                value={role}
-                onChange={(e) => setRole(e.target.value)}
-                placeholder="Developer"
-                className={inputClass}
-                style={inputStyle}
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className={labelClass}>Model</label>
-            <ModelInput value={model} onChange={setModel} />
-          </div>
-
-          {boards.length > 0 && (
-            <div>
-              <label className={labelClass}>Board</label>
-              <select
-                value={boardId}
-                onChange={(e) => setBoardId(e.target.value)}
-                className={`${inputClass} cursor-pointer`}
-                style={selectStyle}
-              >
-                <option value="">No board</option>
-                {boards.map((b) => (
-                  <option key={b.id} value={b.id}>{b.name}</option>
-                ))}
-              </select>
-            </div>
-          )}
-
-          <div>
-            <label className={labelClass}>Runtime</label>
-            <select
-              value={agentRuntime}
-              onChange={(e) => setAgentRuntime(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
-              style={selectStyle}
-            >
-              <option value="cli-bridge">CLI Bridge (local)</option>
-              <option value="manual">Manual</option>
-            </select>
-          </div>
-
-          {isCliBridge && (
-            <div>
-              <label className={labelClass}>LLM Runtime</label>
-              <select
-                value={runtimeId}
-                onChange={(e) => setRuntimeId(e.target.value)}
-                className={`${inputClass} cursor-pointer`}
-                style={selectStyle}
-              >
-                <option value="">— Fallback (docker-compose env) —</option>
-                {runtimesData?.runtimes.map((r) => (
-                  <option key={r.id} value={r.id} disabled={!r.enabled || r.single_instance}>
-                    {r.display_name} · {r.runtime_type}
-                    {r.model_identifier ? ` · ${r.model_identifier}` : ""}
-                    {!r.enabled ? " · disabled" : r.single_instance ? " · locked" : ""}
-                  </option>
-                ))}
-              </select>
-              {bridgeHealth?.reachable === false ? (
-                <div
-                  className="mt-2 rounded-lg px-3 py-2 text-[11px] leading-relaxed"
-                  style={{
-                    backgroundColor: CINEMA.warningBg,
-                    border: `1px solid ${CINEMA.warningBorder}`,
-                    color: "var(--color-text-secondary)",
-                  }}
-                >
-                  <span className="font-medium" style={{ color: C.warning }}>
-                    cli-bridge helper not reachable.
-                  </span>{" "}
-                  The agent will be created but stays unprovisioned until the
-                  helper runs. Start it on the host:{" "}
-                  <code className="font-mono">python3 scripts/cli-bridge.py</code>
-                </div>
-              ) : (
-                <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                  Provisions automatically after create — config, container
-                  and token are set up in the background.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex justify-end gap-2 pt-2">
-            <button onClick={onClose} className={btnCancelClass}>
-              Cancel
-            </button>
-            <button
-              onClick={handleCreate}
-              disabled={!name.trim() || isPending}
-              className="px-5 py-2.5 text-sm rounded-xl font-medium text-white disabled:opacity-40 cursor-pointer transition-all"
-              style={btnPrimaryStyle}
-            >
-              {isPending ? (
-                <span className="flex items-center gap-2">
-                  <Loader2 size={14} className="animate-spin" /> Creating...
-                </span>
-              ) : (
-                "Create"
-              )}
-            </button>
-          </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-// ── Specialized Agent Setup Modal ───────────────────────────────────────────
-
-function SpecializedSetupModal({
-  boardId,
-  boardName,
-  onClose,
-  onCreated,
-}: {
-  boardId: string;
-  boardName: string;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [isPending, setIsPending] = useState(false);
-  const [result, setResult] = useState<{ id: string; name: string; emoji: string; model: string | null; token: string }[] | null>(null);
-  const pendingRef = useRef(false);
-  const qc = useQueryClient();
-
-  async function handleSetup() {
-    if (pendingRef.current) return;
-    pendingRef.current = true;
-    setIsPending(true);
-    try {
-      const res = await api.agents.setupSpecialized(boardId, false);
-      setResult(res.created);
-      notify.success(`${res.count} specialized agents created`);
-      onCreated();
-      await qc.refetchQueries({ queryKey: ["agents"] });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Error";
-      notify.error(`Setup failed: ${msg}`);
-    } finally {
-      pendingRef.current = false;
-      setIsPending(false);
-    }
-  }
-
-  return (
-    <div className={modalOverlayClass} onClick={onClose}>
-      <div className={modalBackdropClass} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 8 }}
-        transition={{ duration: 0.2, ease }}
-        className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden max-h-[90dvh] overflow-y-auto"
-        style={modalCardStyle}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className="flex items-center justify-between px-5 py-4 border-b"
-          style={{ borderColor: CINEMA.borderSubtle }}
-        >
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            Setup Team
-          </h2>
-          <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="p-5 space-y-4">
-          {!result ? (
-            <>
-              <p className="text-sm text-[var(--color-text-secondary)]">
-                Erstellt 4 Agents aus Templates: Planner, Researcher, Writer, Reviewer — mit
-                vordefinierten Modellen und SOUL.md Konfigurationen.
-              </p>
-
-              <div
-                className="rounded-xl px-3 py-2.5 text-sm"
-                style={{
-                  backgroundColor: CINEMA.surfaceBg,
-                  color: "var(--color-text-primary)",
-                  border: `1px solid ${CINEMA.borderSubtle}`,
-                }}
-              >
-                Board: <span className="font-medium">{boardName}</span>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={onClose} className={btnCancelClass}>
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSetup}
-                  disabled={isPending}
-                  className="px-5 py-2.5 text-sm rounded-xl font-medium text-white disabled:opacity-40 cursor-pointer transition-all"
-                  style={btnPrimaryStyle}
-                >
-                  {isPending ? (
-                    <span className="flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin" /> Creating...
-                    </span>
-                  ) : (
-                    "Create team"
-                  )}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="text-sm font-medium text-[var(--color-online)]">
-                {result.length} agents created
-              </div>
-              <p className="text-[11px] text-[var(--color-text-muted)]">
-                Tokens are shown only once — save them now!
-              </p>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {result.map((a) => (
-                  <div
-                    key={a.id}
-                    className="rounded-xl p-3 text-xs space-y-1.5"
-                    style={{
-                      backgroundColor: CINEMA.surfaceBg,
-                      border: `1px solid ${CINEMA.borderSubtle}`,
-                    }}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-[var(--color-text-primary)]">
-                        {a.emoji} {a.name}
-                      </span>
-                      {a.model && (
-                        <span
-                          className="text-[10px] px-1.5 py-0.5 rounded-full"
-                          style={{
-                            backgroundColor: C.accentSubtle,
-                            color: C.accent,
-                          }}
-                        >
-                          {a.model.split("/").pop()}
-                        </span>
-                      )}
-                    </div>
-                    <TokenDisplay token={a.token} />
-                  </div>
-                ))}
-              </div>
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={onClose}
-                  className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
-                  style={btnPrimaryStyle}
-                >
-                  Done
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-// ── Template Instantiate Modal ──────────────────────────────────────────────
-
-function InstantiateModal({
-  template,
-  boards,
-  defaultBoardId,
-  onClose,
-  onCreated,
-}: {
-  template: AgentTemplate;
-  boards: Board[];
-  defaultBoardId: string | null;
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [boardId, setBoardId] = useState(defaultBoardId ?? (boards[0]?.id ?? ""));
-  const [modelOverride, setModelOverride] = useState(template.default_model ?? "");
-  const [nameOverride, setNameOverride] = useState("");
-  const [isPending, setIsPending] = useState(false);
-  const [token, setToken] = useState<string | null>(null);
-  const pendingRef = useRef(false);
-  const qc = useQueryClient();
-
-  async function handleCreate() {
-    if (!boardId || pendingRef.current) return;
-    pendingRef.current = true;
-    setIsPending(true);
-    try {
-      const res = await api.agentTemplates.instantiate(template.id, {
-        board_id: boardId,
-        model: modelOverride.trim() || undefined,
-        name: nameOverride.trim() || undefined,
-      });
-      setToken(res.token);
-      notify.success(`${template.emoji} ${res.agent.name} created`);
-      onCreated();
-      qc.invalidateQueries({ queryKey: ["agents"] });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Error";
-      notify.error(`Error: ${msg}`);
-    } finally {
-      pendingRef.current = false;
-      setIsPending(false);
-    }
-  }
-
-  return (
-    <div className={modalOverlayClass} onClick={onClose}>
-      <div className={modalBackdropClass} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 8 }}
-        transition={{ duration: 0.2, ease }}
-        className="relative w-full max-w-md rounded-t-2xl sm:rounded-2xl overflow-hidden max-h-[90dvh] overflow-y-auto"
-        style={modalCardStyle}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div
-          className="flex items-center justify-between px-5 py-4 border-b"
-          style={{ borderColor: CINEMA.borderSubtle }}
-        >
-          <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {template.emoji} {template.name} — Create agent
-          </h2>
-          <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
-            <X size={16} />
-          </button>
-        </div>
-
-        <div className="p-5 space-y-4">
-          {!token ? (
-            <>
-              <div className="space-y-3">
-                <div>
-                  <label className={labelClass}>Board *</label>
-                  {boards.length === 0 ? (
-                    // Fresh install: without a board, Instantiate is a dead end
-                    // (backend requires board_id) — clear message instead of
-                    // an empty select + a silently-disabled button.
-                    <div
-                      className="rounded-xl px-3 py-2.5 text-xs"
-                      style={{
-                        backgroundColor: CINEMA.surfaceBg,
-                        color: "var(--color-text-secondary)",
-                        border: `1px solid ${CINEMA.borderSubtle}`,
-                      }}
-                    >
-                      No board available yet. Template agents need a
-                      board — create one first in the sidebar via the
-                      workspace switcher ("New Board").
-                    </div>
-                  ) : (
-                    <select
-                      value={boardId}
-                      onChange={(e) => setBoardId(e.target.value)}
-                      className={`${inputClass} cursor-pointer`}
-                      style={selectStyle}
-                    >
-                      {boards.map((b) => (
-                        <option key={b.id} value={b.id}>{b.name}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-
-                <div>
-                  <label className={labelClass}>
-                    Name (optional, default: {template.name})
-                  </label>
-                  <input
-                    type="text"
-                    placeholder={template.name}
-                    value={nameOverride}
-                    onChange={(e) => setNameOverride(e.target.value)}
-                    className={inputClass}
-                    style={inputStyle}
-                  />
-                </div>
-
-                <div>
-                  <label className={labelClass}>
-                    Model (default: {template.default_model ?? "none"})
-                  </label>
-                  <ModelInput
-                    value={modelOverride}
-                    onChange={setModelOverride}
-                    placeholder={template.default_model ?? "Enter model ID"}
-                  />
-                </div>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button onClick={onClose} className={btnCancelClass}>
-                  Cancel
-                </button>
-                <button
-                  onClick={handleCreate}
-                  disabled={!boardId || isPending}
-                  className="px-5 py-2.5 text-sm rounded-xl font-medium text-white disabled:opacity-40 cursor-pointer transition-all"
-                  style={btnPrimaryStyle}
-                >
-                  {isPending ? (
-                    <span className="flex items-center gap-2">
-                      <Loader2 size={14} className="animate-spin" /> Creating...
-                    </span>
-                  ) : (
-                    "Create agent"
-                  )}
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="text-sm font-medium text-[var(--color-online)]">
-                Agent created!
-              </div>
-              <p className="text-[11px] text-[var(--color-text-muted)]">
-                Token visible only once — save it now!
-              </p>
-              <TokenDisplay token={token} />
-              <div className="flex justify-end pt-2">
-                <button
-                  onClick={onClose}
-                  className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
-                  style={btnPrimaryStyle}
-                >
-                  Done
-                </button>
-              </div>
-            </>
-          )}
-        </div>
-      </motion.div>
-    </div>
-  );
-}
 
 // ── Assign Board Modal ──────────────────────────────────────────────────────
 
@@ -895,14 +228,10 @@ function DeleteAgentModal({
 // ── Templates Tab ───────────────────────────────────────────────────────────
 
 function TemplatesTab({
-  boards,
-  activeBoardId,
+  onUseTemplate,
 }: {
-  boards: Board[];
-  activeBoardId: string | null;
+  onUseTemplate: (templateId: string) => void;
 }) {
-  const [instantiating, setInstantiating] = useState<AgentTemplate | null>(null);
-
   const { data: templates, isLoading } = useQuery({
     queryKey: ["agent-templates"],
     queryFn: api.agentTemplates.list,
@@ -987,7 +316,7 @@ function TemplatesTab({
 
               <div className="mt-auto pt-2">
                 <button
-                  onClick={() => setInstantiating(tmpl)}
+                  onClick={() => onUseTemplate(tmpl.id)}
                   className="w-full text-xs px-3 py-2 rounded-xl font-medium cursor-pointer transition-all text-white"
                   style={btnPrimaryStyle}
                 >
@@ -1004,18 +333,6 @@ function TemplatesTab({
           </div>
         )}
       </div>
-
-      <AnimatePresence>
-        {instantiating && (
-          <InstantiateModal
-            template={instantiating}
-            boards={boards}
-            defaultBoardId={activeBoardId}
-            onClose={() => setInstantiating(null)}
-            onCreated={() => setInstantiating(null)}
-          />
-        )}
-      </AnimatePresence>
     </>
   );
 }
@@ -1312,8 +629,8 @@ export default function AgentsPage() {
   const { activeBoardId } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<"agents" | "templates">("agents");
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [showSpecializedSetup, setShowSpecializedSetup] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
+  const [wizardInitial, setWizardInitial] = useState<Partial<WizardState> | undefined>(undefined);
   const [showAllAgents, setShowAllAgents] = useState(false);
   const [assignBoardAgent, setAssignBoardAgent] = useState<Agent | null>(null);
   const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
@@ -1417,27 +734,13 @@ export default function AgentsPage() {
           </div>
 
           <div className="flex items-center gap-2">
-            {activeTab === "agents" && (
-              <button
-                onClick={() => setShowSpecializedSetup(true)}
-                className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-xl cursor-pointer transition-all duration-150"
-                style={{
-                  backgroundColor: "rgba(255,255,255,0.04)",
-                  color: "var(--color-text-secondary)",
-                  border: `1px solid ${CINEMA.borderSubtle}`,
-                }}
-              >
-                <Users size={14} />
-                Setup Team
-              </button>
-            )}
             <button
-              onClick={() => setShowCreateModal(true)}
+              onClick={() => { setWizardInitial(undefined); setWizardOpen(true); }}
               className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-xl font-medium text-white cursor-pointer transition-all"
               style={btnPrimaryStyle}
             >
               <Plus size={14} />
-              New Agent
+              Neuer Agent
             </button>
           </div>
         </div>
@@ -1558,7 +861,12 @@ export default function AgentsPage() {
 
         {/* Tab: Templates */}
         {activeTab === "templates" && (
-          <TemplatesTab boards={boards ?? []} activeBoardId={activeBoardId} />
+          <TemplatesTab
+            onUseTemplate={(id) => {
+              setWizardInitial({ startMode: "template", templateId: id, step: 0 });
+              setWizardOpen(true);
+            }}
+          />
         )}
 
         {/* ── Modals ──────────────────────────────────────────────────────────── */}
@@ -1580,25 +888,13 @@ export default function AgentsPage() {
         </AnimatePresence>
 
         <AnimatePresence>
-          {showCreateModal && (
-            <CreateAgentModal
+          {wizardOpen && (
+            <AgentWizard
               boards={boards ?? []}
               defaultBoardId={activeBoardId}
-              onClose={() => setShowCreateModal(false)}
-              onCreated={() => setShowCreateModal(false)}
-            />
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {showSpecializedSetup && activeBoardId && (
-            <SpecializedSetupModal
-              boardId={activeBoardId}
-              boardName={
-                (boards ?? []).find((b) => b.id === activeBoardId)?.name ?? activeBoardId
-              }
-              onClose={() => setShowSpecializedSetup(false)}
-              onCreated={() => setShowSpecializedSetup(false)}
+              initialState={wizardInitial}
+              onClose={() => setWizardOpen(false)}
+              onCreated={() => setWizardOpen(false)}
             />
           )}
         </AnimatePresence>

@@ -108,9 +108,9 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
     );
   }
 
-  // host (Boss, claude binary) / openclaw (Henry, Gateway)
-  if (agent.agent_runtime === "host" || agent.agent_runtime === "openclaw") {
-    const scope = agent.agent_runtime === "host" ? "host" : "gateway";
+  // host (Boss, claude binary) — runtime managed outside MC.
+  if (agent.agent_runtime === "host") {
+    const scope = "host";
     return (
       <span
         className={`inline-flex items-center gap-1.5 font-mono px-${isCompact ? "1.5" : "2"} py-0.5 rounded-md ${isCompact ? "text-[10px]" : "text-[12px]"}`}

@@ -49,6 +49,29 @@ class AgentCreate(BaseModel):
     # one-click chain renders the right image/env from the start — the
     # detail-page switch service stays the path for changing it later.
     runtime_id: str | None = None
+    # ── Onboarding-wizard fields (2026-07-10) ────────────────────────────────
+    # The wizard funnels custom / template-prefill / duplicate all through
+    # this ONE create call, so create must carry the full agent config.
+    # ADR-056 harness axis. None = derive from the runtime's protocol.
+    harness: str | None = None
+    # Explicit scope list. Empty [] means ALL 16 scopes (backward-compat), so
+    # the wizard always sends a concrete list — a new agent is never silently
+    # all-powerful.
+    scopes: list[str] = []
+    # SOUL/persona markdown (from a template or a duplicated agent). None =
+    # the default SOUL.md.j2 render at provision time.
+    soul_md: str | None = None
+    # cli-bridge skill allowlist. None = all skills.
+    skill_filter: list[str] | None = None
+    # cli-bridge plugin allowlist. None = all installed plugins.
+    cli_plugins: list[str] | None = None
+
+    @field_validator("harness")
+    @classmethod
+    def _validate_harness(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("claude", "openclaude", "omp"):
+            raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
+        return v
 
 
 class AgentUpdate(BaseModel):
@@ -127,7 +150,7 @@ async def create_agent(
 
     # Auto-generated TOOLS.md with the correct token (will never be available in plaintext again)
     board_id_str = str(payload.board_id) if payload.board_id else None
-    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
+    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=payload.scopes)
 
     # Resolve the optional LLM-runtime binding BEFORE creating the agent —
     # a bad slug should 404 without leaving a half-created agent behind.
@@ -147,6 +170,11 @@ async def create_agent(
         tools_md=tools_md,
         agent_runtime=payload.agent_runtime,
         runtime_id=resolved_runtime_id,
+        harness=payload.harness,
+        scopes=payload.scopes,
+        soul_md=payload.soul_md,
+        skill_filter=payload.skill_filter,
+        cli_plugins=payload.cli_plugins,
     )
     session.add(agent)
     await session.commit()
@@ -162,11 +190,55 @@ async def create_agent(
         # compose + container start. Bridge down → honest provision_failed
         # event with remediation; the agent stays 'local'.
         background_tasks.add_task(_auto_provision_cli_bridge, agent.id, raw_token)
-    elif payload.agent_runtime not in ("free-code-bridge", "manual"):
+    elif payload.agent_runtime not in ("free-code-bridge", "manual", "host"):
+        # Host agents provision via the wizard's explicit POST /provision
+        # call — scheduling this here would race it and, since the host
+        # branch of provision_agent_background() is a no-op, falsely flip
+        # provision_status to "provisioned" before any files are staged.
         background_tasks.add_task(_provision_agent_background, agent.id)
     result = agent.model_dump()
     result["token"] = raw_token  # returned once, never stored in plaintext
     return result
+
+
+class SoulPreviewRequest(BaseModel):
+    name: str
+    emoji: str | None = "🤖"
+    role: str | None = None
+    soul_md: str | None = None
+    board_id: uuid.UUID | None = None
+    is_board_lead: bool = False
+    scopes: list[str] = []
+
+
+@router.post("/agents/preview-soul")
+async def preview_soul(
+    payload: SoulPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Render SOUL.md.j2 for a transient (non-persisted) agent.
+
+    Powers the wizard's live persona preview (Step 2). No DB write, no
+    provisioning — a draft render only. Best-effort: template errors return
+    a soft message instead of a 500 so the preview never blocks typing.
+    """
+    draft = Agent(
+        name=payload.name,
+        emoji=payload.emoji,
+        role=payload.role,
+        soul_md=payload.soul_md,
+        board_id=payload.board_id,
+        is_board_lead=payload.is_board_lead,
+        scopes=payload.scopes,
+    )
+    try:
+        context = build_agent_context(draft, board_id=str(payload.board_id) if payload.board_id else None)
+        soul = render_agent_file("SOUL.md.j2", context)
+    except Exception as exc:  # noqa: BLE001 — preview must never hard-fail
+        logger.warning("preview_soul render failed for draft %s: %s", payload.name, exc)
+        soul = f"# {payload.emoji or ''} {payload.name}\n\n_(Vorschau nicht verfügbar — Standard-SOUL wird beim Erstellen erzeugt.)_"
+    return {"soul_md": soul}
 
 
 async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> None:
@@ -1225,6 +1297,74 @@ async def _redispatch_after_reset(session: AsyncSession, agent: Agent) -> None:
     return None
 
 
+@router.post("/agents/{agent_id}/health-check")
+async def agent_health_check(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Runtime-aware readiness for the onboarding wizard's final gate.
+
+    'ready' means the agent is provisioned AND its session is alive — NOT
+    that it answered a message (the synchronous trigger channel was retired
+    in Phase 29). Reuses existing liveness signals: the cli-bridge helper
+    probe + heartbeat status (cli-bridge), recent last_seen_at (host).
+    """
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    runtime = getattr(agent, "agent_runtime", "cli-bridge") or "cli-bridge"
+    alive_states = {"online", "busy", "idle", "working"}
+    checks: list[dict[str, Any]] = []
+
+    provisioned = agent.provision_status == "provisioned"
+    checks.append({
+        "label": "provisioned",
+        "ok": provisioned,
+        "detail": f"provision_status={agent.provision_status}",
+    })
+
+    if runtime == "cli-bridge":
+        from app.routers import cli_terminal
+        helper_ok = cli_terminal._bridge_get("/health") is not None
+        checks.append({
+            "label": "cli-bridge helper",
+            "ok": helper_ok,
+            "detail": "reachable" if helper_ok else "scripts/cli-bridge.py not reachable",
+        })
+        heartbeating = agent.status in alive_states
+        checks.append({
+            "label": "heartbeat",
+            "ok": heartbeating,
+            "detail": f"status={agent.status}",
+        })
+    elif runtime == "host":
+        recent = False
+        if agent.last_seen_at is not None:
+            delta = utcnow() - agent.last_seen_at
+            recent = delta.total_seconds() < 180
+        checks.append({
+            "label": "host heartbeat",
+            "ok": recent,
+            "detail": "seen <3min ago" if recent else "no recent heartbeat — launchd job may not be loaded",
+        })
+    else:
+        checks.append({
+            "label": "runtime",
+            "ok": True,
+            "detail": f"{runtime}: no automated liveness signal",
+        })
+
+    ready = all(c["ok"] for c in checks)
+    return {
+        "provision_status": agent.provision_status,
+        "runtime": runtime,
+        "ready": ready,
+        "checks": checks,
+    }
+
+
 @router.post("/agents/{agent_id}/heartbeat")
 async def trigger_heartbeat(
     agent_id: uuid.UUID,
@@ -1488,21 +1628,64 @@ async def provision_agent_on_gateway(
         try:
             if runtime.runtime_type == "hermes":
                 result = await bootstrap_hermes_agent(session, agent, runtime)
-            else:
-                # Future host worker types (Phase 25+) plug in here.
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported host runtime_type: {runtime.runtime_type}",
-                )
+                return {
+                    "status": "provisioned",
+                    "agent_id": str(agent.id),
+                    "token": result["token"],  # one-time visible
+                    "env_path": result["env_path"],
+                    "plist_loaded": result["plist_loaded"],
+                    "plist_already": result["plist_already"],
+                    "tmux_session": result["tmux_session"],
+                    "workspace_path": result["workspace_path"],
+                }
+
+            # Generic host agent (onboarding wizard, 2026-07-10): stage
+            # plist + run.sh + agent.env into ~/.mc/agents/<slug>/. launchctl
+            # load is gated behind settings.host_agent_autoload_enabled.
+            from app.auth import generate_agent_token
+            from app.services import host_provisioning
+            from app.services.secrets_helper import upsert_agent_token_secret
+
+            raw_token, token_hash = generate_agent_token()
+            stage = await host_provisioning.stage_host_agent_files(
+                agent, runtime, raw_token, session=session
+            )
+            load = host_provisioning.maybe_load_plist(stage)
+
+            # Only mutate the persisted hash once staging (fallible I/O) has
+            # succeeded — otherwise a raise here would leave the generic
+            # except-handler below to commit a new hash for a token that was
+            # never staged/returned, destroying the previously working one.
+            agent.agent_token_hash = token_hash
+            agent.workspace_path = stage.workspace_path
+            agent.provision_status = "provisioned" if load["loaded"] else "provisioning"
+            agent.provisioned_at = utcnow() if load["loaded"] else None
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await upsert_agent_token_secret(session, agent.name, raw_token)
+            await emit_event(
+                session,
+                "agent.provisioned" if load["loaded"] else "agent.host_files_staged",
+                (
+                    f"{agent.name} (host) provisioniert + launchd geladen"
+                    if load["loaded"]
+                    else f"{agent.name} (host): Dateien nach {stage.workspace_path} gerendert. "
+                    f"Zum Aktivieren auf dem Host ausführen: {stage.launchctl_command}"
+                ),
+                severity="info",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+            )
             return {
-                "status": "provisioned",
+                "status": agent.provision_status,
                 "agent_id": str(agent.id),
-                "token": result["token"],  # one-time visible
-                "env_path": result["env_path"],
-                "plist_loaded": result["plist_loaded"],
-                "plist_already": result["plist_already"],
-                "tmux_session": result["tmux_session"],
-                "workspace_path": result["workspace_path"],
+                "token": raw_token,  # one-time visible
+                "workspace_path": stage.workspace_path,
+                "plist_label": stage.plist_label,
+                "plist_staged_path": stage.plist_staged_path,
+                "launchctl_command": stage.launchctl_command,
+                "plist_loaded": load["loaded"],
             }
         except HTTPException:
             agent.provision_status = previous_status
