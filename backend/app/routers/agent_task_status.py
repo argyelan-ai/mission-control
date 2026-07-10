@@ -2260,9 +2260,20 @@ async def agent_update_task(
                         await session.commit()
 
         # Agent entblockt Task → assigned Agent benachrichtigen (TaskComment)
+        # oder — B2 (W2-B, audit G3) — liveness-aware redispatch, wenn der
+        # zugewiesene Agent inzwischen offline ist (sonst liest ihn niemand).
         if new_status == "in_progress" and old_status == "blocked":
             if task.assigned_agent_id and task.assigned_agent_id != agent.id:
-                target = await session.get(Agent, task.assigned_agent_id)
+                from app.services.task_lifecycle import (
+                    redispatch_unblocked_task,
+                    resolve_unblock_action,
+                )
+                _unblock_action = await resolve_unblock_action(session, task)
+                if _unblock_action == "redispatch":
+                    await redispatch_unblocked_task(session, task, board_id)
+                    target = None
+                else:
+                    target = await session.get(Agent, task.assigned_agent_id)
                 if target:
                     hint_cmt = (await session.exec(
                         select(TaskComment)

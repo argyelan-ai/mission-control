@@ -1077,6 +1077,91 @@ async def handle_review_rejection(
     return original_dev
 
 
+async def resolve_unblock_action(
+    session: AsyncSession,
+    task: Task,
+) -> Literal["redispatch", "notify", "skip"]:
+    """B2 (W2-B, audit G3): decide how a blocked→in_progress unblock should
+    reach the assigned agent.
+
+    Previously the unblock path only ever posted an `unblock_notify`
+    TaskComment — no liveness check, no redispatch. If the blocked agent's
+    process had died in the meantime, nobody read the comment and the task
+    silently stalled until the 15-45min stale-recovery ladder caught it.
+
+    Decision:
+      - No assigned agent → "skip" (nothing to notify/redispatch).
+      - Assigned agent DEAD (last_seen_at NULL or stale beyond the wrapper
+        liveness floor — reuses task_runner._liveness_floor_seconds, the
+        same 2x-heartbeat-interval proof-of-life used by the stale-recovery
+        watchdog) → "redispatch". The agent's poll.sh wrapper is gone, so a
+        TaskComment would sit unread; a full auto_dispatch_task re-delivery
+        (with recovery context, W1-deduped checklist) is the only thing that
+        reaches it — dispatch's own fallback logic then targets the lead if
+        the agent stays dead.
+      - Assigned agent ALIVE (regardless of whether it's currently occupied
+        with a different in_progress task) → "notify" — the existing
+        comment-only path. An occupied-but-alive agent is deliberately NOT
+        interrupted: the comment is simply delivered on its next poll after
+        the current task, same as an idle agent picking it up via poll.
+    """
+    if not task.assigned_agent_id:
+        return "skip"
+    target = await session.get(Agent, task.assigned_agent_id)
+    if target is None:
+        return "skip"
+
+    from app.services.task_runner import _liveness_floor_seconds
+    from app.utils import ensure_aware
+
+    last_seen = target.last_seen_at
+    if last_seen is None:
+        return "redispatch"
+    seen_age = (utcnow() - ensure_aware(last_seen)).total_seconds()
+    if seen_age >= _liveness_floor_seconds(target):
+        return "redispatch"
+    return "notify"
+
+
+async def redispatch_unblocked_task(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+) -> None:
+    """B2: dead-agent branch of resolve_unblock_action — reset the dispatch
+    handshake and route through the normal auto_dispatch_task re-dispatch
+    (targets the same agent if it revives, falls back to lead/others per
+    dispatch's own logic if it stays dead)."""
+    from app.services.dispatch import auto_dispatch_task
+    from app.utils import create_tracked_task
+
+    task.dispatched_at = None
+    task.ack_at = None
+    session.add(task)
+    await session.commit()
+    await session.refresh(task)
+
+    create_tracked_task(
+        auto_dispatch_task(task.id, board_id),
+        name=f"unblock-redispatch:{task.id}",
+    )
+    logger.info(
+        "Unblock-Redispatch: task=%s agent=%s war offline (stale last_seen_at) "
+        "→ dispatched_at/ack_at zurueckgesetzt, auto_dispatch_task neu getriggert",
+        task.id, task.assigned_agent_id,
+    )
+    await emit_event(
+        session,
+        "task.unblock_redispatched",
+        f"Unblock-Redispatch: Task \"{task.title}\" — zugewiesener Agent war offline",
+        board_id=board_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        severity="warning",
+        detail={"reason": "assigned_agent_stale_on_unblock"},
+    )
+
+
 def trigger_auto_memory(
     task: Task,
     new_status: str,
