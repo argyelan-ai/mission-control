@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import { motion } from "framer-motion";
 import {
   CheckCircle, XCircle, AlertTriangle, ShieldAlert,
@@ -141,7 +142,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
             </div>
 
             <div className="text-sm mt-2.5 prose-comment text-[var(--color-text-primary)]">
-              <ReactMarkdown>{approval.description}</ReactMarkdown>
+              <ReactMarkdown remarkPlugins={[remarkBreaks]}>{approval.description}</ReactMarkdown>
             </div>
 
             {/* Blocker details */}
@@ -171,17 +172,17 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                   </span>
                   {p.description && (
                     <div className="text-[12px] prose-comment text-[var(--color-text-primary)]">
-                      <ReactMarkdown>{p.description}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkBreaks]}>{p.description}</ReactMarkdown>
                     </div>
                   )}
                   {p.question && (
                     <div className="text-[12px] italic prose-comment" style={{ color: C.accent }}>
-                      <ReactMarkdown>{p.question}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkBreaks]}>{p.question}</ReactMarkdown>
                     </div>
                   )}
                   {!p.description && p.blocker_comment && (
                     <div className="prose-comment text-[11px] text-[var(--color-text-secondary)]">
-                      <ReactMarkdown>{p.blocker_comment}</ReactMarkdown>
+                      <ReactMarkdown remarkPlugins={[remarkBreaks]}>{p.blocker_comment}</ReactMarkdown>
                     </div>
                   )}
                 </div>
@@ -208,7 +209,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                     </p>
                   )}
                   <div className="text-[12px] font-medium prose-comment text-[var(--color-text-primary)]">
-                    <ReactMarkdown>{p.question}</ReactMarkdown>
+                    <ReactMarkdown remarkPlugins={[remarkBreaks]}>{p.question}</ReactMarkdown>
                   </div>
                   {p.options && p.options.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1">

@@ -69,6 +69,28 @@ describe("ApprovalCard — markdown rendering", () => {
     expect(uniqueParagraphs.size).toBe(2);
   });
 
+  it("renders single newlines in agent freetext as hard line breaks (<br>)", () => {
+    const { container } = render(
+      <ApprovalCard
+        approval={mkApproval({
+          payload: {
+            blocker_type: "missing_info",
+            question: "Zeile 1\nZeile 2",
+          },
+        })}
+        onResolve={vi.fn()}
+      />
+    );
+
+    // Agents write single \n, not markdown blank-line paragraphs. Without
+    // remark-breaks this renders as a soft break (a space) and the lines
+    // visually collapse onto one line.
+    const line1 = screen.getByText(/Zeile 1/);
+    const paragraph = line1.closest("p")!;
+    expect(paragraph.querySelector("br")).not.toBeNull();
+    expect(container.textContent).toContain("Zeile 2");
+  });
+
   it("renders clarification question as markdown, not literal asterisks", () => {
     render(
       <ApprovalCard
