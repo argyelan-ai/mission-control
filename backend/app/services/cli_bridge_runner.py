@@ -133,10 +133,28 @@ async def _resolve_workspace(task: Task, agent: Agent, session: AsyncSession):
     - has_repo: True if a git repo exists
     """
     if not agent.workspace_path:
-        raise RuntimeError(
-            f"Agent {agent.name} hat keine workspace_path — Migration 0087 "
-            f"nicht gelaufen? Task-Dispatch kann ohne Base-Dir nicht fortgesetzt "
-            f"werden."
+        # Self-heal: provisioning is supposed to assign workspace_path
+        # deterministically for every cli-bridge agent (see
+        # provisioning.provision_agent_background), but an agent created
+        # before that fix landed — or one whose provisioning silently
+        # failed — can still reach dispatch with workspace_path=NULL. Rather
+        # than hard-failing the task, derive + create the same default
+        # `~/.mc/workspaces/<slug>` path on the fly and persist it, so the
+        # agent self-corrects instead of blocking every future dispatch too.
+        from app.config import settings
+
+        default_workspace = (
+            f"{settings.home_host}/.mc/workspaces/{slugify_project(agent.name)}"
+        )
+        os.makedirs(default_workspace, exist_ok=True)
+        agent.workspace_path = default_workspace
+        session.add(agent)
+        await session.commit()
+        await session.refresh(agent)
+        logger.warning(
+            "Agent %s had no workspace_path — self-healed to %s (provisioning "
+            "should have set this; check provision_agent_background)",
+            agent.name, default_workspace,
         )
 
     agent_base = agent.workspace_path
