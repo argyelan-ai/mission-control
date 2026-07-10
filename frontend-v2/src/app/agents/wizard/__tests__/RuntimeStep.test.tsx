@@ -44,4 +44,15 @@ describe("RuntimeStep", () => {
     const opt = screen.getByText("vLLM A").closest("button") as HTMLButtonElement;
     expect(opt.disabled).toBe(true);
   });
+
+  it("clears the orphaned model when switching to an incompatible harness clears the runtime", async () => {
+    const update = vi.fn();
+    const state = { ...initialWizardState(null), harness: "openclaude" as const, runtimeId: "r1", model: "m" };
+    wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    await waitFor(() => screen.getByText("Claude Code"));
+    fireEvent.click(screen.getByText("Claude Code"));
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ harness: "claude", runtimeId: "", model: "" })
+    );
+  });
 });

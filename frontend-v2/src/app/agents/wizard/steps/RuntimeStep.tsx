@@ -5,6 +5,7 @@ import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import type { Harness } from "@/lib/types";
 import type { WizardAgentRuntime, WizardStepProps } from "../types";
+import { initialWizardState } from "../types";
 import { ModelInput, wizardLabelClass } from "../shared";
 
 const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
@@ -37,11 +38,17 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
 
   function pickHarness(h: Harness) {
     // If the currently bound runtime is incompatible with the new harness,
-    // clear it so the operator must re-pick a compatible provider.
+    // clear it so the operator must re-pick a compatible provider. The model
+    // string was set from that runtime's model_identifier, so it's cleared
+    // too — otherwise it lingers as an orphaned value bound to nothing.
     const bound = runtimesData?.runtimes.find((r) => r.id === state.runtimeId || r.slug === state.runtimeId);
     const compatEntry = bound ? matrixBySlug.get(bound.slug ?? bound.id) : undefined;
     const stillCompatible = compatEntry ? compatEntry.compatible_harnesses.includes(h) : true;
-    update({ harness: h, runtimeId: stillCompatible ? state.runtimeId : "" });
+    update({
+      harness: h,
+      runtimeId: stillCompatible ? state.runtimeId : "",
+      model: stillCompatible ? state.model : initialWizardState(null).model,
+    });
   }
 
   return (
