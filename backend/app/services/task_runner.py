@@ -63,6 +63,13 @@ STALE_PROGRESS_MINUTES_BY_ROLE = {
 # Circuit Breaker
 MAX_STALE_CHECKS = 3       # Max status checks per task
 
+# Tier-3 recovery re-dispatch bound (seconds). auto_dispatch_task does real
+# I/O (git clone / worktree setup + delivery) — the task_runner loop is a
+# single sequential coroutine, so this await must be bounded or N stuck
+# agents would serially starve the other checks. Timeout → Tier 3 failed →
+# Tier 4 operator notification.
+TIER3_DISPATCH_TIMEOUT_SECONDS = 90
+
 
 def _idle_threshold_for(agent) -> int:
     """Idle threshold for an agent.
@@ -880,7 +887,28 @@ class TaskRunnerService:
             # dispatched_at again — re-fetch the task (auto_dispatch_task
             # commits via its own session) and check that.
             #
-            await auto_dispatch_task(task.id, task.board_id)
+            # Bounded with wait_for (TIER3_DISPATCH_TIMEOUT_SECONDS): the
+            # task_runner loop is a single sequential coroutine — an
+            # unbounded await here (git clone / worktree I/O + delivery
+            # inside auto_dispatch_task) with N concurrently-stuck agents
+            # would starve _check_dispatch_ack / _check_stuck_in_progress
+            # for everyone else. On timeout we treat Tier 3 as failed and
+            # fall through to Tier 4. Note: wait_for cancellation is
+            # best-effort — a dispatch blocked in non-cancellable I/O may
+            # still complete in the background; that late success is
+            # harmless (recap + dispatch-flag reset are already committed
+            # above, and a duplicate Tier-4 notification merely over-alerts
+            # rather than losing the task).
+            try:
+                await asyncio.wait_for(
+                    auto_dispatch_task(task.id, task.board_id),
+                    timeout=TIER3_DISPATCH_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Tier 3 (resume) dispatch timed out after %ss for %s on task %s",
+                    TIER3_DISPATCH_TIMEOUT_SECONDS, agent.name, task.id,
+                )
             await session.refresh(task)
             tier3_ok = task.dispatched_at is not None
         except Exception as e:

@@ -221,6 +221,53 @@ async def test_tier3_dispatch_success_skips_tier4(
     assert not tier4_events, "Tier 4 must not fire when Tier 3 dispatch succeeds"
 
 
+@pytest.mark.asyncio
+async def test_tier3_dispatch_hang_times_out_and_fires_tier4(
+    fake_redis, make_board, make_agent, make_task,
+):
+    """auto_dispatch_task hangs beyond the Tier-3 timeout bound → the runner
+    loop is NOT starved forever: wait_for expires, tier3_ok stays False
+    (dispatched_at never set), Tier 4 fires. TIER3_DISPATCH_TIMEOUT_SECONDS
+    patched small so the test doesn't wait 90 real seconds. The hang uses
+    Event().wait() (not sleep) so the asyncio.sleep patch that skips the 30s
+    Tier2→Tier3 wait can't accidentally 'complete' the hung dispatch."""
+    _board, agent, task = await _make_fixtures(
+        make_board, make_agent, make_task, runtime="docker",
+    )
+
+    from app.services import task_runner as tr_mod
+    from app.services.task_runner import task_runner
+
+    restart_spy = MagicMock(return_value={"status": "restarted", "container": "mc-agent-test"})
+    emit_spy = AsyncMock()
+
+    async def _hang_forever(task_id, board_id):
+        await asyncio.Event().wait()  # never set — simulates stuck clone/delivery
+
+    with patch("app.services.task_runner.get_redis", AsyncMock(return_value=fake_redis)), \
+         patch("app.services.task_runner.emit_event", emit_spy), \
+         patch("app.services.docker_agent_sync.restart_docker_agent_container", restart_spy), \
+         patch("app.services.task_runner.auto_dispatch_task", _hang_forever), \
+         patch.object(tr_mod, "TIER3_DISPATCH_TIMEOUT_SECONDS", 0.1), \
+         patch('app.services.task_runner.logger'), \
+         patch("asyncio.sleep", new_callable=AsyncMock):  # skip 30s Tier2→Tier3 wait
+        async with _patched_test_session() as session:
+            # Outer guard: regression back to an UNBOUNDED dispatch await
+            # would hang here forever — fail the test after 10s instead.
+            result = await asyncio.wait_for(
+                task_runner._run_tiered_recovery(session, task, agent),
+                timeout=10,
+            )
+
+    assert result is False, "hung dispatch must be treated as Tier-3 failure"
+
+    tier4_events = [
+        c for c in emit_spy.call_args_list
+        if len(c.args) > 1 and c.args[1] == "agent.recovery_failed"
+    ]
+    assert tier4_events, "Tier 4 operator-notify must fire after dispatch timeout"
+
+
 # ── Test 5: Tier 4 emits agent.recovery_failed severity=error (Discord auto) ──
 
 
