@@ -11,7 +11,6 @@ import {
   canProceed,
   initialWizardState,
   type WizardState,
-  type WizardStepProps,
 } from "./types";
 import {
   wizardOverlayClass,
@@ -19,29 +18,13 @@ import {
   wizardCardStyle,
   wizardBtnPrimaryStyle,
 } from "./shared";
+import { StartStep } from "./steps/StartStep";
+import { IdentityStep } from "./steps/IdentityStep";
+import { RuntimeStep } from "./steps/RuntimeStep";
+import { ScopesStep } from "./steps/ScopesStep";
+import { ReviewStep } from "./steps/ReviewStep";
 
 const ease = [0.16, 1, 0.3, 1] as const;
-
-// Step components are registered in Tasks 9-13. Until then a step renders a
-// placeholder so the shell + navigation are independently testable.
-type StepComponent = (props: WizardStepProps) => React.ReactNode;
-
-function Placeholder({ state }: WizardStepProps) {
-  return (
-    <div className="text-sm text-[var(--color-text-muted)]">
-      Schritt {state.step + 1} — in Arbeit.
-    </div>
-  );
-}
-
-// Populated in Task 13 (wiring). Keyed by WIZARD_STEPS index.
-export const WIZARD_STEP_COMPONENTS: StepComponent[] = [
-  Placeholder,
-  Placeholder,
-  Placeholder,
-  Placeholder,
-  Placeholder,
-];
 
 export function AgentWizard({
   boards,
@@ -68,7 +51,6 @@ export function AgentWizard({
     setState((s) => ({ ...s, step: Math.min(s.step + 1, WIZARD_STEPS.length - 1) }));
   const goBack = () => setState((s) => ({ ...s, step: Math.max(s.step - 1, 0) }));
 
-  const StepComponent = WIZARD_STEP_COMPONENTS[state.step] ?? Placeholder;
   const isLastStep = state.step === WIZARD_STEPS.length - 1;
 
   return (
@@ -141,13 +123,11 @@ export function AgentWizard({
 
         {/* Step body */}
         <div className="p-5 overflow-y-auto flex-1">
-          <StepComponent
-            state={state}
-            update={update}
-            boards={boards}
-            goNext={goNext}
-            goBack={goBack}
-          />
+          {state.step === 0 && <StartStep state={state} update={update} boards={boards} goNext={goNext} goBack={goBack} />}
+          {state.step === 1 && <IdentityStep state={state} update={update} boards={boards} goNext={goNext} goBack={goBack} />}
+          {state.step === 2 && <RuntimeStep state={state} update={update} boards={boards} goNext={goNext} goBack={goBack} />}
+          {state.step === 3 && <ScopesStep state={state} update={update} boards={boards} goNext={goNext} goBack={goBack} />}
+          {state.step === 4 && <ReviewStep state={state} update={update} boards={boards} goNext={goNext} goBack={goBack} onCreated={onCreated} />}
         </div>
 
         {/* Footer nav — the review step owns its own primary action, so hide
