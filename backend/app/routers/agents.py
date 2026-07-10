@@ -123,6 +123,10 @@ class AgentUpdate(BaseModel):
     # runtime_id) re-switches the agent onto its CURRENT runtime with the new
     # harness. Only the three known harnesses are accepted.
     harness: str | None = None
+    # Context-economy Stage 2 (Migration 0151) — opt in/out of the L1
+    # Operating Card. Plain field-merge, no restart-triggering side effect;
+    # the CARD.md write/removal happens on the next sync-config call.
+    use_operating_card: bool | None = None
 
     @field_validator("harness")
     @classmethod

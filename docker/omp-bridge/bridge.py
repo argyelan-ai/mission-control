@@ -988,9 +988,39 @@ COMPLETION_INSTRUCTIONS = (
 )
 
 
-def wrap_prompt(prompt: str) -> str:
-    """Append the §3.4 completion contract to the MC-built dispatch prompt."""
-    return (prompt or "").rstrip() + COMPLETION_INSTRUCTIONS
+def _identity_block(home_dir: Optional[str] = None) -> str:
+    """Reads the agent's persistent identity content — CARD.md if the
+    context-economy Stage 2 opt-in (agent.use_operating_card) wrote one,
+    otherwise SOUL.md (both rendered by docker_agent_sync into the
+    claude-config bind mount, i.e. $HOME/.claude/ inside this container).
+
+    Context-economy Stage 2: unlike the claude/openclaude harnesses (which
+    get SOUL/CARD injected once via --append-system-prompt at process start,
+    see docker/mc-agent-base/start-claude.sh), the omp native TUI has no such
+    flag — bridge.py relaunches Window 0 per task and drives it purely
+    through injected prompts. So this content is prepended to every
+    dispatched prompt instead. File existence is the only branch: no
+    separate config flag to keep in sync on this side.
+    """
+    home = home_dir or os.environ.get("HOME", "/home/agent")
+    card_path = os.path.join(home, ".claude", "CARD.md")
+    soul_path = os.path.join(home, ".claude", "SOUL.md")
+    path = card_path if os.path.isfile(card_path) else soul_path
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def wrap_prompt(prompt: str, *, home_dir: Optional[str] = None) -> str:
+    """Prepends the identity block (Card/SOUL) and appends the §3.4
+    completion contract to the MC-built dispatch prompt."""
+    body = (prompt or "").rstrip()
+    identity = _identity_block(home_dir)
+    if identity:
+        body = f"{identity}\n\n---\n\n{body}"
+    return body + COMPLETION_INSTRUCTIONS
 
 
 def container_workspace_path(host_path: Optional[str]) -> Optional[str]:

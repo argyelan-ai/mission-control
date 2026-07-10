@@ -6,7 +6,8 @@
 #   1. /home/agent/.claude/.env sourcen wenn vorhanden (CLAUDE_CODE_OAUTH_TOKEN
 #      kommt aus Bootstrap-Response, siehe entrypoint.sh).
 #
-#   2. SOUL.md lesen und als --append-system-prompt an claude weiterreichen
+#   2. CARD.md (falls vorhanden, Context-Economy Stufe 2 Opt-in) oder sonst
+#      SOUL.md lesen und als --append-system-prompt an claude weiterreichen
 #      (Brücke zwischen Template-Renderer und claude-code CLI).
 #
 #   3. claude starten. env-Vars werden vom Prozess geerbt.
@@ -23,7 +24,13 @@
 set -eu
 
 ENV_FILE="/home/agent/.claude/.env"
+CARD_FILE="/home/agent/.claude/CARD.md"
 SOUL_FILE="/home/agent/.claude/SOUL.md"
+# Context-Economy Stufe 2: CARD.md (<=5KB) ersetzt SOUL.md (~29KB) als
+# --append-system-prompt, aber nur fuer Agenten mit gesetztem Opt-in-Flag
+# (docker_agent_sync.write_operating_card schreibt/loescht die Datei je nach
+# agent.use_operating_card). Datei-Existenz ist die einzige Weiche hier.
+[ -f "$CARD_FILE" ] || CARD_FILE="$SOUL_FILE"
 CLAUDE_ARGS="--dangerously-skip-permissions"
 
 # Schritt 1: .env sourcen (wenn vorhanden) — überschreibt Container-env
@@ -34,9 +41,9 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-# Schritt 2+3: SOUL.md als system-prompt + claude starten
-if [ -s "$SOUL_FILE" ]; then
-    exec claude $CLAUDE_ARGS --append-system-prompt "$(cat "$SOUL_FILE")"
+# Schritt 2+3: CARD.md/SOUL.md als system-prompt + claude starten
+if [ -s "$CARD_FILE" ]; then
+    exec claude $CLAUDE_ARGS --append-system-prompt "$(cat "$CARD_FILE")"
 else
     exec claude $CLAUDE_ARGS
 fi
