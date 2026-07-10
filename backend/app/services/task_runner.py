@@ -149,6 +149,13 @@ AGENT_RUNTIME_ACK_TIMEOUTS: dict[str, int] = {
 }
 _DEFAULT_ACK_TIMEOUT_MINUTES = 5
 
+# G4 (W2-A): margin added on top of the agent's ack timeout for the
+# resume-suppression TTL — the resume redispatch itself (poll pickup,
+# container cold-start) takes a little time, so the suppression window
+# needs a bit of slack beyond the raw ack timeout or a slow-but-legitimate
+# resume could race its own suppression key expiring.
+RESUME_SUPPRESS_MARGIN_MINUTES = 5
+
 
 def _get_ack_timeout_minutes(agent) -> int:
     """3-step lookup for the ACK timeout (REL-05).
@@ -372,6 +379,21 @@ class TaskRunnerService:
             redis = await get_redis()
 
             if task.dispatched_at:
+                # G4 (W2-A): a Tier-3 recovery resume just reset
+                # dispatched_at/ack_at and redispatched — semantically a
+                # RESUME of the very run the recovery is trying to save, NOT
+                # a fresh dispatch. Without this check, this ACK-timeout
+                # ladder would re-arm on the resume and could fire its own
+                # escalation Approval concurrently with the recovery that
+                # caused it (double-escalation for one root event). Skip for
+                # the suppression window; a genuinely-never-acked resume
+                # still escalates once the window elapses.
+                if await redis.get(RedisKeys.dispatch_resume_suppress(str(task.id))):
+                    logger.debug(
+                        "ACK-Eskalation unterdrueckt (Tier-3-Resume aktiv): '%s' (%s)",
+                        task.title, agent.name,
+                    )
+                    continue
                 # ── Check 1: ACK timeout ──
                 await self._handle_ack_timeout(session, task, agent, now, redis)
             elif not skip_pending:
@@ -877,6 +899,20 @@ class TaskRunnerService:
             task.ack_at = None
             session.add(task)
             await session.commit()
+
+            # G4 (W2-A): one suppression per resume — set BEFORE redispatch so
+            # there's no window where _check_dispatch_ack could observe the
+            # just-reset dispatched_at (once redispatch sets it again) without
+            # the suppression key in place. TTL = ack timeout + margin: long
+            # enough to cover the redispatch's own ack window, short enough
+            # that a resume the agent truly never acks still escalates.
+            _resume_suppress_ttl_s = int(
+                (_get_ack_timeout_minutes(agent) + RESUME_SUPPRESS_MARGIN_MINUTES) * 60
+            )
+            await redis.set(
+                RedisKeys.dispatch_resume_suppress(str(task.id)),
+                "1", ex=_resume_suppress_ttl_s,
+            )
 
             # Re-dispatch — runtime-aware (cli-bridge / host / claude-code).
             # Awaited directly (we're already in an async context) instead of

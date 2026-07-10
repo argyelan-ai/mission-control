@@ -260,3 +260,141 @@ async def test_build_runtime_env_no_agent_arg_falls_back_to_runtime_type(async_s
 
     assert env["OPENAI_BASE_URL"] == "http://192.0.2.10:1234/v1"
     assert env["OPENAI_MODEL"] == "qwen3-coder-next"
+
+
+# ── Fix 4 (W2-A, audit item): per-runtime OMP_TURN_IDLE_TIMEOUT ─────────
+#
+# Slow local runtimes (vllm_docker, lmstudio, unsloth, openai_compatible
+# on local hosts) need 600s instead of the omp bridge's 300s default —
+# a long write on a self-hosted model routinely exceeds 300s and gets
+# SIGKILLed mid-write. Cloud/fast runtimes keep the tighter default
+# (no override -> bridge's own OMP_TURN_IDLE_TIMEOUT default applies).
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_vllm_docker_gets_slow_timeout(async_session):
+    """runtime_type=vllm_docker (self-hosted, no exception) -> 600s override."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="qwen-vllm",
+        display_name="Qwen vLLM",
+        runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="qwen3.6-35b",
+        enabled=True,
+    )
+    agent = Agent(name="SlowLocalAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert env["OMP_TURN_IDLE_TIMEOUT"] == "600"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_lmstudio_and_unsloth_get_slow_timeout(async_session):
+    """runtime_type=lmstudio / unsloth -> 600s override (both self-hosted-only types)."""
+    from app.routers.internal import build_runtime_env
+
+    for rtype in ("lmstudio", "unsloth"):
+        rt = Runtime(
+            slug=f"local-{rtype}",
+            display_name=f"Local {rtype}",
+            runtime_type=rtype,
+            endpoint="http://192.0.2.10:1234/v1",
+            model_identifier="some-model",
+            enabled=True,
+        )
+        agent = Agent(name=f"Agent-{rtype}", agent_runtime="cli-bridge", harness="omp")
+
+        env = await build_runtime_env(rt, async_session, agent=agent)
+
+        assert env["OMP_TURN_IDLE_TIMEOUT"] == "600", f"runtime_type={rtype} must get slow timeout"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_openai_compatible_local_host_gets_slow_timeout(async_session):
+    """runtime_type=openai_compatible BOUND to a physical host (host_id set)
+    -> genuinely local/self-hosted -> 600s override."""
+    import uuid
+
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="local-openai-compatible",
+        display_name="Local OpenAI-compatible",
+        runtime_type="openai_compatible",
+        endpoint="http://192.0.2.20:8000/v1",
+        model_identifier="qwen3.6-35b",
+        enabled=True,
+        host_id=uuid.uuid4(),
+    )
+    agent = Agent(name="LocalOpenAICompatAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert env["OMP_TURN_IDLE_TIMEOUT"] == "600"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_cloud_runtime_untouched(async_session):
+    """runtime_type=omp itself but pointed at a cloud/HTTP-only endpoint
+    (no host_id, e.g. a hosted API reachable purely by URL) does NOT get
+    the slow-local override -- default omp bridge timeout (300s) applies,
+    key is simply absent."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="omp-cloud-runtime",
+        display_name="omp (cloud-hosted)",
+        runtime_type="omp",
+        endpoint="https://managed-omp-endpoint.example.com/v1",
+        model_identifier="some-cloud-model",
+        enabled=True,
+    )
+
+    env = await build_runtime_env(rt, async_session)
+
+    assert "OMP_TURN_IDLE_TIMEOUT" not in env
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_openai_compatible_cloud_untouched(async_session):
+    """runtime_type=openai_compatible with NO host_id (managed cloud API,
+    e.g. Ollama Cloud) even under an explicit omp harness override -> stays
+    untouched, no slow-local timeout injected."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="ollama-cloud-omp",
+        display_name="Ollama Cloud (omp harness)",
+        runtime_type="openai_compatible",
+        endpoint="https://ollama.com/v1",
+        model_identifier="glm-5.1:cloud",
+        enabled=True,
+    )
+    agent = Agent(name="CloudOmpAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert "OMP_TURN_IDLE_TIMEOUT" not in env
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_anthropic_untouched_by_omp_timeout(async_session):
+    """Sanity: anthropic/claude-harness runtimes never get OMP_TURN_IDLE_TIMEOUT
+    at all -- the key is omp-bridge-specific."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="anthropic-claude-sonnet-2",
+        display_name="Claude Sonnet",
+        runtime_type="cloud",
+        endpoint="https://api.anthropic.com",
+        model_identifier="claude-sonnet-4-6",
+        enabled=True,
+    )
+
+    env = await build_runtime_env(rt, async_session)
+
+    assert "OMP_TURN_IDLE_TIMEOUT" not in env

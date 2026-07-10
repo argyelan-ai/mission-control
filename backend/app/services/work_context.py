@@ -21,6 +21,7 @@ test files import `_find_reviewer` / `_find_last_developer` /
 import json
 import logging
 import os
+import re
 import uuid
 
 from fastapi import HTTPException
@@ -32,6 +33,57 @@ from app.models.board import Board, Project
 from app.models.task import Task, TaskComment
 
 logger = logging.getLogger("mc.work_context")
+
+
+# Reflection header matcher — 1-3 leading '#', canonical GERMAN field label
+# (any case, optional trailing colon). Level > 3 is not treated as a header.
+# Mirrors scripts/mc-cli/mc_cli/reflection.py's _HEADER_RE, but the backend
+# gate only needs the canonical German form: clients (mc-cli / omp bridge)
+# already normalize English -> German before POSTing (Wave 1). No English
+# aliases here on purpose — this is the hard structural gate, not a tolerant
+# client-side parser.
+_REFLECTION_HEADER_RE = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$", re.MULTILINE)
+
+
+def _fold_reflection_label(s: str) -> str:
+    """Normalize a header label for tolerant (non-byte-brittle) matching:
+    lowercase, ü/ö/ä/ß folded to ue/oe/ae/ss, trailing colon dropped,
+    whitespace collapsed."""
+    s = s.strip().rstrip(":").strip().lower()
+    for a, b in (("ü", "ue"), ("ö", "oe"), ("ä", "ae"), ("ß", "ss")):
+        s = s.replace(a, b)
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+def _missing_reflection_headers(content: str, required_fields: list[str]) -> list[str]:
+    """Return the canonical required fields whose header is NOT present in
+    `content`, tolerant of heading level (#/##/###), case, trailing colon,
+    and ü/ue-style umlaut spelling. Order preserved from `required_fields`."""
+    present_folded = {
+        _fold_reflection_label(m.group(1))
+        for m in _REFLECTION_HEADER_RE.finditer(content or "")
+    }
+    return [
+        field for field in required_fields
+        if _fold_reflection_label(field) not in present_folded
+    ]
+
+
+def _reflection_body_chars(content: str) -> int:
+    """Count the substantive BODY characters of a reflection: strip every
+    markdown header line (level 1-3 — the same lines the header gate counts),
+    then sum the remaining non-whitespace-only text.
+
+    A-1 (adversarial review): the 4 bare canonical headers are ~90 chars on
+    their own, so a fill-in-the-blanks skeleton satisfies both the total
+    length check AND the header-presence check with zero actual content.
+    The body count closes that hole."""
+    body_lines = [
+        line for line in (content or "").splitlines()
+        if not _REFLECTION_HEADER_RE.match(line)
+    ]
+    return len("\n".join(line.strip() for line in body_lines).strip())
 
 
 # Moved from agent_scoped.py:661 (Phase 4 REF-02 Plan 04-04).
@@ -301,6 +353,42 @@ async def enforce_reflection(
             detail=(
                 f"Reflexions-Kommentar zu kurz (mind. {REFLECTION_MIN_CHARS} Zeichen mit "
                 f"{len(REFLECTION_REQUIRED_FIELDS)} Pflichtfeldern). Beispiel: `{_mc_hint}`"
+            ),
+        )
+    # M2: existence + length alone are not a structural gate — a curl bypass
+    # or degenerate model output can post an 80+ char blob with no headers
+    # at all and "finish" cleanly. Require all 4 canonical German headers
+    # to actually be present (tolerant of #/##/### level, case, trailing
+    # colon, ü/ue). Clients (mc-cli / omp bridge) already normalize
+    # English -> German before POSTing (Wave 1), so no English aliases here.
+    _missing = _missing_reflection_headers(
+        reflection_comment.content or "", REFLECTION_REQUIRED_FIELDS,
+    )
+    if _missing:
+        _missing_str = " / ".join(_missing)
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reflexions-Kommentar unvollständig: fehlende Pflichtfelder "
+                f"({_missing_str}). Nutze `mc finish` — das normalisiert die "
+                f"Header automatisch. Beispiel: `{_mc_hint}`"
+            ),
+        )
+    # A-1 (adversarial review): all 4 headers present is not enough — the 4
+    # bare canonical headers alone are ~90 chars, so a fill-in-the-blanks
+    # skeleton passes both checks above with ZERO content. Require substantive
+    # body text: strip header lines, the remainder must reach the same
+    # REFLECTION_MIN_CHARS knob (one constant, one threshold to tune).
+    # Distinct error wording from the missing-headers case so agents get an
+    # actionable message (headers are fine — the CONTENT is missing).
+    if _reflection_body_chars(reflection_comment.content or "") < REFLECTION_MIN_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reflexions-Kommentar hat alle Pflichtfeld-Header, aber (fast) "
+                f"ohne Inhalt darunter (mind. {REFLECTION_MIN_CHARS} Zeichen Text "
+                f"unter den Headern noetig). Fuelle die Felder aus und nutze "
+                f"`mc finish`. Beispiel: `{_mc_hint}`"
             ),
         )
 
