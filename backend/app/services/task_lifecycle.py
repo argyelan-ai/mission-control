@@ -1119,6 +1119,198 @@ async def handle_review_rejection(
     return original_dev
 
 
+async def resolve_unblock_action(
+    session: AsyncSession,
+    task: Task,
+) -> Literal["redispatch", "requeue", "notify", "skip"]:
+    """B2 (W2-B, audit G3 + review fix B-2): decide how a blocked→in_progress
+    unblock should reach the assigned agent.
+
+    Previously the unblock path only ever posted an `unblock_notify`
+    TaskComment — no liveness check, no redispatch. If the blocked agent's
+    process had died in the meantime, nobody read the comment and the task
+    silently stalled until the 15-45min stale-recovery ladder caught it.
+
+    Decision:
+      - No assigned agent → "skip" (nothing to notify/redispatch).
+      - Assigned agent DEAD (last_seen_at NULL or stale beyond the wrapper
+        liveness floor — reuses task_runner._liveness_floor_seconds, the
+        same 2x-heartbeat-interval proof-of-life used by the stale-recovery
+        watchdog) → "redispatch". The agent's poll.sh wrapper is gone, so a
+        TaskComment would sit unread; a full auto_dispatch_task re-delivery
+        (with recovery context, W1-deduped checklist) is the only thing that
+        reaches it — dispatch's own fallback logic then targets the lead if
+        the agent stays dead.
+      - Assigned agent ALIVE but OCCUPIED with a DIFFERENT task
+        (current_task_id points elsewhere, or another in_progress task is
+        assigned) → "requeue" (review fix B-2). Leaving the unblocked task
+        in_progress here creates TWO in_progress tasks for one agent — and
+        poll's active-query would surface the just-unblocked one (freshest
+        updated_at, ack_at still set) while the real session runs the other
+        task. Instead the task goes back to a claimable state; the normal
+        claim/dispatch flow re-delivers it after the current work, without
+        interrupting the agent.
+      - Assigned agent ALIVE and idle (or already on THIS task) → "notify" —
+        the existing comment-only path, delivered via poll.
+    """
+    if not task.assigned_agent_id:
+        return "skip"
+    target = await session.get(Agent, task.assigned_agent_id)
+    if target is None:
+        return "skip"
+
+    from app.services.task_runner import _liveness_floor_seconds
+    from app.utils import ensure_aware
+
+    last_seen = target.last_seen_at
+    if last_seen is None:
+        return "redispatch"
+    seen_age = (utcnow() - ensure_aware(last_seen)).total_seconds()
+    if seen_age >= _liveness_floor_seconds(target):
+        return "redispatch"
+
+    # Occupancy check (review fix B-2): is the agent actively working on a
+    # DIFFERENT task right now?
+    if target.current_task_id is not None and target.current_task_id != task.id:
+        return "requeue"
+    other_active = (await session.exec(
+        select(Task)
+        .where(
+            Task.assigned_agent_id == target.id,
+            Task.status == "in_progress",
+            Task.id != task.id,
+        )
+        .limit(1)
+    )).first()
+    if other_active is not None:
+        return "requeue"
+
+    return "notify"
+
+
+async def requeue_unblocked_task(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+) -> None:
+    """B2 (review fix B-2): occupied-agent branch of resolve_unblock_action.
+
+    The unblock route has already flipped the task to in_progress — but the
+    assigned agent is mid-flight on ANOTHER task. Two in_progress tasks for
+    one agent corrupt poll's active-task resolution (the just-unblocked task
+    has the freshest updated_at AND a stale ack_at, so poll would report
+    "working" on it while the real session runs the other task). Reset the
+    task to a claimable inbox state instead: the agent's normal poll-claim
+    flow (or auto-dispatch) re-delivers it with a full prompt AFTER the
+    current work finishes — no interrupt, no state corruption.
+    """
+    old_status = task.status
+    task.status = "inbox"
+    task.dispatched_at = None
+    task.ack_at = None
+    session.add(task)
+
+    # Give the active-task lock back: update_agent_active_task (which runs
+    # earlier in the PATCH flow) unconditionally repoints current_task_id to
+    # the just-unblocked task, stealing the lock from the task the agent is
+    # actually running. Restore it to the real in_progress task (or clear).
+    if task.assigned_agent_id is not None:
+        _assigned = await session.get(Agent, task.assigned_agent_id)
+        if _assigned is not None and _assigned.current_task_id == task.id:
+            _real_active = (await session.exec(
+                select(Task)
+                .where(
+                    Task.assigned_agent_id == _assigned.id,
+                    Task.status == "in_progress",
+                    Task.id != task.id,
+                )
+                .limit(1)
+            )).first()
+            _assigned.current_task_id = _real_active.id if _real_active else None
+            session.add(_assigned)
+
+    await record_task_event(
+        session, task.id, old_status, "inbox",
+        changed_by="system", reason="unblock_requeue_agent_busy",
+    )
+    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    await clear_dispatch_attempt_id(
+        session, task,
+        caller="requeue_unblocked_task", reason="unblock_requeue_agent_busy",
+    )
+    await session.commit()
+    await session.refresh(task)
+
+    logger.info(
+        "Unblock-Requeue: task=%s — Agent %s arbeitet gerade an einem anderen "
+        "Task; entblockter Task geht zurueck in die Inbox (Claim nach der "
+        "aktuellen Arbeit, kein Interrupt)",
+        task.id, task.assigned_agent_id,
+    )
+    await emit_event(
+        session,
+        "task.unblock_requeued",
+        f"Unblock-Requeue: Task \"{task.title}\" wartet in der Inbox — "
+        f"zugewiesener Agent arbeitet gerade an einem anderen Task",
+        board_id=board_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        severity="info",
+        detail={"reason": "assigned_agent_busy_on_unblock"},
+    )
+
+
+async def redispatch_unblocked_task(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+) -> None:
+    """B2: dead-agent branch of resolve_unblock_action — reset the dispatch
+    handshake and route through the normal auto_dispatch_task re-dispatch
+    (targets the same agent if it revives, falls back to lead/others per
+    dispatch's own logic if it stays dead)."""
+    from app.services.dispatch import auto_dispatch_task
+    from app.utils import create_tracked_task
+
+    task.dispatched_at = None
+    task.ack_at = None
+    session.add(task)
+
+    # Review fix B-3: reconcile the (dead) agent's active-task pointer. If
+    # current_task_id still points at the task being redispatched, anything
+    # reading it in the window until re-dispatch (poll active-preference,
+    # mc delegate 409-guard, watchdog corroboration) would act on a stale
+    # lock. The fresh dispatch sets it again on claim/ACK.
+    if task.assigned_agent_id is not None:
+        _assigned = await session.get(Agent, task.assigned_agent_id)
+        if _assigned is not None and _assigned.current_task_id == task.id:
+            _assigned.current_task_id = None
+            session.add(_assigned)
+
+    await session.commit()
+    await session.refresh(task)
+
+    create_tracked_task(
+        auto_dispatch_task(task.id, board_id),
+        name=f"unblock-redispatch:{task.id}",
+    )
+    logger.info(
+        "Unblock-Redispatch: task=%s agent=%s war offline (stale last_seen_at) "
+        "→ dispatched_at/ack_at zurueckgesetzt, auto_dispatch_task neu getriggert",
+        task.id, task.assigned_agent_id,
+    )
+    await emit_event(
+        session,
+        "task.unblock_redispatched",
+        f"Unblock-Redispatch: Task \"{task.title}\" — zugewiesener Agent war offline",
+        board_id=board_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        severity="warning",
+        detail={"reason": "assigned_agent_stale_on_unblock"},
+    )
+
+
 def trigger_auto_memory(
     task: Task,
     new_status: str,

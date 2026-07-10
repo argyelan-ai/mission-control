@@ -2276,10 +2276,11 @@ async def agent_update_task(
                     if lead and lead.id != agent.id:
                         msg = (
                             f"BLOCKER: {agent.name} bei \"{task.title}\"\n\n"
+                            f"**Typ:** {blocker_type}\n"
                             f"{blocker_text}\n\n"
-                            f"Task-ID: {task.id}\n\n"
+                            f"**Task-ID:** {task.id}\n\n"
                             f"Ein Approval wurde fuer den Operator erstellt "
-                            f"(Typ: {blocker_type} — Operator-Entscheid).\n"
+                            f"(Operator-Entscheid).\n"
                             f"Du kannst hilfreiche Infos als Kommentar posten."
                         )
                         session.add(TaskComment(
@@ -2291,9 +2292,27 @@ async def agent_update_task(
                         await session.commit()
 
         # Agent entblockt Task → assigned Agent benachrichtigen (TaskComment)
+        # oder — B2 (W2-B, audit G3) — liveness-aware redispatch, wenn der
+        # zugewiesene Agent inzwischen offline ist (sonst liest ihn niemand).
         if new_status == "in_progress" and old_status == "blocked":
             if task.assigned_agent_id and task.assigned_agent_id != agent.id:
-                target = await session.get(Agent, task.assigned_agent_id)
+                from app.services.task_lifecycle import (
+                    redispatch_unblocked_task,
+                    requeue_unblocked_task,
+                    resolve_unblock_action,
+                )
+                _unblock_action = await resolve_unblock_action(session, task)
+                if _unblock_action == "redispatch":
+                    await redispatch_unblocked_task(session, task, board_id)
+                    target = None
+                elif _unblock_action == "requeue":
+                    # Review fix B-2: agent is busy on another task — back to
+                    # inbox so the claim flow re-delivers after current work
+                    # (two in_progress tasks would corrupt poll resolution).
+                    await requeue_unblocked_task(session, task, board_id)
+                    target = None
+                else:
+                    target = await session.get(Agent, task.assigned_agent_id)
                 if target:
                     hint_cmt = (await session.exec(
                         select(TaskComment)

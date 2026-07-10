@@ -1260,7 +1260,8 @@ async def agent_clarification(
             author_type="system",
             content=(
                 f"KLAERUNGSFRAGE: {agent.name} bei \"{current_task.title}\"\n\n"
-                f"{payload.question[:1000]}\n\n"
+                f"**Frage:** {payload.question[:1000]}\n\n"
+                f"**Task-ID:** {current_task.id}\n\n"
                 f"Der Operator wurde gefragt. Kennst DU die Antwort, darfst du "
                 f"sie als `resolution`-Kommentar posten und den Task via PATCH "
                 f"auf `in_progress` setzen — das Approval schliesst sich dann "
