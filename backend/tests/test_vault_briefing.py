@@ -116,6 +116,79 @@ def test_extract_date_from_id_malformed_returns_none():
     assert _extract_date_from_id("") is None
 
 
+def test_extract_date_from_id_rejects_uuid_fragment():
+    """Root-cause regression: a UUID's trailing hex segment can accidentally be
+    all-digits (12 chars, no 'T' separator) and must NOT be misread as a date.
+
+    Real incident: id 'agent-<uuid>' with trailing segment '97045217xxxx' (12
+    hex chars, all digits by chance) was parsed into date '9704-52-17'.
+    """
+    from app.routers.vault import _extract_date_from_id
+
+    # 12-char all-digit UUID trailing segment — wrong length, no 'T'.
+    assert _extract_date_from_id("boss-a1b2c3d4-e5f6-9704-8a1b-970452170000") is None
+    # Exactly the incident shape: last dash-segment is 12 digits, no T.
+    assert _extract_date_from_id("agent-970452170000") is None
+
+
+def test_extract_date_from_id_rejects_implausible_month_day():
+    from app.routers.vault import _extract_date_from_id
+
+    # Well-formed shape (15 chars, T at index 8) but month=52 is impossible.
+    assert _extract_date_from_id("sparky-20265217T123000") is None
+    # Year out of the plausible window.
+    assert _extract_date_from_id("sparky-97040517T123000") is None
+
+
+def test_parse_reliable_date_accepts_plain_and_iso():
+    from app.routers.vault import _parse_reliable_date
+
+    assert _parse_reliable_date("2026-05-14") == "2026-05-14"
+    assert _parse_reliable_date("2026-05-14T10:30:00Z") == "2026-05-14"
+
+
+def test_parse_reliable_date_rejects_garbage():
+    from app.routers.vault import _parse_reliable_date
+
+    assert _parse_reliable_date(None) is None
+    assert _parse_reliable_date("") is None
+    assert _parse_reliable_date("not-a-date") is None
+    assert _parse_reliable_date("9704-52-17") is None  # implausible month/day
+    assert _parse_reliable_date("4466-01-01") is None  # implausible year
+
+
+def test_note_date_prefers_frontmatter_date_over_id():
+    from app.routers.vault import _note_date
+
+    # Frontmatter date wins even when the id would (wrongly) parse to something else.
+    note = {"date": "2026-06-01", "id": "agent-970452170000"}
+    assert _note_date(note) == "2026-06-01"
+
+
+def test_note_date_falls_back_to_id_when_no_frontmatter_date():
+    from app.routers.vault import _note_date
+
+    note = {"id": "sparky-20260514T123000"}
+    assert _note_date(note) == "2026-05-14"
+
+
+def test_note_date_returns_none_when_both_sources_unreliable():
+    from app.routers.vault import _note_date
+
+    note = {"date": "garbage", "id": "agent-970452170000"}
+    assert _note_date(note) is None
+
+
+def test_age_days_computes_delta():
+    from app.routers.vault import _age_days
+
+    now = datetime(2026, 5, 20, 12, 0, 0, tzinfo=timezone.utc)
+    assert _age_days("2026-05-14", now) == 6
+    assert _age_days("2026-05-20", now) == 0
+    assert _age_days(None, now) is None
+    assert _age_days("not-a-date", now) is None
+
+
 # ── Endpoint tests ────────────────────────────────────────────────────────────
 
 
@@ -352,3 +425,211 @@ async def test_briefing_fails_soft_when_vault_index_missing():
     assert "current_time_of_day_de" in data  # other fields still present
     assert data["recent_lessons"] == []
     assert data["recent_writes"] == []
+
+
+@pytest.mark.asyncio
+async def test_briefing_open_tasks_deduped_with_duplicate_count():
+    """Exact-duplicate open tasks (title, status, assigned_to) collapse into one
+    item with duplicate_count, instead of listing the same task 3x."""
+    from app.models.board import Board
+    from app.models.task import Task
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(id=uuid.uuid4(), name="B", slug="b")
+        s.add(board)
+        await s.commit()
+        await s.refresh(board)
+
+        base = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+        for i, delta in enumerate([timedelta(hours=0), timedelta(hours=1), timedelta(hours=2)]):
+            s.add(
+                Task(
+                    id=uuid.uuid4(),
+                    board_id=board.id,
+                    title="Post-launch retro board",
+                    status="inbox",
+                    created_at=base + delta,
+                )
+            )
+        s.add(
+            Task(
+                id=uuid.uuid4(),
+                board_id=board.id,
+                title="Unique task",
+                status="inbox",
+                created_at=base + timedelta(hours=3),
+            )
+        )
+        await s.commit()
+
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = []
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(return_value=[])
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    tasks = r.json()["open_tasks"]
+    titles = [t["title"] for t in tasks]
+    assert titles.count("Post-launch retro board") == 1
+    dup = next(t for t in tasks if t["title"] == "Post-launch retro board")
+    assert dup["duplicate_count"] == 3
+    unique = next(t for t in tasks if t["title"] == "Unique task")
+    assert unique["duplicate_count"] == 1
+    assert "age_days" in dup and dup["age_days"] is not None
+
+
+@pytest.mark.asyncio
+async def test_briefing_open_tasks_status_tier_ordering():
+    """in_progress/blocked sort before inbox regardless of created_at."""
+    from app.models.board import Board
+    from app.models.task import Task
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board = Board(id=uuid.uuid4(), name="B", slug="b")
+        s.add(board)
+        await s.commit()
+        await s.refresh(board)
+
+        base = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+        # Newer inbox task, older in_progress task — in_progress must still win.
+        s.add(
+            Task(
+                id=uuid.uuid4(), board_id=board.id, title="Newer inbox item",
+                status="inbox", created_at=base + timedelta(hours=5),
+            )
+        )
+        s.add(
+            Task(
+                id=uuid.uuid4(), board_id=board.id, title="Older in-progress item",
+                status="in_progress", created_at=base,
+            )
+        )
+        await s.commit()
+
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = []
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(return_value=[])
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    titles = [t["title"] for t in r.json()["open_tasks"]]
+    assert titles[0] == "Older in-progress item"
+    assert titles[1] == "Newer inbox item"
+
+
+@pytest.mark.asyncio
+async def test_briefing_recent_writes_sorted_by_real_date_not_write_count():
+    """Regression: top_n_writes ranks by write COUNT, so an old note written
+    many times used to outrank a genuinely recent single write. The briefing
+    must re-sort candidates by real date before truncating to 5."""
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    # "old-frequent.md" has a high write-count score (ranked first by Redis)
+    # but is old; "new-rare.md" has a low score but is genuinely recent.
+    fake_notes = {
+        "agents/sparky/old-frequent.md": {
+            "path": "agents/sparky/old-frequent.md", "id": "sparky-x",
+            "agent": "sparky", "type": "note", "date": "2026-03-01",
+        },
+        "agents/rex/new-rare.md": {
+            "path": "agents/rex/new-rare.md", "id": "rex-y",
+            "agent": "rex", "type": "note", "date": "2026-05-19",
+        },
+    }
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = list(fake_notes.values())
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(
+        return_value=[
+            {"path": "agents/sparky/old-frequent.md", "score": 40},
+            {"path": "agents/rex/new-rare.md", "score": 1},
+        ]
+    )
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    writes = r.json()["recent_writes"]
+    assert writes[0]["path"] == "agents/rex/new-rare.md"
+    assert writes[0]["date"] == "2026-05-19"
+    assert writes[1]["path"] == "agents/sparky/old-frequent.md"
+
+
+@pytest.mark.asyncio
+async def test_briefing_staleness_summary_reflects_newest_write_age():
+    """staleness_summary.newest_write_age_days is computed from the real date,
+    and the note goes honest ('no writes in last 7 days') when everything is old."""
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    old_date = (datetime.now(timezone.utc) - timedelta(days=55)).strftime("%Y-%m-%d")
+    fake_note = {
+        "path": "agents/sparky/old.md", "id": "sparky-x",
+        "agent": "sparky", "type": "note", "date": old_date,
+    }
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = [fake_note]
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(
+        return_value=[{"path": "agents/sparky/old.md", "score": 1}]
+    )
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    summary = r.json()["staleness_summary"]
+    assert summary["newest_write_age_days"] == 55
+    assert summary["note"] == "no writes in last 7 days"
+
+
+@pytest.mark.asyncio
+async def test_briefing_staleness_summary_no_dated_items():
+    """No reliably dated writes → note says so instead of implying freshness."""
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = []
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(return_value=[])
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    summary = r.json()["staleness_summary"]
+    assert summary["newest_write_age_days"] is None
+    assert summary["note"] == "no reliably dated writes found"
