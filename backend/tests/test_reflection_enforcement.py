@@ -282,6 +282,66 @@ async def test_done_blocked_when_reflection_missing_headers(
 
 
 @pytest.mark.asyncio
+async def test_done_blocked_when_headers_present_but_body_empty(
+    client, fake_redis, make_board, make_task,
+):
+    """A-1 (adversarial review): all 4 canonical headers present but ZERO body
+    content — a fill-in-the-blanks skeleton. The bare 4 canonical headers are
+    ~90 chars on their own, so total-length + header-presence checks are BOTH
+    satisfiable with no content at all. Must be rejected, and the error must
+    say the body/content is missing (NOT 'headers missing' — actionable
+    errors)."""
+    from app.models.task import TaskComment
+
+    board = await make_board(slug="mc-dev", require_review_before_done=True)
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    # Exactly the reviewer's payload: 4 headers, no body — > 80 chars total.
+    skeleton = "\n".join(f"## {f}" for f in REFLECTION_REQUIRED_FIELDS)
+    assert len(skeleton) >= REFLECTION_MIN_CHARS, (
+        "Precondition: the bare skeleton must clear the total-length check "
+        "on its own, otherwise this test doesn't prove the bypass"
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        blob = TaskComment(
+            id=uuid.uuid4(),
+            task_id=task.id,
+            author_type="agent",
+            author_agent_id=cody.id,
+            comment_type="reflection",
+            content=skeleton,
+            created_at=datetime.utcnow(),
+        )
+        s.add(blob)
+        await s.commit()
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        response = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "done"},
+            headers=_agent_headers(cody_token),
+        )
+    assert response.status_code == 400, (
+        f"Empty-skeleton reflection must be rejected. "
+        f"Got: {response.status_code} {response.text[:300]}"
+    )
+    detail = response.json().get("detail", "")
+    assert "ohne Inhalt" in detail, (
+        f"Expected a 'headers present but empty' message. Got: {detail[:300]}"
+    )
+    assert "fehlende Pflichtfelder" not in detail, (
+        f"Must not claim headers are missing when they're present: {detail[:300]}"
+    )
+    assert "mc finish" in detail, f"Expected 'mc finish' hint. Got: {detail[:300]}"
+
+
+@pytest.mark.asyncio
 async def test_done_passes_with_tolerant_header_variants(
     client, fake_redis, make_board, make_task,
 ):

@@ -70,6 +70,22 @@ def _missing_reflection_headers(content: str, required_fields: list[str]) -> lis
     ]
 
 
+def _reflection_body_chars(content: str) -> int:
+    """Count the substantive BODY characters of a reflection: strip every
+    markdown header line (level 1-3 — the same lines the header gate counts),
+    then sum the remaining non-whitespace-only text.
+
+    A-1 (adversarial review): the 4 bare canonical headers are ~90 chars on
+    their own, so a fill-in-the-blanks skeleton satisfies both the total
+    length check AND the header-presence check with zero actual content.
+    The body count closes that hole."""
+    body_lines = [
+        line for line in (content or "").splitlines()
+        if not _REFLECTION_HEADER_RE.match(line)
+    ]
+    return len("\n".join(line.strip() for line in body_lines).strip())
+
+
 # Moved from agent_scoped.py:661 (Phase 4 REF-02 Plan 04-04).
 # Endpoint validation for blocker_type — frozenset so the content
 # isn't accidentally mutated. Changes here affect the
@@ -356,6 +372,23 @@ async def enforce_reflection(
                 f"Reflexions-Kommentar unvollständig: fehlende Pflichtfelder "
                 f"({_missing_str}). Nutze `mc finish` — das normalisiert die "
                 f"Header automatisch. Beispiel: `{_mc_hint}`"
+            ),
+        )
+    # A-1 (adversarial review): all 4 headers present is not enough — the 4
+    # bare canonical headers alone are ~90 chars, so a fill-in-the-blanks
+    # skeleton passes both checks above with ZERO content. Require substantive
+    # body text: strip header lines, the remainder must reach the same
+    # REFLECTION_MIN_CHARS knob (one constant, one threshold to tune).
+    # Distinct error wording from the missing-headers case so agents get an
+    # actionable message (headers are fine — the CONTENT is missing).
+    if _reflection_body_chars(reflection_comment.content or "") < REFLECTION_MIN_CHARS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Reflexions-Kommentar hat alle Pflichtfeld-Header, aber (fast) "
+                f"ohne Inhalt darunter (mind. {REFLECTION_MIN_CHARS} Zeichen Text "
+                f"unter den Headern noetig). Fuelle die Felder aus und nutze "
+                f"`mc finish`. Beispiel: `{_mc_hint}`"
             ),
         )
 
