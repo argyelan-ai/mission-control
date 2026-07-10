@@ -916,25 +916,36 @@ class McCliLifecycle(MCLifecycle):
         env["X_DISPATCH_ATTEMPT_ID"] = self.attempt_id
         return env
 
-    def _run(self, task_id: str, args: list[str], *, best_effort: bool = False) -> int:
-        """Run an mc-cli subcommand. Returns the process exit code (``-1`` if the
-        command could not be launched and ``best_effort`` swallowed the error)."""
+    # Marker `_preflight_finish` in mc-cli prefixes onto its UsageError message
+    # when `mc finish` is rejected purely because checklist items are still
+    # open (see mc_cli/commands.py:_preflight_finish). Used to distinguish
+    # "work is done except an out-of-role checklist item" from a genuine
+    # technical failure (5xx, network, unparseable) — the two used to be
+    # indistinguishable to this bridge and both collapsed into `blocked`.
+    _CHECKLIST_OPEN_MARKER = "Checklist-Item(s) noch offen"
+
+    def _run(
+        self, task_id: str, args: list[str], *, best_effort: bool = False,
+    ) -> tuple[int, str]:
+        """Run an mc-cli subcommand. Returns ``(exit_code, stderr_text)`` —
+        ``exit_code`` is ``-1`` if the command could not be launched and
+        ``best_effort`` swallowed the error."""
         cmd = [self.mc_bin, *args]
         try:
             proc = subprocess.run(
                 cmd, env=self._env(task_id), capture_output=True, text=True, timeout=60,
             )
+            stderr_text = (proc.stderr or proc.stdout or "").strip()
             if proc.returncode != 0:
                 sys.stderr.write(
-                    f"[mc-cli] {args[0]} exit={proc.returncode}: "
-                    f"{(proc.stderr or proc.stdout or '').strip()[:400]}\n"
+                    f"[mc-cli] {args[0]} exit={proc.returncode}: {stderr_text[:400]}\n"
                 )
-            return proc.returncode
+            return proc.returncode, stderr_text
         except Exception as e:  # noqa: BLE001 — lifecycle must never crash the loop
             sys.stderr.write(f"[mc-cli] {args[0]} raised {type(e).__name__}: {e}\n")
             if not best_effort:
                 raise
-            return -1
+            return -1, str(e)
 
     def ack(self, task_id: str) -> None:
         self._run(task_id, ["ack", task_id])
@@ -946,25 +957,79 @@ class McCliLifecycle(MCLifecycle):
         # Terminal guarantee: a non-zero `mc finish` (backend rejected the
         # reflection, transient 5xx, ...) must NOT leave the task silently
         # in_progress — that is the exact silent-hang this runtime exists to
-        # close. Fall back to `blocked` (reversible, notifies Mark) so every
-        # run reaches a terminal state. best_effort=True so a hard launch
-        # failure returns rc=-1 here instead of raising past the fallback.
-        rc = self._run(task_id, args, best_effort=True)
-        if rc != 0:
+        # close. best_effort=True so a hard launch failure returns rc=-1 here
+        # instead of raising past the fallback.
+        rc, stderr_text = self._run(task_id, args, best_effort=True)
+        if rc == 0:
+            return
+
+        if self._CHECKLIST_OPEN_MARKER in (stderr_text or ""):
+            # The agent's work is otherwise done — some checklist items are
+            # still open, possibly because they are out of this agent's role
+            # (e.g. a live Vercel deploy needing npm/node, which is a
+            # Deployer's job). Blanket `blocked`/technical_problem would lie
+            # about *why* the task stalled. Route to review instead, with a
+            # handoff comment carrying the exact pending items, so the Board
+            # Lead/Mark can see what's outstanding and reassign the rest.
             sys.stderr.write(
-                f"[mc-cli] finish failed (rc={rc}) -> falling back to blocked "
-                f"to avoid a silent in_progress hang (task {task_id})\n"
+                f"[mc-cli] finish failed (rc={rc}) due to open checklist items "
+                f"-> routing to review with handoff instead of blocked (task {task_id})\n"
+            )
+            self._run(
+                task_id,
+                [
+                    "comment", "handoff",
+                    "omp-bridge: `mc finish` konnte den Task nicht abschliessen, "
+                    "weil Checklist-Items offen sind (evtl. ausserhalb der Rolle "
+                    f"dieses Agents). Details:\n{stderr_text}",
+                ],
+                best_effort=True,
+            )
+            review_rc, review_stderr = self._run(
+                task_id, ["review", task_id], best_effort=True,
+            )
+            if review_rc == 0:
+                return
+            # The review rescue itself failed (network/5xx/concurrent status
+            # change). We must NOT return here — that would leave the task
+            # silently in_progress, the exact hang this runtime exists to
+            # close. Fall through to the `blocked` fallback below, with a
+            # question that makes clear both finish AND review failed.
+            sys.stderr.write(
+                f"[mc-cli] review rescue failed (rc={review_rc}) after checklist-open "
+                f"finish -> falling back to blocked (task {task_id})\n"
             )
             self.set_blocker(
                 task_id,
                 blocker_type="technical_problem",
                 question=(
-                    "omp-bridge konnte den Task nicht auf review setzen "
-                    f"(mc finish exit={rc}). Automatisch blockiert statt still "
-                    "in_progress haengen zu lassen — bitte Ergebnis pruefen und "
-                    "Task erneut zuweisen."
+                    "omp-bridge: `mc finish` scheiterte an offenen Checklist-Items "
+                    f"und der Rettungsversuch `mc review` schlug ebenfalls fehl "
+                    f"(exit={review_rc}). Automatisch blockiert statt still "
+                    "in_progress haengen zu lassen — bitte Ergebnis pruefen, "
+                    f"offene Items klaeren und Task erneut zuweisen. "
+                    f"Details:\n{stderr_text}"
                 ),
             )
+            return
+
+        # Genuinely unexpected failure (5xx, network, unparseable output,
+        # missing `mc` binary, ...) — fall back to `blocked` (reversible,
+        # notifies Mark) so every run still reaches a terminal state.
+        sys.stderr.write(
+            f"[mc-cli] finish failed (rc={rc}) -> falling back to blocked "
+            f"to avoid a silent in_progress hang (task {task_id})\n"
+        )
+        self.set_blocker(
+            task_id,
+            blocker_type="technical_problem",
+            question=(
+                "omp-bridge konnte den Task nicht auf review setzen "
+                f"(mc finish exit={rc}). Automatisch blockiert statt still "
+                "in_progress haengen zu lassen — bitte Ergebnis pruefen und "
+                "Task erneut zuweisen."
+            ),
+        )
 
     def set_blocker(self, task_id: str, *, blocker_type: str, question: str) -> None:
         self._run(

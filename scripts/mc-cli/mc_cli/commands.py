@@ -727,6 +727,26 @@ def _cmd_checklist(args, client, cfg):
         item_id = _resolve_checklist_item_id(client, base, args.item_id)
         resp = client.request("PATCH", f"{base}/{item_id}", body={"status": "done"})
         _emit(resp)
+    elif action == "skip":
+        # 2026-07-08: an agent can hit a checklist item it physically cannot
+        # do (a live Vercel deploy needing npm/node = a Deployer's job, not
+        # an omp agent's). Before this the only options were `done` (a lie)
+        # or leaving `mc finish` blocked forever. Reuses the existing
+        # `skipped` status — `_preflight_finish` already treats it as
+        # non-blocking, no backend change needed.
+        item_id = _resolve_checklist_item_id(client, base, args.item_id)
+        resp = client.request("PATCH", f"{base}/{item_id}", body={"status": "skipped"})
+        _emit(resp)
+        if getattr(args, "reason", None):
+            board_id, task_id = cfg.require_task_context()
+            client.request(
+                "POST",
+                f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+                body={
+                    "comment_type": "progress",
+                    "content": f"Checklist-Item {item_id} skipped: {args.reason}",
+                },
+            )
     elif action == "list":
         resp = client.request("GET", base)
         _emit(resp)
@@ -742,6 +762,11 @@ def _add_checklist_args(p):
     p_add.add_argument("--order", type=int, default=0)
     p_done = sub.add_parser("done", help="Item als erledigt markieren")
     p_done.add_argument("item_id")
+    p_skip = sub.add_parser(
+        "skip", help="Item ueberspringen (z.B. out-of-role, nicht durch diesen Agent erledigbar)"
+    )
+    p_skip.add_argument("item_id")
+    p_skip.add_argument("--reason", default=None, help="Grund, wird als Comment gepostet")
     sub.add_parser("list", help="Aktuelle Checklist zeigen")
 
 

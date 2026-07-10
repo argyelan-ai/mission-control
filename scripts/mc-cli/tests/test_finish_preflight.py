@@ -376,3 +376,76 @@ def test_too_short_rejected(monkeypatch):
     with pytest.raises(UsageError) as exc:
         commands._validate_reflection(short)
     assert "zu kurz" in str(exc.value).lower()
+
+
+# ── `mc checklist skip <id>` — out-of-role items (2026-07-08 handoff fix) ───
+#
+# An agent can hit a checklist item it physically cannot do (a live Vercel
+# deploy needing npm/node = a Deployer's job, not an omp agent's). Before this
+# fix, the only options were `mc checklist done` (a lie) or leaving `mc
+# finish` blocked forever. `skip` reuses the existing `skipped` status, which
+# `_preflight_finish` already treats as non-blocking (see
+# test_skipped_items_dont_block above).
+
+
+class _ChecklistSkipArgs:
+    def __init__(self, item_id="id-0", reason=None):
+        self.action = "skip"
+        self.item_id = item_id
+        self.reason = reason
+
+
+def _mock_cfg_checklist():
+    cfg = MagicMock()
+    cfg.require_task_context.return_value = (BOARD_ID, TASK_ID)
+    return cfg
+
+
+def test_checklist_skip_patches_status_skipped():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+    ])
+    rc = commands._cmd_checklist(_ChecklistSkipArgs(item_id="id-0"), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"] == {"status": "skipped"}
+    assert not any(c["method"] == "POST" for c in client.calls)
+
+
+def test_checklist_skip_with_reason_posts_comment():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+        ("POST", "/comments", {"id": "comment-1"}),
+    ])
+    rc = commands._cmd_checklist(
+        _ChecklistSkipArgs(item_id="id-0", reason="needs npm/node, out of role for omp agent"),
+        client, cfg,
+    )
+    assert rc == 0
+    post_call = next(c for c in client.calls if c["method"] == "POST")
+    assert "id-0" in post_call["body"]["content"]
+    assert "skipped: needs npm/node" in post_call["body"]["content"]
+
+
+def test_checklist_skip_without_reason_no_comment():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+    ])
+    rc = commands._cmd_checklist(_ChecklistSkipArgs(item_id="id-0"), client, cfg)
+    assert rc == 0
+    assert not any(c["method"] == "POST" for c in client.calls)
+
+
+def test_checklist_skip_unknown_id_raises_usage_error():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+    ])
+    with pytest.raises(UsageError):
+        commands._cmd_checklist(_ChecklistSkipArgs(item_id="nonexistent"), client, cfg)
