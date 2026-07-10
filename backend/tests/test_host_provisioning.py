@@ -51,6 +51,69 @@ async def test_stage_writes_files(home_host, async_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
+    home_host, async_session, monkeypatch
+):
+    """A native 'claude' host agent must not hang on the interactive 'New MCP
+    server found' trust prompt (2026-07-10 E2E finding, Befund 2). Boss (the
+    one working native-claude host agent) avoids it via an explicit, isolated
+    --mcp-config file + --strict-mcp-config + --dangerously-skip-permissions
+    (docker/boss-host/start-claude.sh) — this generalizes that mechanism to
+    the wizard's generic host template so a freshly staged agent doesn't
+    inherit the operator's own ~/.claude project-trust state."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-claude", display_name="Host RT Claude", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Claude Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-claude", session=async_session)
+
+    # An isolated MCP config file was staged alongside run.sh/agent.env.
+    assert result.mcp_config_path is not None
+    assert os.path.isfile(result.mcp_config_path)
+    import json
+    mcp_config = json.loads(open(result.mcp_config_path).read())
+    assert "mcpServers" in mcp_config
+
+    run_sh = open(result.run_script_path).read()
+    assert "--strict-mcp-config" in run_sh
+    assert "--mcp-config" in run_sh
+    assert result.mcp_config_path in run_sh
+    assert "--dangerously-skip-permissions" in run_sh
+
+
+@pytest.mark.asyncio
+async def test_openclaude_harness_does_not_get_claude_mcp_flags(
+    home_host, async_session, monkeypatch
+):
+    """The MCP-trust-prompt fix is scoped to the native 'claude' binary —
+    openclaude/omp have no such interactive prompt and must stay untouched."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-oc", display_name="Host RT OC", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="OC Host", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-oc", session=async_session)
+
+    assert result.mcp_config_path is None
+    run_sh = open(result.run_script_path).read()
+    assert "--strict-mcp-config" not in run_sh
+    assert "--dangerously-skip-permissions" not in run_sh
+
+
+@pytest.mark.asyncio
 async def test_slug_path_traversal_is_confined(home_host, async_session, monkeypatch):
     """A malicious name must never escape ~/.mc/agents/."""
     async def _fake_env(runtime, session):
