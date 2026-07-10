@@ -80,6 +80,10 @@ async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
     import json
     mcp_config = json.loads(open(result.mcp_config_path).read())
     assert "mcpServers" in mcp_config
+    # .mcp.json can carry inline MCP-server secrets (e.g. API keys in `env`,
+    # same shape as the shared MCP registry) — must be as locked-down as
+    # agent.env (0600), never the 644 default (2026-07-10 E2E rerun, Befund 4).
+    assert (os.stat(result.mcp_config_path).st_mode & 0o777) == 0o600
 
     run_sh = open(result.run_script_path).read()
     assert "--strict-mcp-config" in run_sh

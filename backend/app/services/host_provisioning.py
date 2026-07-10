@@ -71,6 +71,26 @@ def _resolve_slug(agent: Agent) -> str:
     return _slugify(candidate)
 
 
+def _write_owner_only_file(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` with 0600 perms from the moment the file
+    exists — never write-then-chmod, which leaves a window (governed by the
+    process umask, not the intended mode) where secret content sits on disk
+    at whatever permissions umask produces before the later chmod() call
+    narrows them. os.open()'s mode arg is itself umask-masked too, so we
+    fchmod() immediately after open()/before any content is written, closing
+    that gap as well. Used for both agent.env and the claude-harness
+    .mcp.json (2026-07-10 E2E rerun, Befund 4 — .mcp.json can carry inline
+    MCP-server secrets, e.g. API keys in `env`, same shape as agent.env)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+
+
 def _format_env_file(env: dict[str, str]) -> str:
     lines = []
     for key in sorted(env.keys()):
@@ -134,8 +154,7 @@ async def stage_host_agent_files(
         "HOME": str(home),
     }
     env.update(runtime_env)
-    env_path.write_text(_format_env_file(env))
-    os.chmod(env_path, 0o600)
+    _write_owner_only_file(env_path, _format_env_file(env))
 
     # 2a. Isolated MCP config, native-claude harness only. The 'claude' CLI
     # defaults to the operator's own $HOME/.claude config (needed here so it
@@ -154,7 +173,16 @@ async def stage_host_agent_files(
     if harness == "claude":
         mcp_config_path = str(workspace / ".mcp.json")
         mcp_config = render_agent_mcp_json(agent)
-        Path(mcp_config_path).write_text(json.dumps(mcp_config, indent=2) + "\n")
+        # 0600, not the write_text() default (umask-dependent, typically
+        # 644) — MCP server manifests can carry inline secrets (e.g. API
+        # keys in `env`, same shape as the shared registry in
+        # mcp_registry.py) and this file sits right next to the 0600
+        # agent.env. render_agent_mcp_json() itself only reuses whatever the
+        # registry already stores inline; if cli-bridge/openclaude agents
+        # ever start referencing env-var placeholders instead of inline
+        # values there, this should follow — but that's a separate,
+        # pre-existing registry-wide decision, not something to invent here.
+        _write_owner_only_file(Path(mcp_config_path), json.dumps(mcp_config, indent=2) + "\n")
 
     # 2b. run.sh launcher.
     run_sh = render_agent_file(
