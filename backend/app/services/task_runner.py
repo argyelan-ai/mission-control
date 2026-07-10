@@ -879,6 +879,7 @@ class TaskRunnerService:
             # reliable indicator is whether the delivery branch actually set
             # dispatched_at again — re-fetch the task (auto_dispatch_task
             # commits via its own session) and check that.
+            #
             await auto_dispatch_task(task.id, task.board_id)
             await session.refresh(task)
             tier3_ok = task.dispatched_at is not None
@@ -1230,31 +1231,39 @@ class TaskRunnerService:
             if tick_count < 1:
                 # First eligible tick: nudge, do NOT block. Gives the agent (and
                 # poll.sh) a chance to self-report; catches transient blips.
-                # G6: shared cooldown gates the *comment* only — tick-count
-                # persistence still advances even if another mechanism already
-                # posted a "continue" comment on this task, so tick 2+
-                # (block) still fires on schedule.
+                # G6: the shared cooldown gates the comment AND tick-1
+                # progression together. The tick counter may ONLY advance when
+                # the nudge comment was actually posted — otherwise a
+                # different mechanism's "continue" comment (Tier-3 recap /
+                # unblock_notify / bootstrap recap) would silently consume
+                # tick 1 and the next pass would block the task without the
+                # agent ever having received THE WATCHDOG's explicit warning
+                # (due process before block). On a cooldown-skip we retry the
+                # nudge on the next watchdog pass — the cooldown TTL (600s) is
+                # well below the stuck thresholds (20-45min), so the added
+                # delay before a block is bounded and acceptable.
                 from app.redis_client import try_claim_recovery_comment_cooldown
-                if await try_claim_recovery_comment_cooldown(redis, str(task.id)):
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        comment_type="watchdog_notify",
-                        content=(
-                            f"LIFECYCLE-WATCHDOG: Du hast \"{task.title}\" geackt, aber seit "
-                            f"{int(mins_silent)}min keinen Fortschritt gemeldet. Bitte JETZT den "
-                            f"Status setzen (PATCH status: review / blocked / failed) oder einen "
-                            f"Progress-Kommentar posten — sonst wird die Task zur Klärung an den Operator "
-                            f"eskaliert.\nTask-ID: {task.id}"
-                        ),
-                    ))
-                    await session.commit()
-                else:
+                if not await try_claim_recovery_comment_cooldown(redis, str(task.id)):
                     logger.debug(
-                        "Lifecycle-Watchdog nudge comment skipped for task %s — "
-                        "recovery-comment cooldown already claimed",
+                        "Lifecycle-Watchdog nudge skipped for task %s — "
+                        "recovery-comment cooldown already claimed; tick counter "
+                        "NOT advanced, nudge retries next pass",
                         task.id,
                     )
+                    continue
+                session.add(TaskComment(
+                    task_id=task.id,
+                    author_type="system",
+                    comment_type="watchdog_notify",
+                    content=(
+                        f"LIFECYCLE-WATCHDOG: Du hast \"{task.title}\" geackt, aber seit "
+                        f"{int(mins_silent)}min keinen Fortschritt gemeldet. Bitte JETZT den "
+                        f"Status setzen (PATCH status: review / blocked / failed) oder einen "
+                        f"Progress-Kommentar posten — sonst wird die Task zur Klärung an den Operator "
+                        f"eskaliert.\nTask-ID: {task.id}"
+                    ),
+                ))
+                await session.commit()
                 await redis.set(count_key, "1", ex=3600)  # ≥2-tick persistence
                 logger.info(
                     "Lifecycle-Watchdog nudge: '%s' (%s) silent %dmin — tick 1, no block",
