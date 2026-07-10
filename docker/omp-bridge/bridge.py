@@ -55,6 +55,73 @@ REFLECTION_HEADERS = (
 )
 MIN_REFLECTION_CHARS = 80
 
+# ===========================================================================
+# MIRRORED NORMALIZER — keep in LOCKSTEP with scripts/mc-cli/mc_cli/reflection.py
+# ===========================================================================
+# The forgiving close-contract logic (sentinel + header tolerance +
+# normalization) has ONE canonical source: mc_cli/reflection.py. bridge.py runs
+# from /opt/omp-bridge while the mc CLI lives under /home/agent/.mc-cli in the
+# omp image — they are NOT on the same sys.path, so bridge.py cannot cleanly
+# `import mc_cli`. We therefore DUPLICATE the small normalizer here, and a
+# repo-level parity test (tests/test_close_parity.py) feeds a shared case matrix
+# through BOTH copies and asserts they agree byte-for-byte. If you touch either
+# copy, update the other and keep that test green — any drift fails loudly.
+#
+# INVARIANT: every tolerance is ADDITIVE — strict canonical input (exact 4
+# German `## ` headers, `TASK_COMPLETE` alone as the last line, >=80 chars)
+# parses byte-identical to the pre-tolerance behaviour. The backend gate only
+# checks reflection existence + length (NOT headers), so nothing accepted here
+# could be rejected downstream.
+
+# Canonical German field labels (without the `## ` prefix).
+_CANON_FIELDS = tuple(h[len("## "):] for h in REFLECTION_HEADERS)
+
+_ENGLISH_ALIASES = {
+    "what was done": "Was wurde gemacht",
+    "what worked": "Was hat funktioniert",
+    "what was unclear": "Was war unklar",
+    "lesson for agent memory": "Lesson fuer Agent-Memory",
+}
+
+_HEADER_RE = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
+_TRAILER_RE = re.compile(r"^[-=*_`]{3,}$")
+
+
+def _fold(s: str) -> str:
+    """Normalize a header label for tolerant matching (see reflection.py)."""
+    s = s.strip().rstrip(":").strip().lower()
+    for a, b in (("ü", "ue"), ("ö", "oe"), ("ä", "ae"), ("ß", "ss")):
+        s = s.replace(a, b)
+    s = s.replace("-", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+_CANON_BY_FOLD = {}
+for _f in _CANON_FIELDS:
+    _CANON_BY_FOLD[_fold(_f)] = _f
+for _k, _v in _ENGLISH_ALIASES.items():
+    _CANON_BY_FOLD[_fold(_k)] = _v
+
+
+def _match_header(line: str) -> Optional[str]:
+    """Canonical German field if `line` is a recognised header, else None."""
+    m = _HEADER_RE.match(line)
+    if not m:
+        return None
+    return _CANON_BY_FOLD.get(_fold(m.group(1)))
+
+
+def _is_sentinel_line(line: str) -> bool:
+    """True if `line` is a TASK_COMPLETE sentinel, tolerating case, wrapping
+    markdown (`**`/backticks/`__`) and trailing punctuation."""
+    s = line.strip()
+    if not s:
+        return False
+    s = s.strip("*`_~ ")
+    s = re.sub(r"[.\!:;,\s]+$", "", s)
+    return s.upper() == SENTINEL
+
 # Heuristic — the ORIGINAL openclaude failure (transient mid-run network abort).
 # The exact shape omp+Claude produces is UNVERIFIED on disk (design §2.1); we
 # detect it as a retryable sub-class of the abort family, never assert it as the
@@ -295,26 +362,36 @@ def last_nonempty_line(text: str) -> str:
 
 
 def extract_reflection(text: str) -> Optional[str]:
-    """Slice the block from the first header to the line before the sentinel.
+    """Slice the reflection block from the FIRST recognised header (any level
+    1-3, case-insensitive, EN alias, ü/ue, trailing colon) to the line before
+    the sentinel, with every recognised header normalised to canonical German
+    `## ` form. Returns None if no recognised header is present.
 
-    Returns None if the first required header is absent.
+    MIRROR of mc_cli.reflection.extract_reflection — keep in lockstep.
     """
-    idx = text.find(REFLECTION_HEADERS[0])
-    if idx == -1:
-        return None
-    block = text[idx:]
-    # Trim everything from a standalone TASK_COMPLETE line onward.
-    lines = block.splitlines()
-    kept = []
-    for line in lines:
-        if line.strip() == SENTINEL:
+    lines = text.splitlines()
+    start = -1
+    for i, line in enumerate(lines):
+        if _match_header(line) is not None:
+            start = i
             break
-        kept.append(line)
+    if start == -1:
+        return None
+    kept = []
+    for line in lines[start:]:
+        if _is_sentinel_line(line):
+            break
+        canon = _match_header(line)
+        kept.append(f"## {canon}" if canon is not None else line)
     return "\n".join(kept).strip()
 
 
 def validate_reflection(block: Optional[str]) -> bool:
-    """Mirror mc_cli._validate_reflection: 4 headers present + >=80 chars."""
+    """4 canonical German headers present + >=80 chars. Expects a block already
+    run through extract_reflection (headers canonicalised).
+
+    MIRROR of mc_cli.reflection.validate_reflection — keep in lockstep.
+    """
     if not block:
         return False
     if len(block) < MIN_REFLECTION_CHARS:
@@ -323,8 +400,20 @@ def validate_reflection(block: Optional[str]) -> bool:
 
 
 def sentinel_present(text: str) -> bool:
-    """Anti-echo: TASK_COMPLETE counts only as the last non-empty line, alone."""
-    return last_nonempty_line(text) == SENTINEL
+    """Anti-echo: the sentinel counts only as the LAST meaningful line (alone,
+    modulo markdown/punctuation), OR the second-to-last when the final line is a
+    harmless trailer (`---`/`***`).
+
+    MIRROR of mc_cli.reflection.sentinel_present — keep in lockstep.
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    if _is_sentinel_line(lines[-1]):
+        return True
+    if len(lines) >= 2 and _TRAILER_RE.match(lines[-1].strip()) and _is_sentinel_line(lines[-2]):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------

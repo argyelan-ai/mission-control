@@ -312,19 +312,24 @@ def _cmd_failed(args, client, cfg):
 # lokal die 4 Pflichtfelder und Min-Length BEVOR irgendein HTTP-Call passiert,
 # damit Agents nicht erst auf 400-Antworten warten muessen.
 
-# Duplikat aus backend/app/constants.py REFLECTION_REQUIRED_FIELDS / _MIN_CHARS.
-# Public Contract — wenn Backend-Konstanten sich aendern, hier auch aendern.
-REFLECTION_REQUIRED_FIELDS = [
-    "Was wurde gemacht",
-    "Was hat funktioniert",
-    "Was war unklar",
-    "Lesson fuer Agent-Memory",
-]
-REFLECTION_MIN_CHARS = 80
+# Canonical reflection contract — sourced from the SINGLE in-container source of
+# truth (mc_cli/reflection.py), which itself is drift-guarded against
+# backend/app/constants.py REFLECTION_REQUIRED_FIELDS. Re-exported here as
+# module-level names so existing callers/tests (e.g. monkeypatching
+# commands.REFLECTION_MIN_CHARS) keep working.
+from . import reflection as _reflection  # noqa: E402
+REFLECTION_REQUIRED_FIELDS = _reflection.REFLECTION_REQUIRED_FIELDS
+REFLECTION_MIN_CHARS = _reflection.REFLECTION_MIN_CHARS
 
 
 def _validate_reflection(text: str) -> None:
     """Local validation matching backend/app/services/work_context.enforce_reflection.
+
+    Forgiving (B1): the header check is tolerant via mc_cli.reflection —
+    #/##/### level, case-insensitive, optional trailing colon, ü↔ue, and
+    English aliases ("What was done", ...) all count. Strict canonical input is
+    unaffected. This only additively rescues trivial local-model variance that
+    the backend gate (existence + length, no header check) accepts anyway.
 
     Raises UsageError mit klarem Hinweis bevor der HTTP-Call passiert.
     """
@@ -333,23 +338,13 @@ def _validate_reflection(text: str) -> None:
             "Reflexions-Text ist leer. Erwartet: alle 4 Pflichtfelder als `## <Feld>` Headers, "
             f"mind. {REFLECTION_MIN_CHARS} Zeichen total."
         )
-    missing = [f for f in REFLECTION_REQUIRED_FIELDS if f"## {f}" not in text]
-    if missing:
-        raise UsageError(
-            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
-            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
-        )
-    if len(text) < REFLECTION_MIN_CHARS:
-        raise UsageError(
-            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
-            f"Inhalt pro Feld ausfuehrlicher beschreiben."
-        )
-    # Detect the literal `\n` shell-escape pitfall: if the text was passed via
-    # `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
-    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and
-    # the comment renders as one unbroken line. Refuse early with a Hilfe-
-    # Hinweis. Heuristic: backslash-n appears AND no real newlines split the
-    # required headers — i.e. all four `## <Feld>` markers live on one line.
+    # Detect the literal `\n` shell-escape pitfall FIRST: if the text was passed
+    # via `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
+    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and the
+    # comment renders as one unbroken line. Must run BEFORE the field check —
+    # with everything on one line the tolerant header matcher can't recognise
+    # the headers, so it would otherwise mis-report "fields missing". Heuristic:
+    # backslash-n appears AND no real newlines split the required headers.
     has_real_newlines = "\n" in text
     has_literal_escape = "\\n" in text
     if has_literal_escape and not has_real_newlines:
@@ -360,6 +355,17 @@ def _validate_reflection(text: str) -> None:
             "oder ein Heredoc:\n"
             "  mc finish \"$(cat <<'EOF'\n"
             "  ## Was wurde gemacht\n  ...\n  EOF\n  )\""
+        )
+    missing = _reflection.missing_fields(text)
+    if missing:
+        raise UsageError(
+            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
+            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
+        )
+    if len(text) < REFLECTION_MIN_CHARS:
+        raise UsageError(
+            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
+            f"Inhalt pro Feld ausfuehrlicher beschreiben."
         )
 
 
@@ -509,6 +515,11 @@ def _cmd_finish(args, client, cfg):
     `mc review` separat re-tryen kann.
     """
     _validate_reflection(args.message)
+    # Normalize recognised headers to canonical German (idempotent on canonical
+    # input) so the POSTed reflection — and thus the memory pipeline's lesson
+    # extraction — always sees the canonical `## <German>` headers even when the
+    # model wrote English/###/ü variants (B1).
+    reflection_content = _reflection.normalize_reflection(args.message)
     target_status = "review" if args.review else "done"
     # --force: erst alle offenen Checklist-Items schliessen, dann normaler
     # Preflight (Status + Children). _preflight_finish wuerde sonst mit
@@ -529,7 +540,7 @@ def _cmd_finish(args, client, cfg):
         client.request(
             "POST",
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
-            body={"comment_type": "reflection", "content": args.message},
+            body={"comment_type": "reflection", "content": reflection_content},
         )
     else:
         # Eine recent reflection vom gleichen Agent gibt es schon — wir laufen
