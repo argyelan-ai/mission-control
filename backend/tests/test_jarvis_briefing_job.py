@@ -110,6 +110,28 @@ async def test_run_briefing_once_happy_path(monkeypatch, enabled):
     # Redis holds the real text (second set overwrote the __generating__ placeholder)
     stored = json.loads(fake.store["mc:jarvis:briefing:2026-07-10"])
     assert stored["text"] == "Guten Morgen — 0 offen."
+    # W1: placeholder gets the SHORT ttl (NX), the final text gets the LONG ttl.
+    placeholder_set = fake.set_calls[0]
+    final_set = fake.set_calls[-1]
+    assert placeholder_set[1] == "__generating__" and placeholder_set[2] is True  # nx
+    assert placeholder_set[3] == jb.PLACEHOLDER_TTL_SECONDS
+    assert final_set[3] == jb.BRIEFING_TTL_SECONDS
+    assert jb.PLACEHOLDER_TTL_SECONDS < jb.BRIEFING_TTL_SECONDS
+
+
+@pytest.mark.asyncio
+async def test_run_briefing_once_expired_placeholder_allows_retry(monkeypatch, enabled):
+    """W1: once the short-lived placeholder has expired (not in store), a retry the
+    same day can acquire the guard again and generate."""
+    fake = _FakeRedis()  # empty store simulates an expired placeholder
+    _patch_redis(monkeypatch, fake)
+    monkeypatch.setattr(jb.mc_client, "vault_briefing", AsyncMock(return_value={"open_tasks": []}))
+    monkeypatch.setattr(jb.jtools, "format_briefing_as_context", lambda b: "ctx")
+    monkeypatch.setattr(jb.frontier, "complete_text", AsyncMock(return_value="Retry-Briefing."))
+    monkeypatch.setattr(jb.mc_client, "vault_write_note", AsyncMock(return_value={"ok": True}))
+
+    res = await jb.run_briefing_once(datetime(2026, 7, 10, 6, 30, tzinfo=ZURICH))
+    assert res["ok"] is True and res.get("skipped") is None
 
 
 @pytest.mark.asyncio

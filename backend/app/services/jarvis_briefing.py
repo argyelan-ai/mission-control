@@ -27,17 +27,36 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from app.config import settings
 
 logger = logging.getLogger("mc.jarvis_briefing")
 
-ZURICH = ZoneInfo("Europe/Zurich")
+
+def _resolve_zurich():
+    """Europe/Zurich tz, mit defensivem UTC-Fallback.
+
+    Fehlt tzdata im Image (ZoneInfoNotFoundError), soll der Briefing-Loop NICHT
+    dauerhaft crashen — dann laeuft er auf UTC-Basis weiter (die Uhrzeit ist dann
+    UTC statt lokal, aber das Feature bleibt funktionsfaehig) und warnt einmal.
+    """
+    try:
+        return ZoneInfo("Europe/Zurich")
+    except Exception as e:  # noqa: BLE001 — tzdata missing → degrade to UTC
+        logger.warning("tzdata Europe/Zurich unavailable (%s) — falling back to UTC", e)
+        return timezone.utc
+
+
+ZURICH = _resolve_zurich()
 # 36h TTL: laenger als ein Tag, sodass der Read-Path das heutige Briefing sicher
 # noch findet, aber alte Tage von selbst verfallen.
 BRIEFING_TTL_SECONDS = 36 * 3600
+# Kurzes TTL fuer den "__generating__"-Platzhalter: schlaegt die Generierung
+# hart fehl (Prozess-Crash, bevor der finally-Release greift), soll der Guard
+# nicht 36h blockieren — nach 15 Min ist ein Retry am selben Tag wieder moeglich.
+PLACEHOLDER_TTL_SECONDS = 15 * 60
 
 # jarvis_core liegt im Repo-Root (Live-Mount im Backend-Image, ADR-061). Weicher
 # Import: fehlt das Package, bleibt das Feature still inaktiv statt den Start zu
@@ -49,7 +68,12 @@ try:
 
     _JARVIS_CORE_OK = True
 except Exception as _exc:  # noqa: BLE001 — degrade gracefully if package absent
-    logger.warning("jarvis_core not importable — morning briefing disabled: %s", _exc)
+    logger.error(
+        "jarvis_core import failed — morning briefing DISABLED. Expected the "
+        "jarvis_core package (repo-root live-mount at /app/jarvis_core, ADR-061). "
+        "Error: %s",
+        _exc,
+    )
     _JARVIS_CORE_OK = False
 
 
@@ -111,7 +135,8 @@ async def run_briefing_once(now: datetime | None = None) -> dict:
     key = RedisKeys.jarvis_daily_briefing(date_iso)
 
     redis = await get_redis()
-    acquired = await redis.set(key, "__generating__", nx=True, ex=BRIEFING_TTL_SECONDS)
+    # Kurzes TTL nur auf den Platzhalter (W1): der fertige Text bekommt unten 36h.
+    acquired = await redis.set(key, "__generating__", nx=True, ex=PLACEHOLDER_TTL_SECONDS)
     if not acquired:
         logger.info("Morning briefing for %s already done/in progress — skip", date_iso)
         return {"ok": True, "skipped": True, "reason": "already_done_today", "date": date_iso}
@@ -125,6 +150,7 @@ async def run_briefing_once(now: datetime | None = None) -> dict:
             user=user,
             api_key=settings.openai_api_key,
             model=settings.jarvis_frontier_model or None,
+            max_tokens=frontier.BRIEFING_MAX_TOKENS,
         )
         if not text:
             raise RuntimeError("Frontier-Modell lieferte keinen Briefing-Text")
