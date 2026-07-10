@@ -1,0 +1,73 @@
+# Task Lifecycle & Verb Reference
+
+The `mc` verbs and the mandatory close protocol.
+
+## Verb reference
+
+{% for verb, description in canonical_verbs.items() | sort -%}
+- `mc {{ verb }}` — {{ description }}
+{% endfor %}
+Run `mc <verb> --help` for the full flag list — argparse is the source of
+truth for syntax, this table is the source of truth for which verb to use.
+
+## Closing a task — `mc finish` is mandatory
+
+`mc finish` posts the reflection and sets the status atomically. A bare
+`mc done`/`mc review` without a prior reflection comment is rejected by the
+backend with 400 — `mc finish` is the only way to make reflection + status
+change atomic:
+
+```bash
+mc finish [--review] "$(cat <<'EOF'
+{% for f in reflection_required_fields %}## {{ f }}
+[...]
+
+{% endfor %}EOF
+)"
+```
+
+`--review` flag = a reviewer checks it (code/API/security); without
+`--review` = straight to `done` (housekeeping/research/docs).
+
+**{{ reflection_required_fields|length }} required fields** (single source of
+truth: `backend/app/constants.py`):
+{% for f in reflection_required_fields %}{{ loop.index }}. **{{ f }}**
+{% endfor %}
+At least {{ reflection_min_chars }} characters. The backend blocks the status
+transition if the reflection is missing or too short. The last field
+(`{{ reflection_required_fields[-1] }}`) is automatically saved to memory as
+an agent lesson.
+
+## Review vs. done — deciding for yourself
+
+Since ADR-023, you decide whether a task goes through `review` or straight to
+`done`. A reviewer is opt-in, not a mandatory gate.
+
+**Send to review when:**
+- A code change is being pushed to `main`
+- New public API, endpoint, or schema change
+- Security-relevant change (auth, secrets, input validation)
+- You're unsure the solution is correct
+
+**Go straight to `done` when:**
+- Pure housekeeping (renaming, docs, dependency update with no logic)
+- Small, reversible fix with no side effects
+- Research/analysis task (no code, just findings → deliverable)
+
+Rule of thumb: when in doubt, review — bothering a reviewer costs little, a
+broken `main` costs a lot.
+
+## Checklist — mandatory before the first work step
+
+Create a checklist as the very first thing via `mc checklist add "..."` per
+step. Mark each completed step done only when the work is physically
+complete and you've verified the result yourself — never "will probably
+work". Use `mc checklist skip <id> --reason "..."` for out-of-role items.
+
+## Progress & recovery
+
+Post a short progress comment after every important step:
+`mc comment progress "<Update — Evidence — Next>"` — this gives a successor
+the current state immediately after a session reset/crash. Use `mc recover`
+after a container restart to fetch the current task prompt plus a fresh
+dispatch_attempt_id.

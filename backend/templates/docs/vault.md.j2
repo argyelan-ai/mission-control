@@ -1,0 +1,66 @@
+# Vault Writing Discipline
+
+Mission Control's collective Karpathy-style wiki memory under `~/.mc/vault/`.
+
+## Rules
+
+1. **Your own folder belongs to you:** write lessons/notes under
+   `$AGENT_VAULT_PATH/...` directly to the filesystem. Never into another
+   agent's folder.
+2. **Shared knowledge via API:** decisions, project notes, anything affecting
+   `global/` or `projects/{slug}/`, goes via `POST /api/v1/agent/vault/note`
+   with a `target:` field (or `mc vault-write`/`mc remember`).
+3. **Frontmatter is mandatory:** every file MUST contain `id`, `type`, `agent`,
+   `date`. The watcher moves invalid files to `_rejected/`.
+4. **Append-only mindset:** one lesson = one file. Don't edit other agents'
+   files. If it contradicts an existing decision: write a new file and
+   supersede the old one.
+5. **Tag everything:** lowercase, hyphen-separated tags (e.g. `[api,
+   rate-limiting, xai]`).
+6. **Note privately, share carefully:** quick observations → your own folder.
+   Architecture decisions → global via API.
+
+Search the Vault before tackling a known problem: `mc vault-search`.
+
+## Mandatory wikilinks (W3-C)
+
+Every `write_note()` via `POST /api/v1/agent/vault/note` MUST contain at
+least 2 `[[wikilinks]]` to existing notes.
+
+1. First call `mc vault-search <query>` with topic terms from the new note
+2. Select 2-4 thematically related notes
+3. Insert `[[note-slug]]` inline in the content AND pass them as a
+   `related_notes` list
+4. Optional supersession: `relations={"old-slug": "supersedes"}`
+5. Allowed relation types: `supersedes | contradicts | refines | example-of |
+   depends-on | related-to`
+
+If no related notes exist (genuinely new topic area): note "**Related:** no
+known notes — new topic area" in the content and still link the 2
+thematically closest notes (defaults to `orphan`).
+
+**Auto-reflections after task close never go directly to the Vault** — use
+the mandatory reflection on `mc finish` instead; the system aggregates that
+into `/intelligence`.
+
+## Vault Files (Deliverable Wrappers)
+
+Every task deliverable has a markdown wrapper under
+`/vault/agents/<slug>/deliverables/*.md` (frontmatter: `task`,
+`deliverable_id`, `attachment_path`, `attachment_mime`). The actual file is
+hardlinked under `/vault/attachments/{files,images,audio}/`.
+
+- Find wrapper: `mc vault-search --type deliverable` returns the `path`.
+- Read wrapper: `Read /vault/agents/.../deliverable.md` — PDF text is under
+  `## Auto-extracted`.
+- Read PDF directly: `Read /vault/attachments/files/<id>.pdf` (`pages` for
+  long documents).
+- Read image directly: `Read /vault/attachments/images/<id>.png` — you SEE it.
+- Never edit binary files in place — create a fresh wrapper via the normal
+  deliverable flow, with `supersedes: [[<old-wrapper-id>]]` in frontmatter.
+
+## Task Reference
+
+If you write a note WHILE working on a task, set `task_id` in the POST body
+so it's grouped with the task's other artifacts (`mc vault-related` finds
+them all later).
