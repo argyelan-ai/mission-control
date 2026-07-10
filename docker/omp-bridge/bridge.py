@@ -1248,6 +1248,11 @@ def drive_live_run(
         if action.action == "retry" and attempts_left > 0:
             lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
             attempts_left -= 1
+            # Fresh session = fresh nudge history: a retry relaunches a BRAND-NEW
+            # session that never saw the explanatory first nudge, so escalation
+            # (Fix 1) must start over — otherwise the minimal template would fire
+            # on a session that never got the normal prompt.
+            nudge_counts = {}
             outcome = run_once()
             continue
         if action.action == "finish":

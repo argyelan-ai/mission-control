@@ -656,6 +656,40 @@ def test_continue_nudge_different_kind_sequence_does_not_escalate_wrongly():
     assert nudges[1] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.TRAILING_TOOL_ERROR]
 
 
+def test_retry_resets_nudge_escalation_history():
+    # A retry relaunches a BRAND-NEW session with no memory of prior nudges —
+    # its first same-Kind nudge must be the explanatory prompt again (fresh
+    # session = fresh nudge history), and only the SECOND nudge within that
+    # new session escalates to the minimal template.
+    runs = iter([_silent_abort_outcome(), _silent_abort_outcome()])
+
+    def run_once():
+        return next(runs)
+
+    nudges: list[str] = []
+    # continue #1 -> crash (consumes the retry, fresh session);
+    # continue #2 -> same Kind again (2nd nudge in the NEW session);
+    # continue #3 -> finish.
+    followups = iter([_crash_outcome(), _silent_abort_outcome(), _finish_outcome()])
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return next(followups)
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, run_once, task_id="T1",
+        board_requires_review=True, retries_left=1,
+        continues_left=3, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "finish"
+    assert len(nudges) == 3
+    explanatory = bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert nudges[0] == explanatory                    # 1st nudge, session 1
+    assert nudges[1] == explanatory                    # 1st nudge, session 2 (post-retry)
+    assert "Format falsch" in nudges[2]                # 2nd nudge, session 2 -> escalates
+
+
 # ---------------------------------------------------------------------------
 # Fix 2 — partial-reflection salvage on budget exhaustion: a MALFORMED_REFLECTION
 # collapse to blocker posts the agent's near-complete reflection as its own
