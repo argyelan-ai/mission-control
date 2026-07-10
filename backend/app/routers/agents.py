@@ -2166,6 +2166,39 @@ async def agent_poll(
             .limit(1)
         )
         active = active_result.first()
+
+        # B1 (W2-B, live incident): a blocked task only parks the agent while
+        # FRESH — grace window = board.blocker_triage_minutes (default 15min),
+        # aligned with the lead-triage window (quick lead-unblocks resume
+        # in-session with full context). Once the blocked transition
+        # (task.updated_at) is older than the window, poll stops treating it
+        # as "working" and the agent becomes claimable for new inbox work —
+        # otherwise a stale/zombie blocked task parks the agent forever (a
+        # day-old blocked task held Sparky parked while a freshly dispatched
+        # task was never offered). in_progress/review tasks are NOT affected —
+        # they keep parking unconditionally.
+        if active is not None and active.status == "blocked":
+            from app.models.board import Board as _PollBoard
+
+            grace_minutes = 15
+            _board_id = active.board_id or agent.board_id
+            if _board_id is not None:
+                _board_row = await session.get(_PollBoard, _board_id)
+                if _board_row is not None and _board_row.blocker_triage_minutes:
+                    grace_minutes = _board_row.blocker_triage_minutes
+            _blocked_since = active.updated_at
+            if _blocked_since is not None:
+                if _blocked_since.tzinfo is None:
+                    _blocked_since = _blocked_since.replace(tzinfo=dt.timezone.utc)
+                _age_seconds = (
+                    dt.datetime.now(tz=dt.timezone.utc) - _blocked_since
+                ).total_seconds()
+                if _age_seconds >= grace_minutes * 60:
+                    # Grace window expired — stop parking on this blocked
+                    # task, fall through to inbox-claim below as if there
+                    # were no active task.
+                    active = None
+
         if active is not None:
             if active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}
