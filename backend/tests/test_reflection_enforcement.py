@@ -227,6 +227,116 @@ async def test_done_passes_with_full_reflection(
 
 
 @pytest.mark.asyncio
+async def test_done_blocked_when_reflection_missing_headers(
+    client, fake_redis, make_board, make_task,
+):
+    """M2: an 80+-char reflection blob WITHOUT the 4 canonical German headers
+    must be rejected — the backend becomes the hard structural gate (not just
+    existence + length). Before the fix this passed (bug: curl bypass /
+    degenerate model output could 'finish' cleanly with a structureless blob).
+    """
+    from app.models.task import TaskComment
+
+    board = await make_board(slug="mc-dev", require_review_before_done=True)
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    # 80+ chars, no headers at all — degenerate blob.
+    structureless = (
+        "Ich habe die Aufgabe erledigt und alles funktioniert einwandfrei, "
+        "es gibt keine offenen Punkte mehr und die Tests laufen durch fein."
+    )
+    assert len(structureless) >= REFLECTION_MIN_CHARS
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        blob = TaskComment(
+            id=uuid.uuid4(),
+            task_id=task.id,
+            author_type="agent",
+            author_agent_id=cody.id,
+            comment_type="reflection",
+            content=structureless,
+            created_at=datetime.utcnow(),
+        )
+        s.add(blob)
+        await s.commit()
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        response = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "done"},
+            headers=_agent_headers(cody_token),
+        )
+    assert response.status_code == 400, (
+        f"Structureless blob must be rejected. "
+        f"Got: {response.status_code} {response.text[:300]}"
+    )
+    detail = response.json().get("detail", "")
+    assert "mc finish" in detail, f"Expected 'mc finish' hint. Got: {detail[:300]}"
+    for field in REFLECTION_REQUIRED_FIELDS:
+        assert field in detail, f"Missing field {field} not listed in error: {detail[:300]}"
+
+
+@pytest.mark.asyncio
+async def test_done_passes_with_tolerant_header_variants(
+    client, fake_redis, make_board, make_task,
+):
+    """Structural gate must be tolerant, not byte-brittle: '###' level, missing
+    colon variance, case-insensitivity, and ü/ue are all accepted."""
+    from app.models.task import TaskComment
+
+    board = await make_board(slug="ideas", require_review_before_done=False)
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    task = await make_task(
+        board_id=board.id, status="in_progress", assigned_agent_id=cody.id,
+    )
+
+    tolerant_body = (
+        "### was wurde gemacht\n"
+        "[Substantial content for field 1 to satisfy min-char threshold nicely]\n\n"
+        "# WAS HAT FUNKTIONIERT:\n"
+        "[Substantial content for field 2 to satisfy min-char threshold nicely]\n\n"
+        "## was war unklar\n"
+        "[Substantial content for field 3 to satisfy min-char threshold nicely]\n\n"
+        "## Lesson fuer Agent-Memory\n"
+        "[Substantial content for field 4 to satisfy min-char threshold nicely]"
+    )
+    assert len(tolerant_body) >= REFLECTION_MIN_CHARS
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        full = TaskComment(
+            id=uuid.uuid4(),
+            task_id=task.id,
+            author_type="agent",
+            author_agent_id=cody.id,
+            comment_type="reflection",
+            content=tolerant_body,
+            created_at=datetime.utcnow(),
+        )
+        s.add(full)
+        await s.commit()
+
+    with patch(
+        "app.services.memory_indexing.index_memory", new_callable=AsyncMock,
+    ), patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        response = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "done"},
+            headers=_agent_headers(cody_token),
+        )
+    assert response.status_code in (200, 201), (
+        f"Tolerant header variants should pass. "
+        f"Got: {response.status_code} {response.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_reflection_creates_lesson_in_board_memory(
     client, fake_redis, make_board, make_task,
 ):
