@@ -1293,6 +1293,74 @@ async def _redispatch_after_reset(session: AsyncSession, agent: Agent) -> None:
     return None
 
 
+@router.post("/agents/{agent_id}/health-check")
+async def agent_health_check(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Runtime-aware readiness for the onboarding wizard's final gate.
+
+    'ready' means the agent is provisioned AND its session is alive — NOT
+    that it answered a message (the synchronous trigger channel was retired
+    in Phase 29). Reuses existing liveness signals: the cli-bridge helper
+    probe + heartbeat status (cli-bridge), recent last_seen_at (host).
+    """
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    runtime = getattr(agent, "agent_runtime", "cli-bridge") or "cli-bridge"
+    alive_states = {"online", "busy", "idle", "working"}
+    checks: list[dict[str, Any]] = []
+
+    provisioned = agent.provision_status == "provisioned"
+    checks.append({
+        "label": "provisioned",
+        "ok": provisioned,
+        "detail": f"provision_status={agent.provision_status}",
+    })
+
+    if runtime == "cli-bridge":
+        from app.routers import cli_terminal
+        helper_ok = cli_terminal._bridge_get("/health") is not None
+        checks.append({
+            "label": "cli-bridge helper",
+            "ok": helper_ok,
+            "detail": "reachable" if helper_ok else "scripts/cli-bridge.py not reachable",
+        })
+        heartbeating = agent.status in alive_states
+        checks.append({
+            "label": "heartbeat",
+            "ok": heartbeating,
+            "detail": f"status={agent.status}",
+        })
+    elif runtime == "host":
+        recent = False
+        if agent.last_seen_at is not None:
+            delta = utcnow() - agent.last_seen_at
+            recent = delta.total_seconds() < 180
+        checks.append({
+            "label": "host heartbeat",
+            "ok": recent,
+            "detail": "seen <3min ago" if recent else "no recent heartbeat — launchd job may not be loaded",
+        })
+    else:
+        checks.append({
+            "label": "runtime",
+            "ok": True,
+            "detail": f"{runtime}: no automated liveness signal",
+        })
+
+    ready = all(c["ok"] for c in checks)
+    return {
+        "provision_status": agent.provision_status,
+        "runtime": runtime,
+        "ready": ready,
+        "checks": checks,
+    }
+
+
 @router.post("/agents/{agent_id}/heartbeat")
 async def trigger_heartbeat(
     agent_id: uuid.UUID,
