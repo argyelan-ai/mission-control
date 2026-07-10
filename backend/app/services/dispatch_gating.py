@@ -125,6 +125,36 @@ MANUAL_WAIT = "manual_wait"
 HIGH_RISK_TAGS = {"infra", "db", "migration", "security"}
 
 
+def is_executable_work_item(
+    *,
+    has_parent: bool,
+    assigned_agent_id,
+    creator_agent_id,
+    creator_is_board_lead: bool,
+) -> bool:
+    """Whether a freshly created task must run through pre-dispatch gating.
+
+    A task is an "executable work item" (→ dispatch_phase='planning', gated) when
+    it is assigned to a DIFFERENT agent than its creator AND either:
+
+    - it is a child/subtask (``has_parent``), OR
+    - its creator is NOT the Board Lead.
+
+    The second clause (ADR-062 hardening) closes a bypass: a non-Board-Lead agent
+    (e.g. Jarvis via ``dispatch_to_agent``) could otherwise create a PARENTLESS
+    root task assigned to a worker and have it dispatch WITHOUT the risk/autonomy
+    evaluation that subtasks go through. Board-Lead root delegation stays ungated
+    (the Board Lead is the orchestrator and carries operator intent), and the
+    subtask path is unchanged — only non-Board-Lead parentless foreign-assignment
+    is newly gated.
+
+    Self-assigned tasks (assignee == creator) are never executable work items.
+    """
+    if assigned_agent_id is None or assigned_agent_id == creator_agent_id:
+        return False
+    return has_parent or not creator_is_board_lead
+
+
 def evaluate_promote_decision(
     task: Task,
     parent_task: Task | None = None,

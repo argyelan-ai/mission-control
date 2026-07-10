@@ -74,6 +74,17 @@ async def _dispatch_to_agent(
     priority: str = "medium",
 ) -> dict:
     logger.info("Tool: dispatch_to_agent(agent=%r, prio=%s)", agent_name, priority)
+    # Mindestqualitaet: ein Agent legt SOFORT los — eine zu duenne Anweisung fuehrt
+    # zu Fehlarbeit. Vor dem Dispatch abfangen und Jarvis nachfragen lassen.
+    if len((instruction or "").strip()) < 50:
+        return {
+            "ok": False,
+            "reason": "instruction_too_thin",
+            "message": (
+                "Die Aufgabe ist mir zu knapp beschrieben, um sie direkt zu vergeben. "
+                "Beschreib mir etwas genauer, was der Agent tun soll."
+            ),
+        }
     try:
         return await client.dispatch_to_agent(agent_name, instruction, priority)
     except Exception as e:

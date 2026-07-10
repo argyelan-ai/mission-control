@@ -54,6 +54,35 @@ Abgrenzung zu `create_task` (in beiden Tool-Beschreibungen deutlich gemacht):
 - `dispatch_to_agent` = **sofort loslegen**; `agent_name` ist Pflicht, Fuzzy-Match
   (wiederverwendet `_resolve_agent_id`), aber **KEIN** stiller Board-Lead-Fallback
   — unbekannter Name → klarer Fehler, damit Jarvis nachfragt statt falsch zu raten.
+- **Mindestqualität:** `instruction` < 50 Zeichen wird im Tool abgewiesen
+  (`instruction_too_thin`) — ein Agent, der sofort loslegt, würde bei einer zu
+  dünnen Anweisung Fehlarbeit produzieren; Jarvis fragt stattdessen nach.
+
+### Sicherheit — Pre-Dispatch-Gating gilt auch für `dispatch_to_agent`
+
+Ein `dispatch_to_agent`-Task ist ein **parentloser Root-Task mit expliziter
+Fremd-Zuweisung durch einen Nicht-Board-Lead-Agent** (Jarvis). Die bisherige
+Gating-Bedingung (`agent_task_status.py`) stufte nur **Sub-Tasks** (`parent_task_id
+is not None`) als „executable work item" ein — parentlose Tasks umgingen das
+Pre-Dispatch-Gating (`evaluate_promote_decision`, `HIGH_RISK_TAGS`,
+`autonomy_level`) komplett. Damit hätte Jarvis einen Agenten an einem
+High-Risk-Task (z.B. `db`/`migration`/`security`) ohne Risk-/Autonomy-Bewertung
+starten können.
+
+**Fix:** Die Klassifikation ist in die reine Funktion
+`dispatch_gating.is_executable_work_item(...)` extrahiert (kein Fake-`parent_task_id`-
+Hack). Ein Task ist executable, wenn er einer **anderen** Person zugewiesen ist UND
+(Sub-Task ODER Ersteller ist **nicht** Board Lead). Damit läuft auch der
+parentlose Jarvis-Dispatch durch das volle Gating; ist es gated on, wird ein
+solcher Task konservativ als `planning` behandelt (auto-promote nur bei klaren
+Low-Risk-Signalen), und Jarvis meldet den `dispatch_status` ehrlich.
+
+Unverändert (durch Regressionstests abgesichert): Board-Lead-Sub-Task-Delegation
+bleibt gated, Board-Lead-**Root**-Delegation bleibt ungated (der Board Lead ist der
+Orchestrator), der Sub-Task-Pfad bleibt gated, self-assigned/unassigned bleibt
+ungated. Gating ist per `enable_dispatch_gating` (Default false) geschaltet — bei
+Default-Konfiguration ändert sich nichts, der Fix schließt den Bypass für den
+gehärteten Betrieb.
 
 ### C3 — Tägliches Morgenbriefing (Backend-Job)
 

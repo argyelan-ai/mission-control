@@ -127,6 +127,9 @@ async def test_dispatch_create_task_forwards_to_client():
     client.create_task.assert_awaited_once_with("Deploy", "", None, "high")
 
 
+_GOOD_INSTRUCTION = "Baue das Login-Feature X mit Tests und aktualisiere die Doku."
+
+
 @pytest.mark.asyncio
 async def test_dispatch_to_agent_forwards_to_client():
     client = AsyncMock()
@@ -136,10 +139,25 @@ async def test_dispatch_to_agent_forwards_to_client():
     )
     res = await jtools.dispatch(
         "dispatch_to_agent", client, VOICE,
-        {"agent_name": "Cody", "instruction": "Baue Feature X", "priority": "high"},
+        {"agent_name": "Cody", "instruction": _GOOD_INSTRUCTION, "priority": "high"},
     )
     assert res["dispatch_status"] == "dispatched"
-    client.dispatch_to_agent.assert_awaited_once_with("Cody", "Baue Feature X", "high")
+    client.dispatch_to_agent.assert_awaited_once_with("Cody", _GOOD_INSTRUCTION, "high")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_to_agent_rejects_thin_instruction():
+    """An instruction < 50 chars is rejected BEFORE dispatch — the agent starts
+    immediately, so a thin brief would cause wrong work."""
+    client = AsyncMock()
+    client.dispatch_to_agent = AsyncMock()
+    res = await jtools.dispatch(
+        "dispatch_to_agent", client, VOICE,
+        {"agent_name": "Cody", "instruction": "mach mal", "priority": "medium"},
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "instruction_too_thin"
+    client.dispatch_to_agent.assert_not_awaited()  # never reached the client
 
 
 @pytest.mark.asyncio

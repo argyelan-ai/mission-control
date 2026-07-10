@@ -1160,16 +1160,20 @@ async def agent_create_task(
     # (owner_agent_id = Board Lead → bestehender Fallback greift korrekt)
 
     # Pre-Dispatch Gating: Agent-Bypass schliessen
-    # Ausfuehrbare Work Items (Child + assigned an anderen Agent) → erzwungen "planning"
-    # Root tasks and self-assigned → no gating (null)
+    # Ausfuehrbare Work Items → erzwungen "planning", sonst kein Gating (null).
+    # Executable = Fremd-Zuweisung UND (Subtask ODER Ersteller ist nicht Board Lead).
+    # Die zweite Bedingung (ADR-062) schliesst den dispatch_to_agent-Bypass: ein
+    # Nicht-Board-Lead (Jarvis) kann sonst einen parentlosen Root-Task an einen
+    # Worker haengen und ohne Risk-/Autonomy-Bewertung dispatchen.
     from app.config import settings as _settings
     if _settings.enable_dispatch_gating:
-        is_executable_work_item = (
-            task.parent_task_id is not None
-            and task.assigned_agent_id is not None
-            and task.assigned_agent_id != agent.id
-        )
-        if is_executable_work_item:
+        from app.services.dispatch_gating import is_executable_work_item
+        if is_executable_work_item(
+            has_parent=task.parent_task_id is not None,
+            assigned_agent_id=task.assigned_agent_id,
+            creator_agent_id=agent.id,
+            creator_is_board_lead=bool(agent.is_board_lead),
+        ):
             task.dispatch_phase = "planning"
         else:
             task.dispatch_phase = None
