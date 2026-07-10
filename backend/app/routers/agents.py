@@ -1624,21 +1624,60 @@ async def provision_agent_on_gateway(
         try:
             if runtime.runtime_type == "hermes":
                 result = await bootstrap_hermes_agent(session, agent, runtime)
-            else:
-                # Future host worker types (Phase 25+) plug in here.
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Unsupported host runtime_type: {runtime.runtime_type}",
-                )
+                return {
+                    "status": "provisioned",
+                    "agent_id": str(agent.id),
+                    "token": result["token"],  # one-time visible
+                    "env_path": result["env_path"],
+                    "plist_loaded": result["plist_loaded"],
+                    "plist_already": result["plist_already"],
+                    "tmux_session": result["tmux_session"],
+                    "workspace_path": result["workspace_path"],
+                }
+
+            # Generic host agent (onboarding wizard, 2026-07-10): stage
+            # plist + run.sh + agent.env into ~/.mc/agents/<slug>/. launchctl
+            # load is gated behind settings.host_agent_autoload_enabled.
+            from app.auth import generate_agent_token
+            from app.services import host_provisioning
+            from app.services.secrets_helper import upsert_agent_token_secret
+
+            raw_token, token_hash = generate_agent_token()
+            agent.agent_token_hash = token_hash
+            stage = await host_provisioning.stage_host_agent_files(
+                agent, runtime, raw_token, session=session
+            )
+            load = host_provisioning.maybe_load_plist(stage)
+
+            agent.workspace_path = stage.workspace_path
+            agent.provision_status = "provisioned" if load["loaded"] else "provisioning"
+            agent.provisioned_at = utcnow() if load["loaded"] else None
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await upsert_agent_token_secret(session, agent.name, raw_token)
+            await emit_event(
+                session,
+                "agent.provisioned" if load["loaded"] else "agent.host_files_staged",
+                (
+                    f"{agent.name} (host) provisioniert + launchd geladen"
+                    if load["loaded"]
+                    else f"{agent.name} (host): Dateien nach {stage.workspace_path} gerendert. "
+                    f"Zum Aktivieren auf dem Host ausführen: {stage.launchctl_command}"
+                ),
+                severity="info",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+            )
             return {
-                "status": "provisioned",
+                "status": agent.provision_status,
                 "agent_id": str(agent.id),
-                "token": result["token"],  # one-time visible
-                "env_path": result["env_path"],
-                "plist_loaded": result["plist_loaded"],
-                "plist_already": result["plist_already"],
-                "tmux_session": result["tmux_session"],
-                "workspace_path": result["workspace_path"],
+                "token": raw_token,  # one-time visible
+                "workspace_path": stage.workspace_path,
+                "plist_label": stage.plist_label,
+                "plist_staged_path": stage.plist_staged_path,
+                "launchctl_command": stage.launchctl_command,
+                "plist_loaded": load["loaded"],
             }
         except HTTPException:
             agent.provision_status = previous_status

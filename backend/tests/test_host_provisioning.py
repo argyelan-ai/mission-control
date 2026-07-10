@@ -188,3 +188,42 @@ async def test_maybe_load_enabled_invokes_launchctl(home_host, async_session, mo
     assert load["loaded"] is True
     # a launchctl bootstrap command was invoked
     assert any("launchctl" in c[0] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_provision_endpoint_stages_generic_host_agent(
+    auth_client, async_session, home_host, monkeypatch
+):
+    from app.models.agent import Agent as A
+    from app.models.runtime import Runtime as R
+
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", False)
+
+    rt = R(slug="generic-host", display_name="Generic", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    agent = A(name="Atlas", agent_runtime="host", runtime_id=rt.id, harness="openclaude",
+              provision_status="local")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["plist_label"] == "com.mc.agent.atlas"
+    assert "launchctl bootstrap" in body["launchctl_command"]
+    # autoload off → files staged, awaiting manual load
+    assert body["plist_loaded"] is False
+    # The request handler commits via its own session (client fixture
+    # overrides get_session per-request); async_session's identity map
+    # doesn't see that commit until forced to repopulate from the DB.
+    refreshed = await async_session.get(A, agent.id, populate_existing=True)
+    assert refreshed.provision_status == "provisioning"
