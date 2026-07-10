@@ -38,6 +38,63 @@ def test_persona_includes_briefing_ctx():
     assert "3 Tasks" in text
 
 
+def test_persona_core_has_honesty_rules():
+    """PERSONA_CORE mandates naming the age of results and never presenting
+    stale content as current (V1.5 briefing hygiene)."""
+    from jarvis_core.persona import PERSONA_CORE
+
+    assert "EHRLICHKEIT" in PERSONA_CORE
+    assert "duplicate_count" in PERSONA_CORE or "im Board" in PERSONA_CORE
+    assert "staleness_summary" in PERSONA_CORE or "Aktualitaet" in PERSONA_CORE
+
+
+# ── Briefing formatter ───────────────────────────────────────────────────
+
+
+def test_format_briefing_includes_age_suffix_for_tasks_lessons_writes():
+    briefing = {
+        "current_time_of_day_de": "abends",
+        "open_approvals_count": 1,
+        "agents_online": 2,
+        "agents_offline": 1,
+        "open_tasks": [
+            {"title": "Fix bug", "status": "in_progress", "assigned_to": "Sparky", "age_days": 3, "duplicate_count": 1},
+        ],
+        "recent_lessons": [
+            {"title": "Lesson A", "agent": "sparky", "age_days": 0},
+        ],
+        "recent_writes": [
+            {"path": "agents/sparky/foo.md", "agent": "sparky", "age_days": 55},
+        ],
+        "staleness_summary": {"newest_write_age_days": 55, "note": "no writes in last 7 days"},
+    }
+    text = jtools.format_briefing_as_context(briefing)
+    assert "(vor 3 Tagen)" in text
+    assert "(heute)" in text
+    assert "(vor 55 Tagen)" in text
+    assert "no writes in last 7 days" in text
+
+
+def test_format_briefing_marks_duplicate_tasks():
+    briefing = {
+        "open_tasks": [
+            {"title": "Post-launch retro board", "status": "inbox", "assigned_to": None, "age_days": 1, "duplicate_count": 3},
+        ],
+    }
+    text = jtools.format_briefing_as_context(briefing)
+    assert "[3x im Board]" in text
+
+
+def test_format_briefing_unknown_age_says_so():
+    briefing = {
+        "open_tasks": [
+            {"title": "Mystery task", "status": "inbox", "assigned_to": None, "age_days": None, "duplicate_count": 1},
+        ],
+    }
+    text = jtools.format_briefing_as_context(briefing)
+    assert "Datum unbekannt" in text
+
+
 # ── Tool availability per channel ────────────────────────────────────────
 
 

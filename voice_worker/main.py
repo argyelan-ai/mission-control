@@ -117,45 +117,10 @@ class VoiceAssistant(Agent):
     def _format_briefing_as_context(b: dict) -> str:
         """Render a briefing dict as compact Markdown for the realtime system prompt.
 
-        Kept terse on purpose — realtime system prompts have token limits and the
-        "Lost in the Middle" effect kicks in past ~500 tokens. We cap each
-        section and elide ids/paths.
+        Delegates to the shared jarvis_core formatter (ADR-061) so Voice and
+        Telegram render the same age-annotated, honesty-preserving briefing text.
         """
-        lines: list[str] = []
-        tod = b.get("current_time_of_day_de")
-        if tod:
-            lines.append(f"- Tageszeit: {tod}")
-        n_open = len(b.get("open_tasks") or [])
-        n_appr = b.get("open_approvals_count", 0)
-        on = b.get("agents_online", 0)
-        off = b.get("agents_offline", 0)
-        lines.append(f"- Offen: {n_open} Tasks · {n_appr} Approvals · {on}/{on + off} Agents online")
-
-        tasks = b.get("open_tasks") or []
-        if tasks:
-            lines.append("- Top offene Tasks:")
-            for t in tasks[:5]:
-                title = (t.get("title") or "").strip()[:60]
-                assignee = t.get("assigned_to") or "unassigned"
-                lines.append(f"  · {title} [{t.get('status')}] → {assignee}")
-
-        lessons = b.get("recent_lessons") or []
-        if lessons:
-            lines.append("- Neue Lessons (24h):")
-            for l in lessons[:3]:
-                title = (l.get("title") or l.get("path") or "")[:60]
-                agent = l.get("agent") or "?"
-                lines.append(f"  · {title} ({agent})")
-
-        writes = b.get("recent_writes") or []
-        if writes:
-            lines.append("- Letzte Vault-Writes (24h):")
-            for w in writes[:3]:
-                path = (w.get("path") or "")[-50:]
-                agent = w.get("agent") or "?"
-                lines.append(f"  · {path} ({agent})")
-
-        return "\n".join(lines)
+        return jtools.format_briefing_as_context(b)
 
     # ── Tool-Delegationen ────────────────────────────────────────────────
     # Jede Methode reicht ihre Argumente an den geteilten jarvis_core-Handler

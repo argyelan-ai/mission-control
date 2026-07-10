@@ -134,6 +134,81 @@ async def _briefing(client, channel: Channel) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+def format_briefing_as_context(b: dict) -> str:
+    """Render a briefing dict as compact Markdown for the system prompt.
+
+    Shared across channels (Voice, Telegram) so both get the same honesty
+    guarantees. Kept terse on purpose — realtime system prompts have token
+    limits and the "Lost in the Middle" effect kicks in past ~500 tokens.
+
+    Every item carries its age (``(vor N Tagen)`` / ``(heute)``) so the persona
+    can never present stale data as current — the backend computes age_days
+    from a verified date (frontmatter or strict id-timestamp), never guesses.
+    Duplicate open tasks are annotated with their duplicate_count instead of
+    being silently repeated.
+    """
+    lines: list[str] = []
+    tod = b.get("current_time_of_day_de")
+    if tod:
+        lines.append(f"- Tageszeit: {tod}")
+    n_open = len(b.get("open_tasks") or [])
+    n_appr = b.get("open_approvals_count", 0)
+    on = b.get("agents_online", 0)
+    off = b.get("agents_offline", 0)
+    lines.append(f"- Offen: {n_open} Tasks · {n_appr} Approvals · {on}/{on + off} Agents online")
+
+    tasks = b.get("open_tasks") or []
+    if tasks:
+        lines.append("- Top offene Tasks:")
+        for t in tasks[:5]:
+            title = (t.get("title") or "").strip()[:60]
+            assignee = t.get("assigned_to") or "unassigned"
+            age = _age_suffix(t.get("age_days"))
+            dup = t.get("duplicate_count") or 1
+            dup_note = f" [{dup}x im Board]" if dup > 1 else ""
+            lines.append(f"  · {title} [{t.get('status')}] → {assignee}{age}{dup_note}")
+
+    lessons = b.get("recent_lessons") or []
+    if lessons:
+        lines.append("- Neue Lessons:")
+        for l in lessons[:3]:
+            title = (l.get("title") or l.get("path") or "")[:60]
+            agent = l.get("agent") or "?"
+            age = _age_suffix(l.get("age_days"))
+            lines.append(f"  · {title} ({agent}){age}")
+
+    writes = b.get("recent_writes") or []
+    if writes:
+        lines.append("- Letzte Vault-Writes:")
+        for w in writes[:3]:
+            path = (w.get("path") or "")[-50:]
+            agent = w.get("agent") or "?"
+            age = _age_suffix(w.get("age_days"))
+            lines.append(f"  · {path} ({agent}){age}")
+
+    staleness = b.get("staleness_summary") or {}
+    note = staleness.get("note")
+    if note:
+        lines.append(f"- Aktualitaet: {note}")
+
+    return "\n".join(lines)
+
+
+def _age_suffix(age_days: int | None) -> str:
+    """Render an age_days value as a short German suffix, e.g. ' (vor 3 Tagen)'.
+
+    Returns '' when the age is unknown — the persona is instructed to treat a
+    missing age as "no reliable date, say so" rather than silently omitting it.
+    """
+    if age_days is None:
+        return " (Datum unbekannt)"
+    if age_days == 0:
+        return " (heute)"
+    if age_days == 1:
+        return " (vor 1 Tag)"
+    return f" (vor {age_days} Tagen)"
+
+
 async def _deliver_to_telegram(
     client,
     channel: Channel,
