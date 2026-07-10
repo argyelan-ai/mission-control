@@ -216,6 +216,41 @@ CONTINUE_NUDGE_PROMPTS: dict[Kind, str] = {
     ),
 }
 
+# Kinds whose repeat nudge (2nd+ within the SAME run, for the SAME Kind) drops
+# the explanatory prose for a maximally minimal, copy-paste template. A weak
+# model that misread the paragraph once is unlikely to parse it better the
+# second time; a fill-in-the-blanks block gives it far less to get wrong.
+# TRAILING_TOOL_ERROR is excluded — that nudge asks for a judgement call
+# (check/fix the tool result), not just format compliance.
+_ESCALATING_NUDGE_KINDS = frozenset({Kind.MALFORMED_REFLECTION, Kind.SILENT_ABORT_NO_SENTINEL})
+
+
+def _minimal_nudge_template() -> str:
+    """Maximally minimal, copy-paste completion template used from the 2nd
+    continue-nudge onward for a Kind in _ESCALATING_NUDGE_KINDS. Header names
+    are sourced from the canonical REFLECTION_HEADERS list (kept in parity
+    with mc_cli/reflection.py), never re-typed as fresh literals."""
+    body_lines: list[str] = []
+    for header in REFLECTION_HEADERS:
+        body_lines.append(header)
+        body_lines.append("<...>")
+    body = "\n".join(body_lines)
+    return (
+        f"Format falsch. Kopiere EXAKT diesen Block, fuelle die <...> aus, "
+        f"{SENTINEL} als letzte Zeile:\n\n{body}\n{SENTINEL}"
+    )
+
+
+def _nudge_prompt_for(kind: Kind, attempt_index: int) -> str:
+    """The continue-nudge text for the `attempt_index`-th (0-based) nudge fired
+    for this Kind within the current run. attempt_index==0 is always the
+    normal, explanatory prompt (often enough on its own — escalating on the
+    FIRST attempt would be premature). attempt_index>=1 for a Kind in
+    _ESCALATING_NUDGE_KINDS switches to the minimal copy-paste template."""
+    if attempt_index >= 1 and kind in _ESCALATING_NUDGE_KINDS:
+        return _minimal_nudge_template()
+    return CONTINUE_NUDGE_PROMPTS[kind]
+
 
 @dataclass
 class RunOutcome:
@@ -397,6 +432,13 @@ def validate_reflection(block: Optional[str]) -> bool:
     if len(block) < MIN_REFLECTION_CHARS:
         return False
     return all(h in block for h in REFLECTION_HEADERS)
+
+
+def _count_present_headers(block: str) -> int:
+    """How many of the 4 canonical headers appear in an (already-normalised)
+    reflection block. Used for partial-reflection salvage (Fix 2) — a block
+    that fails validate_reflection() can still be mostly there."""
+    return sum(1 for h in REFLECTION_HEADERS if h in block)
 
 
 def sentinel_present(text: str) -> bool:
@@ -1179,6 +1221,9 @@ def drive_live_run(
     attempts_left = retries_left
     continues = continues_left
     acked = pre_acked
+    # Fix 1: per-Kind nudge count within this run — the 2nd+ nudge for the SAME
+    # Kind escalates to the minimal copy-paste template (see _nudge_prompt_for).
+    nudge_counts: dict[Kind, int] = {}
     outcome = run_once()
     while True:
         if not acked and outcome.saw_session:
@@ -1195,7 +1240,10 @@ def drive_live_run(
                 task_id, f"omp {cls.reason}; continue-nudge, {continues} left"
             )
             continues -= 1
-            outcome = continue_once(action.nudge_prompt or "")
+            attempt_index = nudge_counts.get(cls.kind, 0)
+            nudge_counts[cls.kind] = attempt_index + 1
+            nudge_prompt = _nudge_prompt_for(cls.kind, attempt_index)
+            outcome = continue_once(nudge_prompt)
             continue
         if action.action == "retry" and attempts_left > 0:
             lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
@@ -1211,6 +1259,27 @@ def drive_live_run(
                     action="blocker", blocker_type="technical_problem",
                     question=cls.detail, classification=cls,
                 )
+            # Fix 2: partial-reflection salvage. A MALFORMED_REFLECTION collapse
+            # often hides an almost-complete summary the model actually wrote —
+            # today it survives only as a fragment quoted inside the blocker
+            # question. If the last output cleared at least half the canonical
+            # headers and the length floor, post it as its OWN progress comment
+            # BEFORE the blocker lands, so Lead/operator see the agent's real
+            # summary. Best-effort: a failed salvage must never break the
+            # terminal blocker guarantee.
+            if cls.kind is Kind.MALFORMED_REFLECTION:
+                block = outcome.reflection_block or ""
+                if _count_present_headers(block) >= 2 and len(block) >= MIN_REFLECTION_CHARS:
+                    try:
+                        lifecycle.comment(
+                            task_id,
+                            "Partielle Reflexion (auto-gerettet vor Blocker): " + block,
+                        )
+                    except Exception as e:  # noqa: BLE001 — best-effort, never breaks the fallback
+                        sys.stderr.write(
+                            f"[drive_live_run] partial-reflection salvage comment failed "
+                            f"(task {task_id}): {e}\n"
+                        )
             # Blocker-Qualität (Fix B §): post the bridge's OWN classification as a
             # fresh comment BEFORE blocking, so Lead/Operator (via Fix A triage)
             # see the real cause — not a stale reflection quoted from the run-up.
