@@ -4,6 +4,7 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { C } from "@/lib/colors";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Board } from "@/lib/types";
 import {
   WIZARD_STEPS,
@@ -55,6 +56,7 @@ export function AgentWizard({
   onClose: () => void;
   onCreated: () => void;
 }) {
+  useBodyScrollLock(true);
   const [state, setState] = useState<WizardState>(() => ({
     ...initialWizardState(defaultBoardId),
     ...initialState,
@@ -73,6 +75,9 @@ export function AgentWizard({
     <div className={wizardOverlayClass} onClick={onClose}>
       <div className={wizardBackdropClass} />
       <motion.div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Neuer Agent"
         initial={{ opacity: 0, scale: 0.97, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}

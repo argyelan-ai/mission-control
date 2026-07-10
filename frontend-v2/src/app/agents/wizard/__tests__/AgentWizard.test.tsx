@@ -38,4 +38,12 @@ describe("AgentWizard shell", () => {
     fireEvent.click(screen.getByLabelText(/schliessen/i));
     expect(onClose).toHaveBeenCalled();
   });
+
+  it("exposes dialog semantics on the modal container", () => {
+    wrap(
+      <AgentWizard boards={[]} defaultBoardId={null} onClose={() => {}} onCreated={() => {}} />
+    );
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
+  });
 });
