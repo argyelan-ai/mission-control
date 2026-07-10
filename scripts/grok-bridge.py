@@ -86,9 +86,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 log = logging.getLogger("grok-bridge")
 
 # Per-task grok session ids (task_id -> grok sessionId). Lets follow-up comments
-# / nudges on the same task resume the SAME grok conversation via `grok -r <id>`
-# instead of starting cold every time.
+# / nudges on the same task resume the SAME grok conversation via `grok -r <id>`.
+# Only populated AFTER a confirmed `end` event (outcome.session_id) — a run that
+# crashed/timed out without an end never leaves a stale id behind, so a re-dispatch
+# mints a fresh `-s <uuid>` instead of colliding on an existing session (Fix 5).
 _task_sessions: dict[str, str] = {}
+# Per-task board_id/attempt_id, captured at dispatch so the nudge path can build a
+# GrokLifecycle for follow-up comments (the /me/poll comment entry may not carry
+# the attempt id).
+_task_ctx: dict[str, dict] = {}
 _last_dispatched_task_id: Optional[str] = None  # dispatch-dedup cache
 _dispatch_lock = threading.Lock()  # serialize: one grok subprocess at a time
 _cancel_requested = threading.Event()
@@ -177,6 +183,7 @@ class GrokOutcome:
     parse_failures: int = 0
     lines_seen: int = 0
     watchdog_killed: bool = False  # set by the supervisor, not the stream
+    cancelled: bool = False        # killed via POST /stop / SIGTERM, not a timeout
     exit_code: Optional[int] = None
 
 
@@ -255,6 +262,13 @@ def map_lifecycle(outcome: GrokOutcome, *, board_requires_review: bool = True) -
     kill, missing end event, error event, non-EndTurn stopReason, non-zero exit
     — is a blocker (reversible, notifies Mark) rather than a silent hang.
     """
+    if outcome.cancelled:
+        return LifecycleAction(
+            "blocked", "cancelled",
+            "grok-Dispatch wurde auf Anforderung gestoppt (POST /stop bzw. "
+            "Bridge-Shutdown) — kein hängender in_progress-Task. Bitte Task "
+            "erneut zuweisen, wenn er weiterlaufen soll.",
+        )
     if outcome.watchdog_killed:
         return LifecycleAction(
             "blocked", "watchdog",
@@ -478,40 +492,78 @@ def run_grok_dispatch(
     log.info("run_grok_dispatch: %s", " ".join(cmd))
 
     popen = _popen or _sp.Popen
-    proc = popen(
-        cmd,
-        stdout=_sp.PIPE,
-        stderr=_sp.PIPE,
-        env=env or os.environ,
-        cwd=workspace,
-        text=True,
-        start_new_session=True,
-    )
+    try:
+        proc = popen(
+            cmd,
+            stdout=_sp.PIPE,
+            stderr=_sp.PIPE,
+            env=env or os.environ,
+            cwd=workspace,
+            text=True,
+            start_new_session=True,  # own process group → killpg reaps children
+        )
+    except (OSError, ValueError) as e:
+        # grok binary missing / not executable / bad cwd. Map to error_message so
+        # map_lifecycle() blocks the task rather than raising past the caller into
+        # a hung in_progress (Fix 1, belt to dispatch_task's suspenders).
+        log.error("run_grok_dispatch: spawn failed: %s", e)
+        outcome.error_message = f"grok konnte nicht gestartet werden: {e}"
+        try:
+            os.remove(prompt_file)
+        except OSError:
+            pass
+        return outcome
 
     def _kill() -> None:
+        # Kill the whole process group (start_new_session=True) so grok's own
+        # child tools don't survive as orphans on a watchdog/cancel kill (Fix 4).
         try:
-            proc.terminate()
-        except Exception:  # noqa: BLE001
-            pass
+            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
         try:
             proc.wait(timeout=10)
         except Exception:  # noqa: BLE001
             try:
-                proc.kill()
-            except Exception:  # noqa: BLE001
-                pass
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError, OSError):
+                try:
+                    proc.kill()
+                except Exception:  # noqa: BLE001
+                    pass
 
-    # External cancel request (POST /stop) races the watchdog.
+    # Drain stderr on its own thread so a full stderr pipe buffer can never block
+    # grok's stdout writes (which would starve the reducer and trip the idle
+    # watchdog on a chatty-stderr but healthy run) (Fix 3).
+    stderr_buf: list[str] = []
+
+    def _drain_stderr() -> None:
+        if proc.stderr is None:
+            return
+        try:
+            for line in proc.stderr:
+                stderr_buf.append(line)
+        except Exception:  # noqa: BLE001 — best-effort diagnostics only
+            pass
+
+    stderr_thread = threading.Thread(target=_drain_stderr, name="grok-stderr", daemon=True)
+    stderr_thread.start()
+
+    # External cancel request (POST /stop / SIGTERM) races the watchdog. Flag it
+    # distinctly from a timeout so the blocker message is accurate (Fix 6).
     def _watch_cancel() -> None:
         while proc.poll() is None:
             if _cancel_requested.is_set():
+                outcome.cancelled = True
                 outcome.watchdog_killed = True
                 _kill()
                 return
             time.sleep(0.5)
 
-    cancel_thread = threading.Thread(target=_watch_cancel, name="grok-cancel", daemon=True)
-    cancel_thread.start()
+    threading.Thread(target=_watch_cancel, name="grok-cancel", daemon=True).start()
 
     if proc.stdout is not None:
         _supervise(
@@ -519,13 +571,9 @@ def run_grok_dispatch(
             kill=_kill, deadline=time.monotonic() + deadline, idle_timeout=idle_timeout,
         )
     outcome.exit_code = proc.wait()
-    if outcome.exit_code not in (0, None) and not outcome.error_message and proc.stderr is not None:
-        try:
-            err = proc.stderr.read()
-            if err:
-                outcome.error_message = err.strip()[:400]
-        except Exception:  # noqa: BLE001
-            pass
+    stderr_thread.join(timeout=5)
+    if outcome.exit_code not in (0, None) and not outcome.error_message and stderr_buf:
+        outcome.error_message = "".join(stderr_buf).strip()[:400]
     try:
         os.remove(prompt_file)
     except OSError:
@@ -626,6 +674,12 @@ def dispatch_task(task: dict, env: dict) -> LifecycleAction:
 
     Serialized by _dispatch_lock (one grok subprocess at a time — a single
     OAuth session, rate-limit friendly). Returns the applied LifecycleAction.
+
+    Terminal guarantee (Fix 1, CRITICAL): once `mc ack` has moved the task to
+    in_progress, EVERY exit path must leave it in a terminal state. run_grok_dispatch
+    maps spawn failures into outcome.error_message (→ blocked), but any *other*
+    unexpected exception between ack and apply_lifecycle is caught here and turned
+    into an explicit `mc blocked` — a headless dispatch must never hang in_progress.
     """
     task_id = str(task.get("id") or "")
     board_id = str(task.get("board_id") or "")
@@ -640,51 +694,101 @@ def dispatch_task(task: dict, env: dict) -> LifecycleAction:
         _cancel_requested.clear()
         write_task_context_env(task)
         lifecycle.ack(task_id)  # protect against the 10-min ACK-timeout re-dispatch
+        _task_ctx[task_id] = {"board_id": board_id, "attempt_id": attempt_id}
 
-        session_id = _task_sessions.get(task_id) or str(uuid.uuid4())
-        _task_sessions[task_id] = session_id
-        prompt = build_dispatch_prompt(task)
-        outcome = run_grok_dispatch(
-            prompt, workspace=str(WORKSPACE), env=env, session_id=session_id,
-        )
-        # grok may mint its own sessionId — track it for resume.
-        if outcome.session_id:
-            _task_sessions[task_id] = outcome.session_id
+        terminal_applied = False
+        try:
+            # Fresh session per full dispatch (Fix 5): never reuse a stored id as
+            # `-s <uuid>` (that collides — the uuid already exists). Follow-up
+            # comments resume via the nudge path instead.
+            session_id = str(uuid.uuid4())
+            prompt = build_dispatch_prompt(task)
+            outcome = run_grok_dispatch(
+                prompt, workspace=str(WORKSPACE), env=env, session_id=session_id,
+            )
+            # Persist the session ONLY on a confirmed end event, so a crashed/timed-out
+            # run leaves no stale id for a colliding `-s` re-dispatch (Fix 5).
+            if outcome.saw_end and outcome.session_id:
+                _task_sessions[task_id] = outcome.session_id
+            else:
+                _task_sessions.pop(task_id, None)
 
-        action = map_lifecycle(outcome)
-        log.info(
-            "dispatch_task %s: lines=%d stop=%s -> %s (%s)",
-            task_id[:8], outcome.lines_seen, outcome.stop_reason,
-            action.action, action.reason,
-        )
-        apply_lifecycle(lifecycle, task_id, action)
-        return action
+            action = map_lifecycle(outcome)
+            log.info(
+                "dispatch_task %s: lines=%d stop=%s -> %s (%s)",
+                task_id[:8], outcome.lines_seen, outcome.stop_reason,
+                action.action, action.reason,
+            )
+            apply_lifecycle(lifecycle, task_id, action)
+            terminal_applied = True
+            return action
+        except Exception as e:  # noqa: BLE001 — terminal guarantee, see docstring
+            log.exception("dispatch_task %s: unexpected error: %s", task_id[:8], e)
+            _task_sessions.pop(task_id, None)
+            if not terminal_applied:
+                lifecycle.blocked(
+                    task_id,
+                    "grok-bridge unerwarteter Fehler beim Dispatch "
+                    f"({type(e).__name__}: {e}). Automatisch blockiert statt still "
+                    "in_progress zu lassen — bitte prüfen und neu zuweisen.",
+                )
+            return LifecycleAction("blocked", "dispatch_exception", str(e))
 
 
 def deliver_comment_nudge(task: dict, comment: dict, env: dict) -> Optional[GrokOutcome]:
     """Resume the task's grok session with a new user comment as a follow-up turn.
 
     Only fires when a session for the task already exists (i.e. the task was
-    dispatched in this bridge's lifetime). Otherwise there is nothing to resume
-    and the comment is left for the next full dispatch. Best-effort.
+    dispatched in this bridge's lifetime, with a confirmed end event). Otherwise
+    there is nothing to resume and the comment is left for the next full dispatch.
+
+    The nudge outcome is routed through the lifecycle (Fix 2): grok's reply reaches
+    Mark as an `mc comment progress`, and an unclean stop / spawn error / watchdog
+    kill posts a blocker-comment instead of vanishing silently. The nudge prompt
+    (unlike the dispatch prompt) explicitly tells grok to `mc comment` its answer,
+    since the bridge does not re-post grok's text verbatim on this path.
     """
     task_id = str(task.get("id") or comment.get("task_id") or "")
     session_id = _task_sessions.get(task_id)
     if not session_id:
         return None
     content = str(comment.get("content") or "")
+    board_id = str(task.get("board_id") or comment.get("board_id") or "")
     prompt = (
         f"[MC COMMENT] Neuer Kommentar auf Task {task_id}:\n\n{content}\n\n"
-        f"Reagiere, arbeite am Task weiter. Kein `mc done` — die Bridge setzt den "
-        f"Endstatus."
+        f"Reagiere und arbeite am Task weiter. Poste deine Antwort per "
+        f"`mc comment progress \"…\"`, damit Mark sie im Task-Thread sieht. "
+        f"Kein `mc done`/`mc finish` — die Bridge setzt den Endstatus."
+    )
+    ctx = _task_ctx.get(task_id, {})
+    lifecycle = GrokLifecycle(
+        base_url=(env.get("MC_BASE_URL") or "").rstrip("/"),
+        token=env.get("MC_AGENT_TOKEN") or "",
+        board_id=board_id or ctx.get("board_id", ""),
+        attempt_id=ctx.get("attempt_id", ""),
     )
     with _dispatch_lock:
         _cancel_requested.clear()
         write_task_context_env({"id": task_id,
-                                "board_id": task.get("board_id") or comment.get("board_id"),
-                                "dispatch_attempt_id": task.get("dispatch_attempt_id")})
-        return run_grok_dispatch(prompt, workspace=str(WORKSPACE), env=env,
-                                 resume_session=session_id)
+                                "board_id": board_id or ctx.get("board_id"),
+                                "dispatch_attempt_id": ctx.get("attempt_id")})
+        outcome = run_grok_dispatch(prompt, workspace=str(WORKSPACE), env=env,
+                                    resume_session=session_id)
+
+    # Route the nudge outcome through the lifecycle — never discard it (Fix 2).
+    # A clean turn: surface grok's reply (grok is also told to comment itself, so
+    # this is a belt-and-suspenders audit note). An unclean stop/error/watchdog:
+    # block so the failure is visible rather than silently lost.
+    action = map_lifecycle(outcome)
+    if action.action == "finish":
+        reply = (outcome.final_text or "").strip()
+        lifecycle.comment(task_id, f"grok (Follow-up): {reply[:1000]}" if reply
+                          else "grok (Follow-up): Turn ohne Textausgabe abgeschlossen.")
+    else:
+        lifecycle.comment(task_id, f"grok-bridge (Follow-up {action.reason}): "
+                          f"{action.detail[:300]}")
+        lifecycle.blocked(task_id, action.detail)
+    return outcome
 
 
 # ── poll + heartbeat loops (mirror hermes-bridge) ───────────────────────────────
