@@ -2068,20 +2068,27 @@ async def agent_update_task(
     if "status" in updates:
         new_status = updates["status"]
 
-        # ── Evidence guard: at least 1 progress/resolution comment before review ──
+        # ── Evidence guard: at least 1 substantive comment before review ──
+        # A reflection counts as evidence: `mc finish --review` posts the
+        # structured 4-header reflection FIRST and then PATCHes to review —
+        # for small/fast tasks the agent may legitimately never post a
+        # separate progress comment, and the reflection (backend-validated,
+        # headers + min body chars) is the strongest evidence there is.
+        # Rejecting it forced the omp bridge into its blocked fallback
+        # (live canary incident 2026-07-10).
         if new_status == "review" and old_status == "in_progress":
             evidence_result = await session.exec(
                 select(TaskComment).where(
                     TaskComment.task_id == task.id,
                     TaskComment.author_agent_id == agent.id,
-                    TaskComment.comment_type.in_(["progress", "resolution", "checkpoint"]),  # type: ignore[union-attr]
+                    TaskComment.comment_type.in_(["progress", "resolution", "checkpoint", "reflection"]),  # type: ignore[union-attr]
                 )
             )
             evidence_comments = evidence_result.all()
             if not evidence_comments:
                 raise HTTPException(
                     status_code=409,
-                    detail="Evidence erforderlich vor Review: Mindestens 1 progress/resolution/checkpoint Kommentar noetig. "
+                    detail="Evidence erforderlich vor Review: Mindestens 1 progress/resolution/reflection Kommentar noetig. "
                            "Bitte dokumentiere was getan wurde bevor du auf Review setzt.",
                 )
 
