@@ -45,7 +45,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k, v in d.items():
-        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED"):
+        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT"):
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
@@ -66,6 +66,11 @@ except Exception:
         [ -n "$_NEW_BASE_URL" ] && export OPENAI_BASE_URL="$_NEW_BASE_URL"
         [ -n "$_NEW_MODEL" ]    && export OPENAI_MODEL="$_NEW_MODEL"
         export AGENT_RECYCLER_ENABLED="${_NEW_RECYCLER:-${AGENT_RECYCLER_ENABLED:-true}}"
+        # Per-runtime idle timeout (slow local models need >300s for long final
+        # writes) — backend decides the value in build_runtime_env; the bridge
+        # reads OMP_TURN_IDLE_TIMEOUT with a 300s default when unset.
+        _NEW_IDLE_TIMEOUT=$(echo "$_EXPORTS" | grep '^OMP_TURN_IDLE_TIMEOUT=' | cut -d= -f2-)
+        [ -n "$_NEW_IDLE_TIMEOUT" ] && export OMP_TURN_IDLE_TIMEOUT="$_NEW_IDLE_TIMEOUT"
         if [ -n "$_NEW_GH_TOKEN" ]; then
             export GH_TOKEN="$_NEW_GH_TOKEN"
             GIT_CRED_FILE="${HOME}/.git-credentials"
