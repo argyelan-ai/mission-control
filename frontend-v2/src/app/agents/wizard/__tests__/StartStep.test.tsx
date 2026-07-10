@@ -39,4 +39,42 @@ describe("StartStep", () => {
     fireEvent.click(screen.getByText("Individuell"));
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ startMode: "custom" }));
   });
+
+  it("switching mode resets previously prefilled fields (no stale state)", () => {
+    const update = vi.fn();
+    const state = {
+      ...initialWizardState(null),
+      startMode: "template" as const,
+      templateId: "t1",
+      name: "Planner",
+      emoji: "🧠",
+      role: "planner",
+      soulMd: "s",
+      scopes: ["tasks:read"],
+      model: "m",
+      agentRuntime: "host" as const,
+      harness: "claude" as const,
+      runtimeId: "rt1",
+    };
+    wrap(<StartStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    fireEvent.click(screen.getByText("Individuell"));
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        startMode: "custom",
+        templateId: null,
+        sourceAgentId: null,
+        name: "",
+        emoji: "",
+        role: "",
+        soulMd: null,
+        scopes: [],
+        model: "",
+        agentRuntime: "cli-bridge",
+        harness: null,
+        runtimeId: "",
+        skillFilter: null,
+        cliPlugins: null,
+      })
+    );
+  });
 });

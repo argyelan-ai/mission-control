@@ -6,12 +6,16 @@ import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 import type { AgentTemplate, Agent, Harness } from "@/lib/types";
 import type { StartMode, WizardStepProps } from "../types";
+import { initialWizardState } from "../types";
 
 const MODES: { key: StartMode; label: string; icon: typeof Sparkles; hint: string }[] = [
   { key: "custom", label: "Individuell", icon: Sparkles, hint: "Von Grund auf konfigurieren" },
   { key: "template", label: "Vorlage", icon: LayoutTemplate, hint: "Aus einem Rollen-Template" },
   { key: "duplicate", label: "Duplizieren", icon: Copy, hint: "Bestehenden Agent kopieren" },
 ];
+
+// Prefillable fields only — board/step are shell-owned and must survive a mode switch.
+const RESET_PREFILL = initialWizardState(null);
 
 export function StartStep({ state, update }: WizardStepProps) {
   const { data: templates } = useQuery({
@@ -33,7 +37,7 @@ export function StartStep({ state, update }: WizardStepProps) {
       emoji: t.emoji ?? "",
       role: t.role ?? "",
       soulMd: t.soul_md,
-      scopes: t.scopes.length ? t.scopes : [],
+      scopes: t.scopes,
       model: t.default_model ?? "",
       skillFilter: t.skill_filter,
       cliPlugins: t.cli_plugins,
@@ -50,7 +54,7 @@ export function StartStep({ state, update }: WizardStepProps) {
       emoji: src.emoji ?? "",
       role: src.role ?? "",
       soulMd: src.soul_md,
-      scopes: src.scopes.length ? src.scopes : [],
+      scopes: src.scopes,
       model: src.model ?? "",
       skillFilter: src.skill_filter,
       cliPlugins: src.cli_plugins,
@@ -74,7 +78,22 @@ export function StartStep({ state, update }: WizardStepProps) {
             <button
               key={m.key}
               onClick={() =>
-                update({ startMode: m.key, templateId: null, sourceAgentId: null })
+                update({
+                  startMode: m.key,
+                  templateId: null,
+                  sourceAgentId: null,
+                  name: RESET_PREFILL.name,
+                  emoji: RESET_PREFILL.emoji,
+                  role: RESET_PREFILL.role,
+                  soulMd: RESET_PREFILL.soulMd,
+                  agentRuntime: RESET_PREFILL.agentRuntime,
+                  harness: RESET_PREFILL.harness,
+                  runtimeId: RESET_PREFILL.runtimeId,
+                  model: RESET_PREFILL.model,
+                  scopes: RESET_PREFILL.scopes,
+                  skillFilter: RESET_PREFILL.skillFilter,
+                  cliPlugins: RESET_PREFILL.cliPlugins,
+                })
               }
               className="text-left rounded-xl p-4 cursor-pointer transition-all"
               style={{
