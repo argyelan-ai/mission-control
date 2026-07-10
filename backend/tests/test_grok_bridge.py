@@ -377,3 +377,206 @@ def test_run_grok_dispatch_reduces_stream(bridge, tmp_path, monkeypatch):
     # argv carried the streaming-json + session flags.
     assert "streaming-json" in captured["cmd"]
     assert "-s" in captured["cmd"]
+
+
+# ── dispatch_task / deliver_comment_nudge integration (subprocess + mc-cli mocked) ─
+#
+# These hit the exact integration paths the adversarial review flagged as untested:
+# the terminal guarantee after `mc ack`, and routing the nudge outcome through the
+# lifecycle. `mc` is mocked via bridge._sp.run; grok is mocked via bridge._sp.Popen.
+
+
+def _mc_recorder(monkeypatch, bridge):
+    """Record every `mc <subcommand>` invocation; each returns rc=0."""
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(list(cmd))
+        m = MagicMock()
+        m.returncode = 0
+        m.stdout = ""
+        m.stderr = ""
+        return m
+
+    monkeypatch.setattr(bridge._sp, "run", fake_run)
+    return calls
+
+
+def _fake_popen(stream_text: str, returncode: int = 0):
+    class _P:
+        def __init__(self, cmd, **kwargs):
+            self.stdout = StringIO(stream_text)
+            self.stderr = StringIO("")
+            self.returncode = returncode
+            self.pid = 424242
+
+        def poll(self):
+            return returncode  # already exited → watchdog/cancel threads no-op
+
+        def wait(self, timeout=None):
+            return returncode
+
+        def terminate(self):
+            pass
+
+        def kill(self):
+            pass
+
+    return _P
+
+
+def _mc_subcommands(calls):
+    return [c[1] for c in calls if len(c) > 1]
+
+
+def test_dispatch_missing_binary_ends_blocked_never_in_progress(bridge, tmp_path, monkeypatch):
+    """CRITICAL regression: grok binary missing → task ends blocked, not hung in_progress."""
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "WORKSPACE", tmp_path)
+    calls = _mc_recorder(monkeypatch, bridge)
+
+    def boom(cmd, **kwargs):
+        raise FileNotFoundError("grok: command not found")
+
+    monkeypatch.setattr(bridge._sp, "Popen", boom)
+
+    action = bridge.dispatch_task(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1", "title": "x", "description": "y"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok", "HOME": str(tmp_path)},
+    )
+
+    subs = _mc_subcommands(calls)
+    assert "ack" in subs                       # ack ran (task moved to in_progress)
+    assert "blocked" in subs                    # ...and a terminal blocker followed
+    assert "finish" not in subs                 # never finished
+    assert action.action == "blocked"
+    # No stale session id left behind for a colliding re-dispatch.
+    assert "t1" not in bridge._task_sessions
+
+
+def test_dispatch_happy_path_acks_and_finishes(bridge, tmp_path, monkeypatch):
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "WORKSPACE", tmp_path)
+    calls = _mc_recorder(monkeypatch, bridge)
+    monkeypatch.setattr(bridge._sp, "Popen", _fake_popen(GOLDEN_STREAM))
+
+    action = bridge.dispatch_task(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1", "title": "x", "description": "y"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok", "HOME": str(tmp_path)},
+    )
+    subs = _mc_subcommands(calls)
+    assert "ack" in subs
+    assert "finish" in subs
+    assert action.action == "finish"
+    # Session persisted from the confirmed end event → available for nudge resume.
+    assert bridge._task_sessions["t1"] == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+
+def test_dispatch_no_end_blocks_and_persists_no_session(bridge, tmp_path, monkeypatch):
+    """No `end` event → blocked, and NO session id stored (Fix 5: no `-s` collision on retry)."""
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "WORKSPACE", tmp_path)
+    calls = _mc_recorder(monkeypatch, bridge)
+    monkeypatch.setattr(bridge._sp, "Popen", _fake_popen('{"type":"text","data":"partial"}\n'))
+
+    action = bridge.dispatch_task(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok", "HOME": str(tmp_path)},
+    )
+    assert action.action == "blocked"
+    assert "blocked" in _mc_subcommands(calls)
+    assert "t1" not in bridge._task_sessions
+
+
+def test_dispatch_unexpected_exception_still_blocks(bridge, tmp_path, monkeypatch):
+    """Terminal guarantee: an exception AFTER ack (here in map_lifecycle) → mc blocked."""
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    monkeypatch.setattr(bridge, "WORKSPACE", tmp_path)
+    calls = _mc_recorder(monkeypatch, bridge)
+    monkeypatch.setattr(bridge._sp, "Popen", _fake_popen(GOLDEN_STREAM))
+
+    def boom(*a, **kw):
+        raise RuntimeError("mapping exploded")
+
+    monkeypatch.setattr(bridge, "map_lifecycle", boom)
+
+    action = bridge.dispatch_task(
+        {"id": "t1", "board_id": "b1", "dispatch_attempt_id": "a1"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok", "HOME": str(tmp_path)},
+    )
+    subs = _mc_subcommands(calls)
+    assert "ack" in subs
+    assert "blocked" in subs
+    assert "finish" not in subs
+    assert action.action == "blocked"
+
+
+def test_nudge_routes_clean_outcome_to_comment(bridge, monkeypatch):
+    """HIGH regression: a clean nudge posts grok's reply via mc comment + resumes -r."""
+    bridge._task_sessions["t1"] = "sess-1"
+    bridge._task_ctx["t1"] = {"board_id": "b1", "attempt_id": "a1"}
+    calls = _mc_recorder(monkeypatch, bridge)
+
+    captured = {}
+
+    def fake_run(prompt, **kwargs):
+        captured["prompt"] = prompt
+        captured["kwargs"] = kwargs
+        return bridge.GrokOutcome(saw_end=True, stop_reason="EndTurn",
+                                  final_text="I checked Firefox, all good", exit_code=0)
+
+    monkeypatch.setattr(bridge, "run_grok_dispatch", fake_run)
+
+    out = bridge.deliver_comment_nudge(
+        {"id": "t1", "board_id": "b1"},
+        {"source": "user", "task_id": "t1", "content": "Teste auch Firefox"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok"},
+    )
+    assert out is not None
+    # Resumes the stored session, not a fresh -s.
+    assert captured["kwargs"].get("resume_session") == "sess-1"
+    # Nudge prompt explicitly instructs mc comment (unlike the dispatch prompt).
+    assert "mc comment" in captured["prompt"]
+    # Reply surfaced to Mark as a comment; no blocker on a clean turn.
+    subs = _mc_subcommands(calls)
+    assert "comment" in subs
+    assert "blocked" not in subs
+    assert any("all good" in " ".join(c) for c in calls)
+
+
+def test_nudge_unclean_stop_blocks(bridge, monkeypatch):
+    """A nudge that crashes/times out must not vanish — it posts a comment + blocker."""
+    bridge._task_sessions["t1"] = "sess-1"
+    bridge._task_ctx["t1"] = {"board_id": "b1", "attempt_id": "a1"}
+    calls = _mc_recorder(monkeypatch, bridge)
+
+    monkeypatch.setattr(
+        bridge, "run_grok_dispatch",
+        lambda prompt, **kw: bridge.GrokOutcome(saw_end=False, exit_code=0),
+    )
+    bridge.deliver_comment_nudge(
+        {"id": "t1", "board_id": "b1"},
+        {"source": "user", "task_id": "t1", "content": "hi"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok"},
+    )
+    assert "blocked" in _mc_subcommands(calls)
+
+
+def test_nudge_without_session_returns_none(bridge, monkeypatch):
+    """No stored session → nothing to resume; leave it for the next full dispatch."""
+    calls = _mc_recorder(monkeypatch, bridge)
+    out = bridge.deliver_comment_nudge(
+        {"id": "unknown", "board_id": "b1"},
+        {"source": "user", "task_id": "unknown", "content": "hi"},
+        {"MC_BASE_URL": "http://backend", "MC_AGENT_TOKEN": "tok"},
+    )
+    assert out is None
+    assert calls == []
+
+
+def test_map_lifecycle_cancelled_vs_watchdog(bridge):
+    """Fix 6: a /stop cancel is reported distinctly from a timeout watchdog kill."""
+    cancelled = bridge.map_lifecycle(bridge.GrokOutcome(cancelled=True, watchdog_killed=True))
+    assert cancelled.action == "blocked" and cancelled.reason == "cancelled"
+    timeout = bridge.map_lifecycle(bridge.GrokOutcome(watchdog_killed=True))
+    assert timeout.action == "blocked" and timeout.reason == "watchdog"
