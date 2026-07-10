@@ -264,6 +264,91 @@ def test_restart_force_recreate_runs_docker_compose_up():
     assert run_mock.call_args.kwargs.get("timeout") == 90
 
 
+# ── B2.1: stale-mount preflight for force_recreate (cross-image switches) ──
+
+
+def test_restart_force_recreate_missing_compose_main_returns_clear_error(tmp_path, monkeypatch):
+    """compose_main doesn't exist inside the backend container (dangling bind
+    mount) → clear, actionable error string, and docker compose is NEVER
+    invoked (no wasted subprocess call, no opaque raw-compose stderr)."""
+    from app.services.docker_agent_sync import restart_docker_agent_container
+    from app.config import settings
+
+    # tmp_path has no docker-compose.yml at all — simulates the file being
+    # gone (stale single-file bind mount reporting ENOENT).
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
+
+    agent = Agent(name="Sparky", agent_runtime="cli-bridge")
+
+    with patch("subprocess.run") as run_mock:
+        result = restart_docker_agent_container(agent, force_recreate=True)
+
+    run_mock.assert_not_called()
+    assert result["status"].startswith("error:")
+    assert "docker-compose.yml is not readable" in result["status"]
+    assert "stale" in result["status"].lower()
+    assert "docker compose restart backend" in result["status"]
+    assert result["container"] == "mc-agent-sparky"
+    assert result["mode"] == "recreate"
+
+
+def test_restart_force_recreate_empty_compose_main_returns_clear_error(tmp_path, monkeypatch):
+    """compose_main exists but is empty (0 bytes) — the other failure mode of
+    a stale single-file bind mount — same clear error, no subprocess call."""
+    from app.services.docker_agent_sync import restart_docker_agent_container
+    from app.config import settings
+
+    (tmp_path / "docker-compose.yml").write_text("")  # 0 bytes
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
+
+    agent = Agent(name="Sparky", agent_runtime="cli-bridge")
+
+    with patch("subprocess.run") as run_mock:
+        result = restart_docker_agent_container(agent, force_recreate=True)
+
+    run_mock.assert_not_called()
+    assert result["status"].startswith("error:")
+    assert "docker-compose.yml is not readable" in result["status"]
+
+
+def test_restart_force_recreate_readable_compose_main_proceeds(tmp_path, monkeypatch):
+    """Regression guard: a normal, readable compose_main still runs the
+    docker compose subprocess as before (preflight doesn't false-positive)."""
+    from app.services.docker_agent_sync import restart_docker_agent_container
+    from app.config import settings
+
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
+
+    agent = Agent(name="Sparky", agent_runtime="cli-bridge")
+
+    with patch("subprocess.run") as run_mock:
+        run_mock.return_value.returncode = 0
+        run_mock.return_value.stdout = ""
+        run_mock.return_value.stderr = ""
+        result = restart_docker_agent_container(agent, force_recreate=True)
+
+    run_mock.assert_called_once()
+    assert result["status"] == "recreated"
+
+
+def test_restart_default_mode_skips_preflight():
+    """The stale-mount preflight only applies to force_recreate — the default
+    `docker restart` path (no compose file involved at all) must be untouched."""
+    from app.services.docker_agent_sync import restart_docker_agent_container
+
+    agent = Agent(name="Davinci", agent_runtime="cli-bridge")
+
+    with patch("subprocess.run") as run_mock:
+        run_mock.return_value.returncode = 0
+        run_mock.return_value.stdout = ""
+        run_mock.return_value.stderr = ""
+        result = restart_docker_agent_container(agent, force_recreate=False)
+
+    run_mock.assert_called_once()
+    assert result["status"] == "restarted"
+
+
 def test_restart_host_runtime_skipped():
     """Host agents (Boss) have no docker container — skip without invoking subprocess."""
     from app.services.docker_agent_sync import restart_docker_agent_container
