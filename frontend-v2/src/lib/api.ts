@@ -843,7 +843,22 @@ export const api = {
       const qs = params.toString();
       return request<Agent[]>(`/api/v1/agents${qs ? `?${qs}` : ""}`);
     },
-    create: (data: { name: string; emoji?: string; role?: string; model?: string; board_id?: string; agent_runtime?: string; runtime_id?: string }) =>
+    create: (data: {
+      name: string;
+      emoji?: string;
+      role?: string;
+      model?: string;
+      board_id?: string;
+      is_board_lead?: boolean;
+      context_max?: number;
+      agent_runtime?: string;
+      runtime_id?: string;
+      harness?: string;
+      scopes?: string[];
+      soul_md?: string;
+      skill_filter?: string[] | null;
+      cli_plugins?: string[] | null;
+    }) =>
       request<Agent>("/api/v1/agents", { method: "POST", body: JSON.stringify(data) }),
     get: (id: string) => request<Agent>(`/api/v1/agents/${id}`),
     update: (id: string, data: Partial<Agent>, opts?: { restart?: boolean }) =>
@@ -909,6 +924,20 @@ export const api = {
       }),
     reset: (id: string) =>
       request<unknown>(`/api/v1/agents/${id}/reset`, { method: "POST" }),
+    previewSoul: (data: {
+      name: string;
+      emoji?: string;
+      role?: string;
+      soul_md?: string;
+      board_id?: string;
+      is_board_lead?: boolean;
+      scopes?: string[];
+    }): Promise<{ soul_md: string }> =>
+      request("/api/v1/agents/preview-soul", { method: "POST", body: JSON.stringify(data) }),
+    healthCheck: (id: string): Promise<import("@/lib/types").AgentReadiness> =>
+      request(`/api/v1/agents/${id}/health-check`, { method: "POST" }),
+    provision: (id: string): Promise<{ status: string; token?: string | null; launchctl_command?: string; plist_loaded?: boolean; workspace_path?: string }> =>
+      request(`/api/v1/agents/${id}/provision`, { method: "POST", body: JSON.stringify({}) }),
     heartbeat: (id: string) =>
       request<unknown>(`/api/v1/agents/${id}/heartbeat`, { method: "POST" }),
     metrics: {
@@ -1061,7 +1090,7 @@ export const api = {
       request<AgentTemplate>(`/api/v1/agent-templates/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: string) =>
       request<void>(`/api/v1/agent-templates/${id}`, { method: "DELETE" }),
-    instantiate: (id: string, data: { board_id: string; model?: string; name?: string }) =>
+    instantiate: (id: string, data: { board_id: string; model?: string; name?: string; runtime_id?: string; harness?: string }) =>
       request<{ agent: Agent; token: string }>(`/api/v1/agent-templates/${id}/instantiate`, {
         method: "POST",
         body: JSON.stringify(data),

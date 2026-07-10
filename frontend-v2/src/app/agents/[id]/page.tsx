@@ -874,19 +874,6 @@ function ConfigTab({
               <span className="text-xs font-mono text-[var(--color-text-muted)]">
                 API KEY (Provider)
               </span>
-              {agent.agent_runtime === "openclaw" && (
-                <span
-                  className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wide"
-                  style={{
-                    backgroundColor: `${C.warning}1A`,
-                    color: C.warning,
-                    border: `1px solid ${C.warning}40`,
-                  }}
-                  title="Gateway agent: the key is set in openclaw.json and applies globally to all openclaw agents with the same provider."
-                >
-                  Gateway · global
-                </span>
-              )}
             </div>
             <select
               value={selectedSecretId ?? ""}
@@ -906,29 +893,8 @@ function ConfigTab({
               ))}
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              {agent.agent_runtime === "openclaw"
-                ? "From Settings → API Keys. Pushed into openclaw.json on Apply (models.providers.*.apiKey) and sessions are reset. Applies globally to all gateway agents with the same provider."
-                : "From Settings → API Keys. Written to the container's .env on Apply and loaded on openclaude start."}
+              From Settings → API Keys. Written to the container's .env on Apply and loaded on openclaude start.
             </div>
-            {/* Warning: Ollama local daemon proxy case.
-                DB field agent.model may be with or without "ollama/" prefix
-                (MC often only stores model names like "glm-5.1:cloud"). */}
-            {agent.agent_runtime === "openclaw" &&
-              agent.model?.toLowerCase().includes(":cloud") && (
-                <div
-                  className="mt-2 p-2 rounded-lg text-[10px] leading-relaxed"
-                  style={{
-                    backgroundColor: `${C.warning}14`,
-                    border: `1px solid ${C.warning}40`,
-                    color: C.warning,
-                  }}
-                >
-                  ⚠️ <strong>Warning:</strong> This model (<code className="font-mono">{agent.model}</code>) runs through the
-                  local Ollama daemon (<code className="font-mono">127.0.0.1:11434</code>), which proxies to ollama.com with
-                  <strong> its own account</strong> (authenticated via <code className="font-mono">~/.ollama/id_ed25519</code>).
-                  Your API key here is <strong>not</strong> used. Fix: run <code className="font-mono">ollama signin</code> on the host with the desired account.
-                </div>
-              )}
           </div>
           <div className="flex flex-col gap-2 pt-[22px]">
             <button
