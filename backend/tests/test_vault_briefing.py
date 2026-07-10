@@ -488,6 +488,57 @@ async def test_briefing_open_tasks_deduped_with_duplicate_count():
 
 
 @pytest.mark.asyncio
+async def test_briefing_open_tasks_dedup_scoped_to_board():
+    """Same (title, status, assigned_to) on TWO different boards are real,
+    distinct tasks — they must NOT collapse into one duplicate. Regression
+    for a dedup key that omitted board_id."""
+    from app.models.board import Board
+    from app.models.task import Task
+    from app.scopes import Scope
+
+    raw_token = await _make_agent("Jarvis", [Scope.VAULT_READ.value])
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        board_a = Board(id=uuid.uuid4(), name="Board A", slug="board-a")
+        board_b = Board(id=uuid.uuid4(), name="Board B", slug="board-b")
+        s.add(board_a)
+        s.add(board_b)
+        await s.commit()
+        await s.refresh(board_a)
+        await s.refresh(board_b)
+
+        base = datetime(2026, 5, 14, 10, 0, 0, tzinfo=timezone.utc)
+        for board, delta in [(board_a, timedelta(hours=0)), (board_b, timedelta(hours=1))]:
+            s.add(
+                Task(
+                    id=uuid.uuid4(),
+                    board_id=board.id,
+                    title="Same title different board",
+                    status="inbox",
+                    created_at=base + delta,
+                )
+            )
+        await s.commit()
+
+    vault_index = MagicMock()
+    vault_index.list_all.return_value = []
+    vault_activity = MagicMock()
+    vault_activity.top_n_writes = AsyncMock(return_value=[])
+
+    app_instance = _make_briefing_app(vault_index, vault_activity)
+    headers = {"Authorization": f"Bearer {raw_token}"}
+    transport = ASGITransport(app=app_instance)
+    async with AsyncClient(transport=transport, base_url="http://test", headers=headers) as ac:
+        r = await ac.get("/api/v1/agent/vault/briefing")
+
+    assert r.status_code == 200, r.text
+    tasks = r.json()["open_tasks"]
+    matching = [t for t in tasks if t["title"] == "Same title different board"]
+    assert len(matching) == 2
+    assert all(t["duplicate_count"] == 1 for t in matching)
+
+
+@pytest.mark.asyncio
 async def test_briefing_open_tasks_status_tier_ordering():
     """in_progress/blocked sort before inbox regardless of created_at."""
     from app.models.board import Board

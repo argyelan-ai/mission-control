@@ -1690,14 +1690,16 @@ async def agent_vault_briefing(
                     a = a[0]
                 agent_name_map[a.id] = a.name
 
-        # Dedup by (title, status, assigned_to). `normalized` is already
-        # created_at DESC, so the first occurrence of a key is the newest —
-        # keep it, count the rest as duplicates instead of dropping them silently.
+        # Dedup by (board_id, title, status, assigned_to). `normalized` is
+        # already created_at DESC, so the first occurrence of a key is the
+        # newest — keep it, count the rest as duplicates instead of dropping
+        # them silently. board_id is part of the key so same-titled tasks on
+        # different boards are real, distinct tasks and must NOT collapse.
         deduped: dict[tuple, dict[str, Any]] = {}
         dedup_order: list[tuple] = []
         for t in normalized:
             assigned_to = agent_name_map.get(t.assigned_agent_id)
-            key = (t.title, t.status, assigned_to)
+            key = (t.board_id, t.title, t.status, assigned_to)
             created = t.created_at
             if created is not None and created.tzinfo is None:
                 created = created.replace(tzinfo=timezone.utc)
