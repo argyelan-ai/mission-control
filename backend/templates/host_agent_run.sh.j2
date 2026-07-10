@@ -1,0 +1,27 @@
+#!/bin/bash
+# Rendered launcher for host agent {{ slug }} (harness: {{ harness }}).
+# Reviewed and loaded by the operator via launchctl — see the wizard's
+# review step for the exact command. Single Source of Truth: this .j2.
+set -euo pipefail
+
+WORKSPACE="{{ workspace_path }}"
+cd "$WORKSPACE"
+
+# Load the agent env (OPENAI_*/MC_* + token), exported for the harness process.
+set -a
+# shellcheck disable=SC1091
+source "$WORKSPACE/agent.env"
+set +a
+
+SESSION="{{ slug }}"
+BINARY="{{ binary }}"
+
+# Start (or re-attach to) a detached tmux session running the harness binary.
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux new-session -d -s "$SESSION" "$BINARY"
+fi
+
+# Keep the launchd job alive; KeepAlive restarts this script if tmux dies.
+while tmux has-session -t "$SESSION" 2>/dev/null; do
+  sleep 30
+done
