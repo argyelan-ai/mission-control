@@ -1,7 +1,7 @@
 """Mission Control Voice-Worker — hosts the Jarvis agent.
 
-Joint einen LiveKit-Room als Agent + spricht mit dem Operator via xAI Grok
-Realtime API. Hosted-Persona ist "Jarvis" — des Operators persoenlicher Concierge,
+Joint einen LiveKit-Room als Agent + spricht mit dem Operator via Realtime
+Voice-API. Hosted-Persona ist "Jarvis" — des Operators persoenlicher Concierge,
 kann Tasks anlegen, Status abfragen, Memory durchsuchen, Agent-Pipeline
 kontrollieren.
 
@@ -11,9 +11,13 @@ Voice-Agent -> Jarvis (LiveKit / voice-worker Infrastruktur behalten
 den Namen "voice").
 
 Stack:
-- livekit-agents[xai] ~= 1.5
-- xAI Realtime: grok-voice-latest, voice 'ara' (warm female, neutral name)
-- Sprache: Auto-detect (xAI antwortet in der Sprache des Inputs — Deutsch ok)
+- livekit-agents[openai,xai] ~= 1.5
+- Provider per `VOICE_PROVIDER` env var (siehe ADR-060):
+  - "openai" (default): OpenAI Realtime, Modell `VOICE_MODEL` (default
+    "gpt-realtime-2.1"), Voice "marin" (uebersteuerbar via VOICE_VOICE_ID)
+  - "xai": Fallback auf das bisherige xAI Grok Realtime, Voice "ara"
+- Sprache: Auto-detect (das Realtime-Modell antwortet in der Sprache des
+  Inputs — Deutsch ok)
 """
 
 import asyncio
@@ -22,14 +26,64 @@ import os
 import random
 
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
-from livekit.plugins import xai
+from livekit.plugins import openai, xai
 
 import mc_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voice_worker")
 
-VOICE_NAME = os.environ.get("VOICE_VOICE_ID", "ara")
+# Turn-detection ist provider-uebergreifend identisch: xAI's Realtime + OpenAI's
+# Realtime sind beide server-VAD-kompatibel und akzeptieren dieselbe dict-Struktur.
+_TURN_DETECTION = {
+    "type": "server_vad",
+    "threshold": 0.6,
+    "prefix_padding_ms": 200,
+    "silence_duration_ms": 400,
+}
+
+
+def _build_realtime_model():
+    """Baut das Realtime-LLM je nach `VOICE_PROVIDER` env var.
+
+    Default ist "openai" (ADR-060). "xai" bleibt als Fallback erhalten, falls
+    OpenAI Realtime mal ausfaellt oder der Operator zurueckschalten will.
+    Faellt der jeweilige API-Key, wird sofort (statt erst beim ersten
+    Session-Connect) mit einer klaren Fehlermeldung abgebrochen.
+    """
+    provider = os.environ.get("VOICE_PROVIDER", "openai").strip().lower()
+
+    if provider == "openai":
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError(
+                "VOICE_PROVIDER=openai but OPENAI_API_KEY is not set. "
+                "Set OPENAI_API_KEY in the environment, or set "
+                "VOICE_PROVIDER=xai to fall back to XAI_API_KEY."
+            )
+        voice = os.environ.get("VOICE_VOICE_ID") or "marin"
+        model = os.environ.get("VOICE_MODEL", "gpt-realtime-2.1")
+        return openai.realtime.RealtimeModel(
+            model=model,
+            voice=voice,
+            turn_detection=_TURN_DETECTION,
+        )
+
+    if provider == "xai":
+        if not os.environ.get("XAI_API_KEY"):
+            raise RuntimeError(
+                "VOICE_PROVIDER=xai but XAI_API_KEY is not set. "
+                "Set XAI_API_KEY in the environment, or set "
+                "VOICE_PROVIDER=openai (default) to use OPENAI_API_KEY instead."
+            )
+        voice = os.environ.get("VOICE_VOICE_ID") or "ara"
+        return xai.realtime.RealtimeModel(
+            voice=voice,
+            turn_detection=_TURN_DETECTION,
+        )
+
+    raise RuntimeError(
+        f"Unknown VOICE_PROVIDER={provider!r}. Use 'openai' (default) or 'xai'."
+    )
 
 
 # Jarvis-Agent Persona + Knowledge (ADR-038: rename von "Voice" -> "Jarvis"
@@ -184,8 +238,8 @@ class VoiceAssistant(Agent):
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
         # threshold = wie laut Stimme sein muss damit VAD anschlaegt (0..1).
-        # xAI's Realtime ist OpenAI-Realtime-compatible, akzeptiert die gleiche
-        # TurnDetection-Struktur via dict.
+        # OpenAI + xAI Realtime akzeptieren beide dieselbe TurnDetection-Struktur
+        # via dict (_TURN_DETECTION oben, provider-agnostisch).
         if briefing:
             instructions = (
                 JARVIS_INSTRUCTIONS
@@ -197,15 +251,7 @@ class VoiceAssistant(Agent):
 
         super().__init__(
             instructions=instructions,
-            llm=xai.realtime.RealtimeModel(
-                voice=VOICE_NAME,
-                turn_detection={
-                    "type": "server_vad",
-                    "threshold": 0.6,
-                    "prefix_padding_ms": 200,
-                    "silence_duration_ms": 400,
-                },
-            ),
+            llm=_build_realtime_model(),
         )
 
     @staticmethod
