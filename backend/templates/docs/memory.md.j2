@@ -1,0 +1,50 @@
+# Memory-First Protocol
+
+How to query and write to Mission Control's layered memory before acting.
+
+## Query order, before every non-trivial decision
+
+**1. Semantic Memory** (reusable knowledge):
+```
+POST /api/v1/agent/memory/query
+{"query": "<what this is about>", "layers": ["semantic"], "top_k": 5}
+```
+
+**2. Agent Memory** (your own + peer lessons):
+```
+POST /api/v1/agent/memory/query
+{"layers": ["agent"], "agent_id": "self", "top_k": 5}
+```
+
+**3. Episodic Memory** (if the task has continuity with an older project):
+```
+POST /api/v1/agent/memory/query
+{"layers": ["episodic"], "board_id": "current", "top_k": 5}
+```
+
+If memory is empty or unclear: that is a validation trigger, not a license to
+guess — delegate research instead.
+
+Quick lookup via CLI: `mc memory search "<text>"` (Qdrant + board memory).
+
+## When to write a lesson — `mc remember`
+
+After a completed task, write a lesson when:
+- You made a mistake and fixed it
+- You found a non-obvious workaround
+- An API behaves differently than documented
+- A tool/command didn't work as expected
+- You made an architecture decision and why
+
+Do NOT write a lesson when the information is already in TOOLS.md, it was a
+one-off non-recurring incident, or it's only relevant to the current task
+(use a comment instead).
+
+```bash
+mc remember "What you learned" --type lesson
+mc remember "Title" --content "Detailed body" --type knowledge
+```
+
+Your lessons automatically appear in future task dispatches under "Your
+Previous Findings". See the `vault` doc for the full Vault write discipline
+(wikilinks, frontmatter) that applies to shared/global notes.

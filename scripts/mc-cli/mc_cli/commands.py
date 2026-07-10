@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Callable
@@ -1827,6 +1828,101 @@ def _add_file_answer_args(p):
     p.add_argument("--tags", default=None, help="Komma-getrennte Tags")
 
 
+# ── mc docs (local — no network, no client call) ──────────────────────────
+
+def _docs_dir():
+    """Directory L2 reference docs are read from.
+
+    Resolution order:
+      1. MC_DOCS_DIR — explicit override (tests, or a manual `mc docs` call
+         pointed at a specific tree).
+      2. $CLAUDE_CONFIG_DIR/docs — host agents (Boss/Hermes/Jarvis, ADR host-
+         runtime) run with CLAUDE_CONFIG_DIR=<agent_dir>/claude-config and
+         HOME=the operator's real home, NOT the agent's — docker_agent_sync.
+         write_reference_docs() writes into exactly this directory
+         (config_dir/docs), so this is where a host agent's own docs live.
+      3. ~/.claude/docs — docker cli-bridge agents don't set CLAUDE_CONFIG_DIR
+         and HOME is their real container home, where write_reference_docs()
+         wrote the same docs/ tree.
+    Falls through to the next candidate if a directory doesn't exist (e.g.
+    CLAUDE_CONFIG_DIR is set but the agent hasn't been synced yet) instead of
+    a permanent dead end.
+    """
+    import os
+    from pathlib import Path
+
+    override = os.environ.get("MC_DOCS_DIR")
+    if override:
+        return Path(override)
+
+    claude_config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if claude_config_dir:
+        candidate = Path(claude_config_dir) / "docs"
+        if candidate.is_dir():
+            return candidate
+
+    return Path.home() / ".claude" / "docs"
+
+
+_VALID_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _cmd_docs(args, client, cfg):
+    """mc docs [topic] — read a local L2 reference doc. No network call.
+
+    Without an argument: prints docs/INDEX.md (or, if that's missing, a list
+    of the .md files found in the docs dir). With a topic: prints
+    docs/<topic>.md to stdout. Purely local file reads — `client`/`cfg` are
+    unused, matching the "local verb" contract (no mc-context.env / token
+    needed to read reference docs).
+    """
+    import sys
+
+    docs_dir = _docs_dir()
+    topic = getattr(args, "topic", None)
+
+    if topic and not _VALID_TOPIC_RE.match(topic):
+        # Reject before touching the filesystem — a topic like "../../etc/passwd"
+        # or an absolute path must never be joined into docs_dir (path
+        # traversal). Only lowercase-alnum-hyphen slugs are legitimate topics.
+        available = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        print(f"mc docs: ungueltiges Topic '{topic}' — nur [a-z][a-z0-9-]* erlaubt.", file=sys.stderr)
+        if available:
+            print(f"Verfuegbare Topics: {', '.join(available)}", file=sys.stderr)
+        return 1
+
+    if not topic:
+        index_path = docs_dir / "INDEX.md"
+        if index_path.is_file():
+            print(index_path.read_text(encoding="utf-8"))
+            return 0
+        topics = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        if not topics:
+            print(f"Keine Reference Docs gefunden unter {docs_dir}.", file=sys.stderr)
+            return 1
+        print("Verfuegbare Topics:")
+        for t in topics:
+            print(f"  mc docs {t}")
+        return 0
+
+    doc_path = docs_dir / f"{topic}.md"
+    if not doc_path.is_file():
+        available = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        print(f"mc docs: Topic '{topic}' nicht gefunden unter {docs_dir}.", file=sys.stderr)
+        if available:
+            print(f"Verfuegbare Topics: {', '.join(available)}", file=sys.stderr)
+        else:
+            print("Keine Reference Docs gefunden — noch nicht synced?", file=sys.stderr)
+        return 1
+
+    print(doc_path.read_text(encoding="utf-8"))
+    return 0
+
+
+def _add_docs_args(p):
+    p.add_argument("topic", nargs="?", default=None, help="Topic-Slug (z.B. 'telegram'). Ohne Arg: INDEX/Topic-Liste.")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 _STATUS_ENDPOINT = ("PATCH /boards/{board_id}/tasks/{task_id}",)
@@ -2117,5 +2213,13 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="vault:write",
         handler=_cmd_file_answer,
         add_args=_add_file_answer_args,
+    ),
+    "docs": CommandSpec(
+        name="docs",
+        help="L2 Reference Doc lesen (lokal, kein Netzwerk) — mc docs [topic]",
+        endpoints=(),
+        scope="",
+        handler=_cmd_docs,
+        add_args=_add_docs_args,
     ),
 }
