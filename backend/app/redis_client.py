@@ -23,6 +23,36 @@ async def close_redis() -> None:
         _redis = None
 
 
+RECOVERY_COMMENT_COOLDOWN_TTL = 600  # seconds — see RedisKeys.recovery_comment_cooldown
+
+
+async def try_claim_recovery_comment_cooldown(redis: aioredis.Redis, task_id: str) -> bool:
+    """Atomically claim the shared per-task "continue"-comment cooldown (G6).
+
+    Returns True if the caller won the race and should post its system
+    TaskComment (and has now set the cooldown for everyone else). Returns
+    False if another recovery mechanism already posted within the last
+    RECOVERY_COMMENT_COOLDOWN_TTL seconds — the caller must skip posting.
+
+    Uses SET NX EX (atomic check-and-set) rather than GET-then-SET so two
+    mechanisms racing on the same watchdog tick can't both observe "not set"
+    and both post.
+
+    Takes an already-resolved ``redis`` client (rather than calling
+    get_redis() itself) so callers keep using whichever get_redis reference
+    their own module/tests already patch — task_runner.py and internal.py
+    both hold a local ``redis`` from an earlier ``await get_redis()`` in the
+    same function.
+    """
+    claimed = await redis.set(
+        RedisKeys.recovery_comment_cooldown(task_id),
+        "1",
+        nx=True,
+        ex=RECOVERY_COMMENT_COOLDOWN_TTL,
+    )
+    return bool(claimed)
+
+
 # Redis key helpers
 class RedisKeys:
     @staticmethod
@@ -229,6 +259,25 @@ class RedisKeys:
         TTL 10min — a fresh bootstrap after that window is treated as a
         new restart worth re-recapping."""
         return f"mc:bootstrap:recovery_sent:{agent_id}:{task_id}"
+
+    @staticmethod
+    def recovery_comment_cooldown(task_id: str) -> str:
+        """Shared per-task cooldown for "continue"-style system TaskComments (G6).
+
+        Four independent mechanisms can each decide to post a "please
+        continue" system comment on the same task within minutes of each
+        other: Tier-3 recovery_recap (task_runner._run_tiered_recovery),
+        unblock_notify (agent_task_status.py), the ADR-046 lifecycle-watchdog
+        nudge (task_runner._check_stuck_in_progress), and the bootstrap
+        recovery recap (routers/internal.py). Each checks this key before
+        posting and sets it after — first mechanism to fire wins, the others
+        skip silently. TTL 600s: comfortably longer than any single
+        mechanism's own internal wait/retry window, short enough that a
+        genuinely NEW stall a few minutes later still gets its own nudge.
+
+        Does NOT gate operator-facing Approvals or Telegram notifications —
+        only the TaskComment spam."""
+        return f"mc:recovery:comment_cooldown:{task_id}"
 
     # ── Compaction Lock (Phase 6 CTX-02) ──────────────────────────────
     @staticmethod

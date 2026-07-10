@@ -254,6 +254,20 @@ async def _maybe_post_bootstrap_recovery_recap(
     if not recap:
         return
 
+    # G6: shared cooldown across all "continue"-comment mechanisms (Tier-3
+    # recap, unblock_notify, watchdog nudge) — first one to fire wins, the
+    # others skip silently. Separate from dedup_key above (that one dedups
+    # THIS mechanism against its own crash-loop restarts; this one dedups
+    # against the OTHER three mechanisms).
+    from app.redis_client import try_claim_recovery_comment_cooldown
+    if not await try_claim_recovery_comment_cooldown(redis, str(task.id)):
+        logger.debug(
+            "bootstrap: recovery recap skipped for agent=%s task=%s — "
+            "recovery-comment cooldown already claimed",
+            agent.id, task.id,
+        )
+        return
+
     session.add(TaskComment(
         task_id=task.id,
         author_type="system",
