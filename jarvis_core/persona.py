@@ -71,11 +71,6 @@ REGELN
     dispatch_status: bei "blocked"/nicht-dispatched sag, dass es (noch) nicht
     gestartet ist und warum. Wird der Name nicht erkannt (agent_not_found) → EINE
     kurze Rueckfrage an wen, nicht raten.
-- SCHWERE FRAGE (Analyse, Planung, Konzept, Abwaegung, Wissensfrage die NICHT im
-  Vault/Board steht) → ask_frontier(question). Sag kurz an ("einen Moment, ich denk
-  kurz nach") und gib die Antwort danach in EIGENEN Worten kompakt wieder — nicht
-  wie ein Dokument vorlesen. Fuer Recall aus dem eigenen Wissen bleibt query_memory/
-  search_notes richtig; ask_frontier ist fuer echtes Nachdenken, nicht fuer Lookup.
 - Status fragen → get_agent_status(agent_name) oder list_open_tasks().
 - Wissensfrage / "Was haben wir entschieden / besprochen" → query_memory(query).
   WICHTIG — KERNBEGRIFF, NICHT die exakte Phrase:
@@ -118,7 +113,6 @@ MORGENBRIEFING
 WORAUF DU REAGIERST
 - "Erstelle eine Task..." / "Notier mir..." / "Leg an..." → create_task
 - "Sag <Name>, er soll..." / "Lass <Name>..." / "<Name> soll jetzt..." → dispatch_to_agent
-- "Was haeltst du von..." / "Plan mir..." / "Analysier..." / "Wie wuerdest du..." → ask_frontier
 - "Was ist los?" / "Status?" / "Wie geht's <Name>?" → get_agent_status
 - "Was ist offen?" / "Welche Aufgaben?" → list_open_tasks
 - "Was haben wir entschieden / besprochen / festgehalten?" → query_memory
@@ -187,6 +181,19 @@ Du chattest mit dem Operator per Telegram-Text. Er tippt oder schickt Sprachnoti
 """
 
 
+# Nur eingefuegt wenn das ask_frontier-Tool aktiv ist (JARVIS_FRONTIER_ENABLED).
+# Sonst waere es ein toter Verweis auf ein Tool, das gar nicht im Schema steht.
+FRONTIER_ADDENDUM = """\
+SCHWERE FRAGEN — ask_frontier
+- SCHWERE FRAGE (Analyse, Planung, Konzept, Abwaegung, Wissensfrage die NICHT im
+  Vault/Board steht) → ask_frontier(question). Sag kurz an ("einen Moment, ich denk
+  kurz nach") und gib die Antwort danach in EIGENEN Worten kompakt wieder — nicht
+  wie ein Dokument vorlesen. Fuer Recall aus dem eigenen Wissen bleibt query_memory/
+  search_notes richtig; ask_frontier ist fuer echtes Nachdenken, nicht fuer Lookup.
+- Trigger: "Was haeltst du von..." / "Plan mir..." / "Analysier..." / "Wie wuerdest du..."
+"""
+
+
 # Kanal-Name → Addendum. Getrennt vom ``Channel``-Dataclass gehalten, damit die
 # Kanal-Definition (channels.py) keinen Persona-Text kennen muss.
 _ADDENDA = {
@@ -195,15 +202,28 @@ _ADDENDA = {
 }
 
 
-def build_instructions(channel: Channel, briefing_ctx: str | None = None) -> str:
+def build_instructions(
+    channel: Channel,
+    briefing_ctx: str | None = None,
+    frontier_enabled: bool | None = None,
+) -> str:
     """Setzt die Persona fuer einen Kanal zusammen.
 
     Args:
         channel: Ziel-Kanal (bestimmt welches Addendum angehaengt wird).
         briefing_ctx: optionaler vorformatierter Briefing-Kontext-Block, der als
             "Aktueller Kontext (Pre-Session Briefing)" angehaengt wird.
+        frontier_enabled: ob die ask_frontier-Passage eingefuegt wird. None →
+            aus dem Environment (JARVIS_FRONTIER_ENABLED) lesen, damit die Persona
+            keinen toten Verweis auf ein deaktiviertes Tool traegt.
     """
+    if frontier_enabled is None:
+        from jarvis_core import frontier
+        frontier_enabled = frontier.is_tool_enabled()
+
     parts = [PERSONA_CORE, _ADDENDA.get(channel.name, "")]
+    if frontier_enabled:
+        parts.append(FRONTIER_ADDENDUM)
     if briefing_ctx:
         parts.append(
             "## Aktueller Kontext (Pre-Session Briefing)\n" + briefing_ctx

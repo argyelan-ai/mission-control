@@ -33,7 +33,7 @@ import random
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, function_tool
 from livekit.plugins import openai, xai
 
-from jarvis_core import mc_client, tools as jtools
+from jarvis_core import frontier, mc_client, tools as jtools
 from jarvis_core.channels import VOICE
 from jarvis_core.persona import build_instructions
 
@@ -108,10 +108,25 @@ class VoiceAssistant(Agent):
         # OpenAI + xAI Realtime akzeptieren beide dieselbe TurnDetection-Struktur
         # via dict (_TURN_DETECTION oben, provider-agnostisch).
         briefing_ctx = self._format_briefing_as_context(briefing) if briefing else None
+        frontier_on = frontier.is_tool_enabled()
         super().__init__(
-            instructions=build_instructions(VOICE, briefing_ctx=briefing_ctx),
+            instructions=build_instructions(
+                VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_on
+            ),
             llm=_build_realtime_model(),
         )
+        # ask_frontier ist per JARVIS_FRONTIER_ENABLED gated (Default off, ADR-062):
+        # ist es aus, das Tool aus dem LiveKit-Schema entfernen, sodass das
+        # Realtime-Modell es gar nicht erst anbieten/aufrufen kann (Persona-Passage
+        # oben ist bereits konditional). Fail-soft: aendert sich die livekit-API,
+        # greift zusaetzlich der Gate-Check in jarvis_core.tools.dispatch.
+        if not frontier_on:
+            try:
+                remaining = [t for t in self.tools if getattr(t, "name", None) != "ask_frontier"]
+                if len(remaining) != len(self.tools):
+                    self.update_tools(remaining)
+            except Exception as e:  # noqa: BLE001 — never block session start on this
+                logger.warning("Could not strip ask_frontier tool from voice schema: %s", e)
 
     @staticmethod
     def _format_briefing_as_context(b: dict) -> str:

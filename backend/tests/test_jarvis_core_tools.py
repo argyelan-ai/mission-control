@@ -170,6 +170,7 @@ async def test_dispatch_to_agent_available_on_both_channels():
 
 @pytest.mark.asyncio
 async def test_ask_frontier_tool_delegates_to_frontier(monkeypatch):
+    monkeypatch.setenv("JARVIS_FRONTIER_ENABLED", "true")  # gate on
     from jarvis_core import frontier
 
     called: dict = {}
@@ -189,11 +190,51 @@ async def test_ask_frontier_tool_delegates_to_frontier(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_ask_frontier_tool_available_on_both_channels():
-    voice_names = {t.name for t in jtools.tools_for(VOICE)}
-    tg_names = {t.name for t in jtools.tools_for(TELEGRAM)}
-    assert "ask_frontier" in voice_names
-    assert "ask_frontier" in tg_names
+async def test_ask_frontier_tool_in_schema_only_when_gate_on(monkeypatch):
+    # Gate ON → offered on both channels.
+    monkeypatch.setenv("JARVIS_FRONTIER_ENABLED", "1")
+    assert "ask_frontier" in {t.name for t in jtools.tools_for(VOICE)}
+    assert "ask_frontier" in {t.name for t in jtools.tools_for(TELEGRAM)}
+    assert "ask_frontier" in {
+        s["function"]["name"] for s in jtools.openai_tool_schemas(TELEGRAM)
+    }
+
+    # Gate OFF (default) → NOT offered in any channel schema.
+    monkeypatch.setenv("JARVIS_FRONTIER_ENABLED", "false")
+    assert "ask_frontier" not in {t.name for t in jtools.tools_for(VOICE)}
+    assert "ask_frontier" not in {t.name for t in jtools.tools_for(TELEGRAM)}
+    assert "ask_frontier" not in {
+        s["function"]["name"] for s in jtools.openai_tool_schemas(TELEGRAM)
+    }
+    # Other tools remain unaffected by the frontier gate.
+    assert "dispatch_to_agent" in {t.name for t in jtools.tools_for(VOICE)}
+
+
+@pytest.mark.asyncio
+async def test_ask_frontier_dispatch_refused_when_gate_off(monkeypatch):
+    """Defense in depth: even if the model somehow requests it, dispatch refuses
+    when the gate is off — the handler is never reached."""
+    monkeypatch.setenv("JARVIS_FRONTIER_ENABLED", "false")
+    from jarvis_core import frontier
+
+    async def _boom(*a, **k):  # must not be called
+        raise AssertionError("ask_frontier should not run when gate is off")
+
+    monkeypatch.setattr(frontier, "ask_frontier", _boom)
+    res = await jtools.dispatch(
+        "ask_frontier", AsyncMock(), TELEGRAM, {"question": "x"},
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "tool_disabled"
+
+
+def test_persona_frontier_passage_is_conditional():
+    on = build_instructions(TELEGRAM, frontier_enabled=True)
+    off = build_instructions(TELEGRAM, frontier_enabled=False)
+    assert "ask_frontier" in on
+    assert "ask_frontier" not in off
+    # dispatch_to_agent guidance is NOT gated — present either way.
+    assert "dispatch_to_agent" in on and "dispatch_to_agent" in off
 
 
 @pytest.mark.asyncio

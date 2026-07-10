@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # Frontier-Modell fuer ask_frontier + das Morning-Briefing (schwere
     # Analyse/Planung). Leer → jarvis_core.frontier.DEFAULT_FRONTIER_MODEL.
     jarvis_frontier_model: str = ""
+    # Eigenes Gate fuer das ask_frontier-TOOL (Default off — jeder Aufruf kostet
+    # pro Anfrage). Off → Tool wird in keinem Kanal-Schema angeboten. Das
+    # Morning-Briefing (jarvis_briefing_enabled) ist davon unabhaengig.
+    jarvis_frontier_enabled: bool = False
     # Taegliches, LLM-generiertes Morgenbriefing als Vault-Note. Default off;
     # aktiv nur bei JARVIS_BRIEFING_ENABLED=true UND OPENAI_API_KEY gesetzt.
     jarvis_briefing_enabled: bool = False

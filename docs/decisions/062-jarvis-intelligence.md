@@ -32,10 +32,19 @@ Textmodell (ein einzelner Chat-Completions-Aufruf ohne Tools). Bewusst über
   5.6-Codenamen (luna/sol/terra unklar spezialisiert).
 - **Fallback-Kette:** konfiguriertes/Default-Modell → bei Aufruf-Fehler einmalig
   `gpt-4o` → sonst ehrlicher Fehler an Jarvis (der ihn narrativiert).
-- **Timeout** großzügig (120s). Persona: bei komplexen Fragen kurz ansagen
-  („einen Moment, ich denk kurz nach"), Antwort in eigenen Worten komprimiert
-  wiedergeben, nicht wie ein Dokument vorlesen.
-- Verfügbar auf **beiden** Kanälen (Voice + Telegram).
+- **Timeout** großzügig (120s), zusätzlich ein harter 90s-Gesamtdeckel über den
+  Tool-Aufruf (inkl. Fallback); token-gedeckelt (`max_completion_tokens`=800).
+  Persona: bei komplexen Fragen kurz ansagen („einen Moment, ich denk kurz nach"),
+  Antwort in eigenen Worten komprimiert wiedergeben, nicht wie ein Dokument vorlesen.
+- **Eigenes Feature-Gate `JARVIS_FRONTIER_ENABLED` (Default false)** — jeder
+  ask_frontier-Aufruf kostet pro Anfrage, daher opt-in. Ist es aus, wird das Tool
+  in **keinem** Kanal-Schema angeboten (Voice + Telegram) und die Persona-Passage
+  über „schwere Fragen delegieren" gar nicht erst eingefügt (kein toter Verweis).
+  Gegated an drei Stellen: `tools_for`/`openai_tool_schemas` (Telegram-Schema),
+  LiveKit-`update_tools` (Voice-Schema) und defensiv in `dispatch`. Der tägliche
+  Briefing-Job (C3) hat sein **eigenes** Gate `JARVIS_BRIEFING_ENABLED` + einen
+  max_tokens-Deckel + 1 Call/Tag und ist von diesem Gate **unberührt**.
+- Verfügbar (wenn Gate an) auf **beiden** Kanälen (Voice + Telegram).
 
 ### C2 — `dispatch_to_agent`-Tool (Agent sofort loslegen lassen)
 

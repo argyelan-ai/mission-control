@@ -40,9 +40,16 @@ class ToolSpec:
     handler: Handler
     #: Kanal-Namen, auf denen dieses Tool angeboten wird. Leer = alle.
     channels: frozenset[str] = field(default_factory=frozenset)
+    #: Optionales Feature-Gate. Gibt es False zurueck, wird das Tool weder im
+    #: Schema angeboten noch dispatcht (env-basiert, pro Aufruf ausgewertet). None
+    #: = immer aktiv. Beispiel: ask_frontier hinter JARVIS_FRONTIER_ENABLED.
+    enabled: Callable[[], bool] | None = None
 
     def available_on(self, channel: Channel) -> bool:
         return not self.channels or channel.name in self.channels
+
+    def is_enabled(self) -> bool:
+        return self.enabled is None or self.enabled()
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -90,6 +97,13 @@ async def _dispatch_to_agent(
     except Exception as e:
         logger.exception("dispatch_to_agent failed")
         return {"ok": False, "error": str(e)}
+
+
+def _frontier_tool_enabled() -> bool:
+    """Feature-Gate fuer das ask_frontier-Tool (lazy import — jarvis_core.frontier
+    liest JARVIS_FRONTIER_ENABLED aus dem Environment)."""
+    from jarvis_core import frontier
+    return frontier.is_tool_enabled()
 
 
 async def _ask_frontier(
@@ -514,6 +528,7 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
             "required": ["question"],
         },
         handler=_ask_frontier,
+        enabled=_frontier_tool_enabled,
     ),
     ToolSpec(
         name="list_open_tasks",
@@ -678,8 +693,8 @@ BY_NAME: dict[str, ToolSpec] = {t.name: t for t in ALL_TOOLS}
 
 
 def tools_for(channel: Channel) -> list[ToolSpec]:
-    """Die auf einem Kanal verfuegbaren Tools."""
-    return [t for t in ALL_TOOLS if t.available_on(channel)]
+    """Die auf einem Kanal verfuegbaren + aktivierten Tools."""
+    return [t for t in ALL_TOOLS if t.available_on(channel) and t.is_enabled()]
 
 
 def openai_tool_schemas(channel: Channel) -> list[dict[str, Any]]:
@@ -713,5 +728,13 @@ async def dispatch(
             "ok": False,
             "reason": "unavailable_on_channel",
             "message": f"Tool '{name}' ist auf {channel.label} nicht verfuegbar.",
+        }
+    # Feature-Gate (z.B. ask_frontier hinter JARVIS_FRONTIER_ENABLED): auch wenn das
+    # Tool nicht im Schema steht, hier defensiv abfangen statt den Handler zu rufen.
+    if not spec.is_enabled():
+        return {
+            "ok": False,
+            "reason": "tool_disabled",
+            "message": f"Tool '{name}' ist derzeit nicht aktiviert.",
         }
     return await spec.handler(client, channel, **(arguments or {}))

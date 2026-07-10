@@ -62,6 +62,20 @@ FALLBACK_FRONTIER_MODEL = "gpt-4o"
 DEFAULT_TIMEOUT_SECONDS = 120.0
 
 
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def is_tool_enabled() -> bool:
+    """Whether the ``ask_frontier`` TOOL is offered (Env ``JARVIS_FRONTIER_ENABLED``).
+
+    Default **false** (ADR-062): jeder ask_frontier-Aufruf kostet pro Anfrage, daher
+    opt-in. Gated wird NUR das interaktive Tool — der taegliche Briefing-Job (C3)
+    hat sein eigenes Gate ``JARVIS_BRIEFING_ENABLED``, einen max_tokens-Deckel und
+    laeuft 1x/Tag; er ist von diesem Gate NICHT betroffen.
+    """
+    return (os.environ.get("JARVIS_FRONTIER_ENABLED") or "").strip().lower() in _TRUTHY
+
+
 def resolve_model(explicit: str | None = None) -> str:
     """Bestimmt das Frontier-Modell: expliziter Arg → Env → Default."""
     return explicit or os.environ.get("JARVIS_FRONTIER_MODEL") or DEFAULT_FRONTIER_MODEL
