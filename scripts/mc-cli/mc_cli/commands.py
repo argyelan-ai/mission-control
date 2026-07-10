@@ -278,6 +278,62 @@ def _cmd_review(args, client, cfg):
     return _patch_status(client, cfg, "review")
 
 
+# ── Reviewer verdicts (approve / reject) ──────────────────────────────────
+#
+# Thin wrappers over POST /boards/{board_id}/tasks/{task_id}/review
+# (backend agent_task_status.agent_review_decision). Give a reviewer agent an
+# explicit verb for the two everyday verdicts instead of forcing a raw status
+# PATCH: `mc approve` (decision=approve) and `mc reject` (decision=request_changes).
+# The backend body requires a non-empty `comment`, so approve supplies a default
+# when no --feedback is given; reject hard-requires --feedback locally so the
+# author always gets an actionable reason.
+
+def _review_decision(client, cfg, *, decision: str, comment: str):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
+        body={"decision": decision, "comment": comment},
+    )
+    _emit(resp)
+    return 0
+
+
+def _cmd_approve(args, client, cfg):
+    """mc approve [--feedback ...] — Review approven (decision=approve)."""
+    comment = (getattr(args, "feedback", None) or "").strip() or "Approved."
+    return _review_decision(client, cfg, decision="approve", comment=comment)
+
+
+def _add_approve_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        default=None,
+        help="Optionale Begruendung/Notiz zum Approve (wird als review-comment gespeichert).",
+    )
+
+
+def _cmd_reject(args, client, cfg):
+    """mc reject --feedback ... — Changes anfordern (decision=request_changes)."""
+    feedback = (getattr(args, "feedback", None) or "").strip()
+    if not feedback:
+        raise UsageError(
+            "mc reject: --feedback ist Pflicht — der Author braucht einen "
+            "konkreten Grund, was geaendert werden soll."
+        )
+    return _review_decision(client, cfg, decision="request_changes", comment=feedback)
+
+
+def _add_reject_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        required=True,
+        help="Pflicht — was muss der Author aendern? Wird als review-comment gespeichert.",
+    )
+
+
 def _cmd_blocked(args, client, cfg):
     if not args.question and not args.description:
         raise UsageError("--question oder --description ist Pflicht bei `mc blocked`.")
@@ -312,19 +368,24 @@ def _cmd_failed(args, client, cfg):
 # lokal die 4 Pflichtfelder und Min-Length BEVOR irgendein HTTP-Call passiert,
 # damit Agents nicht erst auf 400-Antworten warten muessen.
 
-# Duplikat aus backend/app/constants.py REFLECTION_REQUIRED_FIELDS / _MIN_CHARS.
-# Public Contract — wenn Backend-Konstanten sich aendern, hier auch aendern.
-REFLECTION_REQUIRED_FIELDS = [
-    "Was wurde gemacht",
-    "Was hat funktioniert",
-    "Was war unklar",
-    "Lesson fuer Agent-Memory",
-]
-REFLECTION_MIN_CHARS = 80
+# Canonical reflection contract — sourced from the SINGLE in-container source of
+# truth (mc_cli/reflection.py), which itself is drift-guarded against
+# backend/app/constants.py REFLECTION_REQUIRED_FIELDS. Re-exported here as
+# module-level names so existing callers/tests (e.g. monkeypatching
+# commands.REFLECTION_MIN_CHARS) keep working.
+from . import reflection as _reflection  # noqa: E402
+REFLECTION_REQUIRED_FIELDS = _reflection.REFLECTION_REQUIRED_FIELDS
+REFLECTION_MIN_CHARS = _reflection.REFLECTION_MIN_CHARS
 
 
 def _validate_reflection(text: str) -> None:
     """Local validation matching backend/app/services/work_context.enforce_reflection.
+
+    Forgiving (B1): the header check is tolerant via mc_cli.reflection —
+    #/##/### level, case-insensitive, optional trailing colon, ü↔ue, and
+    English aliases ("What was done", ...) all count. Strict canonical input is
+    unaffected. This only additively rescues trivial local-model variance that
+    the backend gate (existence + length, no header check) accepts anyway.
 
     Raises UsageError mit klarem Hinweis bevor der HTTP-Call passiert.
     """
@@ -333,23 +394,13 @@ def _validate_reflection(text: str) -> None:
             "Reflexions-Text ist leer. Erwartet: alle 4 Pflichtfelder als `## <Feld>` Headers, "
             f"mind. {REFLECTION_MIN_CHARS} Zeichen total."
         )
-    missing = [f for f in REFLECTION_REQUIRED_FIELDS if f"## {f}" not in text]
-    if missing:
-        raise UsageError(
-            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
-            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
-        )
-    if len(text) < REFLECTION_MIN_CHARS:
-        raise UsageError(
-            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
-            f"Inhalt pro Feld ausfuehrlicher beschreiben."
-        )
-    # Detect the literal `\n` shell-escape pitfall: if the text was passed via
-    # `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
-    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and
-    # the comment renders as one unbroken line. Refuse early with a Hilfe-
-    # Hinweis. Heuristic: backslash-n appears AND no real newlines split the
-    # required headers — i.e. all four `## <Feld>` markers live on one line.
+    # Detect the literal `\n` shell-escape pitfall FIRST: if the text was passed
+    # via `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
+    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and the
+    # comment renders as one unbroken line. Must run BEFORE the field check —
+    # with everything on one line the tolerant header matcher can't recognise
+    # the headers, so it would otherwise mis-report "fields missing". Heuristic:
+    # backslash-n appears AND no real newlines split the required headers.
     has_real_newlines = "\n" in text
     has_literal_escape = "\\n" in text
     if has_literal_escape and not has_real_newlines:
@@ -360,6 +411,17 @@ def _validate_reflection(text: str) -> None:
             "oder ein Heredoc:\n"
             "  mc finish \"$(cat <<'EOF'\n"
             "  ## Was wurde gemacht\n  ...\n  EOF\n  )\""
+        )
+    missing = _reflection.missing_fields(text)
+    if missing:
+        raise UsageError(
+            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
+            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
+        )
+    if len(text) < REFLECTION_MIN_CHARS:
+        raise UsageError(
+            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
+            f"Inhalt pro Feld ausfuehrlicher beschreiben."
         )
 
 
@@ -509,6 +571,11 @@ def _cmd_finish(args, client, cfg):
     `mc review` separat re-tryen kann.
     """
     _validate_reflection(args.message)
+    # Normalize recognised headers to canonical German (idempotent on canonical
+    # input) so the POSTed reflection — and thus the memory pipeline's lesson
+    # extraction — always sees the canonical `## <German>` headers even when the
+    # model wrote English/###/ü variants (B1).
+    reflection_content = _reflection.normalize_reflection(args.message)
     target_status = "review" if args.review else "done"
     # --force: erst alle offenen Checklist-Items schliessen, dann normaler
     # Preflight (Status + Children). _preflight_finish wuerde sonst mit
@@ -529,7 +596,7 @@ def _cmd_finish(args, client, cfg):
         client.request(
             "POST",
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
-            body={"comment_type": "reflection", "content": args.message},
+            body={"comment_type": "reflection", "content": reflection_content},
         )
     else:
         # Eine recent reflection vom gleichen Agent gibt es schon — wir laufen
@@ -1828,6 +1895,22 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_review,
         add_args=_add_optional_task_id,
+    ),
+    "approve": CommandSpec(
+        name="approve",
+        help="Review approven (decision=approve). Optional --feedback als Notiz.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_approve,
+        add_args=_add_approve_args,
+    ),
+    "reject": CommandSpec(
+        name="reject",
+        help="Changes anfordern (decision=request_changes). --feedback ist Pflicht.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_reject,
+        add_args=_add_reject_args,
     ),
     "finish": CommandSpec(
         name="finish",

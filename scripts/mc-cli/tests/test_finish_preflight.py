@@ -378,6 +378,70 @@ def test_too_short_rejected(monkeypatch):
     assert "zu kurz" in str(exc.value).lower()
 
 
+# ── Forgiving validation (B1): trivial local-model variance must pass ──────
+
+
+def test_validate_accepts_hash_level_variants():
+    """### / # header levels are accepted (not only ##)."""
+    text = (
+        "### Was wurde gemacht\n" + "a" * 25 + "\n"
+        "# Was hat funktioniert\n" + "b" * 25 + "\n"
+        "### Was war unklar\n" + "c" * 25 + "\n"
+        "### Lesson fuer Agent-Memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_accepts_english_headers():
+    text = (
+        "## What was done\n" + "a" * 25 + "\n"
+        "## What worked\n" + "b" * 25 + "\n"
+        "## What was unclear\n" + "c" * 25 + "\n"
+        "## Lesson for agent memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_accepts_fuer_umlaut_and_case():
+    text = (
+        "## was wurde gemacht:\n" + "a" * 25 + "\n"
+        "## Was hat funktioniert\n" + "b" * 25 + "\n"
+        "## Was war unklar\n" + "c" * 25 + "\n"
+        "## Lesson für Agent-Memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_canonical_still_passes():
+    commands._validate_reflection(GOOD_REFLECTION)  # byte-identical strict path
+
+
+def test_finish_normalizes_english_headers_before_post():
+    """`mc finish` with English headers -> POSTed reflection carries canonical
+    German headers so the memory pipeline sees them."""
+    english = (
+        "## What was done\n" + "a" * 25 + "\n"
+        "## What worked\n" + "b" * 25 + "\n"
+        "## What was unclear\n" + "c" * 25 + "\n"
+        "## Lesson for agent memory\n" + "d" * 25
+    )
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {}),
+    ])
+    rc = commands._cmd_finish(_Args(message=english), client, cfg)
+    assert rc == 0
+    post = next(c for c in client.calls if c["method"] == "POST")
+    content = post["body"]["content"]
+    assert "## Was wurde gemacht" in content
+    assert "## Lesson fuer Agent-Memory" in content
+    assert "What was done" not in content
+
+
 # ── `mc checklist skip <id>` — out-of-role items (2026-07-08 handoff fix) ───
 #
 # An agent can hit a checklist item it physically cannot do (a live Vercel
