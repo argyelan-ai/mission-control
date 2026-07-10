@@ -25,6 +25,7 @@ router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 async def build_runtime_env(
     runtime: "Runtime | None",
     session: AsyncSession,
+    agent: "Agent | None" = None,
 ) -> dict[str, str]:
     """Returns the env vars a container needs for this runtime.
 
@@ -41,7 +42,18 @@ async def build_runtime_env(
         OPENAI_BASE_URL + OPENAI_MODEL, NO Anthropic tokens. A dedicated
         branch (instead of just falling through the else path) gives Phase 25
         a clean hook for HERMES_HOME / HERMES_PROFILE / profile switching
-        without routing on slug prefixes.
+        without routing on slug prefixes. hermes is a host worker, outside
+        the harness x runtime-type matrix (ADR-056) — stays runtime_type-gated.
+
+    B3 (Workstream W1-C, ADR-056 follow-up): every other branch now resolves
+    the EFFECTIVE HARNESS first (agent.harness, falling back to
+    derive_harness(runtime) for legacy NULL-harness rows) and branches on
+    THAT instead of runtime.runtime_type — the harness is what actually
+    decides which binary/transport the container speaks, and ADR-056
+    decoupled harness from runtime freely-combinable. A harness explicitly
+    set on the agent always wins, even over a mismatched runtime protocol
+    (that mismatch is a compatibility-validation concern elsewhere, not
+    something this function should silently paper over).
     """
     tokens: dict[str, str] = {}
     if runtime is None or not runtime.enabled:
@@ -54,25 +66,40 @@ async def build_runtime_env(
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         return tokens
-    if runtime.runtime_type == "omp":
+
+    from app.services.harness_compat import derive_harness, runtime_protocol
+
+    harness = (agent.harness if agent is not None else None) or derive_harness(runtime)
+
+    if harness == "omp":
         # ADR-045: omp headless runtime — OpenAI-compatible transport (Qwen on
-        # the DGX Spark), NO Anthropic auth. Explicit branch (mirroring hermes)
-        # rather than falling through the else-path: gives a clean hook for
-        # OMP_PROFILE / models.yml rendering without routing on a slug prefix.
-        # The container entrypoint renders omp's native models.yml provider from
-        # these two vars — runtime.endpoint stays the single source of truth for
-        # the URL, and the .env token path is NOT duplicated.
+        # the DGX Spark), NO Anthropic auth. The container entrypoint renders
+        # omp's native models.yml provider from these two vars —
+        # runtime.endpoint stays the single source of truth for the URL, and
+        # the .env token path is NOT duplicated.
         if runtime.endpoint:
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         return tokens
-    from app.services.harness_compat import runtime_protocol
-    if runtime_protocol(runtime) == "anthropic":
+    if harness == "claude":
         # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
         # resolve_provider_credentials (ADR-056) — no longer loaded here to
         # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
         # the claude binary talks to api.anthropic.com directly.
+        return tokens
+    if harness == "openclaude":
+        if runtime.endpoint:
+            tokens["OPENAI_BASE_URL"] = runtime.endpoint
+        if runtime.model_identifier:
+            tokens["OPENAI_MODEL"] = runtime.model_identifier
+        return tokens
+
+    # NULL-harness fallback (regression guard): harness could not be
+    # determined from the agent OR derived from the runtime (unclassified
+    # runtime_type) — replicate the pre-B3 runtime_type-only behavior so
+    # unmigrated/unknown rows keep working exactly as before.
+    if runtime_protocol(runtime) == "anthropic":
         return tokens
     if runtime.endpoint:
         tokens["OPENAI_BASE_URL"] = runtime.endpoint
@@ -151,7 +178,7 @@ async def agent_bootstrap(
     if agent.runtime_id:
         from app.models.runtime import Runtime
         runtime = await session.get(Runtime, agent.runtime_id)
-        rt_env = await build_runtime_env(runtime, session)
+        rt_env = await build_runtime_env(runtime, session, agent=agent)
         tokens.update(rt_env)
 
     # Provider auth (ADR-056, amended 2026-07-05): agent secret > runtime
