@@ -99,6 +99,10 @@ class TelegramBotService:
         self._task: asyncio.Task | None = None
         self._offset: int = 0  # getUpdates offset
         self._client: httpx.AsyncClient | None = None
+        # Jarvis Telegram-Inbound (ADR-061). The handler stays inert unless the
+        # feature is gated on (JARVIS_TELEGRAM_ENABLED + keys present).
+        from app.services.jarvis_telegram import JarvisTelegramHandler
+        self._jarvis = JarvisTelegramHandler(self)
 
     @property
     def configured(self) -> bool:
@@ -190,6 +194,34 @@ class TelegramBotService:
             logger.warning("editMessageText error: %s", e)
             return False
 
+    async def get_file_bytes(self, file_id: str) -> bytes | None:
+        """Resolve a Telegram file_id → download its bytes (voice notes etc.).
+
+        Two-step Telegram flow: getFile returns a temporary file_path, then the
+        binary is fetched from the /file/bot<token>/<path> URL. Returns None on
+        any failure (caller degrades gracefully).
+        """
+        client = await self._get_client()
+        try:
+            resp = await client.get(self._api_url("getFile"), params={"file_id": file_id})
+            data = resp.json()
+            if not data.get("ok"):
+                logger.warning("getFile failed: %s", data.get("description"))
+                return None
+            file_path = data["result"]["file_path"]
+            file_url = (
+                f"https://api.telegram.org/file/bot"
+                f"{settings.telegram_bot_token}/{file_path}"
+            )
+            file_resp = await client.get(file_url)
+            if file_resp.status_code != 200:
+                logger.warning("Telegram file download failed: %s", file_resp.status_code)
+                return None
+            return file_resp.content
+        except Exception as e:
+            logger.warning("get_file_bytes error: %s", e)
+            return None
+
     async def answer_callback_query(
         self, callback_query_id: str, text: str
     ) -> None:
@@ -280,19 +312,21 @@ class TelegramBotService:
     # ── Poller ──────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        # DEPRECATED: polling disabled — URL buttons instead of callback buttons.
-        # Old code stays until the URL flow is proven in production.
-        logger.info("Telegram bot ready (polling disabled — using URL buttons)")
-        return
-        # --- Old code below stays but is never reached ---
-        if not self.configured:  # noqa: E501 — dead code, intentionally kept
-            logger.info("Telegram bot not configured — skipping")
+        # Approval notifications use URL buttons (no polling needed). Polling is
+        # (re)started ONLY for Jarvis Telegram-Inbound (ADR-061), gated behind
+        # JARVIS_TELEGRAM_ENABLED. With the feature off, behaviour is unchanged:
+        # no getUpdates loop at all.
+        if not self._jarvis.enabled:
+            logger.info("Telegram bot ready (inbound disabled — URL-button approvals only)")
+            return
+        if not self.configured:
+            logger.info("Telegram bot not configured — skipping Jarvis inbound poll")
             return
         if self._running:
             return
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
-        logger.info("Telegram poller started (interval=%ds)", POLL_INTERVAL)
+        logger.info("Jarvis Telegram inbound poller started (interval=%ds)", POLL_INTERVAL)
 
     async def stop(self) -> None:
         self._running = False
@@ -327,7 +361,8 @@ class TelegramBotService:
                 params={
                     "offset": self._offset,
                     "timeout": 1,
-                    "allowed_updates": json.dumps(["callback_query"]),
+                    # ADR-061: subscribe to message updates too (Jarvis inbound).
+                    "allowed_updates": json.dumps(["callback_query", "message"]),
                 },
             )
             data = resp.json()
@@ -343,6 +378,21 @@ class TelegramBotService:
             callback = update.get("callback_query")
             if callback:
                 await self._handle_callback(callback)
+                continue
+            message = update.get("message")
+            if message:
+                await self._handle_inbound_message(message)
+
+    async def _handle_inbound_message(self, message: dict) -> None:
+        """Route an inbound Telegram message to the Jarvis handler (ADR-061).
+
+        Wrapped so a handler error never breaks the poll loop. The chat_id gate
+        lives inside JarvisTelegramHandler.handle_message.
+        """
+        try:
+            await self._jarvis.handle_message(message)
+        except Exception as e:  # noqa: BLE001 — isolate per-message failures
+            logger.exception("Jarvis inbound handler error: %s", e)
 
     async def _handle_callback(self, callback: dict) -> None:
         callback_id = callback["id"]
