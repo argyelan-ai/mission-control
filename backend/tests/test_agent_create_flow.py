@@ -123,6 +123,33 @@ async def test_create_manual_agent_does_not_auto_provision(auth_client, monkeypa
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_create_host_agent_does_not_schedule_background_provisioning(
+    auth_client, async_session, monkeypatch
+):
+    # Regression (2026-07-10): create_agent used to schedule
+    # _provision_agent_background for host agents too, which hits the no-op
+    # host stub and falsely flips provision_status -> "provisioned" (no files
+    # staged), racing the wizard's explicit POST /provision call.
+    calls = []
+
+    async def _recorder(agent_id):
+        calls.append(agent_id)
+
+    monkeypatch.setattr(agents_module, "_provision_agent_background", _recorder)
+
+    resp = await auth_client.post(
+        "/api/v1/agents", json={"name": "Host Hopeful", "agent_runtime": "host"}
+    )
+    assert resp.status_code == 201
+    assert calls == []
+
+    from app.models.agent import Agent
+    agent_id = uuid.UUID(resp.json()["id"])
+    refreshed = await async_session.get(Agent, agent_id)
+    assert refreshed.provision_status == "local"
+
+
 # ── Auto-provision behavior ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

@@ -190,7 +190,11 @@ async def create_agent(
         # compose + container start. Bridge down → honest provision_failed
         # event with remediation; the agent stays 'local'.
         background_tasks.add_task(_auto_provision_cli_bridge, agent.id, raw_token)
-    elif payload.agent_runtime not in ("free-code-bridge", "manual"):
+    elif payload.agent_runtime not in ("free-code-bridge", "manual", "host"):
+        # Host agents provision via the wizard's explicit POST /provision
+        # call — scheduling this here would race it and, since the host
+        # branch of provision_agent_background() is a no-op, falsely flip
+        # provision_status to "provisioned" before any files are staged.
         background_tasks.add_task(_provision_agent_background, agent.id)
     result = agent.model_dump()
     result["token"] = raw_token  # returned once, never stored in plaintext

@@ -5,6 +5,7 @@ operator can review and launchctl-load them. SAFETY: launchctl is never
 run in tests, and autoload is gated behind a feature flag (default off).
 """
 import os
+import uuid
 
 import pytest
 
@@ -227,6 +228,74 @@ async def test_provision_endpoint_stages_generic_host_agent(
     # doesn't see that commit until forced to repopulate from the DB.
     refreshed = await async_session.get(A, agent.id, populate_existing=True)
     assert refreshed.provision_status == "provisioning"
+
+
+@pytest.mark.asyncio
+async def test_host_onboarding_chain_create_provision_health_check(
+    auth_client, async_session, home_host, monkeypatch
+):
+    """End-to-end wizard chain for a host agent (2026-07-10):
+
+    POST /agents (agent_runtime=host) must NOT falsely flip provision_status
+    to "provisioned" via background auto-provisioning (regression covered in
+    isolation by test_agent_create_flow.py, exercised here as part of the
+    full chain) -> the wizard's explicit POST /provision stages the files
+    and returns launchctl_command + a fresh token -> POST /health-check
+    reports runtime-aware host checks. launchctl is never executed.
+    """
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", False)
+
+    def _boom(*a, **k):
+        raise AssertionError("launchctl must never run in this test")
+
+    monkeypatch.setattr(hp.subprocess, "run", _boom)
+
+    from app.models.runtime import Runtime as R
+
+    rt = R(slug="chain-host-rt", display_name="Chain Host", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    create_resp = await auth_client.post(
+        "/api/v1/agents",
+        json={
+            "name": "Chain Host Agent",
+            "agent_runtime": "host",
+            "runtime_id": "chain-host-rt",
+            "harness": "openclaude",
+            "scopes": ["tasks:read"],
+        },
+    )
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["id"]
+
+    # No false "provisioned" flip from background auto-provisioning racing
+    # ahead of the wizard's explicit provision call.
+    from app.models.agent import Agent as A
+    fresh = await async_session.get(A, uuid.UUID(agent_id), populate_existing=True)
+    assert fresh.provision_status == "local"
+
+    provision_resp = await auth_client.post(f"/api/v1/agents/{agent_id}/provision")
+    assert provision_resp.status_code == 200
+    provision_body = provision_resp.json()
+    assert "launchctl bootstrap" in provision_body["launchctl_command"]
+    assert provision_body.get("token")
+
+    staged = await async_session.get(A, uuid.UUID(agent_id), populate_existing=True)
+    assert staged.provision_status == "provisioning"
+
+    health_resp = await auth_client.post(f"/api/v1/agents/{agent_id}/health-check")
+    assert health_resp.status_code == 200
+    health_body = health_resp.json()
+    assert health_body["runtime"] == "host"
+    labels = [c["label"] for c in health_body["checks"]]
+    assert "host heartbeat" in labels
 
 
 @pytest.mark.asyncio
