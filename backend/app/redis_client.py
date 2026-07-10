@@ -155,6 +155,18 @@ class RedisKeys:
         return f"mc:dispatch:pending_warn:{task_id}"
 
     @staticmethod
+    def dispatch_resume_suppress(task_id: str) -> str:
+        """G4 (W2-A): set right after a Tier-3 recovery resume re-dispatches
+        a task (dispatched_at/ack_at reset + redispatch). _check_dispatch_ack
+        checks this before escalating an ACK-timeout approval — a resume is
+        semantically a RESUME, not a fresh dispatch, so it must not re-arm
+        the ACK escalation ladder and fire its own Approval concurrently
+        with the recovery that caused it. TTL = the agent's ack timeout +
+        margin, so a genuinely-never-acked resume still escalates once the
+        suppression window elapses."""
+        return f"mc:dispatch:resume_suppress:{task_id}"
+
+    @staticmethod
     def task_runner_stale(task_id: str) -> str:
         return f"mc:task_runner:stale:{task_id}"
 
