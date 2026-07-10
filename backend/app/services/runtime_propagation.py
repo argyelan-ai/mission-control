@@ -119,7 +119,12 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
             status = str(result.get("status", ""))
             if status.startswith("error"):
                 raise RuntimeError(f"container restart failed: {status}")
-            ready = _OMP_READY_SIGNALS if runtime.runtime_type == "omp" else None
+            # B3 (harness-first, ADR-056 follow-up): the omp ready-signal glyphs
+            # apply to whichever harness is actually running in the container,
+            # not to a runtime_type label — agent.harness wins, derive_harness
+            # is the legacy-row fallback (mirrors mark_agents_for_recreate above).
+            effective_harness = agent.harness or derive_harness(runtime)
+            ready = _OMP_READY_SIGNALS if effective_harness == "omp" else None
             health = await wait_for_agent_healthy(
                 agent, timeout=60, respawn_mode=False, ready_signals=ready
             )
@@ -282,9 +287,9 @@ async def _recreate_one(session: AsyncSession, agent: Agent) -> None:
             status = str(result.get("status", ""))
             if status.startswith("error"):
                 raise RuntimeError(f"container recreate failed: {status}")
-            ready = _OMP_READY_SIGNALS if (
-                runtime and runtime.runtime_type == "omp"
-            ) else None
+            # B3 (harness-first, ADR-056 follow-up): same treatment as _sync_one.
+            effective_harness = agent.harness or (derive_harness(runtime) if runtime else None)
+            ready = _OMP_READY_SIGNALS if effective_harness == "omp" else None
             health = await wait_for_agent_healthy(
                 agent,
                 timeout=_RECREATE_HEALTH_TIMEOUT,

@@ -704,6 +704,38 @@ def restart_docker_agent_container(
         env_main = repo_root / ".env"
         env_agents = repo_root / "docker" / ".env.agents"
         env_shared = repo_root / "docker" / ".env.shared"
+
+        # Preflight (B2.1): verify compose_main is actually readable and
+        # non-empty from inside the backend container BEFORE invoking
+        # `docker compose`. Docker Desktop single-file bind mounts (compose_main
+        # is mounted individually, not as part of a directory mount) go stale
+        # — become ENOENT or read as empty — when the HOST file underneath is
+        # replaced atomically (git checkout, editor atomic save). Without this
+        # guard, `docker compose` fails with an opaque "no such file or
+        # directory" that gives no hint the fix is a backend restart, not a
+        # repo/checkout problem. This exact incident happened 2026-07 and cost
+        # a full diagnosis session.
+        try:
+            compose_main_readable = compose_main.is_file() and compose_main.stat().st_size > 0
+        except OSError:
+            compose_main_readable = False
+        if not compose_main_readable:
+            logger.error(
+                "force_recreate(%s) aborted preflight — %s is not readable/empty "
+                "inside the backend container (stale bind mount)",
+                container_name, compose_main,
+            )
+            return {
+                "status": (
+                    "error: docker-compose.yml is not readable inside the backend "
+                    "container — Docker Desktop single-file bind mounts go stale "
+                    "when the host file is replaced (git checkout/editor atomic "
+                    "save). Fix: docker compose restart backend, then retry the switch."
+                ),
+                "container": container_name,
+                "mode": "recreate",
+            }
+
         # Compose v2 supports multiple `--env-file` flags. The agents compose
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come

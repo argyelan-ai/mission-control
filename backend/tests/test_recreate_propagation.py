@@ -156,6 +156,29 @@ async def test_recreate_omp_passes_ready_signals(async_session, fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_recreate_ready_signals_follow_harness_not_runtime_type(async_session, fake_redis):
+    """B3 (Workstream W1-C): agent.harness='omp' on a NON-omp runtime_type
+    still gets the omp ready-signal glyphs during recreate — same treatment
+    as _sync_one."""
+    rt = await _mk_rt(async_session)  # runtime_type="vllm_docker"
+    agent = await _mk_agent(async_session, rt, name="OmpAgent",
+                            harness="omp", pending=True)
+
+    with (
+        patch.object(rp, "restart_docker_agent_container",
+                     MagicMock(return_value={"status": "recreated"})),
+        patch.object(rp, "wait_for_agent_healthy",
+                     new=AsyncMock(return_value={"healthy": True})) as mock_health,
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await rp.recreate_pending_agents(async_session)
+
+    assert mock_health.await_args.kwargs["ready_signals"] == rp._OMP_READY_SIGNALS
+
+
+@pytest.mark.asyncio
 async def test_recreate_circuit_breaker_gives_up(async_session, fake_redis):
     rt = await _mk_rt(async_session)
     agent = await _mk_agent(async_session, rt, harness="openclaude", pending=True)

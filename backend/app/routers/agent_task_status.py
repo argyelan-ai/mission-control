@@ -2279,13 +2279,25 @@ async def agent_update_task(
                         f"(GET /api/v1/agent/boards/{board_id}/tasks/{task.id}/comments) "
                         f"und arbeite sofort an diesem Task weiter."
                     )
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        content=msg,
-                        comment_type="unblock_notify",
-                    ))
-                    await session.commit()
+                    # G6: shared cooldown across all "continue"-comment
+                    # mechanisms (Tier-3 recap, watchdog nudge, bootstrap
+                    # recap) — first one to fire wins, others skip silently.
+                    from app.redis_client import get_redis, try_claim_recovery_comment_cooldown
+                    _redis = await get_redis()
+                    if await try_claim_recovery_comment_cooldown(_redis, str(task.id)):
+                        session.add(TaskComment(
+                            task_id=task.id,
+                            author_type="system",
+                            content=msg,
+                            comment_type="unblock_notify",
+                        ))
+                        await session.commit()
+                    else:
+                        logger.debug(
+                            "unblock_notify skipped for task %s — "
+                            "recovery-comment cooldown already claimed",
+                            task.id,
+                        )
 
     return task
 
