@@ -197,6 +197,46 @@ async def create_agent(
     return result
 
 
+class SoulPreviewRequest(BaseModel):
+    name: str
+    emoji: str | None = "🤖"
+    role: str | None = None
+    soul_md: str | None = None
+    board_id: uuid.UUID | None = None
+    is_board_lead: bool = False
+    scopes: list[str] = []
+
+
+@router.post("/agents/preview-soul")
+async def preview_soul(
+    payload: SoulPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Render SOUL.md.j2 for a transient (non-persisted) agent.
+
+    Powers the wizard's live persona preview (Step 2). No DB write, no
+    provisioning — a draft render only. Best-effort: template errors return
+    a soft message instead of a 500 so the preview never blocks typing.
+    """
+    draft = Agent(
+        name=payload.name,
+        emoji=payload.emoji,
+        role=payload.role,
+        soul_md=payload.soul_md,
+        board_id=payload.board_id,
+        is_board_lead=payload.is_board_lead,
+        scopes=payload.scopes,
+    )
+    try:
+        context = build_agent_context(draft, board_id=str(payload.board_id) if payload.board_id else None)
+        soul = render_agent_file("SOUL.md.j2", context)
+    except Exception as exc:  # noqa: BLE001 — preview must never hard-fail
+        logger.warning("preview_soul render failed for draft %s: %s", payload.name, exc)
+        soul = f"# {payload.emoji or ''} {payload.name}\n\n_(Vorschau nicht verfügbar — Standard-SOUL wird beim Erstellen erzeugt.)_"
+    return {"soul_md": soul}
+
+
 async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> None:
     """One-click provisioning chain for freshly created cli-bridge agents.
 
