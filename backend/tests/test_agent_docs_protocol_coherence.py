@@ -17,12 +17,22 @@ agents read at provision time:
    the `X-Dispatch-Attempt-Id` header, which the backend rejects with 409
    by design — agents copy-pasting that example would hard-fail their very
    first action.
+4. template_seeder.py's builtin AgentTemplates (seeded into the DB on every
+   backend startup, overwriting soul_md when it differs) still taught the
+   legacy protocol: "ACK: Immediately PATCH status: in_progress" and
+   "Create a checkpoint ... (comment_type: \"checkpoint\")" — `checkpoint`
+   isn't even a valid comment_type anymore, making the guidance actively
+   harmful. Every agent created from "Add Agent → <builtin template>" got
+   instructions contradicting the fixed SOUL/TOOLS.
 """
 import uuid
+
+import pytest
 
 from app.models.agent import Agent
 from app.routers.cli_terminal import _CLI_BRIDGE_PROTOCOL
 from app.services.template_renderer import build_agent_context, render_agent_file
+from app.services.template_seeder import BUILTIN_TEMPLATES
 from app.services.tools_md_builder import generate_tools_md
 
 
@@ -96,8 +106,16 @@ def test_tools_md_no_dead_checkpoint_command():
         board_id="board-uuid-123",
         is_board_lead=False,
     )
-    assert "mc checkpoint " not in result, (
-        "`mc checkpoint` is a dead command — must not appear as an example"
+    # Robust against formatting: match the command itself, not a specific
+    # trailing character. A prose mention like "`mc checkpoint` no longer
+    # exists" is fine — an executable example line starting with the command
+    # is not.
+    example_lines = [
+        line for line in result.splitlines()
+        if line.strip().startswith("mc checkpoint")
+    ]
+    assert not example_lines, (
+        f"`mc checkpoint` is a dead command — must not appear as an example: {example_lines}"
     )
 
 
@@ -178,3 +196,48 @@ def test_orchestrator_soul_has_no_headerless_status_patch():
             assert "X-Dispatch-Attempt-Id" in block, (
                 f"found a header-less status-PATCH curl block:\n{block}"
             )
+
+
+# ── 4. Builtin AgentTemplates (template_seeder) — mc-first protocol ──────────
+#
+# These soul_md strings are seeded/overwritten in the DB on EVERY backend
+# startup (main.py → seed_builtin_templates), so every agent created from
+# "Add Agent → <template>" inherits them. They must teach the same mc-first
+# protocol as SOUL.md.j2 / TOOLS.md / _CLI_BRIDGE_PROTOCOL.
+
+_TEMPLATE_IDS = [spec["name"] for spec in BUILTIN_TEMPLATES]
+
+
+@pytest.mark.parametrize("spec", BUILTIN_TEMPLATES, ids=_TEMPLATE_IDS)
+def test_builtin_template_has_no_raw_status_patch(spec):
+    """No builtin template may instruct a raw `PATCH status:` — that path
+    409s without the X-Dispatch-Attempt-Id header; `mc` verbs handle it."""
+    assert "PATCH status:" not in spec["soul_md"], (
+        f"template '{spec['name']}' still teaches raw PATCH status"
+    )
+
+
+@pytest.mark.parametrize("spec", BUILTIN_TEMPLATES, ids=_TEMPLATE_IDS)
+def test_builtin_template_has_no_checkpoint_protocol(spec):
+    """`checkpoint` is not a valid comment_type (POST /checkpoint is 410,
+    the type is silent/audit-only where it survives) — the checklist is the
+    progress mechanism. No template may instruct checkpoint comments."""
+    soul = spec["soul_md"]
+    assert 'comment_type: "checkpoint"' not in soul, (
+        f"template '{spec['name']}' still teaches checkpoint comments"
+    )
+    for line in soul.splitlines():
+        lowered = line.lower()
+        if "checkpoint" in lowered:
+            raise AssertionError(
+                f"template '{spec['name']}' still references checkpoints: {line!r}"
+            )
+
+
+@pytest.mark.parametrize("spec", BUILTIN_TEMPLATES, ids=_TEMPLATE_IDS)
+def test_builtin_template_teaches_mc_ack_and_mc_finish(spec):
+    """Every builtin template handles tasks → must teach the mc-first ACK
+    (`mc ack`) and the atomic close (`mc finish`)."""
+    soul = spec["soul_md"]
+    assert "mc ack" in soul, f"template '{spec['name']}' lacks `mc ack`"
+    assert "mc finish" in soul, f"template '{spec['name']}' lacks `mc finish`"

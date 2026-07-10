@@ -34,7 +34,7 @@ ALL_COMMENT_TYPES: Final[frozenset[str]] = frozenset({
 # already-assigned task. Default comments (`message`) are deliberately NOT
 # delivered (echo-loop protection / audit routine) — anyone wanting to
 # nudge a worker uses either `mc delegate` (own sub-task) or
-# `mc comment --type handoff` (wake signal on an existing task). See bug memo
+# `mc comment handoff "..."` (wake signal on an existing task). See bug memo
 # project_open_bugs_mc_agent_observability.md.
 DELIVERABLE_SYSTEM_TYPES: Final[frozenset[str]] = frozenset({
     "subtask_completed", "resolution", "blocker", "system", "feedback",
