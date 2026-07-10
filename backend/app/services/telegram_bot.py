@@ -316,6 +316,11 @@ class TelegramBotService:
         # (re)started ONLY for Jarvis Telegram-Inbound (ADR-061), gated behind
         # JARVIS_TELEGRAM_ENABLED. With the feature off, behaviour is unchanged:
         # no getUpdates loop at all.
+        if settings.jarvis_telegram_enabled and not self._jarvis.core_available:
+            logger.warning(
+                "JARVIS_TELEGRAM_ENABLED=true but jarvis_core is not importable "
+                "— Telegram-Jarvis disabled (check the ./jarvis_core mount)."
+            )
         if not self._jarvis.enabled:
             logger.info("Telegram bot ready (inbound disabled — URL-button approvals only)")
             return

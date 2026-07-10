@@ -91,7 +91,9 @@ class JarvisBrain:
         if self._owns_http and self._http is not None and not self._http.is_closed:
             await self._http.aclose()
 
-    async def _chat_completion(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+    async def _chat_completion(
+        self, messages: list[dict[str, Any]], tool_choice: str = "auto"
+    ) -> dict[str, Any]:
         http = await self._get_http()
         resp = await http.post(
             f"{self._base_url}/chat/completions",
@@ -100,7 +102,7 @@ class JarvisBrain:
                 "model": self._model,
                 "messages": messages,
                 "tools": jtools.openai_tool_schemas(self._channel),
-                "tool_choice": "auto",
+                "tool_choice": tool_choice,
             },
         )
         resp.raise_for_status()
@@ -170,9 +172,11 @@ class JarvisBrain:
                     }
                 )
 
-        # Tool-Iterationslimit erreicht — letzte Modellantwort ohne weitere Tools holen.
+        # Tool-Iterationslimit erreicht — finale Antwort erzwingen: tool_choice="none"
+        # verbietet dem Modell einen weiteren Tool-Call, sonst könnte es endlos
+        # Tools anfordern und der Operator bekäme nie Text.
         logger.warning("JarvisBrain hit max_tool_iters=%d", self._max_tool_iters)
-        data = await self._chat_completion(messages)
+        data = await self._chat_completion(messages, tool_choice="none")
         message = (data.get("choices") or [{}])[0].get("message") or {}
         text = (message.get("content") or "").strip()
         return BrainResult(

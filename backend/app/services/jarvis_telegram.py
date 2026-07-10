@@ -63,6 +63,11 @@ class JarvisTelegramHandler:
         self.bot = bot
 
     @property
+    def core_available(self) -> bool:
+        """Whether the shared jarvis_core package imported (mount present)."""
+        return _JARVIS_CORE_OK
+
+    @property
     def enabled(self) -> bool:
         return bool(
             _JARVIS_CORE_OK
@@ -117,7 +122,7 @@ class JarvisTelegramHandler:
 
         if not text and message.get("voice"):
             transcript = await self._transcribe_voice(message["voice"])
-            if transcript is None:
+            if not transcript:
                 await self.bot.send_message(
                     "Ich konnte die Sprachnachricht nicht verstehen — versuch's nochmal "
                     "oder tipp's kurz."
@@ -128,8 +133,13 @@ class JarvisTelegramHandler:
             voice_prefix = f"🎤 Verstanden: „{transcript}“\n\n"
 
         if not text:
-            # Weder Text noch Voice (z.B. Sticker/Photo) — still ignorieren.
-            logger.info("Jarvis inbound: non-text/voice message ignored")
+            # Autorisierter Chat, aber weder Text noch Voice (Foto/Sticker/Dokument).
+            # Kurz Bescheid geben statt still zu verwerfen — Fremd-Chats wurden oben
+            # bereits gefiltert und bleiben komplett stumm.
+            logger.info("Jarvis inbound: unsupported media type from operator chat")
+            await self.bot.send_message(
+                "Ich kann aktuell nur Text- und Sprachnachrichten verarbeiten."
+            )
             return
 
         try:

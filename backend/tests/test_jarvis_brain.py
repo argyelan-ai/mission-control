@@ -143,6 +143,28 @@ async def test_brain_telegram_schema_excludes_highlight_graph():
 
 
 @pytest.mark.asyncio
+async def test_brain_forces_final_answer_after_max_iters():
+    """When the model keeps requesting tools past max_tool_iters, the final
+    catch-up call must force tool_choice='none' so the operator always gets text."""
+    http = _FakeHTTP([
+        _assistant_tool_call("list_open_tasks", {}),  # consumed in the single loop pass
+        _assistant_text("Ok, hier ist die Zusammenfassung."),  # forced final answer
+    ])
+    client = AsyncMock()
+    client.list_open_tasks = AsyncMock(return_value={"ok": True, "count": 0, "tasks": []})
+    brain = JarvisBrain(
+        api_key="sk-test", model="gpt-4o-mini", client=client, channel=TELEGRAM,
+        system_prompt="SYS", http_client=http, max_tool_iters=1,
+    )
+    result = await brain.respond("was ist offen?")
+
+    assert result.text == "Ok, hier ist die Zusammenfassung."
+    # First call auto, final catch-up call forces tool_choice="none".
+    assert http.calls[0]["json"]["tool_choice"] == "auto"
+    assert http.calls[1]["json"]["tool_choice"] == "none"
+
+
+@pytest.mark.asyncio
 async def test_transcribe_audio_returns_text():
     http = _FakeHTTP([{"text": "  erstelle einen task  "}])
     text = await transcribe_audio(

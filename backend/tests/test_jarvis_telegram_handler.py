@@ -156,6 +156,17 @@ async def test_voice_message_transcribes_and_echoes(bot, enable_jarvis, monkeypa
 
 
 @pytest.mark.asyncio
+async def test_unsupported_media_gets_reply(bot, enable_jarvis, monkeypatch):
+    """A photo/sticker/document from the operator gets a short reply, not silence."""
+    _patch_brain(monkeypatch)
+    handler = JarvisTelegramHandler(bot)
+    await handler.handle_message({"chat": {"id": 12345}, "photo": [{"file_id": "P"}]})
+    bot.send_message.assert_awaited_once()
+    reply = bot.send_message.await_args.args[0]
+    assert "Text- und Sprachnachrichten" in reply
+
+
+@pytest.mark.asyncio
 async def test_voice_transcription_failure_asks_retry(bot, enable_jarvis, monkeypatch):
     _patch_brain(monkeypatch)
     monkeypatch.setattr(jt, "transcribe_audio", AsyncMock(side_effect=RuntimeError("boom")))
