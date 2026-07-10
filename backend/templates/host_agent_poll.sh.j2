@@ -31,7 +31,13 @@ fi
 
 : "${MC_API_URL:?MC_API_URL is not set}"
 : "${MC_AGENT_TOKEN:?MC_AGENT_TOKEN is not set}"
-MC_TOKEN="$MC_AGENT_TOKEN"
+# export, not a plain assignment — heartbeat() below spawns a python3
+# subprocess that reads os.environ['MC_TOKEN']; a subprocess only inherits
+# *exported* variables, not plain bash-local ones (2026-07-10 E2E Lauf 4,
+# Fix F — every heartbeat silently KeyError'd and was swallowed by the
+# trailing `2>/dev/null || true`, so last_seen_at only ever looked fresh as
+# a side effect of require_agent() touching it on every poll() GET).
+export MC_TOKEN="$MC_AGENT_TOKEN"
 
 POLL_INTERVAL="${POLL_INTERVAL:-10}"
 HEARTBEAT_INTERVAL=30
@@ -65,7 +71,12 @@ paste_and_submit() {
 
 heartbeat() {
     local status="${1:-idle}"
-    STATUS="$status" python3 -c "
+    # stderr piped through log() instead of `2>/dev/null` — a heartbeat
+    # failure (bad token, network hiccup, backend down) used to vanish
+    # completely, silently swallowed by the trailing `|| true`. `return 0`
+    # at the end still guarantees heartbeat() never aborts the poll loop
+    # under `set -e` (best-effort, same as before — just no longer silent).
+    { STATUS="$status" python3 -c "
 import json, urllib.request, os, sys
 payload = {'status': os.environ.get('STATUS', 'idle')}
 data = json.dumps(payload).encode()
@@ -82,7 +93,8 @@ try:
     urllib.request.urlopen(req, timeout=5)
 except Exception as e:
     print(f'Heartbeat failed: {e}', file=sys.stderr)
-" 2>/dev/null || true
+"; } 2>&1 | while IFS= read -r line; do log "heartbeat: $line"; done
+    return 0
 }
 
 poll() {
