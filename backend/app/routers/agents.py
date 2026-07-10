@@ -2889,7 +2889,33 @@ async def agent_heartbeat(
     if payload.context_pct is not None and agent.context_max:
         agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
 
+    # Host agents: flip provision_status "provisioning" -> "provisioned" on
+    # the first heartbeat that ever arrives (2026-07-10 E2E Lauf 3). The
+    # generic host provisioning chain (host_provisioning.py) stages files +
+    # starts a poller, but with launchd autoload disabled (the normal case,
+    # see /provision's `agent.provision_status = "provisioned" if
+    # load["loaded"] else "provisioning"`) nothing else ever transitions it
+    # once staging leaves it on "provisioning" — a real, heartbeating agent
+    # stayed permanently "not ready" in /health-check. cli-bridge agents are
+    # untouched: their own provisioning flow (services/provisioning.py)
+    # already flips to "provisioned" once the container starts, independent
+    # of any heartbeat — this only ever fires for agent_runtime == "host".
+    just_provisioned = agent.agent_runtime == "host" and agent.provision_status == "provisioning"
+    if just_provisioned:
+        agent.provision_status = "provisioned"
+        agent.provisioned_at = agent.last_seen_at
+
     session.add(agent)
     await session.commit()
+
+    if just_provisioned:
+        await emit_event(
+            session,
+            "agent.provisioned",
+            f"{agent.name} (host) provisioned — first heartbeat received",
+            severity="info",
+            agent_id=agent.id,
+            board_id=agent.board_id,
+        )
 
     return {"ok": True, "agent": agent.name}
