@@ -51,9 +51,16 @@ export function ReviewStep({
       notify.success(`Agent "${state.name}" erstellt`);
 
       // Host agents don't auto-provision on create — stage their files now.
+      // Provisioning rotates the token, so the freshly returned one (if any)
+      // replaces the create-time token shown to the user — the old one is
+      // dead the moment the rotation happens.
       if (state.agentRuntime === "host") {
         try {
-          await api.agents.provision(created.id);
+          const provisioned = await api.agents.provision(created.id);
+          if (provisioned.token) {
+            setLocalResult({ id: created.id, token: provisioned.token });
+            update({ createdAgentId: created.id, createdToken: provisioned.token });
+          }
         } catch {
           notify.error("Host-Dateien konnten nicht gerendert werden — später via Provision-Button.");
         }
