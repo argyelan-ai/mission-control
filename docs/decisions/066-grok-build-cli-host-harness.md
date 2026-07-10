@@ -1,8 +1,14 @@
-# ADR-063 — Grok Build CLI als host-side Harness
+# ADR-066 — Grok Build CLI als host-side Harness
 
 **Status:** Accepted
 **Datum:** 2026-07-10
 **Scope:** Backend/Provisioning, Infra/Host-Bridge, Backend/Runtime
+
+> **Nummerierung:** Dieses ADR entstand parallel zu mehreren anderen Branches am
+> selben Tag. ADR-063 (Agent-Onboarding-Wizard), 064 (Puffer) und 065
+> (X-Publisher) sind auf `origin/main` bzw. anderen Feature-Branches vergeben;
+> dieser host-harness-Adapter-Branch (Basis: `feat/host-harness-adapter`, ADR-060)
+> sah sie beim Schreiben noch nicht. Daher 066 statt der ursprünglich getippten 063.
 
 ## Kontext
 

@@ -54,7 +54,7 @@ class HermesAdapter:
 
 
 class GrokAdapter:
-    """Grok Build CLI as a host harness (ADR-063).
+    """Grok Build CLI as a host harness (ADR-066).
 
     Unlike Hermes (a persistent tmux TUI bound to a vLLM runtime), grok is a
     headless per-dispatch subprocess that talks ONLY to xAI cloud over its own
@@ -106,7 +106,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
     from app.services.harness_compat import runtime_protocol
 
-    # Protocol-fixed host harnesses (grok → xAI cloud OAuth, ADR-063) have no
+    # Protocol-fixed host harnesses (grok → xAI cloud OAuth, ADR-066) have no
     # OPENAI_* provider env to sync — build_runtime_env would wrongly derive
     # OPENAI_BASE_URL/OPENAI_MODEL from the display-anchor runtime. Nothing to do.
     if runtime_protocol(runtime) not in ("openai", None):

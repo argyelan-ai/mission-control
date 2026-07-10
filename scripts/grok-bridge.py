@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-063).
+"""grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-066).
 
 Pattern source: scripts/hermes-bridge.py (poll loop, steady heartbeat, SIGTERM
 handling, localhost-only HTTP control server) + docker/omp-bridge/bridge.py
@@ -23,7 +23,7 @@ grok agent itself registers deliverables/comments via the copied `mc` CLI
 Grok speaks ONLY to xAI cloud over its own OAuth (~/.grok/auth.json, auto
 refresh). There is NO OPENAI_*/ANTHROPIC_* provider env and NO MC-bound model
 endpoint — the runtime binding for a grok agent is a display/anchor only
-(ADR-063). agent.env carries just the MC_* control-plane vars.
+(ADR-066). agent.env carries just the MC_* control-plane vars.
 
 Endpoints:
   GET  /health   -> {"status","harness","dispatching","agent_env_present"}
@@ -249,7 +249,7 @@ _CLEAN_STOP_REASONS = frozenset({"EndTurn", "endturn", "end_turn", "stop", "Stop
 
 
 def map_lifecycle(outcome: GrokOutcome, *, board_requires_review: bool = True) -> LifecycleAction:
-    """Deterministic stream → MC lifecycle mapping (bridge-owned, ADR-063).
+    """Deterministic stream → MC lifecycle mapping (bridge-owned, ADR-066).
 
     EndTurn + no error → finish (hand off to review). Anything else — watchdog
     kill, missing end event, error event, non-EndTurn stopReason, non-zero exit

@@ -1,4 +1,4 @@
-"""Tests for scripts/grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-063).
+"""Tests for scripts/grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-066).
 
 The script lives outside the backend package and has a hyphen in its filename, so we
 import it dynamically via importlib (same pattern as test_hermes_bridge.py).

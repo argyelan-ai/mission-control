@@ -44,7 +44,7 @@ logger = logging.getLogger("mc.agent_bootstrap")
 HERMES_TMUX_SESSION = "hermes-worker"
 HERMES_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.hermes-bridge.plist"
 
-# Grok Build CLI host harness (ADR-063). Headless per-dispatch — no tmux session.
+# Grok Build CLI host harness (ADR-066). Headless per-dispatch — no tmux session.
 GROK_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.grok-bridge.plist"
 
 
@@ -292,7 +292,7 @@ async def bootstrap_hermes_agent(
     }
 
 
-# ── Grok Bootstrap (ADR-063) ────────────────────────────────────────────────────
+# ── Grok Bootstrap (ADR-066) ────────────────────────────────────────────────────
 
 
 async def build_grok_agent_env(
@@ -308,7 +308,7 @@ async def build_grok_agent_env(
     OPENAI_*/ANTHROPIC_* here — only the MC_* control-plane vars grok-bridge.py
     needs to poll/heartbeat and the copied `mc` CLI needs to call back. `runtime`
     is accepted for interface symmetry (display anchor) but its endpoint/model
-    are not injected (ADR-063). `session` is unused — kept for the adapter
+    are not injected (ADR-066). `session` is unused — kept for the adapter
     Protocol signature.
     """
     home = str(_home_host())
@@ -325,7 +325,7 @@ async def bootstrap_grok_agent(
     agent: Agent,
     runtime: Runtime,
 ) -> dict[str, Any]:
-    """Provision the grok host-side worker (headless Grok Build CLI, ADR-063).
+    """Provision the grok host-side worker (headless Grok Build CLI, ADR-066).
 
     Parallels bootstrap_hermes_agent but for the headless model:
       1. Generate fresh MC_AGENT_TOKEN.

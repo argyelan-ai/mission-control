@@ -5,7 +5,7 @@
   <key>Label</key>
   <string>com.mc.grok-bridge</string>
   <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing.
-       ADR-063: grok is a headless host harness. The plist runs grok-bridge.py (the poll+dispatch
+       ADR-066: grok is a headless host harness. The plist runs grok-bridge.py (the poll+dispatch
        HTTP server); each dispatch spawns a one-shot `grok` subprocess. -->
   <key>ProgramArguments</key>
   <array>

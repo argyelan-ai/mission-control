@@ -45,7 +45,7 @@ _OPENAI_TYPES = frozenset(
 # endpoint, so it carries its own "grok" wire protocol. A grok agent therefore
 # only binds to the seed `grok-cloud` runtime (runtime_type "grok"); any
 # openai/anthropic runtime is a clean 422 mismatch. The binding is a display
-# anchor only — grok reads no provider env from it (ADR-063).
+# anchor only — grok reads no provider env from it (ADR-066).
 HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     "claude": frozenset({"anthropic"}),
     "openclaude": frozenset({"openai"}),
@@ -73,7 +73,7 @@ def runtime_protocol(runtime: Runtime | None) -> str | None:
         return "anthropic"
     # grok runtimes carry their own fixed wire protocol (xAI cloud OAuth) — they
     # are neither openai- nor anthropic-compatible, and only the grok harness
-    # accepts them (ADR-063).
+    # accepts them (ADR-066).
     if (runtime.runtime_type or "").strip() == "grok":
         return "grok"
     if (runtime.runtime_type or "").strip() in _OPENAI_TYPES:

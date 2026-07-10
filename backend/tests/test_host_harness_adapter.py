@@ -24,7 +24,7 @@ async def test_registry_lookup():
 
 @pytest.mark.asyncio
 async def test_grok_registry_lookup_and_protocol():
-    """ADR-063: grok is a registered host adapter with the fixed 'grok' protocol."""
+    """ADR-066: grok is a registered host adapter with the fixed 'grok' protocol."""
     from app.services.host_harness_adapter import get_adapter, GrokAdapter
     a = get_adapter("grok")
     assert isinstance(a, GrokAdapter)
@@ -72,7 +72,7 @@ async def test_grok_compat_matrix():
 
 @pytest.mark.asyncio
 async def test_sync_host_agent_model_skips_grok(async_session, tmp_path, monkeypatch):
-    """sync must NOT inject OPENAI_* into a grok agent.env (protocol-fixed, ADR-063)."""
+    """sync must NOT inject OPENAI_* into a grok agent.env (protocol-fixed, ADR-066)."""
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
     d = tmp_path / ".mc" / "agents" / "grok"
     d.mkdir(parents=True)

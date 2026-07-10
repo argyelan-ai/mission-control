@@ -124,7 +124,7 @@
     "preferred_context_len": 262144,
     "max_context_len": 500000,
     "gpu_profile": null,
-    "memory_notes": "ADR-063: Display-Anker für den host-side Grok Build CLI Harness. Der `grok`-Binary spricht ausschliesslich mit der xAI-Cloud über die eigene OAuth-Session (~/.grok/auth.json, Auto-Refresh) — MC injiziert KEINE Provider-Env (kein OPENAI_*/ANTHROPIC_*), Endpoint/Modell hier sind rein informativ. Protokoll 'grok' (harness_compat): nur der grok-Harness bindet diese Runtime.",
+    "memory_notes": "ADR-066: Display-Anker für den host-side Grok Build CLI Harness. Der `grok`-Binary spricht ausschliesslich mit der xAI-Cloud über die eigene OAuth-Session (~/.grok/auth.json, Auto-Refresh) — MC injiziert KEINE Provider-Env (kein OPENAI_*/ANTHROPIC_*), Endpoint/Modell hier sind rein informativ. Protokoll 'grok' (harness_compat): nur der grok-Harness bindet diese Runtime.",
     "startup_notes": "Kein MC-Lifecycle für das Modell — xAI betreibt den Endpoint. Der host-side grok-bridge.py (launchd com.mc.grok-bridge) pollt MC und startet pro Dispatch einen headless `grok --output-format streaming-json`. Login headless via 'grok login --device-auth'.",
     "ui_order": 11,
     "enabled": true,

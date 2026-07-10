@@ -1,4 +1,4 @@
-"""ADR-063 — Tests for grok host-side provisioning (Grok Build CLI as host harness).
+"""ADR-066 — Tests for grok host-side provisioning (Grok Build CLI as host harness).
 
 Mirrors test_hermes_provisioning.py but for the headless model: env file carries
 only MC_* (no provider env), tmux_session is None, and the provision endpoint

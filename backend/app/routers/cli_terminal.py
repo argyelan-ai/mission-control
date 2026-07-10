@@ -1034,7 +1034,7 @@ _HOST_AGENT_PLISTS = {
     "hermes": [
         str(_HOST_LAUNCH_AGENTS / "com.mc.hermes-bridge.plist"),
     ],
-    # ADR-063: Grok Build CLI host harness. plist starts scripts/grok-bridge.py
+    # ADR-066: Grok Build CLI host harness. plist starts scripts/grok-bridge.py
     # (headless poll+dispatch). Unlike hermes there is NO persistent tmux session
     # — restart = launchctl kickstart of the bridge (re-sources agent.env for the
     # next one-shot `grok` dispatch), so grok uses this generic plist path, not

@@ -215,7 +215,7 @@ Mission Control unterstützt **3 parallele Runtime-Typen** post-v0.9 Sunset (sie
 | **cli-bridge** (Docker V2) | Docker-Container mc-agent-{slug} | HTTP-Poll `/agent/me/next-task` + `tmux send-keys` | PTY-Proxy WS → docker exec tmux attach | Produktiv seit 2026-04-08 |
 | **host** (Boss) | macOS launchd-Job auf dem Host | HTTP-Poll `/agent/me/poll` + `tmux paste-buffer` | ttyd → WS-Proxy → Browser xterm.js | Produktiv seit 2026-04-17 |
 | **host** (Hermes) | macOS launchd-Job + eigene `hermes-bridge.py` | tmux-Session `hermes-worker`, vLLM (Qwen/Qwen3.6-35B-A3B-FP8) | xterm.js via `cli_terminal.py` | Pilot v0.8 (2026-04-30, ADR-029) |
-| **host** (Grok) | macOS launchd-Job + eigene `grok-bridge.py` | headless `grok --output-format streaming-json` per Dispatch, xAI-Cloud (grok-4.5) | keine (headless, kein persistenter Prozess) | Adapter+Bridge gebaut, Provisioning = Marks Gate (2026-07-10, ADR-063) |
+| **host** (Grok) | macOS launchd-Job + eigene `grok-bridge.py` | headless `grok --output-format streaming-json` per Dispatch, xAI-Cloud (grok-4.5) | keine (headless, kein persistenter Prozess) | Adapter+Bridge gebaut, Provisioning = Marks Gate (2026-07-10, ADR-066) |
 
 Beide Docker-V2 und Host-cli-bridge setzen `agent_runtime = 'cli-bridge'` in der DB — unterschieden werden sie dadurch ob ein Docker-Container `mc-agent-{slug}` läuft (Check via `docker ps` im `/docker-sessions/agents` Endpoint). Der `"openclaw"`-Enum-Value ist mit Migration 0123 (Phase 30, v0.9) entfernt.
 
@@ -297,7 +297,7 @@ Workspace-Layout) bleiben unverändert.
   in dieser Runde vollständig unangetastet.
 - **Setup-Doku:** ADR-060.
 
-#### Host-Harness: `grok` — Grok Build CLI (NEU 2026-07-10, ADR-063)
+#### Host-Harness: `grok` — Grok Build CLI (NEU 2026-07-10, ADR-066)
 
 Grok ist der **zweite** Host-Harness über den ADR-060-Adapter — und der erste headless: der
 offizielle xAI `grok build` CLI (`brew install --cask grok-build`, `/opt/homebrew/bin/grok`) läuft
@@ -324,7 +324,7 @@ kein API-Key, Grenzkosten 0). Er spricht ausschliesslich mit der xAI-Cloud
   `sync_host_agent_model()` ist für grok ein No-Op (nichts zu syncen). `reload` = launchctl kickstart
   des `com.mc.grok-bridge.plist` (kein persistenter Prozess zu killen).
 - **NICHT in `HARNESSES`** (cli-bridge-Switch-Matrix) — host-only, wie hermes.
-- **Setup-Doku:** ADR-063. Live-Provisioning (launchctl, echter grok-Lauf) bleibt Marks Gate.
+- **Setup-Doku:** ADR-066. Live-Provisioning (launchctl, echter grok-Lauf) bleibt Marks Gate.
 
 ### 6. LLM Runtime Registry (NEU 2026-04-19)
 
