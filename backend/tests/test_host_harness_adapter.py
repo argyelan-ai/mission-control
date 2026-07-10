@@ -23,6 +23,82 @@ async def test_registry_lookup():
 
 
 @pytest.mark.asyncio
+async def test_grok_registry_lookup_and_protocol():
+    """ADR-063: grok is a registered host adapter with the fixed 'grok' protocol."""
+    from app.services.host_harness_adapter import get_adapter, GrokAdapter
+    a = get_adapter("grok")
+    assert isinstance(a, GrokAdapter)
+    assert a.harness == "grok"
+    assert a.protocol == "grok"
+
+
+@pytest.mark.asyncio
+async def test_grok_adapter_build_env_has_no_provider_env(async_session):
+    """grok reads its provider from its own xAI OAuth — agent.env carries only MC_*."""
+    from app.services.host_harness_adapter import get_adapter
+    rt = Runtime(slug="grok-cloud", display_name="Grok Build", runtime_type="grok",
+                 endpoint="https://cli-chat-proxy.grok.com", model_identifier="grok-4.5",
+                 enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = Agent(name="Grok", role="developer", agent_runtime="host",
+                  harness="grok", runtime_id=rt.id)
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    env = await get_adapter("grok").build_agent_env(agent, rt, "tok-xyz", session=async_session)
+    assert env["MC_AGENT_TOKEN"] == "tok-xyz"
+    assert "MC_BASE_URL" in env
+    assert not any(k.startswith("OPENAI_") for k in env)
+    assert not any(k.startswith("ANTHROPIC_") for k in env)
+
+
+@pytest.mark.asyncio
+async def test_grok_compat_matrix():
+    """A grok runtime only matches the grok harness; openai/anthropic runtimes 422."""
+    from app.services.harness_compat import is_compatible, runtime_protocol
+    grok_rt = Runtime(slug="grok-cloud", runtime_type="grok",
+                      endpoint="https://cli-chat-proxy.grok.com", enabled=True)
+    openai_rt = Runtime(slug="spark", runtime_type="vllm_docker",
+                        endpoint="http://x/v1", enabled=True)
+    assert runtime_protocol(grok_rt) == "grok"
+    assert is_compatible("grok", grok_rt) is True
+    assert is_compatible("grok", openai_rt) is False   # openai runtime, grok harness
+    assert is_compatible("hermes", grok_rt) is False   # grok runtime, openai harness
+    assert is_compatible("omp", grok_rt) is False
+
+
+@pytest.mark.asyncio
+async def test_sync_host_agent_model_skips_grok(async_session, tmp_path, monkeypatch):
+    """sync must NOT inject OPENAI_* into a grok agent.env (protocol-fixed, ADR-063)."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    d = tmp_path / ".mc" / "agents" / "grok"
+    d.mkdir(parents=True)
+    (d / "agent.env").write_text("MC_AGENT_TOKEN='keepme'\nMC_BASE_URL='http://backend'\n")
+    rt = Runtime(slug="grok-cloud", display_name="Grok Build", runtime_type="grok",
+                 endpoint="https://cli-chat-proxy.grok.com", model_identifier="grok-4.5",
+                 enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = Agent(name="Grok", role="developer", agent_runtime="host",
+                  harness="grok", runtime_id=rt.id, slug="grok")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    from app.services.host_harness_adapter import sync_host_agent_model
+    await sync_host_agent_model(agent, rt, session=async_session)
+
+    env = (d / "agent.env").read_text()
+    assert "MC_AGENT_TOKEN='keepme'" in env
+    assert "OPENAI_BASE_URL" not in env
+    assert "OPENAI_MODEL" not in env
+
+
+@pytest.mark.asyncio
 async def test_hermes_adapter_build_env_has_openai_no_anthropic(async_session):
     from app.services.host_harness_adapter import get_adapter
     rt = _mk_rt(async_session)
