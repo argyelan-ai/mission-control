@@ -71,6 +71,26 @@ def _resolve_slug(agent: Agent) -> str:
     return _slugify(candidate)
 
 
+def _write_owner_only_file(path: Path, content: str) -> None:
+    """Write ``content`` to ``path`` with 0600 perms from the moment the file
+    exists — never write-then-chmod, which leaves a window (governed by the
+    process umask, not the intended mode) where secret content sits on disk
+    at whatever permissions umask produces before the later chmod() call
+    narrows them. os.open()'s mode arg is itself umask-masked too, so we
+    fchmod() immediately after open()/before any content is written, closing
+    that gap as well. Used for both agent.env and the claude-harness
+    .mcp.json (2026-07-10 E2E rerun, Befund 4 — .mcp.json can carry inline
+    MCP-server secrets, e.g. API keys in `env`, same shape as agent.env)."""
+    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+    except BaseException:
+        os.close(fd)
+        raise
+    with os.fdopen(fd, "w") as f:
+        f.write(content)
+
+
 def _format_env_file(env: dict[str, str]) -> str:
     lines = []
     for key in sorted(env.keys()):
@@ -90,6 +110,7 @@ class HostStageResult:
     launchctl_command: str
     # Only set for harness=="claude" — see stage_host_agent_files().
     mcp_config_path: str | None = None
+    poll_script_path: str | None = None
 
 
 async def stage_host_agent_files(
@@ -127,15 +148,26 @@ async def stage_host_agent_files(
     binary = _HARNESS_BINARY[harness]
 
     # 1. agent.env (OPENAI_*/MC_* from the runtime + token), mode 600.
+    #
+    # MC_API_URL (not MC_BASE_URL) — this is a genuine pre-existing bug found
+    # while wiring up poll.sh (Fix C, 2026-07-10): every curl/mc instruction
+    # in SOUL.md, and the generic poll.sh template below, reads $MC_API_URL
+    # (the convention templates/cli_agent.env.j2 uses for cli-bridge agents,
+    # which — like this generic host template — drive the agent via SOUL.md
+    # + curl). MC_BASE_URL is a *different*, unrelated convention used only
+    # by agent_bootstrap.py/hermes-bridge.py's own internal Python poll loop
+    # (Hermes doesn't run SOUL.md-driven curl calls at all). Before this fix
+    # every staged host agent's own tool calls (and now poll.sh) would have
+    # failed with an unset variable — this simply never surfaced in earlier
+    # E2E runs because the agent never got far enough to try.
     runtime_env = await build_runtime_env(runtime, session)
     env: dict[str, str] = {
         "MC_AGENT_TOKEN": raw_token,
-        "MC_BASE_URL": settings.mc_base_url.rstrip("/"),
+        "MC_API_URL": settings.mc_base_url.rstrip("/"),
         "HOME": str(home),
     }
     env.update(runtime_env)
-    env_path.write_text(_format_env_file(env))
-    os.chmod(env_path, 0o600)
+    _write_owner_only_file(env_path, _format_env_file(env))
 
     # 2a. Isolated MCP config, native-claude harness only. The 'claude' CLI
     # defaults to the operator's own $HOME/.claude config (needed here so it
@@ -154,9 +186,33 @@ async def stage_host_agent_files(
     if harness == "claude":
         mcp_config_path = str(workspace / ".mcp.json")
         mcp_config = render_agent_mcp_json(agent)
-        Path(mcp_config_path).write_text(json.dumps(mcp_config, indent=2) + "\n")
+        # 0600, not the write_text() default (umask-dependent, typically
+        # 644) — MCP server manifests can carry inline secrets (e.g. API
+        # keys in `env`, same shape as the shared registry in
+        # mcp_registry.py) and this file sits right next to the 0600
+        # agent.env. render_agent_mcp_json() itself only reuses whatever the
+        # registry already stores inline; if cli-bridge/openclaude agents
+        # ever start referencing env-var placeholders instead of inline
+        # values there, this should follow — but that's a separate,
+        # pre-existing registry-wide decision, not something to invent here.
+        _write_owner_only_file(Path(mcp_config_path), json.dumps(mcp_config, indent=2) + "\n")
 
-    # 2b. run.sh launcher.
+    # 2b. poll.sh — without this, the staged agent never picks up work or
+    # heartbeats: it boots to an idle interactive prompt and nothing nudges
+    # it (2026-07-10 E2E rerun, Befund 3 — last_seen_at stays null forever,
+    # provision_status stuck on "provisioning"). Generalizes
+    # docker/boss-host/poll.sh, the only working native-claude host worker
+    # at the time this was written (see the template's own docstring for
+    # what was deliberately changed vs. Boss's orchestrator-specific copy).
+    poll_script_path = str(workspace / "poll.sh")
+    poll_sh = render_agent_file(
+        "host_agent_poll.sh.j2",
+        {"slug": slug, "workspace_path": str(workspace)},
+    )
+    Path(poll_script_path).write_text(poll_sh)
+    os.chmod(poll_script_path, 0o755)
+
+    # 2c. run.sh launcher — Window 0 runs the harness, Window 1 runs poll.sh.
     run_sh = render_agent_file(
         "host_agent_run.sh.j2",
         {
@@ -165,6 +221,7 @@ async def stage_host_agent_files(
             "binary": binary,
             "workspace_path": str(workspace),
             "mcp_config_path": mcp_config_path,
+            "poll_script_path": poll_script_path,
         },
     )
     run_script_path.write_text(run_sh)
@@ -198,6 +255,7 @@ async def stage_host_agent_files(
         env_path=str(env_path),
         launchctl_command=launchctl_command,
         mcp_config_path=mcp_config_path,
+        poll_script_path=poll_script_path,
     )
 
 

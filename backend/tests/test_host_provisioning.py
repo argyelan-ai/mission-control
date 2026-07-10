@@ -51,6 +51,40 @@ async def test_stage_writes_files(home_host, async_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_stage_writes_poller_and_run_sh_starts_it(home_host, async_session, monkeypatch):
+    """A staged host agent must be able to pick up work and heartbeat
+    autonomously — without a poller nothing ever nudges claude past its
+    idle welcome screen (2026-07-10 E2E rerun, Befund 3: last_seen_at stays
+    null forever, provision_status stuck on 'provisioning'). Boss
+    (docker/boss-host/poll.sh + entrypoint.sh) is the only working native-
+    claude host worker and is the reference pattern generalized here:
+    tmux Window 0 runs the harness, Window 1 runs poll.sh in a restart loop."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1", "OPENAI_MODEL": "m"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-poll", display_name="Host RT Poll", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Poller Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-poll", session=async_session)
+
+    assert result.poll_script_path is not None
+    assert os.path.isfile(result.poll_script_path)
+    assert (os.stat(result.poll_script_path).st_mode & 0o777) == 0o755
+    poll_sh = open(result.poll_script_path).read()
+    assert "/api/v1/agent/me/poll" in poll_sh
+    assert "/api/v1/agent/me/heartbeat" in poll_sh
+
+    run_sh = open(result.run_script_path).read()
+    assert "new-window" in run_sh
+    assert result.poll_script_path in run_sh
+
+
+@pytest.mark.asyncio
 async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
     home_host, async_session, monkeypatch
 ):
@@ -80,6 +114,10 @@ async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
     import json
     mcp_config = json.loads(open(result.mcp_config_path).read())
     assert "mcpServers" in mcp_config
+    # .mcp.json can carry inline MCP-server secrets (e.g. API keys in `env`,
+    # same shape as the shared MCP registry) — must be as locked-down as
+    # agent.env (0600), never the 644 default (2026-07-10 E2E rerun, Befund 4).
+    assert (os.stat(result.mcp_config_path).st_mode & 0o777) == 0o600
 
     run_sh = open(result.run_script_path).read()
     assert "--strict-mcp-config" in run_sh

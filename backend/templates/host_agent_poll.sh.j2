@@ -1,0 +1,261 @@
+#!/bin/bash
+# poll.sh — generic host-agent HTTP poll loop (runs in tmux Window 1).
+# Polls MC-Backend for the next task, sends the prompt via tmux paste-buffer
+# to the interactive harness in Window 0. Rendered per-agent; SSoT is this
+# .j2 (docs/decisions ADR-006).
+#
+# Pattern source: docker/boss-host/poll.sh — the only working native-claude
+# host worker at the time this template was generalized (2026-07-10, Fix C).
+# Differs from Boss's copy in one deliberate way: Boss is a board-lead
+# orchestrator and intentionally NEVER /clear's on task switch (it needs
+# team-wide context across tasks — see the rationale comment in
+# docker/boss-host/poll.sh's run_task()). A generic wizard-staged host
+# agent is a plain worker, not automatically a board lead, so this follows
+# the regular-worker convention instead (docker/shared/poll.sh): /clear on
+# a real task switch, keep context on re-dispatch of the same task.
+
+set -euo pipefail
+
+SESSION="{{ slug }}"
+WORKSPACE="{{ workspace_path }}"
+PROMPT_FILE="/tmp/mc-{{ slug }}-task-prompt.txt"
+COMMENTS_FILE="/tmp/mc-{{ slug }}-comments-prompt.txt"
+
+ENV_FILE="$WORKSPACE/agent.env"
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$ENV_FILE"
+    set +a
+fi
+
+: "${MC_API_URL:?MC_API_URL is not set}"
+: "${MC_AGENT_TOKEN:?MC_AGENT_TOKEN is not set}"
+MC_TOKEN="$MC_AGENT_TOKEN"
+
+POLL_INTERVAL="${POLL_INTERVAL:-10}"
+HEARTBEAT_INTERVAL=30
+LAST_HEARTBEAT=0
+LAST_DISPATCHED_TASK_ID=""
+# Dedup-Guard via dispatch_attempt_id — verhindert Re-Paste-Spam solange ein
+# Dispatch noch nicht ge-ackt wurde. Portiert aus docker/boss-host/poll.sh.
+LAST_DISPATCHED_ATTEMPT_ID=""
+LAST_STOPPED_TASK_ID=""
+LAST_CANCELLED_TASK_ID=""
+
+log() {
+    echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [$SESSION] $*"
+}
+
+# paste_and_submit FILE — loads FILE into the tmux paste-buffer, pastes into
+# Window 0, sends an explicit bracketed-paste-end marker + Enter to submit.
+# See docker/boss-host/poll.sh for the full bug history behind this exact
+# sequence (claude-cli occasionally swallows the \e[201~ end marker, leaving
+# a subsequent bare Enter interpreted as a newline INSIDE the paste instead
+# of a submit).
+paste_and_submit() {
+    local file="$1"
+    tmux load-buffer "$file"
+    tmux paste-buffer -t "${SESSION}:0"
+    sleep 0.3
+    tmux send-keys -t "${SESSION}:0" -H 1b 5b 32 30 31 7e
+    sleep 0.2
+    tmux send-keys -t "${SESSION}:0" Enter
+}
+
+heartbeat() {
+    local status="${1:-idle}"
+    STATUS="$status" python3 -c "
+import json, urllib.request, os, sys
+payload = {'status': os.environ.get('STATUS', 'idle')}
+data = json.dumps(payload).encode()
+req = urllib.request.Request(
+    os.environ['MC_API_URL'] + '/api/v1/agent/me/heartbeat',
+    data=data,
+    headers={
+        'Authorization': 'Bearer ' + os.environ['MC_TOKEN'],
+        'Content-Type': 'application/json'
+    },
+    method='POST'
+)
+try:
+    urllib.request.urlopen(req, timeout=5)
+except Exception as e:
+    print(f'Heartbeat failed: {e}', file=sys.stderr)
+" 2>/dev/null || true
+}
+
+poll() {
+    curl -sf \
+        -H "Authorization: Bearer $MC_TOKEN" \
+        "$MC_API_URL/api/v1/agent/me/poll" \
+        --max-time 10 \
+        2>/dev/null || echo '{"state":"error"}'
+}
+
+# Startup recovery: after a launchd restart or poll.sh crash mid-task,
+# re-deliver the active task's prompt (read-only — no status mutation).
+recover_task() {
+    local response
+    response=$(curl -sf \
+        -H "Authorization: Bearer $MC_TOKEN" \
+        "$MC_API_URL/api/v1/agent/me/active-task-recovery" \
+        --max-time 8 2>/dev/null || echo '{"active":false}')
+    local active
+    active=$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('active', False))" 2>/dev/null || echo "False")
+    if [ "$active" = "True" ]; then
+        local tid
+        tid=$(echo "$response" | python3 -c "import json,sys; print(json.load(sys.stdin).get('task',{}).get('id','?'))" 2>/dev/null)
+        log "Startup recovery: active task $tid — re-dispatching prompt (read-only)"
+        run_task "$response"
+    else
+        log "Startup recovery: no active task"
+    fi
+}
+
+run_task() {
+    local response_json="$1"
+    local task_id board_id attempt_id
+    task_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task']['id'])")
+    board_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('board_id') or '')" 2>/dev/null || echo "")
+    attempt_id=$(echo "$response_json" | python3 -c "import json,sys; print(json.load(sys.stdin)['task'].get('dispatch_attempt_id') or '')" 2>/dev/null || echo "")
+
+    log "Task received: $task_id"
+
+    # Expose task context to the `mc` CLI running inside the harness — same
+    # mechanism as the Docker cli-bridge agents (tmux session env for new
+    # shells + a /tmp file as belt-and-braces fallback).
+    tmux set-environment -t "$SESSION" TASK_ID "$task_id" 2>/dev/null || true
+    tmux set-environment -t "$SESSION" BOARD_ID "$board_id" 2>/dev/null || true
+    tmux set-environment -t "$SESSION" X_DISPATCH_ATTEMPT_ID "$attempt_id" 2>/dev/null || true
+
+    echo "$response_json" | python3 -c "
+import json, sys
+data = json.load(sys.stdin)
+with open('$PROMPT_FILE', 'w') as f:
+    f.write(data['task']['prompt'])
+"
+    heartbeat "working"
+
+    # /clear on a real task switch (not on re-dispatch of the same task —
+    # review-rejection / recovery need the prior context). Regular-worker
+    # convention; see the module docstring for why Boss's orchestrator copy
+    # differs.
+    if [ "$task_id" != "$LAST_DISPATCHED_TASK_ID" ]; then
+        tmux send-keys -t "${SESSION}:0" "/clear"
+        tmux send-keys -t "${SESSION}:0" Enter
+        sleep 1
+        log "Task $task_id: new task (previous: ${LAST_DISPATCHED_TASK_ID:-none}) — cleared context"
+    else
+        log "Task $task_id: re-dispatch, context kept"
+    fi
+    LAST_DISPATCHED_TASK_ID="$task_id"
+
+    if [ "$attempt_id" = "$LAST_DISPATCHED_ATTEMPT_ID" ] && [ -n "$attempt_id" ]; then
+        log "Task $task_id: attempt $attempt_id already sent, waiting for ACK"
+        return
+    fi
+    LAST_DISPATCHED_ATTEMPT_ID="$attempt_id"
+
+    paste_and_submit "$PROMPT_FILE"
+    log "Task $task_id (attempt ${attempt_id:-unknown}) delivered"
+}
+
+cancel_task() {
+    local task_id="$1"
+    if [ "$task_id" = "${LAST_CANCELLED_TASK_ID:-}" ]; then
+        return 0
+    fi
+    log "Task $task_id externally set to 'failed' — sending ESC"
+    tmux send-keys -t "${SESSION}:0" Escape
+    LAST_CANCELLED_TASK_ID="$task_id"
+    heartbeat "idle"
+}
+
+stop_task_session() {
+    local task_id="$1"
+    log "Task $task_id stopped by operator — ESC + /clear + context reset"
+    tmux send-keys -t "${SESSION}:0" Escape 2>/dev/null || true
+    sleep 0.5
+    tmux send-keys -t "${SESSION}:0" "/clear" Enter 2>/dev/null || true
+    tmux set-environment -t "$SESSION" TASK_ID "" 2>/dev/null || true
+    tmux set-environment -t "$SESSION" BOARD_ID "" 2>/dev/null || true
+    tmux set-environment -t "$SESSION" X_DISPATCH_ATTEMPT_ID "" 2>/dev/null || true
+    heartbeat "idle"
+    LAST_STOPPED_TASK_ID="$task_id"
+}
+
+deliver_comments() {
+    local response_json="$1"
+    local count
+    count=$(echo "$response_json" | python3 -c "
+import json, sys
+try:
+    print(len(json.load(sys.stdin).get('new_comments') or []))
+except Exception:
+    print(0)
+" 2>/dev/null || echo 0)
+    if [ "$count" = "0" ] || [ -z "$count" ]; then
+        return
+    fi
+
+    log "Delivering $count new comment(s)/event(s)"
+
+    export MC_POLL_RESPONSE="$response_json"
+    export MC_COMMENTS_FILE="$COMMENTS_FILE"
+    python3 <<'PYEOF' || { log "deliver_comments: python parse failed — skipping"; unset MC_POLL_RESPONSE MC_COMMENTS_FILE; return; }
+import json, os
+data = json.loads(os.environ['MC_POLL_RESPONSE'])
+comments = data.get('new_comments') or []
+
+lines = ['# New comments/events on your active task(s)', '']
+for c in comments:
+    lines.append(f"## {c.get('comment_type', c.get('source', 'comment'))}: {c['task_title']}  (id: {c['task_id']})")
+    lines.append(f"- Time: {c['created_at']}")
+    lines.append('- Content:')
+    for line in c['content'].splitlines():
+        lines.append(f'  > {line}')
+    lines.append('')
+lines.append('**Action:** Continue work on the relevant task. Reply only if content-relevant.')
+with open(os.environ['MC_COMMENTS_FILE'], 'w') as f:
+    f.write('\n'.join(lines))
+PYEOF
+    unset MC_POLL_RESPONSE MC_COMMENTS_FILE
+
+    paste_and_submit "$COMMENTS_FILE"
+}
+
+log "poll.sh started for $SESSION. Polling $MC_API_URL every ${POLL_INTERVAL}s..."
+
+recover_task
+
+while true; do
+    NOW=$(date +%s)
+    if [ $((NOW - LAST_HEARTBEAT)) -ge $HEARTBEAT_INTERVAL ]; then
+        heartbeat "idle"
+        LAST_HEARTBEAT=$NOW
+    fi
+
+    RESPONSE=$(poll)
+    STATE=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('state','unknown'))" 2>/dev/null || echo "error")
+
+    case "$STATE" in
+        new_task)  run_task "$RESPONSE" ;;
+        cancelled)
+            TASK_ID=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null)
+            [ -n "$TASK_ID" ] && cancel_task "$TASK_ID"
+            ;;
+        stopped)
+            TASK_ID=$(echo "$RESPONSE" | python3 -c "import json,sys; print(json.load(sys.stdin).get('task_id',''))" 2>/dev/null)
+            [ -n "$TASK_ID" ] && stop_task_session "$TASK_ID"
+            ;;
+        idle|working) ;;
+        error) ;;
+    esac
+
+    if [ "$STATE" != "error" ] && [ "$STATE" != "cancelled" ] && [ "$STATE" != "stopped" ]; then
+        deliver_comments "$RESPONSE"
+    fi
+
+    sleep "$POLL_INTERVAL"
+done
