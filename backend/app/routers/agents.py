@@ -2170,13 +2170,19 @@ async def agent_poll(
         # B1 (W2-B, live incident): a blocked task only parks the agent while
         # FRESH — grace window = board.blocker_triage_minutes (default 15min),
         # aligned with the lead-triage window (quick lead-unblocks resume
-        # in-session with full context). Once the blocked transition
-        # (task.updated_at) is older than the window, poll stops treating it
-        # as "working" and the agent becomes claimable for new inbox work —
-        # otherwise a stale/zombie blocked task parks the agent forever (a
-        # day-old blocked task held Sparky parked while a freshly dispatched
-        # task was never offered). in_progress/review tasks are NOT affected —
-        # they keep parking unconditionally.
+        # in-session with full context). Once the blocked transition is older
+        # than the window, poll stops treating it as "working" and the agent
+        # becomes claimable for new inbox work — otherwise a stale/zombie
+        # blocked task parks the agent forever (a day-old blocked task held
+        # Sparky parked while a freshly dispatched task was never offered).
+        # in_progress/review tasks are NOT affected — they keep parking
+        # unconditionally.
+        # Review fix B-1: the age is keyed off task.blocked_at (dedicated
+        # →blocked timestamp, maintained by the Task.status listener), NOT
+        # updated_at — a generic onupdate column that ANY metadata PATCH
+        # (title/priority/labels) resets, which would re-park the agent for
+        # another full window indefinitely. updated_at remains only as the
+        # fallback for legacy rows blocked before migration 0150.
         if active is not None and active.status == "blocked":
             from app.models.board import Board as _PollBoard
 
@@ -2186,7 +2192,7 @@ async def agent_poll(
                 _board_row = await session.get(_PollBoard, _board_id)
                 if _board_row is not None and _board_row.blocker_triage_minutes:
                     grace_minutes = _board_row.blocker_triage_minutes
-            _blocked_since = active.updated_at
+            _blocked_since = active.blocked_at or active.updated_at
             if _blocked_since is not None:
                 if _blocked_since.tzinfo is None:
                     _blocked_since = _blocked_since.replace(tzinfo=dt.timezone.utc)

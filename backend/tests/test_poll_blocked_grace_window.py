@@ -68,12 +68,16 @@ async def _make_task(
     await session.commit()
     await session.refresh(task)
 
-    # updated_at has an onupdate=datetime.utcnow trigger — force the desired
-    # "blocked since" timestamp directly via a raw UPDATE so it isn't
-    # immediately overwritten by SQLAlchemy's onupdate hook.
+    # Age the blocked transition: since review fix B-1 the grace window is
+    # keyed off the dedicated blocked_at column (stamped fresh by the
+    # Task.status listener on creation), so tests force it via raw UPDATE.
+    # updated_at is aged alongside for the legacy-fallback path.
     from sqlmodel import update
+    values = {"updated_at": updated_at}
+    if status == "blocked":
+        values["blocked_at"] = updated_at
     await session.exec(
-        update(Task).where(Task.id == task.id).values(updated_at=updated_at)
+        update(Task).where(Task.id == task.id).values(**values)
     )
     await session.commit()
     await session.refresh(task)
