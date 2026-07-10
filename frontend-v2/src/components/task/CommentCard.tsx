@@ -2,6 +2,7 @@
 
 import React from "react";
 import ReactMarkdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import { parseComment, type ParsedComment } from "@/lib/parseComment";
 import { timeAgo } from "@/lib/utils";
 import type { TaskComment } from "@/lib/types";
@@ -230,7 +231,7 @@ function SectionContent({ content }: { content: string }) {
 
   return (
     <div className="prose-comment">
-      <ReactMarkdown>{content}</ReactMarkdown>
+      <ReactMarkdown remarkPlugins={[remarkBreaks]}>{content}</ReactMarkdown>
     </div>
   );
 }
@@ -246,7 +247,7 @@ function ChecklistSection({ content }: { content: string }) {
           if (line.trim()) {
             return (
               <div key={i} className="prose-comment">
-                <ReactMarkdown>{line}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkBreaks]}>{line}</ReactMarkdown>
               </div>
             );
           }
@@ -446,7 +447,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
           <StructuredBody parsed={parsed} />
         ) : (
           <div className="prose-comment">
-            <ReactMarkdown>{comment.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkBreaks]}>{comment.content}</ReactMarkdown>
           </div>
         )}
       </div>

@@ -232,6 +232,166 @@ body {
 .border-subtle { border-color: var(--color-border-subtle); }
 
 /* ============================================================
+   Prose — agent freetext (blockers, questions, descriptions, comments)
+   Tailwind preflight zeroes p/ul/ol/li/h* margins, so ReactMarkdown output
+   from agents collapses into one run-on block without these. Comments are
+   short-form chat, not documents: headings stay subtle, never page-title
+   sized. `.prose-description` is the same rhythm, slightly more muted for
+   longer task descriptions.
+   ============================================================ */
+
+.prose-comment,
+.prose-description {
+  line-height: 1.65;
+  color: var(--color-text-secondary);
+}
+
+.prose-comment > *:first-child,
+.prose-description > *:first-child {
+  margin-top: 0;
+}
+.prose-comment > *:last-child,
+.prose-description > *:last-child {
+  margin-bottom: 0;
+}
+
+.prose-comment p,
+.prose-description p {
+  margin: 0 0 0.65em;
+}
+
+.prose-comment ul,
+.prose-description ul {
+  margin: 0 0 0.65em;
+  padding-left: 1.25em;
+  list-style: disc;
+}
+
+.prose-comment ol,
+.prose-description ol {
+  margin: 0 0 0.65em;
+  padding-left: 1.25em;
+  list-style: decimal;
+}
+
+.prose-comment li,
+.prose-description li {
+  margin: 0 0 0.3em;
+}
+.prose-comment li:last-child,
+.prose-description li:last-child {
+  margin-bottom: 0;
+}
+
+.prose-comment li > ul,
+.prose-comment li > ol,
+.prose-description li > ul,
+.prose-description li > ol {
+  margin-top: 0.3em;
+  margin-bottom: 0.3em;
+}
+
+.prose-comment strong,
+.prose-description strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+
+.prose-comment em,
+.prose-description em {
+  font-style: italic;
+}
+
+.prose-comment h1,
+.prose-comment h2,
+.prose-comment h3,
+.prose-comment h4,
+.prose-comment h5,
+.prose-comment h6,
+.prose-description h1,
+.prose-description h2,
+.prose-description h3,
+.prose-description h4,
+.prose-description h5,
+.prose-description h6 {
+  margin: 0.85em 0 0.35em;
+  color: var(--color-text-primary);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.prose-comment h1, .prose-description h1 { font-size: 1.05em; }
+.prose-comment h2, .prose-description h2 { font-size: 1em; }
+.prose-comment h3,
+.prose-comment h4,
+.prose-comment h5,
+.prose-comment h6,
+.prose-description h3,
+.prose-description h4,
+.prose-description h5,
+.prose-description h6 {
+  font-size: 0.95em;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-text-secondary);
+}
+
+.prose-comment code,
+.prose-description code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  padding: 0.1em 0.35em;
+}
+
+.prose-comment pre,
+.prose-description pre {
+  margin: 0 0 0.65em;
+  padding: 0.6em 0.8em;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  overflow-x: auto;
+}
+.prose-comment pre code,
+.prose-description pre code {
+  background: none;
+  padding: 0;
+}
+
+.prose-comment blockquote,
+.prose-description blockquote {
+  margin: 0 0 0.65em;
+  padding-left: 0.75em;
+  border-left: 2px solid var(--color-border-strong);
+  color: var(--color-text-muted);
+}
+
+.prose-comment a,
+.prose-description a {
+  color: var(--color-accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-comment a:hover,
+.prose-description a:hover {
+  color: var(--color-accent-light);
+}
+
+.prose-comment hr,
+.prose-description hr {
+  margin: 0.65em 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.prose-description {
+  color: var(--color-text-muted);
+}
+.prose-description strong {
+  color: var(--color-text-secondary);
+}
+
+/* ============================================================
    Mobile / Safe-Area Utilities (iPhone 14 Pro+ / Dynamic Island)
    ============================================================ */
 

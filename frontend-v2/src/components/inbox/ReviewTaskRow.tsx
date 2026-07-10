@@ -9,88 +9,13 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { cn, timeAgo } from "@/lib/utils";
-import { parseComment } from "@/lib/parseComment";
 import { api } from "@/lib/api";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
+import { CommentCard } from "@/components/task/CommentCard";
 import { C } from "@/lib/colors";
 import Link from "next/link";
-import type { Task, Agent, TaskComment } from "@/lib/types";
-
-// ── Comment Card (inline) ────────────────────────────────────────────────────
-
-const COMMENT_TYPE_COLORS: Record<string, string> = {
-  handoff: C.accent,
-  progress: C.online,
-  blocker: C.error,
-  resolution: C.online,
-  feedback: C.warning,
-  message: C.textMuted,
-  checkpoint: C.accent,
-};
-
-function InlineCommentCard({
-  comment,
-  agentMap,
-}: {
-  comment: TaskComment;
-  agentMap: Record<string, Agent>;
-}) {
-  const agent = comment.author_agent_id ? agentMap[comment.author_agent_id] : null;
-  const typeColor = comment.comment_type
-    ? COMMENT_TYPE_COLORS[comment.comment_type] ?? C.textMuted
-    : C.textMuted;
-
-  const parsed = parseComment(comment.content, comment.comment_type ?? undefined);
-
-  return (
-    <div
-      className="rounded-xl px-3 py-2.5 text-[12px]"
-      style={{
-        backgroundColor: "rgba(255,255,255,0.02)",
-        borderLeft: `2px solid ${typeColor}`,
-      }}
-    >
-      <div className="flex items-center gap-2 mb-1.5">
-        {comment.comment_type && (
-          <span
-            className="text-[10px] px-1.5 py-0.5 rounded-md uppercase font-semibold"
-            style={{ color: typeColor, backgroundColor: `${typeColor}15` }}
-          >
-            {comment.comment_type}
-          </span>
-        )}
-        <span className="text-[10px] text-[var(--color-text-muted)]">
-          {agent ? `${agent.emoji ?? "🤖"} ${agent.name}` : comment.author_type === "user" ? "👤 You" : "Agent"}
-        </span>
-        <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
-          {timeAgo(comment.created_at)}
-        </span>
-      </div>
-      {parsed.type === "structured" && parsed.sections.length > 0 ? (
-        <div className="flex flex-col gap-1.5">
-          {parsed.sections.map((section, i) => (
-            <div key={i}>
-              <div
-                className="text-[10px] font-bold uppercase tracking-[0.05em] mb-0.5"
-                style={{ color: C.accent }}
-              >
-                {section.label}
-              </div>
-              <div className="prose-comment text-[12px] text-[var(--color-text-secondary)]">
-                <ReactMarkdown>{section.content}</ReactMarkdown>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : (
-        <div className="prose-comment text-[12px] text-[var(--color-text-secondary)]">
-          <ReactMarkdown>{comment.content}</ReactMarkdown>
-        </div>
-      )}
-    </div>
-  );
-}
+import type { Task, Agent } from "@/lib/types";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -219,7 +144,7 @@ export function ReviewTaskRow({
                     History ({comments.length})
                   </div>
                   {comments.map((c) => (
-                    <InlineCommentCard key={c.id} comment={c} agentMap={agentMap} />
+                    <CommentCard key={c.id} comment={c} agentMap={agentMap} />
                   ))}
                 </div>
               )}
