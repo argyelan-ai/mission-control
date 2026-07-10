@@ -1643,12 +1643,16 @@ async def provision_agent_on_gateway(
             from app.services.secrets_helper import upsert_agent_token_secret
 
             raw_token, token_hash = generate_agent_token()
-            agent.agent_token_hash = token_hash
             stage = await host_provisioning.stage_host_agent_files(
                 agent, runtime, raw_token, session=session
             )
             load = host_provisioning.maybe_load_plist(stage)
 
+            # Only mutate the persisted hash once staging (fallible I/O) has
+            # succeeded — otherwise a raise here would leave the generic
+            # except-handler below to commit a new hash for a token that was
+            # never staged/returned, destroying the previously working one.
+            agent.agent_token_hash = token_hash
             agent.workspace_path = stage.workspace_path
             agent.provision_status = "provisioned" if load["loaded"] else "provisioning"
             agent.provisioned_at = utcnow() if load["loaded"] else None

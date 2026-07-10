@@ -227,3 +227,40 @@ async def test_provision_endpoint_stages_generic_host_agent(
     # doesn't see that commit until forced to repopulate from the DB.
     refreshed = await async_session.get(A, agent.id, populate_existing=True)
     assert refreshed.provision_status == "provisioning"
+
+
+@pytest.mark.asyncio
+async def test_provision_endpoint_failed_staging_does_not_destroy_existing_token_hash(
+    auth_client, async_session, home_host, monkeypatch
+):
+    """A failing stage_host_agent_files() (e.g. unknown harness) must not
+    mutate agent_token_hash — otherwise a working token is silently
+    destroyed while the new one is never returned to the caller (only the
+    generic 502 rollback below runs, which doesn't know about the hash)."""
+    from app.models.agent import Agent as A
+    from app.models.runtime import Runtime as R
+
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = R(slug="bad-harness-host", display_name="Generic", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    agent = A(name="Doomed", agent_runtime="host", runtime_id=rt.id,
+              harness="not-a-real-harness", provision_status="local",
+              agent_token_hash="original-hash-untouched")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
+    assert resp.status_code == 502
+
+    refreshed = await async_session.get(A, agent.id, populate_existing=True)
+    assert refreshed.provision_status == "local"
+    assert refreshed.agent_token_hash == "original-hash-untouched"
