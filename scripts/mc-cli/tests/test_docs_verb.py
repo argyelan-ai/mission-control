@@ -98,7 +98,7 @@ def test_docs_does_not_require_token_or_task_context(tmp_path, monkeypatch, caps
 #
 # Host agents (Boss/Hermes/Jarvis — Boss is the main consumer of the
 # delegation doc!) run with CLAUDE_CONFIG_DIR=<agent_dir>/claude-config and
-# HOME=/Users/Henry (the operator's real home, not the agent's). A `_docs_dir()`
+# the operator's real HOME (not an agent-specific one). A `_docs_dir()`
 # hardcoded to `Path.home()/".claude"/"docs"` looks in the wrong place for
 # them entirely — docker-bridge agents don't set CLAUDE_CONFIG_DIR and keep
 # using ~/.claude/docs (their real container home), but host agents do and
