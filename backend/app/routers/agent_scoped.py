@@ -68,7 +68,7 @@ from datetime import datetime
 from typing import Literal
 
 import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response, status
 
 logger = logging.getLogger("mc.agent_scoped")
 from pydantic import BaseModel, field_validator
@@ -2513,10 +2513,25 @@ async def agent_create_checklist(
     board_id: uuid.UUID,
     task_id: uuid.UUID,
     payload: ChecklistBulkCreate,
+    response: Response,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent creates checklist items for a task (bulk)."""
+    """Agent creates checklist items for a task (bulk).
+
+    Idempotency guard (2026-07-08 incident fix): a re-dispatched agent
+    (container restart, manual resume, blocked→in_progress unblock) gets
+    re-instructed to "create its checklist" and used to replay the exact
+    same `mc checklist add` calls, duplicating rows (one item created 3x,
+    others 2x — which later made `mc finish` fail with a wall of open
+    items). Items whose title already exists for this task are treated as
+    a no-op and the existing row is returned instead of inserting a
+    duplicate. Genuinely new titles (agent discovered an extra step, or
+    this is the very first create) still insert normally. If the whole
+    payload turned out to be a pure replay, respond 200 instead of 201 so
+    callers can tell "nothing changed" from "created new items" without
+    parsing the body.
+    """
     from app.models.checklist import TaskChecklistItem
 
     if agent.board_id != board_id:
@@ -2526,8 +2541,33 @@ async def agent_create_checklist(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task nicht gefunden")
 
+    # Dedup only against NON-TERMINAL items (pending/in_progress). An already
+    # done/skipped item with the same title must NOT swallow a genuinely new
+    # round of that step (e.g. a second "Run tests" pass) — otherwise the new
+    # work would be invisible to `mc finish` and recovery. This is only the
+    # backstop for a real double-POST of still-open items; the prompt gate in
+    # dispatch_message_builder stops re-dispatch from replaying the whole
+    # checklist in the first place.
+    _NON_TERMINAL = ("pending", "in_progress")
+    existing_items = (
+        await session.exec(
+            select(TaskChecklistItem).where(TaskChecklistItem.task_id == task_id)
+        )
+    ).all()
+    existing_by_title = {
+        i.title.strip().lower(): i
+        for i in existing_items
+        if i.status in _NON_TERMINAL
+    }
+
     items = []
+    new_count = 0
     for item_data in payload.items:
+        key = item_data.title.strip().lower()
+        dup = existing_by_title.get(key)
+        if dup is not None:
+            items.append(dup)
+            continue
         item = TaskChecklistItem(
             task_id=task_id,
             agent_id=agent.id,
@@ -2536,9 +2576,16 @@ async def agent_create_checklist(
         )
         session.add(item)
         items.append(item)
+        existing_by_title[key] = item  # dedup within the same payload too
+        new_count += 1
+
+    if new_count == 0:
+        # Pure replay — nothing new to persist, tell the agent it's a no-op.
+        response.status_code = status.HTTP_200_OK
+        return items
 
     # Update counters
-    task.checklist_total = task.checklist_total + len(items)
+    task.checklist_total = task.checklist_total + new_count
     session.add(task)
     await session.commit()
     for item in items:
