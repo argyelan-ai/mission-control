@@ -146,3 +146,108 @@ async def test_different_reviewer_can_still_patch_review_to_done(
         f"A different reviewer must still be able to PATCH review→done. "
         f"Got: {response.status_code} {response.text[:300]}"
     )
+
+
+# ── A-2 (adversarial review): role-independent review-cycle exemption ───
+
+
+async def _record_transitions(task_id, transitions):
+    """Insert a chronological TaskEvent chain: [(agent_id, from_s, to_s), ...]."""
+    from app.models.task import TaskEvent
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        for agent_id, from_s, to_s in transitions:
+            s.add(TaskEvent(
+                id=uuid.uuid4(),
+                task_id=task_id,
+                from_status=from_s,
+                to_status=to_s,
+                changed_by="agent",
+                agent_id=agent_id,
+                created_at=datetime.utcnow(),
+            ))
+        await s.commit()
+
+
+@pytest.mark.asyncio
+async def test_developer_role_pure_reviewer_can_approve(
+    client, fake_redis, make_board, make_task,
+):
+    """A-2: an agent with role='developer' handed a task PURELY to review
+    (its only transitions are the review cycle: review→in_progress ACK,
+    then in_progress→review hand-back) must be able to approve via the
+    generic PATCH. The old classifier exempted review-shaped transitions
+    only for role=='reviewer', so this legitimate reviewer was
+    misclassified as worker and 409-blocked."""
+    board = await make_board(slug="mc-dev-devrole-reviewer")
+    cody, _ = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    dana, dana_token = await _make_agent_with_token(
+        name="Dana", board_id=board.id, is_board_lead=False, role="developer",
+    )
+    task = await make_task(
+        board_id=board.id, status="review", assigned_agent_id=dana.id,
+    )
+    # Cody implemented; Dana (developer role!) only ever did the review
+    # cycle: entered FROM review (ACK), handed back TO review.
+    await _record_transitions(task.id, [
+        (cody.id, "inbox", "in_progress"),
+        (cody.id, "in_progress", "review"),
+        (dana.id, "review", "in_progress"),
+        (dana.id, "in_progress", "review"),
+    ])
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+    ):
+        response = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "done"},
+            headers=_agent_headers(dana_token),
+        )
+    assert response.status_code in (200, 201), (
+        f"A developer-role agent that only did review work must be able to "
+        f"approve. Got: {response.status_code} {response.text[:300]}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_worker_with_review_reject_reentry_still_blocked(
+    client, fake_redis, make_board, make_task,
+):
+    """A-2 regression guard (the tricky case): a WORKER re-entering after a
+    review-reject transitions review→in_progress exactly like a reviewer
+    ACK. But because it ALSO has non-review-shaped work transitions
+    (inbox→in_progress ACK) it must stay classified as worker — the
+    review-shaped re-entry must not launder its worker status."""
+    board = await make_board(slug="mc-dev-reject-reentry")
+    cody, cody_token = await _make_agent_with_token(
+        name="Cody", board_id=board.id, is_board_lead=False,
+    )
+    task = await make_task(
+        board_id=board.id, status="review", assigned_agent_id=cody.id,
+    )
+    # Full worker lifecycle incl. review-reject re-entry:
+    # ACK, handoff, reject re-entry (review-shaped!), second handoff.
+    await _record_transitions(task.id, [
+        (cody.id, "inbox", "in_progress"),
+        (cody.id, "in_progress", "review"),
+        (cody.id, "review", "in_progress"),
+        (cody.id, "in_progress", "review"),
+    ])
+
+    with (
+        patch("app.services.activity.broadcast", new_callable=AsyncMock),
+        patch("app.services.operations.get_system_mode", new_callable=AsyncMock, return_value="active"),
+    ):
+        response = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "done"},
+            headers=_agent_headers(cody_token),
+        )
+    assert response.status_code in (403, 409), (
+        f"Worker with reject re-entry must still be blocked from "
+        f"self-approving. Got: {response.status_code} {response.text[:300]}"
+    )

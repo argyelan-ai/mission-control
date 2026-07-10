@@ -405,12 +405,33 @@ async def _merge_pr_if_exists(
 
 async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[uuid.UUID]:
     """Return the set of agent ids that did IMPLEMENTATION work on `task`,
-    derived from its TaskEvent history (transitions into in_progress/review).
+    derived from its chronological TaskEvent history (transitions into
+    in_progress/review).
 
-    Reviewer-only transitions are filtered out: a reviewer's ACK
-    (review → in_progress) and review completion (in_progress → review) are
-    NOT implementation work — only a non-reviewer agent moving the task
-    counts as "worked on it".
+    A-2 (adversarial review): classification is ROLE-INDEPENDENT. The old
+    version exempted review-shaped transitions only when agent.role ==
+    "reviewer" — a developer-role agent handed a task purely to review was
+    misclassified as worker and blocked from legitimately approving. But a
+    naive "exempt all review-shaped transitions" would let a worker launder
+    itself: after a review-reject, the WORKER re-enters via review →
+    in_progress exactly like a reviewer ACK. The robust signal available in
+    task_events (from_status/to_status/agent_id ordered by created_at) is
+    the ORDER of an agent's transitions:
+
+      * review → in_progress with no prior worker classification = the agent
+        ENTERED the task while it was in review — a review-cycle participant
+        (reviewer ACK), regardless of role.
+      * in_progress → review by an agent that previously entered from review
+        = completing that review cycle (hand-back) — still review work.
+      * in_progress → review WITHOUT a prior review-entry = a developer
+        handoff ("I finished implementing") — worker.
+      * ANY other transition (inbox → in_progress ACK, blocked →
+        in_progress, ...) = implementation work — worker. Once worker,
+        later review-shaped transitions (reject re-entry) never un-classify.
+
+    A worker's reject re-entry is therefore still caught: its original
+    inbox → in_progress ACK (or its handoff before the reject) already
+    marked it as worker before the review-shaped re-entry occurs.
 
     Shared by `execute_review_decision`'s self-review guard (M3, Fix 2) and
     the generic PATCH review→done path in routers/agent_task_status.py —
@@ -423,21 +444,28 @@ async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[
             TaskEvent.task_id == task.id,
             TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
             TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
-        )
+        ).order_by(TaskEvent.created_at)  # type: ignore[arg-type]
     )
     worker_agent_ids: set[uuid.UUID] = set()
+    review_entrants: set[uuid.UUID] = set()  # entered the task FROM review status
     for event in events_result.all():
-        if not event.agent_id:
+        aid = event.agent_id
+        if not aid:
             continue
-        is_review_transition = (
-            (event.from_status == "review" and event.to_status == "in_progress") or
-            (event.from_status == "in_progress" and event.to_status == "review")
-        )
-        if is_review_transition:
-            event_agent = await session.get(Agent, event.agent_id)
-            if event_agent and event_agent.role == "reviewer":
-                continue  # Review work, don't count as worker
-        worker_agent_ids.add(event.agent_id)
+        if event.from_status == "review" and event.to_status == "in_progress":
+            # Review-cycle entry (reviewer ACK) — unless this agent already
+            # did implementation work (worker reject re-entry stays worker).
+            if aid not in worker_agent_ids:
+                review_entrants.add(aid)
+            continue
+        if event.from_status == "in_progress" and event.to_status == "review":
+            if aid in review_entrants:
+                continue  # hand-back completing a review cycle — review work
+            worker_agent_ids.add(aid)  # developer handoff — implementation
+            continue
+        # Any non-review-shaped transition = implementation work.
+        worker_agent_ids.add(aid)
+        review_entrants.discard(aid)
     return worker_agent_ids
 
 
