@@ -108,6 +108,25 @@ services:
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       TELEGRAM_REPORTS_BOT_TOKEN: ${TELEGRAM_REPORTS_BOT_TOKEN:-}
       TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
+      # Jarvis Telegram-Inbound (ADR-061): mobiler Jarvis via Telegram Text/Voice.
+      # Default aus → Verhalten unveraendert (nur Approval-URL-Buttons).
+      JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
+      JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+      # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
+      # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
+      # ask_frontier is off by default (per-request cost); the briefing job has
+      # its own gate below and is unaffected.
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
+      JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
+      JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
+      # Jarvis-Agent-Token: der Brain fuehrt Tool-Calls ueber den agent-scoped
+      # API-Pfad aus (kein Auth-Bypass), derselbe Token wie der voice_worker.
+      JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
+      MC_BACKEND_URL: http://localhost:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
       # Operator identity + newsletter branding (see .env.example)
       OPERATOR_NAME: ${OPERATOR_NAME:-Operator}
@@ -202,6 +221,13 @@ services:
       # --force-recreate` Cross-Image Switches (ADR-027 / Phase 15).
       - ./docker-compose.yml:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/docker-compose.yml:ro
       - ./.env:${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}/.env:ro
+      # Shared Jarvis package (ADR-061). The backend build context is ./backend
+      # (also the GHCR image path), so jarvis_core — which lives at the repo
+      # root — is provided as a live mount rather than baked in, matching the
+      # ./backend/templates and ./docker live-mount convention above. The
+      # Telegram-inbound import of jarvis_core is lazy + feature-gated, so a
+      # pure image run without this mount is unaffected (feature stays off).
+      - ./jarvis_core:/app/jarvis_core:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
@@ -347,7 +373,13 @@ services:
   # Grok Realtime API. Tool-Calls gehen ans MC-Backend mit dem Jarvis-Agent
   # PBKDF2-Token (Boss-equivalente Scopes — siehe agents.scopes in DB).
   voice-worker:
-    build: ./voice_worker
+    # Build context raised to the repo root (ADR-061) so the shared jarvis_core
+    # package (sibling of voice_worker/) can be COPYied into the image. This
+    # service is built locally only (not in the GHCR release matrix), so raising
+    # the context is safe.
+    build:
+      context: .
+      dockerfile: voice_worker/Dockerfile
     profiles: ["voice"]
     restart: unless-stopped
     logging: *default-logging
@@ -360,10 +392,17 @@ services:
       LIVEKIT_URL: ${LIVEKIT_URL:-ws://livekit:7880}
       LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       XAI_API_KEY: ${XAI_API_KEY:-}
+      VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
+      VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
+      # Jarvis Intelligence (ADR-062): frontier model + gate for the ask_frontier
+      # tool (off by default → not offered in the voice tool schema).
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
       JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
       MC_BACKEND_URL: http://backend:8000
-      VOICE_VOICE_ID: ${VOICE_VOICE_ID:-ara}
+      VOICE_VOICE_ID: ${VOICE_VOICE_ID:-}
 
   # Dedicated CDP-exposing Chromium for the agent browser workflow. Replaces
   # playwright-mcp's internal browser so MC can attach a SECOND CDP session to

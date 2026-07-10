@@ -116,6 +116,17 @@ class RedisKeys:
         return "mc:events:schedule"
 
     @staticmethod
+    def jarvis_daily_briefing(date_iso: str) -> str:
+        """Per-day generated morning briefing (ADR-062).
+
+        Holds the LLM-generated German briefing text for one day. Doubles as the
+        idempotency guard (SET NX) so the job never generates twice per day, and
+        as the fast read-path the /agent/vault/briefing endpoint uses to surface
+        today's generated briefing without vault-compaction lag.
+        """
+        return f"mc:jarvis:briefing:{date_iso}"
+
+    @staticmethod
     def workflow_events() -> str:
         return "mc:events:workflows"
 

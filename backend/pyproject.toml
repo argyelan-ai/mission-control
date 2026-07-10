@@ -55,6 +55,9 @@ packages = ["app"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+# "." = backend/ (app package); ".." = repo root, so the shared `jarvis_core`
+# package (ADR-061, lives at repo root) is importable in the backend test env.
+pythonpath = [".", ".."]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
 addopts = "-m 'not integration'"

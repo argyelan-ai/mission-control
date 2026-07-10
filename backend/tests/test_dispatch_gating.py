@@ -535,3 +535,65 @@ def test_agent_task_update_model_has_no_dispatch_phase():
     """AgentTaskUpdate model contains NO dispatch_phase field."""
     from app.routers.agent_scoped import AgentTaskUpdate
     assert "dispatch_phase" not in AgentTaskUpdate.model_fields
+
+
+# ── ADR-062: is_executable_work_item classification (dispatch_to_agent bypass) ──
+
+from app.services.dispatch_gating import is_executable_work_item  # noqa: E402
+
+BOSS = "boss-id"
+CODY = "cody-id"
+JARVIS = "jarvis-id"
+
+
+def test_iewi_board_lead_subtask_delegation_unchanged():
+    """Board Lead delegates a SUBTASK to a worker → gated (as before)."""
+    assert is_executable_work_item(
+        has_parent=True, assigned_agent_id=CODY,
+        creator_agent_id=BOSS, creator_is_board_lead=True,
+    ) is True
+
+
+def test_iewi_board_lead_root_delegation_stays_ungated():
+    """Board Lead creates a PARENTLESS root task for a worker → NOT gated
+    (unchanged: the Board Lead is the orchestrator, carries operator intent)."""
+    assert is_executable_work_item(
+        has_parent=False, assigned_agent_id=CODY,
+        creator_agent_id=BOSS, creator_is_board_lead=True,
+    ) is False
+
+
+def test_iewi_worker_subtask_unchanged():
+    """Non-Board-Lead creates a SUBTASK for another agent → gated (unchanged)."""
+    assert is_executable_work_item(
+        has_parent=True, assigned_agent_id=CODY,
+        creator_agent_id="worker-id", creator_is_board_lead=False,
+    ) is True
+
+
+def test_iewi_jarvis_root_foreign_assignment_now_gated():
+    """THE FIX: non-Board-Lead (Jarvis) creates a PARENTLESS root task assigned
+    to another agent (dispatch_to_agent) → now gated, no bypass."""
+    assert is_executable_work_item(
+        has_parent=False, assigned_agent_id=CODY,
+        creator_agent_id=JARVIS, creator_is_board_lead=False,
+    ) is True
+
+
+def test_iewi_self_assigned_never_gated():
+    """Self-assigned tasks are never executable work items (root or child,
+    board-lead or not)."""
+    for has_parent in (True, False):
+        for is_lead in (True, False):
+            assert is_executable_work_item(
+                has_parent=has_parent, assigned_agent_id=BOSS,
+                creator_agent_id=BOSS, creator_is_board_lead=is_lead,
+            ) is False
+
+
+def test_iewi_unassigned_never_gated():
+    """No assignee → not an executable work item."""
+    assert is_executable_work_item(
+        has_parent=False, assigned_agent_id=None,
+        creator_agent_id=JARVIS, creator_is_board_lead=False,
+    ) is False
