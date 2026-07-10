@@ -49,6 +49,29 @@ class AgentCreate(BaseModel):
     # one-click chain renders the right image/env from the start — the
     # detail-page switch service stays the path for changing it later.
     runtime_id: str | None = None
+    # ── Onboarding-wizard fields (2026-07-10) ────────────────────────────────
+    # The wizard funnels custom / template-prefill / duplicate all through
+    # this ONE create call, so create must carry the full agent config.
+    # ADR-056 harness axis. None = derive from the runtime's protocol.
+    harness: str | None = None
+    # Explicit scope list. Empty [] means ALL 16 scopes (backward-compat), so
+    # the wizard always sends a concrete list — a new agent is never silently
+    # all-powerful.
+    scopes: list[str] = []
+    # SOUL/persona markdown (from a template or a duplicated agent). None =
+    # the default SOUL.md.j2 render at provision time.
+    soul_md: str | None = None
+    # cli-bridge skill allowlist. None = all skills.
+    skill_filter: list[str] | None = None
+    # cli-bridge plugin allowlist. None = all installed plugins.
+    cli_plugins: list[str] | None = None
+
+    @field_validator("harness")
+    @classmethod
+    def _validate_harness(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("claude", "openclaude", "omp"):
+            raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
+        return v
 
 
 class AgentUpdate(BaseModel):
@@ -127,7 +150,7 @@ async def create_agent(
 
     # Auto-generated TOOLS.md with the correct token (will never be available in plaintext again)
     board_id_str = str(payload.board_id) if payload.board_id else None
-    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
+    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=payload.scopes)
 
     # Resolve the optional LLM-runtime binding BEFORE creating the agent —
     # a bad slug should 404 without leaving a half-created agent behind.
@@ -147,6 +170,11 @@ async def create_agent(
         tools_md=tools_md,
         agent_runtime=payload.agent_runtime,
         runtime_id=resolved_runtime_id,
+        harness=payload.harness,
+        scopes=payload.scopes,
+        soul_md=payload.soul_md,
+        skill_filter=payload.skill_filter,
+        cli_plugins=payload.cli_plugins,
     )
     session.add(agent)
     await session.commit()
