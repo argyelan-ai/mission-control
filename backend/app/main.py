@@ -312,6 +312,19 @@ async def lifespan(app: FastAPI):
         logger.info("Vault decay cron scheduled (weekly)")
     except Exception as e:
         logger.error("Vault decay loop failed to schedule: %s", e, exc_info=True)
+
+    # ── Jarvis Morning Briefing (ADR-062) ─────────────────────────────
+    # Daily LLM-generated briefing as a vault note. Feature-gated: the loop
+    # returns immediately unless JARVIS_BRIEFING_ENABLED + OPENAI_API_KEY are set.
+    app.state.jarvis_briefing_task = None
+    try:
+        from app.services.jarvis_briefing import jarvis_briefing_loop
+        app.state.jarvis_briefing_task = _create_background_task(
+            jarvis_briefing_loop(),
+            name="jarvis_briefing_loop",
+        )
+    except Exception as e:
+        logger.error("Jarvis briefing loop failed to schedule: %s", e, exc_info=True)
     yield
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
@@ -320,6 +333,13 @@ async def lifespan(app: FastAPI):
         await _gh_monitor_task
     except (_asyncio.CancelledError, Exception):
         pass
+    _jarvis_briefing_task = getattr(app.state, "jarvis_briefing_task", None)
+    if _jarvis_briefing_task is not None:
+        _jarvis_briefing_task.cancel()
+        try:
+            await _jarvis_briefing_task
+        except (_asyncio.CancelledError, Exception):
+            pass
     # Vault Memory shutdown — vault_lint cron first (lightest, kill before
     # mid-lint write), then compactor (drain final compaction into the
     # still-running watcher pipeline), then the watcher itself (drains

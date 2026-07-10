@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -1858,6 +1859,29 @@ async def agent_vault_briefing(
         "newest_lesson_age_days": newest_lesson_age,
         "note": note,
     }
+
+    # ── Generated morning briefing (ADR-062) ──────────────────────────────────
+    # If today's LLM-generated briefing exists (Redis, written by the scheduled
+    # jarvis_briefing job), surface it so Jarvis can read it out instead of the
+    # raw live data. Fail-soft: absence or a Redis hiccup just omits the field.
+    try:
+        from app.redis_client import RedisKeys, get_redis
+
+        date_iso = now.astimezone(ZoneInfo("Europe/Zurich")).strftime("%Y-%m-%d")
+        redis = await get_redis()
+        raw = await redis.get(RedisKeys.jarvis_daily_briefing(date_iso))
+        if raw:
+            try:
+                payload = json.loads(raw)
+                text = payload.get("text") if isinstance(payload, dict) else None
+            except (ValueError, TypeError):
+                text = None
+            # "__generating__" placeholder (job in flight) → not a real briefing yet.
+            if text:
+                result["generated_briefing"] = text
+                result["generated_briefing_date"] = date_iso
+    except Exception as exc:  # noqa: BLE001 — never fail the briefing on this
+        logger.warning("briefing: generated_briefing lookup failed: %s", exc)
 
     if errors:
         result["error"] = "; ".join(errors)

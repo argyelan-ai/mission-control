@@ -66,6 +66,39 @@ async def _create_task(
         return {"ok": False, "error": str(e)}
 
 
+async def _dispatch_to_agent(
+    client,
+    channel: Channel,
+    agent_name: str,
+    instruction: str,
+    priority: str = "medium",
+) -> dict:
+    logger.info("Tool: dispatch_to_agent(agent=%r, prio=%s)", agent_name, priority)
+    try:
+        return await client.dispatch_to_agent(agent_name, instruction, priority)
+    except Exception as e:
+        logger.exception("dispatch_to_agent failed")
+        return {"ok": False, "error": str(e)}
+
+
+async def _ask_frontier(
+    client,
+    channel: Channel,
+    question: str,
+    context_hint: str | None = None,
+) -> dict:
+    # Frontier-Delegation braucht keinen MC-Client — sie geht direkt an OpenAI
+    # (API-Key + Modell aus dem Environment, wie brain/transcribe). Der client-
+    # Parameter bleibt nur, damit die Handler-Signatur einheitlich ist.
+    logger.info("Tool: ask_frontier(len=%d, hint=%s)", len(question or ""), bool(context_hint))
+    try:
+        from jarvis_core import frontier
+        return await frontier.ask_frontier(question, context_hint)
+    except Exception as e:
+        logger.exception("ask_frontier failed")
+        return {"ok": False, "error": str(e)}
+
+
 async def _list_open_tasks(client, channel: Channel) -> dict:
     logger.info("Tool: list_open_tasks")
     try:
@@ -424,6 +457,52 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
             "required": ["title"],
         },
         handler=_create_task,
+    ),
+    ToolSpec(
+        name="dispatch_to_agent",
+        description=(
+            "Weist einem Agenten SOFORT einen Auftrag zu, sodass er direkt loslegt "
+            "(der normale MC-Dispatch startet die Session). Nutze das, wenn der "
+            "Operator will, dass jetzt jemand loslegt ('sag Cody, er soll…', 'lass "
+            "Sparky…'). Unterschied zu create_task: create_task legt nur einen "
+            "Backlog-Eintrag an (geht an Boss zur Orchestrierung), dispatch_to_agent "
+            "startet den genannten Agenten unmittelbar. agent_name ist PFLICHT und "
+            "muss ein realer Agent sein (Cody/Sparky/Rex/…). Priority: low|medium|high|critical."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "agent_name": _STR,
+                "instruction": {
+                    "type": "string",
+                    "description": "Was der Agent tun soll — klar und vollstaendig formuliert.",
+                },
+                "priority": {"type": "string", "enum": ["low", "medium", "high", "critical"]},
+            },
+            "required": ["agent_name", "instruction"],
+        },
+        handler=_dispatch_to_agent,
+    ),
+    ToolSpec(
+        name="ask_frontier",
+        description=(
+            "Delegiert eine SCHWERE Frage (Analyse, Planung, Konzept, Wissensfrage, "
+            "Abwaegung) an ein starkes Denk-Modell und liefert dessen Antwort zurueck. "
+            "Nutze das, wenn der Operator etwas fragt, das echtes Nachdenken braucht "
+            "und NICHT aus dem Vault/Board beantwortbar ist (dafuer query_memory/"
+            "search_notes). Kuendige es dem Operator kurz an ('einen Moment, ich denk "
+            "kurz nach') und gib die Antwort danach in EIGENEN Worten kompakt wieder — "
+            "nicht wie ein Dokument vorlesen. context_hint optional fuer Zusatzkontext."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "question": _STR,
+                "context_hint": {"type": "string"},
+            },
+            "required": ["question"],
+        },
+        handler=_ask_frontier,
     ),
     ToolSpec(
         name="list_open_tasks",

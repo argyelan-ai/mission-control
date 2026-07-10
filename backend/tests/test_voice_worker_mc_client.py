@@ -214,6 +214,59 @@ async def test_create_task_known_assignee_goes_to_named_agent(mc, agents_fixture
 
 
 # ────────────────────────────────────────────────────────────────────────
+# ADR-062: dispatch_to_agent — immediate assignment + dispatch status
+# ────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_dispatch_to_agent_assigns_and_returns_dispatch_status(mc, agents_fixture):
+    """Known agent → task posted with assigned_agent_id + dispatch status echoed."""
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json = MagicMock(return_value=agents_fixture)
+
+    post_resp = MagicMock()
+    post_resp.status_code = 201
+    post_resp.json = MagicMock(return_value={
+        "id": "task-d1", "title": "Baue X",
+        "dispatch": {"status": "dispatched", "target_agent": "Sparky"},
+    })
+    post_resp.raise_for_status = MagicMock()
+
+    captured: dict = {}
+
+    async def _post(url, json=None):
+        captured["url"] = url
+        captured["payload"] = json
+        return post_resp
+
+    mc._client.get = AsyncMock(return_value=get_resp)
+    mc._client.post = AsyncMock(side_effect=_post)
+
+    result = await mc.dispatch_to_agent("Sparky", "Baue X", "high")
+    assert result["ok"] is True
+    assert result["agent"] == "Sparky"
+    assert result["dispatch_status"] == "dispatched"
+    assert captured["payload"]["assigned_agent_id"] == "bbb"  # Sparky
+    assert captured["payload"]["priority"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_to_agent_unknown_agent_no_silent_fallback(mc, agents_fixture):
+    """Unknown agent → NO board-lead fallback (unlike create_task); clear error."""
+    get_resp = MagicMock()
+    get_resp.status_code = 200
+    get_resp.json = MagicMock(return_value=agents_fixture)
+    mc._client.get = AsyncMock(return_value=get_resp)
+    mc._client.post = AsyncMock()  # must not be called
+
+    result = await mc.dispatch_to_agent("Nonexistent", "tu was", "medium")
+    assert result["ok"] is False
+    assert result["reason"] == "agent_not_found"
+    mc._client.post.assert_not_called()
+
+
+# ────────────────────────────────────────────────────────────────────────
 # Bug A: query_memory uses correct endpoint
 # ────────────────────────────────────────────────────────────────────────
 

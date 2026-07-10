@@ -128,6 +128,57 @@ async def test_dispatch_create_task_forwards_to_client():
 
 
 @pytest.mark.asyncio
+async def test_dispatch_to_agent_forwards_to_client():
+    client = AsyncMock()
+    client.dispatch_to_agent = AsyncMock(
+        return_value={"ok": True, "task_id": "t9", "agent": "Cody",
+                      "dispatch_status": "dispatched"}
+    )
+    res = await jtools.dispatch(
+        "dispatch_to_agent", client, VOICE,
+        {"agent_name": "Cody", "instruction": "Baue Feature X", "priority": "high"},
+    )
+    assert res["dispatch_status"] == "dispatched"
+    client.dispatch_to_agent.assert_awaited_once_with("Cody", "Baue Feature X", "high")
+
+
+@pytest.mark.asyncio
+async def test_dispatch_to_agent_available_on_both_channels():
+    voice_names = {t.name for t in jtools.tools_for(VOICE)}
+    tg_names = {t.name for t in jtools.tools_for(TELEGRAM)}
+    assert "dispatch_to_agent" in voice_names
+    assert "dispatch_to_agent" in tg_names
+
+
+@pytest.mark.asyncio
+async def test_ask_frontier_tool_delegates_to_frontier(monkeypatch):
+    from jarvis_core import frontier
+
+    called: dict = {}
+
+    async def _fake_ask(question, context_hint=None):
+        called["question"] = question
+        called["hint"] = context_hint
+        return {"ok": True, "answer": "42", "model": "gpt-test"}
+
+    monkeypatch.setattr(frontier, "ask_frontier", _fake_ask)
+    res = await jtools.dispatch(
+        "ask_frontier", AsyncMock(), TELEGRAM,
+        {"question": "Sinn des Lebens?", "context_hint": "philosophisch"},
+    )
+    assert res == {"ok": True, "answer": "42", "model": "gpt-test"}
+    assert called == {"question": "Sinn des Lebens?", "hint": "philosophisch"}
+
+
+@pytest.mark.asyncio
+async def test_ask_frontier_tool_available_on_both_channels():
+    voice_names = {t.name for t in jtools.tools_for(VOICE)}
+    tg_names = {t.name for t in jtools.tools_for(TELEGRAM)}
+    assert "ask_frontier" in voice_names
+    assert "ask_frontier" in tg_names
+
+
+@pytest.mark.asyncio
 async def test_dispatch_unknown_tool():
     res = await jtools.dispatch("does_not_exist", AsyncMock(), VOICE, {})
     assert res["ok"] is False

@@ -114,6 +114,11 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
       JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+      # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
+      # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
+      JARVIS_BRIEFING_ENABLED: ${JARVIS_BRIEFING_ENABLED:-false}
+      JARVIS_BRIEFING_HOUR: ${JARVIS_BRIEFING_HOUR:-06:30}
       # Jarvis-Agent-Token: der Brain fuehrt Tool-Calls ueber den agent-scoped
       # API-Pfad aus (kein Auth-Bypass), derselbe Token wie der voice_worker.
       JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
@@ -388,6 +393,8 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       VOICE_PROVIDER: ${VOICE_PROVIDER:-openai}
       VOICE_MODEL: ${VOICE_MODEL:-gpt-realtime-2.1}
+      # Jarvis Intelligence (ADR-062): frontier model for the ask_frontier tool.
+      JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
       JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
       MC_BACKEND_URL: http://backend:8000
       VOICE_VOICE_ID: ${VOICE_VOICE_ID:-}

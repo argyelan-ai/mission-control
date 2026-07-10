@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     # laeuft IM Backend-Container). Standard: localhost:8000.
     mc_backend_url: str = "http://localhost:8000"
 
+    # ── Jarvis Intelligence (ADR-062) ────────────────────────────────────
+    # Frontier-Modell fuer ask_frontier + das Morning-Briefing (schwere
+    # Analyse/Planung). Leer → jarvis_core.frontier.DEFAULT_FRONTIER_MODEL.
+    jarvis_frontier_model: str = ""
+    # Taegliches, LLM-generiertes Morgenbriefing als Vault-Note. Default off;
+    # aktiv nur bei JARVIS_BRIEFING_ENABLED=true UND OPENAI_API_KEY gesetzt.
+    jarvis_briefing_enabled: bool = False
+    # Uhrzeit (Europe/Zurich, "HH:MM") zu der das Briefing generiert wird.
+    jarvis_briefing_hour: str = "06:30"
+
     # MC Base URL (externally reachable, for Telegram URL buttons)
     mc_base_url: str = "http://localhost"
 

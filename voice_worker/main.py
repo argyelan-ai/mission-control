@@ -144,6 +144,42 @@ class VoiceAssistant(Agent):
         })
 
     @function_tool
+    async def dispatch_to_agent(
+        self,
+        agent_name: str,
+        instruction: str,
+        priority: str = "medium",
+    ) -> dict:
+        """Weist einem Agenten SOFORT einen Auftrag zu, sodass er direkt loslegt.
+
+        Anders als create_task (Backlog-Eintrag an Boss) startet dies den genannten
+        Agenten unmittelbar ueber den normalen MC-Dispatch. agent_name ist Pflicht.
+
+        Args:
+            agent_name: Realer Agent (Cody, Sparky, Rex, …).
+            instruction: Was der Agent tun soll — klar und vollstaendig.
+            priority: low | medium | high | critical.
+        """
+        return await jtools.dispatch("dispatch_to_agent", mc_client, VOICE, {
+            "agent_name": agent_name, "instruction": instruction, "priority": priority,
+        })
+
+    @function_tool
+    async def ask_frontier(self, question: str, context_hint: str | None = None) -> dict:
+        """Delegiert eine schwere Frage (Analyse/Planung/Wissen) an ein starkes Denk-Modell.
+
+        Kuendige es kurz an ('einen Moment, ich denk kurz nach') und gib die Antwort
+        danach in eigenen Worten kompakt wieder — nicht wie ein Dokument vorlesen.
+
+        Args:
+            question: Die Frage, die echtes Nachdenken braucht.
+            context_hint: Optionaler Zusatzkontext.
+        """
+        return await jtools.dispatch("ask_frontier", mc_client, VOICE, {
+            "question": question, "context_hint": context_hint,
+        })
+
+    @function_tool
     async def list_open_tasks(self) -> dict:
         """Listet alle offenen Aufgaben (inbox/in_progress/blocked/review)."""
         return await jtools.dispatch("list_open_tasks", mc_client, VOICE, {})
