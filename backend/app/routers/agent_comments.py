@@ -465,7 +465,7 @@ async def agent_add_comment(
         response["delivery_hint"] = (
             "Worker bekommt diesen `message`-Comment nicht via /me/poll — "
             "er ist als Routine-Notiz/Audit klassifiziert. Fuer Briefings "
-            "auf existierende Tasks nutze `mc comment --type handoff`, "
+            "auf existierende Tasks nutze `mc comment handoff \"...\"`, "
             "fuer neue Sub-Aufgaben `mc delegate`."
         )
     return response

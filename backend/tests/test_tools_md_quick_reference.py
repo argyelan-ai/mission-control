@@ -31,8 +31,10 @@ def test_flow1_lifecycle_universal():
     assert "Flow 1" in flows
     assert "mc me" in flows
     assert "mc ack" in flows
-    assert "mc done" in flows
-    assert "mc blocked --type" in flows
+    # `mc finish` is the atomic close verb (reflection + status in one call) —
+    # replaces the old broken two-step `mc comment --type reflection` + `mc done`.
+    assert "mc finish" in flows
+    assert "mc blocked --blocker-type" in flows
     # ACK error note (already-ACKed awareness)
     assert "In Progress" in flows
     # Non-relevant flows NOT present with heartbeat-only
@@ -54,7 +56,10 @@ def test_flow3_deliverable_tasks_write():
     assert "Flow 3" in flows
     assert "mc deliverable" in flows
     assert "mc pdf" in flows
-    assert "mc checkpoint" in flows
+    # `mc checkpoint` is a dead command (POST /checkpoint returns HTTP 410) —
+    # progress goes through `mc comment progress` + the checklist instead.
+    assert "mc checkpoint " not in flows
+    assert "mc comment progress" in flows
     assert "mc checklist" in flows
 
 
