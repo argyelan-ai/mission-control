@@ -50,6 +50,91 @@ async def test_stage_writes_files(home_host, async_session, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_slug_path_traversal_is_confined(home_host, async_session, monkeypatch):
+    """A malicious name must never escape ~/.mc/agents/."""
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-trav", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="../../evil", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    agents_root = (home_host / ".mc" / "agents").resolve()
+    workspace = os.path.dirname(result.env_path)
+    assert os.path.commonpath([agents_root, os.path.realpath(workspace)]) == str(agents_root)
+    # nothing was written outside the confined tree
+    escaped = home_host / "evil"
+    assert not escaped.exists()
+
+
+@pytest.mark.asyncio
+async def test_slug_strips_shell_metacharacters_no_injection(home_host, async_session, monkeypatch):
+    """A newline-carrying name must not become an executable line in run.sh."""
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-inj", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    payload = "poweroff"
+    agent = Agent(name=f"x\n{payload}", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    run_sh = open(result.run_script_path).read()
+    lines = run_sh.splitlines()
+    assert payload not in lines  # not injected as its own executable line
+    assert "\n" not in result.slug
+
+
+@pytest.mark.asyncio
+async def test_slugify_ampersand_name(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-amp", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="R&D Bot", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    assert result.slug == "rd-bot"
+    plist = open(result.plist_staged_path).read()
+    assert "<string>com.mc.agent.rd-bot</string>" in plist
+    assert "&" not in plist  # no raw ampersand injected into XML
+
+
+@pytest.mark.asyncio
+async def test_unknown_harness_raises_instead_of_interpolating(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-harness", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Bad Harness", agent_runtime="host", harness="evil; rm -rf")
+
+    with pytest.raises(ValueError):
+        await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+
+@pytest.mark.asyncio
 async def test_maybe_load_disabled_does_not_run_launchctl(home_host, async_session, monkeypatch):
     async def _fake_env(runtime, session):
         return {}

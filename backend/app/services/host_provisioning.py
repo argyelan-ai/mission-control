@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,8 +43,30 @@ def _home_host() -> Path:
     return Path(home)
 
 
+_SLUG_UNSAFE = re.compile(r"[^a-z0-9-]+")
+_SLUG_DASHES = re.compile(r"-{2,}")
+
+
 def _slugify(name: str) -> str:
-    return name.lower().strip().replace(" ", "-")
+    """Derive a filesystem/plist/shell-safe slug.
+
+    Strips everything outside [a-z0-9-] (this also removes '/', '..'
+    sequences, '&', '<', '>', newlines, tabs — anything that could break
+    out of the workspace path, inject a shell line, or break XML), then
+    collapses repeated hyphens and trims leading/trailing ones. Falls back
+    to "agent" if nothing safe remains.
+    """
+    lowered = (name or "").lower().strip().replace(" ", "-")
+    safe = _SLUG_UNSAFE.sub("", lowered)
+    collapsed = _SLUG_DASHES.sub("-", safe).strip("-")
+    return collapsed or "agent"
+
+
+def _resolve_slug(agent: Agent) -> str:
+    """Prefer the DB's already-derived Agent.slug, normalized through the
+    hardened sanitizer; fall back to re-deriving from the display name."""
+    candidate = agent.slug or agent.name
+    return _slugify(candidate)
 
 
 def _format_env_file(env: dict[str, str]) -> str:
@@ -77,8 +100,14 @@ async def stage_host_agent_files(
     Idempotent — overwrites existing files. Does NOT touch launchd.
     """
     home = _home_host()
-    slug = _slugify(agent.name)
+    slug = _resolve_slug(agent)
+    agents_root = (home / ".mc" / "agents").resolve()
     workspace = home / ".mc" / "agents" / slug
+    resolved_workspace = workspace.resolve()
+    if resolved_workspace != agents_root and agents_root not in resolved_workspace.parents:
+        raise ValueError(
+            f"refusing to stage host agent files outside {agents_root}: {resolved_workspace}"
+        )
     logs_dir = workspace / "logs"
     label = f"com.mc.agent.{slug}"
     plist_path = workspace / f"{label}.plist"
@@ -89,7 +118,9 @@ async def stage_host_agent_files(
     logs_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
 
     harness = agent.harness or "openclaude"
-    binary = _HARNESS_BINARY.get(harness, "openclaude")
+    if harness not in _HARNESS_BINARY:
+        raise ValueError(f"unknown harness {harness!r}; expected one of {sorted(_HARNESS_BINARY)}")
+    binary = _HARNESS_BINARY[harness]
 
     # 1. agent.env (OPENAI_*/MC_* from the runtime + token), mode 600.
     runtime_env = await build_runtime_env(runtime, session)
