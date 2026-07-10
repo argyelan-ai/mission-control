@@ -1518,6 +1518,37 @@ async def agent_update_task(
                     )
                     updates["status"] = "done"
 
+    # ── M3 (Fix 2, W2-A): self-approve guard on the generic PATCH path ──
+    # execute_review_decision() (POST .../tasks/{id}/review) blocks/escalates
+    # an agent approving its own implementation work (self-review). This
+    # generic PATCH endpoint's "review_decision=approved" fallback below used
+    # to bypass that guard entirely — any agent that owns the task (which,
+    # per the ownership check above, includes the assignee that did the
+    # work) could PATCH status=done and self-approve. Route it through the
+    # SAME worker-id check execute_review_decision uses so the guard can't
+    # be dodged by using PATCH instead of the dedicated review endpoint.
+    # Board leads are exempt (parity with execute_review_decision's
+    # escalation target — a board lead approving is the escalation itself).
+    if (
+        "status" in updates
+        and old_status == "review"
+        and updates["status"] == "done"
+        and not agent.is_board_lead
+    ):
+        from app.services.task_lifecycle import get_review_worker_agent_ids
+        _worker_agent_ids = await get_review_worker_agent_ids(session, task)
+        if agent.id in _worker_agent_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Self-review not allowed: Agent '{agent.name}' war als Bearbeiter "
+                    f"beteiligt und darf den eigenen Task nicht per PATCH auf 'done' "
+                    f"self-approven. Nutze den Review-Flow — `mc approve` durch einen "
+                    f"anderen Reviewer-Agent, oder POST "
+                    f"/api/v1/agent/boards/{board_id}/tasks/{task.id}/review."
+                ),
+            )
+
     # ── Fallback: automatically set review_decision on the old PATCH path ──
     # ONLY done → approved. NOT in_progress → changes_requested!
     # Reviewer ACK (review→in_progress) is the start of work, not a decision.

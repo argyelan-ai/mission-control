@@ -403,6 +403,44 @@ async def _merge_pr_if_exists(
         logger.warning("PR-Merge fehlgeschlagen: %s", e)
 
 
+async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[uuid.UUID]:
+    """Return the set of agent ids that did IMPLEMENTATION work on `task`,
+    derived from its TaskEvent history (transitions into in_progress/review).
+
+    Reviewer-only transitions are filtered out: a reviewer's ACK
+    (review → in_progress) and review completion (in_progress → review) are
+    NOT implementation work — only a non-reviewer agent moving the task
+    counts as "worked on it".
+
+    Shared by `execute_review_decision`'s self-review guard (M3, Fix 2) and
+    the generic PATCH review→done path in routers/agent_task_status.py —
+    both must agree on who counts as "the assignee that did the work" so an
+    agent can't bypass the guard by using the generic PATCH endpoint instead
+    of POST /review.
+    """
+    events_result = await session.exec(
+        select(TaskEvent).where(
+            TaskEvent.task_id == task.id,
+            TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
+            TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
+        )
+    )
+    worker_agent_ids: set[uuid.UUID] = set()
+    for event in events_result.all():
+        if not event.agent_id:
+            continue
+        is_review_transition = (
+            (event.from_status == "review" and event.to_status == "in_progress") or
+            (event.from_status == "in_progress" and event.to_status == "review")
+        )
+        if is_review_transition:
+            event_agent = await session.get(Agent, event.agent_id)
+            if event_agent and event_agent.role == "reviewer":
+                continue  # Review work, don't count as worker
+        worker_agent_ids.add(event.agent_id)
+    return worker_agent_ids
+
+
 async def execute_review_decision(
     session: AsyncSession,
     task: Task,
@@ -433,31 +471,7 @@ async def execute_review_decision(
     # Self-review guard: the agent that WORKED on the task may not approve it.
     # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work.
     if decision == "approve" and actor_agent:
-        from app.models.task import TaskEvent
-        from app.models.agent import Agent as AgentModel
-        events_result = await session.exec(
-            select(TaskEvent).where(
-                TaskEvent.task_id == task.id,
-                TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
-                TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
-            )
-        )
-        worker_agent_ids: set[uuid.UUID] = set()
-        for event in events_result.all():
-            if not event.agent_id:
-                continue
-            # Filter out reviewer transitions: review work is not an implementation act.
-            # Reviewer ACK (review → in_progress) and review completion (in_progress → review)
-            # by a reviewer do NOT count as developer work.
-            is_review_transition = (
-                (event.from_status == "review" and event.to_status == "in_progress") or
-                (event.from_status == "in_progress" and event.to_status == "review")
-            )
-            if is_review_transition:
-                event_agent = await session.get(AgentModel, event.agent_id)
-                if event_agent and event_agent.role == "reviewer":
-                    continue  # Review work, don't count as worker
-            worker_agent_ids.add(event.agent_id)
+        worker_agent_ids = await get_review_worker_agent_ids(session, task)
 
         if actor_agent.id in worker_agent_ids:
             if not actor_agent.is_board_lead:
