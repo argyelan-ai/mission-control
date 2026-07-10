@@ -860,9 +860,17 @@ class TaskRunnerService:
             session.add(task)
             await session.commit()
 
-            # Background re-dispatch — runtime-aware (cli-bridge / host / claude-code)
-            asyncio.create_task(auto_dispatch_task(task.id, task.board_id))
-            tier3_ok = True
+            # Re-dispatch — runtime-aware (cli-bridge / host / claude-code).
+            # Awaited directly (we're already in an async context) instead of
+            # fire-and-forget via asyncio.create_task: auto_dispatch_task
+            # catches its own exceptions internally and always returns None,
+            # so its return value carries no success signal. The only
+            # reliable indicator is whether the delivery branch actually set
+            # dispatched_at again — re-fetch the task (auto_dispatch_task
+            # commits via its own session) and check that.
+            await auto_dispatch_task(task.id, task.board_id)
+            await session.refresh(task)
+            tier3_ok = task.dispatched_at is not None
         except Exception as e:
             logger.warning("Tier 3 (resume) failed for %s: %s", agent.name, e)
 
