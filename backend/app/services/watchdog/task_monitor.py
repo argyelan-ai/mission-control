@@ -713,7 +713,14 @@ class TaskMonitorMixin:
             if task.blocked_by_task_id is not None:
                 continue
 
-            age_minutes = (now - task.updated_at).total_seconds() / 60
+            # W2-B review fix (B-1): key the escalation clock off the
+            # dedicated blocked_at timestamp, NOT updated_at — updated_at is
+            # a generic onupdate column that any metadata PATCH (title,
+            # priority, labels) resets, which silently suppressed operator
+            # escalation indefinitely. updated_at stays only as the fallback
+            # for legacy rows blocked before migration 0150.
+            blocked_ref = task.blocked_at or task.updated_at
+            age_minutes = (now - blocked_ref).total_seconds() / 60
 
             # Offene Approvals (Blocker ODER Klaerungsfrage) → Fall liegt
             # bereits beim Operator; nur periodischer Reminder.

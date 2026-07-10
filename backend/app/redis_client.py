@@ -116,6 +116,17 @@ class RedisKeys:
         return "mc:events:schedule"
 
     @staticmethod
+    def jarvis_daily_briefing(date_iso: str) -> str:
+        """Per-day generated morning briefing (ADR-062).
+
+        Holds the LLM-generated German briefing text for one day. Doubles as the
+        idempotency guard (SET NX) so the job never generates twice per day, and
+        as the fast read-path the /agent/vault/briefing endpoint uses to surface
+        today's generated briefing without vault-compaction lag.
+        """
+        return f"mc:jarvis:briefing:{date_iso}"
+
+    @staticmethod
     def workflow_events() -> str:
         return "mc:events:workflows"
 
@@ -153,6 +164,18 @@ class RedisKeys:
     @staticmethod
     def dispatch_pending_warn(task_id: str) -> str:
         return f"mc:dispatch:pending_warn:{task_id}"
+
+    @staticmethod
+    def dispatch_resume_suppress(task_id: str) -> str:
+        """G4 (W2-A): set right after a Tier-3 recovery resume re-dispatches
+        a task (dispatched_at/ack_at reset + redispatch). _check_dispatch_ack
+        checks this before escalating an ACK-timeout approval — a resume is
+        semantically a RESUME, not a fresh dispatch, so it must not re-arm
+        the ACK escalation ladder and fire its own Approval concurrently
+        with the recovery that caused it. TTL = the agent's ack timeout +
+        margin, so a genuinely-never-acked resume still escalates once the
+        suppression window elapses."""
+        return f"mc:dispatch:resume_suppress:{task_id}"
 
     @staticmethod
     def task_runner_stale(task_id: str) -> str:

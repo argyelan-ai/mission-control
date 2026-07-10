@@ -2341,14 +2341,70 @@ async def agent_poll(
         # was supposed to review). Claim-semantics: an unacked review
         # task gets delivered once and keeps status=review (status only
         # flips when Rex explicitly PATCHes to in_progress or done).
-        active_result = await session.exec(
-            select(Task)
-            .where(Task.assigned_agent_id == agent.id)
-            .where(Task.status.in_(["in_progress", "blocked", "review"]))
-            .order_by(Task.updated_at.desc())
-            .limit(1)
-        )
-        active = active_result.first()
+        # Review fix B-2 (poll hardening): prefer the task the agent is
+        # ACTUALLY working on (agent.current_task_id, set at claim/ACK time)
+        # over the updated_at-desc heuristic. Without this, a freshly
+        # unblocked old task (freshest updated_at, stale ack_at set) shadows
+        # the task the real session is running — poll reports "working" on
+        # the wrong task.
+        active = None
+        if agent.current_task_id is not None:
+            _cur_result = await session.exec(
+                select(Task)
+                .where(Task.id == agent.current_task_id)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .limit(1)
+            )
+            active = _cur_result.first()
+        if active is None:
+            active_result = await session.exec(
+                select(Task)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .order_by(Task.updated_at.desc())
+                .limit(1)
+            )
+            active = active_result.first()
+
+        # B1 (W2-B, live incident): a blocked task only parks the agent while
+        # FRESH — grace window = board.blocker_triage_minutes (default 15min),
+        # aligned with the lead-triage window (quick lead-unblocks resume
+        # in-session with full context). Once the blocked transition is older
+        # than the window, poll stops treating it as "working" and the agent
+        # becomes claimable for new inbox work — otherwise a stale/zombie
+        # blocked task parks the agent forever (a day-old blocked task held
+        # Sparky parked while a freshly dispatched task was never offered).
+        # in_progress/review tasks are NOT affected — they keep parking
+        # unconditionally.
+        # Review fix B-1: the age is keyed off task.blocked_at (dedicated
+        # →blocked timestamp, maintained by the Task.status listener), NOT
+        # updated_at — a generic onupdate column that ANY metadata PATCH
+        # (title/priority/labels) resets, which would re-park the agent for
+        # another full window indefinitely. updated_at remains only as the
+        # fallback for legacy rows blocked before migration 0150.
+        if active is not None and active.status == "blocked":
+            from app.models.board import Board as _PollBoard
+
+            grace_minutes = 15
+            _board_id = active.board_id or agent.board_id
+            if _board_id is not None:
+                _board_row = await session.get(_PollBoard, _board_id)
+                if _board_row is not None and _board_row.blocker_triage_minutes:
+                    grace_minutes = _board_row.blocker_triage_minutes
+            _blocked_since = active.blocked_at or active.updated_at
+            if _blocked_since is not None:
+                if _blocked_since.tzinfo is None:
+                    _blocked_since = _blocked_since.replace(tzinfo=dt.timezone.utc)
+                _age_seconds = (
+                    dt.datetime.now(tz=dt.timezone.utc) - _blocked_since
+                ).total_seconds()
+                if _age_seconds >= grace_minutes * 60:
+                    # Grace window expired — stop parking on this blocked
+                    # task, fall through to inbox-claim below as if there
+                    # were no active task.
+                    active = None
+
         if active is not None:
             if active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}

@@ -403,6 +403,72 @@ async def _merge_pr_if_exists(
         logger.warning("PR-Merge fehlgeschlagen: %s", e)
 
 
+async def get_review_worker_agent_ids(session: AsyncSession, task: Task) -> set[uuid.UUID]:
+    """Return the set of agent ids that did IMPLEMENTATION work on `task`,
+    derived from its chronological TaskEvent history (transitions into
+    in_progress/review).
+
+    A-2 (adversarial review): classification is ROLE-INDEPENDENT. The old
+    version exempted review-shaped transitions only when agent.role ==
+    "reviewer" — a developer-role agent handed a task purely to review was
+    misclassified as worker and blocked from legitimately approving. But a
+    naive "exempt all review-shaped transitions" would let a worker launder
+    itself: after a review-reject, the WORKER re-enters via review →
+    in_progress exactly like a reviewer ACK. The robust signal available in
+    task_events (from_status/to_status/agent_id ordered by created_at) is
+    the ORDER of an agent's transitions:
+
+      * review → in_progress with no prior worker classification = the agent
+        ENTERED the task while it was in review — a review-cycle participant
+        (reviewer ACK), regardless of role.
+      * in_progress → review by an agent that previously entered from review
+        = completing that review cycle (hand-back) — still review work.
+      * in_progress → review WITHOUT a prior review-entry = a developer
+        handoff ("I finished implementing") — worker.
+      * ANY other transition (inbox → in_progress ACK, blocked →
+        in_progress, ...) = implementation work — worker. Once worker,
+        later review-shaped transitions (reject re-entry) never un-classify.
+
+    A worker's reject re-entry is therefore still caught: its original
+    inbox → in_progress ACK (or its handoff before the reject) already
+    marked it as worker before the review-shaped re-entry occurs.
+
+    Shared by `execute_review_decision`'s self-review guard (M3, Fix 2) and
+    the generic PATCH review→done path in routers/agent_task_status.py —
+    both must agree on who counts as "the assignee that did the work" so an
+    agent can't bypass the guard by using the generic PATCH endpoint instead
+    of POST /review.
+    """
+    events_result = await session.exec(
+        select(TaskEvent).where(
+            TaskEvent.task_id == task.id,
+            TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
+            TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
+        ).order_by(TaskEvent.created_at)  # type: ignore[arg-type]
+    )
+    worker_agent_ids: set[uuid.UUID] = set()
+    review_entrants: set[uuid.UUID] = set()  # entered the task FROM review status
+    for event in events_result.all():
+        aid = event.agent_id
+        if not aid:
+            continue
+        if event.from_status == "review" and event.to_status == "in_progress":
+            # Review-cycle entry (reviewer ACK) — unless this agent already
+            # did implementation work (worker reject re-entry stays worker).
+            if aid not in worker_agent_ids:
+                review_entrants.add(aid)
+            continue
+        if event.from_status == "in_progress" and event.to_status == "review":
+            if aid in review_entrants:
+                continue  # hand-back completing a review cycle — review work
+            worker_agent_ids.add(aid)  # developer handoff — implementation
+            continue
+        # Any non-review-shaped transition = implementation work.
+        worker_agent_ids.add(aid)
+        review_entrants.discard(aid)
+    return worker_agent_ids
+
+
 async def execute_review_decision(
     session: AsyncSession,
     task: Task,
@@ -433,31 +499,7 @@ async def execute_review_decision(
     # Self-review guard: the agent that WORKED on the task may not approve it.
     # Reviewer ACK (review → in_progress by the reviewer) does NOT count as work.
     if decision == "approve" and actor_agent:
-        from app.models.task import TaskEvent
-        from app.models.agent import Agent as AgentModel
-        events_result = await session.exec(
-            select(TaskEvent).where(
-                TaskEvent.task_id == task.id,
-                TaskEvent.to_status.in_(["in_progress", "review"]),  # type: ignore[union-attr]
-                TaskEvent.agent_id.isnot(None),  # type: ignore[union-attr]
-            )
-        )
-        worker_agent_ids: set[uuid.UUID] = set()
-        for event in events_result.all():
-            if not event.agent_id:
-                continue
-            # Filter out reviewer transitions: review work is not an implementation act.
-            # Reviewer ACK (review → in_progress) and review completion (in_progress → review)
-            # by a reviewer do NOT count as developer work.
-            is_review_transition = (
-                (event.from_status == "review" and event.to_status == "in_progress") or
-                (event.from_status == "in_progress" and event.to_status == "review")
-            )
-            if is_review_transition:
-                event_agent = await session.get(AgentModel, event.agent_id)
-                if event_agent and event_agent.role == "reviewer":
-                    continue  # Review work, don't count as worker
-            worker_agent_ids.add(event.agent_id)
+        worker_agent_ids = await get_review_worker_agent_ids(session, task)
 
         if actor_agent.id in worker_agent_ids:
             if not actor_agent.is_board_lead:
@@ -1075,6 +1117,198 @@ async def handle_review_rejection(
         asyncio.create_task(auto_dispatch_task(task.id, board_id))
 
     return original_dev
+
+
+async def resolve_unblock_action(
+    session: AsyncSession,
+    task: Task,
+) -> Literal["redispatch", "requeue", "notify", "skip"]:
+    """B2 (W2-B, audit G3 + review fix B-2): decide how a blocked→in_progress
+    unblock should reach the assigned agent.
+
+    Previously the unblock path only ever posted an `unblock_notify`
+    TaskComment — no liveness check, no redispatch. If the blocked agent's
+    process had died in the meantime, nobody read the comment and the task
+    silently stalled until the 15-45min stale-recovery ladder caught it.
+
+    Decision:
+      - No assigned agent → "skip" (nothing to notify/redispatch).
+      - Assigned agent DEAD (last_seen_at NULL or stale beyond the wrapper
+        liveness floor — reuses task_runner._liveness_floor_seconds, the
+        same 2x-heartbeat-interval proof-of-life used by the stale-recovery
+        watchdog) → "redispatch". The agent's poll.sh wrapper is gone, so a
+        TaskComment would sit unread; a full auto_dispatch_task re-delivery
+        (with recovery context, W1-deduped checklist) is the only thing that
+        reaches it — dispatch's own fallback logic then targets the lead if
+        the agent stays dead.
+      - Assigned agent ALIVE but OCCUPIED with a DIFFERENT task
+        (current_task_id points elsewhere, or another in_progress task is
+        assigned) → "requeue" (review fix B-2). Leaving the unblocked task
+        in_progress here creates TWO in_progress tasks for one agent — and
+        poll's active-query would surface the just-unblocked one (freshest
+        updated_at, ack_at still set) while the real session runs the other
+        task. Instead the task goes back to a claimable state; the normal
+        claim/dispatch flow re-delivers it after the current work, without
+        interrupting the agent.
+      - Assigned agent ALIVE and idle (or already on THIS task) → "notify" —
+        the existing comment-only path, delivered via poll.
+    """
+    if not task.assigned_agent_id:
+        return "skip"
+    target = await session.get(Agent, task.assigned_agent_id)
+    if target is None:
+        return "skip"
+
+    from app.services.task_runner import _liveness_floor_seconds
+    from app.utils import ensure_aware
+
+    last_seen = target.last_seen_at
+    if last_seen is None:
+        return "redispatch"
+    seen_age = (utcnow() - ensure_aware(last_seen)).total_seconds()
+    if seen_age >= _liveness_floor_seconds(target):
+        return "redispatch"
+
+    # Occupancy check (review fix B-2): is the agent actively working on a
+    # DIFFERENT task right now?
+    if target.current_task_id is not None and target.current_task_id != task.id:
+        return "requeue"
+    other_active = (await session.exec(
+        select(Task)
+        .where(
+            Task.assigned_agent_id == target.id,
+            Task.status == "in_progress",
+            Task.id != task.id,
+        )
+        .limit(1)
+    )).first()
+    if other_active is not None:
+        return "requeue"
+
+    return "notify"
+
+
+async def requeue_unblocked_task(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+) -> None:
+    """B2 (review fix B-2): occupied-agent branch of resolve_unblock_action.
+
+    The unblock route has already flipped the task to in_progress — but the
+    assigned agent is mid-flight on ANOTHER task. Two in_progress tasks for
+    one agent corrupt poll's active-task resolution (the just-unblocked task
+    has the freshest updated_at AND a stale ack_at, so poll would report
+    "working" on it while the real session runs the other task). Reset the
+    task to a claimable inbox state instead: the agent's normal poll-claim
+    flow (or auto-dispatch) re-delivers it with a full prompt AFTER the
+    current work finishes — no interrupt, no state corruption.
+    """
+    old_status = task.status
+    task.status = "inbox"
+    task.dispatched_at = None
+    task.ack_at = None
+    session.add(task)
+
+    # Give the active-task lock back: update_agent_active_task (which runs
+    # earlier in the PATCH flow) unconditionally repoints current_task_id to
+    # the just-unblocked task, stealing the lock from the task the agent is
+    # actually running. Restore it to the real in_progress task (or clear).
+    if task.assigned_agent_id is not None:
+        _assigned = await session.get(Agent, task.assigned_agent_id)
+        if _assigned is not None and _assigned.current_task_id == task.id:
+            _real_active = (await session.exec(
+                select(Task)
+                .where(
+                    Task.assigned_agent_id == _assigned.id,
+                    Task.status == "in_progress",
+                    Task.id != task.id,
+                )
+                .limit(1)
+            )).first()
+            _assigned.current_task_id = _real_active.id if _real_active else None
+            session.add(_assigned)
+
+    await record_task_event(
+        session, task.id, old_status, "inbox",
+        changed_by="system", reason="unblock_requeue_agent_busy",
+    )
+    from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+    await clear_dispatch_attempt_id(
+        session, task,
+        caller="requeue_unblocked_task", reason="unblock_requeue_agent_busy",
+    )
+    await session.commit()
+    await session.refresh(task)
+
+    logger.info(
+        "Unblock-Requeue: task=%s — Agent %s arbeitet gerade an einem anderen "
+        "Task; entblockter Task geht zurueck in die Inbox (Claim nach der "
+        "aktuellen Arbeit, kein Interrupt)",
+        task.id, task.assigned_agent_id,
+    )
+    await emit_event(
+        session,
+        "task.unblock_requeued",
+        f"Unblock-Requeue: Task \"{task.title}\" wartet in der Inbox — "
+        f"zugewiesener Agent arbeitet gerade an einem anderen Task",
+        board_id=board_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        severity="info",
+        detail={"reason": "assigned_agent_busy_on_unblock"},
+    )
+
+
+async def redispatch_unblocked_task(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+) -> None:
+    """B2: dead-agent branch of resolve_unblock_action — reset the dispatch
+    handshake and route through the normal auto_dispatch_task re-dispatch
+    (targets the same agent if it revives, falls back to lead/others per
+    dispatch's own logic if it stays dead)."""
+    from app.services.dispatch import auto_dispatch_task
+    from app.utils import create_tracked_task
+
+    task.dispatched_at = None
+    task.ack_at = None
+    session.add(task)
+
+    # Review fix B-3: reconcile the (dead) agent's active-task pointer. If
+    # current_task_id still points at the task being redispatched, anything
+    # reading it in the window until re-dispatch (poll active-preference,
+    # mc delegate 409-guard, watchdog corroboration) would act on a stale
+    # lock. The fresh dispatch sets it again on claim/ACK.
+    if task.assigned_agent_id is not None:
+        _assigned = await session.get(Agent, task.assigned_agent_id)
+        if _assigned is not None and _assigned.current_task_id == task.id:
+            _assigned.current_task_id = None
+            session.add(_assigned)
+
+    await session.commit()
+    await session.refresh(task)
+
+    create_tracked_task(
+        auto_dispatch_task(task.id, board_id),
+        name=f"unblock-redispatch:{task.id}",
+    )
+    logger.info(
+        "Unblock-Redispatch: task=%s agent=%s war offline (stale last_seen_at) "
+        "→ dispatched_at/ack_at zurueckgesetzt, auto_dispatch_task neu getriggert",
+        task.id, task.assigned_agent_id,
+    )
+    await emit_event(
+        session,
+        "task.unblock_redispatched",
+        f"Unblock-Redispatch: Task \"{task.title}\" — zugewiesener Agent war offline",
+        board_id=board_id,
+        task_id=task.id,
+        agent_id=task.assigned_agent_id,
+        severity="warning",
+        detail={"reason": "assigned_agent_stale_on_unblock"},
+    )
 
 
 def trigger_auto_memory(

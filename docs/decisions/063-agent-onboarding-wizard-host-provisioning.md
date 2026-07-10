@@ -1,4 +1,4 @@
-# ADR-060 — Agent Onboarding Wizard + Generic Host-Agent Provisioning
+# ADR-063 — Agent Onboarding Wizard + Generic Host-Agent Provisioning
 
 **Status:** Accepted
 **Datum:** 2026-07-10

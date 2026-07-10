@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, text, JSON, Uuid
+from sqlalchemy import DateTime, ForeignKey, event, text, JSON, Uuid
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -61,6 +61,16 @@ class Task(SQLModel, table=True):
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
     due_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
+    # W2-B review fix (CRITICAL B-1): dedicated blocked-transition timestamp.
+    # updated_at is a generic onupdate=NOW column — ANY metadata PATCH (title,
+    # priority, labels) resets it, which re-parked the agent for another poll
+    # grace window and suppressed the watchdog's blocked-escalation clock.
+    # blocked_at is maintained by the Task.status attribute listener below:
+    # set ONLY on →blocked, cleared on leaving blocked. Nullable — legacy
+    # blocked rows fall back to updated_at (migration 0150 backfills).
+    blocked_at: datetime | None = Field(
         default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
     )
 
@@ -213,6 +223,47 @@ class Task(SQLModel, table=True):
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
     )
+
+
+@event.listens_for(Task.status, "set")
+def _track_blocked_at(target: "Task", value, oldvalue, initiator):
+    """Maintain Task.blocked_at on every status assignment (W2-B, B-1).
+
+    Status transitions happen in ~10 scattered call sites (routers' generic
+    setattr, task_runner, operations, cli_bridge_runner, ...). This attribute
+    listener is the single point of truth covering ALL of them:
+
+      →blocked    : stamp blocked_at (naive UTC, matching updated_at's
+                    onupdate=datetime.utcnow convention)
+      blocked→ *  : clear blocked_at
+
+    `oldvalue` may be a NO_VALUE symbol (unloaded attribute) — those never
+    equal "blocked", so an unloaded-status edge case simply skips the clear
+    (the updated_at fallback in the consumers covers legacy rows anyway).
+    No other attribute is READ on `target`, only assigned — avoids
+    lazy-load in async contexts. Construction-time status (SQLModel __init__
+    bypasses attribute instrumentation) is covered by the before_insert
+    listener below.
+    """
+    if value == oldvalue:
+        return
+    if value == "blocked":
+        target.blocked_at = datetime.utcnow()
+    elif oldvalue == "blocked":
+        target.blocked_at = None
+
+
+@event.listens_for(Task, "before_insert")
+def _stamp_blocked_at_on_insert(mapper, connection, target: "Task"):
+    """Safety net for Tasks CONSTRUCTED with status="blocked".
+
+    SQLModel's __init__ populates fields without firing SQLAlchemy attribute
+    'set' events, so the listener above only covers post-construction
+    assignments. A task born blocked (rare, but tests and future callers do
+    it) gets its blocked_at stamped at flush time here.
+    """
+    if target.status == "blocked" and target.blocked_at is None:
+        target.blocked_at = datetime.utcnow()
 
 
 class TaskEvent(SQLModel, table=True):

@@ -1,0 +1,9 @@
+# Keep build contexts lean and safe for legacy (non-BuildKit) builders too.
+# The voice-worker build context is the repo root (ADR-061); without this,
+# a legacy builder would stream the whole tree (incl. .git, node_modules).
+.git
+frontend-v2/node_modules
+**/.venv
+**/__pycache__
+**/node_modules
+graphify-out

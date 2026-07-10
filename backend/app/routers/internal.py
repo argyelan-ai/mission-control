@@ -81,6 +81,34 @@ async def build_runtime_env(
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
+
+        # Fix 4 (W2-A, audit item): the omp bridge's no-progress watchdog
+        # (OMP_TURN_IDLE_TIMEOUT, docker/omp-bridge/bridge.py) defaults to
+        # 300s and SIGKILLs a turn that looks hung. Slow local runtimes
+        # (self-hosted, no managed autoscaling — cold starts, VRAM pressure,
+        # long generations on consumer/workstation GPUs) routinely exceed
+        # that on a long write and get killed mid-write. Give them a longer
+        # 600s window; fast/managed cloud runtimes keep the tighter 300s
+        # default (unset here — the bridge's own default applies) so a
+        # genuinely stuck cloud turn is still caught quickly.
+        #
+        # runtime_type is definitive for vllm_docker/lmstudio/unsloth — those
+        # only exist as self-hosted processes. openai_compatible is
+        # ambiguous (it's also used for managed APIs like Ollama Cloud), so
+        # it's gated on runtime.host_id being set — per the Runtime model's
+        # own contract (docs/models/runtime.py), "cloud/HTTP-only runtimes
+        # need no host", so a bound host_id means this is a physical local
+        # box, not a managed cloud endpoint.
+        #
+        # No per-runtime override field exists on the `runtimes` table today
+        # (checked: no config/extra JSON column) — if one is added later,
+        # read it here and let it win over this type-based default.
+        _is_slow_local_runtime = (
+            runtime.runtime_type in ("vllm_docker", "lmstudio", "unsloth")
+            or (runtime.runtime_type == "openai_compatible" and runtime.host_id is not None)
+        )
+        if _is_slow_local_runtime:
+            tokens["OMP_TURN_IDLE_TIMEOUT"] = "600"
         return tokens
     if harness == "claude":
         # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in

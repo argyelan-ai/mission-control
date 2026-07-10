@@ -1,11 +1,18 @@
-"""Tool-Bridge: voice-worker (host) macht authentifizierte API-Calls gegen
-MC-Backend im Namen des Jarvis-Agents.
+"""Tool-Bridge: macht authentifizierte API-Calls gegen das MC-Backend im Namen
+des Jarvis-Agents.
+
+Geteilt (ADR-061) zwischen dem ``voice_worker`` (LiveKit-Host) und dem Backend
+(Telegram-Inbound). Beide Kanaele fuehren Jarvis-Tool-Calls ueber denselben
+agent-scoped Pfad /api/v1/agent/* aus — kein Auth-Bypass, keine Direkt-DB.
+
+Base-URL + Token kommen aus dem Environment und unterscheiden sich pro Prozess:
+- voice_worker: ``MC_BACKEND_URL=http://backend:8000`` (Docker-Netz).
+- backend (self-call): ``MC_BACKEND_URL=http://localhost:8000``.
 
 Nutzt den Jarvis-Agent PBKDF2-Token (env ``JARVIS_AGENT_TOKEN`` mit
 ``VOICE_AGENT_TOKEN`` als Legacy-Fallback fuer Bootstrap-Phasen wo das
-.env noch nicht durchgezogen wurde — siehe ADR-038). Alle Calls gehen
-ueber den agent-scoped Pfad /api/v1/agent/* mit den Boss-equivalenten
-Scopes (siehe agent.scopes — heute alle 18).
+.env noch nicht durchgezogen wurde — siehe ADR-038). Die Boss-equivalenten
+Scopes (siehe agent.scopes) gelten fuer alle Calls.
 """
 
 import logging
@@ -240,6 +247,59 @@ async def create_task(
             if fallback_used and assigned_agent_name
             else None
         ),
+    }
+
+
+async def dispatch_to_agent(
+    agent_name: str,
+    instruction: str,
+    priority: str = "medium",
+) -> dict[str, Any]:
+    """Weist einem konkreten Agenten SOFORT einen Auftrag zu (ADR-062).
+
+    Unterschied zu ``create_task``:
+    - ``create_task`` faellt bei unbekanntem/fehlendem Assignee auf den Board Lead
+      (Boss) zurueck → Backlog/Orchestrierung.
+    - ``dispatch_to_agent`` braucht einen ECHTEN Agenten. Wird der Name nicht
+      erkannt, gibt es KEINEN stillen Fallback — stattdessen ein klarer Fehler,
+      damit Jarvis nachfragt statt den falschen Weg zu gehen.
+
+    Der eigentliche Dispatch (Session-Start des Agenten) passiert im Backend:
+    ``POST /boards/{board}/tasks`` mit ``assigned_agent_id != creator`` triggert im
+    agent-scoped Router direkt den CLI-Bridge-Dispatch (kein Auth-Bypass, keine
+    Direkt-DB, kein neuer Endpoint). Die Antwort des Backends enthaelt ein
+    ``dispatch``-Feld mit dem Status ({status: dispatched|blocked|...}), das wir
+    unveraendert durchreichen, damit Jarvis dem Operator ehrlich sagen kann, ob der
+    Agent wirklich losgelegt hat oder (z.B. offline) in der Queue haengt.
+    """
+    assigned_id, canonical_name = await _resolve_agent_id(agent_name)
+    if assigned_id is None:
+        return {
+            "ok": False,
+            "reason": "agent_not_found",
+            "requested": agent_name,
+            "error": f"Agent '{agent_name}' nicht erkannt — an wen soll der Auftrag gehen?",
+        }
+
+    payload = {
+        "title": instruction,
+        "description": instruction,
+        "priority": priority,
+        "assigned_agent_id": assigned_id,
+    }
+    resp = await _client.post(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks",
+        json=payload,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    dispatch = data.get("dispatch") or {}
+    return {
+        "ok": True,
+        "task_id": data.get("id"),
+        "agent": canonical_name,
+        "dispatch_status": dispatch.get("status"),
+        "dispatch": dispatch,
     }
 
 

@@ -402,6 +402,9 @@ async def test_watchdog_escalates_after_triage_window(fake_redis):
         from app.models.task import Task
         t = await s.get(Task, task.id)
         t.updated_at = _naive_utcnow() - timedelta(minutes=20)
+        # Review fix B-1: the watchdog escalation clock is keyed off the
+        # dedicated blocked_at timestamp now (updated_at only as fallback).
+        t.blocked_at = _naive_utcnow() - timedelta(minutes=20)
         s.add(t)
         await s.commit()
 
