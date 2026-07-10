@@ -2245,10 +2245,11 @@ async def agent_update_task(
                     if lead and lead.id != agent.id:
                         msg = (
                             f"BLOCKER: {agent.name} bei \"{task.title}\"\n\n"
+                            f"**Typ:** {blocker_type}\n"
                             f"{blocker_text}\n\n"
-                            f"Task-ID: {task.id}\n\n"
+                            f"**Task-ID:** {task.id}\n\n"
                             f"Ein Approval wurde fuer den Operator erstellt "
-                            f"(Typ: {blocker_type} — Operator-Entscheid).\n"
+                            f"(Operator-Entscheid).\n"
                             f"Du kannst hilfreiche Infos als Kommentar posten."
                         )
                         session.add(TaskComment(

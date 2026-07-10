@@ -122,10 +122,10 @@ async def start_lead_triage(
     description = blocker_payload.get("description") or ""
     msg = (
         f"BLOCKER (Lead-Triage): {agent.name} bei \"{task.title}\"\n\n"
-        f"Typ: {blocker_payload.get('blocker_type', 'other')}\n"
-        f"Frage: {question}\n"
-        + (f"Detail: {description}\n" if description else "")
-        + f"Task-ID: {task.id}\n\n"
+        f"**Typ:** {blocker_payload.get('blocker_type', 'other')}\n"
+        f"**Frage:** {question}\n"
+        + (f"**Detail:** {description}\n" if description else "")
+        + f"**Task-ID:** {task.id}\n\n"
         f"DU bist zustaendig — es gibt (noch) kein Operator-Approval.\n"
         f"1. Loesen: `resolution`-Kommentar auf den Task posten + Task via PATCH auf "
         f"`in_progress` setzen (du darfst das als Lead) → Auto-Redispatch.\n"
