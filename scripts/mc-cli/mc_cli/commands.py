@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Callable
@@ -1832,9 +1833,20 @@ def _add_file_answer_args(p):
 def _docs_dir():
     """Directory L2 reference docs are read from.
 
-    Default `~/.claude/docs` (mirrors where docker_agent_sync.write_reference_docs
-    writes them into the container home). Override via MC_DOCS_DIR for tests
-    and for host agents whose claude-config lives elsewhere.
+    Resolution order:
+      1. MC_DOCS_DIR — explicit override (tests, or a manual `mc docs` call
+         pointed at a specific tree).
+      2. $CLAUDE_CONFIG_DIR/docs — host agents (Boss/Hermes/Jarvis, ADR host-
+         runtime) run with CLAUDE_CONFIG_DIR=<agent_dir>/claude-config and
+         HOME=the operator's real home, NOT the agent's — docker_agent_sync.
+         write_reference_docs() writes into exactly this directory
+         (config_dir/docs), so this is where a host agent's own docs live.
+      3. ~/.claude/docs — docker cli-bridge agents don't set CLAUDE_CONFIG_DIR
+         and HOME is their real container home, where write_reference_docs()
+         wrote the same docs/ tree.
+    Falls through to the next candidate if a directory doesn't exist (e.g.
+    CLAUDE_CONFIG_DIR is set but the agent hasn't been synced yet) instead of
+    a permanent dead end.
     """
     import os
     from pathlib import Path
@@ -1842,7 +1854,17 @@ def _docs_dir():
     override = os.environ.get("MC_DOCS_DIR")
     if override:
         return Path(override)
+
+    claude_config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if claude_config_dir:
+        candidate = Path(claude_config_dir) / "docs"
+        if candidate.is_dir():
+            return candidate
+
     return Path.home() / ".claude" / "docs"
+
+
+_VALID_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]*$")
 
 
 def _cmd_docs(args, client, cfg):
@@ -1858,6 +1880,16 @@ def _cmd_docs(args, client, cfg):
 
     docs_dir = _docs_dir()
     topic = getattr(args, "topic", None)
+
+    if topic and not _VALID_TOPIC_RE.match(topic):
+        # Reject before touching the filesystem — a topic like "../../etc/passwd"
+        # or an absolute path must never be joined into docs_dir (path
+        # traversal). Only lowercase-alnum-hyphen slugs are legitimate topics.
+        available = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        print(f"mc docs: ungueltiges Topic '{topic}' — nur [a-z][a-z0-9-]* erlaubt.", file=sys.stderr)
+        if available:
+            print(f"Verfuegbare Topics: {', '.join(available)}", file=sys.stderr)
+        return 1
 
     if not topic:
         index_path = docs_dir / "INDEX.md"

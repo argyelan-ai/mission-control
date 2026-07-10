@@ -17,7 +17,8 @@ the file:
 - `mc telegram "<text>" --file <deliverable_id>` (document, sendDocument)
 - `mc telegram "<caption>" --photo <deliverable_id>` (image, sendPhoto)
 
-`deliverable_id` comes from the `mc pdf` response or `mc deliverable --type file`.
+`deliverable_id` comes from the `mc pdf` response or from `mc deliverable`
+(with `--type file`).
 Text-only `mc telegram` on file tasks is a bug — {{ operator_name }} should see the
 file directly in Telegram, not go hunting in the UI.
 

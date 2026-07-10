@@ -12,6 +12,7 @@ Protects three invariants:
 from __future__ import annotations
 
 import re
+import shlex
 import sys
 import uuid
 from pathlib import Path
@@ -177,6 +178,154 @@ def test_doc_topics_have_matching_templates():
         if not (templates_dir / f"{topic}.md.j2").is_file()
     ]
     assert not missing, f"DOC_TOPICS entries with no template file: {missing}"
+
+
+# ── Flag/subcommand syntax (dry-run argparse) ────────────────────────────
+#
+# Verb-existence (above) only checks that `mc <verb>` names a real command —
+# it would NOT have caught `mc memory --query "..."` (real syntax: `mc
+# memory search "..."`, a required subparser) because "memory" IS a real
+# verb. This extracts every literal `mc ...` invocation from ```bash fenced
+# blocks and dry-runs it through the actual argparse parser, so a wrong
+# flag/subcommand fails loudly instead of being copy-pasted by an agent.
+
+def _mc_argv_lines_from_bash_blocks(markdown: str) -> list[str]:
+    """Extracts complete, parseable `mc ...` invocations from ```bash fenced
+    code blocks.
+
+    Joins backslash line-continuations and splits on `|` (for piped
+    examples like `cat foo | mc pdf ...`). Deliberately SKIPS anything that
+    crosses a heredoc (`<<`) or command-substitution (`$(`) boundary — those
+    aren't flat, single-line argv strings (e.g. `mc finish [--review]
+    "$(cat <<'EOF' ...)"` mixes bracket-optional documentation notation with
+    multi-line shell composition) and can't be tokenized without a real
+    shell parser. Coverage gap is intentional and narrow: it only affects
+    doc lines that were never going to be literal copy-paste examples to
+    begin with.
+    """
+    commands: list[str] = []
+    in_bash_block = False
+    in_heredoc = False
+    heredoc_terminator: str | None = None
+    pending = ""
+
+    for raw_line in markdown.splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith("```"):
+            in_bash_block = (stripped == "```bash") if not in_bash_block else False
+            continue
+        if not in_bash_block:
+            continue
+        if in_heredoc:
+            if stripped == heredoc_terminator:
+                in_heredoc = False
+                heredoc_terminator = None
+            continue
+
+        line = f"{pending} {stripped}".strip() if pending else stripped
+        pending = ""
+        if line.endswith("\\"):
+            pending = line[:-1].strip()
+            continue
+
+        for segment in (s.strip() for s in line.split("|")):
+            if not segment.startswith("mc "):
+                continue
+            heredoc_match = re.search(r"<<\s*['\"]?(\w+)['\"]?", segment)
+            if "$(" in segment or heredoc_match:
+                if heredoc_match:
+                    in_heredoc = True
+                    heredoc_terminator = heredoc_match.group(1)
+                continue
+            commands.append(segment)
+    return commands
+
+
+_INLINE_MC_SPAN_RE = re.compile(r"`(mc [^`\n]+)`")
+_VERB_SLOT_RE = re.compile(r"^[a-z][a-z-]*$")
+
+
+def _inline_mc_examples_worth_checking(markdown: str) -> list[str]:
+    """Extracts single-backtick inline `mc ...` spans that look like complete
+    invocations, e.g. `` `mc memory --query "<text>"` `` in running prose
+    (NOT inside a fenced code block — that's _mc_argv_lines_from_bash_blocks).
+
+    This is the span type that actually contained the memory.md bug — a
+    fenced-block-only scan would have missed it entirely.
+
+    Deliberately narrow filter (two conditions, both required) to avoid
+    flooding on the many legitimate bare/partial verb *references* that
+    aren't meant as literal copy-paste commands (`` `mc pdf` ``, `` `mc
+    comment handoff` ``, `` `mc <verb> --help` ``):
+    1. the verb slot (token right after "mc") must look like a real verb
+       identifier (`^[a-z][a-z-]*$`) — excludes placeholder notation like
+       `<verb>`/`<topic>`.
+    2. the span must contain at least one `-`-prefixed flag token — this is
+       exactly the shape of the class of bug found in review (a wrong/
+       invented flag used in place of the real subcommand or flag name).
+       Bare verb mentions and positional-only fragments (`` `mc checklist
+       add "..."` ``) are skipped; a dedicated flag is required to trigger
+       the check.
+    """
+    worth_checking = []
+    for span in _INLINE_MC_SPAN_RE.findall(markdown):
+        try:
+            tokens = shlex.split(span)
+        except ValueError:
+            continue
+        if len(tokens) < 2:
+            continue
+        verb_slot = tokens[1]
+        if not _VERB_SLOT_RE.match(verb_slot):
+            continue
+        if not any(t.startswith("-") for t in tokens[2:]):
+            continue
+        worth_checking.append(span)
+    return worth_checking
+
+
+def _dry_run_parse(argv_line: str) -> None:
+    """Parses one `mc ...` line through the real mc-cli argparse parser.
+
+    Raises SystemExit (code 2) on an unrecognized flag/subcommand or a
+    missing required argument — exactly what an agent copy-pasting a broken
+    doc example would hit.
+    """
+    from mc_cli.__main__ import build_parser
+
+    tokens = shlex.split(argv_line)
+    assert tokens and tokens[0] == "mc", f"unexpected extracted line: {argv_line!r}"
+    build_parser().parse_args(tokens[1:])
+
+
+def test_l2_docs_mc_examples_parse_with_real_argparse():
+    """Every `mc ...` example that reads as a complete invocation — whether
+    in a fenced ```bash block or an inline single-backtick span with a flag
+    — must be valid against the real mc-cli parser (flags/subcommand
+    structure — not values; placeholders like <uuid> are fine).
+
+    Regression test for the memory.md `mc memory --query` bug (real syntax:
+    `mc memory search "<text>"`, a required subparser) — that bug lived in
+    inline prose, not a fenced block, which is why both extraction paths
+    are needed. A hardcoded example with wrong flags must fail this test,
+    not silently teach broken syntax.
+    """
+    docs = generate_reference_docs({"operator_name": "Mark"})
+    failures = []
+    for topic, content in docs.items():
+        examples = _mc_argv_lines_from_bash_blocks(content) + _inline_mc_examples_worth_checking(content)
+        for line in examples:
+            try:
+                _dry_run_parse(line)
+            except SystemExit as e:
+                # exit 0 = argparse's own `--help` (prints usage, not a
+                # syntax error); only a non-zero exit means a bad flag/
+                # subcommand/missing-required-argument.
+                if e.code:
+                    failures.append(f"docs/{topic}.md: {line!r} -> argparse exit {e.code}")
+            except ValueError as e:
+                failures.append(f"docs/{topic}.md: {line!r} -> shlex error: {e}")
+    assert not failures, "\n".join(failures)
 
 
 def test_every_l2_doc_starts_with_h1_title():

@@ -50,7 +50,7 @@ Every task deliverable has a markdown wrapper under
 `deliverable_id`, `attachment_path`, `attachment_mime`). The actual file is
 hardlinked under `/vault/attachments/{files,images,audio}/`.
 
-- Find wrapper: `mc vault-search --type deliverable` returns the `path`.
+- Find wrapper: `mc vault-search <query> --type deliverable` returns the `path`.
 - Read wrapper: `Read /vault/agents/.../deliverable.md` — PDF text is under
   `## Auto-extracted`.
 - Read PDF directly: `Read /vault/attachments/files/<id>.pdf` (`pages` for
