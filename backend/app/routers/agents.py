@@ -2158,14 +2158,31 @@ async def agent_poll(
         # was supposed to review). Claim-semantics: an unacked review
         # task gets delivered once and keeps status=review (status only
         # flips when Rex explicitly PATCHes to in_progress or done).
-        active_result = await session.exec(
-            select(Task)
-            .where(Task.assigned_agent_id == agent.id)
-            .where(Task.status.in_(["in_progress", "blocked", "review"]))
-            .order_by(Task.updated_at.desc())
-            .limit(1)
-        )
-        active = active_result.first()
+        # Review fix B-2 (poll hardening): prefer the task the agent is
+        # ACTUALLY working on (agent.current_task_id, set at claim/ACK time)
+        # over the updated_at-desc heuristic. Without this, a freshly
+        # unblocked old task (freshest updated_at, stale ack_at set) shadows
+        # the task the real session is running — poll reports "working" on
+        # the wrong task.
+        active = None
+        if agent.current_task_id is not None:
+            _cur_result = await session.exec(
+                select(Task)
+                .where(Task.id == agent.current_task_id)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .limit(1)
+            )
+            active = _cur_result.first()
+        if active is None:
+            active_result = await session.exec(
+                select(Task)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .order_by(Task.updated_at.desc())
+                .limit(1)
+            )
+            active = active_result.first()
 
         # B1 (W2-B, live incident): a blocked task only parks the agent while
         # FRESH — grace window = board.blocker_triage_minutes (default 15min),

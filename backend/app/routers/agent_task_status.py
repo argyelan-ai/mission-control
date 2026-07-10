@@ -2267,11 +2267,18 @@ async def agent_update_task(
             if task.assigned_agent_id and task.assigned_agent_id != agent.id:
                 from app.services.task_lifecycle import (
                     redispatch_unblocked_task,
+                    requeue_unblocked_task,
                     resolve_unblock_action,
                 )
                 _unblock_action = await resolve_unblock_action(session, task)
                 if _unblock_action == "redispatch":
                     await redispatch_unblocked_task(session, task, board_id)
+                    target = None
+                elif _unblock_action == "requeue":
+                    # Review fix B-2: agent is busy on another task — back to
+                    # inbox so the claim flow re-delivers after current work
+                    # (two in_progress tasks would corrupt poll resolution).
+                    await requeue_unblocked_task(session, task, board_id)
                     target = None
                 else:
                     target = await session.get(Agent, task.assigned_agent_id)

@@ -200,10 +200,13 @@ async def test_unblock_respects_recovery_comment_cooldown(client: AsyncClient, a
 
 
 @pytest.mark.asyncio
-async def test_unblock_with_busy_agent_does_not_interrupt(client: AsyncClient, async_session):
-    """Assigned agent is alive but occupied with a DIFFERENT in_progress
-    task → no interrupt (no redispatch/dispatch reset), comment posted for
-    delivery on the agent's next poll after its current task."""
+async def test_unblock_with_busy_agent_requeues_without_interrupt(client: AsyncClient, async_session):
+    """Review fix B-2: assigned agent is alive but occupied with a DIFFERENT
+    in_progress task → the unblocked task must NOT stay in_progress (two
+    in_progress tasks corrupt poll's active-task resolution). It goes back
+    to inbox with dispatched_at/ack_at reset, so the normal claim flow
+    re-delivers it after the current work. The other task is untouched — no
+    interrupt, no immediate redispatch."""
     fresh_seen = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(seconds=10)
     board, lead, target, lead_token, task = await _setup(async_session, target_last_seen=fresh_seen)
 
@@ -240,11 +243,47 @@ async def test_unblock_with_busy_agent_does_not_interrupt(client: AsyncClient, a
         # The other task must be untouched — no interrupt.
         other = await s.get(Task, other_task.id)
         assert other.status == "in_progress"
+        busy_agent = await s.get(Agent, target.id)
+        assert busy_agent.current_task_id == other_task.id, "active-task lock untouched"
 
         refreshed = await s.get(Task, task.id)
-        assert refreshed.dispatched_at is not None, "not a redispatch — dispatch handshake untouched"
+        assert refreshed.status == "inbox", (
+            "unblocked task must be requeued to inbox, not left as a second in_progress"
+        )
+        assert refreshed.dispatched_at is None
+        assert refreshed.ack_at is None
 
-        comments = (await s.exec(
-            select(TaskComment).where(TaskComment.task_id == task.id)
-        )).all()
-        assert any(c.comment_type == "unblock_notify" for c in comments)
+
+@pytest.mark.asyncio
+async def test_redispatch_clears_stale_current_task_pointer(client: AsyncClient, async_session):
+    """Review fix B-3: when the dead-agent redispatch path fires and the
+    agent's current_task_id still points at the task being redispatched,
+    the pointer is cleared before auto_dispatch_task — nothing may read a
+    stale active-task lock in the re-dispatch window."""
+    stale_seen = dt.datetime.now(tz=dt.timezone.utc) - dt.timedelta(hours=2)
+    board, lead, target, lead_token, task = await _setup(async_session, target_last_seen=stale_seen)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Agent, target.id)
+        t.current_task_id = task.id
+        s.add(t)
+        await s.commit()
+
+    with patch(
+        "app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock
+    ), patch("app.utils.create_tracked_task"):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board.id}/tasks/{task.id}",
+            json={"status": "in_progress"},
+            headers={"Authorization": f"Bearer {lead_token}"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        dead_agent = await s.get(Agent, target.id)
+        assert dead_agent.current_task_id is None, (
+            "stale current_task_id must be cleared before the re-dispatch"
+        )
+        refreshed = await s.get(Task, task.id)
+        assert refreshed.dispatched_at is None
+        assert refreshed.ack_at is None
