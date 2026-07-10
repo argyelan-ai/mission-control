@@ -278,6 +278,62 @@ def _cmd_review(args, client, cfg):
     return _patch_status(client, cfg, "review")
 
 
+# ── Reviewer verdicts (approve / reject) ──────────────────────────────────
+#
+# Thin wrappers over POST /boards/{board_id}/tasks/{task_id}/review
+# (backend agent_task_status.agent_review_decision). Give a reviewer agent an
+# explicit verb for the two everyday verdicts instead of forcing a raw status
+# PATCH: `mc approve` (decision=approve) and `mc reject` (decision=request_changes).
+# The backend body requires a non-empty `comment`, so approve supplies a default
+# when no --feedback is given; reject hard-requires --feedback locally so the
+# author always gets an actionable reason.
+
+def _review_decision(client, cfg, *, decision: str, comment: str):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
+        body={"decision": decision, "comment": comment},
+    )
+    _emit(resp)
+    return 0
+
+
+def _cmd_approve(args, client, cfg):
+    """mc approve [--feedback ...] — Review approven (decision=approve)."""
+    comment = (getattr(args, "feedback", None) or "").strip() or "Approved."
+    return _review_decision(client, cfg, decision="approve", comment=comment)
+
+
+def _add_approve_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        default=None,
+        help="Optionale Begruendung/Notiz zum Approve (wird als review-comment gespeichert).",
+    )
+
+
+def _cmd_reject(args, client, cfg):
+    """mc reject --feedback ... — Changes anfordern (decision=request_changes)."""
+    feedback = (getattr(args, "feedback", None) or "").strip()
+    if not feedback:
+        raise UsageError(
+            "mc reject: --feedback ist Pflicht — der Author braucht einen "
+            "konkreten Grund, was geaendert werden soll."
+        )
+    return _review_decision(client, cfg, decision="request_changes", comment=feedback)
+
+
+def _add_reject_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        required=True,
+        help="Pflicht — was muss der Author aendern? Wird als review-comment gespeichert.",
+    )
+
+
 def _cmd_blocked(args, client, cfg):
     if not args.question and not args.description:
         raise UsageError("--question oder --description ist Pflicht bei `mc blocked`.")
@@ -1839,6 +1895,22 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_review,
         add_args=_add_optional_task_id,
+    ),
+    "approve": CommandSpec(
+        name="approve",
+        help="Review approven (decision=approve). Optional --feedback als Notiz.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_approve,
+        add_args=_add_approve_args,
+    ),
+    "reject": CommandSpec(
+        name="reject",
+        help="Changes anfordern (decision=request_changes). --feedback ist Pflicht.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_reject,
+        add_args=_add_reject_args,
     ),
     "finish": CommandSpec(
         name="finish",
