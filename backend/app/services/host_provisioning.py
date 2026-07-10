@@ -12,6 +12,7 @@ Staging (file writes) is always safe and always tested.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -25,6 +26,7 @@ from app.config import settings
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.routers.internal import build_runtime_env
+from app.services.mcp_sync import render_agent_mcp_json
 from app.services.template_renderer import render_agent_file
 
 logger = logging.getLogger("mc.host_provisioning")
@@ -86,6 +88,8 @@ class HostStageResult:
     run_script_path: str
     env_path: str
     launchctl_command: str
+    # Only set for harness=="claude" — see stage_host_agent_files().
+    mcp_config_path: str | None = None
 
 
 async def stage_host_agent_files(
@@ -133,7 +137,26 @@ async def stage_host_agent_files(
     env_path.write_text(_format_env_file(env))
     os.chmod(env_path, 0o600)
 
-    # 2. run.sh launcher.
+    # 2a. Isolated MCP config, native-claude harness only. The 'claude' CLI
+    # defaults to the operator's own $HOME/.claude config (needed here so it
+    # finds the Pro/Max OAuth keychain — see agent.plist.j2's HOME var), which
+    # means a freshly staged agent otherwise inherits the operator's personal
+    # user-scope MCP servers. Since this new workspace directory was never
+    # seen before, claude treats every inherited server as "found in this
+    # project" and blocks on an interactive trust prompt — no heartbeat ever
+    # arrives (2026-07-10 host E2E test, Befund 2). Boss (docker/boss-host/
+    # start-claude.sh) already solves this for its one native-claude host
+    # agent via --strict-mcp-config pointed at an explicit, isolated file;
+    # this generalizes that mechanism (reusing render_agent_mcp_json — SSoT
+    # with the cli-bridge/openclaude MCP allowlist rendering) to any host
+    # agent staged through the wizard.
+    mcp_config_path: str | None = None
+    if harness == "claude":
+        mcp_config_path = str(workspace / ".mcp.json")
+        mcp_config = render_agent_mcp_json(agent)
+        Path(mcp_config_path).write_text(json.dumps(mcp_config, indent=2) + "\n")
+
+    # 2b. run.sh launcher.
     run_sh = render_agent_file(
         "host_agent_run.sh.j2",
         {
@@ -141,6 +164,7 @@ async def stage_host_agent_files(
             "harness": harness,
             "binary": binary,
             "workspace_path": str(workspace),
+            "mcp_config_path": mcp_config_path,
         },
     )
     run_script_path.write_text(run_sh)
@@ -173,6 +197,7 @@ async def stage_host_agent_files(
         run_script_path=str(run_script_path),
         env_path=str(env_path),
         launchctl_command=launchctl_command,
+        mcp_config_path=mcp_config_path,
     )
 
 

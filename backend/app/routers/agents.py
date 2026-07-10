@@ -6,7 +6,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
@@ -72,6 +72,19 @@ class AgentCreate(BaseModel):
         if v is not None and v not in ("claude", "openclaude", "omp"):
             raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
         return v
+
+    @model_validator(mode="after")
+    def _host_requires_runtime_id(self):
+        # Host agents can only get a runtime_id at create time — the PATCH
+        # switch path is cli-bridge-only (see update_agent()), and /provision
+        # 400s without one. Without this guard, creating a host agent without
+        # runtime_id is an unrecoverable dead-end (2026-07-10 host E2E test).
+        if self.agent_runtime == "host" and not self.runtime_id:
+            raise ValueError(
+                "Host-Agents benoetigen eine runtime_id beim Erstellen "
+                "(nachtraeglicher Wechsel wird nicht unterstuetzt)"
+            )
+        return self
 
 
 class AgentUpdate(BaseModel):

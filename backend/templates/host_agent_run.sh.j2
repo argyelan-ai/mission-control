@@ -15,10 +15,25 @@ set +a
 
 SESSION="{{ slug }}"
 BINARY="{{ binary }}"
+{% if mcp_config_path %}
+# Isolated MCP config (harness: claude) — without --strict-mcp-config, claude
+# falls back to the operator's own $HOME/.claude project-trust state (needed
+# for the OAuth keychain, see agent.plist.j2) and blocks on an interactive
+# "New MCP server found in this project" prompt for every server it inherits
+# from there, since this workspace is a project directory claude has never
+# seen. --dangerously-skip-permissions matches the same flag every other
+# working claude agent in this fleet already runs with (docker cli-bridge +
+# Boss host, see docker/mc-claude-agent/start-claude.sh +
+# docker/boss-host/start-claude.sh) — omitting it here would leave this the
+# only claude agent still blocking on tool-call approval too.
+CLAUDE_ARGS="--strict-mcp-config --mcp-config {{ mcp_config_path }} --dangerously-skip-permissions"
+{% else %}
+CLAUDE_ARGS=""
+{% endif %}
 
 # Start (or re-attach to) a detached tmux session running the harness binary.
 if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-  tmux new-session -d -s "$SESSION" "$BINARY"
+  tmux new-session -d -s "$SESSION" "$BINARY $CLAUDE_ARGS"
 fi
 
 # Keep the launchd job alive; KeepAlive restarts this script if tmux dies.

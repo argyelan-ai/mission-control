@@ -34,6 +34,22 @@ def test_agent_create_defaults_are_safe():
     assert m.cli_plugins is None
 
 
+def test_agent_create_rejects_host_without_runtime_id():
+    """A host agent without runtime_id is an unrecoverable dead-end: /provision
+    400s and PATCH runtime_id is rejected (runtime switch is cli-bridge-only).
+    Found by the 2026-07-10 host E2E test (Befund 1)."""
+    with pytest.raises(ValueError, match="runtime_id"):
+        agents_module.AgentCreate(name="Host No Runtime", agent_runtime="host")
+
+
+def test_agent_create_accepts_host_with_runtime_id():
+    m = agents_module.AgentCreate(
+        name="Host With Runtime", agent_runtime="host", runtime_id="some-runtime-slug"
+    )
+    assert m.agent_runtime == "host"
+    assert m.runtime_id == "some-runtime-slug"
+
+
 @pytest.mark.asyncio
 async def test_create_agent_persists_scopes_harness_soul(auth_client, async_session, monkeypatch):
     async def _noop(agent_id, raw_token):
