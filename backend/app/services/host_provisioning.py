@@ -110,6 +110,7 @@ class HostStageResult:
     launchctl_command: str
     # Only set for harness=="claude" — see stage_host_agent_files().
     mcp_config_path: str | None = None
+    poll_script_path: str | None = None
 
 
 async def stage_host_agent_files(
@@ -147,10 +148,22 @@ async def stage_host_agent_files(
     binary = _HARNESS_BINARY[harness]
 
     # 1. agent.env (OPENAI_*/MC_* from the runtime + token), mode 600.
+    #
+    # MC_API_URL (not MC_BASE_URL) — this is a genuine pre-existing bug found
+    # while wiring up poll.sh (Fix C, 2026-07-10): every curl/mc instruction
+    # in SOUL.md, and the generic poll.sh template below, reads $MC_API_URL
+    # (the convention templates/cli_agent.env.j2 uses for cli-bridge agents,
+    # which — like this generic host template — drive the agent via SOUL.md
+    # + curl). MC_BASE_URL is a *different*, unrelated convention used only
+    # by agent_bootstrap.py/hermes-bridge.py's own internal Python poll loop
+    # (Hermes doesn't run SOUL.md-driven curl calls at all). Before this fix
+    # every staged host agent's own tool calls (and now poll.sh) would have
+    # failed with an unset variable — this simply never surfaced in earlier
+    # E2E runs because the agent never got far enough to try.
     runtime_env = await build_runtime_env(runtime, session)
     env: dict[str, str] = {
         "MC_AGENT_TOKEN": raw_token,
-        "MC_BASE_URL": settings.mc_base_url.rstrip("/"),
+        "MC_API_URL": settings.mc_base_url.rstrip("/"),
         "HOME": str(home),
     }
     env.update(runtime_env)
@@ -184,7 +197,22 @@ async def stage_host_agent_files(
         # pre-existing registry-wide decision, not something to invent here.
         _write_owner_only_file(Path(mcp_config_path), json.dumps(mcp_config, indent=2) + "\n")
 
-    # 2b. run.sh launcher.
+    # 2b. poll.sh — without this, the staged agent never picks up work or
+    # heartbeats: it boots to an idle interactive prompt and nothing nudges
+    # it (2026-07-10 E2E rerun, Befund 3 — last_seen_at stays null forever,
+    # provision_status stuck on "provisioning"). Generalizes
+    # docker/boss-host/poll.sh, the only working native-claude host worker
+    # at the time this was written (see the template's own docstring for
+    # what was deliberately changed vs. Boss's orchestrator-specific copy).
+    poll_script_path = str(workspace / "poll.sh")
+    poll_sh = render_agent_file(
+        "host_agent_poll.sh.j2",
+        {"slug": slug, "workspace_path": str(workspace)},
+    )
+    Path(poll_script_path).write_text(poll_sh)
+    os.chmod(poll_script_path, 0o755)
+
+    # 2c. run.sh launcher — Window 0 runs the harness, Window 1 runs poll.sh.
     run_sh = render_agent_file(
         "host_agent_run.sh.j2",
         {
@@ -193,6 +221,7 @@ async def stage_host_agent_files(
             "binary": binary,
             "workspace_path": str(workspace),
             "mcp_config_path": mcp_config_path,
+            "poll_script_path": poll_script_path,
         },
     )
     run_script_path.write_text(run_sh)
@@ -226,6 +255,7 @@ async def stage_host_agent_files(
         env_path=str(env_path),
         launchctl_command=launchctl_command,
         mcp_config_path=mcp_config_path,
+        poll_script_path=poll_script_path,
     )
 
 
