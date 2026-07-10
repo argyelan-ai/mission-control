@@ -14,6 +14,7 @@ from app.services.secrets_helper import get_secret_plaintext_by_key
 from fastapi import Depends
 
 if TYPE_CHECKING:
+    from app.models.agent import Agent
     from app.models.runtime import Runtime
 
 logger = logging.getLogger("mc.internal")
@@ -183,9 +184,88 @@ async def agent_bootstrap(
     if not tokens:
         raise HTTPException(404, f"Keine Tokens fuer Agent '{agent_name}' im Vault")
 
+    # Restart-recovery recap (fire-and-forget, best-effort). This endpoint is
+    # hit by the container entrypoint on EVERY process start — the one
+    # unambiguous "my process just came up fresh" signal, identical for a
+    # crash-restart or a manual `docker compose up`. If the agent still
+    # "owns" an in_progress task (its process died mid-task and came back),
+    # post the same recovery recap the Tier-3 tiered-recovery path
+    # (task_runner._run_tiered_recovery) would eventually send — but without
+    # the 60-min staleness gate, since the restart itself is the signal.
+    # Wrapped so a failure here NEVER delays or breaks token delivery, which
+    # the container's retry loop is blocking on.
+    try:
+        await _maybe_post_bootstrap_recovery_recap(session, agent)
+    except Exception:
+        logger.exception(
+            "bootstrap(%s): recovery-recap best-effort step failed — ignoring",
+            agent_name,
+        )
+
     logger.info(
         "bootstrap(%s): %s",
         agent_name,
         ", ".join(f"{k}={'***' + v[-4:]}" for k, v in tokens.items()),
     )
     return tokens
+
+
+async def _maybe_post_bootstrap_recovery_recap(
+    session: AsyncSession,
+    agent: "Agent",
+) -> None:
+    """Post a recovery_recap TaskComment if `agent` just restarted mid-task.
+
+    Mirrors the Tier-3 (resume) step of task_runner._run_tiered_recovery
+    (~task_runner.py:837-865), but triggered by the bootstrap signal instead
+    of the 60-min staleness gate — a container restart resolves in seconds,
+    so waiting an hour for the tiered-recovery watchdog to notice is far too
+    slow. Only posts (never resets dispatched_at/ack_at, never re-dispatches
+    — the agent's own poll-loop is already coming back up on its own; the
+    recap only needs to exist as the next thing it reads).
+
+    Dedup via a short-TTL Redis key so repeated bootstraps (crash-loop,
+    multiple `docker compose up` in a row) don't spam the task timeline with
+    duplicate recaps.
+    """
+    if not agent.current_task_id:
+        return
+
+    from app.models.task import Task, TaskComment
+
+    task = await session.get(Task, agent.current_task_id)
+    if not task or task.status != "in_progress":
+        return
+
+    from app.redis_client import RedisKeys, get_redis
+
+    redis = await get_redis()
+    dedup_key = RedisKeys.bootstrap_recovery_sent(str(agent.id), str(task.id))
+    if await redis.get(dedup_key):
+        logger.info(
+            "bootstrap: recovery recap already sent for agent=%s task=%s — skip",
+            agent.id, task.id,
+        )
+        return
+
+    from app.services.task_context_builder import build_recovery_context
+
+    recap = await build_recovery_context(session, task)
+    if not recap:
+        return
+
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        content=recap,
+        comment_type="recovery_recap",
+    ))
+    await session.commit()
+
+    # Set dedup AFTER a successful commit so a failed commit can retry on
+    # the next bootstrap instead of silently swallowing the recap forever.
+    await redis.set(dedup_key, "1", ex=600)
+    logger.info(
+        "bootstrap: posted recovery recap for agent=%s task=%s (restart-interrupted in_progress task)",
+        agent.id, task.id,
+    )
