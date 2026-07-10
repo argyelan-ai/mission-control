@@ -7,23 +7,16 @@ running httpx server for this, just verify the substring-match logic.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import pytest
-
-# Same lazy-import dance as test_voice_worker_deliver — voice_worker is a
-# sibling package, may not be on sys.path in CI environments.
-VOICE_DIR = Path(__file__).resolve().parents[2] / "voice_worker"
-if str(VOICE_DIR) not in sys.path:
-    sys.path.insert(0, str(VOICE_DIR))
 
 
 def _import_classifier():
+    # mc_client moved into the shared jarvis_core package (ADR-061); it's on the
+    # test pythonpath (repo root) via backend/pyproject.toml.
     try:
-        from mc_client import _classify_telegram_error  # type: ignore
+        from jarvis_core.mc_client import _classify_telegram_error  # type: ignore
     except ImportError as exc:
-        pytest.skip(f"voice_worker not importable: {exc}")
+        pytest.skip(f"jarvis_core not importable: {exc}")
     return _classify_telegram_error
 
 

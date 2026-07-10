@@ -1,6 +1,7 @@
-"""Tests for voice_worker/mc_client.py — Voice-Worker tool bridge.
+"""Tests for jarvis_core/mc_client.py — the shared MC tool bridge.
 
-The voice_worker package lives outside the backend tree (no editable install)
+The mc_client module moved from voice_worker/ into the shared jarvis_core
+package (ADR-061). It lives outside the backend tree (no editable install)
 so we load it via importlib like test_hermes_bridge.
 
 Bug A + B + C verification (2026-05-14):
@@ -18,7 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MC_CLIENT_PATH = REPO_ROOT / "voice_worker" / "mc_client.py"
+MC_CLIENT_PATH = REPO_ROOT / "jarvis_core" / "mc_client.py"
 
 
 def _load_mc_client():

@@ -1,11 +1,18 @@
-"""Tool-Bridge: voice-worker (host) macht authentifizierte API-Calls gegen
-MC-Backend im Namen des Jarvis-Agents.
+"""Tool-Bridge: macht authentifizierte API-Calls gegen das MC-Backend im Namen
+des Jarvis-Agents.
+
+Geteilt (ADR-061) zwischen dem ``voice_worker`` (LiveKit-Host) und dem Backend
+(Telegram-Inbound). Beide Kanaele fuehren Jarvis-Tool-Calls ueber denselben
+agent-scoped Pfad /api/v1/agent/* aus — kein Auth-Bypass, keine Direkt-DB.
+
+Base-URL + Token kommen aus dem Environment und unterscheiden sich pro Prozess:
+- voice_worker: ``MC_BACKEND_URL=http://backend:8000`` (Docker-Netz).
+- backend (self-call): ``MC_BACKEND_URL=http://localhost:8000``.
 
 Nutzt den Jarvis-Agent PBKDF2-Token (env ``JARVIS_AGENT_TOKEN`` mit
 ``VOICE_AGENT_TOKEN`` als Legacy-Fallback fuer Bootstrap-Phasen wo das
-.env noch nicht durchgezogen wurde — siehe ADR-038). Alle Calls gehen
-ueber den agent-scoped Pfad /api/v1/agent/* mit den Boss-equivalenten
-Scopes (siehe agent.scopes — heute alle 18).
+.env noch nicht durchgezogen wurde — siehe ADR-038). Die Boss-equivalenten
+Scopes (siehe agent.scopes) gelten fuer alle Calls.
 """
 
 import logging
