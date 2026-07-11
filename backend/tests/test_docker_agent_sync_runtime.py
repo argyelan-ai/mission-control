@@ -237,9 +237,16 @@ def test_restart_default_uses_docker_restart():
     assert "--force-recreate" not in cmd
 
 
-def test_restart_force_recreate_runs_docker_compose_up():
+def test_restart_force_recreate_runs_docker_compose_up(tmp_path, monkeypatch):
     """force_recreate=True: docker compose -f ... -f ... up -d --force-recreate <svc>."""
+    from app.config import settings
     from app.services.docker_agent_sync import restart_docker_agent_container
+
+    # Satisfy the B2.1 stale-bind-mount preflight: it stats
+    # settings.mc_repo_path/docker-compose.yml, which exists on a real
+    # deployment but not on a CI runner (locally it passes by accident).
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    monkeypatch.setattr(settings, "mc_repo_path", str(tmp_path))
 
     agent = Agent(name="Sparky", agent_runtime="cli-bridge")
 

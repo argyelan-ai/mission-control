@@ -3,7 +3,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
-import type { Harness } from "@/lib/types";
+import type { Harness, HostHarness } from "@/lib/types";
+import { HOST_HARNESS_LABELS, HOST_HARNESS_PROTOCOL } from "@/lib/types";
 import type { WizardAgentRuntime, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
 import { ModelInput, wizardLabelClass } from "../shared";
@@ -14,8 +15,19 @@ const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
   { key: "manual", label: "Manuell", hint: "Kein Auto-Provisioning" },
 ];
 
+// Host-only harnesses (ADR-064/066). The compat-matrix API is cli-bridge-scoped
+// (it iterates backend HARNESSES = claude/openclaude/omp), so host harnesses are
+// offered from this explicit list and filtered by the runtime's wire protocol
+// instead of compatible_harnesses. grok binds its own "grok" cloud runtime; a host
+// grok agent MUST pick harness=grok here because derive_harness() can't infer it.
+const HOST_HARNESSES: { key: HostHarness; label: string }[] = [
+  { key: "hermes", label: HOST_HARNESS_LABELS.hermes },
+  { key: "grok", label: HOST_HARNESS_LABELS.grok },
+];
+
 export function RuntimeStep({ state, update }: WizardStepProps) {
-  const needsHarness = state.agentRuntime === "cli-bridge" || state.agentRuntime === "host";
+  const isHost = state.agentRuntime === "host";
+  const needsHarness = state.agentRuntime === "cli-bridge" || isHost;
 
   const { data: matrix } = useQuery({
     queryKey: ["compat-matrix"],
@@ -36,14 +48,26 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
 
   const matrixBySlug = new Map((matrix?.runtimes ?? []).map((r) => [r.slug, r]));
 
-  function pickHarness(h: Harness) {
+  // Whether a runtime (by matrix entry) is compatible with the chosen harness.
+  // Host harnesses compare wire protocol (hermes → openai, grok → grok); cli-bridge
+  // harnesses use the server-computed compatible_harnesses list.
+  function runtimeMatchesHarness(
+    compatEntry: { protocol: string | null; compatible_harnesses: Harness[] } | undefined,
+    h: Harness | HostHarness | null,
+  ): boolean {
+    if (!h) return true;
+    if (isHost) return compatEntry?.protocol === HOST_HARNESS_PROTOCOL[h as HostHarness];
+    return compatEntry?.compatible_harnesses.includes(h as Harness) ?? false;
+  }
+
+  function pickHarness(h: Harness | HostHarness) {
     // If the currently bound runtime is incompatible with the new harness,
     // clear it so the operator must re-pick a compatible provider. The model
     // string was set from that runtime's model_identifier, so it's cleared
     // too — otherwise it lingers as an orphaned value bound to nothing.
     const bound = runtimesData?.runtimes.find((r) => r.id === state.runtimeId || r.slug === state.runtimeId);
     const compatEntry = bound ? matrixBySlug.get(bound.slug ?? bound.id) : undefined;
-    const stillCompatible = compatEntry ? compatEntry.compatible_harnesses.includes(h) : true;
+    const stillCompatible = runtimeMatchesHarness(compatEntry, h);
     update({
       harness: h,
       runtimeId: stillCompatible ? state.runtimeId : "",
@@ -84,11 +108,12 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
 
       {needsHarness && (
         <>
-          {/* 2. harness */}
+          {/* 2. harness — host runtime offers the host-only harnesses (ADR-064/066),
+                 cli-bridge offers the server compat-matrix harnesses. */}
           <div>
             <label className={wizardLabelClass}>Harness (CLI)</label>
             <div className="flex gap-2">
-              {(matrix?.harnesses ?? []).map((h) => {
+              {(isHost ? HOST_HARNESSES : matrix?.harnesses ?? []).map((h) => {
                 const active = state.harness === h.key;
                 return (
                   <button
@@ -106,6 +131,12 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                 );
               })}
             </div>
+            {isHost && state.harness === "grok" && (
+              <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+                Grok Build spricht die xAI-Cloud über seine eigene OAuth-Session — nur
+                die <code className="font-mono">grok-cloud</code>-Runtime ist kompatibel.
+              </p>
+            )}
           </div>
 
           {/* 3. LLM runtime / provider, filtered by compat matrix */}
@@ -129,15 +160,21 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               )}
               {(runtimesData?.runtimes ?? []).map((rt) => {
                 const compat = matrixBySlug.get(rt.slug ?? rt.id);
-                const harnessOk = state.harness ? compat?.compatible_harnesses.includes(state.harness) ?? false : true;
-                const disabled = rt.enabled === false || !!rt.single_instance || !harnessOk;
+                const harnessOk = runtimeMatchesHarness(compat, state.harness);
+                // Host harnesses bind single-instance runtimes on purpose (grok-cloud,
+                // hermes-vLLM are single-instance host targets); the parallel-instance
+                // guard runs server-side at provision. Only cli-bridge disables them here.
+                const disabled = rt.enabled === false || (!isHost && !!rt.single_instance) || !harnessOk;
                 const active = state.runtimeId === rt.id || state.runtimeId === rt.slug;
-                const reason = state.harness && compat ? compat.reasons[state.harness] : undefined;
+                const reason =
+                  !harnessOk && !isHost && state.harness && compat
+                    ? compat.reasons[state.harness as Harness]
+                    : undefined;
                 return (
                   <button
                     key={rt.id}
                     disabled={disabled}
-                    title={!harnessOk ? reason : rt.single_instance ? "single-instance runtime" : undefined}
+                    title={!harnessOk ? reason : !isHost && rt.single_instance ? "single-instance runtime" : undefined}
                     onClick={() => update({ runtimeId: rt.id, model: rt.model_identifier ?? state.model })}
                     className="text-left rounded-lg px-3 py-2.5 text-sm cursor-pointer transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
                     style={{

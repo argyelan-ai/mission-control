@@ -15,9 +15,13 @@ vi.mock("@/lib/api", () => ({
         ],
         runtimes: [
           { slug: "vllm-a", display_name: "vLLM A", protocol: "openai", compatible_harnesses: ["openclaude", "omp"], reasons: { claude: "nur Anthropic" } },
+          { slug: "grok-cloud", display_name: "Grok Build (xAI Cloud)", protocol: "grok", compatible_harnesses: [], reasons: {} },
         ],
       })),
-      list: vi.fn(async () => ({ runtimes: [{ id: "r1", slug: "vllm-a", display_name: "vLLM A", runtime_type: "vllm_docker", model_identifier: "m", enabled: true }] })),
+      list: vi.fn(async () => ({ runtimes: [
+        { id: "r1", slug: "vllm-a", display_name: "vLLM A", runtime_type: "vllm_docker", model_identifier: "m", enabled: true },
+        { id: "gr1", slug: "grok-cloud", display_name: "Grok Build (xAI Cloud)", runtime_type: "grok", model_identifier: "grok-4.5", enabled: true, single_instance: true },
+      ] })),
     },
     cliBridge: { health: vi.fn(async () => ({ reachable: true, bridge_url: "x:18792" })) },
   },
@@ -54,5 +58,33 @@ describe("RuntimeStep", () => {
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ harness: "claude", runtimeId: "", model: "" })
     );
+  });
+
+  // ── Host harnesses: grok (ADR-066) ──────────────────────────────────────────
+
+  it("host runtime offers the grok harness (not the cli-bridge matrix list)", async () => {
+    const update = vi.fn();
+    const state = { ...initialWizardState(null), agentRuntime: "host" as const };
+    wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    await waitFor(() => screen.getByText("Grok Build"));
+    expect(screen.getByText("Hermes")).toBeTruthy();
+    // cli-bridge-only harnesses must NOT appear for host.
+    expect(screen.queryByText("OpenClaude")).toBeNull();
+    fireEvent.click(screen.getByText("Grok Build"));
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ harness: "grok" }));
+  });
+
+  it("host+grok: only the grok-cloud runtime is compatible; openai providers disabled", async () => {
+    const update = vi.fn();
+    const state = { ...initialWizardState(null), agentRuntime: "host" as const, harness: "grok" as const };
+    wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    await waitFor(() => screen.getByText("Grok Build (xAI Cloud)"));
+    const grokRt = screen.getByText("Grok Build (xAI Cloud)").closest("button") as HTMLButtonElement;
+    // single-instance grok-cloud stays selectable for a host agent.
+    expect(grokRt.disabled).toBe(false);
+    const vllm = screen.getByText("vLLM A").closest("button") as HTMLButtonElement;
+    expect(vllm.disabled).toBe(true); // openai protocol, incompatible with grok
+    fireEvent.click(grokRt);
+    expect(update).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: "gr1" }));
   });
 });

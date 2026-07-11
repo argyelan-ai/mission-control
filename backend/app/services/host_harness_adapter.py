@@ -53,8 +53,40 @@ class HermesAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
+class GrokAdapter:
+    """Grok Build CLI as a host harness (ADR-066).
+
+    Unlike Hermes (a persistent tmux TUI bound to a vLLM runtime), grok is a
+    headless per-dispatch subprocess that talks ONLY to xAI cloud over its own
+    OAuth. So `protocol` is the fixed "grok" wire protocol (harness_compat), and
+    `build_agent_env` renders NO provider env — just the MC_* control-plane vars
+    the grok-bridge needs to poll/heartbeat. The runtime binding is a display
+    anchor only; grok reads its model/endpoint from its own cloud session.
+
+    reload() reuses the generic host lifecycle path (launchctl kickstart of the
+    grok-bridge plist). grok has no persistent LLM session to kill — restarting
+    the bridge re-sources agent.env for the next dispatch, which IS the reload.
+    """
+
+    harness = "grok"
+    protocol = "grok"
+
+    async def build_agent_env(self, agent, runtime, token, *, session):
+        from app.services.agent_bootstrap import build_grok_agent_env
+        return await build_grok_agent_env(runtime, token, session=session)
+
+    async def bootstrap(self, session, agent, runtime):
+        from app.services.agent_bootstrap import bootstrap_grok_agent
+        return await bootstrap_grok_agent(session, agent, runtime)
+
+    async def reload(self, agent):
+        from app.routers.cli_terminal import _host_agent_lifecycle
+        return await _host_agent_lifecycle(agent, "restart")
+
+
 HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "hermes": HermesAdapter(),
+    "grok": GrokAdapter(),
 }
 
 
@@ -72,6 +104,13 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     """
     from app.routers.internal import build_runtime_env
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
+    from app.services.harness_compat import runtime_protocol
+
+    # Protocol-fixed host harnesses (grok → xAI cloud OAuth, ADR-066) have no
+    # OPENAI_* provider env to sync — build_runtime_env would wrongly derive
+    # OPENAI_BASE_URL/OPENAI_MODEL from the display-anchor runtime. Nothing to do.
+    if runtime_protocol(runtime) not in ("openai", None):
+        return
 
     slug = agent.slug or "hermes"
     env_path = _home_host() / ".mc" / "agents" / slug / "agent.env"
