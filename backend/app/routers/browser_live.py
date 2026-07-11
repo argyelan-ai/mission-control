@@ -28,8 +28,8 @@ logger = logging.getLogger("mc.browser_live")
 
 router = APIRouter(prefix="/api/v1/browser-live", tags=["browser-live"])
 
-# cdp-socat re-exposes Chromium's 127.0.0.1-only debug port on this host:port
-# inside the docker network. Overridable for tests/other topologies.
+# cdp-browser's in-container socat re-exposes Chromium's 127.0.0.1-only debug
+# port on this host:port inside the docker network. Overridable for tests.
 CDP_BASE_URL = os.environ.get("CDP_BROWSER_URL", "http://cdp-browser:9223")
 
 

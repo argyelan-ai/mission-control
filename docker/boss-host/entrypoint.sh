@@ -46,6 +46,10 @@ start_tmux() {
     tmux -S "$TMUX_SOCKET" -f "$TMUX_CONF" new-session -d -s "$SESSION" -n "claude" \
         "while true; do $BASE/start-claude.sh; echo '[entrypoint] claude exited, restart in 5s...'; sleep 5; done"
 
+    # mouse on → Sessions web terminal scrolls output, not input history (matches
+    # every other agent). Session-scoped on Boss's dedicated tmux socket.
+    tmux -S "$TMUX_SOCKET" set-option -t "$SESSION" mouse on 2>/dev/null || true
+
     # Window 1: poll.sh in Auto-Restart-Loop (kein tee)
     tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:1" -n "poll" \
         "while true; do bash $BASE/poll.sh; echo '[entrypoint] poll.sh exited, restart in 5s...'; sleep 5; done"

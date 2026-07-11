@@ -61,8 +61,23 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
             if not line or line.startswith("#") or "=" not in line:
                 continue
             k, v = line.split("=", 1)
-            env[k.strip()] = v.strip().strip("'\"")
+            env[k.strip()] = _unquote_env_value(v)
     return env
+
+
+def _unquote_env_value(raw: str) -> str:
+    """Exact inverse of the backend's _format_env_file single-quote escaping.
+
+    A naive .strip("'") leaves '"'"' sequences intact; kept in sync with
+    backend/app/services/agent_bootstrap._unquote_env_value so a token that was
+    written escaped is read back byte-identical (see the 13 KB token bug).
+    entrypoint.sh re-sources agent.env anyway, but this keeps the pass-through
+    env correct on its own.
+    """
+    raw = raw.strip()
+    if len(raw) >= 2 and raw[0] == "'" and raw[-1] == "'":
+        return raw[1:-1].replace("'\"'\"'", "'")
+    return raw.strip("'\"")
 
 
 def is_session_running() -> bool:
@@ -150,11 +165,15 @@ def _build_dispatch_prompt(task: dict) -> str:
         f"Every PATCH/POST against this task MUST carry the header\n"
         f'`X-Dispatch-Attempt-Id: {attempt_id}` — without it the server returns 409.\n'
         f'  ACK NOW: mc_patch_task(task_id="{task_id}", board_id="{board_id}", status="in_progress")\n'
+        f'  Checklist FIRST: mc_checklist_add(task_id="{task_id}", board_id="{board_id}", '
+        f'items=["step 1", "step 2", ...]) — it is the single source of truth for progress '
+        f'and shows in the task detail panel. Tick items off: mc_checklist_done(task_id="{task_id}", '
+        f'board_id="{board_id}", item_id="<id>"). Use the mc_checklist* tools, NOT a shell `mc checklist`.\n'
         f"  Comment format: 3 lines exactly — Update / Evidence / Next.\n"
         f'  Comment via: mc_patch_task(task_id="{task_id}", board_id="{board_id}", comment="Update: ...\\nEvidence: ...\\nNext: ...")\n'
         f'  Hand off: mc_patch_task(task_id="{task_id}", board_id="{board_id}", status="review") when done.\n'
         f"  Skill: ~/.hermes/skills/mission-control/SKILL.md\n"
-        f"  Workspace: cd ~/.mc/agents/hermes\n"
+        f"  Workspace: cd ~/.mc/workspaces/hermes  # task workspace (browsable in Files)\n"
     )
 
 
@@ -343,6 +362,53 @@ def dispatch_poll_loop() -> None:
         raise
 
 
+# Heartbeat interval — must stay well under the backend's 90s liveness window
+# (cli_terminal.list_host_session_agents: session_running = last_seen < 90s).
+HEARTBEAT_INTERVAL = int(os.environ.get("HERMES_HEARTBEAT_INTERVAL", "30"))
+
+
+def heartbeat_loop() -> None:
+    """Keep Hermes' last_seen_at fresh so it stays visible on the Sessions page.
+
+    Unlike Docker agents (poll.sh POSTs /heartbeat every loop), the Hermes
+    native-TUI runtime has no poll window — its only heartbeats came from a
+    per-turn hook, so an IDLE Hermes went stale after 90s and dropped off the
+    Sessions page even though hermes-worker was alive. This daemon POSTs an
+    empty /agent/me/heartbeat every HEARTBEAT_INTERVAL while the tmux session
+    is running, mirroring Boss's steady cadence. /heartbeat only refreshes
+    last_seen (events fire on status transitions only), so this is not noisy.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        env = load_env_from_file(ENV_FILE)
+        base_url = env.get("MC_BASE_URL")
+        token = env.get("MC_AGENT_TOKEN")
+        if not base_url or not token:
+            log.error("heartbeat_loop: MC_BASE_URL / MC_AGENT_TOKEN missing — loop exits")
+            return
+        url = f"{base_url.rstrip('/')}/api/v1/agent/me/heartbeat"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        log.info("heartbeat_loop: POST %s every %ss", url, HEARTBEAT_INTERVAL)
+        while True:
+            try:
+                if is_session_running():
+                    req = urllib.request.Request(
+                        url, data=b"{}", headers=headers, method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=10):
+                        pass
+            except urllib.error.HTTPError as e:
+                log.warning("heartbeat_loop: HTTP %s — %s", e.code, e.reason)
+            except Exception as e:
+                log.warning("heartbeat_loop: error: %s", type(e).__name__)
+            time.sleep(HEARTBEAT_INTERVAL)
+    except Exception as e:
+        log.exception("[fatal] heartbeat_loop crashed: %s", e)
+        raise
+
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def _send_json(self, code: int, payload: dict) -> None:
         body = json.dumps(payload).encode()
@@ -419,6 +485,10 @@ def main() -> None:
         t = threading.Thread(target=dispatch_poll_loop, name="hermes-dispatcher", daemon=True)
         t.start()
         log.info("hermes-dispatcher thread started (poll every %ss)", DISPATCH_POLL_INTERVAL)
+        # Steady liveness heartbeat so Hermes stays on the Sessions page while idle.
+        hb = threading.Thread(target=heartbeat_loop, name="hermes-heartbeat", daemon=True)
+        hb.start()
+        log.info("hermes-heartbeat thread started (POST every %ss)", HEARTBEAT_INTERVAL)
         server = http.server.HTTPServer((HOST, PORT), Handler)
         log.info("hermes-bridge listening on %s:%d", HOST, PORT)
         server.serve_forever()

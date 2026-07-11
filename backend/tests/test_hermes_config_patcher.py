@@ -84,3 +84,30 @@ def test_missing_config_returns_2(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "BACKUP_PATH", tmp_path / "nonexistent.yaml.bak")
     rc = mod.main()
     assert rc == 2
+
+
+def test_model_block_set_from_openai_env(fake_config, monkeypatch):
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://192.0.2.10:8000/v1")
+    monkeypatch.setenv("OPENAI_MODEL", "nvidia/Qwen3.6-35B")
+    mod = _load_module()
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    assert mod.main() == 0
+    result = pyyaml.safe_load(fake_config.read_text())
+    assert result["model"]["provider"] == "custom"
+    assert result["model"]["base_url"] == "http://192.0.2.10:8000/v1"
+    assert result["model"]["default"] == "nvidia/Qwen3.6-35B"
+
+
+def test_model_block_untouched_when_env_missing(fake_config, monkeypatch):
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_MODEL", raising=False)
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    cfg["model"] = {"provider": "ollama-cloud", "base_url": "https://ollama.com/v1", "default": "kimi-k2.6"}
+    fake_config.write_text(pyyaml.safe_dump(cfg, sort_keys=False))
+    mod = _load_module()
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".yaml.bak"))
+    mod.main()
+    result = pyyaml.safe_load(fake_config.read_text())
+    assert result["model"]["provider"] == "ollama-cloud"  # guard held

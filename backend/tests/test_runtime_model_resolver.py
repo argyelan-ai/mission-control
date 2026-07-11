@@ -191,6 +191,46 @@ async def test_returns_none_when_no_spark_runtime(
     assert found is None
 
 
+@pytest.mark.asyncio
+async def test_finds_spark_runtime_regardless_of_type(async_session: AsyncSession):
+    """A model swap that flips the Spark runtime's type (vllm_docker -> omp)
+    must NOT hide it — it is matched by endpoint only. This is the regression
+    that silently broke the news worker's model resolution."""
+    rt = Runtime(
+        slug="omp-qwen",
+        display_name="Spark omp",
+        runtime_type="omp",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="Qwen/Qwen3.6-35B-A3B-FP8",
+        enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    found = await resolver.get_spark_vllm_runtime(async_session)
+    assert found is not None
+    assert found.slug == "omp-qwen"
+
+
+@pytest.mark.asyncio
+async def test_probe_live_spark_model_returns_first_served():
+    """The endpoint-only live probe returns whatever the GPU serves now —
+    the model-agnostic fallback used when no runtime row resolves."""
+    with patch(
+        "app.services.endpoint_probe.probe_endpoint_url",
+        AsyncMock(return_value={"models": ["DeepSeek-V4-Flash-Spark", "other"]}),
+    ):
+        assert await resolver._probe_live_spark_model() == "DeepSeek-V4-Flash-Spark"
+
+
+@pytest.mark.asyncio
+async def test_probe_live_spark_model_none_when_empty():
+    with patch(
+        "app.services.endpoint_probe.probe_endpoint_url",
+        AsyncMock(return_value={"models": []}),
+    ):
+        assert await resolver._probe_live_spark_model() is None
+
+
 # ── Cache behaviour ─────────────────────────────────────────────────────
 
 

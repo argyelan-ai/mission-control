@@ -149,6 +149,7 @@ async def search_files(
     agent: str | None = None,
     root: str | None = None,
     limit: int = 100,
+    offset: int = 0,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
@@ -161,9 +162,18 @@ async def search_files(
         stmt = stmt.where(FileIndexEntry.agent_slug == agent)
     if type:
         stmt = stmt.where(FileIndexEntry.mime.ilike(f"%{type}%"))
-    stmt = stmt.limit(min(max(limit, 1), 500))
+    # Deterministic order so offset/limit paging is stable across page turns.
+    capped = min(max(limit, 1), 500)
+    stmt = (
+        stmt.order_by(FileIndexEntry.name.asc(), FileIndexEntry.rel_path.asc())  # type: ignore[union-attr]
+        .offset(max(offset, 0))
+        .limit(capped + 1)  # fetch one extra to detect a next page
+    )
     rows = (await session.exec(stmt)).all()
+    has_more = len(rows) > capped
+    rows = rows[:capped]
     return {
+        "has_more": has_more,
         "results": [
             {
                 "root": r.root_key,

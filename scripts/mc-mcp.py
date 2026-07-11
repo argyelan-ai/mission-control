@@ -60,6 +60,28 @@ def _api(method: str, path: str, **kwargs) -> dict:
     except Exception as e:
         return {"error": str(e)}
 
+# Agent PBKDF2 token, passed through from agent.env by the host runtime. Used so
+# that task actions performed by the agent are attributed to the AGENT
+# (author_type='agent') instead of the admin user shown as '👤 Du' — which also
+# stops the self-notification echo loop (own comments are filtered out on poll).
+MC_AGENT_TOKEN = os.environ.get("MC_AGENT_TOKEN", "").strip()
+
+def _api_agent(method: str, path: str, **kwargs):
+    """Call an agent-scoped endpoint AS the agent. Returns None when no agent
+    token is available so callers can fall back to the admin _api()."""
+    if not MC_AGENT_TOKEN:
+        return None
+    try:
+        with httpx.Client(timeout=15) as c:
+            r = c.request(method, f"{MC_BASE}{path}",
+                          headers={"Authorization": f"Bearer {MC_AGENT_TOKEN}"}, **kwargs)
+            r.raise_for_status()
+            return r.json()
+    except httpx.HTTPStatusError as e:
+        return {"error": f"HTTP {e.response.status_code}: {e.response.text[:300]}"}
+    except Exception as e:
+        return {"error": str(e)}
+
 def _bridge(method: str, path: str, **kwargs) -> dict:
     try:
         with httpx.Client(timeout=10) as c:
@@ -249,19 +271,137 @@ def mc_patch_task(task_id: str, status: str = "", comment: str = "", board_id: s
 
     results = []
     if status:
-        r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
+        # Change status AS the agent via the agent-scoped state-machine endpoint
+        # (ACK handshake, review handoff, parent reactivation) — the same path
+        # Docker agents use. Falls back to the admin endpoint without a token.
+        r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}", json={"status": status})
+        if r is None or "error" in r:
+            r = _api("PATCH", f"/boards/{board_id}/tasks/{task_id}", json={"status": status})
         if "error" in r:
             return f"Status-Fehler: {r['error']}"
         results.append(f"Status → {status}")
 
     if comment:
-        # Backend schema CommentCreate uses key `content` (verified 2026-05-01, tasks.py:188)
-        r = _api("POST", f"/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
+        # Post AS the agent (author_type='agent') via the agent-scoped endpoint.
+        # NEVER fall back to the operator endpoint here: that records
+        # author_type='user' → the comment shows up as '👤 Du' (the logged-in
+        # operator, i.e. Mark) and echoes back to the agent as a "new user
+        # comment". A missing/invalid MC_AGENT_TOKEN is a provisioning fault to
+        # surface, not to paper over by impersonating the operator.
+        r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/comments", json={"content": comment})
+        if r is None:
+            return ("Kommentar-Fehler: kein MC_AGENT_TOKEN in der Umgebung — "
+                    "Kommentar NICHT gepostet (würde sonst als Operator '👤 Du' "
+                    "erscheinen). agent.env prüfen / Bridge neu starten.")
         if "error" in r:
-            return f"Kommentar-Fehler: {r['error']}"
+            return f"Kommentar-Fehler (Agent-Endpoint): {r['error']}"
         results.append("Kommentar hinzugefügt")
 
     return " | ".join(results) if results else "Nichts geändert"
+
+
+def _resolve_task_board(task_id: str, board_id: str) -> tuple[str, str, str]:
+    """Resolve a (possibly prefix) task_id + optional board_id to full IDs.
+
+    Returns (task_id, board_id, error); error is '' on success. Mirrors the
+    inline resolution in mc_patch_task so the checklist tools accept the same
+    short task-id prefixes.
+    """
+    if len(task_id) < 36 or not board_id:
+        all_tasks = _get_tasks_from_boards(board_id=board_id, limit=200)
+        matches = [t for t in all_tasks if t.get("id", "").startswith(task_id)]
+        if not matches:
+            return "", "", f"Task '{task_id}' nicht gefunden"
+        task = matches[0]
+        task_id = task["id"]
+        if not board_id:
+            board_id = task.get("board_id") or task.get("_board_id", "")
+    if not board_id:
+        return "", "", f"Task {task_id} hat keine board_id (corrupt)"
+    return task_id, board_id, ""
+
+
+def _fmt_checklist(items) -> str:
+    rows = items if isinstance(items, list) else (items.get("items", []) if isinstance(items, dict) else [])
+    if not rows:
+        return "Keine Checklist-Items"
+    return "\n".join(
+        f"- [{it.get('status', 'pending')}] {it.get('title', '?')} (id={str(it.get('id', '?'))[:8]})"
+        for it in rows
+    )
+
+
+@mcp.tool()
+def mc_checklist_add(task_id: str, items: list[str], board_id: str = "") -> str:
+    """Checklist-/Todo-Items für einen Task anlegen (Bulk).
+
+    Die Checkliste ist die Single Source of Truth für den Fortschritt und wird
+    im Task-Detail-Panel angezeigt. Lege sie zu Beginn des Tasks an (ein Item
+    pro Schritt) und hake Items mit mc_checklist_done ab.
+
+    Args:
+        task_id: Task-UUID (voll oder eindeutiger Prefix >= 4 Zeichen)
+        items: Liste der Item-Titel, z.B. ["Recherche", "Implementierung", "Test"]
+        board_id: Optional; wird aus dem Task aufgelöst wenn leer.
+
+    Returns: Die angelegten Items mit ihren IDs (für mc_checklist_done).
+    """
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
+    payload = {"items": [{"title": t, "sort_order": i} for i, t in enumerate(items) if t and t.strip()]}
+    if not payload["items"]:
+        return "Keine Items angegeben"
+    r = _api_agent("POST", f"/agent/boards/{board_id}/tasks/{task_id}/checklist", json=payload)
+    if r is None:
+        return "Kein Agent-Token verfügbar — Checklist-Items brauchen Agent-Auth (MC_AGENT_TOKEN)"
+    if isinstance(r, dict) and "error" in r:
+        return f"Checklist-Fehler: {r['error']}"
+    return "Checkliste angelegt:\n" + _fmt_checklist(r)
+
+
+@mcp.tool()
+def mc_checklist(task_id: str, board_id: str = "") -> str:
+    """Die Checkliste eines Tasks lesen (Item-Titel, Status, IDs)."""
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
+    r = _api_agent("GET", f"/agent/boards/{board_id}/tasks/{task_id}/checklist")
+    if r is None:
+        r = _api("GET", f"/boards/{board_id}/tasks/{task_id}/checklist")
+    if isinstance(r, dict) and "error" in r:
+        return f"Fehler: {r['error']}"
+    return _fmt_checklist(r)
+
+
+@mcp.tool()
+def mc_checklist_done(task_id: str, item_id: str, status: str = "done", board_id: str = "") -> str:
+    """Status eines Checklist-Items setzen (Standard: done).
+
+    Args:
+        task_id: Task-UUID (voll oder Prefix)
+        item_id: Item-UUID (voll oder Prefix — aus mc_checklist / mc_checklist_add)
+        status: pending | in_progress | done | blocked | skipped
+        board_id: Optional; aus dem Task aufgelöst wenn leer.
+    """
+    task_id, board_id, err = _resolve_task_board(task_id, board_id)
+    if err:
+        return err
+    # Resolve a short item-id prefix against the live checklist.
+    if len(item_id) < 36:
+        lst = _api_agent("GET", f"/agent/boards/{board_id}/tasks/{task_id}/checklist")
+        rows = lst if isinstance(lst, list) else (lst.get("items", []) if isinstance(lst, dict) else [])
+        matches = [it for it in rows if str(it.get("id", "")).startswith(item_id)]
+        if not matches:
+            return f"Checklist-Item '{item_id}' nicht gefunden"
+        item_id = matches[0]["id"]
+    r = _api_agent("PATCH", f"/agent/boards/{board_id}/tasks/{task_id}/checklist/{item_id}",
+                   json={"status": status})
+    if r is None:
+        return "Kein Agent-Token verfügbar — Checklist braucht Agent-Auth (MC_AGENT_TOKEN)"
+    if isinstance(r, dict) and "error" in r:
+        return f"Checklist-Fehler: {r['error']}"
+    return f"Item {str(item_id)[:8]} → {status}"
 
 
 @mcp.tool()

@@ -612,14 +612,22 @@ function SkillsTab({ agentId }: { agentId: string }) {
 }
 
 // ── Runtime Selection Section ─────────────────────────────────────────────
-// Only cli-bridge agents can switch runtimes via MC. Host agents (Boss,
-// Hermes, Jarvis) show a locked badge — managed via launchd on the host.
+// cli-bridge agents switch runtimes the "normal" way (container restart).
+// Host agents with a HostHarnessAdapter (currently only Hermes, ADR-060)
+// switch in place — same PATCH /agents/{id} endpoint, backend routes it to
+// the in-place path (services/agent_runtime_switch.py::_is_host_inplace).
+// Host agents WITHOUT an adapter (Boss, Jarvis) still show a locked badge —
+// managed via launchd on the host, no MC-side runtime concept.
 // Phase 30 dropped the `openclaw` runtime entirely (CHECK constraint on
 // agents.agent_runtime). Color map reused from RuntimePill (defined above).
 
 function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
   const qc = useQueryClient();
-  const isSwitchable = agent.agent_runtime === "cli-bridge";
+  // ADR-060: "hermes" is the only host harness with an adapter today. Kept as
+  // a plain string compare (not the cli-bridge-facing `Harness` union) —
+  // mirrors RuntimeSwitchModal's `isHostInplace`.
+  const isHostInplace = agent.agent_runtime === "host" && agent.harness === "hermes";
+  const isSwitchable = agent.agent_runtime === "cli-bridge" || isHostInplace;
 
   const { data: runtimesData } = useQuery({
     queryKey: ["runtimes"],
@@ -637,7 +645,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
     : "rgba(255,255,255,0.06)";
 
   if (!isSwitchable) {
-    // Locked badge for host agents
+    // Locked badge for host agents without a HostHarnessAdapter (Boss, Jarvis)
     const reason =
       agent.agent_runtime === "host"
         ? "Host agent: runtime is controlled via launchd on the Mac (Boss = Opus 4.7)."
@@ -714,9 +722,19 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
               })}
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              Switching triggers <code className="font-mono">docker restart</code>{" "}
-              (~5s) — for cross-image switches, a container rebuild (~30–90s).
-              Compatibility check + warnings appear in the confirm modal.
+              {isHostInplace ? (
+                <>
+                  In-place switch — no parallel container. The runtime binding is
+                  rewritten and the host session restarts briefly (short session
+                  restart, current work is lost).
+                </>
+              ) : (
+                <>
+                  Switching triggers <code className="font-mono">docker restart</code>{" "}
+                  (~5s) — for cross-image switches, a container rebuild (~30–90s).
+                  Compatibility check + warnings appear in the confirm modal.
+                </>
+              )}
             </div>
           </div>
           <div className="pt-[22px]">

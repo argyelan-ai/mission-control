@@ -54,7 +54,17 @@ async def _enforce_board_rules(
 
     # Rule 1: check valid status transitions
     current = task.status
-    allowed = VALID_TRANSITIONS.get(current, set())
+    allowed = set(VALID_TRANSITIONS.get(current, set()))
+
+    # Operator cleanup: on the User/UI-auth path (agent is None) a failed task
+    # may be closed directly as done or aborted. VALID_TRANSITIONS keeps
+    # failed → inbox only for agents (they must re-open + rework); Mark closing
+    # a dead task from the UI is a deliberate opt-out of the learning loop
+    # (see docstring). Only widens the User path, never the agent path.
+    operator_closing_failed = agent is None and current == "failed"
+    if operator_closing_failed:
+        allowed |= {"done", "aborted"}
+
     if new_status not in allowed:
         from_label = STATUS_LABELS.get(current, current)
         to_label = STATUS_LABELS.get(new_status, new_status)
@@ -72,7 +82,9 @@ async def _enforce_board_rules(
     # Rule 2b: human_review_required is a HARD GATE on done — independent of
     # the board's require_review_before_done flag. A task explicitly routed
     # to Mark must not be closeable by skipping review/user_test.
-    if new_status == "done" and task.status not in ("review", "user_test"):
+    # Exception: operator closing a failed task IS Mark performing the review.
+    if new_status == "done" and task.status not in ("review", "user_test") \
+            and not operator_closing_failed:
         if getattr(task, "human_review_required", None):
             raise HTTPException(
                 status_code=400,
@@ -81,7 +93,8 @@ async def _enforce_board_rules(
 
     # Rule 3: task must go through review before it can be set to done
     # Exception: parent tasks with all subtasks done (review happened at subtask level)
-    if board.require_review_before_done:
+    # Exception: operator closing a failed task (deliberate cleanup opt-out).
+    if board.require_review_before_done and not operator_closing_failed:
         if new_status == "done" and task.status not in ("review", "user_test"):
             subtask_result = await session.exec(
                 select(Task).where(Task.parent_task_id == task.id)

@@ -94,7 +94,11 @@ services:
       - ${HOME}/Workspace/Projects:/workspace-ref:ro
       - ${HOME}/.mc/deliverables/rex:/deliverables
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-freecode:
     <<: *claude-agent-base
     image: mc-claude-agent:latest
@@ -116,7 +120,11 @@ services:
       - mc_shared_deliverables:/shared-deliverables:ro
       - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-tester:
     <<: *claude-agent-base
     image: mc-claude-agent:latest
@@ -141,7 +149,11 @@ services:
       - ${HOME}/.mc/mcp-screenshots:/shared-mcp:ro
       - mc_shared_deliverables:/shared-deliverables:ro
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-deployer:
     <<: *claude-agent-base
     image: mc-claude-agent:latest
@@ -168,10 +180,14 @@ services:
       - ${HOME}/.mc/deliverables/deployer:/deliverables
       - mc_shared_deliverables:/shared-deliverables:ro
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-researcher:
     <<: *claude-agent-base
-    image: mc-agent-base:latest
+    image: mc-claude-agent:latest
     container_name: mc-agent-researcher
     environment:
       - AGENT_NAME=researcher
@@ -190,7 +206,11 @@ services:
       - ${HOME}/.mc/deliverables/researcher:/deliverables
       - mc_shared_deliverables:/shared-deliverables:ro
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-shakespeare:
     <<: *claude-agent-base
     image: mc-agent-base:latest
@@ -211,7 +231,11 @@ services:
       - ${HOME}/.mc/workspaces/shakespeare:/workspace
       - ${HOME}/.mc/deliverables/shakespeare:/deliverables
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-davinci:
     <<: *claude-agent-base
     image: mc-claude-agent:latest
@@ -242,9 +266,13 @@ services:
 
   # ── Sparky (openclaude + qwen3-coder-next via LM Studio) ──
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
   mc-agent-sparky:
     <<: *openclaude-agent-base
-    image: mc-agent-base:latest
+    image: mc-omp-agent:latest
     container_name: mc-agent-sparky
     build:
       context: ./mc-agent-base
@@ -271,7 +299,54 @@ services:
       - ${HOME}/.mc/deliverables/sparky:/deliverables
       # Vault mount — rw for Sparky (M.2 pilot). Other agents get :ro in M.3.
       - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
+  mc-agent-estrichvision:
+    <<: *claude-agent-base
+    container_name: mc-agent-estrichvision
+    environment:
+      - AGENT_NAME=estrichvision
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_ESTRICHVISION}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/estrichvision
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=estrichvision
+    volumes:
+      - ${HOME}/.mc/agents/estrichvision/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/estrichvision:/workspace
+      - ${HOME}/.mc/deliverables/estrichvision:/deliverables
+      - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
 
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
+  mc-agent-installer:
+    <<: *claude-agent-base
+    container_name: mc-agent-installer
+    environment:
+      - AGENT_NAME=installer
+      - MC_API_URL=${MC_API_URL:-http://backend:8000}
+      - MC_TOKEN=${MC_TOKEN_INSTALLER}
+      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}
+      - AGENT_VAULT_PATH=/vault/agents/installer
+      - AGENT_VAULT_INBOX=/vault/_inbox
+      - AGENT_SLUG=installer
+    volumes:
+      - ${HOME}/.mc/agents/installer/claude-config:/home/agent/.claude
+      - ${HOME}/.mc/mcp-servers:/mc-servers:ro
+      - ${HOME}/.mc/workspaces/installer:/workspace
+      - ${HOME}/.mc/deliverables/installer:/deliverables
+      - ${HOME}/.mc/vault:/vault:rw
+      - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+
+    env_file:
+      - docker/.env.shared
+      - docker/.env.agents
 networks:
   mission-control_default:
     external: true  # Created by main docker-compose.yml — start main stack first: docker compose up -d

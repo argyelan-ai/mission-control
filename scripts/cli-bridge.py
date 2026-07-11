@@ -204,6 +204,8 @@ def _start_plugins_shell() -> bool:
              "-c", str(installer_dir)],
             check=True, capture_output=True,
         )
+        # mouse on → Sessions web terminal scrolls output, not input history.
+        _sp.run([TMUX_BIN, "set-option", "-t", session, "mouse", "on"], check=False, capture_output=True)
         _sp.run(
             [TMUX_BIN, "set-option", "-t", session, "mouse", "on"],
             capture_output=True,
@@ -282,6 +284,8 @@ def _start_worker_session(agent_name: str) -> bool:
              "bash", worker_script],
             check=True, capture_output=True,
         )
+        # mouse on → Sessions web terminal scrolls output, not input history.
+        _sp.run([TMUX_BIN, "set-option", "-t", session, "mouse", "on"], check=False, capture_output=True)
         log(f"Worker session gestartet: {session} → {worker_script}")
         return True
     except _sp.CalledProcessError as e:
@@ -529,6 +533,8 @@ def start_agent(agent_name: str, task_id: str, workspace: str, prompt: str) -> s
             [TMUX_BIN, "new-session", "-d", "-s", session, "-x", "220", "-y", "50"],
             check=True, capture_output=True,
         )
+        # mouse on → Sessions web terminal scrolls output, not input history.
+        _sp.run([TMUX_BIN, "set-option", "-t", session, "mouse", "on"], check=False, capture_output=True)
         _sp.run(
             [TMUX_BIN, "send-keys", "-t", session, cmd, "Enter"],
             check=True, capture_output=True,

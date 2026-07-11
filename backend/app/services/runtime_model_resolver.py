@@ -206,10 +206,15 @@ async def get_spark_vllm_runtime(session: AsyncSession) -> Runtime | None:
     """
     from urllib.parse import urlparse
 
+    # Match by endpoint only — the netloc uniquely identifies the physical GPU
+    # serving on Spark:8000. Deliberately NOT filtered by runtime_type: the
+    # fleet's Spark runtime has been vllm_docker, omp, and vllm_node at various
+    # times, and a type filter silently returns None whenever it changes (which
+    # broke the news worker's model resolution — it then fell back to a stale
+    # config default). Any enabled runtime at that endpoint is "the Spark GPU".
     spark_netloc = urlparse(settings.spark_llm_url).netloc
     stmt = (
         select(Runtime)
-        .where(Runtime.runtime_type == "vllm_docker")
         .where(Runtime.endpoint.like(f"%{spark_netloc}%"))  # type: ignore[union-attr]
         .where(Runtime.enabled.is_(True))  # type: ignore[union-attr]
     )
@@ -226,12 +231,41 @@ async def get_active_spark_model(*, force_probe: bool = False) -> str | None:
     """
     async with session_scope() as session:
         runtime = await get_spark_vllm_runtime(session)
-        if runtime is None:
-            logger.warning("get_active_spark_model: no Spark vLLM runtime found")
-            return None
-        return await get_active_model_for_runtime(
-            session, runtime.slug, force_probe=force_probe
+        if runtime is not None:
+            model = await get_active_model_for_runtime(
+                session, runtime.slug, force_probe=force_probe
+            )
+            if model:
+                return model
+        # No runtime row matched, or it couldn't resolve a model. Probe whatever
+        # spark_llm_url is actually serving right now so callers stay fully
+        # model-agnostic ("whatever GPU is running"), independent of DB
+        # bookkeeping. This is the omp/Sparky-style self-healing path.
+        probed = await _probe_live_spark_model()
+        if probed:
+            return probed
+        logger.warning(
+            "get_active_spark_model: no runtime match and live probe of %s failed",
+            settings.spark_llm_url,
         )
+        return None
+
+
+async def _probe_live_spark_model() -> str | None:
+    """Return the first model id served at ``settings.spark_llm_url`` right now.
+
+    Endpoint-only probe (no runtime row required) — the ultimate fallback that
+    keeps Spark-backed callers working across any model/recipe swap.
+    """
+    from app.services.endpoint_probe import probe_endpoint_url
+
+    try:
+        info = await probe_endpoint_url(settings.spark_llm_url)
+        models = info.get("models") or []
+        return models[0] if models else None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("resolver: live Spark probe failed: %s", exc)
+        return None
 
 
 async def reprobe_spark_model() -> str | None:

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import {
   Search, RefreshCw, X, FolderOpen, Trash2, type LucideIcon,
@@ -47,6 +47,10 @@ export default function FilesPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const debouncedQuery = useDebounced(query.trim(), 300);
+  const SEARCH_PAGE_SIZE = 50;
+  const [searchPage, setSearchPage] = useState(0);
+  // A new query starts back at page 0 — otherwise you'd land on an empty page.
+  useEffect(() => setSearchPage(0), [debouncedQuery]);
 
   const { data: rootsData, isLoading: loadingRoots } = useQuery({
     queryKey: ["files-roots"],
@@ -68,9 +72,28 @@ export default function FilesPage() {
   const searching = debouncedQuery.length > 0;
 
   const { data: searchData, isLoading: loadingSearch } = useQuery({
-    queryKey: ["files-search", debouncedQuery],
-    queryFn: () => api.files.search({ q: debouncedQuery, limit: 100 }),
+    queryKey: ["files-search", debouncedQuery, searchPage],
+    queryFn: () =>
+      api.files.search({
+        q: debouncedQuery,
+        limit: SEARCH_PAGE_SIZE,
+        offset: searchPage * SEARCH_PAGE_SIZE,
+      }),
     enabled: searching,
+    placeholderData: (prev) => prev,
+  });
+
+  // The index refreshes on a 10-min cadence, so a freshly written file (e.g. a
+  // just-registered deliverable) isn't searchable until the next walk. Give the
+  // operator a manual trigger + refresh all file views on completion.
+  const queryClient = useQueryClient();
+  const reindex = useMutation({
+    mutationFn: () => api.files.reindex(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["files-roots"] });
+      queryClient.invalidateQueries({ queryKey: ["files-search"] });
+      queryClient.invalidateQueries({ queryKey: ["files-list"] });
+    },
   });
 
   function switchRoot(key: string) {
@@ -126,6 +149,17 @@ export default function FilesPage() {
               Search deliverables, workspaces, vault, and more
             </p>
           </div>
+          <button
+            onClick={() => reindex.mutate()}
+            disabled={reindex.isPending}
+            className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-60"
+            style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
+            title="Rescan the file index now — makes freshly written files searchable without waiting for the 10-min auto-walk"
+            aria-label="Reindex files"
+          >
+            <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} style={{ color: C.accent }} />
+            {reindex.isPending ? "Reindexing…" : "Reindex"}
+          </button>
         </div>
 
         {/* Search */}
@@ -160,12 +194,37 @@ export default function FilesPage() {
           </div>
         ) : searching ? (
           /* ── Search results ── */
-          <SearchResults
-            results={searchData?.results ?? []}
-            loading={loadingSearch}
-            roots={roots}
-            onOpen={openSearchResult}
-          />
+          <>
+            <SearchResults
+              results={searchData?.results ?? []}
+              loading={loadingSearch}
+              roots={roots}
+              onOpen={openSearchResult}
+            />
+            {(searchPage > 0 || searchData?.has_more) && (
+              <div className="flex items-center justify-center gap-4 mt-4">
+                <button
+                  onClick={() => setSearchPage((p) => Math.max(0, p - 1))}
+                  disabled={searchPage === 0 || loadingSearch}
+                  className="px-3 py-1.5 text-sm rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
+                >
+                  ← Prev
+                </button>
+                <span className="text-sm tabular-nums" style={{ color: C.textMuted }}>
+                  Page {searchPage + 1}
+                </span>
+                <button
+                  onClick={() => setSearchPage((p) => p + 1)}
+                  disabled={!searchData?.has_more || loadingSearch}
+                  className="px-3 py-1.5 text-sm rounded-lg cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
+                >
+                  Next →
+                </button>
+              </div>
+            )}
+          </>
         ) : (
           <>
             {/* Root selector — tab strip */}
