@@ -106,6 +106,8 @@ def start_free_code(task_id: str, workspace: str, prompt: str) -> str:
             [TMUX_BIN, "new-session", "-d", "-s", session, "-x", "220", "-y", "50"],
             check=True, capture_output=True,
         )
+        # mouse on → Sessions web terminal scrolls output, not input history.
+        _sp.run([TMUX_BIN, "set-option", "-t", session, "mouse", "on"], check=False, capture_output=True)
         # Befehl in Session senden
         _sp.run(
             [TMUX_BIN, "send-keys", "-t", session, cmd, "Enter"],

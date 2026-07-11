@@ -296,13 +296,32 @@ async def validate_compatibility(
     return warnings
 
 
+def _is_host_inplace(agent: Agent) -> bool:
+    """True when this is a host agent that owns a HostHarnessAdapter.
+
+    Such agents (currently only Hermes, ADR-064) can switch runtime in place —
+    the adapter re-renders agent.env + reloads the single host session
+    sequentially, so there is never a parallel instance.
+    """
+    from app.services.host_harness_adapter import get_adapter
+
+    return (
+        getattr(agent, "agent_runtime", None) == "host"
+        and get_adapter(agent.harness) is not None
+    )
+
+
 def _ensure_agent_switchable(agent: Agent) -> None:
     rt = getattr(agent, "agent_runtime", None)
-    if rt != "cli-bridge":
-        raise AgentNotSwitchableError(
-            f"Runtime-Switch nicht unterstuetzt fuer Agent-Typ '{rt}'. "
-            f"Nur 'cli-bridge' Agents koennen einen Runtime via MC waehlen."
-        )
+    if rt == "cli-bridge":
+        return
+    # ADR-064: host agents with an adapter switch in place (sequential reload).
+    if _is_host_inplace(agent):
+        return
+    raise AgentNotSwitchableError(
+        f"Runtime-Switch nicht unterstuetzt fuer Agent-Typ '{rt}'. "
+        f"Nur 'cli-bridge' Agents koennen einen Runtime via MC waehlen."
+    )
 
 
 # ── Lock helpers ──────────────────────────────────────────────────────────
@@ -398,6 +417,13 @@ async def switch_agent_runtime(
     if new_runtime is None:
         raise RuntimeNotFoundError(f"Runtime {new_runtime_id} not found.")
 
+    # ADR-064: a host agent with an adapter switches in place. The reload is
+    # strictly sequential (kill → re-render agent.env → restart the single
+    # session), so it never creates a parallel instance — the single_instance
+    # hard-block below must NOT fire for this path (it still blocks binding a
+    # second / adapter-less agent onto a single_instance runtime).
+    is_host_inplace = _is_host_inplace(agent)
+
     # HERM-04 / D-08 / D-09: single_instance hard-block (Phase 24 plan 03).
     # Some runtimes (e.g. Hermes) own their own session lifecycle outside
     # MC's compose-managed agent fleet — switching INTO or OUT OF such a
@@ -405,7 +431,7 @@ async def switch_agent_runtime(
     # state. Generic mechanism: any runtime row flagged single_instance is
     # opaque to the switch service. ``getattr`` keeps this resilient until
     # plan 24-01's migration lands (column defaults to False either way).
-    if getattr(new_runtime, "single_instance", False):
+    if not is_host_inplace and getattr(new_runtime, "single_instance", False):
         raise AgentNotSwitchableError(
             f"Runtime '{new_runtime.slug}' ist als single_instance markiert "
             f"und kann nicht via Switch gewechselt werden."
@@ -414,7 +440,11 @@ async def switch_agent_runtime(
     old_runtime: Runtime | None = None
     if agent.runtime_id is not None:
         old_runtime = await session.get(Runtime, agent.runtime_id)
-        if old_runtime is not None and getattr(old_runtime, "single_instance", False):
+        if (
+            not is_host_inplace
+            and old_runtime is not None
+            and getattr(old_runtime, "single_instance", False)
+        ):
             raise AgentNotSwitchableError(
                 f"Agent ist an single_instance Runtime '{old_runtime.slug}' "
                 f"gebunden — Switch nicht erlaubt."
@@ -491,6 +521,82 @@ async def switch_agent_runtime(
     await publish_switch_progress(agent.id, "rendering")
 
     try:
+        # ── Host in-place switch (ADR-064) ──────────────────────────────────
+        # A host agent with an adapter never touches the docker/compose path.
+        # The adapter owns the reload: rewrite OPENAI_* in agent.env (token
+        # preserved) then restart the single host session. Sequential, so no
+        # parallel instance is created. Rollback restores the prior binding.
+        if is_host_inplace:
+            from app.services.host_harness_adapter import (
+                get_adapter,
+                sync_host_agent_model,
+            )
+
+            adapter = get_adapter(agent.harness)
+            prev_runtime_id = agent.runtime_id
+            prev_model = agent.model
+            agent.runtime_id = new_runtime.id
+            if new_runtime.model_identifier:
+                agent.model = new_runtime.model_identifier
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await session.refresh(agent)
+            try:
+                await sync_host_agent_model(agent, new_runtime, session=session)
+                await adapter.reload(agent)
+            except Exception as e:
+                # Rollback the DB binding; agent.env keeps the last successful
+                # render (the failed reload never took effect).
+                agent.runtime_id = prev_runtime_id
+                agent.model = prev_model
+                agent.updated_at = utcnow()
+                session.add(agent)
+                await session.commit()
+                await session.refresh(agent)
+                await _emit_failure_event(
+                    session, agent, old_runtime, new_runtime,
+                    reason=f"host reload failed: {e}",
+                    elapsed_ms=int((time.monotonic() - started_at) * 1000),
+                )
+                await publish_switch_progress(
+                    agent.id, "rolled_back", error=f"host reload failed: {e}"
+                )
+                raise
+
+            await _publish_terminal_remount(agent.id, image_changed=False)
+            await publish_switch_progress(agent.id, "done")
+            elapsed_ms = int((time.monotonic() - started_at) * 1000)
+            await emit_event(
+                session,
+                "agent.runtime_switched",
+                f"{agent.name}: "
+                f"{old_runtime.slug if old_runtime else 'n/a'} → {new_runtime.slug} "
+                f"(host in-place)",
+                severity="info",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+                detail={
+                    "old_runtime": _runtime_summary(old_runtime),
+                    "new_runtime": _runtime_summary(new_runtime),
+                    "image_switched": False,
+                    "duration_ms": elapsed_ms,
+                    "warnings": warnings,
+                    "mode": "host_inplace",
+                },
+            )
+            return SwitchResult(
+                old_runtime=_runtime_summary(old_runtime),
+                new_runtime=_runtime_summary(new_runtime) or {},
+                image_switched=False,
+                duration_ms=elapsed_ms,
+                warnings=warnings,
+                dry_run=False,
+                health={"healthy": True, "mode": "host_inplace"},
+                harness=effective_new_harness,
+                old_harness=effective_old_harness,
+            )
+
         # Step 5 — render new compose overlay BEFORE touching the container.
         if image_change:
             try:

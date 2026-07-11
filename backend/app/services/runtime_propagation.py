@@ -49,13 +49,24 @@ _OMP_READY_SIGNALS = ("╭─", "❯")  # omp TUI prompt glyphs (ADR-049)
 async def mark_agents_for_sync(session: AsyncSession, runtime: Runtime) -> int:
     """Flag every cli-bridge agent bound to ``runtime`` for a model re-sync.
 
-    Host agents (launchd-managed) are skipped — the model-changed activity
-    event is their only notification. Returns the number of flagged agents.
+    Host agents (launchd-managed) are flagged too when their harness has an
+    adapter registered (ADR-064) — ``_sync_one`` reloads them in place via the
+    adapter. Host agents without an adapter are skipped — the model-changed
+    activity event is their only notification. Returns the number of flagged
+    agents.
     """
+    from app.services.host_harness_adapter import get_adapter
+
     result = await session.exec(select(Agent).where(Agent.runtime_id == runtime.id))
     flagged = 0
     for agent in result.all():
-        if agent.agent_runtime != "cli-bridge":
+        if agent.agent_runtime == "cli-bridge":
+            pass
+        elif agent.agent_runtime == "host" and get_adapter(
+            agent.harness or derive_harness(runtime)
+        ) is not None:
+            pass
+        else:
             continue
         agent.pending_runtime_sync = True
         session.add(agent)
@@ -96,6 +107,74 @@ async def _sync_one(session: AsyncSession, agent: Agent) -> None:
         agent.pending_runtime_sync = False
         session.add(agent)
         await session.commit()
+        return
+
+    if agent.agent_runtime == "host":
+        # Host agents (launchd) DO go through agent_runtime_switch now
+        # (ADR-064 in-place switch for host+adapter agents), so this branch
+        # must hold the exact same switch-lock (mc:agent:{id}:runtime-switch,
+        # see agent_runtime_switch._lock_key) before mutating agent.env /
+        # reloading — otherwise a watcher auto-forward tick can race a manual
+        # in-place switch and interleave two SSH session restarts of the same
+        # worker. If the lock is already held, behave like the cli-bridge
+        # busy/locked case below: skip this tick without bumping the failure
+        # counter, stay flagged, and retry once the lock frees.
+        from app.services.host_harness_adapter import get_adapter, sync_host_agent_model
+
+        adapter = get_adapter(agent.harness or derive_harness(runtime))
+        if adapter is None:
+            agent.pending_runtime_sync = False
+            session.add(agent)
+            await session.commit()
+            return
+        if not await _acquire_lock(agent.id):
+            logger.info(
+                "host model sync for %s skipped — runtime-switch lock is held",
+                agent.name,
+            )
+            return
+        try:
+            fail_key = RedisKeys.agent_model_sync_fails(str(agent.id))
+            try:
+                await sync_host_agent_model(agent, runtime, session=session)
+                await adapter.reload(agent)
+            except Exception as exc:  # noqa: BLE001 — surface via circuit breaker
+                fails = await _bump_failures(fail_key)
+                logger.warning(
+                    "host model sync for %s failed (%s/%s): %s",
+                    agent.name, fails, MAX_SYNC_ATTEMPTS, exc,
+                )
+                if fails >= MAX_SYNC_ATTEMPTS:
+                    agent.pending_runtime_sync = False
+                    session.add(agent)
+                    await session.commit()
+                    await emit_event(
+                        session,
+                        "agent.model_sync_failed",
+                        f"{agent.name}: model sync failed {fails}× — giving up "
+                        f"(manual restart required)",
+                        severity="error",
+                        agent_id=agent.id,
+                        detail={"runtime": runtime.slug, "reason": str(exc)},
+                    )
+                return
+            await _clear_failures(fail_key)
+            agent.pending_runtime_sync = False
+            if runtime.model_identifier:
+                agent.model = runtime.model_identifier
+            session.add(agent)
+            await session.commit()
+            await emit_event(
+                session,
+                "agent.model_synced",
+                f"{agent.name}: now running "
+                f"{runtime.model_identifier or runtime.slug} ({runtime.slug})",
+                severity="info",
+                agent_id=agent.id,
+                detail={"runtime": runtime.slug, "model": runtime.model_identifier},
+            )
+        finally:
+            await _release_lock(agent.id)
         return
 
     # Guard against racing a manual runtime switch in flight: agent_runtime_switch

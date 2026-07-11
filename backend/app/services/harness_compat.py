@@ -33,10 +33,17 @@ _OPENAI_TYPES = frozenset(
     {"vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud", "omp"}
 )
 
+# HARNESS_PROTOCOLS intentionally covers "hermes" too (ADR-064) even though
+# HARNESSES/HARNESS_LABELS stay cli-bridge-only: "hermes" is a host-only
+# harness (see host_harness_adapter.HermesAdapter) that must still answer
+# is_compatible() checks in the host provisioning/switch dispatch, but must
+# NOT appear in the cli-bridge runtime-switch matrix surfaced by
+# routers/runtimes.py (which iterates HARNESSES).
 HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     "claude": frozenset({"anthropic"}),
     "openclaude": frozenset({"openai"}),
     "omp": frozenset({"openai"}),
+    "hermes": frozenset({"openai"}),
 }
 
 

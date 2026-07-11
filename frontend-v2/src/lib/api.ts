@@ -256,14 +256,14 @@ export const api = {
     },
 
     search: (params: {
-      q: string; type?: string; agent?: string; root?: string; limit?: number;
+      q: string; type?: string; agent?: string; root?: string; limit?: number; offset?: number;
     }) => {
       const qs = new URLSearchParams(
         Object.fromEntries(
           Object.entries(params).filter(([, v]) => v != null).map(([k, v]) => [k, String(v)]),
         ),
       ).toString();
-      return request<{ results: FsSearchResult[] }>(`/api/v1/files/search?${qs}`);
+      return request<{ results: FsSearchResult[]; has_more: boolean }>(`/api/v1/files/search?${qs}`);
     },
 
     meta: (root: string, subpath: string) => {

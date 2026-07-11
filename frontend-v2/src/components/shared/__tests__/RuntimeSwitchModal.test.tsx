@@ -355,6 +355,101 @@ describe("RuntimeSwitchModal", () => {
     );
   });
 
+  describe("host in-place switch (ADR-060)", () => {
+    // Hermes (agent_runtime: "host", harness: "hermes") owns a
+    // HostHarnessAdapter and switches in place — the backend's
+    // `_is_host_inplace()` bypasses the single_instance hard-block for it
+    // (see agent_runtime_switch.py). The frontend must mirror that: enable
+    // the picker/submit and show an in-place hint instead of the D-10 lock
+    // banner, even though the agent's *current* runtime row (the Hermes
+    // runtime itself) is single_instance=true.
+    it("enables the runtime picker for host+hermes agents and shows the in-place hint", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({
+          old_runtime: {
+            id: "rt-hermes",
+            slug: "hermes-host",
+            display_name: "Hermes",
+            runtime_type: "hermes",
+            model_identifier: null,
+            single_instance: true,
+          },
+        }),
+      );
+      const agent = mkAgent({ agent_runtime: "host", harness: "hermes" as Agent["harness"] });
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={agent}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+      expect(screen.getByRole("button", { name: /switch/i })).toBeEnabled();
+      expect(screen.getByText(/in-place/i)).toBeInTheDocument();
+      expect(screen.queryByTestId("single-instance-lock-banner")).not.toBeInTheDocument();
+    });
+
+    it("submit still calls onConfirm for a host+hermes in-place switch", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({
+          old_runtime: {
+            id: "rt-hermes",
+            slug: "hermes-host",
+            display_name: "Hermes",
+            runtime_type: "hermes",
+            model_identifier: null,
+            single_instance: true,
+          },
+        }),
+      );
+      const agent = mkAgent({ agent_runtime: "host", harness: "hermes" as Agent["harness"] });
+      const onConfirm = vi.fn().mockResolvedValue(mkPreview());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={agent}
+          targetRuntimeId="rt-new"
+          onConfirm={onConfirm}
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+      await userEvent.click(screen.getByRole("button", { name: /switch/i }));
+      await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({ force_when_in_progress: false }));
+    });
+
+    it("still hard-blocks a plain cli-bridge single_instance switch (regression)", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
+        mkPreview({
+          old_runtime: {
+            id: "rt-hermes",
+            slug: "hermes-host",
+            display_name: "Hermes",
+            runtime_type: "hermes",
+            model_identifier: null,
+            single_instance: true,
+          },
+        }),
+      );
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()} // cli-bridge, no harness
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      await waitFor(() =>
+        expect(screen.getByTestId("single-instance-lock-banner")).toBeInTheDocument(),
+      );
+      expect(screen.getByRole("button", { name: /switch/i })).toBeDisabled();
+    });
+  });
+
   describe("harness selector (ADR-056)", () => {
     // mkAgent() has no `harness` set → the select also renders the explicit
     // "Standard (aus Provider abgeleitet)" placeholder option (review finding 2),

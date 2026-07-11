@@ -27,7 +27,6 @@ CONFIG_FILE_TYPES = {"tools_md", "rules_md", "identity_md", "soul_md", "memory_m
 # Provisioning constants and functions — delegated to services/provisioning.py
 # Phase 29: the gateway path is removed; cli-bridge + host remain. Plan 29-07
 # further refactors services/provisioning.py (symbol cleanup).
-from app.services.agent_bootstrap import bootstrap_hermes_agent
 from app.services.provisioning import (
     extract_token_from_tools_md as _extract_token_from_tools_md,
     provision_agent_background as _provision_agent_background,
@@ -1639,8 +1638,18 @@ async def provision_agent_on_gateway(
         await session.commit()
 
         try:
-            if runtime.runtime_type == "hermes":
-                result = await bootstrap_hermes_agent(session, agent, runtime)
+            # Adapter-registered host harnesses (ADR-064: hermes, grok, …)
+            # take the adapter path; anything else falls through to the
+            # generic wizard staging path below (ADR-063).
+            from app.services.harness_compat import derive_harness, is_compatible, incompat_reason
+            from app.services.host_harness_adapter import get_adapter
+
+            harness = agent.harness or derive_harness(runtime)
+            adapter = get_adapter(harness)
+            if adapter is not None:
+                if not is_compatible(harness, runtime):
+                    raise HTTPException(status_code=422, detail=incompat_reason(harness, runtime))
+                result = await adapter.bootstrap(session, agent, runtime)
                 return {
                     "status": "provisioned",
                     "agent_id": str(agent.id),

@@ -408,8 +408,14 @@ services:
   # playwright-mcp's internal browser so MC can attach a SECOND CDP session to
   # the same pages for the live screencast view (the internal browser runs
   # over --remote-debugging-pipe and is unreachable from outside).
+  # Chromium binds its debug port to 127.0.0.1:9222 only (M113+ ignores
+  # --remote-debugging-address=0.0.0.0), so an in-container socat re-exposes it
+  # on 0.0.0.0:9223 for other containers (playwright-mcp via CDP_BROWSER_URL).
+  # socat lives INSIDE this image (docker/cdp-browser/) — not a standalone
+  # cdp-socat sidecar — so it shares Chromium's exact lifecycle and can never
+  # bind to a stale netns after a browser crash-loop (the old ECONNREFUSED bug).
   cdp-browser:
-    image: zenika/alpine-chrome:latest
+    build: ./docker/cdp-browser
     profiles: ["browser"]
     restart: unless-stopped
     logging: *default-logging
@@ -427,24 +433,13 @@ services:
       - --remote-allow-origins=*
       - about:blank
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9222/json/version >/dev/null 2>&1 || exit 1"]
+      # Probe :9223 (the socat forward consumers actually use), not :9222 —
+      # a dead forward with a live browser was exactly the failure that slipped
+      # through before. wget has no socat/curl dep and ships in alpine-chrome.
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9223/json/version >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-
-  # Chromium >= M113 forces the debugging listener onto 127.0.0.1 even when
-  # --remote-debugging-address=0.0.0.0 is set. This socat shares the browser's
-  # network namespace and re-exposes the port on 0.0.0.0:9223 — other
-  # containers reach it as cdp-browser:9223.
-  cdp-socat:
-    image: alpine/socat:latest
-    profiles: ["browser"]
-    restart: unless-stopped
-    logging: *default-logging
-    network_mode: "service:cdp-browser"
-    depends_on:
-      - cdp-browser
-    command: ["TCP-LISTEN:9223,fork,reuseaddr", "TCP:127.0.0.1:9222"]
 
   playwright-mcp:
     image: mcr.microsoft.com/playwright/mcp:latest
@@ -453,7 +448,6 @@ services:
     logging: *default-logging
     depends_on:
       - cdp-browser
-      - cdp-socat
     networks:
       - default
       - cdpnet
