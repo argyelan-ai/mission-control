@@ -1,0 +1,71 @@
+# Telegram Reports
+
+How and when to send a report to {{ operator_name }} via `mc telegram`.
+
+## When to send
+
+- The task produced a result relevant to {{ operator_name }} (research output, deploy
+  finished, artifact delivered, recommendation)
+- The task failed or is partial and {{ operator_name }} should know why
+- **BEFORE `mc finish`** — one report per task completion
+
+**MANDATORY when `report_back_required=true`:** the backend hard-gates `mc finish`
+with 422 if you haven't sent `mc telegram` first.
+
+**MANDATORY for file deliverables** (PDF/Excel/Word/image): the report MUST attach
+the file:
+- `mc telegram "<text>" --file <deliverable_id>` (document, sendDocument)
+- `mc telegram "<caption>" --photo <deliverable_id>` (image, sendPhoto)
+
+`deliverable_id` comes from the `mc pdf` response or from `mc deliverable`
+(with `--type file`).
+Text-only `mc telegram` on file tasks is a bug — {{ operator_name }} should see the
+file directly in Telegram, not go hunting in the UI.
+
+## When NOT to send
+
+- Intermediate status / progress pings → `mc comment progress` instead
+- **You're working on a subtask** (`parent_task_id` is set) — no `mc telegram`.
+  The orchestrator consolidates and sends the final report. The backend enforces
+  this with 422 "Subtask cannot send Telegram". Exception: `autonomous_telegram=true`
+  in the brief (long-running watch tasks).
+
+## Format (HTML)
+
+```
+<agent-emoji> <AgentName> · <Short Title> <Status-Emoji>
+
+<One-sentence summary>
+
+─────────────────
+
+<Sub-Emoji> <b>Section</b>
+• Point
+
+⏱️ <Duration> · 📄 Task <short-id>
+```
+
+Allowed HTML tags: `<b>`, `<i>`, `<code>`, `<a href="...">`. No `<div>`/styles —
+Telegram strips them. No `TELEGRAMSTART`/`===`/`EOF` delimiters — heredoc content
+goes 1:1 into the message.
+
+## Usage
+
+```bash
+mc telegram "<complete message as one string>"
+
+mc telegram - <<'EOF'
+🔍 Researcher · …
+…
+EOF
+
+mc telegram "Caption" --photo <deliverable-uuid>
+mc telegram "Report — file attached" --file <deliverable-uuid>
+```
+
+## Fallback discipline
+
+If `mc telegram` unexpectedly fails: `mc telegram --help` first, then `mc help
+<agent>`, then `mc question`. Only after that: raw API call — but check
+`deliverable_id` (screenshots) vs `document_deliverable_id` (PDF/Office) in the
+backend schema first.

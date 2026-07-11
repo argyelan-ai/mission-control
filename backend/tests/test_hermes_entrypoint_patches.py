@@ -1,4 +1,4 @@
-"""entrypoint.sh must run the config patcher AFTER sourcing agent.env (ADR-060)."""
+"""entrypoint.sh must run the config patcher AFTER sourcing agent.env (ADR-064)."""
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]

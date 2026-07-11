@@ -519,9 +519,10 @@ def test_continue_budget_exhausts_to_blocker():
     )
     assert action.action == "blocker"
     assert len(nudges) == 2                            # exactly the continue budget
-    assert all(
-        n == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL] for n in nudges
-    )
+    # Fix 1: the 1st nudge for a Kind stays the normal prompt; a 2nd nudge for
+    # the SAME Kind (no progress) escalates to the minimal copy-paste template.
+    assert nudges[0] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert "Format falsch" in nudges[1]
     kinds = [c[0] for c in lc.calls]
     assert kinds.count("comment") == 3                # 2 nudge notes + 1 classification
     assert "blocker" in kinds and "finish" not in kinds
@@ -582,6 +583,183 @@ def test_continue_without_executor_collapses_to_blocker():
         continues_left=2, continue_once=None, pre_acked=True,
     )
     assert action.action == "blocker"
+
+
+# ---------------------------------------------------------------------------
+# Fix 1 — escalating, simpler second nudge: the 2nd+ nudge for the SAME Kind
+# (i.e. the first nudge did not fix it) switches to a maximally minimal,
+# copy-paste template instead of repeating the identical prose a weak model
+# already misread once.
+# ---------------------------------------------------------------------------
+
+def test_continue_nudge_escalates_on_second_same_kind():
+    nudges: list[str] = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return _silent_abort_outcome()          # same Kind every time -> no progress
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    assert len(nudges) == 2
+    assert nudges[0] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert nudges[1] != nudges[0]
+    assert "Format falsch" in nudges[1]
+    assert "TASK_COMPLETE" in nudges[1]
+    for header in bridge.REFLECTION_HEADERS:
+        assert header in nudges[1]
+
+
+def test_continue_nudge_first_nudge_unchanged():
+    # A single nudge (budget of 1) never escalates — it's Kind's FIRST nudge.
+    nudges: list[str] = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return _silent_abort_outcome()
+
+    lc = _Recording()
+    bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=1, continue_once=continue_once, pre_acked=True,
+    )
+    assert len(nudges) == 1
+    assert nudges[0] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+
+
+def test_continue_nudge_different_kind_sequence_does_not_escalate_wrongly():
+    # A 2nd OVERALL nudge for a DIFFERENT Kind is still that Kind's first nudge
+    # -> escalation is tracked per-Kind, not as a global nudge counter.
+    nudges: list[str] = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        if len(nudges) == 1:
+            return _trailing_tool_err_outcome()  # switches Kind
+        return _finish_outcome()
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "finish"
+    assert len(nudges) == 2
+    assert nudges[0] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert nudges[1] == bridge.CONTINUE_NUDGE_PROMPTS[Kind.TRAILING_TOOL_ERROR]
+
+
+def test_retry_resets_nudge_escalation_history():
+    # A retry relaunches a BRAND-NEW session with no memory of prior nudges —
+    # its first same-Kind nudge must be the explanatory prompt again (fresh
+    # session = fresh nudge history), and only the SECOND nudge within that
+    # new session escalates to the minimal template.
+    runs = iter([_silent_abort_outcome(), _silent_abort_outcome()])
+
+    def run_once():
+        return next(runs)
+
+    nudges: list[str] = []
+    # continue #1 -> crash (consumes the retry, fresh session);
+    # continue #2 -> same Kind again (2nd nudge in the NEW session);
+    # continue #3 -> finish.
+    followups = iter([_crash_outcome(), _silent_abort_outcome(), _finish_outcome()])
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return next(followups)
+
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, run_once, task_id="T1",
+        board_requires_review=True, retries_left=1,
+        continues_left=3, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "finish"
+    assert len(nudges) == 3
+    explanatory = bridge.CONTINUE_NUDGE_PROMPTS[Kind.SILENT_ABORT_NO_SENTINEL]
+    assert nudges[0] == explanatory                    # 1st nudge, session 1
+    assert nudges[1] == explanatory                    # 1st nudge, session 2 (post-retry)
+    assert "Format falsch" in nudges[2]                # 2nd nudge, session 2 -> escalates
+
+
+# ---------------------------------------------------------------------------
+# Fix 2 — partial-reflection salvage on budget exhaustion: a MALFORMED_REFLECTION
+# collapse to blocker posts the agent's near-complete reflection as its own
+# progress comment BEFORE the blocker, instead of discarding it.
+# ---------------------------------------------------------------------------
+
+def _malformed_partial_outcome() -> "bridge.RunOutcome":
+    # 3 of 4 canonical headers ("Lesson fuer Agent-Memory" missing) + >=80 chars.
+    text = (
+        "## Was wurde gemacht\nDatei erstellt und ausfuehrlich getestet, lief sauber.\n"
+        "## Was hat funktioniert\nDer deterministische Fix, zweiter Lauf war komplett gruen.\n"
+        "## Was war unklar\nNichts Wesentliches, die Aufgabe war eindeutig genug beschrieben.\n"
+        "TASK_COMPLETE"
+    )
+    return _stop_outcome(text)
+
+
+def _malformed_garbage_outcome() -> "bridge.RunOutcome":
+    # Sentinel present, but 0 recognised headers.
+    return _stop_outcome("Fertig, denke ich. Kein Format befolgt.\nTASK_COMPLETE")
+
+
+class _SalvageFailsRecording(_Recording):
+    def comment(self, task_id, text):
+        if text.startswith("Partielle Reflexion"):
+            raise RuntimeError("comment backend down")
+        super().comment(task_id, text)
+
+
+def test_budget_exhaustion_salvages_partial_reflection():
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _malformed_partial_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=0, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    comment_calls = [(i, c[2]) for i, c in enumerate(lc.calls) if c[0] == "comment"]
+    salvage = [
+        (i, t) for i, t in comment_calls
+        if t.startswith("Partielle Reflexion (auto-gerettet vor Blocker):")
+    ]
+    assert len(salvage) == 1
+    assert "## Was wurde gemacht" in salvage[0][1]
+    blocker_idx = next(i for i, c in enumerate(lc.calls) if c[0] == "blocker")
+    assert salvage[0][0] < blocker_idx           # salvage lands BEFORE the blocker
+
+
+def test_budget_exhaustion_no_salvage_for_garbage_output():
+    lc = _Recording()
+    action = bridge.drive_live_run(
+        lc, _malformed_garbage_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=0, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    comments = [c[2] for c in lc.calls if c[0] == "comment"]
+    assert not any(t.startswith("Partielle Reflexion") for t in comments)
+
+
+def test_salvage_comment_failure_still_blocks():
+    lc = _SalvageFailsRecording()
+    action = bridge.drive_live_run(
+        lc, _malformed_partial_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=0, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    kinds = [c[0] for c in lc.calls]
+    assert "blocker" in kinds
 
 
 # -- run_native_continue mechanics (no relaunch, keep context) ---------------

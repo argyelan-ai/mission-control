@@ -4,6 +4,7 @@ ToolsMdBuilder — generates TOOLS.md for agents.
 Extracted from agents.py for better testability and shorter files.
 Pure function (no DB dependency, pure string generation).
 """
+from app.constants import REFLECTION_MIN_CHARS, REFLECTION_REQUIRED_FIELDS
 
 
 def generate_tools_md(
@@ -31,6 +32,14 @@ def generate_tools_md(
         if not scopes:
             return True
         return scope in scopes
+
+    # `mc finish` reflection skeleton — single-sourced from
+    # app.constants.REFLECTION_REQUIRED_FIELDS so every example in this file
+    # renders the exact 4 German headers the backend validator requires.
+    # Used both in the "Close a task" section and the Flow 1 worked example.
+    _reflection_skeleton = "\\n".join(
+        f"## {field}\\n..." for field in REFLECTION_REQUIRED_FIELDS
+    )
 
     # ── Board sections ───────────────────────────────────────────────────
     board_section = ""
@@ -228,11 +237,13 @@ Content-Type: application/json
 }}
 
 Fields changeable via raw PATCH: priority, title, description, project_id.
-Status changes: use `mc ack` / `mc review` / `mc done` / `mc blocked` / `mc failed`.
+Status changes: use `mc ack` (start) / `mc finish [--review]` (close, see below) / `mc blocked` / `mc failed`.
+`mc done` and `mc review` still exist as raw status-only commands, but `mc finish` is the
+canonical close — it posts the mandatory reflection and sets the status in one atomic call.
 
 If you're blocked, use `mc blocked` (not raw PATCH):
-`mc blocked --type missing_info "What exactly is missing"`
-`mc blocked --type technical_problem "Description"`
+`mc blocked --blocker-type missing_info --question "What exactly is missing"`
+`mc blocked --blocker-type technical_problem --description "Description"`
 
 blocker_type: missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
 
@@ -247,6 +258,31 @@ Content-Type: application/json
 }}
 
 comment_type: message | handoff | blocker | progress | resolution [terminal — auto-promotes task to review/done] | feedback""")
+
+            # `mc finish` is the atomic close verb — always show it with the
+            # exact 4 German headers agents must produce, single-sourced from
+            # app.constants.REFLECTION_REQUIRED_FIELDS (not hardcoded here) so
+            # this section can never drift from the backend's validator.
+            # (_reflection_skeleton computed once, function-scope, above.)
+            parts.append(f"""## Close a task (mc finish)
+`mc finish` is the canonical close — it posts the mandatory self-reflection AND sets the
+status in one atomic call. Plain `mc done`/`mc review` without a prior reflection comment
+is rejected by the backend with 400.
+
+```bash
+mc finish "{_reflection_skeleton}"
+# → status: done (subtasks / research-only tasks)
+
+mc finish --review "{_reflection_skeleton}"
+# → status: review (code/API/security tasks — a reviewer looks at it before done)
+```
+
+The reflection needs all {len(REFLECTION_REQUIRED_FIELDS)} headers verbatim (exact German
+text, `##` prefix) and at least {REFLECTION_MIN_CHARS} characters total — a one-line
+"done." is rejected. `mc finish --force` closes any still-open checklist items first
+(auto-marks them done) instead of blocking the pre-flight check; use `mc checklist skip
+<id> --reason "..."` beforehand instead if an item is genuinely out of your role rather
+than actually finished.""")
 
             # Register deliverable
             parts.append(f"""## Register deliverable (result artifact)
@@ -270,45 +306,32 @@ deliverable_type: `screenshot` | `file` | `url` | `artifact` | `document` | `dat
 Required fields: `deliverable_type`, `title`.
 **IMPORTANT: ALWAYS include `content`** for document/artifact/file — the `path` points into the container filesystem and isn't readable by the frontend. Without `content`, the deliverable is empty in the UI.""")
 
-            parts.append(f"""## Manage checklist (task progress)
-
-### Create checklist (as the VERY FIRST step!)
-```
-curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"items": [{{"title": "Analysis", "sort_order": 0}}, {{"title": "Implement", "sort_order": 1}}, {{"title": "Tests", "sort_order": 2}}]}}'
-```
-
-### Mark item as done
-```
-curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist/{{{{item_id}}}}" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN" \\
-  -H "Content-Type: application/json" \\
-  -d '{{"status": "done"}}'
-```
-
-### Read checklist (during recovery)
-```
-curl -s "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks/{{{{task_id}}}}/checklist" \\
-  -H "Authorization: Bearer $MC_AGENT_TOKEN"
-```
-
-status values: `pending` | `in_progress` | `done` | `blocked` | `skipped`""")
-
             # Crash-recovery / progress-tracking is now TaskChecklistItem
             # (Workstream A4, ADR-020). POST /checkpoint returns HTTP 410
             # and the TaskCheckpoint table is a read-only archive being
             # dropped in a follow-up migration. Agents use `mc checklist`
             # for progress and the reflection comment for lessons.
-            parts.append(f"""## Track progress (replaces the old /checkpoint)
-Checklist + progress comments replace the old /checkpoint endpoint:
+            #
+            # `mc checklist` is the ONE way to manage checklists — no raw
+            # curl variant is documented anymore (removed 2026-07, it
+            # taught agents a second, parallel path that drifted from the
+            # CLI's validation/recovery behavior). One capability is lost
+            # versus the old curl example: bulk-create in a single call.
+            # `mc checklist add` only accepts one title per call — call it
+            # once per checklist item.
+            parts.append(f"""## Manage checklist (task progress, replaces the old /checkpoint)
+Create the checklist as your VERY FIRST step after ACK — it gives the operator and
+the recovery path a concrete list of steps. Checklist + progress comments replace
+the old /checkpoint endpoint entirely.
 
 ```bash
-# Add item
+# Add item (one call per item — no bulk-create, call once per step)
 mc checklist add "Step 1 — write models"
+mc checklist add "Step 2 — wire up endpoints"
 # Mark item as done
 mc checklist done <item_id>
+# Item you can't do in your role (e.g. a live deploy only Deployer can run)
+mc checklist skip <item_id> --reason "Needs Deployer — no npm/node in this container"
 # Show list
 mc checklist list
 # Progress comment (Update/Evidence/Next)
@@ -316,6 +339,8 @@ mc comment progress "Update — models created
 Evidence — backend/app/models/foo.py:1-40, tests green
 Next — wire up endpoints"
 ```
+
+status values: `pending` | `in_progress` | `done` | `blocked` | `skipped`
 
 On crash/timeout/re-dispatch, the recovery context renders your checklist
 with a `← RESUME HERE` marker on the first open item. No manual
@@ -1359,16 +1384,20 @@ Rules:
         "# 3. Do the work (see role-specific flows below)\n"
         "\n"
         "# 4. Document progress (optional, for multi-step tasks)\n"
-        "mc comment \"Update — phase 1 done. Starting phase 2.\"\n"
+        "mc comment progress \"Update — phase 1 done. Starting phase 2.\"\n"
         "\n"
-        "# 5. Final reflection + done\n"
-        "mc comment --type reflection \"What was done: ... / What worked: ... / What's unclear: ...\"\n"
-        "mc done\n"
+        "# 5. Close atomically: reflection + status in one call — `mc finish` is the ONLY\n"
+        "#    correct close verb. `mc comment reflection ...` followed by `mc done` is the\n"
+        "#    OLD two-step flow and no longer works: `mc done`/`mc review` alone are rejected\n"
+        "#    with 400 unless a reflection was already posted in this same call.\n"
+        f"mc finish \"{_reflection_skeleton}\"\n"
+        "# → status: done. Use `mc finish --review \"...\"` instead for code/API/security tasks\n"
+        "#   that need a reviewer to look before done.\n"
         "```\n"
         "\n"
-        "**If you're unsure** → `mc blocked --type <type> \"What do you need?\"`:\n"
+        "**If you're unsure** → `mc blocked --blocker-type <type> --question \"What do you need?\"`:\n"
         "```bash\n"
-        "mc blocked --type missing_info \"Which tone of voice? formal or casual?\"\n"
+        "mc blocked --blocker-type missing_info --question \"Which tone of voice? formal or casual?\"\n"
         "# Task status → blocked, the operator gets a Telegram question, you wait for an answer\n"
         "```\n"
         "Valid blocker_type: `missing_info` | `technical_problem` | `decision_needed` | "
@@ -1421,7 +1450,8 @@ Rules:
             "# → /shared-deliverables/$TASK_ID/weather-report-week-17.pdf (for the Telegram attachment)\n"
             "\n"
             "# Save intermediate progress (so a container restart → task recovery has context)\n"
-            "mc checkpoint \"Research done, PDF generated, starting Telegram send\"\n"
+            "# `mc checkpoint` no longer exists — the checklist IS the recovery state now.\n"
+            "mc comment progress \"Update — research done, PDF generated, starting Telegram send\"\n"
             "\n"
             "# Maintain the checklist for multi-step tasks\n"
             "mc checklist add \"Research complete\"\n"

@@ -53,7 +53,7 @@ def _model_patches_from_env() -> dict:
 
     Returns patches only when BOTH base_url and model are present, so a
     hand-written model block (e.g. deliberately cloud) is never clobbered.
-    ADR-060.
+    ADR-064.
     """
     base_url = os.environ.get("OPENAI_BASE_URL")
     model = os.environ.get("OPENAI_MODEL")

@@ -1,0 +1,55 @@
+#!/bin/bash
+# Rendered launcher for host agent {{ slug }} (harness: {{ harness }}).
+# Reviewed and loaded by the operator via launchctl — see the wizard's
+# review step for the exact command. Single Source of Truth: this .j2.
+set -euo pipefail
+
+WORKSPACE="{{ workspace_path }}"
+cd "$WORKSPACE"
+
+# Load the agent env (OPENAI_*/MC_* + token), exported for the harness process.
+set -a
+# shellcheck disable=SC1091
+source "$WORKSPACE/agent.env"
+set +a
+
+SESSION="{{ slug }}"
+BINARY="{{ binary }}"
+{% if mcp_config_path %}
+# Isolated MCP config (harness: claude) — without --strict-mcp-config, claude
+# falls back to the operator's own $HOME/.claude project-trust state (needed
+# for the OAuth keychain, see agent.plist.j2) and blocks on an interactive
+# "New MCP server found in this project" prompt for every server it inherits
+# from there, since this workspace is a project directory claude has never
+# seen. --dangerously-skip-permissions matches the same flag every other
+# working claude agent in this fleet already runs with (docker cli-bridge +
+# Boss host, see docker/mc-claude-agent/start-claude.sh +
+# docker/boss-host/start-claude.sh) — omitting it here would leave this the
+# only claude agent still blocking on tool-call approval too.
+CLAUDE_ARGS="--strict-mcp-config --mcp-config {{ mcp_config_path }} --dangerously-skip-permissions"
+{% else %}
+CLAUDE_ARGS=""
+{% endif %}
+
+POLL_SCRIPT="{{ poll_script_path }}"
+
+# Start (or re-attach to) a detached tmux session running the harness binary
+# in Window 0. Without Window 1 (poll.sh) below, the harness boots to an
+# idle interactive prompt and nothing ever nudges it into work or sends a
+# heartbeat (2026-07-10 E2E rerun, Befund 3) — the poller is what pastes the
+# next dispatched task's prompt into Window 0 and reports status back to MC.
+# Pattern: docker/boss-host/entrypoint.sh (Window 0 = harness, Window 1 =
+# poll.sh, both in their own auto-restart loop).
+if ! tmux has-session -t "$SESSION" 2>/dev/null; then
+  tmux new-session -d -s "$SESSION" -n "{{ binary }}" "$BINARY $CLAUDE_ARGS"
+fi
+
+if ! tmux list-windows -t "$SESSION" -F '#{window_index}' 2>/dev/null | grep -qx 1; then
+  tmux new-window -t "$SESSION:1" -n poll \
+    "while true; do bash '$POLL_SCRIPT'; echo '[run.sh] poll.sh exited, restart in 5s...'; sleep 5; done"
+fi
+
+# Keep the launchd job alive; KeepAlive restarts this script if tmux dies.
+while tmux has-session -t "$SESSION" 2>/dev/null; do
+  sleep 30
+done

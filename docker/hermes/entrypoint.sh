@@ -22,7 +22,7 @@ else
 fi
 
 # Render model provider into ~/.hermes/config.yaml from the runtime binding
-# (OPENAI_BASE_URL / OPENAI_MODEL were just sourced above). Idempotent; ADR-060.
+# (OPENAI_BASE_URL / OPENAI_MODEL were just sourced above). Idempotent; ADR-064.
 PATCH_SCRIPT="${HOME}/Workspace/Projects/mission-control/scripts/hermes-config-patch.py"
 if [ -f "$PATCH_SCRIPT" ]; then
   python3 "$PATCH_SCRIPT" || echo "[entrypoint] WARN: hermes-config-patch rc=$?" >&2

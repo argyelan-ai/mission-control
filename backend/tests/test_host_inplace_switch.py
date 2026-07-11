@@ -1,4 +1,4 @@
-"""Host-safe in-place runtime switch (ADR-060, Task 6).
+"""Host-safe in-place runtime switch (ADR-064, Task 6).
 
 A host agent that owns a HostHarnessAdapter (currently only Hermes) can switch
 its LLM runtime *in place*: kill → re-render agent.env (OPENAI_* only, token

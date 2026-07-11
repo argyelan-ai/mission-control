@@ -1160,16 +1160,20 @@ async def agent_create_task(
     # (owner_agent_id = Board Lead → bestehender Fallback greift korrekt)
 
     # Pre-Dispatch Gating: Agent-Bypass schliessen
-    # Ausfuehrbare Work Items (Child + assigned an anderen Agent) → erzwungen "planning"
-    # Root tasks and self-assigned → no gating (null)
+    # Ausfuehrbare Work Items → erzwungen "planning", sonst kein Gating (null).
+    # Executable = Fremd-Zuweisung UND (Subtask ODER Ersteller ist nicht Board Lead).
+    # Die zweite Bedingung (ADR-062) schliesst den dispatch_to_agent-Bypass: ein
+    # Nicht-Board-Lead (Jarvis) kann sonst einen parentlosen Root-Task an einen
+    # Worker haengen und ohne Risk-/Autonomy-Bewertung dispatchen.
     from app.config import settings as _settings
     if _settings.enable_dispatch_gating:
-        is_executable_work_item = (
-            task.parent_task_id is not None
-            and task.assigned_agent_id is not None
-            and task.assigned_agent_id != agent.id
-        )
-        if is_executable_work_item:
+        from app.services.dispatch_gating import is_executable_work_item
+        if is_executable_work_item(
+            has_parent=task.parent_task_id is not None,
+            assigned_agent_id=task.assigned_agent_id,
+            creator_agent_id=agent.id,
+            creator_is_board_lead=bool(agent.is_board_lead),
+        ):
             task.dispatch_phase = "planning"
         else:
             task.dispatch_phase = None
@@ -1517,6 +1521,37 @@ async def agent_update_task(
                         agent.name, recent_cmt.content[:80],
                     )
                     updates["status"] = "done"
+
+    # ── M3 (Fix 2, W2-A): self-approve guard on the generic PATCH path ──
+    # execute_review_decision() (POST .../tasks/{id}/review) blocks/escalates
+    # an agent approving its own implementation work (self-review). This
+    # generic PATCH endpoint's "review_decision=approved" fallback below used
+    # to bypass that guard entirely — any agent that owns the task (which,
+    # per the ownership check above, includes the assignee that did the
+    # work) could PATCH status=done and self-approve. Route it through the
+    # SAME worker-id check execute_review_decision uses so the guard can't
+    # be dodged by using PATCH instead of the dedicated review endpoint.
+    # Board leads are exempt (parity with execute_review_decision's
+    # escalation target — a board lead approving is the escalation itself).
+    if (
+        "status" in updates
+        and old_status == "review"
+        and updates["status"] == "done"
+        and not agent.is_board_lead
+    ):
+        from app.services.task_lifecycle import get_review_worker_agent_ids
+        _worker_agent_ids = await get_review_worker_agent_ids(session, task)
+        if agent.id in _worker_agent_ids:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Self-review not allowed: Agent '{agent.name}' war als Bearbeiter "
+                    f"beteiligt und darf den eigenen Task nicht per PATCH auf 'done' "
+                    f"self-approven. Nutze den Review-Flow — `mc approve` durch einen "
+                    f"anderen Reviewer-Agent, oder POST "
+                    f"/api/v1/agent/boards/{board_id}/tasks/{task.id}/review."
+                ),
+            )
 
     # ── Fallback: automatically set review_decision on the old PATCH path ──
     # ONLY done → approved. NOT in_progress → changes_requested!
@@ -2037,20 +2072,27 @@ async def agent_update_task(
     if "status" in updates:
         new_status = updates["status"]
 
-        # ── Evidence guard: at least 1 progress/resolution comment before review ──
+        # ── Evidence guard: at least 1 substantive comment before review ──
+        # A reflection counts as evidence: `mc finish --review` posts the
+        # structured 4-header reflection FIRST and then PATCHes to review —
+        # for small/fast tasks the agent may legitimately never post a
+        # separate progress comment, and the reflection (backend-validated,
+        # headers + min body chars) is the strongest evidence there is.
+        # Rejecting it forced the omp bridge into its blocked fallback
+        # (live canary incident 2026-07-10).
         if new_status == "review" and old_status == "in_progress":
             evidence_result = await session.exec(
                 select(TaskComment).where(
                     TaskComment.task_id == task.id,
                     TaskComment.author_agent_id == agent.id,
-                    TaskComment.comment_type.in_(["progress", "resolution", "checkpoint"]),  # type: ignore[union-attr]
+                    TaskComment.comment_type.in_(["progress", "resolution", "checkpoint", "reflection"]),  # type: ignore[union-attr]
                 )
             )
             evidence_comments = evidence_result.all()
             if not evidence_comments:
                 raise HTTPException(
                     status_code=409,
-                    detail="Evidence erforderlich vor Review: Mindestens 1 progress/resolution/checkpoint Kommentar noetig. "
+                    detail="Evidence erforderlich vor Review: Mindestens 1 progress/resolution/reflection Kommentar noetig. "
                            "Bitte dokumentiere was getan wurde bevor du auf Review setzt.",
                 )
 
@@ -2245,10 +2287,11 @@ async def agent_update_task(
                     if lead and lead.id != agent.id:
                         msg = (
                             f"BLOCKER: {agent.name} bei \"{task.title}\"\n\n"
+                            f"**Typ:** {blocker_type}\n"
                             f"{blocker_text}\n\n"
-                            f"Task-ID: {task.id}\n\n"
+                            f"**Task-ID:** {task.id}\n\n"
                             f"Ein Approval wurde fuer den Operator erstellt "
-                            f"(Typ: {blocker_type} — Operator-Entscheid).\n"
+                            f"(Operator-Entscheid).\n"
                             f"Du kannst hilfreiche Infos als Kommentar posten."
                         )
                         session.add(TaskComment(
@@ -2260,9 +2303,27 @@ async def agent_update_task(
                         await session.commit()
 
         # Agent entblockt Task → assigned Agent benachrichtigen (TaskComment)
+        # oder — B2 (W2-B, audit G3) — liveness-aware redispatch, wenn der
+        # zugewiesene Agent inzwischen offline ist (sonst liest ihn niemand).
         if new_status == "in_progress" and old_status == "blocked":
             if task.assigned_agent_id and task.assigned_agent_id != agent.id:
-                target = await session.get(Agent, task.assigned_agent_id)
+                from app.services.task_lifecycle import (
+                    redispatch_unblocked_task,
+                    requeue_unblocked_task,
+                    resolve_unblock_action,
+                )
+                _unblock_action = await resolve_unblock_action(session, task)
+                if _unblock_action == "redispatch":
+                    await redispatch_unblocked_task(session, task, board_id)
+                    target = None
+                elif _unblock_action == "requeue":
+                    # Review fix B-2: agent is busy on another task — back to
+                    # inbox so the claim flow re-delivers after current work
+                    # (two in_progress tasks would corrupt poll resolution).
+                    await requeue_unblocked_task(session, task, board_id)
+                    target = None
+                else:
+                    target = await session.get(Agent, task.assigned_agent_id)
                 if target:
                     hint_cmt = (await session.exec(
                         select(TaskComment)
@@ -2279,13 +2340,25 @@ async def agent_update_task(
                         f"(GET /api/v1/agent/boards/{board_id}/tasks/{task.id}/comments) "
                         f"und arbeite sofort an diesem Task weiter."
                     )
-                    session.add(TaskComment(
-                        task_id=task.id,
-                        author_type="system",
-                        content=msg,
-                        comment_type="unblock_notify",
-                    ))
-                    await session.commit()
+                    # G6: shared cooldown across all "continue"-comment
+                    # mechanisms (Tier-3 recap, watchdog nudge, bootstrap
+                    # recap) — first one to fire wins, others skip silently.
+                    from app.redis_client import get_redis, try_claim_recovery_comment_cooldown
+                    _redis = await get_redis()
+                    if await try_claim_recovery_comment_cooldown(_redis, str(task.id)):
+                        session.add(TaskComment(
+                            task_id=task.id,
+                            author_type="system",
+                            content=msg,
+                            comment_type="unblock_notify",
+                        ))
+                        await session.commit()
+                    else:
+                        logger.debug(
+                            "unblock_notify skipped for task %s — "
+                            "recovery-comment cooldown already claimed",
+                            task.id,
+                        )
 
     return task
 

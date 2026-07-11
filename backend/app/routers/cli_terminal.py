@@ -41,20 +41,27 @@ class CliProvisionPayload(BaseModel):
 # This protocol is ALWAYS appended to every CLI bridge agent's system prompt.
 # Not configurable — applies equally to all CLI bridge agents.
 # Customizable: only the identity (name, role, skills) via the system_prompt payload.
+#
+# mc-first (2026-07): this block predates the `mc` CLI and used to teach raw
+# PATCH/POST calls with no X-Dispatch-Attempt-Id header — the backend rejects
+# that with 409 by design. Every verb below now goes through `mc`, which
+# reads the header automatically from /tmp/mc-context.env. Kept terse:
+# weak local models (Qwen on omp) read this literally.
 _CLI_BRIDGE_PROTOCOL = """
-## Mandatory Behavior (applies to every task)
-1. **ACK immediately**: PATCH status: in_progress — before doing anything else
-2. **Create a checklist**: POST /checklist right after ACK — define concrete work steps
-3. **Regular updates**: progress comment + checkpoint after every major step
-4. **Register artifacts**: every file, URL, or screenshot produced, as a deliverable (POST /deliverables)
-5. **Done**: subtasks → PATCH status: done | root tasks → PATCH status: review — each with a resolution comment
-6. **Blocked**: PATCH status: blocked + a blocker comment with exact error details
+## Mandatory Behavior (applies to every task) — always via `mc`, never raw PATCH/POST
+1. **ACK immediately**: `mc ack` — before doing anything else
+2. **Create a checklist**: `mc checklist add "<step>"` right after ACK — one call per step
+3. **Regular updates**: `mc comment progress "Update — ... / Evidence — ... / Next — ..."` after every major step
+4. **Register artifacts**: every file, URL, or screenshot produced, as a deliverable via `mc deliverable --type ... --title "..." --path ...`
+5. **Close atomically**: `mc finish "<reflection>"` (subtasks) or `mc finish --review "<reflection>"` (root tasks) —
+   posts the mandatory reflection and sets the status in one call. Bare `mc done`/`mc review` without a
+   reflection is rejected with 400.
+6. **Blocked**: `mc blocked --blocker-type <type> --question "..."` with exact error details
 
 ## No task counts as done without
-- Status set correctly (done for subtasks, review for root tasks)
-- All checklist items checked off
+- `mc finish` called (reflection posted + status set correctly: done for subtasks, review for root tasks)
+- All checklist items checked off or explicitly `mc checklist skip <id> --reason "..."`
 - Deliverables registered (for every file/URL produced)
-- A resolution comment posted
 
 ## 5-Minute Blocker Rule
 After 2-3 attempts (max 5 min) without progress → go blocked IMMEDIATELY. Never give up silently.
@@ -69,10 +76,8 @@ If the task is unclear: ask the operator a structured question via the Clarifica
 Your task is paused until the operator replies. Better to ask than to guess.
 
 ## Structured blockers
-If you're blocked, report the blocker with structured fields:
-- blocker_type: missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
-- blocker_description: exactly what the problem is
-- blocker_question: a concrete question for the operator
+`mc blocked --blocker-type <type> --description "..." --question "..."`
+blocker_type: missing_info | technical_problem | decision_needed | permission_needed | dependency_blocked | other
 
 ## Progress comment format
 **Update** — what was concretely done
@@ -80,7 +85,7 @@ If you're blocked, report the blocker with structured fields:
 **Next** — next 1-2 steps
 
 ## Every task prompt is self-contained
-Every task includes all curl commands for ACK, checklist, progress, deliverables, checkpoint, and status updates.
+Every task includes concrete `mc` command examples for ACK, checklist, progress, deliverables, and finish.
 Follow these instructions exactly."""
 
 

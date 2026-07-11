@@ -1,4 +1,4 @@
-"""Host-harness adapters (ADR-060).
+"""Host-harness adapters (ADR-064).
 
 One adapter per host CLI. Encapsulates the two things that differ between
 host harnesses: rendering the runtime binding into the CLI's native LLM
@@ -68,7 +68,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     """Rewrite only OPENAI_* in the host agent's agent.env from the runtime binding.
 
     Preserves MC_AGENT_TOKEN and any other existing keys (a model-drift sync must
-    never regenerate the auth token). ADR-060.
+    never regenerate the auth token). ADR-064.
     """
     from app.routers.internal import build_runtime_env
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host

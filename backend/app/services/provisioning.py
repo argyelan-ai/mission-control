@@ -113,6 +113,31 @@ async def provision_agent_background(agent_id: uuid.UUID) -> None:
                 sync_docker_agent_files,
             )
 
+            if not agent.workspace_path:
+                # Migration 0087 was a ONE-TIME backfill (~/.mc/workspaces/<slug>
+                # for every cli-bridge agent that existed at that time). It never
+                # became an ongoing invariant — the only code path that ever set
+                # `workspace_path` afterwards was the dead legacy Free-Code-Bridge
+                # setter (`provision_cli_agent` in routers/cli_terminal.py,
+                # hardcoded to ~/FreeCode/projects). Any cli-bridge agent created
+                # or reset after 0087 got workspace_path=NULL forever and hard-
+                # failed on first dispatch (`_resolve_workspace()` in
+                # cli_bridge_runner.py) — this happened to the "Installer" agent.
+                # Assign the same convention deterministically here so it's an
+                # invariant of provisioning, not a one-off migration side effect.
+                # Slug must match migration 0087's SQL exactly — see
+                # `slugify_project()` (git_service.py), which the migration's
+                # regexp_replace mirrors.
+                from app.config import settings
+                from app.services.git_service import slugify_project
+
+                agent.workspace_path = (
+                    f"{settings.home_host}/.mc/workspaces/{slugify_project(agent.name)}"
+                )
+                session.add(agent)
+                await session.commit()
+                await session.refresh(agent)
+
             await write_compose_agents(session)
             sync_results = await sync_docker_agent_files(session, agent)
 

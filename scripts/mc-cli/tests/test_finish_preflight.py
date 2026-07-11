@@ -376,3 +376,140 @@ def test_too_short_rejected(monkeypatch):
     with pytest.raises(UsageError) as exc:
         commands._validate_reflection(short)
     assert "zu kurz" in str(exc.value).lower()
+
+
+# ── Forgiving validation (B1): trivial local-model variance must pass ──────
+
+
+def test_validate_accepts_hash_level_variants():
+    """### / # header levels are accepted (not only ##)."""
+    text = (
+        "### Was wurde gemacht\n" + "a" * 25 + "\n"
+        "# Was hat funktioniert\n" + "b" * 25 + "\n"
+        "### Was war unklar\n" + "c" * 25 + "\n"
+        "### Lesson fuer Agent-Memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_accepts_english_headers():
+    text = (
+        "## What was done\n" + "a" * 25 + "\n"
+        "## What worked\n" + "b" * 25 + "\n"
+        "## What was unclear\n" + "c" * 25 + "\n"
+        "## Lesson for agent memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_accepts_fuer_umlaut_and_case():
+    text = (
+        "## was wurde gemacht:\n" + "a" * 25 + "\n"
+        "## Was hat funktioniert\n" + "b" * 25 + "\n"
+        "## Was war unklar\n" + "c" * 25 + "\n"
+        "## Lesson für Agent-Memory\n" + "d" * 25
+    )
+    commands._validate_reflection(text)  # must not raise
+
+
+def test_validate_canonical_still_passes():
+    commands._validate_reflection(GOOD_REFLECTION)  # byte-identical strict path
+
+
+def test_finish_normalizes_english_headers_before_post():
+    """`mc finish` with English headers -> POSTed reflection carries canonical
+    German headers so the memory pipeline sees them."""
+    english = (
+        "## What was done\n" + "a" * 25 + "\n"
+        "## What worked\n" + "b" * 25 + "\n"
+        "## What was unclear\n" + "c" * 25 + "\n"
+        "## Lesson for agent memory\n" + "d" * 25
+    )
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {}),
+    ])
+    rc = commands._cmd_finish(_Args(message=english), client, cfg)
+    assert rc == 0
+    post = next(c for c in client.calls if c["method"] == "POST")
+    content = post["body"]["content"]
+    assert "## Was wurde gemacht" in content
+    assert "## Lesson fuer Agent-Memory" in content
+    assert "What was done" not in content
+
+
+# ── `mc checklist skip <id>` — out-of-role items (2026-07-08 handoff fix) ───
+#
+# An agent can hit a checklist item it physically cannot do (a live Vercel
+# deploy needing npm/node = a Deployer's job, not an omp agent's). Before this
+# fix, the only options were `mc checklist done` (a lie) or leaving `mc
+# finish` blocked forever. `skip` reuses the existing `skipped` status, which
+# `_preflight_finish` already treats as non-blocking (see
+# test_skipped_items_dont_block above).
+
+
+class _ChecklistSkipArgs:
+    def __init__(self, item_id="id-0", reason=None):
+        self.action = "skip"
+        self.item_id = item_id
+        self.reason = reason
+
+
+def _mock_cfg_checklist():
+    cfg = MagicMock()
+    cfg.require_task_context.return_value = (BOARD_ID, TASK_ID)
+    return cfg
+
+
+def test_checklist_skip_patches_status_skipped():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+    ])
+    rc = commands._cmd_checklist(_ChecklistSkipArgs(item_id="id-0"), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"] == {"status": "skipped"}
+    assert not any(c["method"] == "POST" for c in client.calls)
+
+
+def test_checklist_skip_with_reason_posts_comment():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+        ("POST", "/comments", {"id": "comment-1"}),
+    ])
+    rc = commands._cmd_checklist(
+        _ChecklistSkipArgs(item_id="id-0", reason="needs npm/node, out of role for omp agent"),
+        client, cfg,
+    )
+    assert rc == 0
+    post_call = next(c for c in client.calls if c["method"] == "POST")
+    assert "id-0" in post_call["body"]["content"]
+    assert "skipped: needs npm/node" in post_call["body"]["content"]
+
+
+def test_checklist_skip_without_reason_no_comment():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+        ("PATCH", "/checklist/id-0", {"id": "id-0", "status": "skipped"}),
+    ])
+    rc = commands._cmd_checklist(_ChecklistSkipArgs(item_id="id-0"), client, cfg)
+    assert rc == 0
+    assert not any(c["method"] == "POST" for c in client.calls)
+
+
+def test_checklist_skip_unknown_id_raises_usage_error():
+    cfg = _mock_cfg_checklist()
+    client = _mock_client([
+        ("GET", "/checklist", _checklist(("Vercel Deploy", "pending"))),
+    ])
+    with pytest.raises(UsageError):
+        commands._cmd_checklist(_ChecklistSkipArgs(item_id="nonexistent"), client, cfg)

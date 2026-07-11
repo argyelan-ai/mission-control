@@ -549,7 +549,7 @@ export interface Agent {
   last_dispatch_error: string | null;
   run_state: "idle" | "running" | "recovering" | "aborted" | "blocked";
   operational_mode: AgentOperationalMode;
-  agent_runtime: "openclaw" | "claude-code" | "manual" | "cli-bridge" | "free-code-bridge" | "host";
+  agent_runtime: "claude-code" | "manual" | "cli-bridge" | "host";
   // Per-agent runtime selection (cli-bridge only — Phase 2). NULL means
   // the agent falls back to docker-compose env defaults.
   runtime_id: string | null;
@@ -563,6 +563,21 @@ export interface Agent {
   harness?: Harness | "hermes" | null;
   created_at: string;
   updated_at: string;
+}
+
+// Onboarding-wizard readiness gate (2026-07-10). ready = provisioned + live;
+// NOT a round-tripped message (synchronous trigger retired in Phase 29).
+export interface AgentReadinessCheck {
+  label: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface AgentReadiness {
+  provision_status: ProvisionStatus;
+  runtime: string;
+  ready: boolean;
+  checks: AgentReadinessCheck[];
 }
 
 export interface AgentTemplate {

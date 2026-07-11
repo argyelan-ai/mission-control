@@ -252,6 +252,63 @@ async def test_first_tick_nudges_not_blocks(fake_redis, make_board, make_agent, 
 
 
 @pytest.mark.asyncio
+async def test_cooldown_skip_does_not_consume_tick1(fake_redis, make_board, make_agent, make_task):
+    """G6 interaction guard (due process before block): when ANOTHER recovery
+    mechanism (Tier-3 recap / unblock_notify / bootstrap recap) holds the
+    shared recovery-comment cooldown, the watchdog must NOT silently consume
+    tick 1 — otherwise the next pass would block the task without the agent
+    ever receiving the watchdog's explicit warning. The tick counter may only
+    advance once the nudge comment was actually posted."""
+    from sqlmodel import select
+    from app.models.task import TaskComment
+    from app.redis_client import RedisKeys
+
+    _b, agent, task = await _make_stuck_setup(make_board, make_agent, make_task)
+
+    # Another mechanism claimed the shared cooldown moments earlier.
+    await fake_redis.set(RedisKeys.recovery_comment_cooldown(str(task.id)), "1", ex=600)
+
+    # Pass 1: cooldown held → nudge skipped, tick counter must NOT advance.
+    async with _session() as s:
+        await _run_check(fake_redis, s)
+    count_key = RedisKeys.task_runner_stuck_block_count(str(task.id))
+    assert await fake_redis.get(count_key) is None, (
+        "tick counter must not advance when the nudge comment was suppressed"
+    )
+    t = await _reload_task(task.id)
+    assert t.status == "in_progress"
+
+    # Pass 2: cooldown STILL held → still no block, still no counter.
+    async with _session() as s:
+        await _run_check(fake_redis, s)
+    assert await fake_redis.get(count_key) is None
+    t = await _reload_task(task.id)
+    assert t.status == "in_progress", (
+        "task must never be blocked before the watchdog's own nudge was posted"
+    )
+    assert not await _pending_blocker_approvals(task.id)
+
+    # Cooldown expires → pass 3 posts the nudge (tick 1), pass 4 may block.
+    await fake_redis.delete(RedisKeys.recovery_comment_cooldown(str(task.id)))
+    async with _session() as s:
+        await _run_check(fake_redis, s)
+    assert await fake_redis.get(count_key) == "1"
+    async with _session() as s:
+        res = await s.exec(select(TaskComment).where(TaskComment.task_id == task.id))
+        comments = res.all()
+    assert any(c.comment_type == "watchdog_notify" for c in comments), (
+        "nudge must be posted once the cooldown frees up"
+    )
+    t = await _reload_task(task.id)
+    assert t.status == "in_progress", "nudge pass itself must not block"
+
+    async with _session() as s:
+        await _run_check(fake_redis, s)  # tick 2 = block (due process satisfied)
+    t = await _reload_task(task.id)
+    assert t.status == "blocked", "block proceeds normally AFTER the nudge was delivered"
+
+
+@pytest.mark.asyncio
 async def test_never_blocks_healthy_long_turn(fake_redis, make_board, make_agent, make_task):
     """PRIME DIRECTIVE: both timestamps fresh (long tool call) → NEVER blocked."""
     _b, agent, task = await _make_stuck_setup(

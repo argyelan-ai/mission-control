@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -40,6 +40,17 @@ class InstantiateRequest(BaseModel):
     board_id: uuid.UUID
     model: str | None = None   # overrides template.default_model
     name: str | None = None    # overrides template.name
+    # ADR-056 / wizard parity: bind the LLM runtime + harness at instantiate
+    # time, same as the custom-create path. Both optional.
+    runtime_id: str | None = None
+    harness: str | None = None
+
+    @field_validator("harness")
+    @classmethod
+    def _validate_harness(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("claude", "openclaude", "omp"):
+            raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
+        return v
 
 
 @router.get("/agent-templates")
@@ -115,6 +126,8 @@ async def _do_instantiate(
     model: str | None,
     session: AsyncSession,
     is_board_lead: bool = False,
+    runtime_id: str | None = None,
+    harness: str | None = None,
 ) -> tuple[Agent, str]:
     """
     Creates an Agent from a Template and returns (agent, raw_token).
@@ -137,6 +150,11 @@ async def _do_instantiate(
         is_board_lead=is_board_lead, scopes=agent_scopes,
     )
 
+    resolved_runtime_id = None
+    if runtime_id:
+        from app.routers.agents import _resolve_runtime_id
+        resolved_runtime_id = await _resolve_runtime_id(session, runtime_id)
+
     agent = Agent(
         board_id=board_id,
         name=agent_name,
@@ -151,6 +169,8 @@ async def _do_instantiate(
         agent_token_hash=token_hash,
         template_id=template.id,
         provision_status="local",
+        runtime_id=resolved_runtime_id,
+        harness=harness,
     )
     session.add(agent)
     await session.commit()
@@ -188,6 +208,8 @@ async def instantiate_template(
         name=body.name,
         model=body.model,
         session=session,
+        runtime_id=body.runtime_id,
+        harness=body.harness,
     )
 
     background_tasks.add_task(_provision_agent_background, agent.id)

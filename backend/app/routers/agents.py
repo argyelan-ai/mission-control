@@ -6,7 +6,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
 
@@ -27,7 +27,6 @@ CONFIG_FILE_TYPES = {"tools_md", "rules_md", "identity_md", "soul_md", "memory_m
 # Provisioning constants and functions — delegated to services/provisioning.py
 # Phase 29: the gateway path is removed; cli-bridge + host remain. Plan 29-07
 # further refactors services/provisioning.py (symbol cleanup).
-from app.services.agent_bootstrap import bootstrap_hermes_agent
 from app.services.provisioning import (
     extract_token_from_tools_md as _extract_token_from_tools_md,
     provision_agent_background as _provision_agent_background,
@@ -49,6 +48,42 @@ class AgentCreate(BaseModel):
     # one-click chain renders the right image/env from the start — the
     # detail-page switch service stays the path for changing it later.
     runtime_id: str | None = None
+    # ── Onboarding-wizard fields (2026-07-10) ────────────────────────────────
+    # The wizard funnels custom / template-prefill / duplicate all through
+    # this ONE create call, so create must carry the full agent config.
+    # ADR-056 harness axis. None = derive from the runtime's protocol.
+    harness: str | None = None
+    # Explicit scope list. Empty [] means ALL 16 scopes (backward-compat), so
+    # the wizard always sends a concrete list — a new agent is never silently
+    # all-powerful.
+    scopes: list[str] = []
+    # SOUL/persona markdown (from a template or a duplicated agent). None =
+    # the default SOUL.md.j2 render at provision time.
+    soul_md: str | None = None
+    # cli-bridge skill allowlist. None = all skills.
+    skill_filter: list[str] | None = None
+    # cli-bridge plugin allowlist. None = all installed plugins.
+    cli_plugins: list[str] | None = None
+
+    @field_validator("harness")
+    @classmethod
+    def _validate_harness(cls, v: str | None) -> str | None:
+        if v is not None and v not in ("claude", "openclaude", "omp"):
+            raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
+        return v
+
+    @model_validator(mode="after")
+    def _host_requires_runtime_id(self):
+        # Host agents can only get a runtime_id at create time — the PATCH
+        # switch path is cli-bridge-only (see update_agent()), and /provision
+        # 400s without one. Without this guard, creating a host agent without
+        # runtime_id is an unrecoverable dead-end (2026-07-10 host E2E test).
+        if self.agent_runtime == "host" and not self.runtime_id:
+            raise ValueError(
+                "Host-Agents benoetigen eine runtime_id beim Erstellen "
+                "(nachtraeglicher Wechsel wird nicht unterstuetzt)"
+            )
+        return self
 
 
 class AgentUpdate(BaseModel):
@@ -127,7 +162,7 @@ async def create_agent(
 
     # Auto-generated TOOLS.md with the correct token (will never be available in plaintext again)
     board_id_str = str(payload.board_id) if payload.board_id else None
-    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=[])
+    tools_md = _generate_tools_md(payload.name, payload.emoji or "🤖", raw_token, board_id_str, is_board_lead=payload.is_board_lead, scopes=payload.scopes)
 
     # Resolve the optional LLM-runtime binding BEFORE creating the agent —
     # a bad slug should 404 without leaving a half-created agent behind.
@@ -147,6 +182,11 @@ async def create_agent(
         tools_md=tools_md,
         agent_runtime=payload.agent_runtime,
         runtime_id=resolved_runtime_id,
+        harness=payload.harness,
+        scopes=payload.scopes,
+        soul_md=payload.soul_md,
+        skill_filter=payload.skill_filter,
+        cli_plugins=payload.cli_plugins,
     )
     session.add(agent)
     await session.commit()
@@ -162,11 +202,55 @@ async def create_agent(
         # compose + container start. Bridge down → honest provision_failed
         # event with remediation; the agent stays 'local'.
         background_tasks.add_task(_auto_provision_cli_bridge, agent.id, raw_token)
-    elif payload.agent_runtime not in ("free-code-bridge", "manual"):
+    elif payload.agent_runtime not in ("free-code-bridge", "manual", "host"):
+        # Host agents provision via the wizard's explicit POST /provision
+        # call — scheduling this here would race it and, since the host
+        # branch of provision_agent_background() is a no-op, falsely flip
+        # provision_status to "provisioned" before any files are staged.
         background_tasks.add_task(_provision_agent_background, agent.id)
     result = agent.model_dump()
     result["token"] = raw_token  # returned once, never stored in plaintext
     return result
+
+
+class SoulPreviewRequest(BaseModel):
+    name: str
+    emoji: str | None = "🤖"
+    role: str | None = None
+    soul_md: str | None = None
+    board_id: uuid.UUID | None = None
+    is_board_lead: bool = False
+    scopes: list[str] = []
+
+
+@router.post("/agents/preview-soul")
+async def preview_soul(
+    payload: SoulPreviewRequest,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Render SOUL.md.j2 for a transient (non-persisted) agent.
+
+    Powers the wizard's live persona preview (Step 2). No DB write, no
+    provisioning — a draft render only. Best-effort: template errors return
+    a soft message instead of a 500 so the preview never blocks typing.
+    """
+    draft = Agent(
+        name=payload.name,
+        emoji=payload.emoji,
+        role=payload.role,
+        soul_md=payload.soul_md,
+        board_id=payload.board_id,
+        is_board_lead=payload.is_board_lead,
+        scopes=payload.scopes,
+    )
+    try:
+        context = build_agent_context(draft, board_id=str(payload.board_id) if payload.board_id else None)
+        soul = render_agent_file("SOUL.md.j2", context)
+    except Exception as exc:  # noqa: BLE001 — preview must never hard-fail
+        logger.warning("preview_soul render failed for draft %s: %s", payload.name, exc)
+        soul = f"# {payload.emoji or ''} {payload.name}\n\n_(Vorschau nicht verfügbar — Standard-SOUL wird beim Erstellen erzeugt.)_"
+    return {"soul_md": soul}
 
 
 async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> None:
@@ -1225,6 +1309,74 @@ async def _redispatch_after_reset(session: AsyncSession, agent: Agent) -> None:
     return None
 
 
+@router.post("/agents/{agent_id}/health-check")
+async def agent_health_check(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Runtime-aware readiness for the onboarding wizard's final gate.
+
+    'ready' means the agent is provisioned AND its session is alive — NOT
+    that it answered a message (the synchronous trigger channel was retired
+    in Phase 29). Reuses existing liveness signals: the cli-bridge helper
+    probe + heartbeat status (cli-bridge), recent last_seen_at (host).
+    """
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    runtime = getattr(agent, "agent_runtime", "cli-bridge") or "cli-bridge"
+    alive_states = {"online", "busy", "idle", "working"}
+    checks: list[dict[str, Any]] = []
+
+    provisioned = agent.provision_status == "provisioned"
+    checks.append({
+        "label": "provisioned",
+        "ok": provisioned,
+        "detail": f"provision_status={agent.provision_status}",
+    })
+
+    if runtime == "cli-bridge":
+        from app.routers import cli_terminal
+        helper_ok = cli_terminal._bridge_get("/health") is not None
+        checks.append({
+            "label": "cli-bridge helper",
+            "ok": helper_ok,
+            "detail": "reachable" if helper_ok else "scripts/cli-bridge.py not reachable",
+        })
+        heartbeating = agent.status in alive_states
+        checks.append({
+            "label": "heartbeat",
+            "ok": heartbeating,
+            "detail": f"status={agent.status}",
+        })
+    elif runtime == "host":
+        recent = False
+        if agent.last_seen_at is not None:
+            delta = utcnow() - agent.last_seen_at
+            recent = delta.total_seconds() < 180
+        checks.append({
+            "label": "host heartbeat",
+            "ok": recent,
+            "detail": "seen <3min ago" if recent else "no recent heartbeat — launchd job may not be loaded",
+        })
+    else:
+        checks.append({
+            "label": "runtime",
+            "ok": True,
+            "detail": f"{runtime}: no automated liveness signal",
+        })
+
+    ready = all(c["ok"] for c in checks)
+    return {
+        "provision_status": agent.provision_status,
+        "runtime": runtime,
+        "ready": ready,
+        "checks": checks,
+    }
+
+
 @router.post("/agents/{agent_id}/heartbeat")
 async def trigger_heartbeat(
     agent_id: uuid.UUID,
@@ -1486,29 +1638,76 @@ async def provision_agent_on_gateway(
         await session.commit()
 
         try:
+            # Adapter-registered host harnesses (ADR-064: hermes, grok, …)
+            # take the adapter path; anything else falls through to the
+            # generic wizard staging path below (ADR-063).
             from app.services.harness_compat import derive_harness, is_compatible, incompat_reason
             from app.services.host_harness_adapter import get_adapter
 
             harness = agent.harness or derive_harness(runtime)
             adapter = get_adapter(harness)
-            if adapter is None:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"No host adapter for harness '{harness}' "
-                           f"(runtime_type={runtime.runtime_type})",
-                )
-            if not is_compatible(harness, runtime):
-                raise HTTPException(status_code=422, detail=incompat_reason(harness, runtime))
-            result = await adapter.bootstrap(session, agent, runtime)
+            if adapter is not None:
+                if not is_compatible(harness, runtime):
+                    raise HTTPException(status_code=422, detail=incompat_reason(harness, runtime))
+                result = await adapter.bootstrap(session, agent, runtime)
+                return {
+                    "status": "provisioned",
+                    "agent_id": str(agent.id),
+                    "token": result["token"],  # one-time visible
+                    "env_path": result["env_path"],
+                    "plist_loaded": result["plist_loaded"],
+                    "plist_already": result["plist_already"],
+                    "tmux_session": result["tmux_session"],
+                    "workspace_path": result["workspace_path"],
+                }
+
+            # Generic host agent (onboarding wizard, 2026-07-10): stage
+            # plist + run.sh + agent.env into ~/.mc/agents/<slug>/. launchctl
+            # load is gated behind settings.host_agent_autoload_enabled.
+            from app.auth import generate_agent_token
+            from app.services import host_provisioning
+            from app.services.secrets_helper import upsert_agent_token_secret
+
+            raw_token, token_hash = generate_agent_token()
+            stage = await host_provisioning.stage_host_agent_files(
+                agent, runtime, raw_token, session=session
+            )
+            load = host_provisioning.maybe_load_plist(stage)
+
+            # Only mutate the persisted hash once staging (fallible I/O) has
+            # succeeded — otherwise a raise here would leave the generic
+            # except-handler below to commit a new hash for a token that was
+            # never staged/returned, destroying the previously working one.
+            agent.agent_token_hash = token_hash
+            agent.workspace_path = stage.workspace_path
+            agent.provision_status = "provisioned" if load["loaded"] else "provisioning"
+            agent.provisioned_at = utcnow() if load["loaded"] else None
+            agent.updated_at = utcnow()
+            session.add(agent)
+            await session.commit()
+            await upsert_agent_token_secret(session, agent.name, raw_token)
+            await emit_event(
+                session,
+                "agent.provisioned" if load["loaded"] else "agent.host_files_staged",
+                (
+                    f"{agent.name} (host) provisioniert + launchd geladen"
+                    if load["loaded"]
+                    else f"{agent.name} (host): Dateien nach {stage.workspace_path} gerendert. "
+                    f"Zum Aktivieren auf dem Host ausführen: {stage.launchctl_command}"
+                ),
+                severity="info",
+                agent_id=agent.id,
+                board_id=agent.board_id,
+            )
             return {
-                "status": "provisioned",
+                "status": agent.provision_status,
                 "agent_id": str(agent.id),
-                "token": result["token"],  # one-time visible
-                "env_path": result["env_path"],
-                "plist_loaded": result["plist_loaded"],
-                "plist_already": result["plist_already"],
-                "tmux_session": result["tmux_session"],
-                "workspace_path": result["workspace_path"],
+                "token": raw_token,  # one-time visible
+                "workspace_path": stage.workspace_path,
+                "plist_label": stage.plist_label,
+                "plist_staged_path": stage.plist_staged_path,
+                "launchctl_command": stage.launchctl_command,
+                "plist_loaded": load["loaded"],
             }
         except HTTPException:
             agent.provision_status = previous_status
@@ -2164,14 +2363,70 @@ async def agent_poll(
         # was supposed to review). Claim-semantics: an unacked review
         # task gets delivered once and keeps status=review (status only
         # flips when Rex explicitly PATCHes to in_progress or done).
-        active_result = await session.exec(
-            select(Task)
-            .where(Task.assigned_agent_id == agent.id)
-            .where(Task.status.in_(["in_progress", "blocked", "review"]))
-            .order_by(Task.updated_at.desc())
-            .limit(1)
-        )
-        active = active_result.first()
+        # Review fix B-2 (poll hardening): prefer the task the agent is
+        # ACTUALLY working on (agent.current_task_id, set at claim/ACK time)
+        # over the updated_at-desc heuristic. Without this, a freshly
+        # unblocked old task (freshest updated_at, stale ack_at set) shadows
+        # the task the real session is running — poll reports "working" on
+        # the wrong task.
+        active = None
+        if agent.current_task_id is not None:
+            _cur_result = await session.exec(
+                select(Task)
+                .where(Task.id == agent.current_task_id)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .limit(1)
+            )
+            active = _cur_result.first()
+        if active is None:
+            active_result = await session.exec(
+                select(Task)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                .order_by(Task.updated_at.desc())
+                .limit(1)
+            )
+            active = active_result.first()
+
+        # B1 (W2-B, live incident): a blocked task only parks the agent while
+        # FRESH — grace window = board.blocker_triage_minutes (default 15min),
+        # aligned with the lead-triage window (quick lead-unblocks resume
+        # in-session with full context). Once the blocked transition is older
+        # than the window, poll stops treating it as "working" and the agent
+        # becomes claimable for new inbox work — otherwise a stale/zombie
+        # blocked task parks the agent forever (a day-old blocked task held
+        # Sparky parked while a freshly dispatched task was never offered).
+        # in_progress/review tasks are NOT affected — they keep parking
+        # unconditionally.
+        # Review fix B-1: the age is keyed off task.blocked_at (dedicated
+        # →blocked timestamp, maintained by the Task.status listener), NOT
+        # updated_at — a generic onupdate column that ANY metadata PATCH
+        # (title/priority/labels) resets, which would re-park the agent for
+        # another full window indefinitely. updated_at remains only as the
+        # fallback for legacy rows blocked before migration 0150.
+        if active is not None and active.status == "blocked":
+            from app.models.board import Board as _PollBoard
+
+            grace_minutes = 15
+            _board_id = active.board_id or agent.board_id
+            if _board_id is not None:
+                _board_row = await session.get(_PollBoard, _board_id)
+                if _board_row is not None and _board_row.blocker_triage_minutes:
+                    grace_minutes = _board_row.blocker_triage_minutes
+            _blocked_since = active.blocked_at or active.updated_at
+            if _blocked_since is not None:
+                if _blocked_since.tzinfo is None:
+                    _blocked_since = _blocked_since.replace(tzinfo=dt.timezone.utc)
+                _age_seconds = (
+                    dt.datetime.now(tz=dt.timezone.utc) - _blocked_since
+                ).total_seconds()
+                if _age_seconds >= grace_minutes * 60:
+                    # Grace window expired — stop parking on this blocked
+                    # task, fall through to inbox-claim below as if there
+                    # were no active task.
+                    active = None
+
         if active is not None:
             if active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}
@@ -2643,7 +2898,33 @@ async def agent_heartbeat(
     if payload.context_pct is not None and agent.context_max:
         agent.context_tokens = round(payload.context_pct / 100 * agent.context_max)
 
+    # Host agents: flip provision_status "provisioning" -> "provisioned" on
+    # the first heartbeat that ever arrives (2026-07-10 E2E Lauf 3). The
+    # generic host provisioning chain (host_provisioning.py) stages files +
+    # starts a poller, but with launchd autoload disabled (the normal case,
+    # see /provision's `agent.provision_status = "provisioned" if
+    # load["loaded"] else "provisioning"`) nothing else ever transitions it
+    # once staging leaves it on "provisioning" — a real, heartbeating agent
+    # stayed permanently "not ready" in /health-check. cli-bridge agents are
+    # untouched: their own provisioning flow (services/provisioning.py)
+    # already flips to "provisioned" once the container starts, independent
+    # of any heartbeat — this only ever fires for agent_runtime == "host".
+    just_provisioned = agent.agent_runtime == "host" and agent.provision_status == "provisioning"
+    if just_provisioned:
+        agent.provision_status = "provisioned"
+        agent.provisioned_at = agent.last_seen_at
+
     session.add(agent)
     await session.commit()
+
+    if just_provisioned:
+        await emit_event(
+            session,
+            "agent.provisioned",
+            f"{agent.name} (host) provisioned — first heartbeat received",
+            severity="info",
+            agent_id=agent.id,
+            board_id=agent.board_id,
+        )
 
     return {"ok": True, "agent": agent.name}
