@@ -966,15 +966,32 @@ def _cmd_deliverable(args, client, cfg):
     import os as _os
     import shutil as _shutil
 
-    # Backend akzeptiert lokale Pfade unter zwei Task-scoped Prefixen:
+    # Backend akzeptiert lokale Pfade unter mehreren Task-scoped Prefixen (siehe
+    # backend/app/services/deliverable_paths.py::accepted_path_prefixes):
     #   /deliverables/<task_id>/        Agent-Container (selbst-erzeugte Files)
     #   /shared-deliverables/<task_id>/ mc-playwright Sidecar (PDF, Screenshots)
+    #   ~/.mc/deliverables/<task_id>/   Host-Worker (Hermes, Grok — launchd, kein Docker)
     # URLs (http/https) + content-only sind ebenfalls erlaubt.
+    #
+    # Host vs. Container: Der Host-Root ist read-only, /deliverables/<task_id>/
+    # ist dort nicht anlegbar. Existiert /deliverables nicht als Verzeichnis,
+    # laeuft mc-cli auf dem Host → Root wird auf ~/.mc/deliverables/<task_id>/
+    # umgebogen (vom Backend akzeptiert + via docker-compose ${HOME}/.mc-Mount
+    # 1:1 servierbar).
     path = args.path
-    agent_prefix = f"/deliverables/{task_id}/"
+    is_host_runtime = not _os.path.isdir("/deliverables")
+    if is_host_runtime:
+        deliverables_root = _os.path.expanduser(f"~/.mc/deliverables/{task_id}")
+    else:
+        deliverables_root = f"/deliverables/{task_id}"
+    agent_prefix = f"{deliverables_root}/"
     sidecar_prefix = f"/shared-deliverables/{task_id}/"
-    deliverables_root = f"/deliverables/{task_id}"
     accepted_local_prefixes = (agent_prefix, sidecar_prefix)
+
+    if is_host_runtime:
+        # Host-Root ist read-only, aber ~/.mc ist es nicht — Verzeichnis
+        # proaktiv anlegen, damit der Agent direkt reinschreiben kann.
+        _os.makedirs(deliverables_root, exist_ok=True)
 
     if path:
         is_url = path.startswith(("http://", "https://"))
@@ -1028,7 +1045,7 @@ def _cmd_deliverable(args, client, cfg):
             marker = f".mc-deliverables/{task_id}/"
             if marker in relative:
                 relative = relative.split(marker, 1)[1]
-            path = _os.path.join("/deliverables", str(task_id), relative)
+            path = _os.path.join(deliverables_root, relative)
 
     body = {
         "deliverable_type": args.type,
