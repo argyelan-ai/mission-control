@@ -34,9 +34,9 @@ describe("mediaPathToFilesLocation", () => {
 
   it("maps host ~/.mc/<root>/ paths onto the matching files root", () => {
     expect(
-      mediaPathToFilesLocation("/Users/Henry/.mc/deliverables/bench-1/shot.png"),
+      mediaPathToFilesLocation("/Users/operator/.mc/deliverables/bench-1/shot.png"),
     ).toEqual({ root: "deliverables", subpath: "bench-1/shot.png" });
-    expect(mediaPathToFilesLocation("/Users/Henry/.mc/media/clip.mp4")).toEqual({
+    expect(mediaPathToFilesLocation("/Users/operator/.mc/media/clip.mp4")).toEqual({
       root: "media",
       subpath: "clip.mp4",
     });
@@ -44,7 +44,7 @@ describe("mediaPathToFilesLocation", () => {
 
   it("returns null for paths outside every browsable root", () => {
     expect(mediaPathToFilesLocation("/etc/passwd")).toBeNull();
-    expect(mediaPathToFilesLocation("/Users/Henry/.mc/secrets/token.json")).toBeNull();
+    expect(mediaPathToFilesLocation("/Users/operator/.mc/secrets/token.json")).toBeNull();
   });
 });
 
@@ -122,8 +122,8 @@ describe("XPostApprovalCard", () => {
         approval={mkApproval({
           text: "Screens",
           media_paths: [
-            "/Users/Henry/.mc/deliverables/bench-1/a.png",
-            "/Users/Henry/.mc/deliverables/bench-1/b.png",
+            "/Users/operator/.mc/deliverables/bench-1/a.png",
+            "/Users/operator/.mc/deliverables/bench-1/b.png",
           ],
         })}
         onResolve={vi.fn()}
