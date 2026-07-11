@@ -1094,6 +1094,50 @@ For large tasks (website, app, feature with multiple steps):
                 "re-create it. Only `mc checklist add \"...\"` for newly discovered steps."
             )
 
+        # ── Runtime-aware deliverable hint (2026-07-11, grok's first live task) ──
+        # Host agents (Hermes, Grok — launchd on the Mac, no Docker) have a
+        # read-only root filesystem: /deliverables/<task_id>/ is unwritable
+        # there. The backend also accepts ~/.mc/deliverables/<task_id>/ (see
+        # deliverable_paths.accepted_path_prefixes) — docker-compose mounts
+        # ${HOME}/.mc into the backend at the same path, so host-path
+        # deliverables are fully servable. cli-bridge agents keep the
+        # container-absolute form (unchanged, ADR-022).
+        _is_host_agent = agent.agent_runtime == "host"
+        if _is_host_agent:
+            _deliverable_hint = (
+                f'Register a deliverable: `mc deliverable --title "..." --path '
+                f"~/.mc/deliverables/{task.id}/<file>` (host path — /deliverables "
+                "is not writable on the host) — or inline: "
+                '`mc deliverable --type document --title "..." --content "..."`'
+            )
+        else:
+            _deliverable_hint = (
+                f'Register a deliverable: `mc deliverable --title "..." --path '
+                f'/deliverables/{task.id}/<file>`  (absolute container path, ADR-022)'
+            )
+
+        # ── Host-only reflection contract (2026-07-11) ──────────────────────
+        # cli-bridge agents learn the 4-header reflection contract from
+        # SOUL.md.j2 (loaded as --append-system-prompt at container start).
+        # Host agents (launchd, no SOUL.md injection) get neither that nor an
+        # Operating Card — without this, they only discover the format via a
+        # 400 from work_context.enforce_reflection_before_close() at `mc
+        # review`/`mc done` time. Dispatch char budget is tight (Stage-2
+        # context economy), so this block is host-only, not added for
+        # everyone. Import the fields/threshold — never hardcode the headers.
+        _reflection_block = ""
+        if _is_host_agent:
+            from app.constants import REFLECTION_REQUIRED_FIELDS, REFLECTION_MIN_CHARS
+            _refl_example = "mc comment reflection \"" + "\\n\\n".join(
+                f"## {f}\\n..." for f in REFLECTION_REQUIRED_FIELDS
+            ) + "\""
+            _reflection_block = (
+                "\n\n**Reflection contract (mandatory before mc review / mc done):**\n"
+                f"Post a reflection comment with all {len(REFLECTION_REQUIRED_FIELDS)} "
+                f"exact headers (min. {REFLECTION_MIN_CHARS} chars body) BEFORE "
+                f"transitioning status — `{_refl_example}`"
+            )
+
         _add("worker_approach", f"""
 ## Approach
 
@@ -1103,7 +1147,8 @@ Work independently on this task until it's done:
 3. In between: `mc comment progress "Update/Evidence/Next"` for the audit trail
 4. When everything is done: `mc {'done' if _is_subtask else 'review'}`
 
-Register a deliverable: `mc deliverable --title "..." --path /deliverables/{task.id}/<file>`  (absolute container path, ADR-022)
+{_deliverable_hint}
+{_reflection_block}
 
 {git_section}
 

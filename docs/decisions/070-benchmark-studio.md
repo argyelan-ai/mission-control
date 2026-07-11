@@ -1,4 +1,4 @@
-# ADR-069 — Benchmark Studio als Vertical + Kern-Bausteine
+# ADR-070 — Benchmark Studio als Vertical + Kern-Bausteine
 
 **Status:** Accepted
 **Datum:** 2026-07-11
@@ -65,7 +65,7 @@ in dasselbe Volume. Praezedenz: mcp-screenshots-Mount ro→rw (05.07.).
 
 ### Baustein 3 — Prompt Library (Kern, PR 2)
 
-Tabelle `prompt_templates` (Migration 0152): `id`/`title`/`body`/`tags`/`created_at`/
+Tabelle `prompt_templates` (Migration 0153): `id`/`title`/`body`/`tags`/`created_at`/
 `updated_at`. Generisch — nicht an Challenges gebunden. CRUD-API unter
 `/api/v1/prompt-templates` + Inbox-Preview-Anreicherung fuer `x_post`-Approvals
 (Challenge-Info + Media-Preview).
@@ -76,7 +76,7 @@ Tabelle `prompt_templates` (Migration 0152): `id`/`title`/`body`/`tags`/`created
 Flag `benchStudio` in `frontend-v2/src/lib/verticals.ts` (Default `true`). Strippbar:
 Verzeichnisse loeschen + Flag aus = App bootet und baut unveraendert.
 
-**Tabellen im Kern** (ADR-044 §3): `bench_challenges` + `bench_entries` (Migration 0153,
+**Tabellen im Kern** (ADR-044 §3): `bench_challenges` + `bench_entries` (Migration 0154,
 eine Kette). `bench_entries.task_id` mit `ondelete=SET NULL` — Bench-Historie ueberlebt
 Task-Loeschung (mc-task-delete-guard). `prompt_text` ist eine **eingefrorene Kopie** —
 Template bleibt editierbar, ohne Historie zu verfaelschen; `prompt_template_id` bleibt
@@ -209,7 +209,7 @@ Kopie des Generations-Prompts, nie der Tweet-Text.
 ## Referenzen
 
 - `backend/app/models/bench.py` — `BenchChallenge`, `BenchEntry` (SQLModel)
-- `backend/alembic/versions/0153_bench_studio_tables.py` — Migration
+- `backend/alembic/versions/0154_bench_studio_tables.py` — Migration
 - `backend/app/verticals/hooks.py` — `x_post_resolved_hooks` (neue Registry)
 - `backend/app/verticals/bench_studio/orchestrator.py` — Zustands-Maschine + Generierungs-Pfade
 - `backend/app/verticals/bench_studio/drafts.py` — Draft-Idempotenz, Pipeline-Reuse
@@ -220,7 +220,7 @@ Kopie des Generations-Prompts, nie der Tweet-Text.
 - `docker/mc-playwright/media.py` — `/record` + `/compose` Endpunkte
 - `docker/mc-playwright/service.py` — ffmpeg-Aufruf Grid-Komposition
 - `backend/app/services/x_publisher.py` — `post_media()` (Baustein 1, PR 1)
-- `backend/alembic/versions/0152_prompt_templates.py` — Prompt Library Migration
+- `backend/alembic/versions/0153_prompt_templates.py` — Prompt Library Migration
 - Spec: `docs/superpowers/specs/2026-07-11-benchmark-studio-design.md`
 - [ADR-044](044-vertical-modules.md) — Vertical-Module (Praezedenz + Kopplungsrichtung)
 - [ADR-065](065-x-post-publisher.md) — X-Publisher ("kein zweiter Lifecycle", Approval-Flow)

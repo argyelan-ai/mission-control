@@ -180,7 +180,7 @@ async def _do_instantiate(
     # the container. Without this write, a freshly instantiated agent
     # crash-loops with 'MC_TOKEN is not set' (Fresh-Install-Fix 2026-07-02).
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
 
     return agent, raw_token
 

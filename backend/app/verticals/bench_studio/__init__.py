@@ -1,4 +1,4 @@
-"""Benchmark Studio vertical (ADR-044, ADR-069).
+"""Benchmark Studio vertical (ADR-044, ADR-070).
 
 One-shot LLM capability demos: prompt -> N models generate index.html ->
 mc-playwright records videos -> ffmpeg grid -> Studio review -> X-post draft

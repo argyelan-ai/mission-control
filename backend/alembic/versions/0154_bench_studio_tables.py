@@ -1,4 +1,4 @@
-"""0153 — Benchmark Studio tables (bench_challenges + bench_entries).
+"""0154 — Benchmark Studio tables (bench_challenges + bench_entries).
 
 Models live in core per ADR-044 §3 (schema identical across variants; a
 stripped installation simply has idle tables). Production tracking only —
@@ -7,14 +7,14 @@ publish tail = Approval + ContentPipeline (ADR-065, no second lifecycle).
 bench_entries.task_id uses ondelete=SET NULL (mc-task-delete-guard):
 bench history survives task deletion, delete_task() needs no cleanup block.
 
-Revision ID: 0153
-Revises: 0152
+Revision ID: 0154
+Revises: 0153
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0153"
-down_revision = "0152"
+revision = "0154"
+down_revision = "0153"
 branch_labels = None
 depends_on = None
 

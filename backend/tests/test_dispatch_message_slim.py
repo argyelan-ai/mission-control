@@ -124,3 +124,49 @@ def test_researcher_subtask_dispatch_contains_essentials(researcher_subtask_ctx)
     assert str(task.id) in msg, "Task-ID missing"
     # ACK reminder still present for inbox tasks
     assert "mc ack" in msg.lower() or "ACK" in msg, "ACK guidance missing"
+
+
+# ── Runtime-aware deliverable hint + host-only reflection contract ─────────
+# (2026-07-11, grok's first live host task hit an unwritable /deliverables/
+# root + discovered the reflection header contract only via a 400.)
+
+
+def test_cli_bridge_agent_keeps_container_deliverable_path(researcher_subtask_ctx):
+    task, agent, ctx = researcher_subtask_ctx
+    agent.agent_runtime = "cli-bridge"
+    msg = _format_dispatch_message(task, agent, ctx)
+    assert f"/deliverables/{task.id}/<file>" in msg
+    assert "~/.mc/deliverables" not in msg
+
+
+def test_cli_bridge_agent_gets_no_reflection_block(researcher_subtask_ctx):
+    task, agent, ctx = researcher_subtask_ctx
+    agent.agent_runtime = "cli-bridge"
+    msg = _format_dispatch_message(task, agent, ctx)
+    assert "Reflection contract" not in msg
+
+
+def test_host_agent_gets_home_mc_deliverable_hint(researcher_subtask_ctx):
+    task, agent, ctx = researcher_subtask_ctx
+    agent.agent_runtime = "host"
+    msg = _format_dispatch_message(task, agent, ctx)
+    assert f"~/.mc/deliverables/{task.id}/<file>" in msg
+    assert "not writable on the host" in msg
+    # Inline-content escape hatch mentioned for host agents (no writable /deliverables).
+    assert "--content" in msg
+    # Must NOT still tell the host agent to use the unwritable container root
+    # (bare `--path /deliverables/...`, without the `~/.mc` prefix).
+    assert f'--path /deliverables/{task.id}/<file>' not in msg
+
+
+def test_host_agent_gets_reflection_contract_block(researcher_subtask_ctx):
+    from app.constants import REFLECTION_REQUIRED_FIELDS, REFLECTION_MIN_CHARS
+
+    task, agent, ctx = researcher_subtask_ctx
+    agent.agent_runtime = "host"
+    msg = _format_dispatch_message(task, agent, ctx)
+    assert "Reflection contract" in msg
+    assert "mc comment reflection" in msg
+    for field in REFLECTION_REQUIRED_FIELDS:
+        assert f"## {field}" in msg
+    assert str(REFLECTION_MIN_CHARS) in msg
