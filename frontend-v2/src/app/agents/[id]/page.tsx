@@ -1687,8 +1687,6 @@ export default function AgentDetailPage() {
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [triggerMessage, setTriggerMessage] = useState("");
-  const [showTriggerInput, setShowTriggerInput] = useState(false);
 
   // SSE updates
   const handleAgentEvent = useCallback(
@@ -1722,21 +1720,6 @@ export default function AgentDetailPage() {
       notify.success("Agent updated");
     },
     onError: (e: Error) => notify.error(e.message),
-  });
-
-  const triggerMutation = useMutation({
-    mutationFn: (message?: string) => api.agents.trigger(id, message),
-    onSuccess: (data) => {
-      if (data.reply) {
-        notify.success(`${agent?.emoji ?? ""} ${agent?.name ?? "Agent"}: ${data.reply}`);
-      } else {
-        notify.info("Trigger sent");
-      }
-      setTriggerMessage("");
-      setShowTriggerInput(false);
-      qc.invalidateQueries({ queryKey: ["agent", id] });
-    },
-    onError: (e: Error) => notify.error(`Trigger failed: ${e.message}`),
   });
 
   const resetMutation = useMutation({
@@ -1962,63 +1945,6 @@ export default function AgentDetailPage() {
               className="mt-5 pt-4 border-t grid grid-cols-2 gap-2 sm:flex sm:items-center sm:flex-wrap"
               style={{ borderColor: "rgba(255,255,255,0.06)" }}
             >
-              {/* Trigger with optional message */}
-              {showTriggerInput ? (
-                <div className="col-span-2 flex items-center gap-2 sm:col-auto">
-                  <input
-                    value={triggerMessage}
-                    onChange={(e) => setTriggerMessage(e.target.value)}
-                    placeholder="Optional: Message override"
-                    aria-label="Trigger message override"
-                    className="flex-1 text-[11px] px-2 py-1.5 max-sm:py-3 rounded-lg bg-transparent outline-none sm:flex-none sm:w-48"
-                    style={{ border: `1px solid ${C.borderAccent}`, color: "var(--color-text-primary)" }}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") triggerMutation.mutate(triggerMessage || undefined);
-                      if (e.key === "Escape") { setShowTriggerInput(false); setTriggerMessage(""); }
-                    }}
-                    autoFocus
-                  />
-                  <div className="shrink-0">
-                    <ActionButton
-                      icon={Zap}
-                      label="Send"
-                      color={C.accent}
-                      onClick={() => triggerMutation.mutate(triggerMessage || undefined)}
-                      loading={triggerMutation.isPending}
-                    />
-                  </div>
-                  <button
-                    onClick={() => { setShowTriggerInput(false); setTriggerMessage(""); }}
-                    className="shrink-0 text-[11px] px-2 py-1.5 max-sm:py-3 max-sm:min-h-touch text-[var(--color-text-muted)] cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <div className="flex items-stretch gap-1">
-                  <div className="flex-1">
-                    <ActionButton
-                      icon={Zap}
-                      label="Trigger"
-                      color={C.accent}
-                      onClick={() => triggerMutation.mutate(undefined)}
-                      loading={triggerMutation.isPending}
-                      disabled={isCliBridge}
-                      title={isCliBridge ? "Only available for host-runtime agents" : undefined}
-                    />
-                  </div>
-                  {!isCliBridge && (
-                    <button
-                      onClick={() => setShowTriggerInput(true)}
-                      className="shrink-0 text-[10px] text-[var(--color-text-muted)] cursor-pointer px-1.5 max-sm:min-h-touch rounded-lg max-sm:bg-[rgba(255,255,255,0.03)]"
-                      title="Trigger with message override"
-                    >
-                      +msg
-                    </button>
-                  )}
-                </div>
-              )}
-
               {isCliBridge ? (
                 <ActionButton
                   icon={RotateCcw}
