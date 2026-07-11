@@ -41,6 +41,13 @@ def test_extract_html_empty_input():
     assert orchestrator.extract_html(None) == ""
 
 
+def test_extract_html_fence_with_leading_prose_inside():
+    """Prose inside a fence (before <!DOCTYPE) must also be trimmed (Task 4 fix)."""
+    raw = "```html\nsome prose\n<!DOCTYPE html><html></html>\n```"
+    result = orchestrator.extract_html(raw)
+    assert result.startswith("<!DOCTYPE html")
+
+
 # ── generate_spark_entry ──────────────────────────────────────────────────
 
 
