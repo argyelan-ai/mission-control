@@ -100,7 +100,7 @@ export function PromptLibraryTab({
               className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] leading-none whitespace-nowrap"
               style={{
                 color: activeTag === tag ? C.accent : C.textMuted,
-                border: `1px solid ${activeTag === tag ? C.borderAccent : "rgba(136,136,136,0.15)"}`,
+                border: `1px solid ${activeTag === tag ? C.borderAccent : C.borderSubtle}`,
               }}
             >
               # {tag}
@@ -119,7 +119,9 @@ export function PromptLibraryTab({
       )}
 
       {filtered.map((tpl) => {
-        const usage = usageByTemplate[tpl.id] ?? [];
+        const usage = (usageByTemplate[tpl.id] ?? []).sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        );
         return (
           <div
             key={tpl.id}
@@ -150,7 +152,10 @@ export function PromptLibraryTab({
                   <Pencil size={13} />
                 </button>
                 <button
-                  onClick={() => removeMutation.mutate(tpl.id)}
+                  onClick={() => {
+                    if (!window.confirm(`Template "${tpl.title}" wirklich löschen?`)) return;
+                    removeMutation.mutate(tpl.id);
+                  }}
                   aria-label="Löschen"
                   style={{ color: C.textMuted }}
                 >

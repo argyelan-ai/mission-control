@@ -83,13 +83,16 @@ describe("PromptLibraryTab", () => {
     );
   });
 
-  it("deletes a template", async () => {
+  it("deletes a template with confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderTab();
     await screen.findByText("Bouncing balls");
     await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
     await waitFor(() =>
       expect(benchApi.promptTemplates.remove).toHaveBeenCalledWith("tpl-1")
     );
+    expect(confirmSpy).toHaveBeenCalledWith(`Template "Bouncing balls" wirklich löschen?`);
+    confirmSpy.mockRestore();
   });
 
   it("fires onStartChallenge with the template", async () => {
@@ -97,5 +100,34 @@ describe("PromptLibraryTab", () => {
     await screen.findByText("Bouncing balls");
     await userEvent.click(screen.getByRole("button", { name: /Challenge starten/ }));
     expect(onStart).toHaveBeenCalledWith(TPL);
+  });
+
+  it("filters templates by tag", async () => {
+    const TPL2: PromptTemplate = {
+      id: "tpl-2",
+      title: "Color picker",
+      body: "HTML color picker component",
+      tags: ["ui-component"],
+      created_at: "2026-07-11T10:00:00Z",
+      updated_at: "2026-07-11T10:00:00Z",
+    };
+    vi.mocked(benchApi.promptTemplates.list).mockResolvedValue([TPL, TPL2]);
+    renderTab();
+    await screen.findByText("Bouncing balls");
+    expect(screen.getByText("Color picker")).toBeTruthy();
+
+    // Click "animation" tag filter
+    await userEvent.click(screen.getByRole("button", { name: "animation" }));
+
+    // Only TPL with "animation" tag remains
+    expect(screen.getByText("Bouncing balls")).toBeTruthy();
+    expect(screen.queryByText("Color picker")).toBeNull();
+
+    // Click "animation" again to deactivate filter
+    await userEvent.click(screen.getByRole("button", { name: "animation" }));
+
+    // Both templates visible again
+    expect(screen.getByText("Bouncing balls")).toBeTruthy();
+    expect(screen.getByText("Color picker")).toBeTruthy();
   });
 });
