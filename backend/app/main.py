@@ -78,6 +78,7 @@ from app.routers import (
     references,
     project_git,
     projects,
+    prompt_templates,
     repos,
     runtimes,
     runtime_schedules,
@@ -745,6 +746,7 @@ app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metri
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
 app.include_router(references.router)  # /api/v1/references — Referenz-Uploads für Tasks/Projekte (ADR-054)
+app.include_router(prompt_templates.router)  # /api/v1/prompt-templates — Prompt Library (Benchmark Studio core, PR 2)
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)
