@@ -143,3 +143,34 @@ Dispatch geliefert wird und wer den Lifecycle besitzt.
   native TUI — Pane-Capture/Ready-Muster), **ADR-064** (HostHarnessAdapter — bleibt).
 - Externe Quellen: xAI Grok Build CLI v0.2.93 (`grok --help`: `--no-alt-screen`,
   `--permission-mode`, `--minimal`).
+
+## Nachtrag (2026-07-11) — Host-Agent DX: Deliverables-Root + Reflection-Contract
+
+Grok hat als erster Agent im v2-TUI-Paste-Modell live gearbeitet (siehe oben) und dabei
+zwei Lücken aufgedeckt, die alle Host-Runtime-Agents (Hermes, Grok — launchd, kein
+Docker) betreffen, weil sie kein SOUL.md/Operating Card injiziert bekommen wie
+cli-bridge-Agents:
+
+1. **`/deliverables/<task_id>/` ist auf dem Host unbeschreibbar** (Root-Filesystem
+   read-only). `mc deliverable` (`scripts/mc-cli/mc_cli/commands.py::_cmd_deliverable`)
+   erkennt jetzt zur Laufzeit, ob `/deliverables` als Verzeichnis existiert (Container)
+   oder nicht (Host) und biegt die Root in letzterem Fall auf
+   `~/.mc/deliverables/<task_id>/` um — das Backend akzeptiert dieses Prefix bereits
+   (`backend/app/services/deliverable_paths.py::accepted_path_prefixes`), und
+   docker-compose mountet `${HOME}/.mc` 1:1 in den Backend-Container, damit Host-Pfad-
+   Deliverables servierbar bleiben.
+2. **Reflection-Contract unbekannt bis zum 400.** `mc finish --review`/`mc done`
+   verlangt vorher einen `comment_type=reflection` mit den 4 exakten Headern
+   (`app/constants.py::REFLECTION_REQUIRED_FIELDS`, durchgesetzt in
+   `work_context.enforce_reflection_before_close`). cli-bridge-Agents lernen das aus
+   SOUL.md/Operating Card; Host-Agents bekommen keines von beidem und stolperten bisher
+   erst über den 400-Fehler. `backend/app/services/dispatch_message_builder.py`
+   (`worker_approach`-Sektion) hängt jetzt für `agent.agent_runtime == "host"` einen
+   kurzen Reflection-Contract-Block an (Felder/Threshold importiert, nie hardcoded) —
+   cli-bridge-Agents bekommen ihn NICHT (Dispatch-Char-Budget ist eng, SOUL.md deckt
+   sie bereits ab).
+
+Betroffene Dateien (Fix): `scripts/mc-cli/mc_cli/commands.py`,
+`backend/app/services/dispatch_message_builder.py`. Tests:
+`scripts/mc-cli/tests/test_deliverable_paths.py`,
+`backend/tests/test_dispatch_message_slim.py`.

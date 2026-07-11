@@ -586,7 +586,7 @@ async def resolve_approval(
                     # Vault write mc_token_{slug} for /internal/bootstrap
                     # (the template path runs via _do_instantiate, which writes itself).
                     from app.services.secrets_helper import upsert_agent_token_secret
-                    await upsert_agent_token_secret(session, new_agent.name, raw_token)
+                    await upsert_agent_token_secret(session, new_agent, raw_token)
 
                 # Ephemeral flag: as a tag in the skills array (no schema change)
                 if spawn_payload.get("ephemeral", True):
