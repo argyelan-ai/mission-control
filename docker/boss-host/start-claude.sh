@@ -12,7 +12,15 @@
 set -eu
 
 CONFIG_DIR="$HOME/.mc/agents/boss-host/claude-config"
+CARD_FILE="$CONFIG_DIR/CARD.md"
 SOUL_FILE="$CONFIG_DIR/SOUL.md"
+# Context-Economy Stufe 2: CARD.md (<=5KB) ersetzt SOUL.md (~29KB) als
+# --append-system-prompt, aber nur fuer Agenten mit gesetztem Opt-in-Flag
+# (docker_agent_sync.write_operating_card schreibt/loescht die Datei je nach
+# agent.use_operating_card). -s statt -f: eine LEERE CARD.md (0 Byte) muss
+# wie "fehlt" behandelt werden, sonst startet der Agent ganz ohne
+# System-Prompt statt auf SOUL.md zurueckzufallen (matcht den -s-Check unten).
+[ -s "$CARD_FILE" ] || CARD_FILE="$SOUL_FILE"
 CLAUDE_BIN="$HOME/.local/bin/claude"
 # Boss-eigene MCP-Config — leer fuer jetzt, kann spaeter erweitert werden.
 # Wird mit --strict-mcp-config genutzt damit claude die persoenliche
@@ -56,14 +64,14 @@ export ANTHROPIC_MODEL="claude-opus-4-8"
 # Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =
 # kein Funktionsverlust gegenueber Container-Boss). Bei Bedarf spaeter
 # via --allowed-tools "Read,Grep,..." oder --permission-mode einschraenken.
-if [ -s "$SOUL_FILE" ]; then
+if [ -s "$CARD_FILE" ]; then
     exec "$CLAUDE_BIN" \
         --dangerously-skip-permissions \
         --strict-mcp-config \
         --mcp-config "$MCP_CONFIG" \
-        --append-system-prompt "$(cat "$SOUL_FILE")"
+        --append-system-prompt "$(cat "$CARD_FILE")"
 else
-    echo "WARN: $SOUL_FILE leer oder fehlt — starte ohne system-prompt" >&2
+    echo "WARN: $CARD_FILE leer oder fehlt — starte ohne system-prompt" >&2
     exec "$CLAUDE_BIN" \
         --dangerously-skip-permissions \
         --strict-mcp-config \

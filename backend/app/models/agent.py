@@ -190,6 +190,18 @@ class Agent(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # Context-economy Stage 2 (Migration 0151): per-agent opt-in for the L1
+    # Operating Card (backend/templates/CARD.md.j2, <=5KB) as a replacement
+    # for the full SOUL.md --append-system-prompt. False by default — the
+    # pilot (Sparky) is flipped via DB at deploy time, not by app code.
+    # docker_agent_sync writes/removes claude-config/CARD.md based on this
+    # flag; consumers (start-claude.sh, boss-host, omp-bridge) prefer
+    # CARD.md over SOUL.md when it exists on disk.
+    use_operating_card: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     requires_git_workflow: bool = Field(default=True)
     # Response language towards the operator (short code, e.g. "en", "de").
     # Templates are English; this only steers how the agent replies.

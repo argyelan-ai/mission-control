@@ -6,7 +6,7 @@ import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Plus, X, Loader2, Bot, Users, Zap, RotateCcw, Settings, BarChart3,
+  Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
   Layout, ChevronDown, Trash2, MoreVertical,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -491,9 +491,7 @@ function AgentActionsSheet({
   agent,
   boardName,
   showAllAgents,
-  triggeringId,
   resettingId,
-  onTrigger,
   onReset,
   onDelete,
   onAssignBoard,
@@ -502,9 +500,7 @@ function AgentActionsSheet({
   agent: Agent;
   boardName: string | null;
   showAllAgents: boolean;
-  triggeringId: string | null;
   resettingId: string | null;
-  onTrigger: (a: Agent) => void;
   onReset: (a: Agent) => void;
   onDelete: (a: Agent) => void;
   onAssignBoard: (a: Agent) => void;
@@ -587,15 +583,6 @@ function AgentActionsSheet({
             <BarChart3 size={15} /> Analytics
           </Link>
           <button
-            onClick={() => { onClose(); onTrigger(agent); }}
-            disabled={triggeringId === agent.id}
-            className={itemCls + " disabled:opacity-50"}
-            style={{ color: C.info }}
-          >
-            {triggeringId === agent.id ? <Loader2 size={15} className="animate-spin" /> : <Zap size={15} />}
-            Trigger
-          </button>
-          <button
             onClick={() => { onClose(); onReset(agent); }}
             disabled={resettingId === agent.id}
             className={itemCls + " disabled:opacity-50"}
@@ -639,7 +626,6 @@ export default function AgentsPage() {
   const [assignBoardAgent, setAssignBoardAgent] = useState<Agent | null>(null);
   const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
   const [menuAgent, setMenuAgent] = useState<Agent | null>(null);
-  const [triggeringId, setTriggeringId] = useState<string | null>(null);
   const [resettingId, setResettingId] = useState<string | null>(null);
 
   // SSE: refresh agents on events
@@ -673,24 +659,6 @@ export default function AgentsPage() {
   );
 
   // ── Actions ─────────────────────────────────────────────────────────────
-  const handleTrigger = async (agent: Agent) => {
-    setTriggeringId(agent.id);
-    try {
-      const result = await api.agents.trigger(agent.id, "Please continue with your current task.");
-      if (result.reply) {
-        notify.success(`${agent.emoji ?? "🤖"} ${agent.name}: ${result.reply}`);
-      } else {
-        notify.info(`${agent.name}: Trigger sent, no reply received.`);
-      }
-      qc.invalidateQueries({ queryKey: ["agents"] });
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Unknown error";
-      notify.error(`Trigger failed: ${msg}`);
-    } finally {
-      setTriggeringId(null);
-    }
-  };
-
   const handleReset = async (agent: Agent) => {
     setResettingId(agent.id);
     try {
@@ -880,9 +848,7 @@ export default function AgentsPage() {
               agent={menuAgent}
               boardName={menuAgent.board_id ? boardsMap[menuAgent.board_id] ?? null : null}
               showAllAgents={showAllAgents}
-              triggeringId={triggeringId}
               resettingId={resettingId}
-              onTrigger={handleTrigger}
               onReset={handleReset}
               onDelete={setDeletingAgent}
               onAssignBoard={setAssignBoardAgent}

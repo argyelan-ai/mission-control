@@ -129,6 +129,10 @@ class AgentUpdate(BaseModel):
     # runtime_id) re-switches the agent onto its CURRENT runtime with the new
     # harness. Only the three known harnesses are accepted.
     harness: str | None = None
+    # Context-economy Stage 2 (Migration 0151) — opt in/out of the L1
+    # Operating Card. Plain field-merge, no restart-triggering side effect;
+    # the CARD.md write/removal happens on the next sync-config call.
+    use_operating_card: bool | None = None
 
     @field_validator("harness")
     @classmethod
@@ -1082,6 +1086,20 @@ async def delete_agent(
     # the sole persistence; cli-bridge containers are managed centrally
     # via docker_agent_sync.
 
+    # Some FK-cleanup tables (e.g. skill_runs) have no SQLModel class — they
+    # exist only via Alembic migrations. Under the SQLite test harness (schema
+    # built from SQLModel metadata) those tables are absent, so blindly issuing
+    # the cleanup SQL raised "no such table". Reflect the live table set once
+    # and skip anything absent: on Postgres prod every table exists → identical
+    # behaviour; the guard just makes the cleanup resilient to schema drift.
+    from sqlalchemy import inspect as _sa_inspect
+
+    existing_tables = set(
+        await session.run_sync(
+            lambda sync_session: _sa_inspect(sync_session.get_bind()).get_table_names()
+        )
+    )
+
     # FK cleanup — delete NOT NULL rows
     not_null_deletes = [
         ("agent_messages", "from_agent_id = :aid OR to_agent_id = :aid"),
@@ -1092,6 +1110,8 @@ async def delete_agent(
         ("task_deliverables", "agent_id = :aid"),
     ]
     for table, where in not_null_deletes:
+        if table not in existing_tables:
+            continue
         await session.execute(
             text(f"DELETE FROM {table} WHERE {where}"),
             {"aid": str(agent_id)},
@@ -1122,14 +1142,58 @@ async def delete_agent(
         ("tasks", "assigned_agent_id"),
     ]
     for table, col in nullable_updates:
+        if table not in existing_tables:
+            continue
         await session.execute(
             text(f"UPDATE {table} SET {col} = NULL WHERE {col} = :aid"),
             {"aid": str(agent_id)},
         )
 
+    # External-artifact cleanup (found 2026-07-11 — DELETE only touched the DB,
+    # leaving the vault token, the compose service block and the staged host
+    # files behind). Capture the fields we need BEFORE commit, because the ORM
+    # object's attributes expire once the row is gone.
+    from types import SimpleNamespace
+    from app.services.secrets_helper import delete_agent_token_secret
+
+    agent_name = agent.name
+    agent_runtime = getattr(agent, "agent_runtime", None)
+    # The stable, insert-time slug (Agent._agent_fill_slug) — NOT the current
+    # name, which a plain PATCH rename can change without rotating the token or
+    # re-rendering compose. Both the vault key and the compose block were keyed
+    # off the ORIGINAL name, and the slug preserves it. Fall back to deriving
+    # from name for any legacy row that somehow lacks a slug.
+    stable_slug = agent.slug or (agent.name or "").lower().replace(" ", "-")
+    host_snapshot = (
+        SimpleNamespace(slug=agent.slug, name=agent.name)
+        if agent_runtime == "host"
+        else None
+    )
+    compose_slug = stable_slug if agent_runtime == "cli-bridge" else None
+
+    # Vault token — deleted inside this transaction so it rolls back atomically
+    # with the agent if the delete fails.
+    await delete_agent_token_secret(session, stable_slug)
+
     await session.delete(agent)
     await session.commit()
-    logger.info("Agent %s (%s) deleted with FK cleanup", agent.name, agent_id)
+    logger.info("Agent %s (%s) deleted with FK cleanup", agent_name, agent_id)
+
+    # Filesystem / compose teardown runs AFTER the commit succeeds — best-effort,
+    # so an rmtree or lock error never resurrects a half-deleted agent.
+    if host_snapshot is not None:
+        try:
+            from app.services.host_provisioning import teardown_host_agent_files
+            teardown_host_agent_files(host_snapshot)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("host file teardown for %s failed: %s", agent_name, e)
+
+    if compose_slug is not None:
+        try:
+            from app.services.compose_renderer import prune_compose_agent
+            await prune_compose_agent(compose_slug)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("compose prune for %s failed: %s", agent_name, e)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

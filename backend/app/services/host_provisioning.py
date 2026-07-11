@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -288,3 +289,31 @@ def maybe_load_plist(result: HostStageResult) -> dict:
         "stderr": (proc.stderr or "").strip(),
         "command": result.launchctl_command,
     }
+
+
+def teardown_host_agent_files(agent: Agent) -> dict:
+    """Remove ``~/.mc/agents/<slug>/`` for a deleted host agent.
+
+    Counterpart to stage_host_agent_files: agent deletion used to leave the
+    staged plist + launcher + agent.env (with a live token!) on disk forever
+    (found 2026-07-11). Reuses the exact path-confinement guard from staging
+    so a hostile/degenerate slug can never make this rmtree escape the agents
+    root — and it refuses to delete the agents root itself.
+
+    Does NOT touch launchd (unloading a job is the operator's manual step,
+    symmetric with maybe_load_plist being gated). Returns
+    ``{"removed": bool, "path": str}``.
+    """
+    home = _home_host()
+    slug = _resolve_slug(agent)
+    agents_root = (home / ".mc" / "agents").resolve()
+    workspace = home / ".mc" / "agents" / slug
+    resolved_workspace = workspace.resolve()
+    if resolved_workspace == agents_root or agents_root not in resolved_workspace.parents:
+        raise ValueError(
+            f"refusing to remove host agent files outside {agents_root}: {resolved_workspace}"
+        )
+    existed = resolved_workspace.is_dir()
+    if existed:
+        shutil.rmtree(resolved_workspace)
+    return {"removed": existed, "path": str(resolved_workspace)}
