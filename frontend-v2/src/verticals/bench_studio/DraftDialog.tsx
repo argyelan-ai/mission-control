@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
@@ -23,6 +23,14 @@ export function DraftDialog({
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [speedLabels, setSpeedLabels] = useState(false);
+
+  // Reset state each time the dialog opens so a second open starts clean.
+  useEffect(() => {
+    if (open) {
+      setText("");
+      setSpeedLabels(false);
+    }
+  }, [open]);
 
   const counterColor =
     text.length > MAX ? C.error : text.length > WARN_AT ? C.warning : C.textMuted;

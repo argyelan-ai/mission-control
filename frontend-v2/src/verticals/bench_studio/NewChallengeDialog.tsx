@@ -29,7 +29,19 @@ export function NewChallengeDialog({
   const [seriesLabel, setSeriesLabel] = useState("");
   const [models, setModels] = useState<BenchModelSpec[]>([{ ...EMPTY_MODEL }]);
 
-  // Prefill from the Prompt Library ("Challenge starten"):
+  const { data: agents } = useQuery({
+    queryKey: ["agents-for-bench"],
+    queryFn: () => api.agents.list(),
+    enabled: open,
+  });
+
+  const { data: templates } = useQuery({
+    queryKey: ["prompt-templates-for-bench"],
+    queryFn: benchApi.promptTemplates.list,
+    enabled: open,
+  });
+
+  // Prefill from the Prompt Library ("Challenge starten") — also preselects the dropdown:
   useEffect(() => {
     if (prefillTemplate && open) {
       setTitle(prefillTemplate.title);
@@ -37,12 +49,6 @@ export function NewChallengeDialog({
       setTemplateId(prefillTemplate.id);
     }
   }, [prefillTemplate, open]);
-
-  const { data: agents } = useQuery({
-    queryKey: ["agents-for-bench"],
-    queryFn: () => api.agents.list(),
-    enabled: open,
-  });
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -70,6 +76,19 @@ export function NewChallengeDialog({
     setMode("side_by_side");
     setSeriesLabel("");
     setModels([{ ...EMPTY_MODEL }]);
+  }
+
+  function handleTemplateSelect(id: string) {
+    if (!id) {
+      // Switching back to Freitext — clear template id, keep text editable
+      setTemplateId(null);
+      return;
+    }
+    const tpl = (templates ?? []).find((t) => t.id === id);
+    if (tpl) {
+      setTemplateId(tpl.id);
+      setPromptText(tpl.body);
+    }
   }
 
   function setModel(i: number, patch: Partial<BenchModelSpec>) {
@@ -110,6 +129,22 @@ export function NewChallengeDialog({
           style={inputStyle}
         />
 
+        {/* Template picker: "Freitext" default + one option per template */}
+        <select
+          value={templateId ?? ""}
+          onChange={(e) => handleTemplateSelect(e.target.value)}
+          className="rounded-lg p-2.5 text-sm outline-none"
+          style={inputStyle}
+          aria-label="Template wählen"
+        >
+          <option value="">Freitext</option>
+          {(templates ?? []).map((tpl) => (
+            <option key={tpl.id} value={tpl.id}>
+              {tpl.title}
+            </option>
+          ))}
+        </select>
+
         <textarea
           value={promptText}
           onChange={(e) => {
@@ -117,7 +152,7 @@ export function NewChallengeDialog({
             setTemplateId(null); // manual edit breaks the template link — frozen copy comes from text
           }}
           rows={5}
-          placeholder="Prompt (oder aus der Prompt Library starten)"
+          placeholder="Prompt (oder Template oben wählen)"
           className="rounded-lg p-3 text-sm resize-none outline-none"
           style={inputStyle}
         />

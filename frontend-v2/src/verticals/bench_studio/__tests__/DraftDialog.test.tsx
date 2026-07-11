@@ -69,3 +69,43 @@ describe("DraftDialog", () => {
     });
   });
 });
+
+describe("DraftDialog — state reset on reopen", () => {
+  it("clears text and speedLabels when dialog is reopened", async () => {
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+    });
+    const { rerender } = render(
+      <QueryClientProvider client={qc}>
+        <DraftDialog challenge={CHALLENGE} open onClose={() => {}} />
+      </QueryClientProvider>
+    );
+
+    // Type something and check the checkbox
+    const textarea = screen.getByRole("textbox");
+    await userEvent.type(textarea, "typed text");
+    await userEvent.click(screen.getByRole("checkbox"));
+
+    expect((textarea as HTMLTextAreaElement).value).toBe("typed text");
+    expect(screen.getByRole("checkbox")).toBeChecked();
+
+    // Close dialog (open=false)
+    rerender(
+      <QueryClientProvider client={qc}>
+        <DraftDialog challenge={CHALLENGE} open={false} onClose={() => {}} />
+      </QueryClientProvider>
+    );
+
+    // Reopen dialog (open=true)
+    rerender(
+      <QueryClientProvider client={qc}>
+        <DraftDialog challenge={CHALLENGE} open onClose={() => {}} />
+      </QueryClientProvider>
+    );
+
+    // State should be reset
+    const textareaAfter = screen.getByRole("textbox");
+    expect((textareaAfter as HTMLTextAreaElement).value).toBe("");
+    expect(screen.getByRole("checkbox")).not.toBeChecked();
+  });
+});
