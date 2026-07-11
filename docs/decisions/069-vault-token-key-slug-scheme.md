@@ -53,7 +53,8 @@ Single-Word-Agents sind unter beiden Schemata byte-identisch
 ## Konsequenzen
 
 ### Positiv
-- Ein Etikett-Schema, überall gleich (Writer/Reader/Cleanup/Consumer/Compose).
+- Ein Etikett-Schema für den **Token-Vault**, überall gleich
+  (Writer/Reader/Cleanup/Consumer/Compose-Envkey).
 - Rename-sicher: Slug ändert sich nie, Writer und Delete stimmen immer überein.
 - Keine Leerzeichen mehr in Keys → `.env.agents`-Parsing kann nicht mehr brechen.
 - `delete_agent_token_secret` von Dual-Key auf Single-Key vereinfacht.
@@ -65,9 +66,20 @@ Single-Word-Agents sind unter beiden Schemata byte-identisch
   `in_progress == 0` (Hard-Rule: kein Fleet-Eingriff während Agenten arbeiten).
 - **Downgrade ist verlustbehaftet:** eine auf Upgrade zusammengeführte Kollision
   lässt sich nicht wieder auftrennen; Orphan-Keys bleiben unangetastet.
-- Kollisions-Tiebreak (beide Key-Formen vorhanden aus Rename+Reset-Historie)
-  wählt das neuere `updated_at` — im theoretischen Gleichstand gewinnt die
-  kanonische Slug-Form. Bewusst simpel gehalten.
+- Kollisions-Tiebreak (beide Key-Formen vorhanden aus Rename+Reset-Historie
+  **desselben** Agenten) wählt das neuere `updated_at` — im theoretischen
+  Gleichstand gewinnt die kanonische Slug-Form. Bewusst simpel gehalten.
+- **Echte Cross-Agent-Kollision** (zwei verschiedene Agents leiten denselben
+  Slug ab — `slug` ist DB-seitig nicht unique) wird von `find_slug_collisions`
+  erkannt und **unangetastet gelassen + geloggt** (statt still einen fremden
+  Live-Token zu überschreiben). In der Praxis fast unmöglich, weil der
+  cli-bridge-Container-Name `mc-agent-{slug}` bereits Docker-eindeutig ist —
+  zwei laufende Agents mit gleichem Slug können nicht koexistieren.
+- **Nicht abgedeckt (vorbestehend):** Container-/tmux-/Bridge-Naming in
+  `routers/cli_terminal.py` leitet den Slug weiterhin aus dem *aktuellen Namen*
+  ab (`name.lower().replace(" ","-")`, ~11 Stellen), nicht aus `agent.slug`.
+  Rename-fragil, aber ausserhalb des Vault-Scopes — eigener Follow-up
+  (auf `fs_service.agent_slug` vereinheitlichen).
 
 ## Referenzen
 

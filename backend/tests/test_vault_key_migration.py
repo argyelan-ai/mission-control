@@ -105,6 +105,67 @@ def test_agent_without_name_is_skipped():
     assert deletes == []
 
 
+# --- Cross-agent slug collision guard (adversarial review 2026-07-11) ---
+# slug is NOT unique in the DB. Two DISTINCT agents whose names differ only by
+# a space vs dash ("Host Testpilot" vs "Host-Testpilot") both derive slug
+# "host-testpilot". Blindly merging their keys by updated_at would DESTROY one
+# agent's live token. The migration must leave such genuine collisions untouched
+# and flag them for manual resolution — never silently clobber.
+
+
+def test_cross_agent_slug_collision_emits_no_ops():
+    from app.services.vault_key_migration import find_slug_collisions
+
+    agents = [
+        ("Host Testpilot", "host-testpilot"),   # space-name, token at space key
+        ("Host-Testpilot", "host-testpilot"),   # dash-name, token at dash key
+    ]
+    secret_keys = {
+        "mc_token_host testpilot": _dt(1),   # agent A's live token
+        "mc_token_host-testpilot": _dt(5),   # agent B's live token — must survive
+    }
+    renames, deletes = plan_key_migration(agents, secret_keys)
+    # Neither agent's key is touched — no rename, no delete.
+    assert renames == []
+    assert deletes == []
+    # And the collision is discoverable for logging.
+    assert find_slug_collisions(agents) == {"mc_token_host-testpilot"}
+
+
+def test_cross_agent_collision_where_dash_agent_is_single_word_key():
+    """B's name is already dash-form so B.name_key == B.slug_key == A.slug_key.
+    A must not delete/rename onto B's live token."""
+    agents = [
+        ("Multi Word", "multi-word"),
+        ("Multi-Word", "multi-word"),
+    ]
+    secret_keys = {
+        "mc_token_multi word": _dt(1),
+        "mc_token_multi-word": _dt(1),  # B's live token
+    }
+    renames, deletes = plan_key_migration(agents, secret_keys)
+    assert renames == []
+    assert deletes == []
+
+
+def test_no_false_collision_for_same_agent_rename_reset_history():
+    """A SINGLE agent with both key forms (created spaced, reset after rename)
+    is NOT a cross-agent collision and must still be merged."""
+    from app.services.vault_key_migration import find_slug_collisions
+
+    agents = [("Host Testpilot", "host-testpilot")]
+    assert find_slug_collisions(agents) == set()
+    renames, deletes = plan_key_migration(
+        agents,
+        secret_keys={
+            "mc_token_host testpilot": _dt(1),
+            "mc_token_host-testpilot": _dt(5),
+        },
+    )
+    assert deletes == ["mc_token_host testpilot"]
+    assert renames == []
+
+
 # --- Integration: migrate_connection / revert_connection against real SQLite ---
 
 import sqlalchemy as sa

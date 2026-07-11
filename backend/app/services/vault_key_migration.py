@@ -17,14 +17,37 @@ constraint on ``secrets.key``).
 """
 from __future__ import annotations
 
+import logging
+from collections import Counter
 from datetime import datetime
 from typing import Iterable, Mapping
+
+logger = logging.getLogger("mc.vault_key_migration")
 
 
 def _effective_slug(name: str, slug: str | None) -> str:
     """Mirror of Agent._agent_fill_slug / fs_service.agent_slug: prefer the
     persisted slug, fall back to the historical name→slug derivation."""
     return slug or name.lower().replace(" ", "-")
+
+
+def find_slug_collisions(
+    agents: Iterable[tuple[str | None, str | None]],
+) -> set[str]:
+    """Slug-derived token keys claimed by MORE THAN ONE distinct agent.
+
+    ``agents.slug`` is NOT unique in the DB (no constraint — verified against
+    the schema), so two agents whose names differ only by a space vs a dash
+    ("Host Testpilot" / "Host-Testpilot") both derive slug "host-testpilot" and
+    would target the same ``mc_token_host-testpilot`` key. Merging them by
+    ``updated_at`` would destroy one agent's live token. These are genuine
+    collisions that need manual resolution; the migration leaves them untouched
+    and logs them rather than clobbering data.
+    """
+    counts = Counter(
+        f"mc_token_{_effective_slug(name, slug)}" for name, slug in agents if name
+    )
+    return {key for key, count in counts.items() if count > 1}
 
 
 def plan_key_migration(
@@ -46,7 +69,14 @@ def plan_key_migration(
 
     Only agent-owned keys are touched: orphaned secrets with no matching agent
     are left untouched (agent deletion cleans those up going forward).
+
+    Genuine cross-agent slug collisions (two distinct agents deriving the same
+    slug key) are left untouched — merging them would destroy a live token.
+    They are returned by :func:`find_slug_collisions` for the caller to log.
     """
+    agents = list(agents)
+    collisions = find_slug_collisions(agents)
+
     renames: list[tuple[str, str]] = []
     deletes: list[str] = []
 
@@ -58,6 +88,8 @@ def plan_key_migration(
         slug_key = f"mc_token_{eff_slug}"
         if name_key == slug_key:
             continue  # single-word agent — key already canonical
+        if slug_key in collisions:
+            continue  # another agent claims this slug key — never clobber
 
         has_name = name_key in secret_keys
         has_slug = slug_key in secret_keys
@@ -93,8 +125,18 @@ def migrate_connection(conn) -> tuple[list[tuple[str, str]], list[str]]:
         text("SELECT key, updated_at FROM secrets WHERE key LIKE 'mc_token_%'")
     ).fetchall()
 
+    agent_pairs = [(row[0], row[1]) for row in agents]
+    collisions = find_slug_collisions(agent_pairs)
+    if collisions:
+        logger.warning(
+            "vault key migration: %d cross-agent slug collision(s) LEFT UNTOUCHED "
+            "— resolve the affected agents' tokens manually: %s",
+            len(collisions),
+            sorted(collisions),
+        )
+
     renames, deletes = plan_key_migration(
-        agents=[(row[0], row[1]) for row in agents],
+        agents=agent_pairs,
         secret_keys={row[0]: row[1] for row in secrets},
     )
 
