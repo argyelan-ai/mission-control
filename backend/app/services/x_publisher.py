@@ -144,10 +144,8 @@ class XPublisherError(Exception):
     """Raised for configuration errors (missing secrets) — never for API-side failures."""
 
 
-async def _load_client(session: AsyncSession):
-    """Builds a tweepy.Client from the 4 secrets. Raises XPublisherError if any is missing."""
-    import tweepy  # local import: keeps tweepy optional for code paths that never post
-
+async def _load_secret_values(session: AsyncSession) -> dict[str, str]:
+    """Loads the 4 X secrets from the vault. Raises XPublisherError if any is missing."""
     values: dict[str, str] = {}
     missing: list[str] = []
     for arg_name, secret_key in _SECRET_KEYS.items():
@@ -162,13 +160,37 @@ async def _load_client(session: AsyncSession):
             "X-Secrets fehlen in der Vault (Settings -> Secrets, Admin): "
             + ", ".join(missing)
         )
+    return values
 
+
+async def _load_client(session: AsyncSession):
+    """Builds a tweepy.Client from the 4 secrets. Raises XPublisherError if any is missing."""
+    import tweepy  # local import: keeps tweepy optional for code paths that never post
+
+    values = await _load_secret_values(session)
     return tweepy.Client(
         consumer_key=values["api_key"],
         consumer_secret=values["api_secret"],
         access_token=values["access_token"],
         access_token_secret=values["access_token_secret"],
     )
+
+
+async def _load_api(session: AsyncSession):
+    """Builds a tweepy.API (v1.1) from the same 4 secrets — required for
+    media_upload: tweepy 4.14's v2 Client has no media upload, only the v1.1
+    API with OAuth1UserHandler supports INIT/APPEND/FINALIZE chunked uploads.
+    Raises XPublisherError if any secret is missing."""
+    import tweepy
+
+    values = await _load_secret_values(session)
+    auth = tweepy.OAuth1UserHandler(
+        values["api_key"],
+        values["api_secret"],
+        values["access_token"],
+        values["access_token_secret"],
+    )
+    return tweepy.API(auth)
 
 
 def _classify_tweepy_error(exc: Exception) -> tuple[str, str]:

@@ -271,3 +271,36 @@ async def test_post_text_unexpected_exception_does_not_crash():
 
     assert result["ok"] is False
     assert result["error_type"] == "unknown_error"
+
+
+# ── _load_api (tweepy v1.1 API for media upload) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_load_api_builds_oauth1_api():
+    mock_auth = MagicMock()
+    mock_api = MagicMock()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.OAuth1UserHandler", return_value=mock_auth) as mock_handler, patch(
+            "tweepy.API", return_value=mock_api
+        ) as mock_api_cls:
+            api = await x_publisher._load_api(session)
+
+    assert api is mock_api
+    mock_handler.assert_called_once_with("ck", "cs", "at", "ats")
+    mock_api_cls.assert_called_once_with(mock_auth)
+
+
+@pytest.mark.asyncio
+async def test_load_api_missing_secrets_raises():
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(return_value=None),
+        ):
+            with pytest.raises(x_publisher.XPublisherError):
+                await x_publisher._load_api(session)
