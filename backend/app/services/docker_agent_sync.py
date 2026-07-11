@@ -118,6 +118,34 @@ def write_reference_docs(config_dir: Path, context: dict) -> dict[str, str]:
     return results
 
 
+def write_operating_card(config_dir: Path, agent: Agent, context: dict) -> dict[str, str]:
+    """Writes or removes claude-config/CARD.md based on agent.use_operating_card.
+
+    Context-economy Stage 2 (Migration 0151, pilot: Sparky). CARD.md is
+    template-owned like SOUL.md: overwritten unconditionally when the flag
+    is on. When the flag is off, any existing CARD.md is deleted so the
+    rollback is clean (consumers fall back to SOUL.md purely by the file's
+    absence — no separate config flag to keep in sync on their side).
+
+    Shared by both sync_docker_agent_files and sync_host_agent_files.
+    """
+    card_path = config_dir / "CARD.md"
+    if not getattr(agent, "use_operating_card", False):
+        try:
+            card_path.unlink(missing_ok=True)
+            return {"CARD.md": "removed (use_operating_card=false)"}
+        except OSError as e:
+            logger.error("write_operating_card(%s): remove failed: %s", agent.name, e)
+            return {"CARD.md": f"error removing: {e}"}
+    try:
+        content = render_agent_file("CARD.md.j2", context)
+        card_path.write_text(content, encoding="utf-8")
+        return {"CARD.md": f"written ({len(content.encode('utf-8'))} bytes)"}
+    except Exception as e:
+        logger.error("write_operating_card(%s): render/write failed: %s", agent.name, e)
+        return {"CARD.md": f"error: {e}"}
+
+
 def _agent_slug(agent: Agent) -> str:
     """Slug used to look up the agent directory.
 
@@ -267,6 +295,13 @@ async def sync_docker_agent_files(
     except Exception as e:
         logger.error("sync_docker_agent_files(%s) docs/: %s", agent.name, e)
         results["docs/_error"] = f"error: {e}"
+
+    # 4c. CARD.md — L1 Operating Card (context economy Stage 2, opt-in).
+    try:
+        results.update(write_operating_card(claude_config_dir, agent, context))
+    except Exception as e:
+        logger.error("sync_docker_agent_files(%s) CARD.md: %s", agent.name, e)
+        results["CARD.md"] = f"error: {e}"
 
     # 5. Runtime config (settings.json + .env) — rendered depending on runtime.
     #
@@ -566,6 +601,13 @@ async def sync_host_agent_files(
     except Exception as e:
         logger.error("sync_host_agent_files(%s) docs/: %s", agent.name, e)
         results["docs/_error"] = f"error: {e}"
+
+    # 4c. CARD.md — L1 Operating Card (context economy Stage 2, opt-in).
+    try:
+        results.update(write_operating_card(claude_config_dir, agent, context))
+    except Exception as e:
+        logger.error("sync_host_agent_files(%s) CARD.md: %s", agent.name, e)
+        results["CARD.md"] = f"error: {e}"
 
     # 5. DB-Updates persist (SOUL.md/HEARTBEAT.md/MEMORY.md may have been updated)
     session.add(agent)

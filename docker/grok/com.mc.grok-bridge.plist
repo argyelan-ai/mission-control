@@ -5,8 +5,9 @@
   <key>Label</key>
   <string>com.mc.grok-bridge</string>
   <!-- Static example plist — replace /Users/YOUR_USER with your actual home dir before installing.
-       ADR-066: grok is a headless host harness. The plist runs grok-bridge.py (the poll+dispatch
-       HTTP server); each dispatch spawns a one-shot `grok` subprocess. -->
+       ADR-068: grok is a host harness running as a persistent TUI (paste model). The plist runs
+       grok-bridge.py (the poll+heartbeat+watchdog HTTP server); it keeps a single `grok` TUI alive
+       in a tmux session and PASTES each dispatch into it (no headless `grok -p` subprocess). -->
   <key>ProgramArguments</key>
   <array>
     <string>/usr/bin/python3</string>

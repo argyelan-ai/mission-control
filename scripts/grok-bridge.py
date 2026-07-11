@@ -1,35 +1,40 @@
 #!/usr/bin/env python3
-"""grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-066).
+"""grok-bridge.py — host-side bridge for the Grok Build CLI (ADR-066 / ADR-068).
 
-Pattern source: scripts/hermes-bridge.py (poll loop, steady heartbeat, SIGTERM
-handling, localhost-only HTTP control server) + docker/omp-bridge/bridge.py
-(headless subprocess, streaming-NDJSON reducer, out-of-band wall-clock/idle
-watchdog, mc-cli lifecycle).
+v2 TUI paste model (ADR-068). The fleet-wide ban on the CLI print/headless mode
+(`grok -p` / `--output-format streaming-json`) — it bills extra on Claude Code and
+Mark wants ONE uniform delivery model across the fleet — retires v1's per-dispatch
+subprocess. Instead, mirroring the Hermes host worker (ADR-029) and the cli-bridge
+poll.sh mechanic, a SINGLE persistent `grok` TUI runs in a tmux session; this bridge
+polls MC and PASTES each dispatch into that TUI. The grok agent works interactively
+and drives its OWN MC lifecycle (`mc ack|comment|finish|blocked`) via the copied
+`mc` CLI — exactly like every claude/hermes host agent. The BRIDGE never closes a
+task: an unfinished run stays in_progress until the agent finishes/blocks it, and a
+silently stalled turn is un-stuck by a pane-capture no-progress nudge, not by the
+bridge forcing a terminal state.
 
-Diverges from hermes-bridge in the ONE thing that matters: Grok's `grok build`
-CLI is NOT a persistent tmux TUI you paste prompts into. Every dispatch is a
-one-shot headless subprocess:
+Pattern source:
+  - scripts/hermes-bridge.py — poll loop, steady heartbeat, SIGTERM handling,
+    localhost-only HTTP control server, tmux session autostart.
+  - docker/shared/poll.sh — paste_and_submit (load-buffer / paste-buffer +
+    bracketed-paste-end marker + Enter), tmux set-environment task context,
+    attempt-id dedup guard.
+  - docker/omp-bridge/bridge.py (NativeTuiController) — pane-capture readiness +
+    no-progress watchdog.
 
-    grok --prompt-file <file> --output-format streaming-json --cwd <workspace>
-         --permission-mode acceptEdits --session-id <uuid>
+There is NO `-p`, NO `--prompt-file`, NO streaming-json subprocess anywhere — grok
+runs as a long-lived interactive TUI only.
 
-that streams NDJSON events to stdout and then exits. So there is no tmux-paste
-delivery; delivery is a subprocess whose event stream the bridge reduces, and —
-because a headless CLI cannot be trusted to always drive its own MC lifecycle —
-the BRIDGE owns ack/finish/blocked deterministically (the omp model), while the
-grok agent itself registers deliverables/comments via the copied `mc` CLI
-(mc-context.env contract).
-
-Grok speaks ONLY to xAI cloud over its own OAuth (~/.grok/auth.json, auto
-refresh). There is NO OPENAI_*/ANTHROPIC_* provider env and NO MC-bound model
-endpoint — the runtime binding for a grok agent is a display/anchor only
-(ADR-066). agent.env carries just the MC_* control-plane vars.
+Grok speaks ONLY to xAI cloud over its own OAuth (~/.grok/auth.json, auto refresh).
+There is NO OPENAI_*/ANTHROPIC_* provider env and NO MC-bound model endpoint — the
+runtime binding for a grok agent is a display/anchor only (ADR-066). agent.env
+carries just the MC_* control-plane vars.
 
 Endpoints:
-  GET  /health   -> {"status","harness","dispatching","agent_env_present"}
-  POST /start    -> no-op ack (grok has no long-lived session to spawn)
-  POST /restart  -> drop the per-task session cache (next dispatch starts fresh)
-  POST /stop     -> request cancellation of the in-flight dispatch
+  GET  /health   -> {"status","harness","session","tmux_running","agent_env_present"}
+  POST /start    -> start the grok tmux session if not running
+  POST /restart  -> kill + restart the grok tmux session (re-sources agent.env)
+  POST /stop     -> send Escape into the session (interrupt the current turn)
 
 Auto-loaded by ~/Library/LaunchAgents/com.mc.grok-bridge.plist at login.
 """
@@ -39,65 +44,73 @@ import http.server
 import json
 import logging
 import os
-import queue as _queue
+import shlex
 import shutil
 import signal
 import subprocess as _sp
 import sys
 import threading
 import time
-import uuid
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable, Iterator, Optional, TextIO
+from typing import Optional
 
 # Ports: 18792/18793 = free-code-bridge, 18794 = hermes-bridge, 18795 = grok-bridge.
 PORT = 18795
 HOST = "127.0.0.1"  # localhost only, never the wildcard bind (same L-C rule as hermes-bridge)
 HOME_DIR = Path(os.environ.get("HOME_HOST", str(Path.home())))
 GROK_BIN = shutil.which("grok") or "/opt/homebrew/bin/grok"
+TMUX_BIN = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
 CONFIG_DIR = HOME_DIR / ".mc/agents/grok"
 WORKSPACE = HOME_DIR / ".mc/workspaces/grok"
 ENV_FILE = CONFIG_DIR / "agent.env"
 LOG_DIR = CONFIG_DIR / "logs"
 HARNESS = "grok"
 
+# The tmux session name the grok TUI runs in. Slug convention (agent "Grok" →
+# "grok"); the Sessions page mounts it via _HOST_AGENT_TMUX_TARGETS["grok"].
+SESSION = os.environ.get("GROK_SESSION", "grok")
+# The prompt glyph the grok TUI renders when it is idle and ready for input.
+# Verified on the live host: a `❯` inside a box, Statuszeile "Grok 4.5 (high)".
+READY_GLYPH = os.environ.get("GROK_READY_GLYPH", "❯")
+# Unattended TUI: acceptEdits so file edits don't stall on an approval prompt.
+GROK_PERMISSION_MODE = os.environ.get("GROK_PERMISSION_MODE", "acceptEdits")
+# Extra flags for the grok launch (space-separated); empty by default.
+GROK_EXTRA_FLAGS = os.environ.get("GROK_EXTRA_FLAGS", "")
+
 # Path the copied `mc` CLI reads task context from (mc_cli/config.py:from_env —
-# file wins over stale process env). poll.sh writes it for the claude fleet; a
-# headless bridge that replaces poll.sh MUST re-provide it or the agent's own
-# `mc ack|deliverable|done` fail. Same 3-key contract as docker/shared/poll.sh.
+# file wins over stale process env). poll.sh writes it for the claude fleet; this
+# bridge MUST re-provide it BEFORE each paste or the agent's own `mc ack|finish`
+# fail. Same 3-key contract as docker/shared/poll.sh.
 MC_CONTEXT_ENV_PATH = os.environ.get("MC_CONTEXT_ENV_PATH", "/tmp/mc-context.env")
 
-# Dispatch/lifecycle knobs (env-overridable).
+# Poll / heartbeat cadence (env-overridable).
 DISPATCH_POLL_INTERVAL = int(os.environ.get("GROK_DISPATCH_POLL_INTERVAL", "5"))
 # Heartbeat must stay well under the backend's 90s liveness window
 # (cli_terminal.list_host_session_agents: session_running = last_seen < 90s).
 HEARTBEAT_INTERVAL = int(os.environ.get("GROK_HEARTBEAT_INTERVAL", "30"))
-# Wall-clock cap per dispatch and no-progress (idle) cap — mirrors the omp
-# watchdog. Any NDJSON line refreshes progress; a genuinely hung generation
-# (no bytes for GROK_IDLE_TIMEOUT) is SIGTERM'd so a run can never hang.
-GROK_TASK_DEADLINE = float(os.environ.get("GROK_TASK_DEADLINE", "1800"))
-GROK_IDLE_TIMEOUT = float(os.environ.get("GROK_IDLE_TIMEOUT", "300"))
-GROK_PERMISSION_MODE = os.environ.get("GROK_PERMISSION_MODE", "acceptEdits")
-GROK_MODEL = os.environ.get("GROK_MODEL", "")  # empty → CLI default (grok-4.5)
-MC_BIN = os.environ.get("MC_BIN", "mc")
+# How long to wait for the TUI prompt glyph after (re)starting the session.
+READY_TIMEOUT = float(os.environ.get("GROK_READY_TIMEOUT", "45"))
+# No-progress nudge: if a dispatched task's pane shows no change for this long,
+# paste a gentle reminder to drive the mc lifecycle. The bridge never closes the
+# task itself — this only un-sticks a silently stalled turn.
+NUDGE_IDLE_TIMEOUT = float(os.environ.get("GROK_NUDGE_IDLE_TIMEOUT", "300"))
+NUDGE_MAX = int(os.environ.get("GROK_NUDGE_MAX", "2"))
+WATCHDOG_INTERVAL = float(os.environ.get("GROK_WATCHDOG_INTERVAL", "30"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("grok-bridge")
 
-# Per-task grok session ids (task_id -> grok sessionId). Lets follow-up comments
-# / nudges on the same task resume the SAME grok conversation via `grok -r <id>`.
-# Only populated AFTER a confirmed `end` event (outcome.session_id) — a run that
-# crashed/timed out without an end never leaves a stale id behind, so a re-dispatch
-# mints a fresh `-s <uuid>` instead of colliding on an existing session (Fix 5).
-_task_sessions: dict[str, str] = {}
-# Per-task board_id/attempt_id, captured at dispatch so the nudge path can build a
-# GrokLifecycle for follow-up comments (the /me/poll comment entry may not carry
-# the attempt id).
-_task_ctx: dict[str, dict] = {}
-_last_dispatched_task_id: Optional[str] = None  # dispatch-dedup cache
-_dispatch_lock = threading.Lock()  # serialize: one grok subprocess at a time
-_cancel_requested = threading.Event()
+# Dispatch-dedup: a task stays state=new_task on /me/poll until the agent runs
+# `mc ack`, so we guard re-paste by (task_id, attempt_id) — the poll.sh pattern.
+_last_dispatched_task_id: Optional[str] = None
+_last_dispatched_attempt_id: Optional[str] = None
+
+# Watchdog state — the currently active (dispatched) task and its pane progress.
+_state_lock = threading.Lock()
+_active_task: Optional[dict] = None
+_last_pane: str = ""
+_last_progress_ts: float = 0.0
+_nudges_sent: int = 0
 
 
 # ── env-file parsing (kept byte-identical to the backend escaping) ──────────────
@@ -120,7 +133,7 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
     """Parse KEY=VALUE lines from agent.env, strip quotes, skip comments/blanks.
 
     Returns os.environ.copy() merged with file contents and HOME forced to
-    HOME_DIR (so the grok subprocess resolves ~/.grok/auth.json on the host).
+    HOME_DIR (so the grok TUI resolves ~/.grok/auth.json on the host).
     """
     env = os.environ.copy()
     env["HOME"] = str(HOME_DIR)
@@ -142,12 +155,12 @@ def load_env_from_file(env_path: Path) -> dict[str, str]:
 def write_task_context_env(task: dict, path: str = MC_CONTEXT_ENV_PATH) -> bool:
     """Write the per-dispatch task context the copied `mc` CLI needs.
 
-    The grok agent's own `mc ack|deliverable|done` read TASK_ID / BOARD_ID /
-    X_DISPATCH_ATTEMPT_ID via mc_cli/config.py:from_env, which resolves this
-    file FIRST (it wins over the previous dispatch's process env). Without it
-    `mc ack` fails ("TASK_ID … müssen gesetzt sein") and status calls are
-    rejected 409 ("Missing X-Dispatch-Attempt-Id"). Best-effort: an unwritable
-    file must never crash the serve loop.
+    The grok agent's own `mc ack|comment|finish|blocked` read TASK_ID / BOARD_ID /
+    X_DISPATCH_ATTEMPT_ID via mc_cli/config.py:from_env, which resolves this file
+    FIRST (it wins over the previous dispatch's process env). Without it `mc ack`
+    fails ("TASK_ID … müssen gesetzt sein") and status calls are rejected 409
+    ("Missing X-Dispatch-Attempt-Id"). Best-effort: an unwritable file must never
+    crash the serve loop.
     """
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -160,175 +173,159 @@ def write_task_context_env(task: dict, path: str = MC_CONTEXT_ENV_PATH) -> bool:
         return False
 
 
-# ── streaming-json reducer ──────────────────────────────────────────────────────
-
-# Event `type`s emitted per NDJSON line by `grok --output-format streaming-json`.
-# Verified spike (2026-07-10): {"type":"thought","data":...},
-# {"type":"text","data":...}, and a terminal
-# {"type":"end","stopReason":"EndTurn","sessionId":"<uuid>","requestId":"..."}.
-# Unknown types are counted but ignored so a schema addition never crashes us.
+# ── tmux session management (start / readiness / paste) ─────────────────────────
 
 
-@dataclass
-class GrokOutcome:
-    """Everything the reducer distilled from one grok NDJSON stream."""
-
-    saw_end: bool = False
-    stop_reason: Optional[str] = None
-    session_id: Optional[str] = None
-    final_text: str = ""
-    thought_chunks: int = 0
-    text_chunks: int = 0
-    error_message: Optional[str] = None
-    parse_failures: int = 0
-    lines_seen: int = 0
-    watchdog_killed: bool = False  # set by the supervisor, not the stream
-    cancelled: bool = False        # killed via POST /stop / SIGTERM, not a timeout
-    exit_code: Optional[int] = None
+def _tmux(args: list[str], *, env: Optional[dict] = None) -> _sp.CompletedProcess:
+    """Run one tmux command, capturing output. Never raises — a tmux hiccup must
+    not crash the poll/watchdog loops (caller inspects returncode/stdout)."""
+    try:
+        return _sp.run(
+            [TMUX_BIN, *args], capture_output=True, text=True, timeout=15,
+            env=env or os.environ,
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("tmux %s failed: %s: %s", args[:2], type(e).__name__, e)
+        return _sp.CompletedProcess(args, returncode=1, stdout="", stderr=str(e))
 
 
-def iter_grok_events(fileobj: TextIO, outcome: Optional[GrokOutcome] = None) -> Iterator[dict]:
-    """Yield parsed NDJSON dicts. Malformed lines are counted, never raised —
-    a truncated/partial stream (crash, SIGTERM mid-write) must still reduce.
+def is_session_running() -> bool:
+    return _tmux(["has-session", "-t", SESSION]).returncode == 0
+
+
+def capture_pane() -> str:
+    """Return the visible pane text of the grok TUI (empty on failure)."""
+    r = _tmux(["capture-pane", "-p", "-t", SESSION])
+    return r.stdout if r.returncode == 0 else ""
+
+
+def _grok_launch_cmd() -> list[str]:
+    """Argv for the interactive grok TUI (NOT headless — no -p / --prompt-file).
+
+    `--no-alt-screen` runs inline (scrollback-native, mountable in xterm.js);
+    `--permission-mode acceptEdits` lets an unattended run apply edits without
+    stalling on an approval prompt. Matches the live host session.
     """
-    for line in fileobj:
-        line = line.strip()
-        if not line:
-            continue
-        if outcome is not None:
-            outcome.lines_seen += 1
-        try:
-            obj = json.loads(line)
-        except (json.JSONDecodeError, ValueError):
-            if outcome is not None:
-                outcome.parse_failures += 1
-            continue
-        if isinstance(obj, dict):
-            yield obj
+    cmd = [GROK_BIN, "--no-alt-screen", "--permission-mode", GROK_PERMISSION_MODE]
+    if GROK_EXTRA_FLAGS.strip():
+        cmd += shlex.split(GROK_EXTRA_FLAGS)
+    return cmd
 
 
-def reduce_grok_stream(events: Iterable[dict], outcome: Optional[GrokOutcome] = None) -> GrokOutcome:
-    """Fold the grok event stream into a GrokOutcome.
+def _grok_launch_shell_cmd() -> str:
+    """Shell line for `tmux new-session`: source agent.env in-shell, then exec grok.
 
-    - thought → count (never surfaced; reasoning is not deliverable content)
-    - text    → accumulate into final_text
-    - error   → capture the message (also flips a non-EndTurn terminal)
-    - end     → terminal: stopReason + sessionId
+    tmux windows inherit their environment from the tmux SERVER, not from the
+    client that runs `new-session` — passing env= to the subprocess never
+    reaches the TUI. A stale server-global (the hermes 13 KB token incident)
+    once poisoned MC_AGENT_TOKEN for every new session this way. Sourcing the
+    file inside the window shell (hermes entrypoint pattern) makes agent.env
+    the single source of truth regardless of server state.
     """
-    o = outcome or GrokOutcome()
-    for ev in events:
-        t = ev.get("type")
-        if t == "thought":
-            o.thought_chunks += 1
-        elif t == "text":
-            o.text_chunks += 1
-            data = ev.get("data")
-            if isinstance(data, str):
-                o.final_text += data
-        elif t == "error":
-            # grok may emit a stand-alone error event; keep the first message.
-            msg = ev.get("data") or ev.get("message")
-            if isinstance(msg, str) and not o.error_message:
-                o.error_message = msg
-        elif t == "end":
-            o.saw_end = True
-            o.stop_reason = ev.get("stopReason")
-            sid = ev.get("sessionId")
-            if isinstance(sid, str) and sid:
-                o.session_id = sid
-    return o
+    # tmux runs the window command through `sh -c` itself — return the compound
+    # line directly instead of double-wrapping (nested quoting would break).
+    grok = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
+    return f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; exec {grok}"
 
 
-@dataclass
-class LifecycleAction:
-    """What the bridge decided to do about a reduced run."""
-
-    action: str  # "finish" | "blocked"
-    reason: str  # short machine tag
-    detail: str  # human-readable (becomes the blocker question when blocked)
-    review: bool = True
-
-
-# grok stopReasons that mean the turn ended cleanly. Everything else (an aborted
-# turn, a max-turns cutoff, an error, a watchdog kill, or NO end event at all)
-# collapses to a terminal blocker so a dispatch can never hang in_progress.
-_CLEAN_STOP_REASONS = frozenset({"EndTurn", "endturn", "end_turn", "stop", "Stop"})
+def wait_for_agent_healthy(timeout: float = READY_TIMEOUT) -> bool:
+    """Poll the pane until the grok prompt glyph appears (TUI ready for input)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if READY_GLYPH in capture_pane():
+            return True
+        time.sleep(0.5)
+    return READY_GLYPH in capture_pane()
 
 
-def map_lifecycle(outcome: GrokOutcome, *, board_requires_review: bool = True) -> LifecycleAction:
-    """Deterministic stream → MC lifecycle mapping (bridge-owned, ADR-066).
+def start_grok_session() -> dict:
+    """Start the persistent grok TUI in a detached tmux session (idempotent).
 
-    EndTurn + no error → finish (hand off to review). Anything else — watchdog
-    kill, missing end event, error event, non-EndTurn stopReason, non-zero exit
-    — is a blocker (reversible, notifies Mark) rather than a silent hang.
+    Mirrors the live host: `tmux new-session -d -s grok -c <workspace> 'grok
+    --no-alt-screen …'`, mouse on, then wait for the prompt glyph. Requires
+    agent.env (the grok OAuth + MC_* control-plane); raises FileNotFoundError if
+    it is missing (provisioning may run later — main() tolerates that).
     """
-    if outcome.cancelled:
-        return LifecycleAction(
-            "blocked", "cancelled",
-            "grok-Dispatch wurde auf Anforderung gestoppt (POST /stop bzw. "
-            "Bridge-Shutdown) — kein hängender in_progress-Task. Bitte Task "
-            "erneut zuweisen, wenn er weiterlaufen soll.",
-        )
-    if outcome.watchdog_killed:
-        return LifecycleAction(
-            "blocked", "watchdog",
-            "grok-bridge hat den Dispatch abgebrochen (Wall-Clock- oder "
-            "Idle-Timeout überschritten) — kein hängender in_progress-Task. "
-            "Bitte Ergebnis prüfen und Task erneut zuweisen.",
-        )
-    if outcome.error_message:
-        return LifecycleAction(
-            "blocked", "grok_error",
-            f"grok meldete einen Fehler: {outcome.error_message[:400]}",
-        )
-    if not outcome.saw_end:
-        return LifecycleAction(
-            "blocked", "no_end",
-            "grok-Stream endete ohne `end`-Event (Prozess abgestürzt / Stream "
-            "abgeschnitten). Automatisch blockiert statt still in_progress zu "
-            "lassen — bitte prüfen.",
-        )
-    if outcome.exit_code not in (None, 0):
-        return LifecycleAction(
-            "blocked", "nonzero_exit",
-            f"grok beendete sich mit exit={outcome.exit_code} trotz "
-            f"stopReason={outcome.stop_reason!r}. Bitte Ergebnis prüfen.",
-        )
-    if (outcome.stop_reason or "") in _CLEAN_STOP_REASONS:
-        return LifecycleAction(
-            "finish", "end_turn",
-            outcome.final_text.strip() or "grok run complete (EndTurn).",
-            review=board_requires_review,
-        )
-    return LifecycleAction(
-        "blocked", "unclean_stop",
-        f"grok endete mit stopReason={outcome.stop_reason!r} (nicht EndTurn) — "
-        f"Turn wurde nicht sauber abgeschlossen. Bitte prüfen.",
+    if not ENV_FILE.exists():
+        raise FileNotFoundError(f"agent.env missing at {ENV_FILE} — provision first")
+    if is_session_running():
+        return {"status": "already_running", "session": SESSION}
+    env = load_env_from_file(ENV_FILE)
+    WORKSPACE.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    r = _tmux(
+        ["new-session", "-d", "-s", SESSION, "-c", str(WORKSPACE),
+         _grok_launch_shell_cmd()],
+        env=env,
     )
+    if r.returncode != 0:
+        raise RuntimeError(f"tmux new-session failed: {r.stderr.strip()}")
+    _tmux(["set-option", "-t", SESSION, "mouse", "on"], env=env)
+    ready = wait_for_agent_healthy()
+    log.info("started grok TUI in tmux session %s (ready=%s)", SESSION, ready)
+    return {"status": "started", "session": SESSION, "ready": ready}
 
 
-# ── dispatch prompt ─────────────────────────────────────────────────────────────
+def paste_and_submit(text: str) -> None:
+    """Load `text` into the tmux paste-buffer, paste into the grok TUI, submit.
+
+    Mirrors docker/shared/poll.sh:paste_and_submit exactly — a bracketed-paste-end
+    marker (ESC [ 2 0 1 ~, hex `1b 5b 32 30 31 7e`) is sent BEFORE Enter because a
+    TUI occasionally swallows the end marker, which would leave a subsequent bare
+    Enter interpreted as a newline INSIDE the paste instead of a submit. Content
+    goes through a file + load-buffer so arbitrary/multiline text is never
+    misinterpreted as tmux key-names.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    buf = LOG_DIR / "dispatch.paste"
+    buf.write_text(text, encoding="utf-8")
+    _tmux(["load-buffer", str(buf)])
+    _tmux(["paste-buffer", "-t", SESSION])
+    time.sleep(0.3)
+    _tmux(["send-keys", "-t", SESSION, "-H", "1b", "5b", "32", "30", "31", "7e"])
+    time.sleep(0.2)
+    _tmux(["send-keys", "-t", SESSION, "Enter"])
+
+
+def deliver_task_context(task: dict) -> None:
+    """Publish the task's MC context so the agent's own `mc` calls resolve it.
+
+    Writes /tmp/mc-context.env (the `mc` CLI reads it first) AND sets the same
+    3 keys in the tmux session env (belt-and-suspenders: new shells grok spawns
+    for bash tools inherit them). Called BEFORE paste_and_submit so `mc ack` in
+    the very first line of the agent's turn already has its context.
+    """
+    write_task_context_env(task)
+    ctx = {
+        "TASK_ID": str(task.get("id") or ""),
+        "BOARD_ID": str(task.get("board_id") or ""),
+        "X_DISPATCH_ATTEMPT_ID": str(task.get("dispatch_attempt_id") or ""),
+    }
+    for k, v in ctx.items():
+        _tmux(["set-environment", "-t", SESSION, k, v])
+
+
+# ── dispatch / comment prompts ──────────────────────────────────────────────────
 
 
 def build_dispatch_prompt(task: dict) -> str:
-    """Build the single-turn prompt handed to `grok --prompt-file`.
+    """Build the paste-ready dispatch text for the grok TUI.
 
-    Mirrors the hermes dispatch contract but adapted for the headless model: the
-    BRIDGE owns the terminal transition (finish/blocked), so grok is told to do
-    the work + register deliverables/comments/checklist via the `mc` CLI, and to
-    NOT itself move the task to review/done (the bridge does that from the
-    stream's `end` event). task_id/board_id/attempt_id are surfaced in the
-    header AND written to mc-context.env, so the `mc` CLI resolves them without
-    grok having to thread env through subshells.
+    The AGENT owns its MC lifecycle (ADR-068): it acks, comments progress, and
+    finishes/blocks the task itself via the copied `mc` CLI — the bridge does NOT
+    close tasks. The task/board/attempt ids are surfaced in the header AND written
+    to mc-context.env, so `mc` resolves them without grok threading env through
+    subshells. `task.prompt` (built by the backend) already carries SOUL/TOOLS
+    context; we render it verbatim and append the MC protocol footer.
 
     SECURITY: never materialize the literal MC_AGENT_TOKEN — only $MC_AGENT_TOKEN
-    references (resolved from the subprocess env) are allowed.
+    references (resolved from the tmux session env) are allowed.
     """
     task_id = str(task.get("id") or "")
     board_id = str(task.get("board_id") or "")
     attempt_id = str(task.get("dispatch_attempt_id") or "")
     title = str(task.get("title") or "")
-    body = str(task.get("description") or task.get("prompt") or "")
+    body = str(task.get("prompt") or task.get("description") or "")
 
     return (
         f"[MC DISPATCH] task_id={task_id} board_id={board_id} attempt_id={attempt_id}\n"
@@ -336,474 +333,156 @@ def build_dispatch_prompt(task: dict) -> str:
         f"\n"
         f"{body}\n"
         f"\n"
-        f"PROTOCOL (grok headless via Mission Control):\n"
-        f"- Your task context is already in {MC_CONTEXT_ENV_PATH} — the `mc` CLI\n"
-        f"  reads TASK_ID / BOARD_ID / X_DISPATCH_ATTEMPT_ID from it. Just call `mc`.\n"
+        f"PROTOCOL (grok interactive worker via Mission Control):\n"
+        f"- Your task context is in {MC_CONTEXT_ENV_PATH} — the `mc` CLI reads\n"
+        f"  TASK_ID / BOARD_ID / X_DISPATCH_ATTEMPT_ID from it. Just call `mc`.\n"
+        f"- ACK NOW, before you start: `mc ack {task_id}` (protects against the\n"
+        f"  10-min ACK-timeout re-dispatch).\n"
+        f"- Post progress as you work: `mc comment progress \"Update: ...\"`.\n"
         f"- Register every concrete artefact you produce: `mc deliverable <path-or-url>`.\n"
-        f"- Post progress as you go: `mc comment progress \"Update: ...\"`.\n"
         f"- Do the work in the current directory (your task workspace).\n"
-        f"- Do NOT run `mc done` / `mc finish` / move the task to review yourself —\n"
-        f"  the grok-bridge sets the terminal state from your turn's end. Just\n"
-        f"  finish your turn cleanly when the work is done.\n"
+        f"- FINISH the task YOURSELF when done: `mc finish {task_id} --review`\n"
+        f"  (or `mc blocked {task_id} ...` if you cannot proceed). The bridge does\n"
+        f"  NOT close tasks — an unfinished task stays in_progress.\n"
     )
 
 
-# ── grok subprocess ─────────────────────────────────────────────────────────────
+def build_comments_prompt(comments: list) -> str:
+    """Build a paste-ready prompt for a batch of new_comments from /me/poll.
 
-
-def build_grok_command(
-    *,
-    prompt_file: str,
-    workspace: str,
-    session_id: Optional[str] = None,
-    resume_session: Optional[str] = None,
-) -> list[str]:
-    """Assemble the `grok` argv for one headless dispatch.
-
-    Round 1 of a task: pass a fresh `--session-id <uuid>` (a NEW named session).
-    Follow-ups (comments/nudges on the same task): pass `-r <sessionId>` to
-    resume the SAME grok conversation. `--prompt-file` (not `-p`) avoids any
-    shell-escaping of multi-line prompts.
+    Mirrors hermes-bridge._build_comments_prompt / poll.sh:deliver_comments —
+    separates user vs system source, formats task header + content, ends with an
+    action hint. Backend already filters the agent's own comments (author_type),
+    so no client-side dedup. Returns "" when there is nothing to deliver.
     """
-    cmd = [
-        GROK_BIN,
-        "--output-format", "streaming-json",
-        "--cwd", workspace,
-        "--permission-mode", GROK_PERMISSION_MODE,
-        "--prompt-file", prompt_file,
-    ]
-    if GROK_MODEL:
-        cmd += ["--model", GROK_MODEL]
-    if resume_session:
-        cmd += ["-r", resume_session]
-    elif session_id:
-        cmd += ["-s", session_id]
-    return cmd
+    user_c = [c for c in comments if c.get("source") == "user"]
+    sys_c = [c for c in comments if c.get("source") == "system"]
 
+    lines: list[str] = []
+    if user_c:
+        lines += [
+            "[MC COMMENT] Neue User-Kommentare auf deinen aktiven Tasks",
+            "",
+            "Der Operator hat kommentiert. Lies, antworte im Task-Thread "
+            "(`mc comment progress \"…\"`), arbeite am Task weiter.",
+            "",
+        ]
+        for c in user_c:
+            lines.append(f"## Task: {c.get('task_title', '?')}  (id: {c.get('task_id', '?')})")
+            lines.append(f"- Zeit: {c.get('created_at', '?')}")
+            lines.append("- Inhalt:")
+            for line in (c.get("content") or "").splitlines():
+                lines.append(f"  > {line}")
+            lines.append("")
 
-def _supervise(
-    stream: TextIO,
-    outcome: GrokOutcome,
-    *,
-    kill: Callable[[], None],
-    deadline: float,
-    idle_timeout: float,
-    now: Callable[[], float] = time.monotonic,
-    poll_interval: float = 1.0,
-) -> GrokOutcome:
-    """Reduce `stream` while an out-of-band wall-clock + no-progress watchdog runs.
+    if sys_c:
+        if user_c:
+            lines += ["---", ""]
+        lines += [
+            "[MC EVENT] System-Events auf deinen aktiven Tasks",
+            "",
+            "Automatische Events (kein User-Input). Reagiere faktenbasiert:",
+            "- subtask_completed: Subtask fertig. Deliverables prüfen, ggf. Parent auf review.",
+            "- resolution: Agent hat Task abgeschlossen.",
+            "- blocker: Task blockiert. Impact + Entscheidung prüfen.",
+            "",
+        ]
+        for c in sys_c:
+            ct = c.get("comment_type", "system")
+            lines.append(f"## [{ct}] {c.get('task_title', '?')}  (id: {c.get('task_id', '?')})")
+            lines.append(f"- Zeit: {c.get('created_at', '?')}")
+            lines.append("- Inhalt:")
+            for line in (c.get("content") or "").splitlines():
+                lines.append(f"  > {line}")
+            lines.append("")
 
-    A genuine hang emits no NDJSON, so a blocking `readline()` would never
-    return and an inline deadline check would never run. So the blocking read
-    lives on a daemon reader thread that stamps a real last-progress timestamp
-    on every line; the main thread drains parsed events on a timer and evaluates
-    both deadlines even while the reader is wedged. On either deadline it flips
-    `watchdog_killed`, calls `kill()` (which SIGTERMs grok → EOF unblocks the
-    reader), and stops. `kill` is injected so this is unit-testable against a
-    fake blocking pipe.
-    """
-    q: "_queue.Queue[object]" = _queue.Queue()
-    _EOF = object()
-    last_progress = now()
-    lock = threading.Lock()
+    if not lines:
+        return ""
 
-    def _reader() -> None:
-        nonlocal last_progress
-        try:
-            while True:
-                raw = stream.readline()
-                if raw == "":
-                    break  # EOF (process exited / pipe closed by kill()).
-                with lock:
-                    last_progress = now()
-                line = raw.strip()
-                if not line:
-                    continue
-                outcome.lines_seen += 1
-                try:
-                    obj = json.loads(line)
-                except (json.JSONDecodeError, ValueError):
-                    outcome.parse_failures += 1
-                    continue
-                if isinstance(obj, dict):
-                    q.put(obj)
-        finally:
-            q.put(_EOF)
-
-    reader = threading.Thread(target=_reader, name="grok-reader", daemon=True)
-    reader.start()
-
-    def _drain() -> Iterator[dict]:
-        while True:
-            try:
-                item = q.get(timeout=poll_interval)
-            except _queue.Empty:
-                item = None
-            t_now = now()
-            with lock:
-                idle = t_now - last_progress
-            if t_now > deadline or idle > idle_timeout:
-                outcome.watchdog_killed = True
-                kill()
-                return
-            if item is _EOF:
-                return
-            if item is not None:
-                yield item  # type: ignore[misc]
-
-    reduce_grok_stream(_drain(), outcome)
-    reader.join(timeout=5)
-    return outcome
-
-
-def run_grok_dispatch(
-    prompt: str,
-    *,
-    workspace: str = str(WORKSPACE),
-    env: Optional[dict] = None,
-    session_id: Optional[str] = None,
-    resume_session: Optional[str] = None,
-    deadline: float = GROK_TASK_DEADLINE,
-    idle_timeout: float = GROK_IDLE_TIMEOUT,
-    _popen: Optional[Callable[..., "_sp.Popen"]] = None,
-) -> GrokOutcome:
-    """Spawn one headless grok subprocess and reduce its NDJSON stream.
-
-    Writes `prompt` to a temp file (avoids shell escaping), builds argv via
-    build_grok_command, streams stdout through the out-of-band watchdog, and
-    returns the reduced GrokOutcome (incl. exit_code). `_popen` is injected in
-    tests; real runs use subprocess.Popen. SIGTERM (not SIGKILL) is used to
-    cancel so grok can flush/checkpoint; a follow-up kill guards a wedged child.
-    """
-    outcome = GrokOutcome()
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    prompt_file = str(LOG_DIR / f"dispatch-{uuid.uuid4().hex[:8]}.prompt")
-    try:
-        Path(prompt_file).write_text(prompt, encoding="utf-8")
-    except OSError as e:
-        log.error("run_grok_dispatch: could not write prompt file: %s", e)
-        outcome.error_message = f"prompt file write failed: {e}"
-        return outcome
-
-    cmd = build_grok_command(
-        prompt_file=prompt_file, workspace=workspace,
-        session_id=session_id, resume_session=resume_session,
+    lines.append(
+        "**Aktion:** Reagiere im Task-Thread per `mc comment progress \"Update: ...\"`. "
+        "Abschluss wie immer per `mc finish <task> --review` / `mc blocked <task> ...`."
     )
-    log.info("run_grok_dispatch: %s", " ".join(cmd))
-
-    popen = _popen or _sp.Popen
-    try:
-        proc = popen(
-            cmd,
-            stdout=_sp.PIPE,
-            stderr=_sp.PIPE,
-            env=env or os.environ,
-            cwd=workspace,
-            text=True,
-            start_new_session=True,  # own process group → killpg reaps children
-        )
-    except (OSError, ValueError) as e:
-        # grok binary missing / not executable / bad cwd. Map to error_message so
-        # map_lifecycle() blocks the task rather than raising past the caller into
-        # a hung in_progress (Fix 1, belt to dispatch_task's suspenders).
-        log.error("run_grok_dispatch: spawn failed: %s", e)
-        outcome.error_message = f"grok konnte nicht gestartet werden: {e}"
-        try:
-            os.remove(prompt_file)
-        except OSError:
-            pass
-        return outcome
-
-    def _kill() -> None:
-        # Kill the whole process group (start_new_session=True) so grok's own
-        # child tools don't survive as orphans on a watchdog/cancel kill (Fix 4).
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                proc.terminate()
-            except Exception:  # noqa: BLE001
-                pass
-        try:
-            proc.wait(timeout=10)
-        except Exception:  # noqa: BLE001
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, PermissionError, OSError):
-                try:
-                    proc.kill()
-                except Exception:  # noqa: BLE001
-                    pass
-
-    # Drain stderr on its own thread so a full stderr pipe buffer can never block
-    # grok's stdout writes (which would starve the reducer and trip the idle
-    # watchdog on a chatty-stderr but healthy run) (Fix 3).
-    stderr_buf: list[str] = []
-
-    def _drain_stderr() -> None:
-        if proc.stderr is None:
-            return
-        try:
-            for line in proc.stderr:
-                stderr_buf.append(line)
-        except Exception:  # noqa: BLE001 — best-effort diagnostics only
-            pass
-
-    stderr_thread = threading.Thread(target=_drain_stderr, name="grok-stderr", daemon=True)
-    stderr_thread.start()
-
-    # External cancel request (POST /stop / SIGTERM) races the watchdog. Flag it
-    # distinctly from a timeout so the blocker message is accurate (Fix 6).
-    def _watch_cancel() -> None:
-        while proc.poll() is None:
-            if _cancel_requested.is_set():
-                outcome.cancelled = True
-                outcome.watchdog_killed = True
-                _kill()
-                return
-            time.sleep(0.5)
-
-    threading.Thread(target=_watch_cancel, name="grok-cancel", daemon=True).start()
-
-    if proc.stdout is not None:
-        _supervise(
-            proc.stdout, outcome,
-            kill=_kill, deadline=time.monotonic() + deadline, idle_timeout=idle_timeout,
-        )
-    outcome.exit_code = proc.wait()
-    stderr_thread.join(timeout=5)
-    if outcome.exit_code not in (0, None) and not outcome.error_message and stderr_buf:
-        outcome.error_message = "".join(stderr_buf).strip()[:400]
-    try:
-        os.remove(prompt_file)
-    except OSError:
-        pass
-    return outcome
+    return "\n".join(lines)
 
 
-# ── mc-cli lifecycle (bridge-driven, shells out to the copied `mc`) ─────────────
-
-
-class GrokLifecycle:
-    """Bridge-driven lifecycle — shells out to the copied `mc` CLI.
-
-    Same lifecycle the whole fleet uses (`mc ack|finish|blocked|comment`); the
-    task/board/attempt context is injected via env (the exact contract
-    mc_cli/config.py:from_env reads). No new backend endpoint. Every call is
-    best-effort logging — a failed lifecycle call must never crash the poll loop.
-    """
-
-    def __init__(self, *, base_url: str, token: str, board_id: str, attempt_id: str,
-                 mc_bin: str = MC_BIN) -> None:
-        self.base_url = base_url
-        self.token = token
-        self.board_id = board_id or ""
-        self.attempt_id = attempt_id or ""
-        self.mc_bin = mc_bin
-
-    def _env(self, task_id: str) -> dict:
-        env = dict(os.environ)
-        env["HOME"] = str(HOME_DIR)
-        env["MC_API_URL"] = self.base_url
-        env["MC_BASE_URL"] = self.base_url
-        env["MC_AGENT_TOKEN"] = self.token
-        env["TASK_ID"] = task_id
-        env["BOARD_ID"] = self.board_id
-        env["X_DISPATCH_ATTEMPT_ID"] = self.attempt_id
-        return env
-
-    def _run(self, task_id: str, args: list[str]) -> int:
-        try:
-            proc = _sp.run(
-                [self.mc_bin, *args], env=self._env(task_id),
-                capture_output=True, text=True, timeout=60,
-            )
-            if proc.returncode != 0:
-                log.warning(
-                    "mc %s exit=%s: %s", args[0], proc.returncode,
-                    (proc.stderr or proc.stdout or "").strip()[:300],
-                )
-            return proc.returncode
-        except Exception as e:  # noqa: BLE001 — lifecycle must never crash the loop
-            log.warning("mc %s raised %s: %s", args[0], type(e).__name__, e)
-            return -1
-
-    def ack(self, task_id: str) -> None:
-        self._run(task_id, ["ack", task_id])
-
-    def comment(self, task_id: str, text: str) -> None:
-        self._run(task_id, ["comment", "progress", text])
-
-    def finish(self, task_id: str, reflection: str, *, review: bool) -> None:
-        args = ["finish", task_id, reflection]
-        if review:
-            args.append("--review")
-        rc = self._run(task_id, args)
-        if rc != 0:
-            # Terminal guarantee: a rejected `mc finish` must NOT leave the task
-            # silently in_progress — fall back to a blocker (reversible, notifies).
-            log.warning("mc finish failed (rc=%s) -> falling back to blocked", rc)
-            self.blocked(
-                task_id,
-                "grok-bridge konnte den Task nicht auf review setzen "
-                f"(mc finish exit={rc}). Automatisch blockiert statt still "
-                "in_progress zu lassen — bitte Ergebnis prüfen und neu zuweisen.",
-            )
-
-    def blocked(self, task_id: str, question: str) -> None:
-        self._run(
-            task_id,
-            ["blocked", task_id, "--blocker-type", "technical_problem", "--question", question],
-        )
-
-
-def apply_lifecycle(lifecycle: GrokLifecycle, task_id: str, action: LifecycleAction) -> None:
-    """Execute the mapped LifecycleAction against MC."""
-    if action.action == "finish":
-        lifecycle.finish(task_id, action.detail, review=action.review)
-    else:
-        lifecycle.comment(task_id, f"grok-bridge: {action.reason} — {action.detail[:200]}")
-        lifecycle.blocked(task_id, action.detail)
-
-
-# ── dispatch driver ─────────────────────────────────────────────────────────────
-
-
-def dispatch_task(task: dict, env: dict) -> LifecycleAction:
-    """Run one task end-to-end: context env → ack → grok subprocess → lifecycle.
-
-    Serialized by _dispatch_lock (one grok subprocess at a time — a single
-    OAuth session, rate-limit friendly). Returns the applied LifecycleAction.
-
-    Terminal guarantee (Fix 1, CRITICAL): once `mc ack` has moved the task to
-    in_progress, EVERY exit path must leave it in a terminal state. run_grok_dispatch
-    maps spawn failures into outcome.error_message (→ blocked), but any *other*
-    unexpected exception between ack and apply_lifecycle is caught here and turned
-    into an explicit `mc blocked` — a headless dispatch must never hang in_progress.
-    """
-    task_id = str(task.get("id") or "")
-    board_id = str(task.get("board_id") or "")
-    attempt_id = str(task.get("dispatch_attempt_id") or "")
-    base_url = (env.get("MC_BASE_URL") or "").rstrip("/")
-    token = env.get("MC_AGENT_TOKEN") or ""
-
-    lifecycle = GrokLifecycle(
-        base_url=base_url, token=token, board_id=board_id, attempt_id=attempt_id,
+def build_nudge_prompt(task_id: str, n: int) -> str:
+    """Gentle no-progress reminder pasted into a silently stalled turn."""
+    return (
+        f"[MC WATCHDOG] Kein sichtbarer Fortschritt seit ~{int(NUDGE_IDLE_TIMEOUT)}s "
+        f"auf Task {task_id} (Nudge {n}/{NUDGE_MAX}).\n"
+        f"Falls du noch arbeitest, ignoriere das. Falls fertig: "
+        f"`mc finish {task_id} --review`. Falls blockiert: "
+        f"`mc blocked {task_id} --blocker-type technical_problem --question \"…\"`. "
+        f"Die Bridge schliesst den Task nicht selbst."
     )
-    with _dispatch_lock:
-        _cancel_requested.clear()
-        write_task_context_env(task)
-        lifecycle.ack(task_id)  # protect against the 10-min ACK-timeout re-dispatch
-        _task_ctx[task_id] = {"board_id": board_id, "attempt_id": attempt_id}
-
-        terminal_applied = False
-        try:
-            # Fresh session per full dispatch (Fix 5): never reuse a stored id as
-            # `-s <uuid>` (that collides — the uuid already exists). Follow-up
-            # comments resume via the nudge path instead.
-            session_id = str(uuid.uuid4())
-            prompt = build_dispatch_prompt(task)
-            outcome = run_grok_dispatch(
-                prompt, workspace=str(WORKSPACE), env=env, session_id=session_id,
-            )
-            # Persist the session ONLY on a confirmed end event, so a crashed/timed-out
-            # run leaves no stale id for a colliding `-s` re-dispatch (Fix 5).
-            if outcome.saw_end and outcome.session_id:
-                _task_sessions[task_id] = outcome.session_id
-            else:
-                _task_sessions.pop(task_id, None)
-
-            action = map_lifecycle(outcome)
-            log.info(
-                "dispatch_task %s: lines=%d stop=%s -> %s (%s)",
-                task_id[:8], outcome.lines_seen, outcome.stop_reason,
-                action.action, action.reason,
-            )
-            apply_lifecycle(lifecycle, task_id, action)
-            terminal_applied = True
-            return action
-        except Exception as e:  # noqa: BLE001 — terminal guarantee, see docstring
-            log.exception("dispatch_task %s: unexpected error: %s", task_id[:8], e)
-            _task_sessions.pop(task_id, None)
-            if not terminal_applied:
-                lifecycle.blocked(
-                    task_id,
-                    "grok-bridge unerwarteter Fehler beim Dispatch "
-                    f"({type(e).__name__}: {e}). Automatisch blockiert statt still "
-                    "in_progress zu lassen — bitte prüfen und neu zuweisen.",
-                )
-            return LifecycleAction("blocked", "dispatch_exception", str(e))
 
 
-def deliver_comment_nudge(task: dict, comment: dict, env: dict) -> Optional[GrokOutcome]:
-    """Resume the task's grok session with a new user comment as a follow-up turn.
+# ── dispatch driver (ensure session → context → paste → track) ──────────────────
 
-    Only fires when a session for the task already exists (i.e. the task was
-    dispatched in this bridge's lifetime, with a confirmed end event). Otherwise
-    there is nothing to resume and the comment is left for the next full dispatch.
 
-    The nudge outcome is routed through the lifecycle (Fix 2): grok's reply reaches
-    Mark as an `mc comment progress`, and an unclean stop / spawn error / watchdog
-    kill posts a blocker-comment instead of vanishing silently. The nudge prompt
-    (unlike the dispatch prompt) explicitly tells grok to `mc comment` its answer,
-    since the bridge does not re-post grok's text verbatim on this path.
+def _mark_active(task: dict) -> None:
+    global _active_task, _last_pane, _last_progress_ts, _nudges_sent
+    with _state_lock:
+        _active_task = task
+        _last_pane = ""
+        _last_progress_ts = time.monotonic()
+        _nudges_sent = 0
+
+
+def _clear_active() -> None:
+    global _active_task
+    with _state_lock:
+        _active_task = None
+
+
+def dispatch_task(task: dict, env: dict) -> bool:
+    """Deliver one task to the grok TUI: ensure session → context → paste → track.
+
+    Returns True on a paste, False if the session could not be started. The agent
+    then drives its own lifecycle; this function never touches task status.
     """
-    task_id = str(task.get("id") or comment.get("task_id") or "")
-    session_id = _task_sessions.get(task_id)
-    if not session_id:
-        return None
-    content = str(comment.get("content") or "")
-    board_id = str(task.get("board_id") or comment.get("board_id") or "")
-    prompt = (
-        f"[MC COMMENT] Neuer Kommentar auf Task {task_id}:\n\n{content}\n\n"
-        f"Reagiere und arbeite am Task weiter. Poste deine Antwort per "
-        f"`mc comment progress \"…\"`, damit Mark sie im Task-Thread sieht. "
-        f"Kein `mc done`/`mc finish` — die Bridge setzt den Endstatus."
+    if not is_session_running():
+        try:
+            start_grok_session()
+        except Exception as e:  # noqa: BLE001
+            log.error("dispatch_task: session autostart failed: %s — skipping", e)
+            return False
+    deliver_task_context(task)
+    paste_and_submit(build_dispatch_prompt(task))
+    _mark_active(task)
+    log.info(
+        "dispatched task %s (%s) into tmux session %s",
+        str(task.get("id"))[:8], str(task.get("title") or "?")[:60], SESSION,
     )
-    ctx = _task_ctx.get(task_id, {})
-    lifecycle = GrokLifecycle(
-        base_url=(env.get("MC_BASE_URL") or "").rstrip("/"),
-        token=env.get("MC_AGENT_TOKEN") or "",
-        board_id=board_id or ctx.get("board_id", ""),
-        attempt_id=ctx.get("attempt_id", ""),
-    )
-    with _dispatch_lock:
-        _cancel_requested.clear()
-        write_task_context_env({"id": task_id,
-                                "board_id": board_id or ctx.get("board_id"),
-                                "dispatch_attempt_id": ctx.get("attempt_id")})
-        outcome = run_grok_dispatch(prompt, workspace=str(WORKSPACE), env=env,
-                                    resume_session=session_id)
-
-    # Route the nudge outcome through the lifecycle — never discard it (Fix 2).
-    # A clean turn: surface grok's reply (grok is also told to comment itself, so
-    # this is a belt-and-suspenders audit note). An unclean stop/error/watchdog:
-    # block so the failure is visible rather than silently lost.
-    action = map_lifecycle(outcome)
-    if action.action == "finish":
-        reply = (outcome.final_text or "").strip()
-        lifecycle.comment(task_id, f"grok (Follow-up): {reply[:1000]}" if reply
-                          else "grok (Follow-up): Turn ohne Textausgabe abgeschlossen.")
-    else:
-        lifecycle.comment(task_id, f"grok-bridge (Follow-up {action.reason}): "
-                          f"{action.detail[:300]}")
-        lifecycle.blocked(task_id, action.detail)
-    return outcome
+    return True
 
 
-# ── poll + heartbeat loops (mirror hermes-bridge) ───────────────────────────────
+def deliver_comments(comments: list) -> bool:
+    """Paste a batch of new_comments into the running TUI. Returns True if sent."""
+    if not comments or not is_session_running():
+        return False
+    prompt = build_comments_prompt(comments)
+    if not prompt:
+        return False
+    paste_and_submit(prompt)
+    log.info("delivered %d comment(s)/event(s) to tmux session %s", len(comments), SESSION)
+    return True
+
+
+# ── poll + watchdog + heartbeat loops ───────────────────────────────────────────
 
 
 def dispatch_poll_loop() -> None:
-    """Poll MC for the agent's active task; run new ones headless via grok.
+    """Poll MC for the agent's active task; paste new ones into the grok TUI.
 
-    Idempotent via _last_dispatched_task_id. Network/JSON errors are logged and
-    swallowed — the loop never crashes the bridge HTTP server. Endpoint:
-    GET /api/v1/agent/me/poll (a CLAIM endpoint: sets ack_at + status=in_progress
-    on inbox tasks). state=new_task → dispatch; idle/cancelled/stopped → clear
-    dedup cache.
+    Dedup via (task_id, attempt_id): /me/poll keeps returning state=new_task until
+    the agent runs `mc ack`, so we only re-paste when the attempt id changes.
+    Network/JSON errors are logged and swallowed — the loop never crashes the HTTP
+    server. Endpoint GET /api/v1/agent/me/poll (a CLAIM endpoint). state=new_task →
+    dispatch; idle/cancelled/stopped → clear dedup + active-task tracking.
     """
-    global _last_dispatched_task_id
+    global _last_dispatched_task_id, _last_dispatched_attempt_id
     try:
         env = load_env_from_file(ENV_FILE)
         base_url = env.get("MC_BASE_URL")
@@ -833,27 +512,24 @@ def dispatch_poll_loop() -> None:
                         if _last_dispatched_task_id is not None:
                             log.info("dispatch_poll_loop: agent %s, clearing dispatch cache", state)
                             _last_dispatched_task_id = None
+                            _last_dispatched_attempt_id = None
+                        _clear_active()
 
-                if task and task.get("id") and task["id"] != _last_dispatched_task_id:
-                    _last_dispatched_task_id = task["id"]
-                    # Run in a worker thread so a long grok dispatch doesn't stall
-                    # polling/heartbeat; the _dispatch_lock still serializes runs.
-                    threading.Thread(
-                        target=_safe_dispatch, args=(task, env),
-                        name=f"grok-dispatch-{str(task['id'])[:8]}", daemon=True,
-                    ).start()
+                if task and task.get("id"):
+                    tid = str(task["id"])
+                    aid = str(task.get("dispatch_attempt_id") or "")
+                    # Re-paste only on a genuinely new task OR a fresh attempt id.
+                    if tid != _last_dispatched_task_id or (
+                        aid and aid != _last_dispatched_attempt_id
+                    ):
+                        if dispatch_task(task, env):
+                            _last_dispatched_task_id = tid
+                            _last_dispatched_attempt_id = aid
 
-                # Follow-up comments on an active, already-dispatched task → resume.
-                for c in (payload or {}).get("new_comments") or []:
-                    if c.get("source") != "user":
-                        continue
-                    ct_id = str(c.get("task_id") or "")
-                    if ct_id in _task_sessions:
-                        threading.Thread(
-                            target=deliver_comment_nudge,
-                            args=({"id": ct_id, "board_id": c.get("board_id")}, c, env),
-                            name=f"grok-nudge-{ct_id[:8]}", daemon=True,
-                        ).start()
+                # Follow-up comments/events on active tasks → paste (any state).
+                new_comments = (payload or {}).get("new_comments") or []
+                if new_comments:
+                    deliver_comments(new_comments)
             except urllib.error.HTTPError as e:
                 if e.code != 404:
                     log.warning("dispatch_poll_loop: HTTP %s — %s", e.code, e.reason)
@@ -865,20 +541,73 @@ def dispatch_poll_loop() -> None:
         raise
 
 
-def _safe_dispatch(task: dict, env: dict) -> None:
+def should_nudge(*, active: bool, idle_seconds: float, idle_threshold: float,
+                 nudges_sent: int, max_nudges: int) -> bool:
+    """Pure decision: nudge only while a task is active, the pane has been idle
+    past the threshold, and we have not exhausted the nudge budget."""
+    return bool(active) and idle_seconds >= idle_threshold and nudges_sent < max_nudges
+
+
+def _watchdog_tick(now: float, pane: str) -> Optional[str]:
+    """Advance the no-progress watchdog one step against a captured pane.
+
+    Returns a nudge prompt to paste (and increments the counter + resets the
+    idle window), or None. Pane change = progress → reset the idle clock. Pure
+    w.r.t. tmux: the caller supplies `now`/`pane` and pastes the return value, so
+    this is unit-testable without a real TUI.
+    """
+    global _last_pane, _last_progress_ts, _nudges_sent
+    with _state_lock:
+        if _active_task is None:
+            return None
+        if pane != _last_pane:
+            _last_pane = pane
+            _last_progress_ts = now
+            return None
+        idle = now - _last_progress_ts
+        if should_nudge(active=_active_task is not None, idle_seconds=idle,
+                        idle_threshold=NUDGE_IDLE_TIMEOUT,
+                        nudges_sent=_nudges_sent, max_nudges=NUDGE_MAX):
+            _nudges_sent += 1
+            n = _nudges_sent
+            _last_progress_ts = now  # reset so we wait another full idle window
+            task_id = str(_active_task.get("id") or "")
+            return build_nudge_prompt(task_id, n)
+        return None
+
+
+def watchdog_loop() -> None:
+    """Capture the pane on a timer; paste a no-progress nudge if a task stalls.
+
+    The agent owns its terminal state — the watchdog never blocks/finishes a task,
+    it only un-sticks a silently hung turn so nothing sits invisibly in_progress.
+    """
     try:
-        dispatch_task(task, env)
-    except Exception as e:  # noqa: BLE001 — a dispatch crash must not kill the loop
-        log.exception("dispatch failed for task %s: %s", str(task.get("id"))[:8], e)
+        while True:
+            time.sleep(WATCHDOG_INTERVAL)
+            try:
+                with _state_lock:
+                    has_task = _active_task is not None
+                if not has_task or not is_session_running():
+                    continue
+                nudge = _watchdog_tick(time.monotonic(), capture_pane())
+                if nudge:
+                    log.warning("watchdog: no progress — pasting nudge")
+                    paste_and_submit(nudge)
+            except Exception as e:  # noqa: BLE001 — a tick error must not kill the loop
+                log.warning("watchdog_loop: tick error: %s", type(e).__name__)
+    except Exception as e:
+        log.exception("[fatal] watchdog_loop crashed: %s", e)
+        raise
 
 
 def heartbeat_loop() -> None:
     """Keep the grok agent's last_seen_at fresh so it stays on the Sessions page.
 
-    Headless grok has no persistent process to derive liveness from, so — like
-    hermes-bridge — the bridge POSTs an empty /agent/me/heartbeat every
-    HEARTBEAT_INTERVAL. /heartbeat only refreshes last_seen (events fire on
-    status transitions only), so this is not noisy.
+    Like hermes-bridge, POST an empty /agent/me/heartbeat every HEARTBEAT_INTERVAL
+    WHILE the tmux session is running — the session is the liveness source, so a
+    dead session correctly goes stale after 90s. /heartbeat only refreshes
+    last_seen (events fire on status transitions only), so this is not noisy.
     """
     import urllib.error
     import urllib.request
@@ -895,9 +624,10 @@ def heartbeat_loop() -> None:
         log.info("heartbeat_loop: POST %s every %ss", url, HEARTBEAT_INTERVAL)
         while True:
             try:
-                req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=10):
-                    pass
+                if is_session_running():
+                    req = urllib.request.Request(url, data=b"{}", headers=headers, method="POST")
+                    with urllib.request.urlopen(req, timeout=10):
+                        pass
             except urllib.error.HTTPError as e:
                 log.warning("heartbeat_loop: HTTP %s — %s", e.code, e.reason)
             except Exception as e:  # noqa: BLE001
@@ -925,7 +655,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {
                 "status": "ok",
                 "harness": HARNESS,
-                "dispatching": _dispatch_lock.locked(),
+                "session": SESSION,
+                "tmux_running": is_session_running(),
                 "agent_env_present": ENV_FILE.exists(),
             })
             return
@@ -933,19 +664,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path == "/start":
-            # grok has no long-lived session; /start is a readiness ack.
-            self._send_json(200, {"ok": True, "harness": HARNESS, "note": "headless — no persistent session"})
+            try:
+                self._send_json(200, start_grok_session())
+            except FileNotFoundError as e:
+                self._send_json(412, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                self._send_json(500, {"error": f"start failed: {e}"})
             return
         if self.path == "/restart":
-            # Drop the per-task session cache so the next dispatch starts fresh
-            # (picks up a freshly re-sourced agent.env for the next `grok` call).
-            _task_sessions.clear()
-            _cancel_requested.set()
-            self._send_json(200, {"ok": True, "restart": "session cache cleared"})
+            # Kill + restart re-sources agent.env for the next turn (this IS the
+            # reload for a session-less harness — ADR-066 §2).
+            _tmux(["kill-session", "-t", SESSION])
+            _clear_active()
+            try:
+                self._send_json(200, {"ok": True, "restart": start_grok_session()})
+            except FileNotFoundError as e:
+                self._send_json(412, {"error": str(e)})
+            except Exception as e:  # noqa: BLE001
+                self._send_json(500, {"error": f"restart failed: {e}"})
             return
         if self.path == "/stop":
-            _cancel_requested.set()
-            self._send_json(200, {"ok": True, "stopped": "cancel requested"})
+            # Interrupt the current turn (Escape) — does NOT kill the session.
+            _tmux(["send-keys", "-t", SESSION, "Escape"])
+            self._send_json(200, {"ok": True, "stopped": "Escape sent"})
             return
         self._send_json(404, {"error": "not found"})
 
@@ -955,20 +696,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 def _handle_sigterm(signum, frame):  # noqa: ARG001
     log.info("[shutdown] received SIGTERM, exiting cleanly")
-    _cancel_requested.set()
     sys.exit(0)
 
 
 def main() -> None:
     try:
         signal.signal(signal.SIGTERM, _handle_sigterm)
-        # Background dispatcher + steady heartbeat (daemon → die with HTTP server).
+        # Try start on bridge boot — non-fatal if env missing (provisioning may run later).
+        try:
+            start_grok_session()
+        except FileNotFoundError as e:
+            log.warning("grok session not started: %s", e)
+        except Exception as e:  # noqa: BLE001
+            log.warning("grok session start failed (will retry on dispatch): %s", e)
         threading.Thread(target=dispatch_poll_loop, name="grok-dispatcher", daemon=True).start()
         log.info("grok-dispatcher thread started (poll every %ss)", DISPATCH_POLL_INTERVAL)
+        threading.Thread(target=watchdog_loop, name="grok-watchdog", daemon=True).start()
+        log.info("grok-watchdog thread started (capture every %ss)", WATCHDOG_INTERVAL)
         threading.Thread(target=heartbeat_loop, name="grok-heartbeat", daemon=True).start()
         log.info("grok-heartbeat thread started (POST every %ss)", HEARTBEAT_INTERVAL)
         server = http.server.HTTPServer((HOST, PORT), Handler)
-        log.info("grok-bridge listening on %s:%d (bin=%s)", HOST, PORT, GROK_BIN)
+        log.info("grok-bridge listening on %s:%d (bin=%s, session=%s)", HOST, PORT, GROK_BIN, SESSION)
         server.serve_forever()
         log.info("[shutdown] grok-bridge main loop exited normally")
     except SystemExit:
