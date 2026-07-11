@@ -143,6 +143,19 @@ def test_validate_media_default_root_is_shared_deliverables():
     assert any("/shared-deliverables" in e for e in result.errors)
 
 
+def test_validate_media_missing_files_do_not_count_toward_limits(tmp_path):
+    # Non-existent .mp4 files should not be counted toward the "Nur 1 Video" limit.
+    # Only the "existiert nicht" error should appear, not a limit error.
+    video1 = str(tmp_path / "bench-1/v1.mp4")
+    video2 = str(tmp_path / "bench-1/v2.mp4")
+    result = x_publisher.validate_media([video1, video2], root=tmp_path)
+    assert result.ok is False
+    # Both files should produce "existiert nicht" errors
+    assert sum(1 for e in result.errors if "existiert nicht" in e) == 2
+    # But should NOT produce a "Nur 1 Video" error (since non-existent files aren't counted)
+    assert not any("Nur 1 Video" in e for e in result.errors)
+
+
 # ── post_text: missing secrets ──────────────────────────────────────────────
 
 

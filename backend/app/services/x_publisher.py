@@ -113,6 +113,9 @@ def validate_media(media_paths: list[str], *, root: Path | None = None) -> Draft
         if not resolved.is_relative_to(effective_root):
             errors.append(f"Pfad liegt nicht unter {effective_root}: {raw}")
             continue
+        if not resolved.is_file():
+            errors.append(f"Datei existiert nicht: {raw}")
+            continue
         suffix = resolved.suffix.lower()
         if suffix in VIDEO_EXTENSIONS:
             videos.append(resolved)
@@ -121,8 +124,6 @@ def validate_media(media_paths: list[str], *, root: Path | None = None) -> Draft
         else:
             errors.append(f"Nicht unterstuetzter Medientyp '{suffix}': {raw}")
             continue
-        if not resolved.is_file():
-            errors.append(f"Datei existiert nicht: {raw}")
 
     if videos and images:
         errors.append(
