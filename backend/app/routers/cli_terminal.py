@@ -392,7 +392,7 @@ async def provision_cli_agent(
     # Vault rotation mc_token_{slug}: /internal/bootstrap must return the NEW
     # token — otherwise the container starts with the old one (fresh-install fix).
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
 
     agent_slug = agent.name.lower().replace(" ", "-")
 

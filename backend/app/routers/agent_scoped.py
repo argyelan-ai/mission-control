@@ -2471,7 +2471,7 @@ async def agent_create_custom(
 
     # Vault write mc_token_{slug} for /internal/bootstrap (fresh-install fix).
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, new_agent.name, raw_token)
+    await upsert_agent_token_secret(session, new_agent, raw_token)
 
     await emit_event(
         session,

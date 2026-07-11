@@ -273,7 +273,7 @@ async def bootstrap_hermes_agent(
     # Vault rotation mc_token_{slug}: keeps /internal/bootstrap consistent with
     # the freshly written agent.env (otherwise the vault would serve a stale token).
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
 
     # 8. Activity event
     await emit_event(
@@ -392,7 +392,7 @@ async def bootstrap_grok_agent(
     await session.refresh(agent)
 
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
 
     await emit_event(
         session,
