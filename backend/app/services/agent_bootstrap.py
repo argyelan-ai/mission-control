@@ -44,6 +44,9 @@ logger = logging.getLogger("mc.agent_bootstrap")
 HERMES_TMUX_SESSION = "hermes-worker"
 HERMES_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.hermes-bridge.plist"
 
+# Grok Build CLI host harness (ADR-066). Headless per-dispatch — no tmux session.
+GROK_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.grok-bridge.plist"
+
 
 def _home_host() -> Path:
     """Resolve host-side HOME using HOME_HOST override (per project memory).
@@ -285,5 +288,122 @@ async def bootstrap_hermes_agent(
         "plist_loaded": plist_result["loaded"],
         "plist_already": plist_result["already"],
         "tmux_session": HERMES_TMUX_SESSION,
+        "workspace_path": str(workspace),
+    }
+
+
+# ── Grok Bootstrap (ADR-066) ────────────────────────────────────────────────────
+
+
+async def build_grok_agent_env(
+    runtime: Runtime,
+    mc_agent_token: str,
+    *,
+    session: AsyncSession,
+) -> dict[str, str]:
+    """Compose env vars for the grok agent.env file.
+
+    Unlike Hermes, grok reads NO provider env: the Grok Build CLI talks only to
+    xAI cloud over its own OAuth (~/.grok/auth.json), so there is deliberately no
+    OPENAI_*/ANTHROPIC_* here — only the MC_* control-plane vars grok-bridge.py
+    needs to poll/heartbeat and the copied `mc` CLI needs to call back. `runtime`
+    is accepted for interface symmetry (display anchor) but its endpoint/model
+    are not injected (ADR-066). `session` is unused — kept for the adapter
+    Protocol signature.
+    """
+    home = str(_home_host())
+    return {
+        "MC_AGENT_TOKEN": mc_agent_token,
+        "MC_BASE_URL": settings.mc_base_url.rstrip("/"),
+        "HOME": home,
+        "PATH": f"{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    }
+
+
+async def bootstrap_grok_agent(
+    session: AsyncSession,
+    agent: Agent,
+    runtime: Runtime,
+) -> dict[str, Any]:
+    """Provision the grok host-side worker (headless Grok Build CLI, ADR-066).
+
+    Parallels bootstrap_hermes_agent but for the headless model:
+      1. Generate fresh MC_AGENT_TOKEN.
+      2. Build env via build_grok_agent_env (MC_* only — NO provider env).
+      3. mkdir config (~/.mc/agents/grok) + browsable workspace
+         (~/.mc/workspaces/grok) + logs.
+      4. Write agent.env (mode 600).
+      5. launchctl bootstrap ~/Library/LaunchAgents/com.mc.grok-bridge.plist
+         (tolerates already-loaded).
+      6. Auto-assign the MC Development board when unset.
+      7. provision_status = 'provisioned', persist, rotate vault token.
+      8. emit agent.grok_provisioned event.
+
+    Returns the same dict shape as bootstrap_hermes_agent (the provision endpoint
+    reads these keys uniformly). `tmux_session` is None — grok has no persistent
+    session; each dispatch is a one-shot subprocess.
+    """
+    home = _home_host()
+    config_dir = home / ".mc" / "agents" / "grok"
+    workspace = home / ".mc" / "workspaces" / "grok"
+    env_path = config_dir / "agent.env"
+    logs_dir = config_dir / "logs"
+    plist_path = home / GROK_PLIST_PATH_REL
+
+    raw_token, token_hash = generate_agent_token()
+    env = await build_grok_agent_env(runtime, raw_token, session=session)
+
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o755)
+    logs_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+
+    content = _format_env_file(env)
+    env_path.write_text(content)
+    os.chmod(env_path, 0o600)
+    logger.info("grok bootstrap: wrote %s (mode 600, %d keys)", env_path, len(env))
+
+    plist_result = _run_launchctl_bootstrap(plist_path)
+
+    if agent.board_id is None:
+        default_board_id = await _default_host_agent_board_id(session)
+        if default_board_id:
+            agent.board_id = default_board_id
+            logger.info(
+                "bootstrap_grok_agent: auto-assigned %s to MC Development board (%s)",
+                agent.name, default_board_id,
+            )
+        else:
+            logger.warning(
+                "bootstrap_grok_agent: 'MC Development' board not found — %s remains board_id=None",
+                agent.name,
+            )
+
+    agent.agent_token_hash = token_hash
+    agent.workspace_path = str(workspace)
+    agent.provision_status = "provisioned"
+    agent.provisioned_at = utcnow()
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+
+    from app.services.secrets_helper import upsert_agent_token_secret
+    await upsert_agent_token_secret(session, agent.name, raw_token)
+
+    await emit_event(
+        session,
+        "agent.grok_provisioned",
+        f"{agent.name} (Grok host worker) provisioniert — headless grok-bridge",
+        severity="info",
+        agent_id=agent.id,
+        board_id=agent.board_id,
+    )
+
+    return {
+        "token": raw_token,  # one-time visible
+        "env_path": str(env_path),
+        "plist_loaded": plist_result["loaded"],
+        "plist_already": plist_result["already"],
+        "tmux_session": None,  # grok is headless — no persistent session
         "workspace_path": str(workspace),
     }

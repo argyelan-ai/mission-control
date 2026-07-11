@@ -501,6 +501,25 @@ export const HARNESS_LABELS: Record<Harness, string> = {
   omp: "omp",
 };
 
+// Host-only harnesses (HostHarnessAdapter registry): hermes (ADR-064), grok
+// (ADR-066). Kept separate from the cli-bridge `Harness` union + HARNESS_LABELS
+// because they never appear in the cli-bridge runtime-switch matrix — they are
+// pickable only in the agent wizard for the `host` runtime.
+export type HostHarness = "hermes" | "grok";
+
+export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
+  hermes: "Hermes",
+  grok: "Grok Build",
+};
+
+// Wire protocol each host harness speaks (mirrors backend HARNESS_PROTOCOLS) —
+// used by the wizard to filter compatible runtimes: hermes → OpenAI-protocol
+// providers, grok → its own fixed "grok" cloud runtime (grok-cloud).
+export const HOST_HARNESS_PROTOCOL: Record<HostHarness, string> = {
+  hermes: "openai",
+  grok: "grok",
+};
+
 export interface Agent {
   id: string;
   board_id: string | null;
@@ -556,11 +575,11 @@ export interface Agent {
   pending_runtime_sync: boolean;
   // Harness/Provider-Decoupling (ADR-056) — explicit CLI harness override.
   // NULL means the harness is derived from the runtime's protocol.
-  // "hermes" (ADR-060) is a host-only harness value (HostHarnessAdapter
-  // registry, backend/app/services/host_harness_adapter.py) — intentionally
-  // outside the cli-bridge-facing `Harness` union so HARNESS_LABELS etc.
-  // don't need a "hermes" entry.
-  harness?: Harness | "hermes" | null;
+  // "hermes" (ADR-064) and "grok" (ADR-066) are host-only harness values
+  // (HostHarnessAdapter registry, backend/app/services/host_harness_adapter.py) —
+  // intentionally outside the cli-bridge-facing `Harness` union so HARNESS_LABELS
+  // stays cli-bridge-only. Labels for host harnesses live in HOST_HARNESS_LABELS.
+  harness?: Harness | HostHarness | null;
   created_at: string;
   updated_at: string;
 }

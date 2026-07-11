@@ -14,11 +14,17 @@ from tests.conftest import test_engine
 
 _BROADCAST_PATCH = patch("app.services.activity.broadcast", new_callable=AsyncMock)
 
+# Canonical W1 headers + >=80 chars of body: the reflection gate now checks
+# both the four required German headers AND substantive body content
+# (work_context._reflection_body_chars). The old short/renamed-header skeleton
+# was rejected 400 before these tests could reach their real subject (the
+# evidence gate). Valid reflection = the gate under test is exercised.
 REFLECTION_TEXT = (
-    "## Was gemacht\nFeature implementiert.\n"
-    "## Was funktioniert\nTests gruen.\n"
-    "## Was unklar\nNichts.\n"
-    "## Lesson\nImmer Tests zuerst schreiben."
+    "## Was wurde gemacht\nFeature implementiert inklusive Unit-Tests und einer "
+    "kurzen Doku-Notiz.\n\n"
+    "## Was hat funktioniert\nTests liefen gruen, der TDD-Zyklus war sauber.\n\n"
+    "## Was war unklar\nNichts Nennenswertes.\n\n"
+    "## Lesson fuer Agent-Memory\nImmer Tests zuerst schreiben."
 )
 
 
@@ -87,10 +93,15 @@ async def _setup_phase2a_scenario():
 
 @pytest.mark.asyncio
 async def test_review_blocked_without_evidence(client):
-    """Agent cannot set review without at least 1 progress/resolution comment.
+    """The evidence guard blocks review when a task has NO evidence comment.
 
-    Reflection comment has been mandatory since Phase E (Rule 4) and is satisfied here.
-    After that, the evidence guard applies (no progress/resolution/checkpoint → 409).
+    Since the 2026-07-10 canary fix a validated reflection COUNTS as evidence, and
+    a reflection is mandatory for a normal agent's closing transition — so for a
+    normal agent the reflection gate (400) always fronts the evidence guard, making
+    409 unreachable via that path. The evidence guard is still the independent
+    backstop for a board lead, who is exempt from the reflection requirement
+    (work_context.enforce_reflection skips is_board_lead) but NOT from the evidence
+    guard. So the lead posting no evidence at all is what must still 409 here.
     """
     ids = await _setup_phase2a_scenario()
     from app.models.task import Task
@@ -100,18 +111,17 @@ async def test_review_blocked_without_evidence(client):
         task = Task(
             id=task_id, board_id=ids["board_id"],
             title="No Evidence Task", status="in_progress",
-            assigned_agent_id=ids["dev_id"],
+            assigned_agent_id=ids["lead_id"],
         )
         s.add(task)
         await s.commit()
 
-    # Post reflection (Rule 4 satisfied) — but no evidence comment
-    await _add_reflection(task_id, ids["dev_id"])
-
+    # Board lead → reflection requirement skipped; no evidence comment of any kind
+    # → the evidence guard is the active gate and must fire.
     with _BROADCAST_PATCH:
         resp = await client.patch(
             f"/api/v1/agent/boards/{ids['board_id']}/tasks/{task_id}",
-            headers={"Authorization": f"Bearer {ids['dev_token']}"},
+            headers={"Authorization": f"Bearer {ids['lead_token']}"},
             json={"status": "review"},
         )
 

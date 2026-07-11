@@ -91,10 +91,15 @@ async def _add_reflection_comment(task_id: uuid.UUID, agent_id: uuid.UUID):
     """Posts a mandatory reflection so the closing transition gate passes."""
     from app.models.task import TaskComment
     content = (
-        "## Was wurde gemacht\nTask fertig.\n\n"
-        "## Was hat funktioniert\nAlles gut.\n\n"
-        "## Was war unklar\nNichts.\n\n"
-        "## Lesson fuer Agent-Memory\nKeine."
+        # Body must carry >=80 chars below the headers — the W1 reflection
+        # validator (work_context._reflection_body_chars) rejects header-only
+        # skeletons (adversarial-review A-1). Fill each field realistically.
+        "## Was wurde gemacht\nTask fertig implementiert inklusive Tests und "
+        "kurzer Doku-Notiz im README.\n\n"
+        "## Was hat funktioniert\nDer TDD-Zyklus lief sauber durch, alle Tests "
+        "auf Anhieb gruen.\n\n"
+        "## Was war unklar\nNichts Nennenswertes.\n\n"
+        "## Lesson fuer Agent-Memory\nKeine neue Lesson."
     )
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         s.add(TaskComment(

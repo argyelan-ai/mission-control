@@ -1,4 +1,4 @@
-import type { Board, Harness } from "@/lib/types";
+import type { Board, Harness, HostHarness } from "@/lib/types";
 
 export type StartMode = "custom" | "template" | "duplicate";
 export type WizardAgentRuntime = "cli-bridge" | "host" | "manual";
@@ -17,7 +17,8 @@ export interface WizardState {
   soulMd: string | null; // template/duplicate persona override
   // Runtime & model
   agentRuntime: WizardAgentRuntime;
-  harness: Harness | null;
+  // cli-bridge harness OR a host-only harness (hermes/grok) for the host runtime.
+  harness: Harness | HostHarness | null;
   runtimeId: string; // LLM runtime slug/uuid; "" = fallback
   model: string;
   // Rights & skills

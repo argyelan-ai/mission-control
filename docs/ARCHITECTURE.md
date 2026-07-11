@@ -216,6 +216,7 @@ Mission Control unterstützt **3 parallele Runtime-Typen** post-v0.9 Sunset (sie
 | **cli-bridge** (Docker V2) | Docker-Container mc-agent-{slug} | HTTP-Poll `/agent/me/next-task` + `tmux send-keys` | PTY-Proxy WS → docker exec tmux attach | Produktiv seit 2026-04-08 |
 | **host** (Boss) | macOS launchd-Job auf dem Host | HTTP-Poll `/agent/me/poll` + `tmux paste-buffer` | ttyd → WS-Proxy → Browser xterm.js | Produktiv seit 2026-04-17 |
 | **host** (Hermes) | macOS launchd-Job + eigene `hermes-bridge.py` | tmux-Session `hermes-worker`, vLLM (Qwen/Qwen3.6-35B-A3B-FP8) | xterm.js via `cli_terminal.py` | Pilot v0.8 (2026-04-30, ADR-029) |
+| **host** (Grok) | macOS launchd-Job + eigene `grok-bridge.py` | headless `grok --output-format streaming-json` per Dispatch, xAI-Cloud (grok-4.5) | keine (headless, kein persistenter Prozess) | Adapter+Bridge gebaut, Provisioning = Marks Gate (2026-07-10, ADR-066) |
 
 Beide Docker-V2 und Host-cli-bridge setzen `agent_runtime = 'cli-bridge'` in der DB — unterschieden werden sie dadurch ob ein Docker-Container `mc-agent-{slug}` läuft (Check via `docker ps` im `/docker-sessions/agents` Endpoint). Der `"openclaw"`-Enum-Value ist mit Migration 0123 (Phase 30, v0.9) entfernt.
 
@@ -296,6 +297,35 @@ Workspace-Layout) bleiben unverändert.
   bewusst `None`. Boss (`docker/boss-host/start-claude.sh`, hartcodiertes Modell, reine OAuth) bleibt
   in dieser Runde vollständig unangetastet.
 - **Setup-Doku:** ADR-064.
+
+#### Host-Harness: `grok` — Grok Build CLI (NEU 2026-07-10, ADR-066)
+
+Grok ist der **zweite** Host-Harness über den ADR-064-Adapter — und der erste headless: der
+offizielle xAI `grok build` CLI (`brew install --cask grok-build`, `/opt/homebrew/bin/grok`) läuft
+auf dem Host, per OAuth mit Marks X-Premium+-Abo eingeloggt (`~/.grok/auth.json`, Auto-Refresh,
+kein API-Key, Grenzkosten 0). Er spricht ausschliesslich mit der xAI-Cloud
+(`cli-chat-proxy.grok.com`) — kein MC-gebundenes Modell, keine Provider-Env.
+
+- **Modell:** headless per-Dispatch Subprocess `grok --prompt-file <p> --output-format
+  streaming-json --cwd <workspace> --permission-mode acceptEdits --session-id <uuid>` — **kein**
+  persistentes tmux-TUI (anders als Hermes). NDJSON-Stream: `thought`/`text`/terminal `end`
+  (`stopReason`,`sessionId`).
+- **Bridge:** eigene `scripts/grok-bridge.py` (Port 18795, 127.0.0.1) — Poll-Loop + Heartbeat +
+  SIGTERM/Crash-Contract nach `hermes-bridge.py`; Subprocess-Delivery + streaming-NDJSON-Reducer +
+  out-of-band Wall-Clock/Idle-Watchdog + mc-cli-Lifecycle nach `docker/omp-bridge/bridge.py`.
+- **Lifecycle bridge-getrieben:** weil grok headless ist, besitzt die Bridge `ack`/`finish`/`blocked`
+  deterministisch (omp-Prinzip: immer terminal, nie still `in_progress`). `end`+`EndTurn`+exit 0 →
+  `mc finish --review`; Watchdog/kein `end`/Fehler/non-EndTurn/exit≠0 → `mc blocked`. Der grok-Agent
+  registriert nur Deliverables/Kommentare via `mc` (mc-context.env-Contract), setzt **nicht** selbst
+  den Endstatus. Session-Kontinuität pro Task via `grok -r <sessionId>` für Folge-Kommentare.
+- **Adapter/Protokoll:** `GrokAdapter` (`harness="grok"`, `protocol="grok"`), `build_agent_env`
+  rendert **nur** MC_*-Env (kein `OPENAI_*`/`ANTHROPIC_*`). `HARNESS_PROTOCOLS["grok"]={"grok"}` —
+  protokoll-fix; die Seed-Runtime `grok-cloud` (`runtime_type:"grok"`, `single_instance:true`) ist
+  ein Display-Anker, `is_compatible()` lehnt jede openai/anthropic-Runtime für grok mit 422 ab.
+  `sync_host_agent_model()` ist für grok ein No-Op (nichts zu syncen). `reload` = launchctl kickstart
+  des `com.mc.grok-bridge.plist` (kein persistenter Prozess zu killen).
+- **NICHT in `HARNESSES`** (cli-bridge-Switch-Matrix) — host-only, wie hermes.
+- **Setup-Doku:** ADR-066. Live-Provisioning (launchctl, echter grok-Lauf) bleibt Marks Gate.
 
 ### 6. LLM Runtime Registry (NEU 2026-04-19)
 
