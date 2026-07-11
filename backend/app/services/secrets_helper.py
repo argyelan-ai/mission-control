@@ -141,3 +141,38 @@ async def upsert_agent_token_secret(
         )
     except Exception as e:
         logger.error("upsert_agent_token_secret(%s): Vault-Write fehlgeschlagen: %s", slug, e)
+
+
+async def delete_agent_token_secret(
+    session: AsyncSession,
+    agent_slug: str,
+) -> bool:
+    """Removes an agent's MC_AGENT_TOKEN vault secret on agent deletion.
+
+    Without this, a deleted agent leaves an orphaned `mc-agent` secret behind
+    that (a) never gets cleaned up and (b) still lands in docker/.env.agents
+    on the next start-all.sh token generation — a stale token for a
+    non-existent agent (found 2026-07-11: a leftover `mc_token_host testpilot`
+    even broke .env.agents parsing).
+
+    Keyed on the agent's STABLE slug (set on insert, never on rename — see
+    Agent._agent_fill_slug), not its current name: a plain PATCH rename does
+    not rotate the token, so the vault key still reflects the ORIGINAL name.
+    upsert_agent_token_secret writes `mc_token_{name.lower()}` (spaces
+    preserved) while the slug uses dashes, so we clear BOTH derivations —
+    `mc_token_{slug}` and `mc_token_{slug-with-dashes-as-spaces}` — to catch a
+    multi-word agent whichever scheme its key was written under.
+
+    Does NOT commit — runs inside the delete_agent transaction so it is
+    rolled back atomically if the agent delete fails. Returns True when at
+    least one secret was found and staged for deletion.
+    """
+    candidate_keys = {
+        f"mc_token_{agent_slug}",
+        f"mc_token_{agent_slug.replace('-', ' ')}",
+    }
+    result = await session.exec(select(Secret).where(Secret.key.in_(candidate_keys)))
+    secrets = list(result.all())
+    for secret in secrets:
+        await session.delete(secret)
+    return bool(secrets)
