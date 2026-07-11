@@ -7,6 +7,13 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-jammy
 
 WORKDIR /app
 
+# ffmpeg fuer /record (webm->H.264 mp4) + /compose (Grid-Video);
+# fonts-dejavu-core garantiert /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+# fuer drawtext-Labels (im Playwright-Image i.d.R. schon vorhanden — hier explizit).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir \
     fastapi==0.115.6 \
     uvicorn[standard]==0.32.1 \
@@ -16,6 +23,7 @@ RUN pip install --no-cache-dir \
     markdown==3.7 \
     pygments==2.18.0
 
+COPY media.py /app/media.py
 COPY service.py /app/service.py
 
 ENV PYTHONUNBUFFERED=1

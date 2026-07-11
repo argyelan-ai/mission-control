@@ -165,8 +165,8 @@ async def _handle_x_post_resolution(
 ) -> None:
     """Post-resolve hook for action_type == "x_post".
 
-    On approve: calls XPublisher.post_text() and persists the outcome —
-    tweet URL in approval.resolver_note (operator-visible) + activity_event
+    On approve: calls x_publisher.post_media() when the payload carries media_paths, else post_text() —
+    persists the outcome — tweet URL in approval.resolver_note (operator-visible) + activity_event
     (detail carries the structured result for the frontend/API). If the
     draft came from a ContentPipeline row (content_pipeline_id in payload),
     that row's published_url/published_platform/published_at/status are
@@ -195,7 +195,11 @@ async def _handle_x_post_resolution(
 
     from app.services import x_publisher
 
-    result = await x_publisher.post_text(session, text)
+    media_paths = payload.get("media_paths") or []
+    if media_paths:
+        result = await x_publisher.post_media(session, text, media_paths)
+    else:
+        result = await x_publisher.post_text(session, text)
 
     note_suffix = (
         f"\n[X-Post] {result['url']}" if result.get("ok")

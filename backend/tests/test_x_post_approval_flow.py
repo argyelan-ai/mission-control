@@ -27,6 +27,7 @@ async def _make_x_post_approval(
     status: str = "pending",
     content_pipeline_id: uuid.UUID | None = None,
     requester_task_id: uuid.UUID | None = None,
+    media_paths: list[str] | None = None,
 ):
     from app.models.board import Board
     from app.models.agent import Agent
@@ -49,6 +50,8 @@ async def _make_x_post_approval(
             "requester_task_id": str(requester_task_id) if requester_task_id else None,
             "content_pipeline_id": str(content_pipeline_id) if content_pipeline_id else None,
         }
+        if media_paths is not None:
+            payload["media_paths"] = media_paths
         approval = Approval(
             board_id=board.id,
             agent_id=agent.id,
@@ -186,3 +189,86 @@ async def test_approve_updates_linked_content_pipeline(auth_client, fake_redis):
         assert refreshed.published_platform == "twitter"
         assert refreshed.status == "published"
         assert refreshed.published_at is not None
+
+
+@pytest.mark.asyncio
+async def test_approve_with_media_calls_post_media_not_post_text(auth_client, fake_redis):
+    media = ["/shared-deliverables/bench-1/grid.mp4"]
+    approval, board, agent = await _make_x_post_approval(
+        text="Grid video draft", media_paths=media
+    )
+
+    fake_result = {
+        "ok": True,
+        "tweet_id": "321",
+        "url": "https://x.com/i/status/321",
+        "media_ids": ["987"],
+    }
+    with patch(
+        "app.services.x_publisher.post_media",
+        new=AsyncMock(return_value=fake_result),
+    ) as mock_media, patch(
+        "app.services.x_publisher.post_text", new_callable=AsyncMock
+    ) as mock_text, patch(
+        "app.routers.approvals.emit_event", new_callable=AsyncMock
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/approvals/{approval.id}",
+            json={"status": "approved", "resolver_note": "go"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "approved"
+    mock_media.assert_awaited_once()
+    _, called_text, called_media = mock_media.call_args.args
+    assert called_text == "Grid video draft"
+    assert called_media == media
+    mock_text.assert_not_awaited()
+    assert "https://x.com/i/status/321" in resp.json()["resolver_note"]
+
+
+@pytest.mark.asyncio
+async def test_approve_without_media_key_still_calls_post_text(auth_client, fake_redis):
+    # Backward compat: payloads created before media support have no media_paths key.
+    approval, board, agent = await _make_x_post_approval(text="Legacy text draft")
+
+    fake_result = {"ok": True, "tweet_id": "1", "url": "https://x.com/i/status/1"}
+    with patch(
+        "app.services.x_publisher.post_text",
+        new=AsyncMock(return_value=fake_result),
+    ) as mock_text, patch(
+        "app.services.x_publisher.post_media", new_callable=AsyncMock
+    ) as mock_media, patch(
+        "app.routers.approvals.emit_event", new_callable=AsyncMock
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/approvals/{approval.id}",
+            json={"status": "approved"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    mock_text.assert_awaited_once()
+    mock_media.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reject_with_media_never_calls_any_publisher(auth_client, fake_redis):
+    approval, board, agent = await _make_x_post_approval(
+        media_paths=["/shared-deliverables/bench-1/grid.mp4"]
+    )
+
+    with patch(
+        "app.services.x_publisher.post_media", new_callable=AsyncMock
+    ) as mock_media, patch(
+        "app.services.x_publisher.post_text", new_callable=AsyncMock
+    ) as mock_text, patch(
+        "app.routers.approvals.emit_event", new_callable=AsyncMock
+    ):
+        resp = await auth_client.patch(
+            f"/api/v1/approvals/{approval.id}",
+            json={"status": "rejected", "resolver_note": "not now"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    mock_media.assert_not_awaited()
+    mock_text.assert_not_awaited()

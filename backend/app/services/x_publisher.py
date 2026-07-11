@@ -29,7 +29,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -82,14 +84,69 @@ def validate_draft(text: str) -> DraftValidation:
     return DraftValidation(ok=not errors, errors=errors, warnings=warnings, has_link=has_link)
 
 
+# ── Media validation ────────────────────────────────────────────────────────
+
+MEDIA_ROOT = Path("/shared-deliverables")  # backend mounts this shared volume read-only
+VIDEO_EXTENSIONS = {".mp4"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MAX_IMAGES_PER_TWEET = 4
+
+
+def validate_media(media_paths: list[str], *, root: Path | None = None) -> DraftValidation:
+    """Validates a tweet media set: 1 video (mp4) OR up to 4 images (png/jpg),
+    never mixed; files must exist and live under `root` (default:
+    /shared-deliverables — the volume shared with mc-playwright)."""
+    effective_root = (root or MEDIA_ROOT).resolve()
+    errors: list[str] = []
+
+    if not media_paths:
+        errors.append("media_paths ist leer")
+        return DraftValidation(ok=False, errors=errors)
+
+    videos: list[Path] = []
+    images: list[Path] = []
+    for raw in media_paths:
+        path = Path(raw)
+        if not path.is_absolute():
+            errors.append(f"Pfad muss absolut sein: {raw}")
+            continue
+        resolved = path.resolve()
+        if not resolved.is_relative_to(effective_root):
+            errors.append(f"Pfad liegt nicht unter {effective_root}: {raw}")
+            continue
+        if not resolved.is_file():
+            errors.append(f"Datei existiert nicht: {raw}")
+            continue
+        suffix = resolved.suffix.lower()
+        if suffix in VIDEO_EXTENSIONS:
+            videos.append(resolved)
+        elif suffix in IMAGE_EXTENSIONS:
+            images.append(resolved)
+        else:
+            errors.append(f"Nicht unterstuetzter Medientyp '{suffix}': {raw}")
+            continue
+
+    if videos and images:
+        errors.append(
+            "Video und Bilder im selben Tweet sind nicht erlaubt "
+            "(1 Video ODER bis zu 4 Bilder)"
+        )
+    if len(videos) > 1:
+        errors.append(f"Nur 1 Video pro Tweet erlaubt ({len(videos)} uebergeben)")
+    if len(images) > MAX_IMAGES_PER_TWEET:
+        errors.append(
+            f"Maximal {MAX_IMAGES_PER_TWEET} Bilder pro Tweet ({len(images)} uebergeben)"
+        )
+
+    return DraftValidation(ok=not errors, errors=errors)
+
+
 class XPublisherError(Exception):
     """Raised for configuration errors (missing secrets) — never for API-side failures."""
 
 
-async def _load_client(session: AsyncSession):
-    """Builds a tweepy.Client from the 4 secrets. Raises XPublisherError if any is missing."""
-    import tweepy  # local import: keeps tweepy optional for code paths that never post
-
+async def _load_secret_values(session: AsyncSession) -> dict[str, str]:
+    """Loads the 4 X secrets from the vault. Raises XPublisherError if any is missing."""
     values: dict[str, str] = {}
     missing: list[str] = []
     for arg_name, secret_key in _SECRET_KEYS.items():
@@ -104,13 +161,37 @@ async def _load_client(session: AsyncSession):
             "X-Secrets fehlen in der Vault (Settings -> Secrets, Admin): "
             + ", ".join(missing)
         )
+    return values
 
+
+async def _load_client(session: AsyncSession):
+    """Builds a tweepy.Client from the 4 secrets. Raises XPublisherError if any is missing."""
+    import tweepy  # local import: keeps tweepy optional for code paths that never post
+
+    values = await _load_secret_values(session)
     return tweepy.Client(
         consumer_key=values["api_key"],
         consumer_secret=values["api_secret"],
         access_token=values["access_token"],
         access_token_secret=values["access_token_secret"],
     )
+
+
+async def _load_api(session: AsyncSession):
+    """Builds a tweepy.API (v1.1) from the same 4 secrets — required for
+    media_upload: tweepy 4.14's v2 Client has no media upload, only the v1.1
+    API with OAuth1UserHandler supports INIT/APPEND/FINALIZE chunked uploads.
+    Raises XPublisherError if any secret is missing."""
+    import tweepy
+
+    values = await _load_secret_values(session)
+    auth = tweepy.OAuth1UserHandler(
+        values["api_key"],
+        values["api_secret"],
+        values["access_token"],
+        values["access_token_secret"],
+    )
+    return tweepy.API(auth)
 
 
 def _classify_tweepy_error(exc: Exception) -> tuple[str, str]:
@@ -164,4 +245,115 @@ async def post_text(session: AsyncSession, text: str) -> dict[str, Any]:
         "ok": True,
         "tweet_id": tweet_id,
         "url": f"https://x.com/i/status/{tweet_id}",
+    }
+
+
+# ── Media posting ────────────────────────────────────────────────────────────
+
+VIDEO_PROCESSING_TIMEOUT_S = 300  # X video processing rarely exceeds ~1 min for <2 min clips
+
+
+class MediaUploadError(Exception):
+    """Internal: media upload/processing failed — converted to a clean Result
+    ("media_upload_failed") by post_media, never propagated to callers."""
+
+
+async def _wait_for_video_processing(api, media_id: int | str) -> None:
+    """Polls the v1.1 STATUS endpoint until X finished processing the video.
+
+    Chunked video uploads are async on X's side: FINALIZE returns
+    processing_info with state pending/in_progress; the media_id is only
+    usable in create_tweet once state == succeeded. tweepy 4.x may already
+    wait during media_upload (wait_for_async_finalize) — in that case the
+    first STATUS poll returns succeeded/no processing_info and we return
+    immediately. Raises MediaUploadError on state == failed or timeout.
+    """
+    deadline = time.monotonic() + VIDEO_PROCESSING_TIMEOUT_S
+    while True:
+        status = await asyncio.to_thread(api.get_media_upload_status, media_id)
+        info = getattr(status, "processing_info", None) or {}
+        state = info.get("state")
+        if not info or state == "succeeded":
+            return
+        if state == "failed":
+            error = info.get("error") or {}
+            raise MediaUploadError(
+                "X-Video-Processing fehlgeschlagen: "
+                f"{error.get('message', state)} (media_id={media_id})"
+            )
+        if time.monotonic() > deadline:
+            raise MediaUploadError(
+                f"X-Video-Processing Timeout nach {VIDEO_PROCESSING_TIMEOUT_S}s "
+                f"(media_id={media_id}, state={state})"
+            )
+        await asyncio.sleep(info.get("check_after_secs", 2))
+
+
+async def _upload_media(api, media_paths: list[str]) -> list[str]:
+    """Uploads each file via the v1.1 media endpoint. Videos use chunked
+    upload + processing wait; images a simple upload. Returns media_ids
+    in input order. Raises MediaUploadError / tweepy exceptions on failure."""
+    media_ids: list[str] = []
+    for raw in media_paths:
+        is_video = raw.lower().endswith(".mp4")
+        media = await asyncio.to_thread(
+            api.media_upload,
+            raw,
+            media_category="tweet_video" if is_video else "tweet_image",
+            chunked=is_video,
+        )
+        if is_video:
+            await _wait_for_video_processing(api, media.media_id)
+        media_ids.append(str(media.media_id))
+    return media_ids
+
+
+async def post_media(
+    session: AsyncSession, text: str, media_paths: list[str]
+) -> dict[str, Any]:
+    """Posts a tweet with media (1 video OR up to 4 images) via tweepy.
+    Returns a Result dict, never raises for API-side failures — mirrors
+    post_text.
+
+    Returns:
+        {"ok": True, "tweet_id": str, "url": str, "media_ids": list[str]}
+        {"ok": False, "error_type": str, "error": str}
+    """
+    validation = validate_draft(text)
+    if not validation.ok:
+        return {"ok": False, "error_type": "invalid_draft", "error": "; ".join(validation.errors)}
+
+    media_validation = validate_media(media_paths)
+    if not media_validation.ok:
+        return {"ok": False, "error_type": "invalid_media", "error": "; ".join(media_validation.errors)}
+
+    try:
+        client = await _load_client(session)
+        api = await _load_api(session)
+    except XPublisherError as e:
+        return {"ok": False, "error_type": "missing_secrets", "error": str(e)}
+
+    try:
+        media_ids = await _upload_media(api, media_paths)
+    except MediaUploadError as exc:
+        log.warning("X media upload failed: %s", exc)
+        return {"ok": False, "error_type": "media_upload_failed", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — deliberately broad, classified below
+        _, message = _classify_tweepy_error(exc)
+        log.warning("X media upload failed (media_upload_failed): %s", message)
+        return {"ok": False, "error_type": "media_upload_failed", "error": message}
+
+    try:
+        response = await asyncio.to_thread(client.create_tweet, text=text, media_ids=media_ids)
+    except Exception as exc:  # noqa: BLE001 — deliberately broad, classified below
+        error_type, message = _classify_tweepy_error(exc)
+        log.warning("X media post failed (%s): %s", error_type, message)
+        return {"ok": False, "error_type": error_type, "error": message}
+
+    tweet_id = str(response.data["id"])
+    return {
+        "ok": True,
+        "tweet_id": tweet_id,
+        "url": f"https://x.com/i/status/{tweet_id}",
+        "media_ids": media_ids,
     }

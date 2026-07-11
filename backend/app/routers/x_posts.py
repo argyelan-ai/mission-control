@@ -24,7 +24,7 @@ from app.models.agent import Agent
 from app.models.approval import Approval
 from app.redis_client import RedisKeys, get_redis
 from app.scopes import Scope, require_scope
-from app.services.x_publisher import validate_draft
+from app.services.x_publisher import validate_draft, validate_media
 
 router = APIRouter(prefix="/api/v1/agent/x-posts", tags=["x-posts"])
 
@@ -34,6 +34,10 @@ router = APIRouter(prefix="/api/v1/agent/x-posts", tags=["x-posts"])
 
 class XPostDraftCreate(BaseModel):
     text: str = Field(..., min_length=1, max_length=280)
+    # 1 video (mp4) OR up to 4 images (png/jpg), never mixed — validated by
+    # validate_media before an Approval is created. Paths must live under
+    # /shared-deliverables (the volume shared with mc-playwright).
+    media_paths: list[str] = Field(default_factory=list, max_length=4)
     content_pipeline_id: uuid.UUID | None = None  # optional: write published_url back here
     task_id: uuid.UUID | None = None  # optional: callback comment on approval outcome
 
@@ -63,6 +67,14 @@ async def create_x_post_draft(
     if not validation.ok:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "; ".join(validation.errors))
 
+    if body.media_paths:
+        media_validation = validate_media(body.media_paths)
+        if not media_validation.ok:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "; ".join(media_validation.errors),
+            )
+
     if requester.board_id is None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -80,7 +92,10 @@ async def create_x_post_draft(
     ).all()
     for row in existing_rows:
         payload = row.payload or {}
-        if payload.get("text") == body.text:
+        if (
+            payload.get("text") == body.text
+            and (payload.get("media_paths") or []) == body.media_paths
+        ):
             response.status_code = status.HTTP_200_OK
             return XPostDraftResponse(
                 approval_id=row.id,
@@ -92,6 +107,7 @@ async def create_x_post_draft(
     description = f"{requester.name} requests to post to X: {body.text[:200]}"
     payload_data = {
         "text": body.text,
+        "media_paths": body.media_paths,
         "requester_agent_id": str(requester.id),
         "requester_agent_name": requester.name,
         "requester_task_id": str(body.task_id) if body.task_id else None,
