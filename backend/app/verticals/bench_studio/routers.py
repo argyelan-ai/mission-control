@@ -203,9 +203,10 @@ async def rerender_challenge(
     challenge = await session.get(BenchChallenge, challenge_id)
     if challenge is None:
         raise HTTPException(404, "Challenge not found")
-    if challenge.status not in ("review", "drafted", "failed"):
+    if challenge.status not in ("review", "drafted", "failed", "rendering", "composing"):
         raise HTTPException(
-            409, f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed."
+            409,
+            f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed/rendering/composing.",
         )
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),

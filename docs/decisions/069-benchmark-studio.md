@@ -102,8 +102,8 @@ Ueberlebenden; alles `failed` → Challenge `failed`.
   Brief ("liefere genau eine `index.html` als Deliverable"), Artefakt-Einsammlung ueber
   den `task_done`-Hook.
 
-**Router** `/api/v1/bench/*` (operator-JWT): fuenf Endpunkte (create, list, get, start,
-rerender) + Draft-Endpunkt.
+**Router** `/api/v1/bench/*` (operator-JWT): sechs Endpunkte (create, list, get, draft,
+rerender, retry).
 
 **Frontend Studio-Seite** `/bench` mit zwei Tabs:
 - *Challenges* — Gallery (Status-Chips, Progress-Polling alle 5 s), Challenge-Detail
@@ -181,22 +181,25 @@ Kopie des Generations-Prompts, nie der Tweet-Text.
 
 - **Crash-Recovery-Gap (Design-Gap, dokumentiert):** Ein Backend-Crash waehrend
   `rendering` oder `composing` laesst die Challenge in diesem Zustand haengen — es gibt
-  keinen automatischen Re-Entry. Operator-Reset via `POST /bench/{id}/rerender`. Das
-  `rerender`-Schreiben setzt `status=failed` und schreibt eine Fehler-Meldung, damit
-  der Operator weiss, was passiert ist.
+  keinen automatischen Re-Entry. Operator-Reset via `POST /bench/{id}/rerender` moeglich:
+  das Gate erlaubt `status in (review, drafted, failed, rendering, composing)`, sodass
+  auch im laufenden/haengenden Zustand ein manueller Neustart greift.
 - **Theoretisches Race-Window beim 409-Guard:** der Draft-Idempotenz-Check laeuft
   nicht unter Datenbank-Unique-Constraint — zwei gleichzeitige Requests koennen in einer
   kurzen Zeitspanne zwei Approvals anlegen. Fuer ein Ein-Operator-System akzeptiert
   (Frequenz vernachlaessigbar); loesbar mit DB-Unique-Constraint in v2.
-- **Expired-pending-Approval blockiert Re-Draft:** eine abgelaufene, noch offene Approval
-  (Status `pending`, TTL ueberschritten) muss der Operator zuerst manuell ablehnen, bevor
-  ein neuer Draft angelegt werden kann. Erklaerte Einschraenkung fuer v1.
+- **Expired-pending-Approval blockiert Re-Draft:** `x_post`-Approvals sind nicht
+  renewable (nur `blocker_decision`/`clarification_question` werden erneuert —
+  `health_checks.py::_check_expired_approvals`). Der Approval-Watchdog setzt eine
+  abgelaufene, noch offene `x_post`-Approval automatisch auf `status="expired"` beim
+  naechsten Sweep; dadurch loest sich der 409-Guard auf. Block-Fenster = TTL bis zum
+  naechsten Watchdog-Sweep. Erklaerte Einschraenkung fuer v1.
 - **X-Video-Limit-Konstanten noch nicht hinterlegt:** maximale Video-Groesse/-Laenge/-
   Aufloesung fuer die X API sind im Code noch nicht als benannte Konstanten definiert —
   Fehler bei Ueberschreitung kommt erst vom tweepy-Upload. Follow-up-Task.
-- **`sharedSubpath`-Duplikation:** das Frontend importiert `sharedSubpath` aus einem
-  Core-Helper statt aus `mediaPathToFilesLocation` — eine geringe Doppelung, die in
-  einem Cleanup-PR adressiert werden kann.
+- **`sharedSubpath`-Duplikation:** das Vertical definiert einen eigenen schmalen Helper
+  statt den Core-Helper `mediaPathToFilesLocation` zu verwenden — eine geringe Doppelung,
+  die in einem Cleanup-PR adressiert werden kann.
 - Gestrippte Installationen tragen zwei brachliegende Kern-Tabellen (`bench_challenges`,
   `bench_entries`) — bewusst, ADR-044.
 - Hook-Indirektion: Debugging braucht das Wissen, dass `register()` beim App-Boot laeuft

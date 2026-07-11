@@ -202,6 +202,21 @@ async def test_rerender_endpoint_gates_status(auth_client, session):
 
 
 @pytest.mark.asyncio
+async def test_rerender_allowed_from_composing(auth_client, session):
+    """Challenges stuck in 'composing' (e.g. after a backend crash) must be
+    recoverable via rerender — gate must allow rendering and composing, not
+    just review/drafted/failed."""
+    ch = BenchChallenge(title="T", prompt_text="p", status="composing")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp.status_code == 200
+    orchestrator.rerender_challenge.assert_called()
+
+
+@pytest.mark.asyncio
 async def test_entry_retry_endpoint_requires_failed(auth_client, session):
     ch = BenchChallenge(title="T", prompt_text="p", status="review")
     session.add(ch)
