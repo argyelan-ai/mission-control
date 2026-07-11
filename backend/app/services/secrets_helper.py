@@ -11,12 +11,17 @@ the claude-config bind mount during sync-config.
 """
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.secret import Secret
 from app.services.encryption import encrypt, safe_decrypt
+from app.services.fs_service import agent_slug
+
+if TYPE_CHECKING:
+    from app.models.agent import Agent
 
 logger = logging.getLogger("mc.secrets_helper")
 
@@ -112,12 +117,12 @@ async def upsert_secret_by_key(
 
 async def upsert_agent_token_secret(
     session: AsyncSession,
-    agent_name: str,
+    agent: "Agent",
     raw_token: str,
 ) -> None:
     """Persists an agent's MC_AGENT_TOKEN as a vault secret.
 
-    Key schema `mc_token_{agent.name.lower()}` — MUST match the lookup in
+    Key schema `mc_token_{agent.slug}` — MUST match the lookup in
     routers/internal.py::agent_bootstrap, otherwise poll.sh crash-loops with
     'MC_TOKEN is not set' (fresh-install bug 2026-07-02): the token used to be
     stored only as a PBKDF2 hash + once in the response, but never written to
@@ -125,19 +130,26 @@ async def upsert_agent_token_secret(
     generation (create/instantiate/reset/provision) so the vault never
     serves a stale token.
 
+    Keyed on the STABLE slug (fs_service.agent_slug: persisted `agent.slug`,
+    set on insert and never on rename, spaces→dashes) rather than the mutable
+    name (ADR vault-key-slug-migration 2026-07-11). The old name-derived key
+    (`mc_token_{name.lower()}`, spaces preserved) orphaned on rename and broke
+    docker/.env.agents parsing when a name had a space. Single-word agents are
+    byte-identical under both schemes, so only multi-word agents changed.
+
     Best-effort: a vault error must not kill agent creation — the token is
     visible in the response and can be brought back into the vault via
     reset-token.
     """
-    slug = agent_name.lower()
+    slug = agent_slug(agent)
     try:
         await upsert_secret_by_key(
             session,
             f"mc_token_{slug}",
             raw_token,
             provider="mc-agent",
-            label=f"Agent Token: {agent_name}",
-            description=f"PBKDF2-Auth Token fuer Agent {agent_name} (auto-managed)",
+            label=f"Agent Token: {agent.name}",
+            description=f"PBKDF2-Auth Token fuer Agent {agent.name} (auto-managed)",
         )
     except Exception as e:
         logger.error("upsert_agent_token_secret(%s): Vault-Write fehlgeschlagen: %s", slug, e)
@@ -156,22 +168,20 @@ async def delete_agent_token_secret(
     even broke .env.agents parsing).
 
     Keyed on the agent's STABLE slug (set on insert, never on rename — see
-    Agent._agent_fill_slug), not its current name: a plain PATCH rename does
-    not rotate the token, so the vault key still reflects the ORIGINAL name.
-    upsert_agent_token_secret writes `mc_token_{name.lower()}` (spaces
-    preserved) while the slug uses dashes, so we clear BOTH derivations —
-    `mc_token_{slug}` and `mc_token_{slug-with-dashes-as-spaces}` — to catch a
-    multi-word agent whichever scheme its key was written under.
+    Agent._agent_fill_slug), matching upsert_agent_token_secret's single
+    slug-derived key `mc_token_{slug}` (ADR vault-key-slug-migration
+    2026-07-11). A plain PATCH rename does not rotate the token, but the slug
+    never changes on rename, so writer and delete always agree on the key.
+    The legacy space-form name key is eliminated by Alembic migration 0152, so
+    no dual-key fallback is needed.
 
     Does NOT commit — runs inside the delete_agent transaction so it is
     rolled back atomically if the agent delete fails. Returns True when at
     least one secret was found and staged for deletion.
     """
-    candidate_keys = {
-        f"mc_token_{agent_slug}",
-        f"mc_token_{agent_slug.replace('-', ' ')}",
-    }
-    result = await session.exec(select(Secret).where(Secret.key.in_(candidate_keys)))
+    result = await session.exec(
+        select(Secret).where(Secret.key == f"mc_token_{agent_slug}")
+    )
     secrets = list(result.all())
     for secret in secrets:
         await session.delete(secret)

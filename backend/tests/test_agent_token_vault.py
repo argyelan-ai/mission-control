@@ -119,7 +119,7 @@ async def test_delete_agent_removes_vault_secret(auth_client, async_session):
     async_session.add(agent)
     await async_session.commit()
     await async_session.refresh(agent)
-    await upsert_agent_token_secret(async_session, "DeleteMe", "tok-xyz")
+    await upsert_agent_token_secret(async_session, agent, "tok-xyz")
     assert await _vault_token(async_session, "deleteme") is not None
 
     delete = await auth_client.delete(f"/api/v1/agents/{agent.id}")
@@ -132,9 +132,10 @@ async def test_delete_agent_removes_vault_secret(auth_client, async_session):
 @pytest.mark.asyncio
 async def test_delete_agent_removes_vault_secret_after_rename(auth_client, async_session):
     """Regression (reviewer 2026-07-11): a plain PATCH rename does NOT rotate
-    the token, so the vault key keeps the ORIGINAL name. Deletion must key off
-    the stable insert-time slug, not the current name, or the secret orphans.
-    Uses a multi-word name so the space-vs-dash dual-key path is exercised."""
+    the token. Under the slug scheme the vault key is derived from the stable
+    insert-time slug (never changed on rename), so writer AND delete agree on
+    the key regardless of the current name. Multi-word name so the space→dash
+    slug mapping is exercised."""
     from app.models.agent import Agent
     from app.services.secrets_helper import upsert_agent_token_secret
 
@@ -143,11 +144,12 @@ async def test_delete_agent_removes_vault_secret_after_rename(auth_client, async
     await async_session.commit()
     await async_session.refresh(agent)
     assert agent.slug == "renamed-one"
-    # Token written under the ORIGINAL name → key 'mc_token_renamed one' (space).
-    await upsert_agent_token_secret(async_session, "Renamed One", "tok-orig")
-    assert await _vault_token(async_session, "renamed one") is not None
+    # New writer keys on the slug → 'mc_token_renamed-one' (dash), not the name.
+    await upsert_agent_token_secret(async_session, agent, "tok-orig")
+    assert await _vault_token(async_session, "renamed-one") is not None
+    assert await _vault_token(async_session, "renamed one") is None  # never space-form
 
-    # Rename WITHOUT rotating the token (plain metadata edit).
+    # Rename WITHOUT rotating the token (plain metadata edit) — slug is unchanged.
     agent.name = "Totally Different"
     async_session.add(agent)
     await async_session.commit()
@@ -156,7 +158,51 @@ async def test_delete_agent_removes_vault_secret_after_rename(auth_client, async
     assert delete.status_code == 204, delete.text
 
     async_session.expire_all()
-    assert await _vault_token(async_session, "renamed one") is None
+    assert await _vault_token(async_session, "renamed-one") is None
+
+
+@pytest.mark.asyncio
+async def test_writer_keys_token_on_slug_not_name(async_session):
+    """Core of the slug migration: a multi-word agent's token lands under the
+    dash-form slug key, never the legacy space-form name key."""
+    from app.models.agent import Agent
+    from app.services.secrets_helper import upsert_agent_token_secret
+
+    agent = Agent(name="Multi Word", agent_runtime="cli-bridge")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    assert agent.slug == "multi-word"
+
+    await upsert_agent_token_secret(async_session, agent, "tok-slug")
+
+    assert await _vault_token(async_session, "multi-word") == "tok-slug"
+    assert await _vault_token(async_session, "multi word") is None
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_reads_multiword_token_via_slug(auth_client, async_session):
+    """End-to-end reader: the bootstrap endpoint resolves a multi-word agent's
+    token via the slug key that the writer produced (writer↔reader symmetry).
+
+    Agent inserted directly + token written via the writer, so no POST-create
+    background provisioning task (which opens a real Postgres session) runs."""
+    from app.models.agent import Agent
+    from app.services.secrets_helper import upsert_agent_token_secret
+
+    agent = Agent(name="Multi Boot", agent_runtime="cli-bridge")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    await upsert_agent_token_secret(async_session, agent, "tok-boot")
+
+    # Stored under the slug key, not the space-form name key.
+    assert await _vault_token(async_session, "multi-boot") == "tok-boot"
+    assert await _vault_token(async_session, "multi boot") is None
+
+    boot = await auth_client.get("/api/v1/internal/bootstrap?agent_name=Multi Boot")
+    assert boot.status_code == 200, boot.text
+    assert boot.json()["MC_AGENT_TOKEN"] == "tok-boot"
 
 
 @pytest.mark.asyncio

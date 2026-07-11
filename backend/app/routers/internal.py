@@ -157,7 +157,12 @@ async def agent_bootstrap(
     if not agent:
         raise HTTPException(404, f"Agent '{agent_name}' nicht gefunden")
 
-    slug = agent.name.lower()
+    # Stable slug (persisted agent.slug, spaces→dashes, rename-safe) — must
+    # match upsert_agent_token_secret's write key (ADR vault-key-slug-migration
+    # 2026-07-11). Legacy name-derived keys are rewritten by migration 0152.
+    from app.services.fs_service import agent_slug
+
+    slug = agent_slug(agent)
     tokens = {}
 
     # MC_AGENT_TOKEN from vault (key: mc_token_{slug})
