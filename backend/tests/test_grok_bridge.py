@@ -487,3 +487,14 @@ def test_main_logs_traceback_on_crash(tmp_path):
     assert "[fatal]" in combined
     assert "BOOM_TEST_MARKER" in combined
     assert "Traceback" in combined
+
+
+def test_launch_shell_cmd_sources_agent_env_in_window_shell(bridge):
+    """Regression: tmux windows inherit env from the tmux SERVER, not the
+    new-session client — a stale server-global once poisoned MC_AGENT_TOKEN
+    (4.4 KB grown token). The window command must source agent.env itself."""
+    line = bridge._grok_launch_shell_cmd()
+    assert line.startswith("set -a; . ")
+    assert str(bridge.ENV_FILE) in line
+    assert "; set +a; exec " in line
+    assert not line.startswith("sh -c")  # tmux already runs the line via sh -c
