@@ -230,3 +230,95 @@ async def test_resolved_ignores_foreign_approvals(session):
     await session.commit()
     # Must be a silent no-op:
     await drafts.on_x_post_resolved(session, approval, "approved", {"ok": True})
+
+
+# ── Idempotency + pipeline-reuse tests ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_create_draft_twice_with_pending_approval_409(session):
+    """Second create_draft while first Approval is still pending → 409.
+    DB must still have exactly 1 ContentPipeline + 1 Approval."""
+    board, ch, _ = await _seed_review_challenge(session)
+
+    # First call — succeeds
+    await drafts.create_draft(
+        session, ch, tweet_text="First draft.", board_id=board.id
+    )
+
+    # Second call — must 409 because the first Approval is still pending
+    with pytest.raises(HTTPException) as exc:
+        await drafts.create_draft(
+            session, ch, tweet_text="Second draft.", board_id=board.id
+        )
+    assert exc.value.status_code == 409
+    assert "pending x_post approval" in exc.value.detail
+
+    # DB state: exactly one pipeline, exactly one approval
+    all_pipelines = (await session.exec(select(ContentPipeline))).all()
+    all_approvals = (await session.exec(select(Approval))).all()
+    assert len(all_pipelines) == 1
+    assert len(all_approvals) == 1
+
+
+@pytest.mark.asyncio
+async def test_redraft_after_reject_reuses_pipeline(session):
+    """After an approval is rejected, re-drafting must reuse the existing
+    ContentPipeline row (same id, updated draft_content) and create a new
+    Approval — total pipelines == 1, total approvals == 2 (1 rejected + 1 pending)."""
+    board, ch, _ = await _seed_review_challenge(session)
+
+    # First draft
+    first_approval = await drafts.create_draft(
+        session, ch, tweet_text="Original tweet.", board_id=board.id
+    )
+    original_pipeline_id = ch.content_pipeline_id
+
+    # Simulate rejection (direct DB update)
+    first_approval.status = "rejected"
+    session.add(first_approval)
+    await session.commit()
+
+    # Re-draft with new text
+    second_approval = await drafts.create_draft(
+        session, ch, tweet_text="Updated tweet.", board_id=board.id
+    )
+
+    # Pipeline count must still be 1 (same row reused)
+    all_pipelines = (await session.exec(select(ContentPipeline))).all()
+    assert len(all_pipelines) == 1, "Pipeline row must be reused, not duplicated"
+    assert all_pipelines[0].id == original_pipeline_id
+
+    # Pipeline was updated with new text
+    pipeline = await session.get(ContentPipeline, original_pipeline_id)
+    assert pipeline.final_content == "Updated tweet."
+    assert pipeline.status == "review"
+
+    # Two approvals: the first rejected + the new pending one
+    all_approvals = (await session.exec(select(Approval))).all()
+    assert len(all_approvals) == 2
+    pending = [a for a in all_approvals if a.status == "pending"]
+    rejected = [a for a in all_approvals if a.status == "rejected"]
+    assert len(pending) == 1
+    assert len(rejected) == 1
+    assert pending[0].id == second_approval.id
+
+
+@pytest.mark.asyncio
+async def test_create_draft_invalid_media_400(session, monkeypatch):
+    """validate_media returning a failing DraftValidation → HTTPException 400."""
+    board, ch, _ = await _seed_review_challenge(session)
+
+    # Override the autouse fixture that makes validate_media pass
+    monkeypatch.setattr(
+        drafts.x_publisher, "validate_media",
+        lambda paths: DraftValidation(ok=False, errors=["file too large"]),
+        raising=False,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await drafts.create_draft(
+            session, ch, tweet_text="Valid tweet text.", board_id=board.id
+        )
+    assert exc.value.status_code == 400
+    assert "file too large" in exc.value.detail

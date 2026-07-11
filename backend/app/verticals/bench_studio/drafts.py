@@ -51,6 +51,25 @@ async def create_draft(
             f"Challenge is {challenge.status!r} — drafts only from review/drafted.",
         )
 
+    # Guard: reject if a pending x_post Approval already exists for this challenge.
+    # Filter pending x_post approvals in SQL; match bench_challenge_id in Python
+    # (JSON column — avoids DB-specific JSON operators).
+    pending_x_posts = (
+        await session.exec(
+            select(Approval).where(
+                Approval.action_type == "x_post",
+                Approval.status == "pending",
+            )
+        )
+    ).all()
+    for existing in pending_x_posts:
+        payload = existing.payload or {}
+        if payload.get("bench_challenge_id") == str(challenge.id):
+            raise HTTPException(
+                409,
+                "pending x_post approval exists for this challenge — resolve it first",
+            )
+
     validation = x_publisher.validate_draft(tweet_text)
     if not validation.ok:
         raise HTTPException(400, "; ".join(validation.errors))
@@ -89,16 +108,33 @@ async def create_draft(
             )
         board_id = board.id
 
-    pipeline = ContentPipeline(
-        board_id=board_id,
-        title=challenge.title,
-        content_type="social",
-        status="review",  # core hook sets "published" after a successful post
-        brief=challenge.prompt_text[:2000],
-        final_content=tweet_text,
-    )
-    session.add(pipeline)
-    await session.flush()  # need pipeline.id before commit
+    # Reuse the existing pipeline row if one is already linked to this challenge.
+    # This prevents a second pipeline row from being orphaned on re-draft.
+    pipeline: ContentPipeline | None = None
+    if challenge.content_pipeline_id is not None:
+        pipeline = await session.get(ContentPipeline, challenge.content_pipeline_id)
+
+    if pipeline is not None:
+        # Update in-place: reset to "review" state with the new tweet text.
+        pipeline.title = challenge.title
+        pipeline.final_content = tweet_text
+        pipeline.status = "review"
+        pipeline.published_url = None
+        pipeline.published_platform = None
+        pipeline.published_at = None
+        session.add(pipeline)
+        await session.flush()
+    else:
+        pipeline = ContentPipeline(
+            board_id=board_id,
+            title=challenge.title,
+            content_type="social",
+            status="review",  # core hook sets "published" after a successful post
+            brief=challenge.prompt_text[:2000],
+            final_content=tweet_text,
+        )
+        session.add(pipeline)
+        await session.flush()  # need pipeline.id before commit
 
     approval = Approval(
         board_id=board_id,
