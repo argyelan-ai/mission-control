@@ -1,13 +1,13 @@
 """Prompt Library — prompt_templates table (Benchmark Studio core, PR 2).
 
-Revision ID: 0151
-Revises: 0150
+Revision ID: 0152
+Revises: 0151
 """
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0151"
-down_revision = "0150"
+revision = "0152"
+down_revision = "0151"
 branch_labels = None
 depends_on = None
 
