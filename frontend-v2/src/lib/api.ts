@@ -30,6 +30,9 @@ import type {
   PlaybookRunProjection,
   PlaybookVersion,
   PlannerMessage,
+  PromptTemplate,
+  PromptTemplateCreate,
+  PromptTemplateUpdate,
   ProviderTemplate,
   Project,
   ProjectPhase,
@@ -832,6 +835,30 @@ export const api = {
       return URL.createObjectURL(await res.blob());
     },
     remove: (id: string) => request<void>(`/api/v1/references/${id}`, { method: "DELETE" }),
+  },
+
+  // ── Prompt Library (Benchmark Studio core, PR 2) ────────────────────────────
+  promptTemplates: {
+    list: (params?: { q?: string; tag?: string }) => {
+      const qs = new URLSearchParams();
+      if (params?.q) qs.set("q", params.q);
+      if (params?.tag) qs.set("tag", params.tag);
+      const suffix = qs.toString() ? `?${qs.toString()}` : "";
+      return request<PromptTemplate[]>(`/api/v1/prompt-templates${suffix}`);
+    },
+    get: (id: string) => request<PromptTemplate>(`/api/v1/prompt-templates/${id}`),
+    create: (data: PromptTemplateCreate) =>
+      request<PromptTemplate>("/api/v1/prompt-templates", {
+        method: "POST",
+        body: JSON.stringify(data),
+      }),
+    update: (id: string, data: PromptTemplateUpdate) =>
+      request<PromptTemplate>(`/api/v1/prompt-templates/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(data),
+      }),
+    remove: (id: string) =>
+      request<void>(`/api/v1/prompt-templates/${id}`, { method: "DELETE" }),
   },
 
   // ── Agents ──────────────────────────────────────────────────────────────────

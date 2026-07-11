@@ -2218,3 +2218,33 @@ export interface BrowserLiveTarget {
   title: string;
   url: string;
 }
+
+// ── Prompt Library (Benchmark Studio core, PR 2) ─────────────────────────────
+
+export interface PromptTemplate {
+  id: string;
+  title: string;
+  body: string;
+  tags: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptTemplateCreate {
+  title: string;
+  body: string;
+  tags?: string[];
+}
+
+export type PromptTemplateUpdate = Partial<PromptTemplateCreate>;
+
+// x_post approval payload (routers/x_posts.py; media_paths lands with the
+// Benchmark Studio draft flow — absent on v1 text-only drafts).
+export interface XPostApprovalPayload {
+  text: string;
+  media_paths?: string[];
+  requester_agent_id?: string;
+  requester_agent_name?: string;
+  requester_task_id?: string | null;
+  content_pipeline_id?: string | null;
+}
