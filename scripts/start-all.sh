@@ -56,10 +56,11 @@ async def gen():
         for s in result.all():
             # Sanitize to a valid shell env-var name and align with the
             # compose renderer's key (slug.upper().replace('-', '_')). The
-            # vault key is mc_token_{name.lower()}, which can contain spaces
-            # or hyphens (e.g. 'mc_token_host testpilot') — an unsanitized
-            # 'MC_TOKEN_HOST TESTPILOT=...' line breaks .env.agents parsing
-            # AND never matches compose's \${MC_TOKEN_HOST_TESTPILOT}.
+            # vault key is mc_token_{slug} (dash-form, e.g.
+            # 'mc_token_host-testpilot') since the slug migration (0152);
+            # sanitizing hyphens → underscores yields MC_TOKEN_HOST_TESTPILOT,
+            # matching compose's \${MC_TOKEN_HOST_TESTPILOT}. Kept as defense
+            # against any legacy space-form key that predates the migration.
             raw = s.key.replace('mc_token_', '').upper()
             name = re.sub(r'[^A-Z0-9_]', '_', raw)
             val = safe_decrypt(s.encrypted_value)

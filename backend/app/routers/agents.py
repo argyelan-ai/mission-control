@@ -206,7 +206,7 @@ async def create_agent(
     # the container (Fresh-Install-Fix 2026-07-02: before this there was NO
     # write path, poll.sh crash-looped with 'MC_TOKEN is not set').
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
     if payload.agent_runtime == "cli-bridge":
         # One-click create (Day-2 basics fix): render config via the host
         # helper (reusing the token just returned so it stays valid), then
@@ -615,7 +615,7 @@ async def setup_specialized_agents(
 
         # Vault write mc_token_{slug} for /internal/bootstrap (see create_agent).
         from app.services.secrets_helper import upsert_agent_token_secret
-        await upsert_agent_token_secret(session, agent.name, raw_token)
+        await upsert_agent_token_secret(session, agent, raw_token)
 
         # Provision (cli-bridge path) — gateway path removed (Phase 29).
         # `_provision_agent_background` handles cli-bridge runtimes; the legacy
@@ -1596,7 +1596,7 @@ async def reset_agent_token(
     # Vault rotation: the new token must overwrite mc_token_{slug}, otherwise
     # /internal/bootstrap serves the old one on the next container start.
     from app.services.secrets_helper import upsert_agent_token_secret
-    await upsert_agent_token_secret(session, agent.name, raw_token)
+    await upsert_agent_token_secret(session, agent, raw_token)
 
     # Gateway sync removed (Phase 29). New TOOLS.md sits on disk; the
     # cli-bridge `sync_docker_agent_files` path picks it up on the next restart.
@@ -1756,7 +1756,7 @@ async def provision_agent_on_gateway(
             agent.updated_at = utcnow()
             session.add(agent)
             await session.commit()
-            await upsert_agent_token_secret(session, agent.name, raw_token)
+            await upsert_agent_token_secret(session, agent, raw_token)
             await emit_event(
                 session,
                 "agent.provisioned" if load["loaded"] else "agent.host_files_staged",
