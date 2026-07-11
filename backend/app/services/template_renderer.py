@@ -156,6 +156,14 @@ def build_agent_context(
         "board_id": effective_board_id,
         "is_board_lead": agent.is_board_lead,
         "agent_runtime": getattr(agent, "agent_runtime", "openclaw") or "openclaw",
+        # Context-economy Stage 2 (Migration 0151): CARD.md.j2 skips the
+        # close-example block for omp — the omp-bridge injects its own
+        # COMPLETION_INSTRUCTIONS just-in-time per prompt (bridge.py
+        # wrap_prompt), so a duplicate example would waste the card's tight
+        # byte budget. Default "claude" (the common case) when unset so
+        # legacy agents/tests without a harness value still render the
+        # close example.
+        "harness": (getattr(agent, "harness", None) or "claude"),
         "role": role_type,
         "role_description": agent.role or agent.name,
         "api_base": "$MC_API_URL/api/v1",
@@ -194,7 +202,23 @@ def build_agent_context(
         "team": team_list,
         # Scopes — for conditional sections (e.g. vault:write) in templates
         "scopes": _get_agent_scopes(agent),
+        # Context-economy Stage 2: CARD.md.j2's verb table + L2-doc index are
+        # generated from the same single-source registries the L2 docs and
+        # their contract tests use (app.agent_doc_constants) — no
+        # duplication of the verb list/topic metadata in the template itself.
+        "canonical_verbs": _canonical_verbs(),
+        "doc_topics": _doc_topics(),
     }
+
+
+def _canonical_verbs() -> dict:
+    from app.agent_doc_constants import CANONICAL_VERBS
+    return CANONICAL_VERBS
+
+
+def _doc_topics() -> dict:
+    from app.agent_doc_constants import DOC_TOPICS
+    return DOC_TOPICS
 
 
 def _get_agent_scopes(agent: "Agent") -> list[str]:
