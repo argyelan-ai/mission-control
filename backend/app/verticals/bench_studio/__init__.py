@@ -17,9 +17,10 @@ def register(app) -> None:
 
     from .drafts import on_x_post_resolved  # noqa: PLC0415
     from .orchestrator import on_task_done  # noqa: PLC0415
+    from .routers import router  # noqa: PLC0415
 
+    app.include_router(router)
     if on_task_done not in hooks.task_done_hooks:
         hooks.task_done_hooks.append(on_task_done)
     if on_x_post_resolved not in hooks.x_post_resolved_hooks:
         hooks.x_post_resolved_hooks.append(on_x_post_resolved)
-    # Router is included in Task 6.
