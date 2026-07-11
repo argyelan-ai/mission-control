@@ -989,37 +989,52 @@ COMPLETION_INSTRUCTIONS = (
 
 
 def _identity_block(home_dir: Optional[str] = None) -> str:
-    """Reads the agent's persistent identity content — CARD.md if the
-    context-economy Stage 2 opt-in (agent.use_operating_card) wrote one,
-    otherwise SOUL.md (both rendered by docker_agent_sync into the
-    claude-config bind mount, i.e. $HOME/.claude/ inside this container).
+    """Reads CARD.md — the context-economy Stage 2 opt-in (agent.
+    use_operating_card, rendered by docker_agent_sync into the claude-config
+    bind mount, i.e. $HOME/.claude/ inside this container) — if present.
 
-    Context-economy Stage 2: unlike the claude/openclaude harnesses (which
-    get SOUL/CARD injected once via --append-system-prompt at process start,
-    see docker/mc-agent-base/start-claude.sh), the omp native TUI has no such
-    flag — bridge.py relaunches Window 0 per task and drives it purely
-    through injected prompts. So this content is prepended to every
-    dispatched prompt instead. File existence is the only branch: no
-    separate config flag to keep in sync on this side.
+    Deliberately CARD-ONLY, no SOUL.md fallback: omp is opt-IN. An omp agent
+    without the flag gets nothing here, exactly like before this feature
+    existed — bridge.py must never start injecting the ~29KB SOUL.md into
+    every dispatched prompt just because SOUL.md happens to sit on disk
+    (docker_agent_sync writes it for every agent regardless of runtime). That
+    would blow up context for every non-piloted omp agent (Qwen/DeepSeek
+    degrade badly on oversized prompts) and would make flipping the flag back
+    OFF on the pilot (Sparky) a regression instead of a clean rollback to the
+    prior (empty) behaviour.
+
+    Unlike the claude/openclaude harnesses (SOUL/CARD injected once via
+    --append-system-prompt at process start, see
+    docker/mc-agent-base/start-claude.sh — those DO keep a SOUL fallback,
+    they always had one), the omp native TUI has no such flag — bridge.py
+    relaunches Window 0 per task and drives it purely through injected
+    prompts, so the card is prepended to the dispatch prompt instead.
     """
     home = home_dir or os.environ.get("HOME", "/home/agent")
     card_path = os.path.join(home, ".claude", "CARD.md")
-    soul_path = os.path.join(home, ".claude", "SOUL.md")
-    path = card_path if os.path.isfile(card_path) else soul_path
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(card_path, "r", encoding="utf-8") as f:
             return f.read().strip()
     except OSError:
         return ""
 
 
-def wrap_prompt(prompt: str, *, home_dir: Optional[str] = None) -> str:
-    """Prepends the identity block (Card/SOUL) and appends the §3.4
-    completion contract to the MC-built dispatch prompt."""
+def wrap_prompt(prompt: str, *, home_dir: Optional[str] = None, include_identity: bool = True) -> str:
+    """Appends the §3.4 completion contract to the MC-built dispatch prompt,
+    prepending the CARD.md identity block (Stage 2 opt-in only) when
+    `include_identity` is set.
+
+    `include_identity=False` for continue-nudges (see the `continue_once`
+    callback in `run_omp_serve_loop`): a nudge resumes the SAME live omp
+    session that already received the card on its first-dispatch prompt —
+    re-prepending it on every nudge (up to OMP_MAX_CONTINUES times) would
+    just burn context re-stating what the session already has.
+    """
     body = (prompt or "").rstrip()
-    identity = _identity_block(home_dir)
-    if identity:
-        body = f"{identity}\n\n---\n\n{body}"
+    if include_identity:
+        identity = _identity_block(home_dir)
+        if identity:
+            body = f"{identity}\n\n---\n\n{body}"
     return body + COMPLETION_INSTRUCTIONS
 
 
@@ -1532,9 +1547,16 @@ def serve_loop(
 
                 # Continue-Nudge (Fix B): resume the SAME TUI session (no relaunch,
                 # so context survives) with the wrapped nudge follow-up.
+                # include_identity=False — the session already has the CARD.md
+                # identity block from the first-dispatch prompt above; re-
+                # prepending it on every nudge (up to OMP_MAX_CONTINUES times)
+                # would just re-burn context restating what the live session
+                # already carries.
                 def continue_once(nudge: str, _cwd=cwd, _tf=task_file) -> RunOutcome:
                     return run_native_continue(
-                        tui, cwd=_cwd, nudge_prompt=wrap_prompt(nudge), task_file_path=_tf,
+                        tui, cwd=_cwd,
+                        nudge_prompt=wrap_prompt(nudge, include_identity=False),
+                        task_file_path=_tf,
                         turn_deadline=turn_deadline, idle_timeout=idle_timeout,
                     )
 

@@ -29,8 +29,10 @@ SOUL_FILE="/home/agent/.claude/SOUL.md"
 # Context-Economy Stufe 2: CARD.md (<=5KB) ersetzt SOUL.md (~29KB) als
 # --append-system-prompt, aber nur fuer Agenten mit gesetztem Opt-in-Flag
 # (docker_agent_sync.write_operating_card schreibt/loescht die Datei je nach
-# agent.use_operating_card). Datei-Existenz ist die einzige Weiche hier.
-[ -f "$CARD_FILE" ] || CARD_FILE="$SOUL_FILE"
+# agent.use_operating_card). -s statt -f: eine LEERE CARD.md (0 Byte) muss
+# wie "fehlt" behandelt werden, sonst startet der Agent ganz ohne
+# System-Prompt statt auf SOUL.md zurueckzufallen (matcht den -s-Check unten).
+[ -s "$CARD_FILE" ] || CARD_FILE="$SOUL_FILE"
 CLAUDE_ARGS="--dangerously-skip-permissions"
 
 # Schritt 1: .env sourcen (wenn vorhanden) — überschreibt Container-env
