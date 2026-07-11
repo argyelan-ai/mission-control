@@ -212,6 +212,22 @@ def _grok_launch_cmd() -> list[str]:
     return cmd
 
 
+def _grok_launch_shell_cmd() -> str:
+    """Shell line for `tmux new-session`: source agent.env in-shell, then exec grok.
+
+    tmux windows inherit their environment from the tmux SERVER, not from the
+    client that runs `new-session` — passing env= to the subprocess never
+    reaches the TUI. A stale server-global (the hermes 13 KB token incident)
+    once poisoned MC_AGENT_TOKEN for every new session this way. Sourcing the
+    file inside the window shell (hermes entrypoint pattern) makes agent.env
+    the single source of truth regardless of server state.
+    """
+    # tmux runs the window command through `sh -c` itself — return the compound
+    # line directly instead of double-wrapping (nested quoting would break).
+    grok = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
+    return f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; exec {grok}"
+
+
 def wait_for_agent_healthy(timeout: float = READY_TIMEOUT) -> bool:
     """Poll the pane until the grok prompt glyph appears (TUI ready for input)."""
     deadline = time.monotonic() + timeout
@@ -237,9 +253,10 @@ def start_grok_session() -> dict:
     env = load_env_from_file(ENV_FILE)
     WORKSPACE.mkdir(parents=True, exist_ok=True)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    cmd_str = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
     r = _tmux(
-        ["new-session", "-d", "-s", SESSION, "-c", str(WORKSPACE), cmd_str], env=env,
+        ["new-session", "-d", "-s", SESSION, "-c", str(WORKSPACE),
+         _grok_launch_shell_cmd()],
+        env=env,
     )
     if r.returncode != 0:
         raise RuntimeError(f"tmux new-session failed: {r.stderr.strip()}")
