@@ -195,8 +195,11 @@ services:
       # Backend mountet alle Agent-Slugs zusammengefasst unter /deliverables/
       # damit FileResponse den path-Wert aus der DB direkt aufloesen kann.
       - ${HOME}/.mc/deliverables:/deliverables:ro
-      # Shared Deliverables fuer mc-playwright Screenshots (read-only fuer Backend)
-      - mc_shared_deliverables:/shared-deliverables:ro
+      # Shared Deliverables fuer mc-playwright Screenshots. rw seit PR3
+      # (Benchmark Studio): der Orchestrator schreibt bench-<id>/<label>/
+      # index.html hierher, damit mc-playwright /record es laden kann
+      # (Praezedenz: mcp-screenshots-Mount wurde am 05.07. ro->rw geflippt).
+      - mc_shared_deliverables:/shared-deliverables
       # MCP Screenshots (Microsoft Playwright MCP Sidecar) — read-only fuer
       # Backend's `mc deliverable from-mcp` Validierung + FileResponse.
       # rw seit 05.07.: Task-Delete räumt /shared-mcp/<task_id>/ mit
