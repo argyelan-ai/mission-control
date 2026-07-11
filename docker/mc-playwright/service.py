@@ -20,9 +20,12 @@ Interaktions-Mode (2026-04-23):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
+import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Literal
@@ -32,6 +35,15 @@ import uvicorn  # noqa: F401  (for side-effects on deployment)
 from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
+from media import (
+    VIEWPORTS,
+    ComposeRequest,
+    ComposeResponse,
+    RecordRequest,
+    RecordResponse,
+    build_compose_cmd,
+    build_transcode_cmd,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("mc.playwright_service")
@@ -43,12 +55,6 @@ SHARED_DELIVERABLES = Path(os.environ.get("SHARED_DELIVERABLES", "/shared-delive
 
 # LocalStorage-Key den das MC-Frontend nutzt (frontend-v2/src/lib/api.ts)
 MC_AUTH_STORAGE_KEY = "mc_auth_token"
-
-VIEWPORTS = {
-    "desktop": {"width": 1440, "height": 900},
-    "mobile":  {"width":  390, "height": 844},  # iPhone 13-ish
-    "tablet":  {"width":  768, "height": 1024},
-}
 
 
 def _safe_filename(name: str) -> str:
@@ -773,3 +779,123 @@ async def verify(req: VerifyRequest):
         len(req.interactions),
     )
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Record & Compose (2026-07-11, Benchmark Studio Baustein 2)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# /record:  HTML-Datei oder URL laden, N Sekunden Video aufnehmen (Playwright
+#           record_video, webm) + Screenshot, dann ffmpeg-Transcode zu H.264
+#           mp4 (X-kompatibel). /compose: N mp4s -> beschriftetes Grid-Video.
+# Lehre aus dem Grok-Review: JEDER Subprocess laeuft mit Timeout + captured
+# stderr — nichts haengt still.
+
+FFMPEG_TIMEOUT_S = 300
+
+
+def _require_shared_path(raw: str, what: str) -> Path:
+    """Containment: alle Record/Compose-Pfade muessen unter /shared-deliverables liegen."""
+    resolved = Path(raw).resolve()
+    root = SHARED_DELIVERABLES.resolve()
+    if not resolved.is_relative_to(root):
+        raise HTTPException(422, f"{what} muss unter {root} liegen: {raw}")
+    return resolved
+
+
+def _run_ffmpeg(cmd: list[str]) -> None:
+    """Runs ffmpeg with timeout + captured stderr. 502 on failure — never hangs."""
+    logger.info("ffmpeg: %s", " ".join(cmd))
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(502, f"ffmpeg timeout nach {FFMPEG_TIMEOUT_S}s")
+    except FileNotFoundError:
+        raise HTTPException(502, "ffmpeg binary nicht gefunden — Image ohne ffmpeg gebaut?")
+    if proc.returncode != 0:
+        raise HTTPException(
+            502,
+            f"ffmpeg failed (rc={proc.returncode}): {proc.stderr[-800:]}",
+        )
+
+
+@app.post("/record", response_model=RecordResponse)
+async def record(req: RecordRequest):
+    """Laedt html_path/url, nimmt duration_s Sekunden Video auf (webm via
+    Playwright record_video), transkodiert zu H.264 mp4 und speichert
+    zusaetzlich screenshot.png (Thumbnail/Fallback) nach output_dir."""
+    out_dir = _require_shared_path(req.output_dir, "output_dir")
+    if req.html_path:
+        html = _require_shared_path(req.html_path, "html_path")
+        if not html.is_file():
+            raise HTTPException(422, f"html_path existiert nicht: {req.html_path}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    vp = VIEWPORTS[req.viewport]
+    screenshot_path = out_dir / "screenshot.png"
+    video_path = out_dir / "recording.mp4"
+
+    with tempfile.TemporaryDirectory() as tmp:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context(
+                    viewport=vp,
+                    record_video_dir=tmp,
+                    record_video_size=vp,
+                )
+                page = await context.new_page()
+                try:
+                    await page.goto(req.target_url, wait_until="load", timeout=30000)
+                except Exception as e:
+                    raise HTTPException(502, f"Navigation failed ({req.target_url}): {e}")
+                await page.wait_for_timeout(req.duration_s * 1000)
+                await page.screenshot(path=str(screenshot_path), full_page=False)
+                video = page.video
+                await context.close()  # flushes the webm to record_video_dir
+                webm_path = await video.path()
+            finally:
+                await browser.close()
+
+        # ffmpeg braucht das webm bevor der TemporaryDirectory-Context endet
+        await asyncio.to_thread(
+            _run_ffmpeg, build_transcode_cmd(str(webm_path), str(video_path))
+        )
+
+    logger.info(
+        "record: %s -> %s (%ds, %s)",
+        req.target_url, video_path, req.duration_s, req.viewport,
+    )
+    return RecordResponse(
+        video_path=str(video_path),
+        screenshot_path=str(screenshot_path),
+        duration_s=req.duration_s,
+        bytes=video_path.stat().st_size,
+    )
+
+
+@app.post("/compose", response_model=ComposeResponse)
+async def compose(req: ComposeRequest):
+    """Komponiert N mp4-Aufnahmen zu einem Grid-Video mit Modell-Labels
+    (2x1 / 3x1 / 2x2 je nach Anzahl). speed_labels (optional) werden an die
+    Labels angehaengt (z.B. 'DeepSeek · 87 tok/s')."""
+    for raw in req.inputs:
+        resolved = _require_shared_path(raw, "input")
+        if not resolved.is_file():
+            raise HTTPException(422, f"Input nicht gefunden: {raw}")
+    out_path = _require_shared_path(req.output_path, "output_path")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    cmd = build_compose_cmd(
+        req.inputs, req.labels, str(out_path), speed_labels=req.speed_labels
+    )
+    await asyncio.to_thread(_run_ffmpeg, cmd)
+
+    logger.info("compose: %d inputs -> %s", len(req.inputs), out_path)
+    return ComposeResponse(
+        output_path=str(out_path),
+        bytes=out_path.stat().st_size,
+        inputs=len(req.inputs),
+    )
