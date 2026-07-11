@@ -68,8 +68,15 @@ class AgentCreate(BaseModel):
     @field_validator("harness")
     @classmethod
     def _validate_harness(cls, v: str | None) -> str | None:
-        if v is not None and v not in ("claude", "openclaude", "omp"):
-            raise ValueError("harness muss 'claude', 'openclaude' oder 'omp' sein")
+        # Any known harness is valid at CREATE — cli-bridge (claude/openclaude/omp)
+        # AND host-only harnesses (hermes, grok — ADR-064/066). HARNESS_PROTOCOLS is
+        # the canonical set. Unlike the cli-bridge switch path (AgentUpdate), a host
+        # harness like grok can ONLY be set here: derive_harness() returns None for a
+        # grok-cloud runtime, so the wizard must pass harness="grok" explicitly.
+        from app.services.harness_compat import HARNESS_PROTOCOLS
+        if v is not None and v not in HARNESS_PROTOCOLS:
+            allowed = ", ".join(sorted(HARNESS_PROTOCOLS))
+            raise ValueError(f"harness muss einer von: {allowed} sein")
         return v
 
     @model_validator(mode="after")

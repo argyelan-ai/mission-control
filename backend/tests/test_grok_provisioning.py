@@ -147,6 +147,20 @@ async def test_grok_provision_endpoint_dispatches_adapter(
     mocked.assert_awaited_once()
 
 
+def test_agent_create_accepts_host_harnesses():
+    """AgentCreate validator accepts host-only harnesses (grok, hermes) — not just
+    cli-bridge ones — since a grok host agent can only set harness at create time."""
+    from app.routers.agents import AgentCreate
+
+    rid = str(uuid.uuid4())
+    for h in ("grok", "hermes", "claude", "openclaude", "omp"):
+        ac = AgentCreate(name="A", harness=h, agent_runtime="host", runtime_id=rid)
+        assert ac.harness == h
+    # Unknown harness still rejected.
+    with pytest.raises(Exception):
+        AgentCreate(name="A", harness="bogus", agent_runtime="host", runtime_id=rid)
+
+
 @pytest.mark.asyncio
 async def test_grok_provision_rejects_openai_runtime(
     auth_client, async_session, tmp_path, monkeypatch, fake_redis
