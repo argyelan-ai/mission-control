@@ -517,6 +517,15 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
             await _render_and_compose(session, challenge, candidates)
         except Exception:  # noqa: BLE001
             logger.exception("bench challenge %s rerender crashed", challenge_id)
+            try:
+                challenge = await session.get(BenchChallenge, challenge_id)
+                if challenge is not None:
+                    challenge.status = "failed"
+                    challenge.error = "rerender crashed — see backend logs"
+                    session.add(challenge)
+                    await session.commit()
+            except Exception:
+                logger.exception("bench challenge %s rerender failure write failed", challenge_id)
 
 
 async def retry_entry(entry_id: uuid.UUID) -> None:

@@ -9,9 +9,11 @@ import pytest
 pytest.importorskip("app.verticals.bench_studio")
 
 from sqlmodel import select
+from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.bench import BenchChallenge, BenchEntry
 from app.verticals.bench_studio import orchestrator
+from tests.conftest import test_engine
 
 
 async def _seed(session, *, mode="side_by_side", entry_specs=None):
@@ -341,3 +343,42 @@ async def test_reconcile_marks_failed_agent_tasks(
     await session.refresh(ch)
     assert entries[0].status == "failed"
     assert ch.status == "failed"  # only entry failed -> all failed
+
+
+# ── rerender_challenge outer exception handler ─────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rerender_challenge_crash_writes_failed_status(session, monkeypatch):
+    """Outer exception handler in rerender_challenge must flip to failed,
+    not just log — same pattern as start_challenge (Task 4 review fix)."""
+    # rerender_challenge creates its own AsyncSession(engine); patch it to the
+    # test engine so the failure write lands in the same in-memory SQLite DB.
+    monkeypatch.setattr("app.database.engine", test_engine)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark",
+             "status": "rendered", "artifact_path": "/a/index.html",
+             "video_path": "/a/clip.mp4"},
+        ],
+    )
+    ch.status = "rendering"
+    session.add(ch)
+    await session.commit()
+
+    # Make _render_and_compose crash so the outer handler fires.
+    monkeypatch.setattr(
+        orchestrator, "_render_and_compose",
+        AsyncMock(side_effect=RuntimeError("injected crash")),
+    )
+
+    await orchestrator.rerender_challenge(ch.id)
+
+    # Verify via a fresh session (rerender_challenge's own session committed the status).
+    async with AsyncSession(test_engine, expire_on_commit=False) as verify_session:
+        updated_ch = await verify_session.get(BenchChallenge, ch.id)
+    assert updated_ch is not None
+    assert updated_ch.status == "failed"
+    assert updated_ch.error is not None
