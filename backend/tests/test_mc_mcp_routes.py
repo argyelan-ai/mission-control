@@ -55,7 +55,10 @@ def test_mc_patch_task_hits_board_scoped_path_for_comment(mc_mcp_module):
         api_calls.append((method, path, kwargs.get("json")))
         return {"ok": True}
 
-    with patch.object(mc_mcp_module, "_api", side_effect=fake_api):
+    # Comments go through the AGENT-scoped endpoint since the 'Du'-attribution
+    # fix (hermes W1): author_type='agent', never the operator fallback.
+    with patch.object(mc_mcp_module, "_api", side_effect=fake_api), \
+         patch.object(mc_mcp_module, "_api_agent", side_effect=fake_api):
         result = _unwrap(mc_mcp_module.mc_patch_task)(
             fake_task_id,
             comment="Update: x\nEvidence: y\nNext: z",
@@ -63,7 +66,7 @@ def test_mc_patch_task_hits_board_scoped_path_for_comment(mc_mcp_module):
         )
     posts = [c for c in api_calls if c[0] == "POST"]
     assert len(posts) == 1
-    assert posts[0][1] == f"/boards/{fake_board_id}/tasks/{fake_task_id}/comments"
+    assert posts[0][1] == f"/agent/boards/{fake_board_id}/tasks/{fake_task_id}/comments"
     body = posts[0][2]
     # Backend schema CommentCreate uses `content` (tasks.py:188)
     assert "content" in body

@@ -125,6 +125,8 @@ async def test_record_task_completion_comment_contains_task_title(fake_redis):
     async def _fake_get_redis():
         return fake_redis
 
+    original_get_redis = rc_mod.get_redis
+    original_am_get_redis = am_mod.get_redis
     rc_mod.get_redis = _fake_get_redis
     am_mod.get_redis = _fake_get_redis
 
@@ -149,4 +151,9 @@ async def test_record_task_completion_comment_contains_task_title(fake_redis):
             assert task.title in comment.content
     finally:
         auto_memory_module.engine = original_engine
-        rc_mod.get_redis = am_mod.get_redis  # restore (both point to original)
+        # Restore the TRUE originals. The old `rc_mod.get_redis =
+        # am_mod.get_redis` "restore" leaked this test's (closed) fake_redis
+        # into both modules and broke every later test that calls
+        # get_redis() directly (e.g. the recovery-comment cooldown claim).
+        rc_mod.get_redis = original_get_redis
+        am_mod.get_redis = original_am_get_redis
