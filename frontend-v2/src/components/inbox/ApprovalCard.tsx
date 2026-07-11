@@ -12,6 +12,7 @@ import { cn, timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
 import { Pill } from "@/components/shared/Pill";
 import { InstallRequestCard } from "./InstallRequestCard";
+import { XPostApprovalCard } from "./XPostApprovalCard";
 import { C } from "@/lib/colors";
 import type { Approval, AutonomyLevel } from "@/lib/types";
 
@@ -86,6 +87,13 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
         approval={approval}
         onResolve={() => onResolve("approved")}
       />
+    );
+  }
+
+  // Dispatch X post drafts to the tweet-preview card (Benchmark Studio PR 2)
+  if (approval.action_type === "x_post") {
+    return (
+      <XPostApprovalCard approval={approval} onResolve={onResolve} loading={loading} />
     );
   }
 

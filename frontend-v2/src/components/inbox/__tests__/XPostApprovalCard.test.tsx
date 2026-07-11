@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { XPostApprovalCard, mediaPathToFilesLocation } from "../XPostApprovalCard";
+import { ApprovalCard } from "../ApprovalCard";
 import type { Approval } from "@/lib/types";
 
 const mkApproval = (payload: Record<string, unknown>, overrides: Partial<Approval> = {}): Approval =>
@@ -151,5 +152,42 @@ describe("XPostApprovalCard", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /reject/i }));
     expect(onResolve).toHaveBeenCalledWith("rejected");
+  });
+});
+
+describe("ApprovalCard dispatch", () => {
+  beforeEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      value: {
+        getItem: () => "tok",
+        setItem: () => undefined,
+        removeItem: () => undefined,
+        clear: () => undefined,
+      },
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  it("routes action_type x_post to XPostApprovalCard", () => {
+    const text = "Hello X";
+    render(
+      <ApprovalCard approval={mkApproval({ text })} onResolve={vi.fn()} />,
+    );
+    // Tweet preview markers, not the generic markdown description card:
+    expect(screen.getByText(text)).toBeInTheDocument();
+    expect(screen.getByText(`${text.length}/280`)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /approve & post/i })).toBeInTheDocument();
+  });
+
+  it("leaves other action types on the generic card", () => {
+    render(
+      <ApprovalCard
+        approval={mkApproval({}, { action_type: "visual_review", description: "Look at this" })}
+        onResolve={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/\/280/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^approve$/i })).toBeInTheDocument();
   });
 });
