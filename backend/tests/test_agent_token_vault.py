@@ -100,3 +100,76 @@ async def test_template_instantiate_writes_token_to_vault(async_session):
 
     assert agent.name == "Vaulter"
     assert await _vault_token(async_session, "vaulter") == raw_token
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_removes_vault_secret(auth_client, async_session):
+    """Deleting an agent must also remove its mc_token_<slug> vault secret.
+    Before 2026-07-11 the DELETE only cleaned up DB FKs, so the token secret
+    lingered — and even re-entered docker/.env.agents on the next start-all.sh
+    run as a stale token for a non-existent agent.
+
+    The agent is inserted directly (not via POST) to avoid the create
+    endpoint's best-effort background provisioning task, which opens a real
+    Postgres session and is irrelevant to the delete cascade under test."""
+    from app.models.agent import Agent
+    from app.services.secrets_helper import upsert_agent_token_secret
+
+    agent = Agent(name="DeleteMe", agent_runtime="cli-bridge")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    await upsert_agent_token_secret(async_session, "DeleteMe", "tok-xyz")
+    assert await _vault_token(async_session, "deleteme") is not None
+
+    delete = await auth_client.delete(f"/api/v1/agents/{agent.id}")
+    assert delete.status_code == 204, delete.text
+
+    async_session.expire_all()
+    assert await _vault_token(async_session, "deleteme") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_removes_vault_secret_after_rename(auth_client, async_session):
+    """Regression (reviewer 2026-07-11): a plain PATCH rename does NOT rotate
+    the token, so the vault key keeps the ORIGINAL name. Deletion must key off
+    the stable insert-time slug, not the current name, or the secret orphans.
+    Uses a multi-word name so the space-vs-dash dual-key path is exercised."""
+    from app.models.agent import Agent
+    from app.services.secrets_helper import upsert_agent_token_secret
+
+    agent = Agent(name="Renamed One", agent_runtime="cli-bridge")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    assert agent.slug == "renamed-one"
+    # Token written under the ORIGINAL name → key 'mc_token_renamed one' (space).
+    await upsert_agent_token_secret(async_session, "Renamed One", "tok-orig")
+    assert await _vault_token(async_session, "renamed one") is not None
+
+    # Rename WITHOUT rotating the token (plain metadata edit).
+    agent.name = "Totally Different"
+    async_session.add(agent)
+    await async_session.commit()
+
+    delete = await auth_client.delete(f"/api/v1/agents/{agent.id}")
+    assert delete.status_code == 204, delete.text
+
+    async_session.expire_all()
+    assert await _vault_token(async_session, "renamed one") is None
+
+
+@pytest.mark.asyncio
+async def test_delete_agent_without_vault_secret_still_succeeds(auth_client, async_session):
+    """The vault delete is best-effort: an agent whose secret was never
+    written must still delete cleanly (no 500)."""
+    from app.models.agent import Agent
+
+    agent = Agent(name="NoSecret", agent_runtime="cli-bridge")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+    assert await _vault_token(async_session, "nosecret") is None
+
+    delete = await auth_client.delete(f"/api/v1/agents/{agent.id}")
+    assert delete.status_code == 204, delete.text

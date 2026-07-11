@@ -750,3 +750,94 @@ async def write_compose_agents(
         }
     finally:
         await redis.delete(COMPOSE_WRITE_LOCK_KEY)
+
+
+def prune_compose_agent_block(content: str, slug: str) -> tuple[str, bool]:
+    """Remove the ``mc-agent-<slug>:`` service block from compose YAML.
+
+    render_compose_agents is *additive* — it overlays image overrides and
+    appends new service blocks, but never removes one. So a deleted cli-bridge
+    agent's block lingered in docker-compose.agents.yml forever (found
+    2026-07-11), and `docker compose up` kept trying to recreate its container.
+
+    This is a *targeted* prune: it removes only the block for the exact slug
+    the caller just deleted — never inferred from DB state, which could wrongly
+    drop a static anchor agent whose DB row is momentarily absent.
+
+    A service block starts at a line ``^  mc-agent-<slug>:`` (2-space indent
+    under ``services:``) and runs until the next line at ≤2-space indent
+    (the next service, or a top-level key) or EOF. Pure function: returns
+    ``(new_content, removed)``.
+    """
+    lines = content.splitlines(keepends=True)
+    header = f"  mc-agent-{slug}:"
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        stripped = line.rstrip("\n").rstrip("\r")
+        if stripped == header:
+            start = idx
+            break
+    if start is None:
+        return content, False
+
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        line = lines[idx]
+        # Blank / whitespace-only lines belong to the block (trailing spacing).
+        if not line.strip():
+            continue
+        # A line whose first non-space column is ≤ 2 ends the block: either a
+        # sibling service ("  other:") or a top-level key ("services:").
+        indent = len(line) - len(line.lstrip(" "))
+        if indent <= 2:
+            end = idx
+            break
+
+    del lines[start:end]
+    return "".join(lines), True
+
+
+async def prune_compose_agent(slug: str, compose_path: Path | None = None) -> dict:
+    """Remove a deleted cli-bridge agent's service block from the compose file.
+
+    Lock-protected + atomic + best-effort, mirroring write_compose_agents:
+    acquire the shared compose-write lock, back up to <path>.bak, write via
+    <path>.tmp + os.replace. A no-op (no matching block, or file absent)
+    writes nothing. Callers in the delete path must treat this as best-effort
+    — a lock/IO failure must never block the DB delete.
+
+    Returns ``{"removed": "true|false", "path": str, "changed": "true|false"}``.
+    """
+    path = Path(compose_path or DEFAULT_COMPOSE_PATH)
+    if not path.exists():
+        return {"removed": "false", "path": str(path), "changed": "false"}
+
+    redis = await get_redis()
+    acquired = await redis.set(
+        COMPOSE_WRITE_LOCK_KEY, "1", nx=True, ex=COMPOSE_WRITE_LOCK_TTL
+    )
+    if not acquired:
+        import asyncio
+        await asyncio.sleep(2)
+        acquired = await redis.set(
+            COMPOSE_WRITE_LOCK_KEY, "1", nx=True, ex=COMPOSE_WRITE_LOCK_TTL
+        )
+        if not acquired:
+            raise RuntimeError(
+                "compose write lock busy — concurrent switch in progress"
+            )
+    try:
+        previous = path.read_text(encoding="utf-8")
+        rendered, removed = prune_compose_agent_block(previous, slug)
+        if not removed or rendered == previous:
+            return {"removed": "false", "path": str(path), "changed": "false"}
+
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        bak = path.with_suffix(path.suffix + ".bak")
+        bak.write_text(previous, encoding="utf-8")
+        tmp.write_text(rendered, encoding="utf-8")
+        os.replace(tmp, path)
+        logger.info("compose_renderer pruned mc-agent-%s from %s", slug, path)
+        return {"removed": "true", "path": str(path), "changed": "true"}
+    finally:
+        await redis.delete(COMPOSE_WRITE_LOCK_KEY)

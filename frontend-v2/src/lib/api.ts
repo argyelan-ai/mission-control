@@ -917,11 +917,6 @@ export const api = {
           { method: "PUT", body: JSON.stringify({ content }) }
         ),
     },
-    trigger: (id: string, message?: string) =>
-      request<{ source: string; reply: string | null }>(`/api/v1/agents/${id}/trigger`, {
-        method: "POST",
-        body: JSON.stringify(message ? { message } : {}),
-      }),
     reset: (id: string) =>
       request<unknown>(`/api/v1/agents/${id}/reset`, { method: "POST" }),
     previewSoul: (data: {

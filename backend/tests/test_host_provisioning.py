@@ -472,3 +472,46 @@ async def test_provision_endpoint_failed_staging_does_not_destroy_existing_token
     refreshed = await async_session.get(A, agent.id, populate_existing=True)
     assert refreshed.provision_status == "local"
     assert refreshed.agent_token_hash == "original-hash-untouched"
+
+
+# ── teardown_host_agent_files (delete cascade, 2026-07-11) ──────────────────
+
+def test_teardown_removes_agent_dir(home_host):
+    """Deleting a host agent must remove ~/.mc/agents/<slug>/ — it used to
+    leave the plist + launcher + agent.env (with a live token) on disk."""
+    slug = "nova-host"
+    workspace = home_host / ".mc" / "agents" / slug
+    (workspace / "logs").mkdir(parents=True)
+    (workspace / "agent.env").write_text("MC_AGENT_TOKEN='secret'\n")
+
+    agent = Agent(name="Nova Host", agent_runtime="host", harness="openclaude")
+    result = hp.teardown_host_agent_files(agent)
+
+    assert result["removed"] is True
+    assert not workspace.exists()
+
+
+def test_teardown_missing_dir_is_noop(home_host):
+    agent = Agent(name="Never Staged", agent_runtime="host", harness="openclaude")
+    result = hp.teardown_host_agent_files(agent)
+    assert result["removed"] is False
+
+
+def test_teardown_refuses_to_delete_agents_root(home_host, monkeypatch):
+    """A degenerate slug must never let rmtree escape to the agents root
+    itself (or above). The slug sanitizer already blocks traversal, but the
+    teardown guard is the belt-and-suspenders that fails loudly."""
+    agents_root = home_host / ".mc" / "agents"
+    agents_root.mkdir(parents=True)
+    (agents_root / "boss").mkdir()
+
+    # Force _resolve_slug to yield the sanitizer fallback that would resolve
+    # to the agents root — i.e. an empty/degenerate name.
+    monkeypatch.setattr(hp, "_resolve_slug", lambda a: "")
+
+    agent = Agent(name="", agent_runtime="host", harness="openclaude")
+    with pytest.raises(ValueError):
+        hp.teardown_host_agent_files(agent)
+
+    # Sibling agent dir must be untouched.
+    assert (agents_root / "boss").exists()
