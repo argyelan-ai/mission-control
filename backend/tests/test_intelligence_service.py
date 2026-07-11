@@ -185,7 +185,7 @@ class TestDetectFailurePatterns:
 class TestDetectAnomalies:
     """IntelligenceService._detect_anomalies()"""
 
-    async def test_no_anomalies_on_healthy_data(self):
+    async def test_no_anomalies_on_healthy_data(self, fake_redis):
         svc = IntelligenceService(interval=9999)
         insights = {
             "task_durations": {"outliers": [], "avg_minutes": 10},
@@ -196,12 +196,13 @@ class TestDetectAnomalies:
         }
 
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
-            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock):
+            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock), \
+                 patch("app.services.intelligence.get_redis", return_value=fake_redis):
                 result = await svc._detect_anomalies(session, insights)
 
         assert result == []
 
-    async def test_detects_low_success_rate(self):
+    async def test_detects_low_success_rate(self, fake_redis):
         svc = IntelligenceService(interval=9999)
         insights = {
             "task_durations": {"outliers": []},
@@ -212,14 +213,15 @@ class TestDetectAnomalies:
         }
 
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
-            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock):
+            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock), \
+                 patch("app.services.intelligence.get_redis", return_value=fake_redis):
                 result = await svc._detect_anomalies(session, insights)
 
         assert len(result) == 1
         assert result[0]["type"] == "low_success_rate"
         assert result[0]["severity"] == "warning"
 
-    async def test_detects_high_failure_rate(self):
+    async def test_detects_high_failure_rate(self, fake_redis):
         svc = IntelligenceService(interval=9999)
         insights = {
             "task_durations": {"outliers": []},
@@ -228,10 +230,61 @@ class TestDetectAnomalies:
         }
 
         async with AsyncSession(test_engine, expire_on_commit=False) as session:
-            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock):
+            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock), \
+                 patch("app.services.intelligence.get_redis", return_value=fake_redis):
                 result = await svc._detect_anomalies(session, insights)
 
         assert any(a["type"] == "high_failure_rate" for a in result)
+
+    async def test_persistent_anomaly_pushes_once_per_cooldown(self, fake_redis):
+        """Regression: a persistent condition must alert Discord only once per
+        cooldown window, not every analysis cycle (Discord-spam bug)."""
+        svc = IntelligenceService(interval=9999)
+        insights = {
+            "task_durations": {"outliers": []},
+            "agent_performance": [
+                {"name": "BadAgent", "agent_id": str(uuid.uuid4()), "done": 1, "failed": 4, "success_rate": 20.0}
+            ],
+            "failure_patterns": {"total": 8, "patterns": {"timeout": 8}},
+        }
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as session:
+            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock) as emit, \
+                 patch("app.services.intelligence.get_redis", return_value=fake_redis):
+                # First cycle: both warnings fire.
+                first = await svc._detect_anomalies(session, insights)
+                emits_after_first = emit.await_count
+                # Second cycle: same conditions, cooldown active → no new pushes.
+                second = await svc._detect_anomalies(session, insights)
+                emits_after_second = emit.await_count
+
+        # Warnings: low_success_rate (per-agent) + high_failure_rate (global).
+        assert emits_after_first == 2
+        assert emits_after_second == 2, "persistent anomaly re-alerted within cooldown"
+        # Dashboard list stays complete on every cycle (dedup only gates push).
+        assert len(second) == len(first) == 2
+
+    async def test_distinct_anomaly_types_dedup_independently(self, fake_redis):
+        """Different anomaly types/agents get independent cooldown keys."""
+        svc = IntelligenceService(interval=9999)
+        agent_a = str(uuid.uuid4())
+        agent_b = str(uuid.uuid4())
+        insights = {
+            "task_durations": {"outliers": []},
+            "agent_performance": [
+                {"name": "A", "agent_id": agent_a, "done": 1, "failed": 4, "success_rate": 20.0},
+                {"name": "B", "agent_id": agent_b, "done": 1, "failed": 4, "success_rate": 20.0},
+            ],
+            "failure_patterns": {"total": 0, "patterns": {}},
+        }
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as session:
+            with patch("app.services.intelligence.emit_event", new_callable=AsyncMock) as emit, \
+                 patch("app.services.intelligence.get_redis", return_value=fake_redis):
+                await svc._detect_anomalies(session, insights)
+
+        # Two distinct agents → two independent pushes on first cycle.
+        assert emit.await_count == 2
 
 
 class TestBuildDestillationPrompt:

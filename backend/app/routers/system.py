@@ -233,6 +233,9 @@ class IntelligenceConfig(BaseModel):
     outlier_multiplier: float = Field(default=2.0, gt=1.0)
     success_rate_threshold: float = Field(default=50.0, ge=0.0, le=100.0)
     failure_count_threshold: int = Field(default=5, ge=1)
+    # Cooldown between repeated Discord pushes for the *same* persistent
+    # anomaly. Without it a 7-day condition re-alerts every analysis cycle.
+    anomaly_alert_cooldown_seconds: int = Field(default=21600, ge=60)  # 6h
 
 
 @router.get("/api/v1/intelligence/config")
