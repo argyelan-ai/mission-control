@@ -1,0 +1,474 @@
+"""Host-agent file staging for the onboarding wizard (2026-07-10).
+
+Renders plist + run.sh + agent.env into ~/.mc/agents/<slug>/ so an
+operator can review and launchctl-load them. SAFETY: launchctl is never
+run in tests, and autoload is gated behind a feature flag (default off).
+"""
+import os
+import uuid
+
+import pytest
+
+from app.models.agent import Agent
+from app.models.runtime import Runtime
+import app.services.host_provisioning as hp
+
+
+@pytest.fixture
+def home_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    return tmp_path
+
+
+@pytest.mark.asyncio
+async def test_stage_writes_files(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1", "OPENAI_MODEL": "m"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt", display_name="Host RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Nova Host", emoji="🛰️", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-abc", session=async_session)
+
+    assert os.path.isfile(result.plist_staged_path)
+    assert os.path.isfile(result.run_script_path)
+    assert os.path.isfile(result.env_path)
+    assert result.plist_label == "com.mc.agent.nova-host"
+    # env file has 600 perms and holds the token
+    assert (os.stat(result.env_path).st_mode & 0o777) == 0o600
+    assert "tok-abc" in open(result.env_path).read()
+    # plist references the staged run script and the label
+    plist = open(result.plist_staged_path).read()
+    assert "com.mc.agent.nova-host" in plist
+    assert result.run_script_path in plist
+    # launchctl command is offered but NOT executed
+    assert "launchctl bootstrap" in result.launchctl_command
+
+
+@pytest.mark.asyncio
+async def test_stage_writes_poller_and_run_sh_starts_it(home_host, async_session, monkeypatch):
+    """A staged host agent must be able to pick up work and heartbeat
+    autonomously — without a poller nothing ever nudges claude past its
+    idle welcome screen (2026-07-10 E2E rerun, Befund 3: last_seen_at stays
+    null forever, provision_status stuck on 'provisioning'). Boss
+    (docker/boss-host/poll.sh + entrypoint.sh) is the only working native-
+    claude host worker and is the reference pattern generalized here:
+    tmux Window 0 runs the harness, Window 1 runs poll.sh in a restart loop."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1", "OPENAI_MODEL": "m"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-poll", display_name="Host RT Poll", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Poller Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-poll", session=async_session)
+
+    assert result.poll_script_path is not None
+    assert os.path.isfile(result.poll_script_path)
+    assert (os.stat(result.poll_script_path).st_mode & 0o777) == 0o755
+    poll_sh = open(result.poll_script_path).read()
+    assert "/api/v1/agent/me/poll" in poll_sh
+    assert "/api/v1/agent/me/heartbeat" in poll_sh
+
+    run_sh = open(result.run_script_path).read()
+    assert "new-window" in run_sh
+    assert result.poll_script_path in run_sh
+
+
+@pytest.mark.asyncio
+async def test_poll_sh_heartbeat_subprocess_receives_mc_token(home_host, async_session, monkeypatch):
+    """The heartbeat() function in poll.sh spawns a python3 subprocess that
+    reads os.environ['MC_TOKEN'] — but MC_TOKEN was assigned as a plain,
+    unexported bash variable (outside the `set -a`/`set +a` block used for
+    agent.env), so the subprocess never saw it: os.environ['MC_TOKEN'] raised
+    KeyError on every single heartbeat, silently swallowed by the trailing
+    `2>/dev/null || true`. last_seen_at only stayed fresh as a side effect of
+    require_agent() touching it on every poll() GET — heartbeats themselves
+    always failed (2026-07-10 E2E Lauf 4, Fix F)."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-token", display_name="Host RT Token", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Token Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-secret", session=async_session)
+    poll_sh = open(result.poll_script_path).read()
+
+    # MC_TOKEN must be exported (or otherwise passed into the subprocess
+    # env) — a plain unexported assignment is not visible to python3.
+    assert "export MC_TOKEN" in poll_sh
+
+    # Heartbeat failures must no longer vanish into /dev/null — isolate the
+    # heartbeat() function body and check it doesn't end in the silent
+    # swallow anymore.
+    start = poll_sh.index("heartbeat() {")
+    end = poll_sh.index("poll() {")
+    heartbeat_body = poll_sh[start:end]
+    assert "2>/dev/null || true" not in heartbeat_body
+    assert "log " in heartbeat_body
+
+
+@pytest.mark.asyncio
+async def test_claude_harness_gets_isolated_mcp_config_and_skip_permissions(
+    home_host, async_session, monkeypatch
+):
+    """A native 'claude' host agent must not hang on the interactive 'New MCP
+    server found' trust prompt (2026-07-10 E2E finding, Befund 2). Boss (the
+    one working native-claude host agent) avoids it via an explicit, isolated
+    --mcp-config file + --strict-mcp-config + --dangerously-skip-permissions
+    (docker/boss-host/start-claude.sh) — this generalizes that mechanism to
+    the wizard's generic host template so a freshly staged agent doesn't
+    inherit the operator's own ~/.claude project-trust state."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-claude", display_name="Host RT Claude", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Claude Host", agent_runtime="host", harness="claude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-claude", session=async_session)
+
+    # An isolated MCP config file was staged alongside run.sh/agent.env.
+    assert result.mcp_config_path is not None
+    assert os.path.isfile(result.mcp_config_path)
+    import json
+    mcp_config = json.loads(open(result.mcp_config_path).read())
+    assert "mcpServers" in mcp_config
+    # .mcp.json can carry inline MCP-server secrets (e.g. API keys in `env`,
+    # same shape as the shared MCP registry) — must be as locked-down as
+    # agent.env (0600), never the 644 default (2026-07-10 E2E rerun, Befund 4).
+    assert (os.stat(result.mcp_config_path).st_mode & 0o777) == 0o600
+
+    run_sh = open(result.run_script_path).read()
+    assert "--strict-mcp-config" in run_sh
+    assert "--mcp-config" in run_sh
+    assert result.mcp_config_path in run_sh
+    assert "--dangerously-skip-permissions" in run_sh
+
+
+@pytest.mark.asyncio
+async def test_openclaude_harness_does_not_get_claude_mcp_flags(
+    home_host, async_session, monkeypatch
+):
+    """The MCP-trust-prompt fix is scoped to the native 'claude' binary —
+    openclaude/omp have no such interactive prompt and must stay untouched."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="host-rt-oc", display_name="Host RT OC", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="OC Host", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-oc", session=async_session)
+
+    assert result.mcp_config_path is None
+    run_sh = open(result.run_script_path).read()
+    assert "--strict-mcp-config" not in run_sh
+    assert "--dangerously-skip-permissions" not in run_sh
+
+
+@pytest.mark.asyncio
+async def test_slug_path_traversal_is_confined(home_host, async_session, monkeypatch):
+    """A malicious name must never escape ~/.mc/agents/."""
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-trav", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="../../evil", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    agents_root = (home_host / ".mc" / "agents").resolve()
+    workspace = os.path.dirname(result.env_path)
+    assert os.path.commonpath([agents_root, os.path.realpath(workspace)]) == str(agents_root)
+    # nothing was written outside the confined tree
+    escaped = home_host / "evil"
+    assert not escaped.exists()
+
+
+@pytest.mark.asyncio
+async def test_slug_strips_shell_metacharacters_no_injection(home_host, async_session, monkeypatch):
+    """A newline-carrying name must not become an executable line in run.sh."""
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-inj", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    payload = "poweroff"
+    agent = Agent(name=f"x\n{payload}", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    run_sh = open(result.run_script_path).read()
+    lines = run_sh.splitlines()
+    assert payload not in lines  # not injected as its own executable line
+    assert "\n" not in result.slug
+
+
+@pytest.mark.asyncio
+async def test_slugify_ampersand_name(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-amp", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="R&D Bot", agent_runtime="host", harness="openclaude")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+    assert result.slug == "rd-bot"
+    plist = open(result.plist_staged_path).read()
+    assert "<string>com.mc.agent.rd-bot</string>" in plist
+    assert "&" not in plist  # no raw ampersand injected into XML
+
+
+@pytest.mark.asyncio
+async def test_unknown_harness_raises_instead_of_interpolating(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="rt-harness", display_name="RT", runtime_type="lmstudio",
+        endpoint="http://x/v1", model_identifier="m", enabled=True,
+    )
+    agent = Agent(name="Bad Harness", agent_runtime="host", harness="evil; rm -rf")
+
+    with pytest.raises(ValueError):
+        await hp.stage_host_agent_files(agent, rt, "tok", session=async_session)
+
+
+@pytest.mark.asyncio
+async def test_maybe_load_disabled_does_not_run_launchctl(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", False)
+
+    called = {"launchctl": False}
+
+    def _boom(*a, **k):
+        called["launchctl"] = True
+        raise AssertionError("launchctl must not run when autoload is disabled")
+
+    monkeypatch.setattr(hp.subprocess, "run", _boom)
+
+    rt = Runtime(slug="r", display_name="R", runtime_type="lmstudio", endpoint="http://x/v1", model_identifier="m", enabled=True)
+    agent = Agent(name="No Load", agent_runtime="host")
+    result = await hp.stage_host_agent_files(agent, rt, "t", session=async_session)
+
+    load = hp.maybe_load_plist(result)
+    assert load["loaded"] is False
+    assert called["launchctl"] is False
+
+
+@pytest.mark.asyncio
+async def test_maybe_load_enabled_invokes_launchctl(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", True)
+
+    calls = []
+
+    class _Proc:
+        returncode = 0
+        stdout = "ok"
+        stderr = ""
+
+    def _fake_run(cmd, **kw):
+        calls.append(cmd)
+        return _Proc()
+
+    monkeypatch.setattr(hp.subprocess, "run", _fake_run)
+
+    rt = Runtime(slug="r2", display_name="R2", runtime_type="lmstudio", endpoint="http://x/v1", model_identifier="m", enabled=True)
+    agent = Agent(name="Do Load", agent_runtime="host")
+    result = await hp.stage_host_agent_files(agent, rt, "t", session=async_session)
+
+    load = hp.maybe_load_plist(result)
+    assert load["loaded"] is True
+    # a launchctl bootstrap command was invoked
+    assert any("launchctl" in c[0] for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_provision_endpoint_stages_generic_host_agent(
+    auth_client, async_session, home_host, monkeypatch
+):
+    from app.models.agent import Agent as A
+    from app.models.runtime import Runtime as R
+
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", False)
+
+    rt = R(slug="generic-host", display_name="Generic", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    agent = A(name="Atlas", agent_runtime="host", runtime_id=rt.id, harness="openclaude",
+              provision_status="local")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["plist_label"] == "com.mc.agent.atlas"
+    assert "launchctl bootstrap" in body["launchctl_command"]
+    # autoload off → files staged, awaiting manual load
+    assert body["plist_loaded"] is False
+    # The request handler commits via its own session (client fixture
+    # overrides get_session per-request); async_session's identity map
+    # doesn't see that commit until forced to repopulate from the DB.
+    refreshed = await async_session.get(A, agent.id, populate_existing=True)
+    assert refreshed.provision_status == "provisioning"
+
+
+@pytest.mark.asyncio
+async def test_host_onboarding_chain_create_provision_health_check(
+    auth_client, async_session, home_host, monkeypatch
+):
+    """End-to-end wizard chain for a host agent (2026-07-10):
+
+    POST /agents (agent_runtime=host) must NOT falsely flip provision_status
+    to "provisioned" via background auto-provisioning (regression covered in
+    isolation by test_agent_create_flow.py, exercised here as part of the
+    full chain) -> the wizard's explicit POST /provision stages the files
+    and returns launchctl_command + a fresh token -> POST /health-check
+    reports runtime-aware host checks. launchctl is never executed.
+    """
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    monkeypatch.setattr(hp.settings, "host_agent_autoload_enabled", False)
+
+    def _boom(*a, **k):
+        raise AssertionError("launchctl must never run in this test")
+
+    monkeypatch.setattr(hp.subprocess, "run", _boom)
+
+    from app.models.runtime import Runtime as R
+
+    rt = R(slug="chain-host-rt", display_name="Chain Host", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    create_resp = await auth_client.post(
+        "/api/v1/agents",
+        json={
+            "name": "Chain Host Agent",
+            "agent_runtime": "host",
+            "runtime_id": "chain-host-rt",
+            "harness": "openclaude",
+            "scopes": ["tasks:read"],
+        },
+    )
+    assert create_resp.status_code == 201
+    agent_id = create_resp.json()["id"]
+
+    # No false "provisioned" flip from background auto-provisioning racing
+    # ahead of the wizard's explicit provision call.
+    from app.models.agent import Agent as A
+    fresh = await async_session.get(A, uuid.UUID(agent_id), populate_existing=True)
+    assert fresh.provision_status == "local"
+
+    provision_resp = await auth_client.post(f"/api/v1/agents/{agent_id}/provision")
+    assert provision_resp.status_code == 200
+    provision_body = provision_resp.json()
+    assert "launchctl bootstrap" in provision_body["launchctl_command"]
+    assert provision_body.get("token")
+
+    staged = await async_session.get(A, uuid.UUID(agent_id), populate_existing=True)
+    assert staged.provision_status == "provisioning"
+
+    health_resp = await auth_client.post(f"/api/v1/agents/{agent_id}/health-check")
+    assert health_resp.status_code == 200
+    health_body = health_resp.json()
+    assert health_body["runtime"] == "host"
+    labels = [c["label"] for c in health_body["checks"]]
+    assert "host heartbeat" in labels
+
+
+@pytest.mark.asyncio
+async def test_provision_endpoint_failed_staging_does_not_destroy_existing_token_hash(
+    auth_client, async_session, home_host, monkeypatch
+):
+    """A failing stage_host_agent_files() (e.g. unknown harness) must not
+    mutate agent_token_hash — otherwise a working token is silently
+    destroyed while the new one is never returned to the caller (only the
+    generic 502 rollback below runs, which doesn't know about the hash)."""
+    from app.models.agent import Agent as A
+    from app.models.runtime import Runtime as R
+
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = R(slug="bad-harness-host", display_name="Generic", runtime_type="lmstudio",
+           endpoint="http://x/v1", model_identifier="m", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    agent = A(name="Doomed", agent_runtime="host", runtime_id=rt.id,
+              harness="not-a-real-harness", provision_status="local",
+              agent_token_hash="original-hash-untouched")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
+    assert resp.status_code == 502
+
+    refreshed = await async_session.get(A, agent.id, populate_existing=True)
+    assert refreshed.provision_status == "local"
+    assert refreshed.agent_token_hash == "original-hash-untouched"

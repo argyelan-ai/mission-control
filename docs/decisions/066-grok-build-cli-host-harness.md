@@ -4,11 +4,12 @@
 **Datum:** 2026-07-10
 **Scope:** Backend/Provisioning, Infra/Host-Bridge, Backend/Runtime
 
-> **Nummerierung:** Dieses ADR entstand parallel zu mehreren anderen Branches am
-> selben Tag. ADR-063 (Agent-Onboarding-Wizard), 064 (Puffer) und 065
-> (X-Publisher) sind auf `origin/main` bzw. anderen Feature-Branches vergeben;
-> dieser host-harness-Adapter-Branch (Basis: `feat/host-harness-adapter`, ADR-060)
-> sah sie beim Schreiben noch nicht. Daher 066 statt der ursprünglich getippten 063.
+> **Nummerierung:** Dieses ADR entstand parallel zu mehreren Branches am selben Tag
+> und wurde nach dem Base-Merge final einsortiert: ADR-063 (Agent-Onboarding-Wizard,
+> `origin/main`), **ADR-064 (HostHarnessAdapter** — der Adapter-Layer, den dieses ADR
+> anwendet; früher als 060 getippt, beim Merge auf 064 umnummeriert, weil 060 der
+> Voice-Provider-Switch von `main` ist) und ADR-065 (X-Publisher). Dieses ADR ist
+> daher **066** (ursprünglich als 063 getippt).
 
 ## Kontext
 
@@ -26,7 +27,7 @@ Grenzkosten 0). Verifizierter Spike (2026-07-10):
 - Der CLI spricht **ausschliesslich** mit der xAI-Cloud (`cli-chat-proxy.grok.com`) über seine
   eigene OAuth-Session — keine `OPENAI_*`/`ANTHROPIC_*`-Env-Konfiguration möglich oder nötig.
 
-ADR-060 hat mit dem `HostHarnessAdapter`-Layer bereits das generische Muster gelegt, einen zweiten
+ADR-064 hat mit dem `HostHarnessAdapter`-Layer bereits das generische Muster gelegt, einen zweiten
 Host-Harness ohne Hardcode-Branches anzudocken. Grok ist der erste Test dieses Musters — und
 strukturell **anders als Hermes**: Hermes ist eine persistente tmux-TUI, an eine vLLM-Runtime
 gebunden, in die Dispatches als Prompt gepastet werden. Grok ist ein **headless per-Dispatch
@@ -35,7 +36,7 @@ MC-gebundenes Modell.
 
 ## Entscheidung
 
-Grok wird als host-side Harness `grok` integriert — nach dem Hermes-/ADR-060-Vorbild bei den
+Grok wird als host-side Harness `grok` integriert — nach dem Hermes-/ADR-064-Vorbild bei den
 geteilten Bausteinen (launchd, `agent.env`, Workspace-Layout, Provisioning-Dispatch), aber mit
 einem headless Subprocess-Delivery-Modell nach dem Vorbild der omp-Bridge.
 
@@ -106,11 +107,11 @@ Statt einen Runtime-losen Sonderpfad zu bauen, bekommt grok sein eigenes Wire-Pr
 Damit läuft grok durch **dasselbe** `is_compatible()`-Gate wie jeder andere Host-Harness: ein
 grok-Agent bindet nur `grok-cloud`, jede openai/anthropic-Runtime ist ein sauberes 422. Der
 Runtime-Endpoint/Modell sind reiner Display-Anker (analog zur kosmetischen ollama-cloud-Bindung
-aus ADR-060) — grok liest sein Modell aus seiner eigenen Cloud-Session.
+aus ADR-064) — grok liest sein Modell aus seiner eigenen Cloud-Session.
 
 ### 4. Provisioning
 
-Der ADR-060-Dispatch (`routers/agents.py`) bleibt unangetastet: `get_adapter("grok")` +
+Der ADR-064-Dispatch (`routers/agents.py`) bleibt unangetastet: `get_adapter("grok")` +
 `is_compatible()` reichen. `bootstrap_grok_agent` spiegelt `bootstrap_hermes_agent` (Token,
 `agent.env` mode 600, Config-/Workspace-/Logs-Dirs, launchctl `com.mc.grok-bridge.plist`,
 MC-Dev-Board-Auto-Assign, Vault-Token-Rotation, `agent.grok_provisioned`-Event) — Rückgabe-Shape
@@ -122,7 +123,7 @@ identisch, `tmux_session=None` (headless). `_HOST_AGENT_PLISTS["grok"]` verweist
   persistenter TUI-Worker, den man mit `send-keys` füttert; der headless `-p`/`streaming-json`-Pfad
   ist der native, robustere Weg (deterministischer Lifecycle, Watchdog greift).
 - **Runtime-loser Sonderpfad (grok braucht keine Runtime-Bindung).** Verworfen — würde den
-  ADR-060-Dispatch (`agent.runtime_id` Pflicht, `is_compatible()`-Gate) aufweichen. Ein eigenes
+  ADR-064-Dispatch (`agent.runtime_id` Pflicht, `is_compatible()`-Gate) aufweichen. Ein eigenes
   `"grok"`-Protokoll + Display-Anker-Runtime hält grok im **selben** generischen Gate, ohne
   Sonderfälle im Provisioning.
 - **LLM-getriebener Lifecycle (grok ruft `mc done` selbst, wie Hermes).** Verworfen als
@@ -136,21 +137,21 @@ identisch, `tmux_session=None` (headless). `_HOST_AGENT_PLISTS["grok"]` verweist
 
 ### Positiv
 
-- **Zweiter Host-Harness ohne Hardcode-Branch** — ADR-060 hält, der Adapter-Registry-Eintrag +
+- **Zweiter Host-Harness ohne Hardcode-Branch** — ADR-064 hält, der Adapter-Registry-Eintrag +
   Bootstrap + ein Protokoll-Tag genügen; `routers/agents.py`/`runtime_propagation`/`switch` bleiben
   unangetastet.
 - **Grenzkosten 0** — läuft auf Marks X-Premium+-Abo, kein API-Key, kein lokales GPU.
 - **Deterministischer, hang-sicherer Lifecycle** — Wall-Clock/Idle-Watchdog + bridge-getriebenes
   finish/blocked; ein Lauf erreicht immer einen Terminalzustand.
 - **Das generische Muster ist an einem strukturell anderen Harness verifiziert** (headless statt
-  TUI, eigene Cloud statt vLLM) — der offene Punkt aus ADR-060 §Negativ ist damit adressiert.
+  TUI, eigene Cloud statt vLLM) — der offene Punkt aus ADR-064 §Negativ ist damit adressiert.
 
 ### Negativ
 
 - **Neues Protokoll-Tag `"grok"`** in der Compat-Matrix — ausschliesslich mit sich selbst
   kompatibel. Sauber, aber die Matrix wächst pro proprietärer Cloud-CLI um einen Eintrag.
 - **Display-Anker-Runtime bleibt kosmetisch** — `grok-cloud` Endpoint/Modell werden nicht gelesen;
-  dieselbe „zwei Wahrheiten"-Fussnote wie bei hermes/ollama-cloud (ADR-060 §Negativ).
+  dieselbe „zwei Wahrheiten"-Fussnote wie bei hermes/ollama-cloud (ADR-064 §Negativ).
 - **Kein Live-Provisioning in dieser Runde** — Adapter/Bridge/Tests sind gebaut und grün, aber das
   tatsächliche `POST /provision` gegen den Host (launchctl, echter grok-Lauf, Abo-Rate-Limits)
   bleibt Marks Gate. Der grok-Binary wurde nur read-only smoke-gecheckt (`grok --help`).
@@ -171,7 +172,7 @@ identisch, `tmux_session=None` (headless). `_HOST_AGENT_PLISTS["grok"]` verweist
   - `docker/grok/com.mc.grok-bridge.plist` (neu)
   - Tests: `backend/tests/test_grok_bridge.py`, `test_grok_provisioning.py`,
     `test_host_harness_adapter.py` (grok-Fälle)
-- Verwandte ADRs: **ADR-060** (HostHarnessAdapter — das Muster, das grok anwendet),
+- Verwandte ADRs: **ADR-064** (HostHarnessAdapter — das Muster, das grok anwendet),
   **ADR-056** (Harness/Provider-Decoupling — `is_compatible()`/`protocol`), **ADR-049/045**
   (omp headless/native — Vorbild für streaming-NDJSON-Reduce + mc-cli-Lifecycle),
   **ADR-029** (Hermes host-side Worker — Bootstrap-/launchd-Vorbild).

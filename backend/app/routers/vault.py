@@ -17,6 +17,7 @@ import json
 import logging
 import shutil
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from hashlib import sha256
 from pathlib import Path
 from typing import Annotated, Any, Optional
@@ -1552,18 +1553,82 @@ def _time_of_day_de(now: datetime) -> str:
     return "nachts"
 
 
+_DATE_YEAR_MIN = 2020
+_DATE_YEAR_MAX = 2100
+
+
+def _plausible_ymd(year: int, month: int, day: int) -> bool:
+    """Sanity-check a (year, month, day) triple before trusting it as a real date.
+
+    Guards against misparsed fragments (e.g. a UUID segment that happens to be
+    all-digits) producing nonsense dates like month=52 or year=9704.
+    """
+    return _DATE_YEAR_MIN <= year <= _DATE_YEAR_MAX and 1 <= month <= 12 and 1 <= day <= 31
+
+
 def _extract_date_from_id(note_id: str | None) -> str | None:
     """Extract the YYYY-MM-DD date from a vault note id like 'sparky-20260514T123000'.
 
-    Returns None when the id is missing or malformed.
+    Requires the strict ``<prefix>-<8 digits>T<6 digits>`` shape (the format the
+    vault writer actually produces) plus a plausibility check on year/month/day.
+    This intentionally does NOT match a bare UUID's trailing hex segment — a
+    12-char hex group can accidentally be all-digits (no "T" separator, wrong
+    length) and would otherwise be misread as a date (real incident: a UUID
+    fragment was parsed into the date '9704-52-17').
+
+    Returns None when the id is missing or doesn't match the strict shape.
     """
     if not note_id or "-" not in note_id:
         return None
     ts = note_id.rsplit("-", 1)[-1]
-    # Expect at least YYYYMMDD prefix
-    if len(ts) < 8 or not ts[:8].isdigit():
+    # Strict shape: YYYYMMDDTHHMMSS (15 chars, literal T at index 8).
+    if len(ts) < 15 or ts[8].upper() != "T" or not ts[:8].isdigit():
         return None
-    return f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
+    year, month, day = int(ts[0:4]), int(ts[4:6]), int(ts[6:8])
+    if not _plausible_ymd(year, month, day):
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _parse_reliable_date(date_raw: Any) -> str | None:
+    """Extract a plausible YYYY-MM-DD from a frontmatter ``date``/``created_at``
+    value (as stored in the vault index — the author-provided, reliable field).
+
+    Accepts a plain date ('2026-05-14') or an ISO timestamp
+    ('2026-05-14T10:30:00Z'); rejects anything that doesn't match the strict
+    leading YYYY-MM-DD pattern or fails the plausibility check.
+    """
+    if not date_raw:
+        return None
+    s = str(date_raw).strip()
+    m = _re.match(r"^(\d{4})-(\d{2})-(\d{2})", s)
+    if not m:
+        return None
+    year, month, day = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if not _plausible_ymd(year, month, day):
+        return None
+    return f"{year:04d}-{month:02d}-{day:02d}"
+
+
+def _note_date(note: dict) -> str | None:
+    """Resolve a note's date from the most reliable source available.
+
+    Prefers the vault index's own ``date`` column (frontmatter ``date`` or
+    ``created_at`` — author-provided, reliable). Falls back to strict
+    id-timestamp parsing only when no frontmatter date is present.
+    """
+    return _parse_reliable_date(note.get("date")) or _extract_date_from_id(note.get("id"))
+
+
+def _age_days(date_str: str | None, now: datetime) -> int | None:
+    """Days between *date_str* (YYYY-MM-DD) and *now*. None if unparseable."""
+    if not date_str:
+        return None
+    try:
+        d = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return max(0, (now - d).days)
 
 
 @agent_router.get("/briefing", dependencies=[Depends(require_scope(Scope.VAULT_READ))])
@@ -1574,8 +1639,10 @@ async def agent_vault_briefing(
 ):
     """Pre-session briefing JSON for voice (or any other agent) to orient itself.
 
-    Returns: open_tasks, open_approvals_count, recent_lessons, recent_writes,
-             agents_online/offline, current_time_of_day_de.
+    Returns: open_tasks (deduped, with age_days + duplicate_count),
+             open_approvals_count, recent_lessons/recent_writes (real-date sorted,
+             with age_days), agents_online/offline, current_time_of_day_de,
+             staleness_summary.
 
     Fail-soft: every data source is wrapped — partial failures return the partial
     briefing with an `error` field instead of HTTP 500. Voice should never
@@ -1593,9 +1660,10 @@ async def agent_vault_briefing(
         "recent_writes": [],
         "agents_online": 0,
         "agents_offline": 0,
+        "staleness_summary": {},
     }
 
-    # ── Open tasks (top 10, ordered by created_at DESC) ──────────────────────
+    # ── Open tasks (top 10, ordered by created_at DESC, deduped) ─────────────
     try:
         stmt = (
             select(Task)
@@ -1622,16 +1690,46 @@ async def agent_vault_briefing(
                 if hasattr(a, "_mapping"):
                     a = a[0]
                 agent_name_map[a.id] = a.name
-        result["open_tasks"] = [
-            {
+
+        # Dedup by (board_id, title, status, assigned_to). `normalized` is
+        # already created_at DESC, so the first occurrence of a key is the
+        # newest — keep it, count the rest as duplicates instead of dropping
+        # them silently. board_id is part of the key so same-titled tasks on
+        # different boards are real, distinct tasks and must NOT collapse.
+        deduped: dict[tuple, dict[str, Any]] = {}
+        dedup_order: list[tuple] = []
+        for t in normalized:
+            assigned_to = agent_name_map.get(t.assigned_agent_id)
+            key = (t.board_id, t.title, t.status, assigned_to)
+            created = t.created_at
+            if created is not None and created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+            if key in deduped:
+                deduped[key]["duplicate_count"] += 1
+                continue
+            deduped[key] = {
                 "id": str(t.id),
                 "title": t.title,
                 "status": t.status,
                 "priority": t.priority,
-                "assigned_to": agent_name_map.get(t.assigned_agent_id),
+                "assigned_to": assigned_to,
+                "age_days": max(0, (now - created).days) if created else None,
+                "duplicate_count": 1,
             }
-            for t in normalized
-        ]
+            dedup_order.append(key)
+
+        # in_progress/blocked before inbox before everything else (e.g. review);
+        # younger (lower age_days) first within each tier.
+        _STATUS_TIER = {"in_progress": 0, "blocked": 0, "inbox": 1}
+
+        def _task_sort_key(key: tuple) -> tuple:
+            item = deduped[key]
+            tier = _STATUS_TIER.get(item["status"], 2)
+            age = item["age_days"] if item["age_days"] is not None else 10**9
+            return (tier, age)
+
+        dedup_order.sort(key=_task_sort_key)
+        result["open_tasks"] = [deduped[k] for k in dedup_order]
     except Exception as exc:  # noqa: BLE001 — fail-soft per design
         logger.warning("briefing: open_tasks failed: %s", exc)
         errors.append(f"open_tasks: {exc}")
@@ -1656,7 +1754,7 @@ async def agent_vault_briefing(
             for note in index.list_all():
                 if note.get("type") != "lesson":
                     continue
-                date = _extract_date_from_id(note.get("id"))
+                date = _note_date(note)
                 lessons.append(
                     {
                         "path": note.get("path"),
@@ -1665,14 +1763,17 @@ async def agent_vault_briefing(
                         if note.get("content")
                         else None,
                         "date": date,
+                        "age_days": _age_days(date, now),
                     }
                 )
             # Filter to last 24h when we have a date; keep dateless ones at the
             # back so we still return something on a freshly seeded vault.
             recent = [l for l in lessons if (l["date"] or "") >= cutoff_date]
+            # Real-date descending; items without a date sink to the bottom.
             recent.sort(key=lambda x: x["date"] or "", reverse=True)
             if not recent:
-                # Fallback: top 5 lessons regardless of date (sorted by id desc).
+                # Fallback: top 5 lessons regardless of date, still date-sorted
+                # (dateless ones last).
                 lessons.sort(key=lambda x: x["date"] or "", reverse=True)
                 recent = lessons
             result["recent_lessons"] = recent[:5]
@@ -1680,14 +1781,18 @@ async def agent_vault_briefing(
         logger.warning("briefing: recent_lessons failed: %s", exc)
         errors.append(f"recent_lessons: {exc}")
 
-    # ── Recent writes (top 5 from VaultActivity, last 24h window) ────────────
+    # ── Recent writes (real-date sorted, top 5) ───────────────────────────────
     try:
         activity = getattr(request.app.state, "vault_activity", None)
         index = getattr(request.app.state, "vault_index", None)
         if activity is None:
             errors.append("recent_writes: vault_activity not initialized")
         else:
-            raw_writes = await activity.top_n_writes(limit=5, window="24h")
+            # top_n_writes ranks by write COUNT (most-modified), not recency —
+            # pull a wider candidate pool so genuinely recent single writes
+            # aren't crowded out by old-but-frequently-touched notes, then
+            # re-sort by real date ourselves before truncating to 5.
+            raw_writes = await activity.top_n_writes(limit=25, window="24h")
             # Enrich each write with type+agent via index lookup (best-effort)
             path_to_meta: dict[str, dict] = {}
             if index is not None:
@@ -1696,15 +1801,20 @@ async def agent_vault_briefing(
             enriched: list[dict[str, Any]] = []
             for w in raw_writes:
                 meta = path_to_meta.get(w.get("path"), {})
+                date = _note_date(meta)
                 enriched.append(
                     {
                         "path": w.get("path"),
                         "agent": meta.get("agent"),
                         "type": meta.get("type"),
-                        "date": _extract_date_from_id(meta.get("id")),
+                        "date": date,
+                        "age_days": _age_days(date, now),
                     }
                 )
-            result["recent_writes"] = enriched
+            # Real-date descending; dateless writes sink to the bottom instead
+            # of leaking a stale "most frequently written" ordering.
+            enriched.sort(key=lambda x: x["date"] or "", reverse=True)
+            result["recent_writes"] = enriched[:5]
     except Exception as exc:  # noqa: BLE001
         logger.warning("briefing: recent_writes failed: %s", exc)
         errors.append(f"recent_writes: {exc}")
@@ -1728,6 +1838,50 @@ async def agent_vault_briefing(
     except Exception as exc:  # noqa: BLE001
         logger.warning("briefing: agents_status failed: %s", exc)
         errors.append(f"agents_status: {exc}")
+
+    # ── Staleness summary — machine-readable so the voice layer can be honest
+    # about how old the "recent" items actually are, instead of implying
+    # freshness that isn't there. ────────────────────────────────────────────
+    write_ages = [w["age_days"] for w in result["recent_writes"] if w.get("age_days") is not None]
+    lesson_ages = [l["age_days"] for l in result["recent_lessons"] if l.get("age_days") is not None]
+    newest_write_age = min(write_ages) if write_ages else None
+    newest_lesson_age = min(lesson_ages) if lesson_ages else None
+    if newest_write_age is None:
+        note = "no reliably dated writes found"
+    elif newest_write_age <= 1:
+        note = "up to date"
+    elif newest_write_age <= 7:
+        note = f"newest write is {newest_write_age} days old"
+    else:
+        note = "no writes in last 7 days"
+    result["staleness_summary"] = {
+        "newest_write_age_days": newest_write_age,
+        "newest_lesson_age_days": newest_lesson_age,
+        "note": note,
+    }
+
+    # ── Generated morning briefing (ADR-062) ──────────────────────────────────
+    # If today's LLM-generated briefing exists (Redis, written by the scheduled
+    # jarvis_briefing job), surface it so Jarvis can read it out instead of the
+    # raw live data. Fail-soft: absence or a Redis hiccup just omits the field.
+    try:
+        from app.redis_client import RedisKeys, get_redis
+
+        date_iso = now.astimezone(ZoneInfo("Europe/Zurich")).strftime("%Y-%m-%d")
+        redis = await get_redis()
+        raw = await redis.get(RedisKeys.jarvis_daily_briefing(date_iso))
+        if raw:
+            try:
+                payload = json.loads(raw)
+                text = payload.get("text") if isinstance(payload, dict) else None
+            except (ValueError, TypeError):
+                text = None
+            # "__generating__" placeholder (job in flight) → not a real briefing yet.
+            if text:
+                result["generated_briefing"] = text
+                result["generated_briefing_date"] = date_iso
+    except Exception as exc:  # noqa: BLE001 — never fail the briefing on this
+        logger.warning("briefing: generated_briefing lookup failed: %s", exc)
 
     if errors:
         result["error"] = "; ".join(errors)

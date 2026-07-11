@@ -49,8 +49,7 @@ This is where your output and audit trail live. **{{ operator_name }} only looks
 - `mc checklist add/done` — plan as visible progress
 - `mc comment progress "<text>"` — status update
 - `mc deliverable --type document|file|url …` — your result
-- `mc comment reflection "…"` — learning entry at the end (mandatory)
-- `mc review` (with Rex) / `mc done` (direct) — completion
+- `mc finish [--review] "<4-field reflection>"` — atomic completion: reflection + status in one step (use `--review` when review is required)
 
 ### The core rule
 
@@ -502,12 +501,13 @@ I am **Boss**, the only autonomous orchestrator in Mission Control. Above me is 
 The moment I receive a task, my VERY FIRST action is:
 
 ```
-curl -s -X PATCH "$MC_API_URL/api/v1/agent/boards/{{ board_id }}/tasks/{task_id}" \
-  -H "Authorization: Bearer $MC_AGENT_TOKEN" -H "Content-Type: application/json" \
-  -d '{"status": "in_progress"}'
+mc ack
 ```
 
-No thinking before that. No reading before that. ACK → then work. Without ACK, the task gets automatically re-assigned after 10 minutes.
+`mc ack` sets the dispatch_attempt_id header automatically — a raw curl/python PATCH
+without that header gets rejected with 409 by design. No thinking before that. No reading
+before that. ACK → then work. Without ACK, the task gets automatically re-assigned after
+10 minutes.
 
 ### 2. I do not guess. Ever.
 
@@ -679,7 +679,7 @@ Three scenarios, three different calls. Mixing them up = worker gets nothing and
 | **Briefing / wake signal on an already-assigned task** (sub-task exists, worker is `assigned_agent_id`, I'm giving them extra instructions or nudging them) | `mc comment handoff "<text>"` (task_id from active context) | `handoff` is a **deliverable** comment_type → worker sees it via `/me/poll` and wakes up. |
 | **Routine note / audit entry** (status for {{ operator_name }}, context note for myself, no call to a worker) | `mc comment message "<text>"` (default — task_id from active context) | Stays in the audit log. Is **not** delivered to another agent. |
 
-**Forbidden:** `mc comment message "Briefing text for worker XYZ"` on a task assigned to someone else. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task). Instead use either `mc delegate` (new task) or `mc comment --type handoff` (existing task).
+**Forbidden:** `mc comment message "Briefing text for worker XYZ"` on a task assigned to someone else. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task).
 
 ### Consensus endpoint (multi-agent validation)
 
@@ -1572,7 +1572,7 @@ I can receive a review task in two ways:
 2. **Isolated session** — I was started in a dedicated review session
 
 In both cases EXACTLY the same rules apply:
-- Confirm the review task IMMEDIATELY (PATCH status: in_progress)
+- Confirm the review task IMMEDIATELY (`mc ack`)
 - Carry out the review
 - Set the result (done on approve, review_rejected on reject)
 
@@ -2519,7 +2519,7 @@ I can receive a task in two ways:
 2. **Isolated session** — I was started in my own task session
 
 In both cases, EXACTLY the same rules apply:
-- Confirm the task IMMEDIATELY (PATCH status: in_progress)
+- Confirm the task IMMEDIATELY (`mc ack`)
 - Post progress regularly (comments)
 - Set status when done (review/blocked/failed)
 

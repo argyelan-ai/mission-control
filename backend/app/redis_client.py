@@ -23,6 +23,36 @@ async def close_redis() -> None:
         _redis = None
 
 
+RECOVERY_COMMENT_COOLDOWN_TTL = 600  # seconds — see RedisKeys.recovery_comment_cooldown
+
+
+async def try_claim_recovery_comment_cooldown(redis: aioredis.Redis, task_id: str) -> bool:
+    """Atomically claim the shared per-task "continue"-comment cooldown (G6).
+
+    Returns True if the caller won the race and should post its system
+    TaskComment (and has now set the cooldown for everyone else). Returns
+    False if another recovery mechanism already posted within the last
+    RECOVERY_COMMENT_COOLDOWN_TTL seconds — the caller must skip posting.
+
+    Uses SET NX EX (atomic check-and-set) rather than GET-then-SET so two
+    mechanisms racing on the same watchdog tick can't both observe "not set"
+    and both post.
+
+    Takes an already-resolved ``redis`` client (rather than calling
+    get_redis() itself) so callers keep using whichever get_redis reference
+    their own module/tests already patch — task_runner.py and internal.py
+    both hold a local ``redis`` from an earlier ``await get_redis()`` in the
+    same function.
+    """
+    claimed = await redis.set(
+        RedisKeys.recovery_comment_cooldown(task_id),
+        "1",
+        nx=True,
+        ex=RECOVERY_COMMENT_COOLDOWN_TTL,
+    )
+    return bool(claimed)
+
+
 # Redis key helpers
 class RedisKeys:
     @staticmethod
@@ -86,6 +116,17 @@ class RedisKeys:
         return "mc:events:schedule"
 
     @staticmethod
+    def jarvis_daily_briefing(date_iso: str) -> str:
+        """Per-day generated morning briefing (ADR-062).
+
+        Holds the LLM-generated German briefing text for one day. Doubles as the
+        idempotency guard (SET NX) so the job never generates twice per day, and
+        as the fast read-path the /agent/vault/briefing endpoint uses to surface
+        today's generated briefing without vault-compaction lag.
+        """
+        return f"mc:jarvis:briefing:{date_iso}"
+
+    @staticmethod
     def workflow_events() -> str:
         return "mc:events:workflows"
 
@@ -123,6 +164,18 @@ class RedisKeys:
     @staticmethod
     def dispatch_pending_warn(task_id: str) -> str:
         return f"mc:dispatch:pending_warn:{task_id}"
+
+    @staticmethod
+    def dispatch_resume_suppress(task_id: str) -> str:
+        """G4 (W2-A): set right after a Tier-3 recovery resume re-dispatches
+        a task (dispatched_at/ack_at reset + redispatch). _check_dispatch_ack
+        checks this before escalating an ACK-timeout approval — a resume is
+        semantically a RESUME, not a fresh dispatch, so it must not re-arm
+        the ACK escalation ladder and fire its own Approval concurrently
+        with the recovery that caused it. TTL = the agent's ack timeout +
+        margin, so a genuinely-never-acked resume still escalates once the
+        suppression window elapses."""
+        return f"mc:dispatch:resume_suppress:{task_id}"
 
     @staticmethod
     def task_runner_stale(task_id: str) -> str:
@@ -220,6 +273,34 @@ class RedisKeys:
         TTL 600s covers Tier 1 (10s probe) + Tier 2 (30s restart wait) +
         Tier 3 (5min ACK-wait). See 06-CONTEXT.md D-18."""
         return f"mc:recovery:inprogress:{agent_id}:{task_id}"
+
+    @staticmethod
+    def bootstrap_recovery_sent(agent_id: str, task_id: str) -> str:
+        """Dedup key for the bootstrap-triggered recovery recap (restart
+        signal). Prevents crash-loop / repeated container starts from
+        spamming the task timeline with duplicate recovery_recap comments.
+        TTL 10min — a fresh bootstrap after that window is treated as a
+        new restart worth re-recapping."""
+        return f"mc:bootstrap:recovery_sent:{agent_id}:{task_id}"
+
+    @staticmethod
+    def recovery_comment_cooldown(task_id: str) -> str:
+        """Shared per-task cooldown for "continue"-style system TaskComments (G6).
+
+        Four independent mechanisms can each decide to post a "please
+        continue" system comment on the same task within minutes of each
+        other: Tier-3 recovery_recap (task_runner._run_tiered_recovery),
+        unblock_notify (agent_task_status.py), the ADR-046 lifecycle-watchdog
+        nudge (task_runner._check_stuck_in_progress), and the bootstrap
+        recovery recap (routers/internal.py). Each checks this key before
+        posting and sets it after — first mechanism to fire wins, the others
+        skip silently. TTL 600s: comfortably longer than any single
+        mechanism's own internal wait/retry window, short enough that a
+        genuinely NEW stall a few minutes later still gets its own nudge.
+
+        Does NOT gate operator-facing Approvals or Telegram notifications —
+        only the TaskComment spam."""
+        return f"mc:recovery:comment_cooldown:{task_id}"
 
     # ── Compaction Lock (Phase 6 CTX-02) ──────────────────────────────
     @staticmethod

@@ -23,9 +23,9 @@ async def _mk_rt(session, *, slug="prop-rt", model="new-model"):
 
 
 async def _mk_agent(session, rt, *, name="Sparky", agent_runtime="cli-bridge",
-                    busy=False, pending=False):
+                    harness=None, busy=False, pending=False):
     agent = Agent(name=name, role="developer", agent_runtime=agent_runtime,
-                  runtime_id=rt.id, pending_runtime_sync=pending)
+                  runtime_id=rt.id, harness=harness, pending_runtime_sync=pending)
     if busy:
         agent.current_task_id = uuid.uuid4()
     session.add(agent)
@@ -93,6 +93,56 @@ async def test_sync_success_clears_flag_and_updates_model(async_session, fake_re
     await async_session.refresh(agent)
     assert agent.pending_runtime_sync is False
     assert agent.model == "brand-new-model"
+
+
+@pytest.mark.asyncio
+async def test_sync_ready_signals_follow_harness_not_runtime_type(async_session, fake_redis):
+    """B3 (Workstream W1-C): agent.harness='omp' on a NON-omp runtime_type
+    (vllm_docker) must still get the omp ready-signal glyphs — the harness
+    decides what the container actually speaks, not the runtime label."""
+    rt = await _mk_rt(async_session)  # runtime_type="vllm_docker"
+    agent = await _mk_agent(async_session, rt, harness="omp", pending=True)
+
+    with (
+        patch.object(rp, "sync_docker_agent_files", new=AsyncMock()),
+        patch.object(rp, "restart_docker_agent_container",
+                     return_value={"status": "restarted"}),
+        patch.object(rp, "wait_for_agent_healthy",
+                     new=AsyncMock(return_value={"healthy": True})) as mock_health,
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await rp.sync_pending_agents(async_session)
+
+    assert mock_health.await_args.kwargs["ready_signals"] == rp._OMP_READY_SIGNALS
+
+
+@pytest.mark.asyncio
+async def test_sync_ready_signals_none_when_harness_overrides_omp_runtime(async_session, fake_redis):
+    """Inverse of the above: runtime_type="omp" but agent.harness explicitly
+    set to something else (openclaude) → NO omp ready-signal glyphs. The
+    explicit harness wins, mirroring mark_agents_for_recreate's precedence."""
+    rt = await _mk_rt(async_session, slug="omp-rt")
+    rt.runtime_type = "omp"
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = await _mk_agent(async_session, rt, harness="openclaude", pending=True)
+
+    with (
+        patch.object(rp, "sync_docker_agent_files", new=AsyncMock()),
+        patch.object(rp, "restart_docker_agent_container",
+                     return_value={"status": "restarted"}),
+        patch.object(rp, "wait_for_agent_healthy",
+                     new=AsyncMock(return_value={"healthy": True})) as mock_health,
+        patch.object(rp, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(sse_mod, "get_redis", _fake_get_redis(fake_redis)),
+        patch.object(switch_mod, "get_redis", _fake_get_redis(fake_redis)),
+    ):
+        await rp.sync_pending_agents(async_session)
+
+    assert mock_health.await_args.kwargs["ready_signals"] is None
 
 
 @pytest.mark.asyncio
@@ -215,7 +265,7 @@ async def test_host_sync_skips_when_switch_lock_held(
     async_session, fake_redis, tmp_path, monkeypatch
 ):
     """Same race guard as test_sync_one_skips_when_switch_lock_held but for the
-    host branch (ADR-060): a concurrent switch_agent_runtime() in-place switch
+    host branch (ADR-064): a concurrent switch_agent_runtime() in-place switch
     holds mc:agent:{id}:runtime-switch, so the watcher's host auto-forward tick
     must NOT rewrite agent.env / call adapter.reload — it must leave
     pending_runtime_sync=True and retry next tick."""

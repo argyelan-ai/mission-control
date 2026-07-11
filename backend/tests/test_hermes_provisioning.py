@@ -38,7 +38,7 @@ HERMES_MODEL = "Qwen/Qwen3.6-35B-A3B-FP8"
 
 
 def _make_hermes_runtime() -> Runtime:
-    # ADR-060: the real Hermes agent binds a plain openai-protocol runtime
+    # ADR-064: the real Hermes agent binds a plain openai-protocol runtime
     # (e.g. a Spark vLLM registration) — "hermes" used to be a standalone
     # runtime_type sentinel that the pre-adapter dispatch branched on
     # (`if runtime.runtime_type == "hermes"`), but that coupling is exactly

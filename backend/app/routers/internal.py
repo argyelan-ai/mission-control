@@ -14,6 +14,7 @@ from app.services.secrets_helper import get_secret_plaintext_by_key
 from fastapi import Depends
 
 if TYPE_CHECKING:
+    from app.models.agent import Agent
     from app.models.runtime import Runtime
 
 logger = logging.getLogger("mc.internal")
@@ -24,6 +25,7 @@ router = APIRouter(prefix="/api/v1/internal", tags=["internal"])
 async def build_runtime_env(
     runtime: "Runtime | None",
     session: AsyncSession,
+    agent: "Agent | None" = None,
 ) -> dict[str, str]:
     """Returns the env vars a container needs for this runtime.
 
@@ -40,7 +42,18 @@ async def build_runtime_env(
         OPENAI_BASE_URL + OPENAI_MODEL, NO Anthropic tokens. A dedicated
         branch (instead of just falling through the else path) gives Phase 25
         a clean hook for HERMES_HOME / HERMES_PROFILE / profile switching
-        without routing on slug prefixes.
+        without routing on slug prefixes. hermes is a host worker, outside
+        the harness x runtime-type matrix (ADR-056) — stays runtime_type-gated.
+
+    B3 (Workstream W1-C, ADR-056 follow-up): every other branch now resolves
+    the EFFECTIVE HARNESS first (agent.harness, falling back to
+    derive_harness(runtime) for legacy NULL-harness rows) and branches on
+    THAT instead of runtime.runtime_type — the harness is what actually
+    decides which binary/transport the container speaks, and ADR-056
+    decoupled harness from runtime freely-combinable. A harness explicitly
+    set on the agent always wins, even over a mismatched runtime protocol
+    (that mismatch is a compatibility-validation concern elsewhere, not
+    something this function should silently paper over).
     """
     tokens: dict[str, str] = {}
     if runtime is None or not runtime.enabled:
@@ -53,25 +66,68 @@ async def build_runtime_env(
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         return tokens
-    if runtime.runtime_type == "omp":
+
+    from app.services.harness_compat import derive_harness, runtime_protocol
+
+    harness = (agent.harness if agent is not None else None) or derive_harness(runtime)
+
+    if harness == "omp":
         # ADR-045: omp headless runtime — OpenAI-compatible transport (Qwen on
-        # the DGX Spark), NO Anthropic auth. Explicit branch (mirroring hermes)
-        # rather than falling through the else-path: gives a clean hook for
-        # OMP_PROFILE / models.yml rendering without routing on a slug prefix.
-        # The container entrypoint renders omp's native models.yml provider from
-        # these two vars — runtime.endpoint stays the single source of truth for
-        # the URL, and the .env token path is NOT duplicated.
+        # the DGX Spark), NO Anthropic auth. The container entrypoint renders
+        # omp's native models.yml provider from these two vars —
+        # runtime.endpoint stays the single source of truth for the URL, and
+        # the .env token path is NOT duplicated.
+        if runtime.endpoint:
+            tokens["OPENAI_BASE_URL"] = runtime.endpoint
+        if runtime.model_identifier:
+            tokens["OPENAI_MODEL"] = runtime.model_identifier
+
+        # Fix 4 (W2-A, audit item): the omp bridge's no-progress watchdog
+        # (OMP_TURN_IDLE_TIMEOUT, docker/omp-bridge/bridge.py) defaults to
+        # 300s and SIGKILLs a turn that looks hung. Slow local runtimes
+        # (self-hosted, no managed autoscaling — cold starts, VRAM pressure,
+        # long generations on consumer/workstation GPUs) routinely exceed
+        # that on a long write and get killed mid-write. Give them a longer
+        # 600s window; fast/managed cloud runtimes keep the tighter 300s
+        # default (unset here — the bridge's own default applies) so a
+        # genuinely stuck cloud turn is still caught quickly.
+        #
+        # runtime_type is definitive for vllm_docker/lmstudio/unsloth — those
+        # only exist as self-hosted processes. openai_compatible is
+        # ambiguous (it's also used for managed APIs like Ollama Cloud), so
+        # it's gated on runtime.host_id being set — per the Runtime model's
+        # own contract (docs/models/runtime.py), "cloud/HTTP-only runtimes
+        # need no host", so a bound host_id means this is a physical local
+        # box, not a managed cloud endpoint.
+        #
+        # No per-runtime override field exists on the `runtimes` table today
+        # (checked: no config/extra JSON column) — if one is added later,
+        # read it here and let it win over this type-based default.
+        _is_slow_local_runtime = (
+            runtime.runtime_type in ("vllm_docker", "lmstudio", "unsloth")
+            or (runtime.runtime_type == "openai_compatible" and runtime.host_id is not None)
+        )
+        if _is_slow_local_runtime:
+            tokens["OMP_TURN_IDLE_TIMEOUT"] = "600"
+        return tokens
+    if harness == "claude":
+        # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
+        # resolve_provider_credentials (ADR-056) — no longer loaded here to
+        # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
+        # the claude binary talks to api.anthropic.com directly.
+        return tokens
+    if harness == "openclaude":
         if runtime.endpoint:
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
         if runtime.model_identifier:
             tokens["OPENAI_MODEL"] = runtime.model_identifier
         return tokens
-    from app.services.harness_compat import runtime_protocol
+
+    # NULL-harness fallback (regression guard): harness could not be
+    # determined from the agent OR derived from the runtime (unclassified
+    # runtime_type) — replicate the pre-B3 runtime_type-only behavior so
+    # unmigrated/unknown rows keep working exactly as before.
     if runtime_protocol(runtime) == "anthropic":
-        # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
-        # resolve_provider_credentials (ADR-056) — no longer loaded here to
-        # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
-        # the claude binary talks to api.anthropic.com directly.
         return tokens
     if runtime.endpoint:
         tokens["OPENAI_BASE_URL"] = runtime.endpoint
@@ -150,7 +206,7 @@ async def agent_bootstrap(
     if agent.runtime_id:
         from app.models.runtime import Runtime
         runtime = await session.get(Runtime, agent.runtime_id)
-        rt_env = await build_runtime_env(runtime, session)
+        rt_env = await build_runtime_env(runtime, session, agent=agent)
         tokens.update(rt_env)
 
     # Provider auth (ADR-056, amended 2026-07-05): agent secret > runtime
@@ -183,9 +239,102 @@ async def agent_bootstrap(
     if not tokens:
         raise HTTPException(404, f"Keine Tokens fuer Agent '{agent_name}' im Vault")
 
+    # Restart-recovery recap (fire-and-forget, best-effort). This endpoint is
+    # hit by the container entrypoint on EVERY process start — the one
+    # unambiguous "my process just came up fresh" signal, identical for a
+    # crash-restart or a manual `docker compose up`. If the agent still
+    # "owns" an in_progress task (its process died mid-task and came back),
+    # post the same recovery recap the Tier-3 tiered-recovery path
+    # (task_runner._run_tiered_recovery) would eventually send — but without
+    # the 60-min staleness gate, since the restart itself is the signal.
+    # Wrapped so a failure here NEVER delays or breaks token delivery, which
+    # the container's retry loop is blocking on.
+    try:
+        await _maybe_post_bootstrap_recovery_recap(session, agent)
+    except Exception:
+        logger.exception(
+            "bootstrap(%s): recovery-recap best-effort step failed — ignoring",
+            agent_name,
+        )
+
     logger.info(
         "bootstrap(%s): %s",
         agent_name,
         ", ".join(f"{k}={'***' + v[-4:]}" for k, v in tokens.items()),
     )
     return tokens
+
+
+async def _maybe_post_bootstrap_recovery_recap(
+    session: AsyncSession,
+    agent: "Agent",
+) -> None:
+    """Post a recovery_recap TaskComment if `agent` just restarted mid-task.
+
+    Mirrors the Tier-3 (resume) step of task_runner._run_tiered_recovery
+    (~task_runner.py:837-865), but triggered by the bootstrap signal instead
+    of the 60-min staleness gate — a container restart resolves in seconds,
+    so waiting an hour for the tiered-recovery watchdog to notice is far too
+    slow. Only posts (never resets dispatched_at/ack_at, never re-dispatches
+    — the agent's own poll-loop is already coming back up on its own; the
+    recap only needs to exist as the next thing it reads).
+
+    Dedup via a short-TTL Redis key so repeated bootstraps (crash-loop,
+    multiple `docker compose up` in a row) don't spam the task timeline with
+    duplicate recaps.
+    """
+    if not agent.current_task_id:
+        return
+
+    from app.models.task import Task, TaskComment
+
+    task = await session.get(Task, agent.current_task_id)
+    if not task or task.status != "in_progress":
+        return
+
+    from app.redis_client import RedisKeys, get_redis
+
+    redis = await get_redis()
+    dedup_key = RedisKeys.bootstrap_recovery_sent(str(agent.id), str(task.id))
+    if await redis.get(dedup_key):
+        logger.info(
+            "bootstrap: recovery recap already sent for agent=%s task=%s — skip",
+            agent.id, task.id,
+        )
+        return
+
+    from app.services.task_context_builder import build_recovery_context
+
+    recap = await build_recovery_context(session, task)
+    if not recap:
+        return
+
+    # G6: shared cooldown across all "continue"-comment mechanisms (Tier-3
+    # recap, unblock_notify, watchdog nudge) — first one to fire wins, the
+    # others skip silently. Separate from dedup_key above (that one dedups
+    # THIS mechanism against its own crash-loop restarts; this one dedups
+    # against the OTHER three mechanisms).
+    from app.redis_client import try_claim_recovery_comment_cooldown
+    if not await try_claim_recovery_comment_cooldown(redis, str(task.id)):
+        logger.debug(
+            "bootstrap: recovery recap skipped for agent=%s task=%s — "
+            "recovery-comment cooldown already claimed",
+            agent.id, task.id,
+        )
+        return
+
+    session.add(TaskComment(
+        task_id=task.id,
+        author_type="system",
+        content=recap,
+        comment_type="recovery_recap",
+    ))
+    await session.commit()
+
+    # Set dedup AFTER a successful commit so a failed commit can retry on
+    # the next bootstrap instead of silently swallowing the recap forever.
+    await redis.set(dedup_key, "1", ex=600)
+    logger.info(
+        "bootstrap: posted recovery recap for agent=%s task=%s (restart-interrupted in_progress task)",
+        agent.id, task.id,
+    )

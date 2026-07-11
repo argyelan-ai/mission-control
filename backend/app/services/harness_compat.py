@@ -33,7 +33,7 @@ _OPENAI_TYPES = frozenset(
     {"vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud", "omp"}
 )
 
-# HARNESS_PROTOCOLS intentionally covers "hermes" + "grok" too (ADR-060/063)
+# HARNESS_PROTOCOLS intentionally covers "hermes" + "grok" too (ADR-064/066)
 # even though HARNESSES/HARNESS_LABELS stay cli-bridge-only: these are host-only
 # harnesses (see host_harness_adapter) that must still answer is_compatible()
 # checks in the host provisioning/switch dispatch, but must NOT appear in the

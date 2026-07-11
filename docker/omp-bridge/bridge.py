@@ -55,6 +55,73 @@ REFLECTION_HEADERS = (
 )
 MIN_REFLECTION_CHARS = 80
 
+# ===========================================================================
+# MIRRORED NORMALIZER — keep in LOCKSTEP with scripts/mc-cli/mc_cli/reflection.py
+# ===========================================================================
+# The forgiving close-contract logic (sentinel + header tolerance +
+# normalization) has ONE canonical source: mc_cli/reflection.py. bridge.py runs
+# from /opt/omp-bridge while the mc CLI lives under /home/agent/.mc-cli in the
+# omp image — they are NOT on the same sys.path, so bridge.py cannot cleanly
+# `import mc_cli`. We therefore DUPLICATE the small normalizer here, and a
+# repo-level parity test (tests/test_close_parity.py) feeds a shared case matrix
+# through BOTH copies and asserts they agree byte-for-byte. If you touch either
+# copy, update the other and keep that test green — any drift fails loudly.
+#
+# INVARIANT: every tolerance is ADDITIVE — strict canonical input (exact 4
+# German `## ` headers, `TASK_COMPLETE` alone as the last line, >=80 chars)
+# parses byte-identical to the pre-tolerance behaviour. The backend gate only
+# checks reflection existence + length (NOT headers), so nothing accepted here
+# could be rejected downstream.
+
+# Canonical German field labels (without the `## ` prefix).
+_CANON_FIELDS = tuple(h[len("## "):] for h in REFLECTION_HEADERS)
+
+_ENGLISH_ALIASES = {
+    "what was done": "Was wurde gemacht",
+    "what worked": "Was hat funktioniert",
+    "what was unclear": "Was war unklar",
+    "lesson for agent memory": "Lesson fuer Agent-Memory",
+}
+
+_HEADER_RE = re.compile(r"^\s{0,3}#{1,3}\s+(.+?)\s*$")
+_TRAILER_RE = re.compile(r"^[-=*_`]{3,}$")
+
+
+def _fold(s: str) -> str:
+    """Normalize a header label for tolerant matching (see reflection.py)."""
+    s = s.strip().rstrip(":").strip().lower()
+    for a, b in (("ü", "ue"), ("ö", "oe"), ("ä", "ae"), ("ß", "ss")):
+        s = s.replace(a, b)
+    s = s.replace("-", " ")
+    s = re.sub(r"\s+", " ", s)
+    return s.strip()
+
+
+_CANON_BY_FOLD = {}
+for _f in _CANON_FIELDS:
+    _CANON_BY_FOLD[_fold(_f)] = _f
+for _k, _v in _ENGLISH_ALIASES.items():
+    _CANON_BY_FOLD[_fold(_k)] = _v
+
+
+def _match_header(line: str) -> Optional[str]:
+    """Canonical German field if `line` is a recognised header, else None."""
+    m = _HEADER_RE.match(line)
+    if not m:
+        return None
+    return _CANON_BY_FOLD.get(_fold(m.group(1)))
+
+
+def _is_sentinel_line(line: str) -> bool:
+    """True if `line` is a TASK_COMPLETE sentinel, tolerating case, wrapping
+    markdown (`**`/backticks/`__`) and trailing punctuation."""
+    s = line.strip()
+    if not s:
+        return False
+    s = s.strip("*`_~ ")
+    s = re.sub(r"[.\!:;,\s]+$", "", s)
+    return s.upper() == SENTINEL
+
 # Heuristic — the ORIGINAL openclaude failure (transient mid-run network abort).
 # The exact shape omp+Claude produces is UNVERIFIED on disk (design §2.1); we
 # detect it as a retryable sub-class of the abort family, never assert it as the
@@ -148,6 +215,41 @@ CONTINUE_NUDGE_PROMPTS: dict[Kind, str] = {
         "ab (Reflexion + TASK_COMPLETE)."
     ),
 }
+
+# Kinds whose repeat nudge (2nd+ within the SAME run, for the SAME Kind) drops
+# the explanatory prose for a maximally minimal, copy-paste template. A weak
+# model that misread the paragraph once is unlikely to parse it better the
+# second time; a fill-in-the-blanks block gives it far less to get wrong.
+# TRAILING_TOOL_ERROR is excluded — that nudge asks for a judgement call
+# (check/fix the tool result), not just format compliance.
+_ESCALATING_NUDGE_KINDS = frozenset({Kind.MALFORMED_REFLECTION, Kind.SILENT_ABORT_NO_SENTINEL})
+
+
+def _minimal_nudge_template() -> str:
+    """Maximally minimal, copy-paste completion template used from the 2nd
+    continue-nudge onward for a Kind in _ESCALATING_NUDGE_KINDS. Header names
+    are sourced from the canonical REFLECTION_HEADERS list (kept in parity
+    with mc_cli/reflection.py), never re-typed as fresh literals."""
+    body_lines: list[str] = []
+    for header in REFLECTION_HEADERS:
+        body_lines.append(header)
+        body_lines.append("<...>")
+    body = "\n".join(body_lines)
+    return (
+        f"Format falsch. Kopiere EXAKT diesen Block, fuelle die <...> aus, "
+        f"{SENTINEL} als letzte Zeile:\n\n{body}\n{SENTINEL}"
+    )
+
+
+def _nudge_prompt_for(kind: Kind, attempt_index: int) -> str:
+    """The continue-nudge text for the `attempt_index`-th (0-based) nudge fired
+    for this Kind within the current run. attempt_index==0 is always the
+    normal, explanatory prompt (often enough on its own — escalating on the
+    FIRST attempt would be premature). attempt_index>=1 for a Kind in
+    _ESCALATING_NUDGE_KINDS switches to the minimal copy-paste template."""
+    if attempt_index >= 1 and kind in _ESCALATING_NUDGE_KINDS:
+        return _minimal_nudge_template()
+    return CONTINUE_NUDGE_PROMPTS[kind]
 
 
 @dataclass
@@ -295,26 +397,36 @@ def last_nonempty_line(text: str) -> str:
 
 
 def extract_reflection(text: str) -> Optional[str]:
-    """Slice the block from the first header to the line before the sentinel.
+    """Slice the reflection block from the FIRST recognised header (any level
+    1-3, case-insensitive, EN alias, ü/ue, trailing colon) to the line before
+    the sentinel, with every recognised header normalised to canonical German
+    `## ` form. Returns None if no recognised header is present.
 
-    Returns None if the first required header is absent.
+    MIRROR of mc_cli.reflection.extract_reflection — keep in lockstep.
     """
-    idx = text.find(REFLECTION_HEADERS[0])
-    if idx == -1:
-        return None
-    block = text[idx:]
-    # Trim everything from a standalone TASK_COMPLETE line onward.
-    lines = block.splitlines()
-    kept = []
-    for line in lines:
-        if line.strip() == SENTINEL:
+    lines = text.splitlines()
+    start = -1
+    for i, line in enumerate(lines):
+        if _match_header(line) is not None:
+            start = i
             break
-        kept.append(line)
+    if start == -1:
+        return None
+    kept = []
+    for line in lines[start:]:
+        if _is_sentinel_line(line):
+            break
+        canon = _match_header(line)
+        kept.append(f"## {canon}" if canon is not None else line)
     return "\n".join(kept).strip()
 
 
 def validate_reflection(block: Optional[str]) -> bool:
-    """Mirror mc_cli._validate_reflection: 4 headers present + >=80 chars."""
+    """4 canonical German headers present + >=80 chars. Expects a block already
+    run through extract_reflection (headers canonicalised).
+
+    MIRROR of mc_cli.reflection.validate_reflection — keep in lockstep.
+    """
     if not block:
         return False
     if len(block) < MIN_REFLECTION_CHARS:
@@ -322,9 +434,28 @@ def validate_reflection(block: Optional[str]) -> bool:
     return all(h in block for h in REFLECTION_HEADERS)
 
 
+def _count_present_headers(block: str) -> int:
+    """How many of the 4 canonical headers appear in an (already-normalised)
+    reflection block. Used for partial-reflection salvage (Fix 2) — a block
+    that fails validate_reflection() can still be mostly there."""
+    return sum(1 for h in REFLECTION_HEADERS if h in block)
+
+
 def sentinel_present(text: str) -> bool:
-    """Anti-echo: TASK_COMPLETE counts only as the last non-empty line, alone."""
-    return last_nonempty_line(text) == SENTINEL
+    """Anti-echo: the sentinel counts only as the LAST meaningful line (alone,
+    modulo markdown/punctuation), OR the second-to-last when the final line is a
+    harmless trailer (`---`/`***`).
+
+    MIRROR of mc_cli.reflection.sentinel_present — keep in lockstep.
+    """
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    if _is_sentinel_line(lines[-1]):
+        return True
+    if len(lines) >= 2 and _TRAILER_RE.match(lines[-1].strip()) and _is_sentinel_line(lines[-2]):
+        return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -916,25 +1047,36 @@ class McCliLifecycle(MCLifecycle):
         env["X_DISPATCH_ATTEMPT_ID"] = self.attempt_id
         return env
 
-    def _run(self, task_id: str, args: list[str], *, best_effort: bool = False) -> int:
-        """Run an mc-cli subcommand. Returns the process exit code (``-1`` if the
-        command could not be launched and ``best_effort`` swallowed the error)."""
+    # Marker `_preflight_finish` in mc-cli prefixes onto its UsageError message
+    # when `mc finish` is rejected purely because checklist items are still
+    # open (see mc_cli/commands.py:_preflight_finish). Used to distinguish
+    # "work is done except an out-of-role checklist item" from a genuine
+    # technical failure (5xx, network, unparseable) — the two used to be
+    # indistinguishable to this bridge and both collapsed into `blocked`.
+    _CHECKLIST_OPEN_MARKER = "Checklist-Item(s) noch offen"
+
+    def _run(
+        self, task_id: str, args: list[str], *, best_effort: bool = False,
+    ) -> tuple[int, str]:
+        """Run an mc-cli subcommand. Returns ``(exit_code, stderr_text)`` —
+        ``exit_code`` is ``-1`` if the command could not be launched and
+        ``best_effort`` swallowed the error."""
         cmd = [self.mc_bin, *args]
         try:
             proc = subprocess.run(
                 cmd, env=self._env(task_id), capture_output=True, text=True, timeout=60,
             )
+            stderr_text = (proc.stderr or proc.stdout or "").strip()
             if proc.returncode != 0:
                 sys.stderr.write(
-                    f"[mc-cli] {args[0]} exit={proc.returncode}: "
-                    f"{(proc.stderr or proc.stdout or '').strip()[:400]}\n"
+                    f"[mc-cli] {args[0]} exit={proc.returncode}: {stderr_text[:400]}\n"
                 )
-            return proc.returncode
+            return proc.returncode, stderr_text
         except Exception as e:  # noqa: BLE001 — lifecycle must never crash the loop
             sys.stderr.write(f"[mc-cli] {args[0]} raised {type(e).__name__}: {e}\n")
             if not best_effort:
                 raise
-            return -1
+            return -1, str(e)
 
     def ack(self, task_id: str) -> None:
         self._run(task_id, ["ack", task_id])
@@ -946,25 +1088,79 @@ class McCliLifecycle(MCLifecycle):
         # Terminal guarantee: a non-zero `mc finish` (backend rejected the
         # reflection, transient 5xx, ...) must NOT leave the task silently
         # in_progress — that is the exact silent-hang this runtime exists to
-        # close. Fall back to `blocked` (reversible, notifies Mark) so every
-        # run reaches a terminal state. best_effort=True so a hard launch
-        # failure returns rc=-1 here instead of raising past the fallback.
-        rc = self._run(task_id, args, best_effort=True)
-        if rc != 0:
+        # close. best_effort=True so a hard launch failure returns rc=-1 here
+        # instead of raising past the fallback.
+        rc, stderr_text = self._run(task_id, args, best_effort=True)
+        if rc == 0:
+            return
+
+        if self._CHECKLIST_OPEN_MARKER in (stderr_text or ""):
+            # The agent's work is otherwise done — some checklist items are
+            # still open, possibly because they are out of this agent's role
+            # (e.g. a live Vercel deploy needing npm/node, which is a
+            # Deployer's job). Blanket `blocked`/technical_problem would lie
+            # about *why* the task stalled. Route to review instead, with a
+            # handoff comment carrying the exact pending items, so the Board
+            # Lead/Mark can see what's outstanding and reassign the rest.
             sys.stderr.write(
-                f"[mc-cli] finish failed (rc={rc}) -> falling back to blocked "
-                f"to avoid a silent in_progress hang (task {task_id})\n"
+                f"[mc-cli] finish failed (rc={rc}) due to open checklist items "
+                f"-> routing to review with handoff instead of blocked (task {task_id})\n"
+            )
+            self._run(
+                task_id,
+                [
+                    "comment", "handoff",
+                    "omp-bridge: `mc finish` konnte den Task nicht abschliessen, "
+                    "weil Checklist-Items offen sind (evtl. ausserhalb der Rolle "
+                    f"dieses Agents). Details:\n{stderr_text}",
+                ],
+                best_effort=True,
+            )
+            review_rc, review_stderr = self._run(
+                task_id, ["review", task_id], best_effort=True,
+            )
+            if review_rc == 0:
+                return
+            # The review rescue itself failed (network/5xx/concurrent status
+            # change). We must NOT return here — that would leave the task
+            # silently in_progress, the exact hang this runtime exists to
+            # close. Fall through to the `blocked` fallback below, with a
+            # question that makes clear both finish AND review failed.
+            sys.stderr.write(
+                f"[mc-cli] review rescue failed (rc={review_rc}) after checklist-open "
+                f"finish -> falling back to blocked (task {task_id})\n"
             )
             self.set_blocker(
                 task_id,
                 blocker_type="technical_problem",
                 question=(
-                    "omp-bridge konnte den Task nicht auf review setzen "
-                    f"(mc finish exit={rc}). Automatisch blockiert statt still "
-                    "in_progress haengen zu lassen — bitte Ergebnis pruefen und "
-                    "Task erneut zuweisen."
+                    "omp-bridge: `mc finish` scheiterte an offenen Checklist-Items "
+                    f"und der Rettungsversuch `mc review` schlug ebenfalls fehl "
+                    f"(exit={review_rc}). Automatisch blockiert statt still "
+                    "in_progress haengen zu lassen — bitte Ergebnis pruefen, "
+                    f"offene Items klaeren und Task erneut zuweisen. "
+                    f"Details:\n{stderr_text}"
                 ),
             )
+            return
+
+        # Genuinely unexpected failure (5xx, network, unparseable output,
+        # missing `mc` binary, ...) — fall back to `blocked` (reversible,
+        # notifies Mark) so every run still reaches a terminal state.
+        sys.stderr.write(
+            f"[mc-cli] finish failed (rc={rc}) -> falling back to blocked "
+            f"to avoid a silent in_progress hang (task {task_id})\n"
+        )
+        self.set_blocker(
+            task_id,
+            blocker_type="technical_problem",
+            question=(
+                "omp-bridge konnte den Task nicht auf review setzen "
+                f"(mc finish exit={rc}). Automatisch blockiert statt still "
+                "in_progress haengen zu lassen — bitte Ergebnis pruefen und "
+                "Task erneut zuweisen."
+            ),
+        )
 
     def set_blocker(self, task_id: str, *, blocker_type: str, question: str) -> None:
         self._run(
@@ -1025,6 +1221,9 @@ def drive_live_run(
     attempts_left = retries_left
     continues = continues_left
     acked = pre_acked
+    # Fix 1: per-Kind nudge count within this run — the 2nd+ nudge for the SAME
+    # Kind escalates to the minimal copy-paste template (see _nudge_prompt_for).
+    nudge_counts: dict[Kind, int] = {}
     outcome = run_once()
     while True:
         if not acked and outcome.saw_session:
@@ -1041,11 +1240,19 @@ def drive_live_run(
                 task_id, f"omp {cls.reason}; continue-nudge, {continues} left"
             )
             continues -= 1
-            outcome = continue_once(action.nudge_prompt or "")
+            attempt_index = nudge_counts.get(cls.kind, 0)
+            nudge_counts[cls.kind] = attempt_index + 1
+            nudge_prompt = _nudge_prompt_for(cls.kind, attempt_index)
+            outcome = continue_once(nudge_prompt)
             continue
         if action.action == "retry" and attempts_left > 0:
             lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
             attempts_left -= 1
+            # Fresh session = fresh nudge history: a retry relaunches a BRAND-NEW
+            # session that never saw the explanatory first nudge, so escalation
+            # (Fix 1) must start over — otherwise the minimal template would fire
+            # on a session that never got the normal prompt.
+            nudge_counts = {}
             outcome = run_once()
             continue
         if action.action == "finish":
@@ -1057,6 +1264,27 @@ def drive_live_run(
                     action="blocker", blocker_type="technical_problem",
                     question=cls.detail, classification=cls,
                 )
+            # Fix 2: partial-reflection salvage. A MALFORMED_REFLECTION collapse
+            # often hides an almost-complete summary the model actually wrote —
+            # today it survives only as a fragment quoted inside the blocker
+            # question. If the last output cleared at least half the canonical
+            # headers and the length floor, post it as its OWN progress comment
+            # BEFORE the blocker lands, so Lead/operator see the agent's real
+            # summary. Best-effort: a failed salvage must never break the
+            # terminal blocker guarantee.
+            if cls.kind is Kind.MALFORMED_REFLECTION:
+                block = outcome.reflection_block or ""
+                if _count_present_headers(block) >= 2 and len(block) >= MIN_REFLECTION_CHARS:
+                    try:
+                        lifecycle.comment(
+                            task_id,
+                            "Partielle Reflexion (auto-gerettet vor Blocker): " + block,
+                        )
+                    except Exception as e:  # noqa: BLE001 — best-effort, never breaks the fallback
+                        sys.stderr.write(
+                            f"[drive_live_run] partial-reflection salvage comment failed "
+                            f"(task {task_id}): {e}\n"
+                        )
             # Blocker-Qualität (Fix B §): post the bridge's OWN classification as a
             # fresh comment BEFORE blocking, so Lead/Operator (via Fix A triage)
             # see the real cause — not a stale reflection quoted from the run-up.

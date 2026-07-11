@@ -52,6 +52,72 @@ _HOME_HOST = os.environ.get("HOME_HOST", os.path.expanduser("~"))
 AGENTS_DIR = Path(_HOME_HOST) / ".mc" / "agents"
 
 
+def write_reference_docs(config_dir: Path, context: dict) -> dict[str, str]:
+    """Writes docs/INDEX.md + docs/<topic>.md into an agent's claude-config.
+
+    Shared by both sync_docker_agent_files and sync_host_agent_files (context
+    economy Stage 1 — L2 reference docs, additive only). Always overwrites
+    (template-owned, like SOUL.md) — filters topics by the agent's role
+    against agent_doc_constants.DOC_TOPICS[topic].audience.
+
+    Args:
+        config_dir: the agent's claude-config directory (docs/ is created
+            under it).
+        context: the Jinja2 context from build_agent_context — only "role"
+            and "is_board_lead" are used for the audience filter, the rest
+            is passed through to generate_reference_docs.
+
+    Returns: per-file status dict, same shape/convention as the other sync
+        steps ("written" / "error: msg" / "_error: msg").
+    """
+    from app.agent_doc_constants import DOC_TOPICS
+    from app.services.reference_docs_builder import (
+        generate_docs_index,
+        generate_reference_docs,
+    )
+
+    role = context.get("role") or "developer"
+    is_board_lead = bool(context.get("is_board_lead"))
+
+    all_docs = generate_reference_docs(context)
+    selected: dict[str, str] = {}
+    for topic, spec in DOC_TOPICS.items():
+        if topic not in all_docs:
+            continue
+        audience = spec.audience
+        if audience == "all":
+            include = True
+        else:
+            roles = audience if isinstance(audience, (tuple, list, set)) else (audience,)
+            include = role in roles or (is_board_lead and "lead" in roles)
+        if include:
+            selected[topic] = all_docs[topic]
+
+    docs_dir = config_dir / "docs"
+    results: dict[str, str] = {}
+    try:
+        docs_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        return {"_error": f"cannot create docs dir {docs_dir}: {e}"}
+
+    try:
+        (docs_dir / "INDEX.md").write_text(generate_docs_index(selected), encoding="utf-8")
+        results["docs/INDEX.md"] = "written"
+    except Exception as e:
+        logger.error("write_reference_docs: INDEX.md: %s", e)
+        results["docs/INDEX.md"] = f"error: {e}"
+
+    for topic, content in selected.items():
+        try:
+            (docs_dir / f"{topic}.md").write_text(content, encoding="utf-8")
+            results[f"docs/{topic}.md"] = "written"
+        except Exception as e:
+            logger.error("write_reference_docs: %s.md: %s", topic, e)
+            results[f"docs/{topic}.md"] = f"error: {e}"
+
+    return results
+
+
 def _agent_slug(agent: Agent) -> str:
     """Slug used to look up the agent directory.
 
@@ -194,6 +260,13 @@ async def sync_docker_agent_files(
             results["TOOLS.md"] = f"error: {e}"
     else:
         results["TOOLS.md"] = "skipped (empty in DB — run reset-token)"
+
+    # 4b. docs/ — L2 reference docs (context economy Stage 1, additive).
+    try:
+        results.update(write_reference_docs(claude_config_dir, context))
+    except Exception as e:
+        logger.error("sync_docker_agent_files(%s) docs/: %s", agent.name, e)
+        results["docs/_error"] = f"error: {e}"
 
     # 5. Runtime config (settings.json + .env) — rendered depending on runtime.
     #
@@ -487,6 +560,13 @@ async def sync_host_agent_files(
     else:
         results["TOOLS.md"] = "skipped (empty in DB — run reset-token)"
 
+    # 4b. docs/ — L2 reference docs (context economy Stage 1, additive).
+    try:
+        results.update(write_reference_docs(claude_config_dir, context))
+    except Exception as e:
+        logger.error("sync_host_agent_files(%s) docs/: %s", agent.name, e)
+        results["docs/_error"] = f"error: {e}"
+
     # 5. DB-Updates persist (SOUL.md/HEARTBEAT.md/MEMORY.md may have been updated)
     session.add(agent)
     await session.commit()
@@ -704,6 +784,38 @@ def restart_docker_agent_container(
         env_main = repo_root / ".env"
         env_agents = repo_root / "docker" / ".env.agents"
         env_shared = repo_root / "docker" / ".env.shared"
+
+        # Preflight (B2.1): verify compose_main is actually readable and
+        # non-empty from inside the backend container BEFORE invoking
+        # `docker compose`. Docker Desktop single-file bind mounts (compose_main
+        # is mounted individually, not as part of a directory mount) go stale
+        # — become ENOENT or read as empty — when the HOST file underneath is
+        # replaced atomically (git checkout, editor atomic save). Without this
+        # guard, `docker compose` fails with an opaque "no such file or
+        # directory" that gives no hint the fix is a backend restart, not a
+        # repo/checkout problem. This exact incident happened 2026-07 and cost
+        # a full diagnosis session.
+        try:
+            compose_main_readable = compose_main.is_file() and compose_main.stat().st_size > 0
+        except OSError:
+            compose_main_readable = False
+        if not compose_main_readable:
+            logger.error(
+                "force_recreate(%s) aborted preflight — %s is not readable/empty "
+                "inside the backend container (stale bind mount)",
+                container_name, compose_main,
+            )
+            return {
+                "status": (
+                    "error: docker-compose.yml is not readable inside the backend "
+                    "container — Docker Desktop single-file bind mounts go stale "
+                    "when the host file is replaced (git checkout/editor atomic "
+                    "save). Fix: docker compose restart backend, then retry the switch."
+                ),
+                "container": container_name,
+                "mode": "recreate",
+            }
+
         # Compose v2 supports multiple `--env-file` flags. The agents compose
         # file references ${MC_TOKEN_*}, ${OPENAI_API_KEY_*} etc. that live in
         # docker/.env.agents — without it those expand to empty and agents come

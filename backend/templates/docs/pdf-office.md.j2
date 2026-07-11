@@ -1,0 +1,76 @@
+# PDF & Office Documents
+
+How to produce PDF/DOCX/XLSX/PPTX deliverables without breaking the container.
+
+## PDF — `mc pdf` (always, instead of local Chromium)
+
+**DO NOT** install `puppeteer`/`chromium`/`playwright` locally — the agent
+container is an x86 image under Rosetta on ARM; local Chrome binaries fail
+with `rosetta error: failed to open elf`. The central mc-playwright sidecar
+has Chromium ARM-native and renders via `page.pdf()`.
+
+```bash
+# RECOMMENDED: stdin — no path issues, always works
+cat /tmp/report.md | mc pdf --title "Q1 Research Report" --file -
+
+# Heredoc directly, no file needed
+mc pdf --title "Zurich Weather" --file - << 'EOF'
+# Weather Report
+...
+EOF
+
+# Absolute path also works
+mc pdf --title "Q1 Research Report" --file /tmp/report.md \
+       --filename-prefix "medewo-brand-dna" \
+       --description "Brand guidelines summarized from research"
+```
+
+Response: `{"ok": true, "deliverable_id": "<uuid>", "path": "...", "bytes": 15000}`.
+Reuse `deliverable_id` directly for `mc telegram --file <deliverable_id>`.
+
+### Forbidden alternatives (ARM/Rosetta conflict)
+
+- `npm install puppeteer` + `page.pdf()` → x86 Chrome download, Rosetta failure
+- `apt-get install chromium` → no root, fails
+- `pip install playwright && playwright install chromium` → same x86/ARM issue
+
+Only working alternative: Python `reportlab` for text-only PDFs. `mc pdf` is
+always cleaner (consistently styled, no pip install in the container).
+
+## Word / Excel / PowerPoint — direct via Python libraries
+
+For DOCX / XLSX / PPTX, use the pre-installed libraries directly — there is
+**no dedicated `mc` primitive for these formats**, they're ARM-neutral and
+need no sidecar.
+
+- `python-docx` for Word (.docx)
+- `openpyxl` for Excel (.xlsx)
+- `python-pptx` for PowerPoint (.pptx)
+- `pandoc` (binary) for format conversions, e.g. Markdown → DOCX
+
+```python
+from docx import Document
+doc = Document()
+doc.add_heading("Q1 Report", 0)
+doc.add_paragraph("...")
+doc.save(f"/deliverables/{TASK_ID}/report.docx")
+```
+
+```bash
+mc deliverable --title "Q1 Report" --type file --path /deliverables/$TASK_ID/report.docx
+mc telegram "Q1 Report attached" --file <uuid>
+```
+
+Pandoc fallback: `pandoc report.md -o /deliverables/$TASK_ID/report.docx`
+
+## Path disambiguation (applies to ALL formats)
+
+| Path | Registerable as deliverable? |
+|------|---|
+| `/deliverables/<task_id>/` | Yes — directly |
+| `/shared-deliverables/<task_id>/` (mc pdf, screenshots) | Yes — directly |
+| `~/deliverables/`, `/home/agent/deliverables/` | No — not readable by the backend |
+| `~/FreeCode/...`, `/workspace/...` | No — not readable by the backend |
+
+A file created outside the two registerable prefixes MUST be copied there
+before you register it as a deliverable.

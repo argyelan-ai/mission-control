@@ -63,6 +63,13 @@ STALE_PROGRESS_MINUTES_BY_ROLE = {
 # Circuit Breaker
 MAX_STALE_CHECKS = 3       # Max status checks per task
 
+# Tier-3 recovery re-dispatch bound (seconds). auto_dispatch_task does real
+# I/O (git clone / worktree setup + delivery) — the task_runner loop is a
+# single sequential coroutine, so this await must be bounded or N stuck
+# agents would serially starve the other checks. Timeout → Tier 3 failed →
+# Tier 4 operator notification.
+TIER3_DISPATCH_TIMEOUT_SECONDS = 90
+
 
 def _idle_threshold_for(agent) -> int:
     """Idle threshold for an agent.
@@ -141,6 +148,13 @@ AGENT_RUNTIME_ACK_TIMEOUTS: dict[str, int] = {
     "openclaw": 15,
 }
 _DEFAULT_ACK_TIMEOUT_MINUTES = 5
+
+# G4 (W2-A): margin added on top of the agent's ack timeout for the
+# resume-suppression TTL — the resume redispatch itself (poll pickup,
+# container cold-start) takes a little time, so the suppression window
+# needs a bit of slack beyond the raw ack timeout or a slow-but-legitimate
+# resume could race its own suppression key expiring.
+RESUME_SUPPRESS_MARGIN_MINUTES = 5
 
 
 def _get_ack_timeout_minutes(agent) -> int:
@@ -365,6 +379,21 @@ class TaskRunnerService:
             redis = await get_redis()
 
             if task.dispatched_at:
+                # G4 (W2-A): a Tier-3 recovery resume just reset
+                # dispatched_at/ack_at and redispatched — semantically a
+                # RESUME of the very run the recovery is trying to save, NOT
+                # a fresh dispatch. Without this check, this ACK-timeout
+                # ladder would re-arm on the resume and could fire its own
+                # escalation Approval concurrently with the recovery that
+                # caused it (double-escalation for one root event). Skip for
+                # the suppression window; a genuinely-never-acked resume
+                # still escalates once the window elapses.
+                if await redis.get(RedisKeys.dispatch_resume_suppress(str(task.id))):
+                    logger.debug(
+                        "ACK-Eskalation unterdrueckt (Tier-3-Resume aktiv): '%s' (%s)",
+                        task.title, agent.name,
+                    )
+                    continue
                 # ── Check 1: ACK timeout ──
                 await self._handle_ack_timeout(session, task, agent, now, redis)
             elif not skip_pending:
@@ -844,15 +873,26 @@ class TaskRunnerService:
         tier3_ok = False
         try:
             from app.services.task_context_builder import build_recovery_context
+            from app.redis_client import try_claim_recovery_comment_cooldown
 
             recap_extras = await build_recovery_context(session, task)
             if recap_extras:
-                session.add(TaskComment(
-                    task_id=task.id,
-                    author_type="system",
-                    content=recap_extras,
-                    comment_type="recovery_recap",
-                ))
+                # G6: shared cooldown across all "continue"-comment mechanisms
+                # (Tier-3 recap, unblock_notify, watchdog nudge, bootstrap
+                # recap) — first one to fire wins, others skip silently.
+                if await try_claim_recovery_comment_cooldown(redis, str(task.id)):
+                    session.add(TaskComment(
+                        task_id=task.id,
+                        author_type="system",
+                        content=recap_extras,
+                        comment_type="recovery_recap",
+                    ))
+                else:
+                    logger.debug(
+                        "Tier 3 recovery_recap skipped for task %s — "
+                        "recovery-comment cooldown already claimed",
+                        task.id,
+                    )
 
             # Reset dispatch flags so the dispatcher treats this as a fresh attempt
             task.dispatched_at = None
@@ -860,9 +900,53 @@ class TaskRunnerService:
             session.add(task)
             await session.commit()
 
-            # Background re-dispatch — runtime-aware (cli-bridge / host / claude-code)
-            asyncio.create_task(auto_dispatch_task(task.id, task.board_id))
-            tier3_ok = True
+            # G4 (W2-A): one suppression per resume — set BEFORE redispatch so
+            # there's no window where _check_dispatch_ack could observe the
+            # just-reset dispatched_at (once redispatch sets it again) without
+            # the suppression key in place. TTL = ack timeout + margin: long
+            # enough to cover the redispatch's own ack window, short enough
+            # that a resume the agent truly never acks still escalates.
+            _resume_suppress_ttl_s = int(
+                (_get_ack_timeout_minutes(agent) + RESUME_SUPPRESS_MARGIN_MINUTES) * 60
+            )
+            await redis.set(
+                RedisKeys.dispatch_resume_suppress(str(task.id)),
+                "1", ex=_resume_suppress_ttl_s,
+            )
+
+            # Re-dispatch — runtime-aware (cli-bridge / host / claude-code).
+            # Awaited directly (we're already in an async context) instead of
+            # fire-and-forget via asyncio.create_task: auto_dispatch_task
+            # catches its own exceptions internally and always returns None,
+            # so its return value carries no success signal. The only
+            # reliable indicator is whether the delivery branch actually set
+            # dispatched_at again — re-fetch the task (auto_dispatch_task
+            # commits via its own session) and check that.
+            #
+            # Bounded with wait_for (TIER3_DISPATCH_TIMEOUT_SECONDS): the
+            # task_runner loop is a single sequential coroutine — an
+            # unbounded await here (git clone / worktree I/O + delivery
+            # inside auto_dispatch_task) with N concurrently-stuck agents
+            # would starve _check_dispatch_ack / _check_stuck_in_progress
+            # for everyone else. On timeout we treat Tier 3 as failed and
+            # fall through to Tier 4. Note: wait_for cancellation is
+            # best-effort — a dispatch blocked in non-cancellable I/O may
+            # still complete in the background; that late success is
+            # harmless (recap + dispatch-flag reset are already committed
+            # above, and a duplicate Tier-4 notification merely over-alerts
+            # rather than losing the task).
+            try:
+                await asyncio.wait_for(
+                    auto_dispatch_task(task.id, task.board_id),
+                    timeout=TIER3_DISPATCH_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "Tier 3 (resume) dispatch timed out after %ss for %s on task %s",
+                    TIER3_DISPATCH_TIMEOUT_SECONDS, agent.name, task.id,
+                )
+            await session.refresh(task)
+            tier3_ok = task.dispatched_at is not None
         except Exception as e:
             logger.warning("Tier 3 (resume) failed for %s: %s", agent.name, e)
 
@@ -1211,6 +1295,26 @@ class TaskRunnerService:
             if tick_count < 1:
                 # First eligible tick: nudge, do NOT block. Gives the agent (and
                 # poll.sh) a chance to self-report; catches transient blips.
+                # G6: the shared cooldown gates the comment AND tick-1
+                # progression together. The tick counter may ONLY advance when
+                # the nudge comment was actually posted — otherwise a
+                # different mechanism's "continue" comment (Tier-3 recap /
+                # unblock_notify / bootstrap recap) would silently consume
+                # tick 1 and the next pass would block the task without the
+                # agent ever having received THE WATCHDOG's explicit warning
+                # (due process before block). On a cooldown-skip we retry the
+                # nudge on the next watchdog pass — the cooldown TTL (600s) is
+                # well below the stuck thresholds (20-45min), so the added
+                # delay before a block is bounded and acceptable.
+                from app.redis_client import try_claim_recovery_comment_cooldown
+                if not await try_claim_recovery_comment_cooldown(redis, str(task.id)):
+                    logger.debug(
+                        "Lifecycle-Watchdog nudge skipped for task %s — "
+                        "recovery-comment cooldown already claimed; tick counter "
+                        "NOT advanced, nudge retries next pass",
+                        task.id,
+                    )
+                    continue
                 session.add(TaskComment(
                     task_id=task.id,
                     author_type="system",

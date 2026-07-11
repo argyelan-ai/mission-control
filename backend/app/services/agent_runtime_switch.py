@@ -299,7 +299,7 @@ async def validate_compatibility(
 def _is_host_inplace(agent: Agent) -> bool:
     """True when this is a host agent that owns a HostHarnessAdapter.
 
-    Such agents (currently only Hermes, ADR-060) can switch runtime in place —
+    Such agents (currently only Hermes, ADR-064) can switch runtime in place —
     the adapter re-renders agent.env + reloads the single host session
     sequentially, so there is never a parallel instance.
     """
@@ -315,7 +315,7 @@ def _ensure_agent_switchable(agent: Agent) -> None:
     rt = getattr(agent, "agent_runtime", None)
     if rt == "cli-bridge":
         return
-    # ADR-060: host agents with an adapter switch in place (sequential reload).
+    # ADR-064: host agents with an adapter switch in place (sequential reload).
     if _is_host_inplace(agent):
         return
     raise AgentNotSwitchableError(
@@ -417,7 +417,7 @@ async def switch_agent_runtime(
     if new_runtime is None:
         raise RuntimeNotFoundError(f"Runtime {new_runtime_id} not found.")
 
-    # ADR-060: a host agent with an adapter switches in place. The reload is
+    # ADR-064: a host agent with an adapter switches in place. The reload is
     # strictly sequential (kill → re-render agent.env → restart the single
     # session), so it never creates a parallel instance — the single_instance
     # hard-block below must NOT fire for this path (it still blocks binding a
@@ -521,7 +521,7 @@ async def switch_agent_runtime(
     await publish_switch_progress(agent.id, "rendering")
 
     try:
-        # ── Host in-place switch (ADR-060) ──────────────────────────────────
+        # ── Host in-place switch (ADR-064) ──────────────────────────────────
         # A host agent with an adapter never touches the docker/compose path.
         # The adapter owns the reload: rewrite OPENAI_* in agent.env (token
         # preserved) then restart the single host session. Sequential, so no

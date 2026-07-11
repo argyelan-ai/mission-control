@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from typing import Callable
@@ -278,6 +279,62 @@ def _cmd_review(args, client, cfg):
     return _patch_status(client, cfg, "review")
 
 
+# ── Reviewer verdicts (approve / reject) ──────────────────────────────────
+#
+# Thin wrappers over POST /boards/{board_id}/tasks/{task_id}/review
+# (backend agent_task_status.agent_review_decision). Give a reviewer agent an
+# explicit verb for the two everyday verdicts instead of forcing a raw status
+# PATCH: `mc approve` (decision=approve) and `mc reject` (decision=request_changes).
+# The backend body requires a non-empty `comment`, so approve supplies a default
+# when no --feedback is given; reject hard-requires --feedback locally so the
+# author always gets an actionable reason.
+
+def _review_decision(client, cfg, *, decision: str, comment: str):
+    board_id, task_id = cfg.require_task_context()
+    resp = client.request(
+        "POST",
+        f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/review",
+        body={"decision": decision, "comment": comment},
+    )
+    _emit(resp)
+    return 0
+
+
+def _cmd_approve(args, client, cfg):
+    """mc approve [--feedback ...] — Review approven (decision=approve)."""
+    comment = (getattr(args, "feedback", None) or "").strip() or "Approved."
+    return _review_decision(client, cfg, decision="approve", comment=comment)
+
+
+def _add_approve_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        default=None,
+        help="Optionale Begruendung/Notiz zum Approve (wird als review-comment gespeichert).",
+    )
+
+
+def _cmd_reject(args, client, cfg):
+    """mc reject --feedback ... — Changes anfordern (decision=request_changes)."""
+    feedback = (getattr(args, "feedback", None) or "").strip()
+    if not feedback:
+        raise UsageError(
+            "mc reject: --feedback ist Pflicht — der Author braucht einen "
+            "konkreten Grund, was geaendert werden soll."
+        )
+    return _review_decision(client, cfg, decision="request_changes", comment=feedback)
+
+
+def _add_reject_args(p):
+    _add_optional_task_id(p)
+    p.add_argument(
+        "--feedback",
+        required=True,
+        help="Pflicht — was muss der Author aendern? Wird als review-comment gespeichert.",
+    )
+
+
 def _cmd_blocked(args, client, cfg):
     if not args.question and not args.description:
         raise UsageError("--question oder --description ist Pflicht bei `mc blocked`.")
@@ -312,19 +369,24 @@ def _cmd_failed(args, client, cfg):
 # lokal die 4 Pflichtfelder und Min-Length BEVOR irgendein HTTP-Call passiert,
 # damit Agents nicht erst auf 400-Antworten warten muessen.
 
-# Duplikat aus backend/app/constants.py REFLECTION_REQUIRED_FIELDS / _MIN_CHARS.
-# Public Contract — wenn Backend-Konstanten sich aendern, hier auch aendern.
-REFLECTION_REQUIRED_FIELDS = [
-    "Was wurde gemacht",
-    "Was hat funktioniert",
-    "Was war unklar",
-    "Lesson fuer Agent-Memory",
-]
-REFLECTION_MIN_CHARS = 80
+# Canonical reflection contract — sourced from the SINGLE in-container source of
+# truth (mc_cli/reflection.py), which itself is drift-guarded against
+# backend/app/constants.py REFLECTION_REQUIRED_FIELDS. Re-exported here as
+# module-level names so existing callers/tests (e.g. monkeypatching
+# commands.REFLECTION_MIN_CHARS) keep working.
+from . import reflection as _reflection  # noqa: E402
+REFLECTION_REQUIRED_FIELDS = _reflection.REFLECTION_REQUIRED_FIELDS
+REFLECTION_MIN_CHARS = _reflection.REFLECTION_MIN_CHARS
 
 
 def _validate_reflection(text: str) -> None:
     """Local validation matching backend/app/services/work_context.enforce_reflection.
+
+    Forgiving (B1): the header check is tolerant via mc_cli.reflection —
+    #/##/### level, case-insensitive, optional trailing colon, ü↔ue, and
+    English aliases ("What was done", ...) all count. Strict canonical input is
+    unaffected. This only additively rescues trivial local-model variance that
+    the backend gate (existence + length, no header check) accepts anyway.
 
     Raises UsageError mit klarem Hinweis bevor der HTTP-Call passiert.
     """
@@ -333,23 +395,13 @@ def _validate_reflection(text: str) -> None:
             "Reflexions-Text ist leer. Erwartet: alle 4 Pflichtfelder als `## <Feld>` Headers, "
             f"mind. {REFLECTION_MIN_CHARS} Zeichen total."
         )
-    missing = [f for f in REFLECTION_REQUIRED_FIELDS if f"## {f}" not in text]
-    if missing:
-        raise UsageError(
-            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
-            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
-        )
-    if len(text) < REFLECTION_MIN_CHARS:
-        raise UsageError(
-            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
-            f"Inhalt pro Feld ausfuehrlicher beschreiben."
-        )
-    # Detect the literal `\n` shell-escape pitfall: if the text was passed via
-    # `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
-    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and
-    # the comment renders as one unbroken line. Refuse early with a Hilfe-
-    # Hinweis. Heuristic: backslash-n appears AND no real newlines split the
-    # required headers — i.e. all four `## <Feld>` markers live on one line.
+    # Detect the literal `\n` shell-escape pitfall FIRST: if the text was passed
+    # via `mc finish "## … \n## …"` (no $'…' quoting) bash hands us the two-char
+    # sequence `\\n` instead of an actual newline. Backend stores it 1:1 and the
+    # comment renders as one unbroken line. Must run BEFORE the field check —
+    # with everything on one line the tolerant header matcher can't recognise
+    # the headers, so it would otherwise mis-report "fields missing". Heuristic:
+    # backslash-n appears AND no real newlines split the required headers.
     has_real_newlines = "\n" in text
     has_literal_escape = "\\n" in text
     if has_literal_escape and not has_real_newlines:
@@ -360,6 +412,17 @@ def _validate_reflection(text: str) -> None:
             "oder ein Heredoc:\n"
             "  mc finish \"$(cat <<'EOF'\n"
             "  ## Was wurde gemacht\n  ...\n  EOF\n  )\""
+        )
+    missing = _reflection.missing_fields(text)
+    if missing:
+        raise UsageError(
+            f"Reflexion unvollstaendig — fehlende Pflichtfelder: {', '.join(missing)}. "
+            f"Erwartet: alle 4 Headers '## <Feld>' im Text."
+        )
+    if len(text) < REFLECTION_MIN_CHARS:
+        raise UsageError(
+            f"Reflexion zu kurz ({len(text)} Zeichen, mind. {REFLECTION_MIN_CHARS}). "
+            f"Inhalt pro Feld ausfuehrlicher beschreiben."
         )
 
 
@@ -509,6 +572,11 @@ def _cmd_finish(args, client, cfg):
     `mc review` separat re-tryen kann.
     """
     _validate_reflection(args.message)
+    # Normalize recognised headers to canonical German (idempotent on canonical
+    # input) so the POSTed reflection — and thus the memory pipeline's lesson
+    # extraction — always sees the canonical `## <German>` headers even when the
+    # model wrote English/###/ü variants (B1).
+    reflection_content = _reflection.normalize_reflection(args.message)
     target_status = "review" if args.review else "done"
     # --force: erst alle offenen Checklist-Items schliessen, dann normaler
     # Preflight (Status + Children). _preflight_finish wuerde sonst mit
@@ -529,7 +597,7 @@ def _cmd_finish(args, client, cfg):
         client.request(
             "POST",
             f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
-            body={"comment_type": "reflection", "content": args.message},
+            body={"comment_type": "reflection", "content": reflection_content},
         )
     else:
         # Eine recent reflection vom gleichen Agent gibt es schon — wir laufen
@@ -727,6 +795,26 @@ def _cmd_checklist(args, client, cfg):
         item_id = _resolve_checklist_item_id(client, base, args.item_id)
         resp = client.request("PATCH", f"{base}/{item_id}", body={"status": "done"})
         _emit(resp)
+    elif action == "skip":
+        # 2026-07-08: an agent can hit a checklist item it physically cannot
+        # do (a live Vercel deploy needing npm/node = a Deployer's job, not
+        # an omp agent's). Before this the only options were `done` (a lie)
+        # or leaving `mc finish` blocked forever. Reuses the existing
+        # `skipped` status — `_preflight_finish` already treats it as
+        # non-blocking, no backend change needed.
+        item_id = _resolve_checklist_item_id(client, base, args.item_id)
+        resp = client.request("PATCH", f"{base}/{item_id}", body={"status": "skipped"})
+        _emit(resp)
+        if getattr(args, "reason", None):
+            board_id, task_id = cfg.require_task_context()
+            client.request(
+                "POST",
+                f"/api/v1/agent/boards/{board_id}/tasks/{task_id}/comments",
+                body={
+                    "comment_type": "progress",
+                    "content": f"Checklist-Item {item_id} skipped: {args.reason}",
+                },
+            )
     elif action == "list":
         resp = client.request("GET", base)
         _emit(resp)
@@ -742,6 +830,11 @@ def _add_checklist_args(p):
     p_add.add_argument("--order", type=int, default=0)
     p_done = sub.add_parser("done", help="Item als erledigt markieren")
     p_done.add_argument("item_id")
+    p_skip = sub.add_parser(
+        "skip", help="Item ueberspringen (z.B. out-of-role, nicht durch diesen Agent erledigbar)"
+    )
+    p_skip.add_argument("item_id")
+    p_skip.add_argument("--reason", default=None, help="Grund, wird als Comment gepostet")
     sub.add_parser("list", help="Aktuelle Checklist zeigen")
 
 
@@ -1735,6 +1828,101 @@ def _add_file_answer_args(p):
     p.add_argument("--tags", default=None, help="Komma-getrennte Tags")
 
 
+# ── mc docs (local — no network, no client call) ──────────────────────────
+
+def _docs_dir():
+    """Directory L2 reference docs are read from.
+
+    Resolution order:
+      1. MC_DOCS_DIR — explicit override (tests, or a manual `mc docs` call
+         pointed at a specific tree).
+      2. $CLAUDE_CONFIG_DIR/docs — host agents (Boss/Hermes/Jarvis, ADR host-
+         runtime) run with CLAUDE_CONFIG_DIR=<agent_dir>/claude-config and
+         HOME=the operator's real home, NOT the agent's — docker_agent_sync.
+         write_reference_docs() writes into exactly this directory
+         (config_dir/docs), so this is where a host agent's own docs live.
+      3. ~/.claude/docs — docker cli-bridge agents don't set CLAUDE_CONFIG_DIR
+         and HOME is their real container home, where write_reference_docs()
+         wrote the same docs/ tree.
+    Falls through to the next candidate if a directory doesn't exist (e.g.
+    CLAUDE_CONFIG_DIR is set but the agent hasn't been synced yet) instead of
+    a permanent dead end.
+    """
+    import os
+    from pathlib import Path
+
+    override = os.environ.get("MC_DOCS_DIR")
+    if override:
+        return Path(override)
+
+    claude_config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if claude_config_dir:
+        candidate = Path(claude_config_dir) / "docs"
+        if candidate.is_dir():
+            return candidate
+
+    return Path.home() / ".claude" / "docs"
+
+
+_VALID_TOPIC_RE = re.compile(r"^[a-z][a-z0-9-]*$")
+
+
+def _cmd_docs(args, client, cfg):
+    """mc docs [topic] — read a local L2 reference doc. No network call.
+
+    Without an argument: prints docs/INDEX.md (or, if that's missing, a list
+    of the .md files found in the docs dir). With a topic: prints
+    docs/<topic>.md to stdout. Purely local file reads — `client`/`cfg` are
+    unused, matching the "local verb" contract (no mc-context.env / token
+    needed to read reference docs).
+    """
+    import sys
+
+    docs_dir = _docs_dir()
+    topic = getattr(args, "topic", None)
+
+    if topic and not _VALID_TOPIC_RE.match(topic):
+        # Reject before touching the filesystem — a topic like "../../etc/passwd"
+        # or an absolute path must never be joined into docs_dir (path
+        # traversal). Only lowercase-alnum-hyphen slugs are legitimate topics.
+        available = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        print(f"mc docs: ungueltiges Topic '{topic}' — nur [a-z][a-z0-9-]* erlaubt.", file=sys.stderr)
+        if available:
+            print(f"Verfuegbare Topics: {', '.join(available)}", file=sys.stderr)
+        return 1
+
+    if not topic:
+        index_path = docs_dir / "INDEX.md"
+        if index_path.is_file():
+            print(index_path.read_text(encoding="utf-8"))
+            return 0
+        topics = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        if not topics:
+            print(f"Keine Reference Docs gefunden unter {docs_dir}.", file=sys.stderr)
+            return 1
+        print("Verfuegbare Topics:")
+        for t in topics:
+            print(f"  mc docs {t}")
+        return 0
+
+    doc_path = docs_dir / f"{topic}.md"
+    if not doc_path.is_file():
+        available = sorted(p.stem for p in docs_dir.glob("*.md")) if docs_dir.is_dir() else []
+        print(f"mc docs: Topic '{topic}' nicht gefunden unter {docs_dir}.", file=sys.stderr)
+        if available:
+            print(f"Verfuegbare Topics: {', '.join(available)}", file=sys.stderr)
+        else:
+            print("Keine Reference Docs gefunden — noch nicht synced?", file=sys.stderr)
+        return 1
+
+    print(doc_path.read_text(encoding="utf-8"))
+    return 0
+
+
+def _add_docs_args(p):
+    p.add_argument("topic", nargs="?", default=None, help="Topic-Slug (z.B. 'telegram'). Ohne Arg: INDEX/Topic-Liste.")
+
+
 # ── Registry ──────────────────────────────────────────────────────────────
 
 _STATUS_ENDPOINT = ("PATCH /boards/{board_id}/tasks/{task_id}",)
@@ -1803,6 +1991,22 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:write",
         handler=_cmd_review,
         add_args=_add_optional_task_id,
+    ),
+    "approve": CommandSpec(
+        name="approve",
+        help="Review approven (decision=approve). Optional --feedback als Notiz.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_approve,
+        add_args=_add_approve_args,
+    ),
+    "reject": CommandSpec(
+        name="reject",
+        help="Changes anfordern (decision=request_changes). --feedback ist Pflicht.",
+        endpoints=("POST /boards/{board_id}/tasks/{task_id}/review",),
+        scope="tasks:write",
+        handler=_cmd_reject,
+        add_args=_add_reject_args,
     ),
     "finish": CommandSpec(
         name="finish",
@@ -2009,5 +2213,13 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="vault:write",
         handler=_cmd_file_answer,
         add_args=_add_file_answer_args,
+    ),
+    "docs": CommandSpec(
+        name="docs",
+        help="L2 Reference Doc lesen (lokal, kein Netzwerk) — mc docs [topic]",
+        endpoints=(),
+        scope="",
+        handler=_cmd_docs,
+        add_args=_add_docs_args,
     ),
 }

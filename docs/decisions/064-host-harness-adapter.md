@@ -1,4 +1,4 @@
-# ADR-060 — HostHarnessAdapter: generischer Adapter-Layer für Host-Agent-Runtime-Bindung
+# ADR-064 — HostHarnessAdapter: generischer Adapter-Layer für Host-Agent-Runtime-Bindung
 
 **Status:** Accepted
 **Datum:** 2026-07-07

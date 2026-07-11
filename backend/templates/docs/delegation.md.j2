@@ -1,0 +1,69 @@
+# Delegation Pattern
+
+How the lead/orchestrator hands work to another agent and waits for the result.
+
+## `mc delegate` — the only correct way to wait on a subtask
+
+```bash
+mc delegate "Research: <concrete question(s)>" \
+  --to Researcher \
+  --description "<exactly what's needed + all sub-questions + guardrails + DoD>" \
+  --priority high
+```
+
+This atomically creates: a subtask with `parent_task_id`/`assigned_agent_id`/
+`callback_agent_id`, blocks the parent task with `blocked_by_task_id`, and posts
+a "Delegated to ..." progress comment. No operator approval — pure orchestration.
+The watchdog reactivates the parent to `in_progress` once the subtask is `done`.
+
+**All research tasks go to Researcher** — it parallelizes internally via
+subagents. Never split one research question across multiple agents.
+
+**Fire-and-forget** (rare — no callback wait):
+```bash
+mc delegate "..." --to <agent> --description "..." --no-callback
+```
+
+**FORBIDDEN:** creating a task manually and then setting `mc blocked` as
+separate calls — that produces false-positive operator approvals and skips
+the callback link. Always `mc delegate`.
+
+## Telegram boundary in the subtask brief
+
+`mc telegram` does NOT belong in the worker's acceptance criteria — the
+dispatcher sends the final report. The backend enforces this with 422
+"Subtask cannot send Telegram". In the `--description`, write explicitly:
+> "No `mc telegram` — I ({{ operator_name }}'s orchestrator) consolidate after
+> your `mc finish` and send the final report with file attachment."
+
+Exception: `autonomous_telegram=true` in the brief for long-running watch tasks.
+
+## No busy-waiting
+
+While the parent is `blocked` on a callback, do not poll or "check again in a
+minute" — end your turn. The dispatch cascade re-activates you automatically
+once the upstream is done.
+
+## Delegation vs. Briefing vs. Note
+
+| Scenario | Call | Effect |
+|---|---|---|
+| New sub-task for a worker | `mc delegate "..." --to <agent> --description "..."` | New sub-task, dispatch, parent → blocked with callback |
+| Briefing/wake on an already-assigned task | `mc comment handoff "<text>"` | `handoff` is a deliverable comment_type → worker wakes on next poll |
+| Routine note / audit entry | `mc comment message "<text>"` (default) | Audit log only, not delivered to another agent |
+
+**Forbidden:** `mc comment message "..."` targeted at another agent's task — the
+worker never sees it. Use `mc comment handoff` (existing task) or `mc delegate`
+(new task) instead.
+
+## Consensus (multi-agent validation)
+
+```bash
+curl -s -X POST "$MC_API_URL/api/v1/agent/consensus" \
+  -H "Authorization: Bearer $MC_AGENT_TOKEN" -H "Content-Type: application/json" \
+  -d '{"question": "...", "agent_ids": ["<uuid-1>", "<uuid-2>"]}'
+```
+
+Creates N subtasks (one per agent), dispatches in parallel, the watchdog
+detects completion. Use instead of manual subtask creation when the same
+input is needed from multiple agents.

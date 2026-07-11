@@ -123,6 +123,50 @@ async def test_create_manual_agent_does_not_auto_provision(auth_client, monkeypa
     assert calls == []
 
 
+@pytest.mark.asyncio
+async def test_create_host_agent_does_not_schedule_background_provisioning(
+    auth_client, async_session, monkeypatch
+):
+    # Regression (2026-07-10): create_agent used to schedule
+    # _provision_agent_background for host agents too, which hits the no-op
+    # host stub and falsely flips provision_status -> "provisioned" (no files
+    # staged), racing the wizard's explicit POST /provision call.
+    # runtime_id is required for host agents (2026-07-10 E2E finding: without
+    # it, /provision 400s and PATCH runtime_id is rejected — dead end).
+    from app.models.runtime import Runtime
+
+    rt = Runtime(
+        slug="host-hopeful-rt",
+        display_name="Host Hopeful RT",
+        runtime_type="lmstudio",
+        endpoint="http://example.com/v1",
+        model_identifier="test-model",
+        enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+
+    calls = []
+
+    async def _recorder(agent_id):
+        calls.append(agent_id)
+
+    monkeypatch.setattr(agents_module, "_provision_agent_background", _recorder)
+
+    resp = await auth_client.post(
+        "/api/v1/agents",
+        json={"name": "Host Hopeful", "agent_runtime": "host", "runtime_id": "host-hopeful-rt"},
+    )
+    assert resp.status_code == 201
+    assert calls == []
+
+    from app.models.agent import Agent
+    agent_id = uuid.UUID(resp.json()["id"])
+    refreshed = await async_session.get(Agent, agent_id)
+    assert refreshed.provision_status == "local"
+
+
 # ── Auto-provision behavior ──────────────────────────────────────────────────
 
 @pytest.mark.asyncio

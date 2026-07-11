@@ -53,6 +53,40 @@ class Settings(BaseSettings):
     telegram_reports_bot_token: str = ""
     telegram_reports_chat_id: str = ""
 
+    # ── Jarvis Telegram-Inbound (ADR-061) ────────────────────────────────
+    # Feature-Gate fuer den mobilen Jarvis: Text- + Sprachnachrichten aus dem
+    # Operator-Chat werden vom JarvisBrain (OpenAI Function-Calling) beantwortet.
+    # Default false → Verhalten exakt wie heute (nur Approval-URL-Buttons).
+    # Aktiv nur wenn JARVIS_TELEGRAM_ENABLED=true UND openai_api_key gesetzt ist.
+    jarvis_telegram_enabled: bool = False
+    # OpenAI-Key fuer den Text-Brain + Sprachnachrichten-Transkription.
+    openai_api_key: str = ""
+    # Chat-Modell fuer den Text-Brain (konservativer Default, existiert sicher).
+    jarvis_text_model: str = "gpt-4o-mini"
+    # Transcription-Modell fuer Telegram-Sprachnotizen (ogg/opus direkt).
+    jarvis_stt_model: str = "gpt-4o-mini-transcribe"
+    # Jarvis-Agent PBKDF2-Token — der Brain fuehrt Tool-Calls ueber den
+    # agent-scoped API-Pfad aus (kein Auth-Bypass), derselbe Token wie der
+    # voice_worker. Leer → Inbound bleibt inaktiv.
+    jarvis_agent_token: str = ""
+    # Interne Backend-URL, die der mc_client fuer Self-Calls nutzt (der Brain
+    # laeuft IM Backend-Container). Standard: localhost:8000.
+    mc_backend_url: str = "http://localhost:8000"
+
+    # ── Jarvis Intelligence (ADR-062) ────────────────────────────────────
+    # Frontier-Modell fuer ask_frontier + das Morning-Briefing (schwere
+    # Analyse/Planung). Leer → jarvis_core.frontier.DEFAULT_FRONTIER_MODEL.
+    jarvis_frontier_model: str = ""
+    # Eigenes Gate fuer das ask_frontier-TOOL (Default off — jeder Aufruf kostet
+    # pro Anfrage). Off → Tool wird in keinem Kanal-Schema angeboten. Das
+    # Morning-Briefing (jarvis_briefing_enabled) ist davon unabhaengig.
+    jarvis_frontier_enabled: bool = False
+    # Taegliches, LLM-generiertes Morgenbriefing als Vault-Note. Default off;
+    # aktiv nur bei JARVIS_BRIEFING_ENABLED=true UND OPENAI_API_KEY gesetzt.
+    jarvis_briefing_enabled: bool = False
+    # Uhrzeit (Europe/Zurich, "HH:MM") zu der das Briefing generiert wird.
+    jarvis_briefing_hour: str = "06:30"
+
     # MC Base URL (externally reachable, for Telegram URL buttons)
     mc_base_url: str = "http://localhost"
 
@@ -206,6 +240,14 @@ class Settings(BaseSettings):
     # Accelerator only (bytes always stream live). Tests override to 99999 so
     # the loop never auto-fires; they call run_once() directly.
     file_index_interval: int = 600
+
+    # Host-agent provisioning autoload (onboarding wizard, 2026-07-10). When
+    # False (default), host provisioning only STAGES plist/env/run.sh into
+    # ~/.mc/agents/<slug>/ and returns the launchctl command for the operator
+    # to run + verify manually. When True, provisioning also copies the plist
+    # into ~/Library/LaunchAgents and runs `launchctl bootstrap`. Kept off by
+    # default because loading a launchd job is an irreversible host action.
+    host_agent_autoload_enabled: bool = False
 
     # Phase 3 — Claude-Process Recycler (MEM-01)
     # Global kill-switch. Per-agent override lives in agents.recycler_enabled.

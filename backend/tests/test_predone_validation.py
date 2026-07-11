@@ -242,3 +242,28 @@ async def test_validation_passes_if_all_checklist_done_on_review(client):
             json={"status": "review"},
         )
     assert resp.status_code == 200, resp.json()
+
+
+async def test_reflection_alone_satisfies_evidence_guard(client):
+    """A posted reflection counts as evidence for in_progress -> review.
+
+    `mc finish --review` posts the structured reflection FIRST, then PATCHes
+    to review. Small/fast tasks may never post a separate progress comment —
+    rejecting the reflection as evidence forced the omp bridge into its
+    blocked fallback (live canary incident 2026-07-10).
+    """
+    ids = await _setup_predone_scenario()
+    agent_headers = {"Authorization": f"Bearer {ids['agent_token']}"}
+    board_id = ids["board_id"]
+    task_id = ids["task_id"]
+
+    # ONLY a reflection — no progress/resolution/checkpoint comment at all.
+    await _post_reflection(client, agent_headers, board_id, task_id)
+
+    with patch("app.services.activity.broadcast", new_callable=AsyncMock):
+        resp = await client.patch(
+            f"/api/v1/agent/boards/{board_id}/tasks/{task_id}",
+            headers=agent_headers,
+            json={"status": "review"},
+        )
+    assert resp.status_code == 200, resp.json()
