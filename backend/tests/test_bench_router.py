@@ -100,7 +100,7 @@ async def test_series_numbering_increments_per_label(auth_client):
 
 
 @pytest.mark.asyncio
-async def test_list_and_detail(auth_client, session):
+async def test_list_and_detail(auth_client, session, monkeypatch):
     ch = BenchChallenge(title="T", prompt_text="p", status="review")
     session.add(ch)
     await session.commit()
@@ -114,9 +114,12 @@ async def test_list_and_detail(auth_client, session):
     assert listing.status_code == 200
     assert any(c["id"] == str(ch.id) for c in listing.json())
 
+    # Monkeypatch reconcile_challenge and assert it was awaited by detail call
+    monkeypatch.setattr(orchestrator, "reconcile_challenge", AsyncMock())
     detail = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}")
     assert detail.status_code == 200
     assert detail.json()["entries"][0]["model_label"] == "A"
+    orchestrator.reconcile_challenge.assert_called_once()
 
 
 @pytest.mark.asyncio

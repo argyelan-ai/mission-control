@@ -2,7 +2,6 @@
 (same auth dependency as the core approvals/files routers)."""
 from __future__ import annotations
 
-import asyncio
 import logging
 import uuid
 from typing import Literal
@@ -15,6 +14,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.auth import require_user
 from app.database import get_session
 from app.models.bench import BenchChallenge, BenchEntry
+from app.utils import create_tracked_task
 
 from . import orchestrator
 from .drafts import create_draft
@@ -124,7 +124,10 @@ async def create_challenge(
     await session.commit()
     await session.refresh(challenge)
 
-    asyncio.create_task(orchestrator.start_challenge(challenge.id))
+    create_tracked_task(
+        orchestrator.start_challenge(challenge.id),
+        name=f"start_challenge({challenge.id})"
+    )
     logger.info("bench challenge %s created (%d entries)", challenge.id, len(entries))
     return _serialize(challenge, entries)
 
@@ -201,7 +204,10 @@ async def rerender_challenge(
         raise HTTPException(
             409, f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed."
         )
-    asyncio.create_task(orchestrator.rerender_challenge(challenge.id))
+    create_tracked_task(
+        orchestrator.rerender_challenge(challenge.id),
+        name=f"rerender_challenge({challenge.id})"
+    )
     return {"ok": True}
 
 
@@ -216,5 +222,8 @@ async def retry_entry(
         raise HTTPException(404, "Entry not found")
     if entry.status != "failed":
         raise HTTPException(409, f"Entry is {entry.status!r} — retry only from failed.")
-    asyncio.create_task(orchestrator.retry_entry(entry.id))
+    create_tracked_task(
+        orchestrator.retry_entry(entry.id),
+        name=f"retry_entry({entry.id})"
+    )
     return {"ok": True}
