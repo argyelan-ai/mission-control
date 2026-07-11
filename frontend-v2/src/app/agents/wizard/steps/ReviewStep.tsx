@@ -103,6 +103,23 @@ export function ReviewStep({
             </div>
           ))}
         </div>
+        {state.harness === "grok" && (
+          <div
+            className="rounded-lg px-3 py-2 text-[11px]"
+            style={{
+              backgroundColor: `${C.warning}14`,
+              border: `1px solid ${C.warning}33`,
+              color: "var(--color-text-secondary)",
+            }}
+          >
+            <span className="font-medium" style={{ color: C.warning }}>
+              Grok Build CLI muss auf dem Host eingeloggt sein.
+            </span>{" "}
+            Ohne gültige xAI-OAuth-Session (<code className="font-mono">~/.grok/auth.json</code>)
+            bleiben Dispatches liegen. Einmalig auf dem Mac:{" "}
+            <code className="font-mono">grok login --device-auth</code>.
+          </div>
+        )}
         <div className="flex justify-end">
           <button
             onClick={handleCreate}

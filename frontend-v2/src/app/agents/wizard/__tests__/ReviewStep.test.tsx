@@ -37,6 +37,26 @@ describe("ReviewStep", () => {
     await waitFor(() => expect(screen.getByText("tok-xyz")).toBeTruthy());
   });
 
+  it("shows the grok login hint before creating a grok host agent", async () => {
+    const state = { ...initialWizardState(null), name: "Grok", agentRuntime: "host" as const, harness: "grok" as const, runtimeId: "grok-cloud" };
+    wrap(<ReviewStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} onCreated={() => {}} />);
+    expect(screen.getByText(/grok login --device-auth/)).toBeTruthy();
+    // Harness surfaces in the review summary.
+    expect(screen.getByText("grok")).toBeTruthy();
+  });
+
+  it("posts harness=grok for a grok host agent", async () => {
+    const state = { ...initialWizardState(null), name: "Grok", agentRuntime: "host" as const, harness: "grok" as const, runtimeId: "grok-cloud" };
+    wrap(<ReviewStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} onCreated={() => {}} />);
+    fireEvent.click(screen.getByRole("button", { name: /Agent erstellen/ }));
+    await waitFor(() => expect(createMock).toHaveBeenCalled());
+    // createMock is module-shared across tests → assert THIS test's call, not calls[0].
+    const payload = createMock.mock.lastCall![0];
+    expect(payload.harness).toBe("grok");
+    expect(payload.agent_runtime).toBe("host");
+    expect(payload.runtime_id).toBe("grok-cloud");
+  });
+
   it("shows the rotated token from host provisioning, not the stale create-time token", async () => {
     provisionMock.mockResolvedValueOnce({ status: "provisioning", token: "rotated" });
     const state = { ...initialWizardState(null), name: "Nova Host", agentRuntime: "host" as const, harness: "openclaude" as const };
