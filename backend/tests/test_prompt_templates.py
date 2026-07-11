@@ -85,7 +85,15 @@ async def test_list_with_q_and_tag_filters(auth_client: AsyncClient):
 
 @pytest.mark.asyncio
 async def test_patch_partial_update(auth_client: AsyncClient):
+    import time
+    from datetime import datetime
+
     created = await _create(auth_client, "Old title", "Old body", ["a"])
+    before_updated_at_str = created["updated_at"]
+    before_updated_at = datetime.fromisoformat(before_updated_at_str)
+
+    # Small sleep to ensure timestamp granularity (PostgreSQL with timezone can be precise)
+    time.sleep(0.001)
 
     r = await auth_client.patch(
         f"/api/v1/prompt-templates/{created['id']}",
@@ -97,11 +105,27 @@ async def test_patch_partial_update(auth_client: AsyncClient):
     assert data["title"] == "Old title"   # untouched fields survive
     assert data["body"] == "Old body"
 
+    # Assert updated_at advanced
+    after_updated_at_str = data["updated_at"]
+    after_updated_at = datetime.fromisoformat(after_updated_at_str)
+    assert after_updated_at > before_updated_at, (
+        f"updated_at must advance on PATCH: {before_updated_at_str} → {after_updated_at_str}"
+    )
+
+    # Second patch
     r2 = await auth_client.patch(
         f"/api/v1/prompt-templates/{created['id']}",
         json={"title": "New title"},
     )
-    assert r2.json()["title"] == "New title"
+    assert r2.status_code == 200
+    data2 = r2.json()
+    assert data2["title"] == "New title"
+
+    # Assert updated_at advanced again
+    second_updated_at = datetime.fromisoformat(data2["updated_at"])
+    assert second_updated_at > after_updated_at, (
+        f"updated_at must advance on second PATCH: {after_updated_at_str} → {data2['updated_at']}"
+    )
 
 
 @pytest.mark.asyncio
