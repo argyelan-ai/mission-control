@@ -427,3 +427,161 @@ async def test_post_media_video_no_processing_info_returns_immediately(tmp_path,
 
     assert result["ok"] is True
     assert mock_api.get_media_upload_status.call_count == 1
+
+
+# ── post_media: error paths (never raises) ───────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_post_media_invalid_media_short_circuits_before_secrets(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=AssertionError("should not be called")),
+        ):
+            result = await x_publisher.post_media(
+                session, "Hello", [str(tmp_path / "missing.png")]
+            )
+
+    assert result["ok"] is False
+    assert result["error_type"] == "invalid_media"
+
+
+@pytest.mark.asyncio
+async def test_post_media_invalid_draft_short_circuits(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img = _touch(tmp_path, "bench-1/shot.png")
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=AssertionError("should not be called")),
+        ):
+            result = await x_publisher.post_media(session, "x" * 500, [str(img)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "invalid_draft"
+
+
+@pytest.mark.asyncio
+async def test_post_media_missing_secrets_returns_clean_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img = _touch(tmp_path, "bench-1/shot.png")
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(return_value=None),
+        ):
+            result = await x_publisher.post_media(session, "Hello", [str(img)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "missing_secrets"
+    assert "x_api_key" in result["error"]
+
+
+@pytest.mark.asyncio
+async def test_post_media_upload_exception_is_media_upload_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img = _touch(tmp_path, "bench-1/shot.png")
+
+    mock_api = MagicMock()
+    mock_response = MagicMock(status_code=400, reason="Bad Request")
+    mock_api.media_upload.side_effect = tweepy.BadRequest(
+        mock_response, response_json={"errors": [{"message": "Invalid media."}]}
+    )
+    mock_client = _mock_tweet_client()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Hello", [str(img)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "media_upload_failed"
+    mock_client.create_tweet.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_media_video_processing_failed(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    video = _touch(tmp_path, "bench-1/grid.mp4")
+
+    mock_api = MagicMock()
+    media = MagicMock()
+    media.media_id = 4242
+    mock_api.media_upload.return_value = media
+    failed = MagicMock()
+    failed.processing_info = {
+        "state": "failed",
+        "error": {"message": "Unsupported codec"},
+    }
+    mock_api.get_media_upload_status.return_value = failed
+    mock_client = _mock_tweet_client()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Grid video", [str(video)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "media_upload_failed"
+    assert "Unsupported codec" in result["error"]
+    mock_client.create_tweet.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_post_media_create_tweet_rate_limited(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img = _touch(tmp_path, "bench-1/shot.png")
+
+    mock_api = MagicMock()
+    media = MagicMock()
+    media.media_id = 111
+    mock_api.media_upload.return_value = media
+    mock_client = MagicMock()
+    mock_response = MagicMock(status_code=429, reason="Too Many Requests")
+    mock_client.create_tweet.side_effect = tweepy.TooManyRequests(
+        mock_response, response_json={"errors": []}
+    )
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Hello", [str(img)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "rate_limited"
+
+
+@pytest.mark.asyncio
+async def test_post_media_unexpected_exception_does_not_crash(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img = _touch(tmp_path, "bench-1/shot.png")
+
+    mock_api = MagicMock()
+    mock_api.media_upload.side_effect = RuntimeError("disk exploded")
+    mock_client = _mock_tweet_client()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Hello", [str(img)])
+
+    assert result["ok"] is False
+    assert result["error_type"] == "media_upload_failed"
