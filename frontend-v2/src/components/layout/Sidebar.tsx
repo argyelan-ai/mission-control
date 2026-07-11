@@ -22,6 +22,7 @@ import {
   Newspaper,
   FolderOpen,
   Repeat,
+  FlaskConical,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
@@ -54,6 +55,10 @@ export const NAV_ITEMS = [
         { href: "/content", icon: PenLine, label: "Content" },
         { href: "/news", icon: Newspaper, label: "News" },
       ]
+    : []),
+  // Benchmark-Studio vertical — strippable (flag flipped by release script)
+  ...(VERTICALS.benchStudio
+    ? [{ href: "/bench", icon: FlaskConical, label: "Benchmark" }]
     : []),
   { href: "/repos", icon: FolderGit2, label: "Repos" },
   { href: "/skills", icon: Puzzle, label: "Skills" },

@@ -1491,9 +1491,11 @@ async def update_task(
     await session.commit()
     await session.refresh(task)
 
-    # Vertical hooks (e.g. News-Studio pipeline-stage auto-advance) — no-op
-    # if no vertical is registered (stripped public release).
-    if "status" in updates and updates["status"] == "done" and task.pipeline_id:
+    # Vertical hooks (e.g. News-Studio pipeline-stage auto-advance, bench_studio
+    # artifact collection) — no-op if no vertical is registered (stripped public
+    # release). Hooks self-filter (run_task_done_hooks swallows hook errors);
+    # the old `and task.pipeline_id` gate starved non-pipeline verticals.
+    if "status" in updates and updates["status"] == "done":
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_task_done_hooks(session, task)
         await session.commit()

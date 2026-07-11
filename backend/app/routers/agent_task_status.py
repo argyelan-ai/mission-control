@@ -1933,9 +1933,10 @@ async def agent_update_task(
             from app.services.blocker_triage import clear_triage_payload
             await clear_triage_payload(task.id)
 
-    # Vertical-Hooks (z.B. News-Studio Pipeline-Stage auto-advance) — no-op
-    # when no vertical is registered (stripped public release).
-    if updates.get("status") == "done" and task.pipeline_id:
+    # Vertical hooks (news_studio pipeline auto-advance, bench_studio artifact
+    # collection) — no-op when no vertical is registered. Hooks self-filter;
+    # the old `and task.pipeline_id` gate starved non-pipeline verticals.
+    if updates.get("status") == "done":
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_task_done_hooks(session, task)
         await session.commit()

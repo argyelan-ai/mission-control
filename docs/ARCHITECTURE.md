@@ -2,8 +2,8 @@
 
 > **Lebende Dokumentation.** Bei jeder Architektur-Änderung (neue Services, Runtime-Wechsel, Dispatch-Flow, Schema-Migration) muss dieses Dokument angepasst werden. Bei Design-Entscheidungen zusätzlich neues ADR in `docs/decisions/` anlegen.
 
-**Letztes Update:** 2026-05-17
-**Stand:** v0.9 OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
+**Letztes Update:** 2026-07-11
+**Stand:** v0.9+ Benchmark Studio Vertical + Kern-Bausteine (ADR-070); OpenClaw Gateway Sunset complete (Phases 28-31, ADR-039 Accepted)
 
 ---
 
@@ -565,6 +565,79 @@ Prozess killt, ohne ihn neu zu starten (v2-Kandidat, nicht in diesem Fix).
 
 ---
 
+### 7. Vertical-Module + Content-Bausteine (NEU 2026-07-11, ADR-044/069)
+
+#### Vertical-Architektur (ADR-044)
+
+`backend/app/verticals/` ist das strippbare Feature-Paket. pkgutil-Discovery
+(`register_all()` im Lifespan) laedt alle Verticals; eine Installation ohne das
+Verzeichnis bootet unveraendert. Kopplung nur ueber die **Hook-Registry** in
+`backend/app/verticals/hooks.py` (Kern, nie gestrippt) — Kern importiert Verticals nie.
+
+**Verfuegbare Verticals:**
+
+| Vertical | Pfad | Flag in `verticals.ts` | Zweck |
+|---|---|---|---|
+| `news_studio` | `backend/app/verticals/news_studio/` | `newsStudio` | Newsletter/News-Produktion (privat, gitignored im OSS-Release) |
+| `bench_studio` | `backend/app/verticals/bench_studio/` | `benchStudio` (Default an) | LLM-Capability-Demos als Video auf X |
+
+**Hook-Registries (`verticals/hooks.py`):**
+
+| Registry | Aufgerufen aus | Einsatz |
+|---|---|---|
+| `task_done_hooks` | `routers/tasks.py`, `routers/agent_task_status.py` | Callback wenn Agent-Task `done` wird (bench_studio: Artefakt einsammeln) |
+| `tools_md_sections` | Template-Renderer | Zusaetzliche TOOLS.md-Sektionen fuer Agents |
+| `x_post_resolved_hooks` (NEU) | `routers/approvals.py::_handle_x_post_resolution()` | Callback bei Approve/Reject eines `x_post`-Approvals (bench_studio: Challenge → `published`) |
+
+#### Kern-Bausteine fuer Publishing (ADR-065, ADR-070)
+
+| Baustein | Datei | Beschreibung |
+|---|---|---|
+| Text-Post | `services/x_publisher.post_text()` | Tweepy OAuth 1.0a, 4 System-Secrets, Rate-Limit/Duplicate-Klassifikation |
+| Media-Post | `services/x_publisher.post_media()` | Tweepy Media-Upload, `media_paths[]`, Tweet mit `media_ids` |
+| Draft-API | `routers/x_posts.py` | `POST /api/v1/agent/x-posts` (Scope `content:submit`), Idempotenz-Guard |
+| Approve/Post-Hook | `routers/approvals.py` | `_handle_x_post_resolution()` bei `action_type="x_post"` |
+
+#### mc-playwright — Record + Compose (NEU 2026-07-11, ADR-070)
+
+`docker/mc-playwright/` (Playwright-Headless-Service, Profil `browser`) bekommt zwei
+neue Endpunkte fuer den Benchmark-Studio-Workflow:
+
+- `POST /record` — rendert eine lokale HTML-Datei oder URL headless (Playwright), nimmt
+  ein Video auf (webm); gibt `video_path` zurueck.
+- `POST /compose` — nimmt N Video-Pfade + Labels, komponiert via ffmpeg ein Grid-Video
+  mit Beschriftung.
+
+**Volume-Aenderung:** `mc_shared_deliverables` von `ro` auf `rw` in `docker-compose.yml`
+— der Bench-Orchestrator schreibt `/shared-deliverables/bench-<id>/<label>/index.html`,
+mc-playwright liest und schreibt in dasselbe Volume (Praezedenz: mcp-screenshots ro→rw).
+
+#### bench_studio Vertical (NEU 2026-07-11, ADR-070)
+
+Orchestriert die komplette Benchmark-Studio-Kette.
+
+**Backend:** `backend/app/verticals/bench_studio/`
+- `orchestrator.py` — Zustands-Maschine + zwei Generierungs-Pfade (Spark-Direkt vs.
+  Fleet-Dispatch), schreibt bei jedem Schritt Status + Fehler in die DB
+- `drafts.py` — Draft-Idempotenz (409-Guard), Pipeline-Reuse, Edited-Text-wins
+- `routers.py` — `/api/v1/bench/*` (5 Endpunkte, operator-JWT)
+
+**DB-Tabellen (Kern, Migration 0153):**
+- `bench_challenges` — ein Lauf; Status `generating → rendering → composing → review →
+  drafted → published | failed`; `prompt_text` eingefrorene Kopie (Template editierbar)
+- `bench_entries` — ein Modell im Lauf; `task_id` `ondelete=SET NULL` (mc-task-delete-guard);
+  `metrics` JSON (`duration_ms`, `tokens_in`, `tokens_out`, `tok_per_s` bei Spark)
+
+**Frontend:** `frontend-v2/src/verticals/bench_studio/`
+- Studio-Seite `/bench` (Tab *Challenges* + Tab *Prompt Library*)
+- 5-s-Polling fuer Challenge-Fortschritt, DraftDialog mit Zeichenzaehler, Metriken-Toggle
+
+**Prompt Library (Kern, Migration 0152):**
+- Tabelle `prompt_templates` (`id`/`title`/`body`/`tags`/`created_at`/`updated_at`)
+- Generisch — nicht an Challenges gebunden; CRUD unter `/api/v1/prompt-templates`
+
+---
+
 ## Zentrale Flows
 
 ### Task-Lifecycle
@@ -888,6 +961,8 @@ Alle ADRs in `docs/decisions/`:
 ---
 
 ## Änderungshistorie (high-level)
+
+- **2026-07-11** — **Benchmark Studio Vertical + Kern-Bausteine (ADR-070, PRs #97/#101/#105):** Komplette LLM-Capability-Demo-Kette in MC. (1) `x_publisher.post_media()` (tweepy Media-Upload, `media_paths[]`, Kern). (2) mc-playwright `/record` (HTML/URL→webm via Playwright) + `/compose` (N Videos→Grid via ffmpeg), ffmpeg ins Image, `mc_shared_deliverables`-Mount ro→rw. (3) Kern-Tabelle `prompt_templates` (Migration 0153, generische Prompt Library, CRUD `/api/v1/prompt-templates`). (4) Vertical `bench_studio`: Kern-Tabellen `bench_challenges`+`bench_entries` (Migration 0154, `task_id ondelete=SET NULL`), Orchestrator-Zustands-Maschine (`generating→rendering→composing→review→drafted→published`), Router `/api/v1/bench/*` (5 Endpunkte, operator-JWT), Studio-Seite `/bench` (Challenges + Prompt Library, 5-s-Polling), DraftDialog, Flag `benchStudio` (strippbar). (5) `x_post_resolved_hooks` (neue Registry in `verticals/hooks.py`) damit das Vertical den Challenge-Status flippen kann ohne dass der Kern das Vertical importiert (ADR-044-Kopplungsrichtung). `task_done_hooks` von `pipeline_id`-Gate entgated (Bench-Agent-Tasks haben keine Pipeline; Hooks self-filtern). Zwei Generierungspfade: Spark-Direkt (vLLM `/chat/completions`, Usage-Metriken) + Fleet-Dispatch (normaler Agent-Task via `auto_dispatch_task`, Artefakt-Einsammlung via task_done-Hook). Draft-Idempotenz 409-Guard + Pipeline-Reuse. Inbox-ApprovalCard: x_post-Preview mit Media. Publish-Teil unveraendert Approval + ContentPipeline (ADR-065, kein zweiter Lifecycle). Bekannte Design-Luecken: Crash-Recovery-Gap in rendering/composing (Operator-Reset via rerender), theoretisches Race-Window 409-Guard, expired-pending blockiert Re-Draft. ADR-070.
 
 - **2026-07-10** — **Agent Onboarding Wizard + Generic Host-Agent Provisioning (ADR-063):** Ersetzt die drei alten Create-Modals (cli-bridge Quick-Create, Legacy-Gateway-Dialog, Ad-hoc-Host-Flow) durch einen einzigen `frontend-v2/src/app/agents/wizard/`-Wizard, der jede Runtime über `POST /agents` mit Create-Time `harness`/`scopes`/`soul_md`/`skill_filter` erstellt. Neue seiteneffektfreie Live-Vorschau `POST /agents/preview-soul` rendert SOUL.md.j2 gegen ein transientes, nicht-persistiertes `Agent`-Objekt (kein DB-Write beim Tippen). Neuer generischer Staging-Service `services/host_provisioning.py` rendert `.plist`+`run.sh`+`agent.env` nach `~/.mc/agents/<slug>/` für beliebige Host-Runtime-Agenten (Hermes' dedizierter `bootstrap_hermes_agent`-Pfad bleibt für `runtime_type=="hermes"` unverändert — der neue Service ist der Fallback für alles andere); `launchctl`-Load bleibt hinter `settings.host_agent_autoload_enabled` gegated (Default aus) — Staging und Laden sind bewusst zwei getrennte, einzeln zustimmbare Schritte. **Race-Fix:** `create_agent` schloss `host` bisher nicht von `_provision_agent_background` aus — der No-op-Host-Branch in `provisioning.py` flippte `provision_status` fälschlich auf `"provisioned"` bevor der Wizard seinen expliziten `POST /provision`-Call überhaupt abgesetzt hatte; `host` steht jetzt in der Exclusion-Liste neben `free-code-bridge`/`manual`. Verifiziert: der Boss-eigene Agent-Create-Pfad (`agent_scoped.py`) kann `agent_runtime` nie setzen (Schema-Default bleibt `cli-bridge`) — der Fix betrifft ihn nicht. Neuer runtime-bewusster Readiness-Endpoint `POST /agents/{id}/health-check` (cli-bridge: Helper-Reachability + Heartbeat; host: `last_seen_at`-Frische) ersetzt den mit dem Gateway (ADR-039) entfallenen synchronen Trigger-Dry-Run. **Frontend-Fix:** `ReviewStep` verwarf bisher die von `provision()` zurückgegebene, rotierte Token-Antwort und zeigte weiter den toten Create-Time-Token — der frische Token wird jetzt in den Wizard-State übernommen. ADR-063.
 - **2026-07-10** — **jarvis_core + Jarvis Telegram-Inbound (ADR-061):** Jarvis wird kanal-agnostisch und mobil. Neues Repo-Root-Package `jarvis_core/` bündelt die bisher im `voice_worker` verdrahtete Persona (`persona.py`: `PERSONA_CORE` + `VOICE_ADDENDUM`/`TELEGRAM_ADDENDUM`, `build_instructions(channel, briefing_ctx)`), Kanal-Capabilities (`channels.py`: `VOICE`/`TELEGRAM` mit `supports_cards`/`supports_graph_highlight`), provider-neutrale Tool-Specs mit Kanal-Degradation (`tools.py`: `ToolSpec` + Handler `(client, channel, **kwargs)`, `openai_tool_schemas`, `dispatch`; `show_*` pusht am Desk eine Card, auf Telegram Text/Link; `highlight_graph` voice-only → `desk_only`), den per `git mv` verschobenen HTTP-Tool-Client (`mc_client.py`) und ein Text-Gehirn (`brain.py`: `JarvisBrain` mit OpenAI Function-Calling-Loop über `httpx` — keine neue Dependency — plus `transcribe_audio` für ogg/opus direkt, kein ffmpeg). `voice_worker/main.py` ist jetzt ein dünner Wrapper (12 `@function_tool`-Methoden delegieren an die geteilten Handler mit `channel=VOICE`; Verhalten identisch, alle Voice-Tests grün). **Telegram-Inbound:** `services/telegram_bot.py` abonniert `message`-Updates (getUpdates-Polling nur gestartet wenn gegatet) + `get_file_bytes()`; `services/jarvis_telegram.py::JarvisTelegramHandler` mit **hartem chat_id-Gate** (nur `settings.telegram_chat_id`, sonst geloggt+ignoriert, nie Reply an Fremde), Text- und Voice-Flow (Sprachnotiz → Download → OpenAI-Transcribe → Brain; Transkript wird der Antwort vorangestellt), Konversations-History pro Chat in Redis (20 Messages, TTL 24h). Tool-Calls laufen über den agent-scoped API-Pfad mit dem Jarvis-Token (kein Auth-Bypass, keine Direkt-DB). **Feature-Gate** `JARVIS_TELEGRAM_ENABLED` (Default false) + `OPENAI_API_KEY` + `JARVIS_AGENT_TOKEN` — sonst Verhalten exakt wie zuvor (nur Approval-URL-Buttons). **Deploy:** voice-worker Build-Kontext auf Repo-Root gehoben (Dockerfile kopiert `jarvis_core/` ins Image); backend behält Kontext `./backend` (GHCR-Pfad) und bekommt `jarvis_core` als Live-Mount `./jarvis_core:/app/jarvis_core:ro` (wie templates/docker), Import lazy+gated. Neue Settings `jarvis_telegram_enabled`/`openai_api_key`/`jarvis_text_model`/`jarvis_stt_model`/`jarvis_agent_token`/`mc_backend_url`. Tests: `test_jarvis_core_tools.py`, `test_jarvis_brain.py`, `test_jarvis_telegram_handler.py`. ADR-061.
