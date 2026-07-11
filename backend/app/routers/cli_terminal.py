@@ -783,6 +783,13 @@ _HOST_AGENT_TMUX_TARGETS: dict[str, dict[str, str]] = {
         # Socket is rendered as needed — default value here is enough for tests.
         "socket": _user_default_tmux_socket(),
     },
+    # Grok: user-default tmux, session 'grok' — the persistent grok TUI the
+    # grok-bridge pastes dispatches into (ADR-068, paste model). Before ADR-068
+    # grok was headless with no mountable session.
+    "grok": {
+        "session": "grok",
+        "socket": _user_default_tmux_socket(),
+    },
 }
 
 
