@@ -173,7 +173,8 @@ async def test_sync_host_agent_model_token_stable_across_repeated_syncs(
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
     d = tmp_path / ".mc" / "agents" / "hermes"
     d.mkdir(parents=True)
-    token = "2e3f61e44cb83a5e4e38dc04509e6ce9cd8bcf0c46788d494dbaa4f3bec1017f"
+    # deliberately low-entropy dummy — a realistic hex token trips the gitleaks CI gate
+    token = "aa11" * 16
     (d / "agent.env").write_text(f"MC_AGENT_TOKEN='{token}'\nOPENAI_MODEL='old'\n")
 
     rt = _mk_rt(async_session)
