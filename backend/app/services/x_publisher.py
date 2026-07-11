@@ -30,6 +30,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -80,6 +81,62 @@ def validate_draft(text: str) -> DraftValidation:
         warnings.append(LINK_COST_HINT)
 
     return DraftValidation(ok=not errors, errors=errors, warnings=warnings, has_link=has_link)
+
+
+# ── Media validation ────────────────────────────────────────────────────────
+
+MEDIA_ROOT = Path("/shared-deliverables")  # backend mounts this shared volume read-only
+VIDEO_EXTENSIONS = {".mp4"}
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
+MAX_IMAGES_PER_TWEET = 4
+
+
+def validate_media(media_paths: list[str], *, root: Path | None = None) -> DraftValidation:
+    """Validates a tweet media set: 1 video (mp4) OR up to 4 images (png/jpg),
+    never mixed; files must exist and live under `root` (default:
+    /shared-deliverables — the volume shared with mc-playwright)."""
+    effective_root = (root or MEDIA_ROOT).resolve()
+    errors: list[str] = []
+
+    if not media_paths:
+        errors.append("media_paths ist leer")
+        return DraftValidation(ok=False, errors=errors)
+
+    videos: list[Path] = []
+    images: list[Path] = []
+    for raw in media_paths:
+        path = Path(raw)
+        if not path.is_absolute():
+            errors.append(f"Pfad muss absolut sein: {raw}")
+            continue
+        resolved = path.resolve()
+        if not resolved.is_relative_to(effective_root):
+            errors.append(f"Pfad liegt nicht unter {effective_root}: {raw}")
+            continue
+        suffix = resolved.suffix.lower()
+        if suffix in VIDEO_EXTENSIONS:
+            videos.append(resolved)
+        elif suffix in IMAGE_EXTENSIONS:
+            images.append(resolved)
+        else:
+            errors.append(f"Nicht unterstuetzter Medientyp '{suffix}': {raw}")
+            continue
+        if not resolved.is_file():
+            errors.append(f"Datei existiert nicht: {raw}")
+
+    if videos and images:
+        errors.append(
+            "Video und Bilder im selben Tweet sind nicht erlaubt "
+            "(1 Video ODER bis zu 4 Bilder)"
+        )
+    if len(videos) > 1:
+        errors.append(f"Nur 1 Video pro Tweet erlaubt ({len(videos)} uebergeben)")
+    if len(images) > MAX_IMAGES_PER_TWEET:
+        errors.append(
+            f"Maximal {MAX_IMAGES_PER_TWEET} Bilder pro Tweet ({len(images)} uebergeben)"
+        )
+
+    return DraftValidation(ok=not errors, errors=errors)
 
 
 class XPublisherError(Exception):

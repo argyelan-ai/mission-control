@@ -53,6 +53,96 @@ def test_validate_draft_link_cost_hint():
     assert any("Kosten" in w for w in result.warnings)
 
 
+# ── validate_media ───────────────────────────────────────────────────────────
+
+
+def _touch(root, rel: str):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(b"x")
+    return p
+
+
+def test_validate_media_empty_list_fails(tmp_path):
+    result = x_publisher.validate_media([], root=tmp_path)
+    assert result.ok is False
+    assert "leer" in result.errors[0].lower()
+
+
+def test_validate_media_single_video_ok(tmp_path):
+    video = _touch(tmp_path, "bench-1/grid.mp4")
+    result = x_publisher.validate_media([str(video)], root=tmp_path)
+    assert result.ok is True
+    assert result.errors == []
+
+
+def test_validate_media_four_images_ok(tmp_path):
+    paths = [str(_touch(tmp_path, f"bench-1/shot-{i}.png")) for i in range(4)]
+    result = x_publisher.validate_media(paths, root=tmp_path)
+    assert result.ok is True
+
+
+def test_validate_media_five_images_fails(tmp_path):
+    paths = [str(_touch(tmp_path, f"bench-1/shot-{i}.jpg")) for i in range(5)]
+    result = x_publisher.validate_media(paths, root=tmp_path)
+    assert result.ok is False
+    assert any("4" in e for e in result.errors)
+
+
+def test_validate_media_two_videos_fails(tmp_path):
+    paths = [str(_touch(tmp_path, f"bench-1/v{i}.mp4")) for i in range(2)]
+    result = x_publisher.validate_media(paths, root=tmp_path)
+    assert result.ok is False
+    assert any("1 Video" in e for e in result.errors)
+
+
+def test_validate_media_mixed_video_and_image_fails(tmp_path):
+    video = _touch(tmp_path, "bench-1/grid.mp4")
+    image = _touch(tmp_path, "bench-1/shot.png")
+    result = x_publisher.validate_media([str(video), str(image)], root=tmp_path)
+    assert result.ok is False
+    assert any("nicht erlaubt" in e for e in result.errors)
+
+
+def test_validate_media_unsupported_extension_fails(tmp_path):
+    gif = _touch(tmp_path, "bench-1/anim.gif")
+    result = x_publisher.validate_media([str(gif)], root=tmp_path)
+    assert result.ok is False
+    assert any(".gif" in e for e in result.errors)
+
+
+def test_validate_media_missing_file_fails(tmp_path):
+    result = x_publisher.validate_media([str(tmp_path / "bench-1/nope.png")], root=tmp_path)
+    assert result.ok is False
+    assert any("existiert nicht" in e for e in result.errors)
+
+
+def test_validate_media_escaping_containment_fails(tmp_path):
+    inside = tmp_path / "deliverables"
+    inside.mkdir()
+    outside = _touch(tmp_path, "outside/evil.png")
+    result = x_publisher.validate_media(
+        [str(inside / ".." / "outside" / "evil.png")], root=inside
+    )
+    assert result.ok is False
+    assert any("nicht unter" in e for e in result.errors)
+    # sanity: the file actually exists, only containment rejects it
+    assert outside.is_file()
+
+
+def test_validate_media_relative_path_fails(tmp_path):
+    result = x_publisher.validate_media(["bench-1/shot.png"], root=tmp_path)
+    assert result.ok is False
+    assert any("absolut" in e for e in result.errors)
+
+
+def test_validate_media_default_root_is_shared_deliverables():
+    # default root: a path clearly outside /shared-deliverables is rejected
+    result = x_publisher.validate_media(["/etc/passwd.png"])
+    assert result.ok is False
+    assert any("/shared-deliverables" in e for e in result.errors)
+
+
 # ── post_text: missing secrets ──────────────────────────────────────────────
 
 
