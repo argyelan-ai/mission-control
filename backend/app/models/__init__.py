@@ -46,6 +46,7 @@ from app.models.file_index import FileIndexEntry  # noqa: F401
 from app.models.repo import Repo  # noqa: F401
 from app.models.loop import Loop, LoopRound  # noqa: F401
 from app.models.reference_file import ReferenceFile  # noqa: F401
+from app.models.prompt_template import PromptTemplate  # noqa: F401
 
 __all__ = [
     "AgentMeeting",
@@ -112,4 +113,5 @@ __all__ = [
     "ModelPrice",
     "ModelUsageHarvestState",
     "FileIndexEntry",
+    "PromptTemplate",
 ]
