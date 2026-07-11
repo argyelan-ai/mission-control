@@ -73,10 +73,14 @@ async def _create_workflow_data(*, human_review_required=None):
             task_id=task_id, author_type="agent", author_agent_id=dev_id,
             comment_type="reflection",
             content=(
-                "## Was wurde gemacht\nFeature Y implementiert\n\n"
-                "## Was hat funktioniert\nTDD\n\n"
-                "## Was war unklar\nNichts\n\n"
-                "## Lesson fuer Agent-Memory\nKeine."
+                # Body must carry >=80 chars below the headers — the W1
+                # reflection validator rejects header-only skeletons.
+                "## Was wurde gemacht\nFeature Y implementiert inklusive Unit-Tests "
+                "und Doku-Update im README.\n\n"
+                "## Was hat funktioniert\nTDD-Zyklus lief sauber durch, alle Tests "
+                "auf Anhieb gruen.\n\n"
+                "## Was war unklar\nNichts Nennenswertes.\n\n"
+                "## Lesson fuer Agent-Memory\nKeine neue Lesson."
             ),
         ))
         await s.commit()
