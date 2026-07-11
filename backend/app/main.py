@@ -94,6 +94,7 @@ from app.routers import (
     voice,
     workflows,
     webhooks,
+    x_posts,
 )
 from app.services.embedding_retry import embedding_retry
 from app.services.cli_update_check import cli_update_checker
@@ -726,6 +727,7 @@ app.include_router(agent_scoped.router)
 app.include_router(agent_comments.router)  # REF-02 step 3 — extracted from agent_scoped (Plan 04-08 finalizes)
 app.include_router(agent_task_status.router)  # REF-02 step 4 — extracted from agent_scoped (Plan 04-08 finalizes)
 app.include_router(install_requests.router)
+app.include_router(x_posts.router)
 app.include_router(approvals.router)
 app.include_router(mcp_servers.router)
 app.include_router(projects.router)

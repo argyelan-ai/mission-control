@@ -158,6 +158,109 @@ async def _post_install_callback(
     )
 
 
+async def _handle_x_post_resolution(
+    session: AsyncSession,
+    approval: Approval,
+    resolution_status: str,
+) -> None:
+    """Post-resolve hook for action_type == "x_post".
+
+    On approve: calls XPublisher.post_text() and persists the outcome —
+    tweet URL in approval.resolver_note (operator-visible) + activity_event
+    (detail carries the structured result for the frontend/API). If the
+    draft came from a ContentPipeline row (content_pipeline_id in payload),
+    that row's published_url/published_platform/published_at/status are
+    updated too — reusing the existing content lifecycle instead of adding
+    a parallel one.
+
+    On reject: no API call, event only. Never raises — API-side failures
+    (rate-limit/403/duplicate/missing secrets) become a clean failed result,
+    not a crash of the approval-resolve endpoint.
+    """
+    payload = approval.payload or {}
+    text = payload.get("text", "")
+
+    if resolution_status != "approved":
+        await emit_event(
+            session,
+            event_type="x_post.rejected",
+            title=f"X-Post abgelehnt: {text[:80]}",
+            severity="info",
+            board_id=approval.board_id,
+            agent_id=approval.agent_id,
+            task_id=approval.task_id,
+            detail={"approval_id": str(approval.id)},
+        )
+        return
+
+    from app.services import x_publisher
+
+    result = await x_publisher.post_text(session, text)
+
+    note_suffix = (
+        f"\n[X-Post] {result['url']}" if result.get("ok")
+        else f"\n[X-Post FAILED, {result.get('error_type')}] {result.get('error')}"
+    )
+    approval.resolver_note = ((approval.resolver_note or "") + note_suffix)[:2000]
+    session.add(approval)
+    await session.commit()
+
+    content_pipeline_id = payload.get("content_pipeline_id")
+    if result.get("ok") and content_pipeline_id:
+        from app.models.content import ContentPipeline
+
+        pipeline = await session.get(ContentPipeline, uuid.UUID(content_pipeline_id))
+        if pipeline is not None:
+            pipeline.published_url = result["url"]
+            pipeline.published_platform = "twitter"
+            pipeline.published_at = datetime.utcnow()
+            pipeline.status = "published"
+            session.add(pipeline)
+            await session.commit()
+
+    await emit_event(
+        session,
+        event_type="x_post.published" if result.get("ok") else "x_post.failed",
+        title=(
+            f"X-Post veroeffentlicht: {result.get('url')}" if result.get("ok")
+            else f"X-Post fehlgeschlagen ({result.get('error_type')}): {result.get('error')}"
+        ),
+        severity="info" if result.get("ok") else "warning",
+        board_id=approval.board_id,
+        agent_id=approval.agent_id,
+        task_id=approval.task_id,
+        detail={"approval_id": str(approval.id), **result},
+    )
+
+    # Callback comment on the requester's task, mirrors _post_install_callback
+    requester_task_id_str = payload.get("requester_task_id")
+    if requester_task_id_str:
+        from app.models.task import Task, TaskComment
+
+        try:
+            task = await session.get(Task, uuid.UUID(requester_task_id_str))
+        except ValueError:
+            task = None
+        if task is not None:
+            if result.get("ok"):
+                content = (
+                    f"**X-Post veroeffentlicht** (Approval `{approval.id}`):\n"
+                    f"{result['url']}"
+                )
+            else:
+                content = (
+                    f"**X-Post fehlgeschlagen** (Approval `{approval.id}`):\n"
+                    f"`{result.get('error_type')}` — {result.get('error')}"
+                )
+            session.add(TaskComment(
+                task_id=task.id,
+                author_type="system",
+                comment_type="x_post_completed" if result.get("ok") else "x_post_failed",
+                content=content,
+            ))
+            await session.commit()
+
+
 @router.get("/approvals")
 async def list_approvals(
     session: AsyncSession = Depends(get_session),
@@ -577,6 +680,10 @@ async def resolve_approval(
                     "reason": payload.resolver_note or "",
                 },
             )
+
+    # ── X (Twitter) Post: approved → tweepy post via XPublisher ──
+    if approval.action_type == "x_post":
+        await _handle_x_post_resolution(session, approval, payload.status)
 
     # ── Install-Executor Hook + Requester-Callback ──
     if (

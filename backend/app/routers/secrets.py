@@ -93,6 +93,34 @@ PROVIDER_TEMPLATES = [
         "description": "GitHub-User/Org, unter dem MC Projekt-Repos anlegt — auch via Settings → GitHub setzbar",
         "placeholder": "my-github-user",
     },
+    {
+        "provider": "x",
+        "key": "x_api_key",
+        "label": "X (Twitter) API Key",
+        "description": "Consumer Key aus dem X Developer Portal — für den X-Post-Publisher (ADR-065)",
+        "placeholder": "...",
+    },
+    {
+        "provider": "x",
+        "key": "x_api_secret",
+        "label": "X (Twitter) API Key Secret",
+        "description": "Consumer Secret aus dem X Developer Portal — für den X-Post-Publisher (ADR-065)",
+        "placeholder": "...",
+    },
+    {
+        "provider": "x",
+        "key": "x_access_token",
+        "label": "X (Twitter) Access Token",
+        "description": "OAuth 1.0a Access Token des postenden Accounts — für den X-Post-Publisher (ADR-065)",
+        "placeholder": "...",
+    },
+    {
+        "provider": "x",
+        "key": "x_access_token_secret",
+        "label": "X (Twitter) Access Token Secret",
+        "description": "OAuth 1.0a Access Token Secret des postenden Accounts — für den X-Post-Publisher (ADR-065)",
+        "placeholder": "...",
+    },
 ]
 
 
