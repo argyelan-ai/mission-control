@@ -434,17 +434,31 @@ class IntelligenceService:
                 "severity": "warning",
             })
 
-        # Emit anomaly events
+        # Emit anomaly events — deduped per cooldown window. A persistent
+        # 7-day condition (e.g. a low-success agent) would otherwise re-fire an
+        # `intelligence.anomaly` warning every analysis cycle, and each warning
+        # fans out to the Discord ops webhook + #mc-alerts channel → spam. The
+        # cooldown key suppresses only the *push*; the anomaly still appears in
+        # the returned list (dashboard + LLM destillation stay complete).
+        cooldown = config.anomaly_alert_cooldown_seconds if config else 21600
+        redis = await get_redis()
         for anomaly in anomalies:
-            if anomaly["severity"] == "warning":
-                await emit_event(
-                    session,
-                    "intelligence.anomaly",
-                    f"Intelligence: {anomaly['description']}",
-                    severity="warning",
-                    agent_id=uuid.UUID(anomaly["agent_id"]) if anomaly.get("agent_id") else None,
-                    detail={"anomaly_type": anomaly["type"]},
-                )
+            if anomaly["severity"] != "warning":
+                continue
+            dedup_key = RedisKeys.intelligence_anomaly_dedup(
+                anomaly["type"], anomaly.get("agent_id") or "global"
+            )
+            if await redis.get(dedup_key):
+                continue  # Already alerted within cooldown
+            await emit_event(
+                session,
+                "intelligence.anomaly",
+                f"Intelligence: {anomaly['description']}",
+                severity="warning",
+                agent_id=uuid.UUID(anomaly["agent_id"]) if anomaly.get("agent_id") else None,
+                detail={"anomaly_type": anomaly["type"]},
+            )
+            await redis.set(dedup_key, "1", ex=cooldown)
 
         return anomalies
 

@@ -241,6 +241,13 @@ class RedisKeys:
     def intelligence_metrics_dedup(agent_id: str, hour_key: str) -> str:
         return f"mc:intelligence:metrics:{agent_id}:{hour_key}"
 
+    @staticmethod
+    def intelligence_anomaly_dedup(anomaly_type: str, target: str) -> str:
+        """Cooldown key so a persistent anomaly pushes to Discord at most once
+        per cooldown window instead of every analysis cycle. `target` is the
+        agent_id for agent-scoped anomalies, else 'global'."""
+        return f"mc:intelligence:anomaly:{anomaly_type}:{target}"
+
     # ── Task Queue / Dispatch ────────────────────────────────────────────
     @staticmethod
     def agent_task_queue(agent_id: str) -> str:
