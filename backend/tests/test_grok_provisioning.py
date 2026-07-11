@@ -1,8 +1,8 @@
 """ADR-066 — Tests for grok host-side provisioning (Grok Build CLI as host harness).
 
-Mirrors test_hermes_provisioning.py but for the headless model: env file carries
-only MC_* (no provider env), tmux_session is None, and the provision endpoint
-routes through the HostHarnessAdapter registry to bootstrap_grok_agent.
+Mirrors test_hermes_provisioning.py: env file carries only MC_* (no provider env),
+tmux_session is the persistent grok TUI session (ADR-068), and the provision
+endpoint routes through the HostHarnessAdapter registry to bootstrap_grok_agent.
 """
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ async def test_bootstrap_renders_env_file_mc_only(async_session, tmp_path, monke
     assert "OPENAI_MODEL" not in content
     assert "ANTHROPIC" not in content
 
-    assert result["tmux_session"] is None  # headless — no persistent session
+    assert result["tmux_session"] == "grok"  # ADR-068: persistent TUI (paste model)
     assert result["plist_loaded"] is True
     assert result["token"]
 
@@ -130,7 +130,7 @@ async def test_grok_provision_endpoint_dispatches_adapter(
         "env_path": str(tmp_path / ".mc" / "agents" / "grok" / "agent.env"),
         "plist_loaded": True,
         "plist_already": False,
-        "tmux_session": None,
+        "tmux_session": "grok",
         "workspace_path": str(tmp_path / ".mc" / "workspaces" / "grok"),
     }
     with _patch_redis(fake_redis), patch(
@@ -143,7 +143,7 @@ async def test_grok_provision_endpoint_dispatches_adapter(
     body = resp.json()
     assert body["status"] == "provisioned"
     assert body["token"] == "grok-token-once"
-    assert body["tmux_session"] is None
+    assert body["tmux_session"] == "grok"
     mocked.assert_awaited_once()
 
 

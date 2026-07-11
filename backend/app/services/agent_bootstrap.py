@@ -46,6 +46,9 @@ HERMES_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.hermes-bridge.plist"
 
 # Grok Build CLI host harness (ADR-066). Headless per-dispatch — no tmux session.
 GROK_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.grok-bridge.plist"
+# ADR-068: grok now runs as a persistent TUI in a tmux session (paste model),
+# not a headless per-dispatch subprocess. Session name = slug convention.
+GROK_TMUX_SESSION = "grok"
 
 
 def _home_host() -> Path:
@@ -340,8 +343,9 @@ async def bootstrap_grok_agent(
       8. emit agent.grok_provisioned event.
 
     Returns the same dict shape as bootstrap_hermes_agent (the provision endpoint
-    reads these keys uniformly). `tmux_session` is None — grok has no persistent
-    session; each dispatch is a one-shot subprocess.
+    reads these keys uniformly). `tmux_session` is the persistent grok TUI session
+    (ADR-068) — the Sessions page mounts its terminal via
+    cli_terminal._HOST_AGENT_TMUX_TARGETS["grok"].
     """
     home = _home_host()
     config_dir = home / ".mc" / "agents" / "grok"
@@ -393,7 +397,7 @@ async def bootstrap_grok_agent(
     await emit_event(
         session,
         "agent.grok_provisioned",
-        f"{agent.name} (Grok host worker) provisioniert — headless grok-bridge",
+        f"{agent.name} (Grok host worker) provisioniert — grok-bridge TUI session '{GROK_TMUX_SESSION}'",
         severity="info",
         agent_id=agent.id,
         board_id=agent.board_id,
@@ -404,6 +408,6 @@ async def bootstrap_grok_agent(
         "env_path": str(env_path),
         "plist_loaded": plist_result["loaded"],
         "plist_already": plist_result["already"],
-        "tmux_session": None,  # grok is headless — no persistent session
+        "tmux_session": GROK_TMUX_SESSION,  # ADR-068: persistent TUI (paste model)
         "workspace_path": str(workspace),
     }
