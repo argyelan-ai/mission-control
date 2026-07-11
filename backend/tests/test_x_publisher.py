@@ -304,3 +304,126 @@ async def test_load_api_missing_secrets_raises():
         ):
             with pytest.raises(x_publisher.XPublisherError):
                 await x_publisher._load_api(session)
+
+
+# ── post_media: happy paths ──────────────────────────────────────────────────
+
+
+def _processing_status(state: str | None, check_after: int = 0):
+    status = MagicMock()
+    if state is None:
+        status.processing_info = None
+    else:
+        status.processing_info = {"state": state, "check_after_secs": check_after}
+    return status
+
+
+def _mock_tweet_client(tweet_id: str = "555"):
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.data = {"id": tweet_id}
+    mock_client.create_tweet.return_value = mock_response
+    return mock_client
+
+
+@pytest.mark.asyncio
+async def test_post_media_images_success(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    img1 = _touch(tmp_path, "bench-1/shot-1.png")
+    img2 = _touch(tmp_path, "bench-1/shot-2.jpg")
+
+    mock_api = MagicMock()
+    media1, media2 = MagicMock(), MagicMock()
+    media1.media_id, media1.processing_info = 111, None
+    media2.media_id, media2.processing_info = 222, None
+    mock_api.media_upload.side_effect = [media1, media2]
+    mock_client = _mock_tweet_client("555")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(
+                session, "Two screenshots", [str(img1), str(img2)]
+            )
+
+    assert result["ok"] is True
+    assert result["tweet_id"] == "555"
+    assert result["url"] == "https://x.com/i/status/555"
+    assert result["media_ids"] == ["111", "222"]
+    mock_api.media_upload.assert_any_call(
+        str(img1), media_category="tweet_image", chunked=False
+    )
+    mock_api.media_upload.assert_any_call(
+        str(img2), media_category="tweet_image", chunked=False
+    )
+    mock_api.get_media_upload_status.assert_not_called()  # images: no processing wait
+    mock_client.create_tweet.assert_called_once_with(
+        text="Two screenshots", media_ids=["111", "222"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_media_video_waits_for_processing(tmp_path, monkeypatch):
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    video = _touch(tmp_path, "bench-1/grid.mp4")
+
+    mock_api = MagicMock()
+    media = MagicMock()
+    media.media_id = 4242
+    mock_api.media_upload.return_value = media
+    mock_api.get_media_upload_status.side_effect = [
+        _processing_status("in_progress", check_after=0),
+        _processing_status("succeeded"),
+    ]
+    mock_client = _mock_tweet_client("777")
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Grid video", [str(video)])
+
+    assert result["ok"] is True
+    assert result["tweet_id"] == "777"
+    assert result["media_ids"] == ["4242"]
+    mock_api.media_upload.assert_called_once_with(
+        str(video), media_category="tweet_video", chunked=True
+    )
+    assert mock_api.get_media_upload_status.call_count == 2
+    mock_client.create_tweet.assert_called_once_with(
+        text="Grid video", media_ids=["4242"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_post_media_video_no_processing_info_returns_immediately(tmp_path, monkeypatch):
+    # tweepy's chunked upload may already have waited for async finalize —
+    # a status without processing_info means "done", no further polling.
+    monkeypatch.setattr(x_publisher, "MEDIA_ROOT", tmp_path)
+    video = _touch(tmp_path, "bench-1/grid.mp4")
+
+    mock_api = MagicMock()
+    media = MagicMock()
+    media.media_id = 4242
+    mock_api.media_upload.return_value = media
+    mock_api.get_media_upload_status.return_value = _processing_status(None)
+    mock_client = _mock_tweet_client()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as session:
+        with patch(
+            "app.services.x_publisher.get_secret_plaintext_by_key",
+            new=AsyncMock(side_effect=_fake_secret_lookup),
+        ), patch("tweepy.Client", return_value=mock_client), patch(
+            "tweepy.OAuth1UserHandler", return_value=MagicMock()
+        ), patch("tweepy.API", return_value=mock_api):
+            result = await x_publisher.post_media(session, "Grid video", [str(video)])
+
+    assert result["ok"] is True
+    assert mock_api.get_media_upload_status.call_count == 1

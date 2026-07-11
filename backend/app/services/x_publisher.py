@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -244,4 +245,115 @@ async def post_text(session: AsyncSession, text: str) -> dict[str, Any]:
         "ok": True,
         "tweet_id": tweet_id,
         "url": f"https://x.com/i/status/{tweet_id}",
+    }
+
+
+# ── Media posting ────────────────────────────────────────────────────────────
+
+VIDEO_PROCESSING_TIMEOUT_S = 300  # X video processing rarely exceeds ~1 min for <2 min clips
+
+
+class MediaUploadError(Exception):
+    """Internal: media upload/processing failed — converted to a clean Result
+    ("media_upload_failed") by post_media, never propagated to callers."""
+
+
+async def _wait_for_video_processing(api, media_id: int | str) -> None:
+    """Polls the v1.1 STATUS endpoint until X finished processing the video.
+
+    Chunked video uploads are async on X's side: FINALIZE returns
+    processing_info with state pending/in_progress; the media_id is only
+    usable in create_tweet once state == succeeded. tweepy 4.x may already
+    wait during media_upload (wait_for_async_finalize) — in that case the
+    first STATUS poll returns succeeded/no processing_info and we return
+    immediately. Raises MediaUploadError on state == failed or timeout.
+    """
+    deadline = time.monotonic() + VIDEO_PROCESSING_TIMEOUT_S
+    while True:
+        status = await asyncio.to_thread(api.get_media_upload_status, media_id)
+        info = getattr(status, "processing_info", None) or {}
+        state = info.get("state")
+        if not info or state == "succeeded":
+            return
+        if state == "failed":
+            error = info.get("error") or {}
+            raise MediaUploadError(
+                "X-Video-Processing fehlgeschlagen: "
+                f"{error.get('message', state)} (media_id={media_id})"
+            )
+        if time.monotonic() > deadline:
+            raise MediaUploadError(
+                f"X-Video-Processing Timeout nach {VIDEO_PROCESSING_TIMEOUT_S}s "
+                f"(media_id={media_id}, state={state})"
+            )
+        await asyncio.sleep(info.get("check_after_secs", 2))
+
+
+async def _upload_media(api, media_paths: list[str]) -> list[str]:
+    """Uploads each file via the v1.1 media endpoint. Videos use chunked
+    upload + processing wait; images a simple upload. Returns media_ids
+    in input order. Raises MediaUploadError / tweepy exceptions on failure."""
+    media_ids: list[str] = []
+    for raw in media_paths:
+        is_video = raw.lower().endswith(".mp4")
+        media = await asyncio.to_thread(
+            api.media_upload,
+            raw,
+            media_category="tweet_video" if is_video else "tweet_image",
+            chunked=is_video,
+        )
+        if is_video:
+            await _wait_for_video_processing(api, media.media_id)
+        media_ids.append(str(media.media_id))
+    return media_ids
+
+
+async def post_media(
+    session: AsyncSession, text: str, media_paths: list[str]
+) -> dict[str, Any]:
+    """Posts a tweet with media (1 video OR up to 4 images) via tweepy.
+    Returns a Result dict, never raises for API-side failures — mirrors
+    post_text.
+
+    Returns:
+        {"ok": True, "tweet_id": str, "url": str, "media_ids": list[str]}
+        {"ok": False, "error_type": str, "error": str}
+    """
+    validation = validate_draft(text)
+    if not validation.ok:
+        return {"ok": False, "error_type": "invalid_draft", "error": "; ".join(validation.errors)}
+
+    media_validation = validate_media(media_paths)
+    if not media_validation.ok:
+        return {"ok": False, "error_type": "invalid_media", "error": "; ".join(media_validation.errors)}
+
+    try:
+        client = await _load_client(session)
+        api = await _load_api(session)
+    except XPublisherError as e:
+        return {"ok": False, "error_type": "missing_secrets", "error": str(e)}
+
+    try:
+        media_ids = await _upload_media(api, media_paths)
+    except MediaUploadError as exc:
+        log.warning("X media upload failed: %s", exc)
+        return {"ok": False, "error_type": "media_upload_failed", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001 — deliberately broad, classified below
+        _, message = _classify_tweepy_error(exc)
+        log.warning("X media upload failed (media_upload_failed): %s", message)
+        return {"ok": False, "error_type": "media_upload_failed", "error": message}
+
+    try:
+        response = await asyncio.to_thread(client.create_tweet, text=text, media_ids=media_ids)
+    except Exception as exc:  # noqa: BLE001 — deliberately broad, classified below
+        error_type, message = _classify_tweepy_error(exc)
+        log.warning("X media post failed (%s): %s", error_type, message)
+        return {"ok": False, "error_type": error_type, "error": message}
+
+    tweet_id = str(response.data["id"])
+    return {
+        "ok": True,
+        "tweet_id": tweet_id,
+        "url": f"https://x.com/i/status/{tweet_id}",
+        "media_ids": media_ids,
     }
