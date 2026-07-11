@@ -73,6 +73,7 @@ async def create_challenge(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
+    # Edited text wins over template body. Only use template body as fallback when prompt_text is empty.
     prompt_text = body.prompt_text
     if body.prompt_template_id is not None:
         from app.models.prompt_template import PromptTemplate  # PR 2
@@ -80,7 +81,9 @@ async def create_challenge(
         template = await session.get(PromptTemplate, body.prompt_template_id)
         if template is None:
             raise HTTPException(404, "Prompt template not found")
-        prompt_text = template.body  # frozen copy (spec §3)
+        # Use template body only if prompt_text is empty/None (user did not edit or left it blank)
+        if not prompt_text or not prompt_text.strip():
+            prompt_text = template.body
     if not prompt_text or not prompt_text.strip():
         raise HTTPException(400, "prompt_text or prompt_template_id required")
 

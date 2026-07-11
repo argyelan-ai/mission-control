@@ -87,6 +87,31 @@ async def test_create_challenge_from_template_freezes_copy(auth_client, session)
 
 
 @pytest.mark.asyncio
+async def test_create_challenge_edited_text_wins_over_template_body(auth_client, session):
+    """When template_id is set AND prompt_text is provided (user edited),
+    the edited text should be used, not the template body. Template ID is kept for provenance."""
+    from app.models.prompt_template import PromptTemplate
+
+    tpl = PromptTemplate(title="Balls", body="original template body", tags=["3d"])
+    session.add(tpl)
+    await session.commit()
+    await session.refresh(tpl)
+
+    edited_text = "My edited version of the prompt"
+    resp = await auth_client.post(
+        "/api/v1/bench/challenges",
+        json=_create_body(
+            prompt_text=edited_text,
+            prompt_template_id=str(tpl.id)
+        ),
+    )
+    assert resp.status_code == 201, resp.text
+    data = resp.json()
+    assert data["prompt_text"] == edited_text, "Edited text should win over template body"
+    assert data["prompt_template_id"] == str(tpl.id), "Template ID should be preserved for provenance"
+
+
+@pytest.mark.asyncio
 async def test_series_numbering_increments_per_label(auth_client):
     r1 = await auth_client.post(
         "/api/v1/bench/challenges", json=_create_body(series_label="Spark Bench")

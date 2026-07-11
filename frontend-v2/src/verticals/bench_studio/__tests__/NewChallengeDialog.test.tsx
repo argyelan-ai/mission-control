@@ -173,4 +173,60 @@ describe("NewChallengeDialog — template picker", () => {
       expect((select as HTMLSelectElement).value).toBe("tpl-2");
     });
   });
+
+  it("when template is selected and edited, create body includes edited prompt_text AND template_id", async () => {
+    const editedText = "My custom edited version of the prompt";
+    vi.mocked(benchApi.challenges.create).mockResolvedValue({
+      id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
+      prompt_text: editedText, mode: "side_by_side",
+      status: "generating", series_label: null, series_no: null,
+      composed_video_path: null, content_pipeline_id: null, error: null,
+      created_at: "", updated_at: "", entries: [],
+    });
+
+    renderDialog();
+
+    // Wait for templates to load
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    // Select template "Bouncing Balls"
+    const select = screen.getByRole("combobox", { name: /template/i });
+    await userEvent.selectOptions(select, "tpl-1");
+
+    // Verify textarea is filled with template body
+    const textarea = screen.getByPlaceholderText(/prompt/i);
+    await waitFor(() => {
+      expect((textarea as HTMLTextAreaElement).value).toBe("Animate 100 bouncing balls");
+    });
+
+    // User edits the textarea
+    await userEvent.clear(textarea);
+    await userEvent.type(textarea, editedText);
+
+    // Fill mandatory fields
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "My Test");
+
+    // Fill first model (label + spark model)
+    const [labelInput, sparkInput] = screen.getAllByPlaceholderText(/Label \(z\. B\.|vLLM-Modell/);
+    await userEvent.type(labelInput, "DeepSeek");
+    await userEvent.type(sparkInput, "deepseek-v4");
+
+    // Now submit button should be enabled
+    const submitBtn = screen.getByRole("button", { name: /Challenge starten/i });
+    await waitFor(() => {
+      expect(submitBtn).not.toBeDisabled();
+    });
+
+    await userEvent.click(submitBtn);
+
+    // Verify the mutation was called with edited text AND template id
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          prompt_template_id: "tpl-1",
+          prompt_text: editedText,
+        })
+      );
+    });
+  });
 });

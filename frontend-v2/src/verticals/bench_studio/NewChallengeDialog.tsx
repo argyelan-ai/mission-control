@@ -55,7 +55,7 @@ export function NewChallengeDialog({
       benchApi.challenges.create({
         title,
         prompt_template_id: templateId,
-        prompt_text: templateId ? null : promptText,
+        prompt_text: promptText,
         mode,
         models,
         series_label: seriesLabel.trim() || null,
@@ -149,7 +149,7 @@ export function NewChallengeDialog({
           value={promptText}
           onChange={(e) => {
             setPromptText(e.target.value);
-            setTemplateId(null); // manual edit breaks the template link — frozen copy comes from text
+            // Don't clear templateId — edited text + template ID both win (backend uses text if provided)
           }}
           rows={5}
           placeholder="Prompt (oder Template oben wählen)"
