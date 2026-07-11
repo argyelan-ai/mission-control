@@ -191,6 +191,10 @@ async def _handle_x_post_resolution(
             task_id=approval.task_id,
             detail={"approval_id": str(approval.id)},
         )
+        from app.verticals import hooks as vertical_hooks
+        await vertical_hooks.run_x_post_resolved_hooks(
+            session, approval, resolution_status, None
+        )
         return
 
     from app.services import x_publisher
@@ -263,6 +267,13 @@ async def _handle_x_post_resolution(
                 content=content,
             ))
             await session.commit()
+
+    # Vertical hooks (ADR-044): e.g. bench_studio flips its challenge to
+    # `published` on a successful post. No-op when no vertical registered.
+    from app.verticals import hooks as vertical_hooks
+    await vertical_hooks.run_x_post_resolved_hooks(
+        session, approval, resolution_status, result
+    )
 
 
 @router.get("/approvals")
