@@ -98,7 +98,7 @@ def escape_drawtext(text: str) -> str:
     """
     return (
         text.replace("\\", "\\\\")
-        .replace("'", "'")
+        .replace("'", "’")
         .replace("%", "\\%")
     )
 

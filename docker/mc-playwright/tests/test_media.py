@@ -105,7 +105,7 @@ def test_compose_request_max_four_inputs():
 
 
 def test_escape_drawtext_neutralizes_quotes_backslashes_percent():
-    assert escape_drawtext("it's 100% \\great") == "it's 100\\% \\\\great"
+    assert escape_drawtext("it's 100% \\great") == "it’s 100\\% \\\\great"
 
 
 def test_escape_drawtext_plain_label_unchanged():
@@ -192,4 +192,4 @@ def test_build_compose_cmd_speed_labels_appended():
 def test_build_compose_cmd_labels_are_escaped():
     cmd = build_compose_cmd(["/d/a.mp4"], ["Mark's 100% run"], "/d/out.mp4")
     fc = cmd[cmd.index("-filter_complex") + 1]
-    assert "text='Mark's 100\\% run'" in fc
+    assert "text='Mark’s 100\\% run'" in fc
