@@ -377,7 +377,10 @@ async def test_reopen_does_not_reset_started_at(client: AsyncClient):
     assert patch_resp.status_code in (200, 204), patch_resp.text
 
     reloaded = await _reload_task(task_id)
-    assert reloaded.status == "in_progress"
+    # PR #109: review->in_progress with no reconstructable developer resolves
+    # to inbox (no_developer outcome) instead of a ghost in_progress. This
+    # test's subject is started_at preservation, which must hold either way.
+    assert reloaded.status == "inbox"
     assert reloaded.started_at is not None
 
     sa = reloaded.started_at
