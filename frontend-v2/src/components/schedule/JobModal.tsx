@@ -130,12 +130,15 @@ export function JobModal({
         ...EMPTY_TASK_FORM_PAYLOAD,
         ...(job.task_payload as Partial<TaskFormPayload>),
         title: job.task_title ?? "",
+        // Authoritative source for skip_review is the top-level job column
+        skipReview: job.task_skip_review ?? false,
       };
     }
     return {
       ...EMPTY_TASK_FORM_PAYLOAD,
       title: job?.task_title ?? "",
       priority: job?.task_priority ?? "medium",
+      skipReview: job?.task_skip_review ?? false,
     };
   });
 
@@ -154,6 +157,8 @@ export function JobModal({
         ...((job.task_payload ?? {}) as Partial<TaskFormPayload>),
         title: job.task_title ?? "",
         priority: job.task_priority ?? "medium",
+        // Authoritative source for skip_review is the top-level job column
+        skipReview: job.task_skip_review ?? false,
       });
       setTaskExpanded(true);
     } else {
@@ -268,7 +273,13 @@ export function JobModal({
       task_board_id: activeBoardId,
       task_title: taskPayload.title.trim() || form.name.trim(),
       task_priority: taskPayload.priority,
-      task_payload: taskPayload as unknown as Record<string, unknown>,
+      task_skip_review: taskPayload.skipReview ?? false,
+      task_payload: {
+        ...(taskPayload as unknown as Record<string, unknown>),
+        // Forward-compat: scheduler.py reads payload["skip_review"] before
+        // falling back to job.task_skip_review (the authoritative column).
+        skip_review: taskPayload.skipReview ?? false,
+      },
       tags,
       retry_max: form.retry_max,
       retry_delay_minutes: form.retry_delay_minutes,

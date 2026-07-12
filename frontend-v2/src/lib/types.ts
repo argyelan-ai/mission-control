@@ -235,6 +235,7 @@ export interface Task {
   needs_browser: boolean | null;
   e2e_test_required?: boolean | null;
   human_review_required?: boolean | null;
+  skip_review?: boolean;
   blocker_to_operator?: boolean | null;
   use_separate_repo: boolean;
   repo_id: string | null;
