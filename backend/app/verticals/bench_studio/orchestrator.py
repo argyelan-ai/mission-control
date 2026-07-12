@@ -254,12 +254,24 @@ async def on_task_done(session: AsyncSession, task) -> None:
             select(TaskDeliverable).where(TaskDeliverable.task_id == task.id)
         )
     ).all()
+    # Resolve through fs_service: deliverable paths are stored in the AGENT's
+    # view (e.g. /deliverables/<task>/... which is ~/.mc/deliverables/<slug>/...
+    # on the host → /deliverables/<slug>/... in the backend container). A naive
+    # Path(d.path).exists() misses the slug segment and always fails for
+    # docker-agent deliverables (2026-07-12 incident).
+    from app.services.fs_service import resolve_deliverable
+
     html_src: Path | None = None
     for d in rows:
         if d.path and d.path.endswith(".html"):
-            candidate = Path(d.path)
-            if candidate.exists():
-                html_src = candidate
+            resolved = await resolve_deliverable(d, session, target="container")
+            # Resolver returns None for unknown prefixes — fall back to the raw
+            # path for already-backend-local paths (sidecar dirs, tests).
+            for candidate in filter(None, (resolved, d.path)):
+                if Path(candidate).exists():
+                    html_src = Path(candidate)
+                    break
+            if html_src:
                 break
 
     if html_src is None:
