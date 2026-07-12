@@ -78,6 +78,9 @@ class BenchEntry(SQLModel, table=True):
     model_label: str  # display label, also used for the artifact directory
     source_kind: str  # spark | agent (extensible later: "api", spec §8)
     spark_model: str | None = None  # vLLM model name override (spark entries)
+    # Custom chip tag for the branded video frame (e.g. "OMP · DGX SPARK").
+    # NULL -> harness-derived default (orchestrator._build_branding_payload).
+    display_tag: str | None = None
     agent_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(Uuid, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True),

@@ -38,14 +38,14 @@ const CHALLENGE: BenchChallenge = {
   entries: [
     {
       id: "e-1", challenge_id: "ch-1", model_label: "DeepSeek",
-      source_kind: "spark", spark_model: "deepseek-x", agent_id: null,
+      source_kind: "spark", spark_model: "deepseek-x", agent_id: null, display_tag: null,
       task_id: null, status: "rendered", artifact_path: "/sd/a/index.html",
       video_path: "/sd/a.mp4", screenshot_path: null,
       metrics: { duration_ms: 42000, tok_per_s: 87 }, error: null,
     },
     {
       id: "e-2", challenge_id: "ch-1", model_label: "Claude",
-      source_kind: "agent", spark_model: null, agent_id: "a-1",
+      source_kind: "agent", spark_model: null, agent_id: "a-1", display_tag: null,
       task_id: "t-1", status: "generating", artifact_path: null,
       video_path: null, screenshot_path: null, metrics: {}, error: null,
     },

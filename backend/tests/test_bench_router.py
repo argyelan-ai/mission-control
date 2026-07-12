@@ -53,6 +53,19 @@ async def test_create_challenge_freezes_prompt_and_fans_out(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_create_challenge_persists_display_tag(auth_client):
+    """Optional per-entry display_tag is persisted (blank -> NULL)."""
+    body = _create_body()
+    body["models"][0]["display_tag"] = "OMP · DGX SPARK"
+    body["models"][1]["display_tag"] = "   "  # whitespace-only -> normalized to NULL
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 201, resp.text
+    tags = {e["model_label"]: e["display_tag"] for e in resp.json()["entries"]}
+    assert tags["DeepSeek"] == "OMP · DGX SPARK"
+    assert tags["Claude"] is None
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_requires_prompt(auth_client):
     resp = await auth_client.post(
         "/api/v1/bench/challenges", json=_create_body(prompt_text=None)

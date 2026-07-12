@@ -509,31 +509,9 @@ async def test_compose_challenge_parses_sidecar_response(session, monkeypatch):
 # ── branding payload (video-branding, 2026-07-12) ───────────────────────────
 
 
-@pytest.mark.asyncio
-async def test_compose_challenge_sends_branding_for_two_entries(session, monkeypatch, make_agent, make_board):
-    """side_by_side + exactly 2 rendered entries -> compose_challenge attaches
-    a `branding` payload with title/run_label/models/outro_rows shape."""
-    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
-    agent = await make_agent(board_id=board.id, name="Grok")
-
-    ch = BenchChallenge(title="SVG timeline animation", prompt_text="  \nBuild a timeline.\nSecond line.",
-                         mode="side_by_side")
-    session.add(ch)
-    await session.commit()
-    await session.refresh(ch)
-
-    entries = [
-        BenchEntry(challenge_id=ch.id, model_label="Qwen 3.6 35B A3B", source_kind="spark",
-                   status="rendered", video_path="/sd/qwen.mp4",
-                   metrics={"duration_ms": 768000}, artifact_path=None),
-        BenchEntry(challenge_id=ch.id, model_label="Grok 4.5", source_kind="agent",
-                   agent_id=agent.id, status="rendered", video_path="/sd/grok.mp4",
-                   metrics={"duration_ms": 564000}, artifact_path=None),
-    ]
-    for e in entries:
-        session.add(e)
-    await session.commit()
-
+def _fake_compose_client(monkeypatch) -> dict:
+    """Patches orchestrator httpx.AsyncClient with a capturing fake; returns
+    the dict that receives the posted /compose json payload."""
     captured: dict = {}
 
     class FakeResp:
@@ -558,6 +536,36 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
             return FakeResp()
 
     monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+    return captured
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_sends_branding_for_two_entries(session, monkeypatch, make_agent, make_board):
+    """side_by_side + exactly 2 rendered entries -> compose_challenge attaches
+    a `branding` payload with title/run_label/models/outro_rows shape. Tags:
+    spark -> "VLLM · SPARK", agent -> harness uppercased."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+
+    ch = BenchChallenge(title="SVG timeline animation", prompt_text="  \nBuild a timeline.\nSecond line.",
+                         mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="Qwen 3.6 35B A3B", source_kind="spark",
+                   status="rendered", video_path="/sd/qwen.mp4",
+                   metrics={"duration_ms": 768000}, artifact_path=None),
+        BenchEntry(challenge_id=ch.id, model_label="Grok 4.5", source_kind="agent",
+                   agent_id=agent.id, status="rendered", video_path="/sd/grok.mp4",
+                   metrics={"duration_ms": 564000}, artifact_path=None),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
 
     result = await orchestrator.compose_challenge(session, ch, entries)
     assert result == "/sd/branded.mp4"
@@ -568,14 +576,76 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
     assert branding["prompt_line"] == "Build a timeline."
 
     models_by_label = {m["label"]: m["tag"] for m in branding["models"]}
-    assert models_by_label["Grok 4.5"] == "GROK"
-    assert models_by_label["Qwen 3.6 35B A3B"] == "LOCAL · SPARK"
+    assert models_by_label["Grok 4.5"] == "GROK"  # harness "grok" uppercased
+    assert models_by_label["Qwen 3.6 35B A3B"] == "VLLM · SPARK"
 
     rows_by_name = {r["name"]: r for r in branding["outro_rows"]}
     assert rows_by_name["Qwen 3.6 35B A3B"]["time"] == "12.8 min"
     assert rows_by_name["Grok 4.5"]["time"] == "9.4 min"
     # No artifact_path on either entry here -> size falls back to "—"
     assert rows_by_name["Qwen 3.6 35B A3B"]["size"] == "—"
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_display_tag_override_wins(session, monkeypatch, make_agent, make_board):
+    """entry.display_tag beats every derived default — for spark AND agent."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4",
+                   display_tag="OMP · DGX SPARK"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="agent",
+                   agent_id=agent.id, status="rendered", video_path="/sd/b.mp4",
+                   display_tag="FRONTIER · API"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+
+    models_by_label = {m["label"]: m["tag"] for m in captured["branding"]["models"]}
+    assert models_by_label["A"] == "OMP · DGX SPARK"
+    assert models_by_label["B"] == "FRONTIER · API"
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_harness_default_and_name_fallback(session, monkeypatch, make_agent, make_board):
+    """No display_tag: agent tag comes from the harness; agent NAME is only
+    the fallback when the agent has no harness set."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    with_harness = await make_agent(board_id=board.id, name="Sparky", harness="omp")
+    without_harness = await make_agent(board_id=board.id, name="Boss")
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="agent",
+                   agent_id=with_harness.id, status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="agent",
+                   agent_id=without_harness.id, status="rendered", video_path="/sd/b.mp4"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+
+    models_by_label = {m["label"]: m["tag"] for m in captured["branding"]["models"]}
+    assert models_by_label["A"] == "OMP"   # harness wins
+    assert models_by_label["B"] == "BOSS"  # name fallback
 
 
 @pytest.mark.asyncio

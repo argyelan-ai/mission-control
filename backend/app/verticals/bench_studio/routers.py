@@ -32,6 +32,9 @@ class BenchModelSpec(BaseModel):
     source_kind: Literal["spark", "agent"]
     spark_model: str | None = None
     agent_id: uuid.UUID | None = None
+    # Custom chip tag for the branded video (e.g. "OMP · DGX SPARK").
+    # None -> harness-derived default (orchestrator._build_branding_payload).
+    display_tag: str | None = Field(default=None, max_length=80)
 
 
 class BenchChallengeCreate(BaseModel):
@@ -119,6 +122,7 @@ async def create_challenge(
             source_kind=spec.source_kind,
             spark_model=spec.spark_model,
             agent_id=spec.agent_id,
+            display_tag=(spec.display_tag or "").strip() or None,
         )
         for spec in body.models
     ]

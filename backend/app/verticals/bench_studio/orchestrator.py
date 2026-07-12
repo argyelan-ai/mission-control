@@ -381,14 +381,22 @@ async def _build_branding_payload(
     models: list[dict] = []
     outro_rows: list[dict] = []
     for entry in ordered:
-        if entry.source_kind == "spark":
-            tag = "LOCAL · SPARK"
+        if entry.display_tag:
+            # Operator override (bench_entries.display_tag) always wins.
+            tag = entry.display_tag
+        elif entry.source_kind == "spark":
+            tag = "VLLM · SPARK"
         else:
+            # Agent entries: harness-derived default (e.g. omp -> "OMP",
+            # grok -> "GROK"); agent name as fallback when no harness is set.
             tag = "AGENT"
             if entry.agent_id is not None:
                 agent = await session.get(Agent, entry.agent_id)
-                if agent is not None and agent.name:
-                    tag = agent.name.upper()
+                if agent is not None:
+                    if agent.harness:
+                        tag = agent.harness.upper()
+                    elif agent.name:
+                        tag = agent.name.upper()
         models.append({"label": entry.model_label, "tag": tag})
         outro_rows.append({
             "name": entry.model_label,
