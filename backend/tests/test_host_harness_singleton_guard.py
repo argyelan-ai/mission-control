@@ -152,6 +152,33 @@ def test_launchctl_argv_local_when_launchctl_present():
     assert argv[-1] == "/x/com.mc.hermes-bridge.plist"
 
 
+def test_run_launchctl_tolerates_already_loaded_eio():
+    """macOS returns rc=5 'Input/output error' when bootstrapping an already-loaded
+    service (not always rc=37) — idempotent re-provision must tolerate it."""
+    from unittest.mock import MagicMock
+    from app.services import agent_bootstrap
+
+    proc = MagicMock(returncode=5, stdout="", stderr="Bootstrap failed: 5: Input/output error")
+    with patch("app.services.agent_bootstrap.shutil.which", return_value="/bin/launchctl"), \
+         patch("app.services.agent_bootstrap.subprocess.run", return_value=proc):
+        result = agent_bootstrap._run_launchctl_bootstrap(Path("/x/com.mc.hermes-bridge.plist"))
+    assert result["loaded"] is True
+    assert result["already"] is True
+
+
+def test_run_launchctl_still_raises_on_real_failure():
+    """A non-already-loaded hard failure (rc=5 without the EIO string, or other rc)
+    must still raise so the caller rolls back."""
+    from unittest.mock import MagicMock
+    from app.services import agent_bootstrap
+
+    proc = MagicMock(returncode=1, stdout="", stderr="Load failed: no such file")
+    with patch("app.services.agent_bootstrap.shutil.which", return_value="/bin/launchctl"), \
+         patch("app.services.agent_bootstrap.subprocess.run", return_value=proc):
+        with pytest.raises(RuntimeError):
+            agent_bootstrap._run_launchctl_bootstrap(Path("/x/com.mc.foo.plist"))
+
+
 def test_launchctl_argv_ssh_when_launchctl_absent():
     """In the Linux container launchctl is absent → run it on the host via SSH,
     with $(id -u) evaluated remotely (host login uid, not the container user)."""

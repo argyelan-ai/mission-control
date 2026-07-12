@@ -216,7 +216,15 @@ def _run_launchctl_bootstrap(plist_path: Path) -> dict[str, Any]:
         "already loaded" in combined
         or "service already" in combined
         or "already bootstrapped" in combined
-        or proc.returncode == 37  # macOS launchctl: service already loaded
+        or proc.returncode == 37  # EEXIST — macOS launchctl: service already loaded
+        # macOS launchd quirk: bootstrapping an ALREADY-loaded service can return
+        # EIO (5) "Input/output error" instead of EEXIST (37), depending on the OS
+        # version. Verified 2026-07-12 on this host: com.mc.hermes-bridge (loaded,
+        # healthy, plist plutil-valid) returns exactly this. Scoped to rc==5 AND
+        # the EIO string so a genuine I/O failure on an unloaded service still
+        # surfaces — this only makes idempotent re-provision of a running
+        # singleton bridge tolerant, matching the rc==37 case above.
+        or (proc.returncode == 5 and "input/output error" in combined)
     )
     result: dict[str, Any] = {
         "returncode": proc.returncode,

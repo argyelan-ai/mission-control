@@ -190,10 +190,13 @@ async def test_launchctl_bootstrap_failure_rollback(async_session, tmp_path, mon
     """Hard launchctl failure raises so caller can rollback provision_status."""
     monkeypatch.setenv("HOME_HOST", str(tmp_path))
 
+    # A genuine hard failure — NOT the already-loaded EIO(5) case, which macOS
+    # returns for a running service and which _run_launchctl_bootstrap now
+    # tolerates (see test_host_harness_singleton_guard). Use a real load error.
     proc_fail = MagicMock(
-        returncode=5,
+        returncode=3,
         stdout="",
-        stderr="Bootstrap failed: 5: Input/output error",
+        stderr="Load failed: 3: No such process",
     )
     from app.services.agent_bootstrap import bootstrap_hermes_agent
 
