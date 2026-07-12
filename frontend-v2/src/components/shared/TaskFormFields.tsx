@@ -910,7 +910,7 @@ export function TaskFormFields({
                       <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />Report-Back</button>
                       <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title="After review, a tester agent drives the real user flows in a browser before the task can complete" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />E2E test</button>
                       <button type="button" onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })} aria-pressed={value.humanReviewRequired} title="You review this task yourself instead of a review agent" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.humanReviewRequired, C.accent)}><UserCheck size={11} />Human review</button>
-                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title="Task goes straight to done — no review stage (typical for scheduled/report jobs)" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.skipReview, C.online)}><FastForward size={11} />Skip review</button>
+                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title="Task goes straight to done — no review stage (typical for scheduled/report jobs)" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.skipReview, C.accent)}><FastForward size={11} />Skip review</button>
                       <button type="button" onClick={() => patch({ blockerToOperator: !value.blockerToOperator })} aria-pressed={value.blockerToOperator} title="Blockers on this task come straight to you instead of going to Boss first" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.blockerToOperator, C.warning)}><BellRing size={11} />Blocker to me</button>
                     </div>
                     <AnimatePresence>
@@ -1538,9 +1538,9 @@ export function TaskFormFields({
               title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
               className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
               style={{
-                backgroundColor: value.skipReview ? `${C.online}22` : "transparent",
-                color: value.skipReview ? C.online : C.textMuted,
-                border: value.skipReview ? `1px solid ${C.online}66` : `1px solid ${C.border}`,
+                backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
+                color: value.skipReview ? C.accent : C.textMuted,
+                border: value.skipReview ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
               }}
             >
               <FastForward size={11} />
