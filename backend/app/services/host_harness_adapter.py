@@ -19,6 +19,10 @@ from app.models.runtime import Runtime
 class HostHarnessAdapter(Protocol):
     harness: str
     protocol: str  # "openai" | "anthropic"
+    # A single-instance host bridge (hermes/grok) hardcodes its config dir +
+    # plist to ONE slug; provisioning it onto any other agent would clobber the
+    # real singleton. None = the adapter is safe for arbitrary agents.
+    singleton_slug: str | None
 
     async def build_agent_env(
         self, agent: Agent, runtime: Runtime, token: str, *, session: AsyncSession
@@ -34,6 +38,7 @@ class HostHarnessAdapter(Protocol):
 class HermesAdapter:
     harness = "hermes"
     protocol = "openai"
+    singleton_slug = "hermes"
 
     async def build_agent_env(self, agent, runtime, token, *, session):
         from app.services.agent_bootstrap import build_hermes_agent_env
@@ -70,6 +75,7 @@ class GrokAdapter:
 
     harness = "grok"
     protocol = "grok"
+    singleton_slug = "grok"
 
     async def build_agent_env(self, agent, runtime, token, *, session):
         from app.services.agent_bootstrap import build_grok_agent_env

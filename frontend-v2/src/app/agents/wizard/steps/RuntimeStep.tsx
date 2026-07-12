@@ -45,6 +45,21 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
     enabled: state.agentRuntime === "cli-bridge",
     refetchInterval: 30_000,
   });
+  // hermes/grok are SINGLETON host bridges — one hermes-bridge, one grok-bridge
+  // on the host, each hardcoded to its slug. Provisioning a second one would
+  // clobber the first's agent.env (2026-07-12 incident), so the backend now
+  // rejects it with a 422. Surface that here: disable a host harness whose
+  // singleton already exists, instead of letting the user build a doomed agent.
+  const { data: existingAgents } = useQuery({
+    queryKey: ["agents", "all-for-singleton-check"],
+    queryFn: () => api.agents.list(undefined, true),
+    enabled: isHost,
+  });
+  const takenHostHarnesses = new Set(
+    (existingAgents ?? [])
+      .filter((a) => a.agent_runtime === "host" && a.harness)
+      .map((a) => a.harness as string),
+  );
 
   const matrixBySlug = new Map((matrix?.runtimes ?? []).map((r) => [r.slug, r]));
 
@@ -115,18 +130,24 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
             <div className="flex gap-2">
               {(isHost ? HOST_HARNESSES : matrix?.harnesses ?? []).map((h) => {
                 const active = state.harness === h.key;
+                const taken = isHost && takenHostHarnesses.has(h.key);
                 return (
                   <button
                     key={h.key}
-                    onClick={() => pickHarness(h.key)}
-                    className="flex-1 rounded-xl px-3 py-2.5 text-sm cursor-pointer transition-all"
+                    onClick={() => !taken && pickHarness(h.key)}
+                    disabled={taken}
+                    title={taken ? `Singleton – ein '${h.key}'-Host-Agent existiert bereits` : undefined}
+                    className="flex-1 rounded-xl px-3 py-2.5 text-sm transition-all"
                     style={{
+                      cursor: taken ? "not-allowed" : "pointer",
+                      opacity: taken ? 0.4 : 1,
                       backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
                       border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                       color: active ? C.accent : "var(--color-text-primary)",
                     }}
                   >
                     {h.label}
+                    {taken && " ✓"}
                   </button>
                 );
               })}

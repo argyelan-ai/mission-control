@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 import os
+import shlex
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -29,7 +31,7 @@ from typing import Any
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import generate_agent_token
-from app.config import settings
+from app.config import settings, effective_host_ssh_user
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.routers.internal import build_runtime_env
@@ -137,19 +139,74 @@ async def build_hermes_agent_env(
     return env
 
 
+def _assert_singleton_slug(agent: Agent, expected: str) -> None:
+    """Refuse to bootstrap a singleton host bridge onto the wrong agent.
+
+    The hermes/grok host harnesses are SINGLETONS: their whole provisioning
+    path (config dir ``~/.mc/agents/<expected>``, the one
+    ``com.mc.<expected>-bridge.plist``) is hardcoded to a single slug, because
+    there is exactly one hermes-bridge and one grok-bridge on the host. If a
+    *different* agent (e.g. a wizard-created "Dev" that picked harness=hermes)
+    reaches this bootstrap, the env-write step would silently overwrite the real
+    singleton's ``agent.env`` with a foreign token — corrupting a live agent
+    (found 2026-07-12: creating "Dev" clobbered Hermes's agent.env). Guard here
+    as defense-in-depth; the provision router (routers/agents.py) rejects it
+    earlier with a 422, but the service layer must never be able to clobber even
+    when called directly.
+    """
+    slug = (agent.slug or agent.name or "").lower().replace(" ", "-")
+    if slug != expected:
+        raise ValueError(
+            f"harness {expected!r} is a singleton host bridge bound to the "
+            f"pre-seeded {expected!r} agent and cannot be provisioned onto "
+            f"agent {agent.name!r} (slug {slug!r}). Use the openclaude or omp "
+            f"harness for a generic host agent."
+        )
+
+
+def _launchctl_bootstrap_argv(plist_path: Path) -> list[str]:
+    """Build the argv that loads ``plist_path`` into the host's launchd GUI domain.
+
+    launchd only exists on macOS, but the backend runs inside a Linux Docker
+    container where ``launchctl`` is absent — a plain ``subprocess.run(["launchctl",
+    …])`` there dies with ``[Errno 2] No such file or directory: 'launchctl'``
+    (found 2026-07-12: every hermes/grok re-provision failed at this exact line,
+    and the failure fired *after* the agent.env write, so a mis-targeted bootstrap
+    could clobber a live agent's env yet never finish). When launchctl is present
+    (a Mac-host backend or the CI/local test box) we call it directly; otherwise we
+    SSH to the host and run it there — the same host-SSH path
+    ``cli_terminal._ssh_host`` already uses for start/stop/restart. ``$(id -u)`` is
+    evaluated ON the host so the GUI domain targets the host login's uid, never the
+    container user's.
+    """
+    if shutil.which("launchctl"):
+        return ["launchctl", "bootstrap", f"gui/{os.getuid()}", str(plist_path)]
+    remote = f"launchctl bootstrap gui/$(id -u) {shlex.quote(str(plist_path))}"
+    return [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=5",
+        "-i", "/home/mcuser/.ssh/id_rsa",
+        f"{effective_host_ssh_user()}@host.docker.internal",
+        remote,
+    ]
+
+
 def _run_launchctl_bootstrap(plist_path: Path) -> dict[str, Any]:
-    """Run ``launchctl bootstrap gui/$(id -u) <plist>``.
+    """Run ``launchctl bootstrap gui/$(id -u) <plist>`` (locally or via host SSH).
 
     Tolerates "already loaded" / "already bootstrapped" — these are
     benign for idempotent re-provision. Returns dict with returncode,
     stderr, ``loaded`` bool, and ``already`` bool.
 
     Raises ``RuntimeError`` on hard failures (non-zero exit that is
-    not the already-loaded case).
+    not the already-loaded case). ssh passes the remote launchctl's exit
+    code straight through, so rc==37 (already loaded) still round-trips.
     """
-    uid = os.getuid()
-    cmd = ["launchctl", "bootstrap", f"gui/{uid}", str(plist_path)]
-    proc = subprocess.run(  # noqa: S603 — fixed cmd, no shell
+    cmd = _launchctl_bootstrap_argv(plist_path)
+    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
         cmd, capture_output=True, text=True, check=False
     )
     stderr = (proc.stderr or "").strip()
@@ -210,6 +267,7 @@ async def bootstrap_hermes_agent(
     Returns dict with token (one-time visible), env_path, plist_loaded,
     plist_already, tmux_session, workspace_path.
     """
+    _assert_singleton_slug(agent, "hermes")
     home = _home_host()
     # Config lives in the sensitive ~/.mc/agents/hermes root (env, logs,
     # entrypoint — never browsable via the Files API). The task WORKSPACE is
@@ -347,6 +405,7 @@ async def bootstrap_grok_agent(
     (ADR-068) — the Sessions page mounts its terminal via
     cli_terminal._HOST_AGENT_TMUX_TARGETS["grok"].
     """
+    _assert_singleton_slug(agent, "grok")
     home = _home_host()
     config_dir = home / ".mc" / "agents" / "grok"
     workspace = home / ".mc" / "workspaces" / "grok"

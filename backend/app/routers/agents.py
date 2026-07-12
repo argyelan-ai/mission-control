@@ -1718,6 +1718,23 @@ async def provision_agent_on_gateway(
             harness = agent.harness or derive_harness(runtime)
             adapter = get_adapter(harness)
             if adapter is not None:
+                # Singleton host bridges (hermes/grok) hardcode their config dir
+                # + plist to one slug — provisioning onto a different agent would
+                # overwrite the real singleton's agent.env with a foreign token
+                # (2026-07-12: creating "Dev" with harness=hermes clobbered the
+                # live Hermes). Reject with a clear 422 before any file is touched.
+                singleton = getattr(adapter, "singleton_slug", None)
+                agent_slug = (agent.slug or agent.name or "").lower().replace(" ", "-")
+                if singleton and agent_slug != singleton:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            f"Der Harness '{harness}' ist eine Singleton-Host-Bridge "
+                            f"(fest an den Agent '{singleton}' gebunden) und kann nicht "
+                            f"auf '{agent.name}' provisioniert werden. Für einen generischen "
+                            f"Host-Agent 'openclaude' oder 'omp' als Harness wählen."
+                        ),
+                    )
                 if not is_compatible(harness, runtime):
                     raise HTTPException(status_code=422, detail=incompat_reason(harness, runtime))
                 result = await adapter.bootstrap(session, agent, runtime)
