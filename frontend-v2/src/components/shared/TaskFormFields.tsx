@@ -1207,6 +1207,25 @@ export function TaskFormFields({
         </motion.div>
       )}
 
+      {/* ── SCHNELL-MODE: Kompakter Skip-Review-Toggle (haeufigster Job-Fall) ── */}
+      {mode === "schnell" && (
+        <button
+          type="button"
+          onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })}
+          aria-pressed={value.skipReview}
+          title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
+          className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer self-start"
+          style={{
+            backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
+            color: value.skipReview ? C.accent : C.textMuted,
+            border: value.skipReview ? `1px solid ${C.accent}66` : `1px solid ${C.border}`,
+          }}
+        >
+          <FastForward size={11} />
+          Skip review
+        </button>
+      )}
+
       {/* ── SCHNELL-MODE: Kompakter Auth-Toggle ── */}
       {mode === "schnell" && (vaultCredentials ?? []).length > 0 && (
         <div className="flex flex-col gap-2">
