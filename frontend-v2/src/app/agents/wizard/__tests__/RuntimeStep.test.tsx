@@ -24,8 +24,11 @@ vi.mock("@/lib/api", () => ({
       ] })),
     },
     cliBridge: { health: vi.fn(async () => ({ reachable: true, bridge_url: "x:18792" })) },
+    agents: { list: vi.fn(async () => [] as unknown[]) },
   },
 }));
+
+import { api } from "@/lib/api";
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient();
@@ -86,5 +89,26 @@ describe("RuntimeStep", () => {
     expect(vllm.disabled).toBe(true); // openai protocol, incompatible with grok
     fireEvent.click(grokRt);
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ runtimeId: "gr1" }));
+  });
+
+  it("disables a singleton host harness when an agent with it already exists", async () => {
+    // A live Hermes host agent exists → picking hermes again would clobber it
+    // (2026-07-12 incident). The picker must disable it, not let the user build
+    // a doomed agent that the backend then 422s.
+    (api.agents.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+      { id: "h1", name: "Hermes", agent_runtime: "host", harness: "hermes" },
+    ]);
+    const update = vi.fn();
+    const state = { ...initialWizardState(null), agentRuntime: "host" as const };
+    wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+    await waitFor(() => screen.getByText("Grok Build"));
+    const hermesBtn = await waitFor(() => {
+      const btn = screen.getByText(/Hermes/).closest("button") as HTMLButtonElement;
+      if (!btn.disabled) throw new Error("not disabled yet");
+      return btn;
+    });
+    expect(hermesBtn.disabled).toBe(true);
+    fireEvent.click(hermesBtn);
+    expect(update).not.toHaveBeenCalledWith(expect.objectContaining({ harness: "hermes" }));
   });
 });
