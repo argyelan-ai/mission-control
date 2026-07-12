@@ -73,6 +73,8 @@ def _force_host(monkeypatch):
 
 def test_container_relative_path_rewrites_to_deliverables_root(monkeypatch):
     _force_container(monkeypatch)
+    monkeypatch.setattr(os.path, "isfile",
+                        lambda p: p == f"/deliverables/{TASK_ID}/report.md")
     client = _mock_client()
     cfg = _mock_cfg()
     commands._cmd_deliverable(_Args(path="report.md"), client, cfg)
@@ -85,6 +87,7 @@ def test_container_accepted_absolute_prefix_passes_through(monkeypatch):
     client = _mock_client()
     cfg = _mock_cfg()
     given = f"/deliverables/{TASK_ID}/foo.pdf"
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == given)
     commands._cmd_deliverable(_Args(path=given), client, cfg)
     body = client.request.call_args.kwargs["body"]
     assert body["path"] == given
@@ -105,6 +108,9 @@ def test_container_rejected_absolute_path_raises_with_deliverables_hint(monkeypa
 
 def test_host_relative_path_rewrites_to_home_mc_deliverables(monkeypatch):
     _force_host(monkeypatch)
+    monkeypatch.setattr(
+        os.path, "isfile",
+        lambda p: p == f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/report.md")
     client = _mock_client()
     cfg = _mock_cfg()
     commands._cmd_deliverable(_Args(path="report.md"), client, cfg)
@@ -117,6 +123,7 @@ def test_host_accepted_absolute_prefix_passes_through(monkeypatch):
     client = _mock_client()
     cfg = _mock_cfg()
     given = f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/foo.pdf"
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == given)
     commands._cmd_deliverable(_Args(path=given), client, cfg)
     body = client.request.call_args.kwargs["body"]
     assert body["path"] == given
@@ -140,6 +147,9 @@ def test_host_legacy_marker_path_still_extracts_filename(monkeypatch):
     _force_host(monkeypatch)
     client = _mock_client()
     cfg = _mock_cfg()
+    monkeypatch.setattr(
+        os.path, "isfile",
+        lambda p: p == f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/legacy.txt")
     commands._cmd_deliverable(
         _Args(path=f".mc-deliverables/{TASK_ID}/legacy.txt"), client, cfg
     )
@@ -166,3 +176,70 @@ def test_host_content_only_no_path(monkeypatch):
     body = client.request.call_args.kwargs["body"]
     assert body["path"] is None
     assert body["content"] == "inline text"
+
+
+# ── Phantom guard (Horror-Forest incident 2026-07-12) ──────────────────────
+# A path inside the agent's own deliverables zone used to be registered
+# WITHOUT checking the file exists — the agent passed the TARGET path
+# without copying anything there, the DB row pointed into the void and the
+# UI 404'd. Registration now requires the file to exist.
+
+
+def test_container_phantom_path_in_own_zone_raises(monkeypatch):
+    _force_container(monkeypatch)
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError) as exc:
+        commands._cmd_deliverable(
+            _Args(path=f"/deliverables/{TASK_ID}/index.html"), client, cfg
+        )
+    assert "existiert nicht" in str(exc.value)
+    client.request.assert_not_called()
+
+
+def test_host_phantom_path_in_own_zone_raises(monkeypatch):
+    _force_host(monkeypatch)
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError) as exc:
+        commands._cmd_deliverable(
+            _Args(path=f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/index.html"),
+            client, cfg,
+        )
+    assert "existiert nicht" in str(exc.value)
+    client.request.assert_not_called()
+
+
+def test_sidecar_prefix_is_not_existence_checked(monkeypatch):
+    """On the host /shared-deliverables is not mounted — an existence check
+    there would be a false negative. Sidecar paths stay pass-through."""
+    _force_host(monkeypatch)
+    monkeypatch.setattr(os.path, "isfile", lambda p: False)
+    client = _mock_client()
+    cfg = _mock_cfg()
+    given = f"/shared-deliverables/{TASK_ID}/shot.png"
+    commands._cmd_deliverable(_Args(path=given), client, cfg)
+    body = client.request.call_args.kwargs["body"]
+    assert body["path"] == given
+
+
+def test_relative_workspace_file_is_auto_copied(monkeypatch):
+    """Preferred flow per --path help: relative workspace path — the CLI must
+    COPY the file into the deliverables zone, not just rewrite the string."""
+    import shutil
+    _force_container(monkeypatch)
+    dest = f"/deliverables/{TASK_ID}/index.html"
+    # index.html exists in the CWD, not yet at the destination
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == "index.html")
+    copies = []
+    monkeypatch.setattr(shutil, "copy2", lambda src, dst: copies.append((src, dst)))
+    monkeypatch.setattr(os, "makedirs", lambda *a, **kw: None)
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError):
+        # copy2 is mocked away, so the file still does not exist at dest —
+        # the phantom guard must catch that too (belt and braces).
+        commands._cmd_deliverable(_Args(path="index.html"), client, cfg)
+    assert copies == [("index.html", dest)]
