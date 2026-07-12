@@ -461,7 +461,7 @@ async def test_dispatch_agent_entry_survives_fk_enforcement(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_compose_challenge_parses_sidecar_response(monkeypatch):
+async def test_compose_challenge_parses_sidecar_response(session, monkeypatch):
     """The sidecar's ComposeResponse names the field `output_path` (see
     docker/mc-playwright/media.py) — NOT `video_path` like RecordResponse.
     compose_challenge crashed with KeyError('video_path') on the first live
@@ -502,5 +502,227 @@ async def test_compose_challenge_parses_sidecar_response(monkeypatch):
         BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
                    status="rendered", video_path="/sd/b.mp4"),
     ]
-    result = await orchestrator.compose_challenge(ch, entries)
+    result = await orchestrator.compose_challenge(session, ch, entries)
     assert result == "/shared-deliverables/bench-x/grid.mp4"
+
+
+# ── branding payload (video-branding, 2026-07-12) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_sends_branding_for_two_entries(session, monkeypatch, make_agent, make_board):
+    """side_by_side + exactly 2 rendered entries -> compose_challenge attaches
+    a `branding` payload with title/run_label/models/outro_rows shape."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok")
+
+    ch = BenchChallenge(title="SVG timeline animation", prompt_text="  \nBuild a timeline.\nSecond line.",
+                         mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="Qwen 3.6 35B A3B", source_kind="spark",
+                   status="rendered", video_path="/sd/qwen.mp4",
+                   metrics={"duration_ms": 768000}, artifact_path=None),
+        BenchEntry(challenge_id=ch.id, model_label="Grok 4.5", source_kind="agent",
+                   agent_id=agent.id, status="rendered", video_path="/sd/grok.mp4",
+                   metrics={"duration_ms": 564000}, artifact_path=None),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/branded.mp4", "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    result = await orchestrator.compose_challenge(session, ch, entries)
+    assert result == "/sd/branded.mp4"
+
+    branding = captured["branding"]
+    assert branding["title"] == "SVG timeline animation"
+    assert branding["run_label"] == "001"
+    assert branding["prompt_line"] == "Build a timeline."
+
+    models_by_label = {m["label"]: m["tag"] for m in branding["models"]}
+    assert models_by_label["Grok 4.5"] == "GROK"
+    assert models_by_label["Qwen 3.6 35B A3B"] == "LOCAL · SPARK"
+
+    rows_by_name = {r["name"]: r for r in branding["outro_rows"]}
+    assert rows_by_name["Qwen 3.6 35B A3B"]["time"] == "12.8 min"
+    assert rows_by_name["Grok 4.5"]["time"] == "9.4 min"
+    # No artifact_path on either entry here -> size falls back to "—"
+    assert rows_by_name["Qwen 3.6 35B A3B"]["size"] == "—"
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_no_branding_for_three_entries(session, monkeypatch):
+    """More than 2 rendered entries -> plain grid path, no `branding` key at all."""
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label=label, source_kind="spark",
+                   status="rendered", video_path=f"/sd/{label}.mp4")
+        for label in ("A", "B", "C")
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/grid.mp4", "bytes": 1, "inputs": 3}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    result = await orchestrator.compose_challenge(session, ch, entries)
+    assert result == "/sd/grid.mp4"
+    assert "branding" not in captured
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_artifact_size_in_outro_row(session, tmp_path, monkeypatch):
+    """artifact_path -> real file size in KB via Path().stat()."""
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    artifact = tmp_path / "index.html"
+    artifact.write_bytes(b"x" * 2048)  # exactly 2 KB
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4", artifact_path=str(artifact)),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4", artifact_path="/does/not/exist.html"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/branded.mp4", "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    await orchestrator.compose_challenge(session, ch, entries)
+    rows_by_name = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows_by_name["A"]["size"] == "2 KB"
+    assert rows_by_name["B"]["size"] == "—"  # nonexistent path -> fallback
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_speed_labels_skip_branding(session, monkeypatch):
+    """drafts.py's speed_labels re-compose ('grid-speeds.mp4') stays on the
+    plain grid — branding is only for the primary review composition."""
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4", metrics={"duration_ms": 1000}),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4", metrics={"duration_ms": 2000}),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/grid-speeds.mp4", "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    await orchestrator.compose_challenge(
+        session, ch, entries, speed_labels=True, output_name="grid-speeds.mp4"
+    )
+    assert "branding" not in captured
+    assert "speed_labels" in captured

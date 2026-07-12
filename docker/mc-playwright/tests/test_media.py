@@ -9,12 +9,23 @@ from pydantic import ValidationError
 
 from media import (
     DEJAVU_BOLD,
+    SLOT_A_XY,
+    SLOT_B_XY,
+    SLOT_BG_COLOR,
+    SLOT_HEIGHT,
+    SLOT_WIDTH,
     VIEWPORTS,
+    BrandingModelSpec,
+    BrandingOutroRow,
+    BrandingSpec,
     ComposeRequest,
     RecordRequest,
+    build_branded_compose_cmd,
     build_compose_cmd,
     build_transcode_cmd,
     escape_drawtext,
+    fill_bench_template,
+    render_outro_rows_html,
 )
 
 
@@ -193,3 +204,176 @@ def test_build_compose_cmd_labels_are_escaped():
     cmd = build_compose_cmd(["/d/a.mp4"], ["Mark's 100% run"], "/d/out.mp4")
     fc = cmd[cmd.index("-filter_complex") + 1]
     assert "text='Mark’s 100\\% run'" in fc
+
+
+# ── ComposeRequest branding validation ────────────────────────────────────
+
+
+def _branding(n_models: int = 2) -> BrandingSpec:
+    models = [
+        BrandingModelSpec(label="Qwen 3.6 35B A3B", tag="LOCAL · SPARK"),
+        BrandingModelSpec(label="Grok 4.5", tag="GROK"),
+    ][:n_models]
+    return BrandingSpec(
+        title="SVG timeline animation",
+        run_label="019",
+        prompt_line="single HTML file · timeline animation",
+        models=models,
+        outro_rows=[
+            BrandingOutroRow(name="Qwen 3.6 35B", time="12.8 min", size="48 KB"),
+            BrandingOutroRow(name="Grok 4.5", time="9.4 min", size="61 KB"),
+        ],
+    )
+
+
+def test_branding_spec_requires_exactly_two_models():
+    with pytest.raises(ValidationError):
+        _branding(n_models=1)
+
+
+def test_compose_request_branding_ok_with_two_inputs():
+    req = ComposeRequest(
+        inputs=["/d/a.mp4", "/d/b.mp4"],
+        labels=["Qwen", "Grok"],
+        output_path="/d/branded.mp4",
+        branding=_branding(),
+    )
+    assert req.branding is not None
+
+
+def test_compose_request_branding_rejects_wrong_input_count():
+    with pytest.raises(ValidationError):
+        ComposeRequest(
+            inputs=["/d/a.mp4", "/d/b.mp4", "/d/c.mp4"],
+            labels=["Qwen", "Grok", "Claude"],
+            output_path="/d/branded.mp4",
+            branding=_branding(),
+        )
+    with pytest.raises(ValidationError):
+        ComposeRequest(
+            inputs=["/d/a.mp4"],
+            labels=["Qwen"],
+            output_path="/d/branded.mp4",
+            branding=_branding(),
+        )
+
+
+# ── fill_bench_template ────────────────────────────────────────────────────
+
+
+def test_fill_bench_template_replaces_all_tokens():
+    template = "<h1>{{TITLE}}</h1><span>{{RUN_LABEL}}</span>"
+    out = fill_bench_template(template, {"TITLE": "My Run", "RUN_LABEL": "007"})
+    assert out == "<h1>My Run</h1><span>007</span>"
+
+
+def test_fill_bench_template_html_escapes_values():
+    template = "<b>{{PROMPT_LINE}}</b>"
+    out = fill_bench_template(template, {"PROMPT_LINE": "A & B <script>x</script>"})
+    assert "<script>" not in out
+    assert out == "<b>A &amp; B &lt;script&gt;x&lt;/script&gt;</b>"
+
+
+def test_fill_bench_template_leaves_unknown_placeholders_untouched():
+    template = "{{KNOWN}} {{UNKNOWN}}"
+    out = fill_bench_template(template, {"KNOWN": "x"})
+    assert out == "x {{UNKNOWN}}"
+
+
+def test_fill_bench_template_all_frame_tokens_replaced():
+    tokens = {
+        "TITLE": "SVG timeline animation",
+        "RUN_LABEL": "019",
+        "MODEL_A": "Qwen 3.6 35B A3B",
+        "TAG_A": "LOCAL · SPARK",
+        "MODEL_B": "Grok 4.5",
+        "TAG_B": "GROK",
+        "PROMPT_LINE": "single HTML file · timeline animation",
+        "MODE_LINE": "side by side",
+    }
+    template = " ".join(f"{{{{{k}}}}}" for k in tokens)
+    out = fill_bench_template(template, tokens)
+    assert "{{" not in out
+    for v in tokens.values():
+        assert v in out
+
+
+# ── render_outro_rows_html ──────────────────────────────────────────────────
+
+
+def test_render_outro_rows_html_two_rows():
+    rows = [
+        BrandingOutroRow(name="Qwen 3.6 35B", time="12.8 min", size="48 KB"),
+        BrandingOutroRow(name="Grok 4.5", time="9.4 min", size="61 KB"),
+    ]
+    html = render_outro_rows_html(rows)
+    assert html.count('class="row"') == 2
+    assert "Qwen 3.6 35B" in html and "12.8 min" in html and "48 KB" in html
+    assert "Grok 4.5" in html and "9.4 min" in html and "61 KB" in html
+    # No winner-highlight styling (Mark's decision 2026-07-12 — neutral table).
+    assert "row win" not in html
+    assert "●" not in html
+
+
+def test_render_outro_rows_html_escapes_values():
+    rows = [BrandingOutroRow(name="A & <b>B</b>", time="1 min", size="1 KB")]
+    html = render_outro_rows_html(rows)
+    assert "<b>B</b>" not in html
+    assert "&amp;" in html and "&lt;b&gt;" in html
+
+
+# ── build_branded_compose_cmd ────────────────────────────────────────────────
+
+
+def test_build_branded_compose_cmd_slot_coords_and_pad_color():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    ax, ay = SLOT_A_XY
+    bx, by = SLOT_B_XY
+    assert f"overlay={ax}:{ay}:shortest=1" in fc
+    assert f"overlay={bx}:{by}:shortest=1" in fc
+    assert f"scale={SLOT_WIDTH}:{SLOT_HEIGHT}" in fc
+    assert f"color={SLOT_BG_COLOR}" in fc
+
+
+def test_build_branded_compose_cmd_concat_structure():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "[mainv][outrov]concat=n=2:v=1:a=0[outv]" in fc
+    assert cmd[cmd.index("-map") + 1] == "[outv]"
+    # frame loops indefinitely (no -t) so the branded main duration is
+    # governed by shortest=1 on the video overlays, not a hardcoded length:
+    # "-loop 1 -i frame.png" — the token right after "-loop 1" is "-i", not "-t".
+    loop_idx = cmd.index("-loop")
+    assert cmd[loop_idx:loop_idx + 3] == ["-loop", "1", "-i"]
+    # outro loops for a fixed duration: the second "-loop 1" is followed by "-t 2.0".
+    second_loop_idx = cmd.index("-loop", loop_idx + 1)
+    assert cmd[second_loop_idx:second_loop_idx + 4] == ["-loop", "1", "-t", "2.0"]
+
+
+def test_build_branded_compose_cmd_inputs_order():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    i_positions = [i for i, tok in enumerate(cmd) if tok == "-i"]
+    inputs_in_order = [cmd[i + 1] for i in i_positions]
+    assert inputs_in_order == ["/d/frame.png", "/d/a.mp4", "/d/b.mp4", "/d/outro.png"]
+
+
+def test_build_branded_compose_cmd_h264_output():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    assert "libx264" in cmd and "yuv420p" in cmd and "+faststart" in cmd
+    assert cmd[-1] == "/d/out.mp4"
+
+
+def test_build_branded_compose_cmd_requires_exactly_two_inputs():
+    with pytest.raises(ValueError):
+        build_branded_compose_cmd(
+            ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+        )

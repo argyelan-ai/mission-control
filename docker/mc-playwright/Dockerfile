@@ -25,6 +25,13 @@ RUN pip install --no-cache-dir \
 
 COPY media.py /app/media.py
 COPY service.py /app/service.py
+COPY templates/ /app/templates/
+
+# Bench-video branding fonts: fetched + inlined at build time (never
+# committed — Fontshare fonts must not be redistributed verbatim, see
+# templates/bench/fetch_fonts.py). Network failure must NOT fail the build —
+# the script itself guarantees that (writes an empty css + exits 0).
+RUN python3 /app/templates/bench/fetch_fonts.py
 
 ENV PYTHONUNBUFFERED=1
 

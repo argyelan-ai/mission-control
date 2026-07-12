@@ -37,12 +37,16 @@ from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
     VIEWPORTS,
+    BrandingSpec,
     ComposeRequest,
     ComposeResponse,
     RecordRequest,
     RecordResponse,
+    build_branded_compose_cmd,
     build_compose_cmd,
     build_transcode_cmd,
+    fill_bench_template,
+    render_outro_rows_html,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -793,6 +797,67 @@ async def verify(req: VerifyRequest):
 
 FFMPEG_TIMEOUT_S = 300
 
+# Bench-video branding templates (frame.html + outro.html + shared.css +
+# fonts/embedded-fonts.css, see docker/mc-playwright/templates/bench/).
+BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
+BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
+BENCH_MODE_LINE = "side by side"  # frame.html's fixed {{MODE_LINE}} value
+
+
+async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
+    """Writes a filled bench template to a scratch dir alongside its shared
+    assets (shared.css, fonts/ — referenced via relative href in the
+    template) and screenshots it at the canonical 1920x1080 frame size."""
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        (tmp_dir / "shared.css").symlink_to(BENCH_TEMPLATES_DIR / "shared.css")
+        (tmp_dir / "fonts").symlink_to(BENCH_TEMPLATES_DIR / "fonts")
+        html_path = tmp_dir / "card.html"
+        html_path.write_text(html_text, encoding="utf-8")
+
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context(viewport=BENCH_FRAME_VIEWPORT)
+                page = await context.new_page()
+                await page.goto(html_path.as_uri(), wait_until="networkidle", timeout=30000)
+                await page.screenshot(path=str(out_png))
+            finally:
+                await browser.close()
+
+
+async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> tuple[Path, Path]:
+    """Fills frame.html + outro.html with the branding payload and
+    screenshots both to PNGs inside render_dir. Returns (frame_png, outro_png)."""
+    frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
+    outro_template = (BENCH_TEMPLATES_DIR / "outro.html").read_text(encoding="utf-8")
+
+    model_a, model_b = branding.models
+    frame_tokens = {
+        "TITLE": branding.title,
+        "RUN_LABEL": branding.run_label,
+        "MODEL_A": model_a.label,
+        "TAG_A": model_a.tag,
+        "MODEL_B": model_b.label,
+        "TAG_B": model_b.tag,
+        "PROMPT_LINE": branding.prompt_line,
+        "MODE_LINE": BENCH_MODE_LINE,
+    }
+    frame_html = fill_bench_template(frame_template, frame_tokens)
+
+    outro_tokens = {"RUN_LABEL": branding.run_label}
+    outro_html = fill_bench_template(outro_template, outro_tokens)
+    # ROWS is a markup block (already html-escaped per-cell by
+    # render_outro_rows_html), not a plain scalar token — filled separately
+    # so fill_bench_template's blanket html.escape() doesn't double-escape it.
+    outro_html = outro_html.replace("{{ROWS}}", render_outro_rows_html(branding.outro_rows))
+
+    frame_png = render_dir / "frame.png"
+    outro_png = render_dir / "outro.png"
+    await _screenshot_bench_card(frame_html, frame_png)
+    await _screenshot_bench_card(outro_html, outro_png)
+    return frame_png, outro_png
+
 
 def _require_shared_path(raw: str, what: str) -> Path:
     """Containment: alle Record/Compose-Pfade muessen unter /shared-deliverables liegen."""
@@ -880,7 +945,12 @@ async def record(req: RecordRequest):
 async def compose(req: ComposeRequest):
     """Komponiert N mp4-Aufnahmen zu einem Grid-Video mit Modell-Labels
     (2x1 / 3x1 / 2x2 je nach Anzahl). speed_labels (optional) werden an die
-    Labels angehaengt (z.B. 'DeepSeek · 87 tok/s')."""
+    Labels angehaengt (z.B. 'DeepSeek · 87 tok/s').
+
+    Mit `branding` gesetzt (immer genau 2 inputs, ComposeRequest validiert
+    das bereits): statt des neutralen Grids werden die zwei Aufnahmen in die
+    Slots des argyelan-Frame-Templates compositiert + ein 2s Outro-Card
+    angehaengt (Benchmark Studio Video-Branding, 2026-07-12)."""
     for raw in req.inputs:
         resolved = _require_shared_path(raw, "input")
         if not resolved.is_file():
@@ -888,12 +958,22 @@ async def compose(req: ComposeRequest):
     out_path = _require_shared_path(req.output_path, "output_path")
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    cmd = build_compose_cmd(
-        req.inputs, req.labels, str(out_path), speed_labels=req.speed_labels
-    )
-    await asyncio.to_thread(_run_ffmpeg, cmd)
+    if req.branding is not None:
+        with tempfile.TemporaryDirectory() as render_tmp:
+            render_dir = Path(render_tmp)
+            frame_png, outro_png = await _render_branding_assets(req.branding, render_dir)
+            cmd = build_branded_compose_cmd(
+                req.inputs, str(frame_png), str(outro_png), str(out_path)
+            )
+            await asyncio.to_thread(_run_ffmpeg, cmd)
+        logger.info("compose (branded): %d inputs -> %s", len(req.inputs), out_path)
+    else:
+        cmd = build_compose_cmd(
+            req.inputs, req.labels, str(out_path), speed_labels=req.speed_labels
+        )
+        await asyncio.to_thread(_run_ffmpeg, cmd)
+        logger.info("compose: %d inputs -> %s", len(req.inputs), out_path)
 
-    logger.info("compose: %d inputs -> %s", len(req.inputs), out_path)
     return ComposeResponse(
         output_path=str(out_path),
         bytes=out_path.stat().st_size,

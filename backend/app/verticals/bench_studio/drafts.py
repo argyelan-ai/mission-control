@@ -89,7 +89,7 @@ async def create_draft(
         # Re-compose with metric overlays ("DeepSeek · 42 s · 87 tok/s") —
         # separate output so the clean grid stays available.
         media_path = await compose_challenge(
-            challenge, rendered, speed_labels=True, output_name="grid-speeds.mp4"
+            session, challenge, rendered, speed_labels=True, output_name="grid-speeds.mp4"
         )
     if media_path is None and rendered:
         media_path = rendered[0].video_path
