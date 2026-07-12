@@ -87,6 +87,14 @@ class _Harness:
             self.run_log.append(args)
             if args and args[0] == "list-panes":
                 return 0, "4242\n"
+            if args and args[0] == "capture-pane":
+                # Bug B follow-up: inject_file's verification reads the
+                # composer's own bottom-border line — a blank capture is
+                # "unclear" (retried), not "submitted". These tests don't
+                # exercise injection-verification mechanics, so fake a
+                # normal blank/submitted composer so inject_file succeeds
+                # on the first paste, same as before that fix.
+                return 0, "╰─                              ─╯\n"
             return 0, ""
 
         def pid_alive(_pid):

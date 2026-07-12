@@ -359,6 +359,7 @@ class DispatchContext:
     semantic_memory_context: str = ""  # Phase A (2026-04-11): Qdrant vector hits
     intelligence_context: str = ""
     feedback_context: str = ""
+    review_comment_context: str = ""  # Bug A (2026-07-12): operator's request_changes comment
     meeting_context: str = ""
     credentials_text: str = ""
     dependency_context: str = ""
@@ -550,6 +551,36 @@ async def _load_dispatch_context(
             pass
         return ""
 
+    async def _load_review_comment() -> str:
+        """Bug A (2026-07-12): the operator's `request_changes` decision on
+        the human-review path (execute_review_decision) writes a TaskComment
+        with comment_type='review' (author_type='user'), NOT 'feedback'
+        (author_type='agent') — so _load_feedback above never picks it up.
+        On rework re-dispatch the agent got no trace of what the operator
+        actually asked to be changed and re-did the same work blind (live
+        trace: 8348-byte prompt, 0 hits for the operator's comment text).
+        Surfaced separately here and rendered as its own prominent block.
+        """
+        try:
+            review_result = await session.exec(
+                select(TaskComment)
+                .where(
+                    TaskComment.task_id == task.id,
+                    TaskComment.comment_type == "review",
+                )
+                .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )
+            last_review = review_result.first()
+            if not last_review or not last_review.content:
+                return ""
+            content = last_review.content[:1500]
+            if len(last_review.content) > 1500:
+                content += "\n[...gekuerzt]"
+            return content
+        except Exception:
+            return ""
+
     async def _load_project() -> tuple[Project | None, list[str]]:
         if not task.project_id:
             return None, []
@@ -676,6 +707,7 @@ async def _load_dispatch_context(
         _load_semantic_memory(),  # Phase A
         _load_intelligence(),
         _load_feedback(),
+        _load_review_comment(),
         _load_project(),
         _load_team(),
         _load_meeting_insights(),
@@ -692,15 +724,16 @@ async def _load_dispatch_context(
     ctx.semantic_memory_context = results[4] if isinstance(results[4], str) else ""
     ctx.intelligence_context = results[5] if isinstance(results[5], str) else ""
     ctx.feedback_context = results[6] if isinstance(results[6], str) else ""
+    ctx.review_comment_context = results[7] if isinstance(results[7], str) else ""
 
-    if isinstance(results[7], tuple):
-        ctx.project, ctx.project_tags = results[7]
-    if isinstance(results[8], list):
-        ctx.team_agents = results[8]
-    ctx.meeting_context = results[9] if isinstance(results[9], str) else ""
-    if isinstance(results[10], list):
-        ctx.child_tasks = results[10]
-    ctx.dependency_context = results[11] if isinstance(results[11], str) else ""
+    if isinstance(results[8], tuple):
+        ctx.project, ctx.project_tags = results[8]
+    if isinstance(results[9], list):
+        ctx.team_agents = results[9]
+    ctx.meeting_context = results[10] if isinstance(results[10], str) else ""
+    if isinstance(results[11], list):
+        ctx.child_tasks = results[11]
+    ctx.dependency_context = results[12] if isinstance(results[12], str) else ""
 
     # Per-repo working rules (ADR-050/052) — Task-Repo hat Vorrang vor dem
     # Projekt-Repo. Läuft nach dem gather (braucht ctx.project). Best-effort.

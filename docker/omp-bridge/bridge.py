@@ -1702,23 +1702,174 @@ class NativeTuiController:
         cmd = f"exec {self.launcher} {shlex.quote(cwd)}"
         self._run(["respawn-window", "-k", "-t", self.target, cmd])
 
-    def inject_file(self, path: str) -> None:
+    def inject_file(
+        self, path: str, *, max_paste_attempts: int = 2,
+        verify_attempts: int = 3, verify_wait: float = 1.0,
+        retry_backoff: float = 5.0,
+    ) -> bool:
         """Inject the dispatch as an `@/abs/path` mention (no body paste).
 
-        Verified in-container (omp v16.2.13 TUI): typing `@<existing-path>`
-        opens a file-mention AUTOCOMPLETE POPUP that swallows a bare Enter, so a
-        single Enter never submits. The robust sequence is:
+        Verified in-container (omp v16.2.13 TUI, manual repro 2026-07-12
+        12:23 on Sparky): typing `@<existing-path>` opens a file-mention
+        AUTOCOMPLETE POPUP that swallows a bare Enter, so a single Enter
+        never submits. The robust sequence is:
           1. type `@path`      -> popup appears, text in the input box,
           2. `Escape`          -> dismisses the popup, KEEPS the `@path` text,
           3. `Enter`           -> submits; omp resolves `@path` -> Read(file).
-        Escape is a no-op when no popup is showing, so this is safe either way.
-        Small key delays let the TUI process each event in order.
+        Escape is a no-op when no popup is showing, so this is safe either
+        way. Also empirically confirmed on that same repro: the composer's
+        bottom border line (`╰─...─╯`) shows the `@path` fragment BEFORE
+        submit and is blank (only border/space) AFTER — see
+        `_composer_state()`. Small key delays let the TUI process each event
+        in order.
+
+        Bug B (2026-07-12, live incident): the original version fired these
+        three `send-keys` calls and returned unconditionally — no return-code
+        check, no verification the text actually left the composer. A
+        transient `subprocess.run(..., timeout=15)` TimeoutExpired inside
+        `_run` (swallowed there, returns rc=1) then silently no-op'd: the
+        task stayed `in_progress`, the agent "working", the TUI sitting at
+        an empty Welcome screen forever.
+
+        Bug B follow-up (review, same day): the first verification attempt
+        scanned the last 400 chars of the WHOLE pane for the literal
+        `@path` string — two failure modes: (1) FALSE NEGATIVE — omp echoes
+        the submitted user message back into the transcript above the
+        composer, so a successful submit could still show `@path` in the
+        tail, causing up to `max_paste_attempts` redundant re-submissions of
+        the SAME task (duplicate dispatch, worse than the original bug);
+        (2) FALSE POSITIVE — a long path wraps across composer lines, so a
+        literal full-string match can miss a still-pending mention. Fixed by
+        checking ONLY the composer's own bottom-border line via
+        `_composer_state()`, matched against a short tail FRAGMENT of the
+        path (robust to line-wrapping — the filename tail is what lands on
+        the last visual line), and by hard-capping `@path` re-sends at
+        `max_paste_attempts` (default 2): the swallowed-Enter fallback
+        (bare Enter, no retyping) is cheap and idempotent — Enter on an
+        already-empty composer is a no-op — but a re-paste is the actual
+        duplicate-dispatch risk, so it only fires on POSITIVE evidence the
+        previous paste is still sitting there unsubmitted, never on an
+        "unclear" (failed/blank) capture-pane read.
+
+        Returns True once verified submitted, False if it definitively
+        failed — the caller MUST treat False as a hard failure (see
+        `_native_watchdog_kill` in run_native_turn / run_native_continue,
+        which escalates to the existing blocked-task fallback instead of
+        waiting out the multi-minute idle watchdog).
         """
-        self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
-        self._sleep(self.key_delay)
-        self._run(["send-keys", "-t", self.target, "Escape"])
-        self._sleep(self.key_delay)
-        self._run(["send-keys", "-t", self.target, "Enter"])
+        fragment = ("@" + path)[-24:]
+        paste_count = 0
+
+        while paste_count < max_paste_attempts:
+            self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
+            self._sleep(self.key_delay)
+            self._run(["send-keys", "-t", self.target, "Escape"])
+            self._sleep(self.key_delay)
+            self._run(["send-keys", "-t", self.target, "Enter"])
+            self._sleep(self.key_delay)
+            paste_count += 1
+
+            state = self._composer_state(fragment, verify_attempts, verify_wait)
+            if state == "submitted":
+                return True
+
+            if state == "pending":
+                # Swallowed-Enter fallback: cheap + idempotent (Enter on an
+                # empty composer is a no-op), does NOT count against the
+                # paste cap, no retyping.
+                self._run(["send-keys", "-t", self.target, "Enter"])
+                self._sleep(self.key_delay)
+                state = self._composer_state(fragment, verify_attempts, verify_wait)
+                if state == "submitted":
+                    return True
+
+            if state == "unclear":
+                # capture-pane never produced a clean read (TUI redraw) —
+                # do NOT re-paste on ambiguity (duplicate-dispatch risk).
+                # One more bounded wait-and-check; only a POSITIVE "pending"
+                # read earns a re-paste.
+                self._sleep(retry_backoff)
+                state = self._composer_state(fragment, verify_attempts, verify_wait)
+                if state == "submitted":
+                    return True
+                if state != "pending":
+                    break  # still unclear -> give up, do not guess
+
+            if paste_count < max_paste_attempts:
+                sys.stderr.write(
+                    f"[native] inject_file: composer still shows the pending "
+                    f"mention after paste {paste_count}/{max_paste_attempts} "
+                    f"(target={self.target}) — re-pasting in {retry_backoff}s\n"
+                )
+                self._sleep(retry_backoff)
+
+        sys.stderr.write(
+            f"[native] inject_file: FAILED after {paste_count} paste attempt(s) "
+            f"(target={self.target}) — giving up, caller must escalate\n"
+        )
+        return False
+
+    _COMPOSER_BOTTOM_PREFIX = "╰─"  # '╰─' — composer bottom-border edge
+    _COMPOSER_BORDER_CHARS = "╰╯─│╭╮ "  # ╰╯─│╭╮ + space
+
+    def _composer_state(
+        self, fragment: str, verify_attempts: int, verify_wait: float,
+    ) -> str:
+        """Read the composer's bottom-border line and classify it.
+
+        What is EMPIRICALLY verified (manual repro 2026-07-12 12:23, Sparky
+        pane, live repair of a stuck task): the Escape-then-Enter sequence
+        submits an `@path` mention out of the file-mention autocomplete
+        popup, and the composer's bottom-border line (`╰─...─╯`) visibly
+        contains the `@path` text before that submit and is blank
+        (border/space only) immediately after. That direct observation is
+        exactly the two-way "pending" vs "submitted" split below.
+
+        What is a DEFENSIVE DESIGN CHOICE, not something separately
+        observed: the `verify_attempts` capture-retry loop and the
+        "unclear" state. A capture-pane call returning empty output DID
+        happen live during that same repro (a TUI-redraw timing gap) — but
+        whether every blank capture always means "mid-redraw" specifically
+        (vs. some other transient tmux hiccup) isn't verified; treating it
+        as "unclear" and retrying the capture rather than the paste is the
+        conservative choice given that ambiguity, not a confirmed root
+        cause.
+
+        Returns "submitted" (border line is blank besides frame chars),
+        "pending" (the `fragment` tail of our `@path` is still sitting in
+        it, OR the border line holds unrecognized non-blank content — never
+        guess "submitted" from an ambiguous read), or "unclear" (capture-pane
+        failed/blank for `verify_attempts` tries in a row, or no
+        composer-border line was found at all in an otherwise valid
+        capture). Retries the CAPTURE (not the injection) up to
+        `verify_attempts` times, only while it keeps coming back
+        blank/failed.
+        """
+        out = None
+        for _ in range(max(1, verify_attempts)):
+            rc, captured = self._run(["capture-pane", "-t", self.target, "-p"])
+            if rc == 0 and captured and captured.strip():
+                out = captured
+                break
+            self._sleep(verify_wait)
+        if out is None:
+            return "unclear"
+
+        composer_line = None
+        for line in out.splitlines():
+            if line.strip().startswith(self._COMPOSER_BOTTOM_PREFIX):
+                composer_line = line
+        if composer_line is None:
+            return "unclear"
+
+        content = composer_line.strip(self._COMPOSER_BORDER_CHARS).strip()
+        if not content:
+            return "submitted"
+        if fragment in composer_line:
+            return "pending"
+        # Non-blank border line that doesn't match our fragment — some other
+        # state we don't recognize. Never guess "submitted" from this.
+        return "pending"
 
     def reset_conversation(self) -> None:
         """`/new` slash-reset (same process, same cwd). Kept as an alternative
@@ -1951,7 +2102,13 @@ def run_native_turn(
 
     # 3. Inject the wrapped dispatch via an @file mention (no paste of the body).
     _write_task_file(task_file_path, prompt)
-    controller.inject_file(task_file_path)
+    if not controller.inject_file(task_file_path):
+        # Bug B: injection definitively failed (retries exhausted) — escalate
+        # immediately via the same watchdog-kill path used for a dead/wedged
+        # TUI, instead of silently waiting out the multi-minute idle timeout
+        # with nothing ever having been typed. Feeds the existing
+        # retry-then-blocker policy in drive_live_run.
+        return _native_watchdog_kill(controller, outcome, cwd)
 
     # 4. Tail the hook signal for this task's terminal turn.
     return _observe_native_turn(
@@ -1991,7 +2148,10 @@ def run_native_continue(
         return _native_watchdog_kill(controller, outcome, cwd)
 
     _write_task_file(task_file_path, nudge_prompt)
-    controller.inject_file(task_file_path)
+    if not controller.inject_file(task_file_path):
+        # Bug B: same escalation as run_native_turn — a failed nudge
+        # injection must not sit silently in_progress either.
+        return _native_watchdog_kill(controller, outcome, cwd)
 
     return _observe_native_turn(
         controller, outcome, cwd=cwd, turn_deadline=turn_deadline,

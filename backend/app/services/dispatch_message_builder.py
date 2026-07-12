@@ -720,6 +720,18 @@ def _format_dispatch_message(
     if ctx.feedback_context:
         _add("feedback", f"\n## ⚠ Review Feedback — you need to fix this\n{ctx.feedback_context}")
 
+    # Bug A (2026-07-12): the operator's request_changes comment (human-review
+    # path, comment_type="review") is a SEPARATE source from ctx.feedback_context
+    # above (comment_type="feedback", agent-reviewer-only) — without this block
+    # a rework re-dispatch carried no trace of what the operator asked to be
+    # fixed and the agent blindly repeated the same work. Mandatory + first,
+    # so the agent reads it before anything else.
+    if task.dispatch_intent == "review_rework" and ctx.review_comment_context:
+        _add(
+            "review_feedback_operator",
+            f"\n## Review-Feedback (ZUERST lesen)\n{ctx.review_comment_context}",
+        )
+
     if task.description:
         _add("description", f"\n## Description\n{task.description}")
 
