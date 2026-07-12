@@ -297,7 +297,8 @@ async def test_rejection_reassigns_to_original_developer(client, fake_redis):
                     )
 
     assert result is not None
-    assert result.id == data["developer"].id
+    assert result.developer is not None  # PR #109: ReviewRejectionResult
+    assert result.developer.id == data["developer"].id
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task
@@ -354,7 +355,8 @@ async def test_rejection_busy_dev_queues_task(client, fake_redis):
                 )
 
     assert result is not None
-    assert result.id == data["developer"].id
+    assert result.developer is not None  # PR #109: ReviewRejectionResult
+    assert result.developer.id == data["developer"].id
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         from app.models.task import Task

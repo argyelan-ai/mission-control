@@ -161,10 +161,16 @@ async def test_review_rejection_queues_with_dispatched_inbox_task(
 
 
 @pytest.mark.asyncio
-async def test_review_rejection_no_dev_found_keeps_in_progress(
+async def test_review_rejection_no_dev_found_resolves_to_inbox(
     auth_client, make_board, make_task
 ):
-    """If no developer is found, the task stays in_progress without reassignment."""
+    """No developer reconstructable -> "no_developer" outcome (Bug C, PR #109):
+    the task must NOT linger as an unwatched in_progress ghost — it is forced
+    to inbox unassigned so auto-dispatch can route it to the Board Lead.
+
+    (This replaces the pre-#109 expectation that the task silently stayed
+    in_progress — exactly the ghost-state #109 fixed. The old assertion was
+    left stale in that PR and broke main CI.)"""
     board = await make_board(name="MC Dev", slug="mc-dev-4")
 
     review_task = await make_task(
@@ -186,5 +192,5 @@ async def test_review_rejection_no_dev_found_keeps_in_progress(
 
     assert resp.status_code == 200
     data = resp.json()
-    assert data["status"] == "in_progress"
+    assert data["status"] == "inbox"
     assert data["assigned_agent_id"] is None
