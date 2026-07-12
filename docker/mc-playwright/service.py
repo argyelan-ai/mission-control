@@ -36,6 +36,7 @@ from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
+    RECORD_SETTLE_S,
     VIEWPORTS,
     BrandingSpec,
     ComposeRequest,
@@ -890,7 +891,18 @@ def _run_ffmpeg(cmd: list[str]) -> None:
 async def record(req: RecordRequest):
     """Laedt html_path/url, nimmt duration_s Sekunden Video auf (webm via
     Playwright record_video), transkodiert zu H.264 mp4 und speichert
-    zusaetzlich screenshot.png (Thumbnail/Fallback) nach output_dir."""
+    zusaetzlich screenshot.png (Thumbnail/Fallback) nach output_dir.
+
+    White-flash fix (2026-07-12): die Aufnahme startet bei Page-Creation,
+    also vor dem ersten Paint der Ziel-Seite — Chromiums weisse Default-Page
+    landet als Blitz am Videoanfang. Gegenmassnahmen:
+      1. RECORD_SETTLE_S extra aufnehmen + im Transcode frame-genau vom Kopf
+         schneiden (die eigentliche Korrektur — geliefertes mp4 startet auf
+         echtem Content und behaelt ~duration_s).
+      2. Belt-and-braces: CDP Emulation.setDefaultBackgroundColorOverride
+         faerbt Chromiums Pre-Paint-Hintergrund dunkel (bench-bg #06070A),
+         damit auch der Rest des Settle-Fensters nicht weiss ist. Best
+         effort — wenn der CDP-Call fehlt/fehlschlaegt, rettet der Trim."""
     out_dir = _require_shared_path(req.output_dir, "output_dir")
     if req.html_path:
         html = _require_shared_path(req.html_path, "html_path")
@@ -913,10 +925,23 @@ async def record(req: RecordRequest):
                 )
                 page = await context.new_page()
                 try:
+                    # Pre-paint frames dunkel faerben (CDP, chromium-only).
+                    cdp = await context.new_cdp_session(page)
+                    await cdp.send(
+                        "Emulation.setDefaultBackgroundColorOverride",
+                        {"color": {"r": 6, "g": 7, "b": 10, "a": 255}},  # #06070A
+                    )
+                except Exception as e:  # noqa: BLE001 — best effort, trim covers it
+                    logger.warning("record: background override failed (%s)", e)
+                try:
                     await page.goto(req.target_url, wait_until="load", timeout=30000)
                 except Exception as e:
                     raise HTTPException(502, f"Navigation failed ({req.target_url}): {e}")
-                await page.wait_for_timeout(req.duration_s * 1000)
+                # Settle-Fenster + gewuenschte Dauer aufnehmen; das Settle-
+                # Stueck wird im Transcode vom Kopf geschnitten.
+                await page.wait_for_timeout(
+                    int((req.duration_s + RECORD_SETTLE_S) * 1000)
+                )
                 await page.screenshot(path=str(screenshot_path), full_page=False)
                 video = page.video
                 await context.close()  # flushes the webm to record_video_dir
@@ -924,9 +949,14 @@ async def record(req: RecordRequest):
             finally:
                 await browser.close()
 
-        # ffmpeg braucht das webm bevor der TemporaryDirectory-Context endet
+        # ffmpeg braucht das webm bevor der TemporaryDirectory-Context endet.
+        # trim_start_s schneidet das Settle-Fenster (weisser Pre-Paint-Blitz)
+        # frame-genau vom Kopf — geliefertes mp4 ~ duration_s.
         await asyncio.to_thread(
-            _run_ffmpeg, build_transcode_cmd(str(webm_path), str(video_path))
+            _run_ffmpeg,
+            build_transcode_cmd(
+                str(webm_path), str(video_path), trim_start_s=RECORD_SETTLE_S
+            ),
         )
 
     logger.info(

@@ -9,6 +9,7 @@ from pydantic import ValidationError
 
 from media import (
     DEJAVU_BOLD,
+    RECORD_SETTLE_S,
     SLOT_A_XY,
     SLOT_B_XY,
     SLOT_BG_COLOR,
@@ -140,6 +141,33 @@ def test_build_transcode_cmd():
         "-an",
         "/shared-deliverables/out.mp4",
     ]
+
+
+def test_build_transcode_cmd_head_trim_is_output_side_seek():
+    """White-flash fix: trim_start_s cuts the head via ACCURATE (output-side)
+    seek — `-ss` must come AFTER `-i`, otherwise ffmpeg snaps to keyframes and
+    the cut lands visibly wrong on Playwright's sparse-keyframe webm. Output
+    duration semantics: delivered mp4 = source duration - trim_start_s (the
+    /record endpoint records duration_s + RECORD_SETTLE_S extra for this, so
+    the delivered file keeps the requested duration_s)."""
+    cmd = build_transcode_cmd(
+        "/tmp/in.webm", "/sd/out.mp4", trim_start_s=RECORD_SETTLE_S
+    )
+    i_idx = cmd.index("-i")
+    ss_idx = cmd.index("-ss")
+    assert ss_idx > i_idx  # output-side seek = frame accurate
+    assert cmd[ss_idx + 1] == str(RECORD_SETTLE_S)
+    # Codec flags unchanged behind the trim:
+    assert "libx264" in cmd and "yuv420p" in cmd and cmd[-1] == "/sd/out.mp4"
+
+
+def test_build_transcode_cmd_no_trim_no_ss():
+    cmd = build_transcode_cmd("/tmp/in.webm", "/sd/out.mp4", trim_start_s=0.0)
+    assert "-ss" not in cmd
+
+
+def test_record_settle_default_one_second():
+    assert RECORD_SETTLE_S == 1.0
 
 
 # ── build_compose_cmd ─────────────────────────────────────────────────────────

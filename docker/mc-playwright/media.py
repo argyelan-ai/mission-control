@@ -139,12 +139,33 @@ def escape_drawtext(text: str) -> str:
     )
 
 
-def build_transcode_cmd(src: str, dst: str) -> List[str]:
+# Head-trim for /record (2026-07-12): Playwright starts recording at context
+# creation, so the first frames show Chromium's default white page before the
+# HTML's first paint — a white flash at the start of every bench video. Fix:
+# record RECORD_SETTLE_S extra seconds and cut them off the head in the
+# transcode step — the delivered mp4 keeps the requested duration_s and
+# starts on real content.
+RECORD_SETTLE_S = 1.0
+
+
+def build_transcode_cmd(src: str, dst: str, trim_start_s: float = 0.0) -> List[str]:
     """webm (Playwright record_video) -> H.264 mp4, X-compatible
-    (yuv420p + faststart), constant 30 fps, no audio track."""
-    return [
+    (yuv420p + faststart), constant 30 fps, no audio track.
+
+    trim_start_s > 0 cuts that many seconds off the HEAD of the recording
+    (white-flash fix, see RECORD_SETTLE_S). The `-ss` sits AFTER `-i`
+    deliberately: output-side seeking decodes from the start and trims
+    frame-accurately, while input-side `-ss` snaps to keyframes — with
+    Playwright's sparse-keyframe webm that cuts visibly wrong. Output
+    duration = source duration - trim_start_s.
+    """
+    cmd = [
         FFMPEG_BIN, "-y",
         "-i", src,
+    ]
+    if trim_start_s > 0:
+        cmd += ["-ss", str(trim_start_s)]
+    cmd += [
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-r", "30",
@@ -154,6 +175,7 @@ def build_transcode_cmd(src: str, dst: str) -> List[str]:
         "-an",
         dst,
     ]
+    return cmd
 
 
 def build_compose_cmd(
