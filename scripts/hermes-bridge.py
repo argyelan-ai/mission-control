@@ -42,6 +42,19 @@ TMUX_BIN = shutil.which("tmux") or "/opt/homebrew/bin/tmux"
 DISPATCH_POLL_INTERVAL = int(os.environ.get("HERMES_DISPATCH_POLL_INTERVAL", "5"))
 _last_dispatched_task_id: str | None = None  # Idempotency cache (module-scoped)
 
+# Session-reset on GENUINE task switch (ADR-068 addendum, twin of grok-bridge).
+# Dispatch semantics (dispatch.py:8-18) promise a fresh context per NEW task —
+# without a reset the paste model accumulates every task into one conversation
+# (observed live 2026-07-12: 30% context fill from prior tasks). hermes-agent
+# gates bare /new behind a destructive-command confirm modal; the inline skip
+# token `now` (cli.py _split_destructive_skip) bypasses it non-interactively.
+RESET_COMMAND = os.environ.get("HERMES_RESET_COMMAND", "/new now")
+# Last dispatched task id, persisted to DISK so a bridge restart cannot erase
+# switch detection (_last_dispatched_task_id above resets on restart).
+LAST_TASK_FILE = WORKSPACE / "logs" / "last-task-id"
+# How long the TUI needs to rotate sessions before the next paste is safe.
+RESET_SETTLE_SECONDS = float(os.environ.get("HERMES_RESET_SETTLE_SECONDS", "3"))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("hermes-bridge")
 
@@ -188,6 +201,51 @@ def _send_to_tmux(prompt: str) -> None:
     _sp.run([TMUX_BIN, "send-keys", "-t", SESSION, "Enter"], check=False, env=os.environ)
 
 
+def load_last_task_id() -> str | None:
+    """Read the persisted last-dispatched task id (None if never dispatched)."""
+    try:
+        value = LAST_TASK_FILE.read_text(encoding="utf-8").strip()
+        return value or None
+    except FileNotFoundError:
+        return None
+    except OSError as e:  # unreadable state file → treat as unknown, never crash
+        log.warning("load_last_task_id: %s — treating as no prior task", e)
+        return None
+
+
+def save_last_task_id(task_id: str) -> None:
+    """Persist the last-dispatched task id for switch detection across restarts."""
+    try:
+        LAST_TASK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_TASK_FILE.write_text(f"{task_id}\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("save_last_task_id: %s — switch detection may miss one restart", e)
+
+
+def should_reset_session(new_task_id: str, last_task_id: str | None) -> bool:
+    """Reset ONLY on a genuine task switch (dispatch.py:8-18 semantics).
+
+    - different task than the last dispatched one → True (fresh context)
+    - same task (revision / request_changes / restart redelivery) → False
+    - no known prior task → False (nothing to clear)
+    """
+    return bool(last_task_id) and new_task_id != last_task_id
+
+
+def reset_tui_session() -> None:
+    """Submit RESET_COMMAND (/new now) into the hermes TUI and let it settle.
+
+    Reuses the proven _send_to_tmux mechanic (literal keys + Enter — the
+    hermes prompt_toolkit TUI submits on LF, unlike raw-mode ptys). The `now`
+    token bypasses the destructive-command confirm modal, so no second
+    keystroke is needed. A short settle sleep keeps the subsequent task paste
+    out of the session rotation window.
+    """
+    log.info("task switch — resetting hermes TUI session (%s)", RESET_COMMAND)
+    _send_to_tmux(RESET_COMMAND)
+    time.sleep(RESET_SETTLE_SECONDS)
+
+
 def _build_comments_prompt(comments: list) -> str:
     """Build a paste-ready prompt for a batch of new_comments from /me/poll.
 
@@ -321,8 +379,13 @@ def dispatch_poll_loop() -> None:
                             )
                             time.sleep(DISPATCH_POLL_INTERVAL)
                             continue
+                    # Fresh context per NEW task (dispatch.py:8-18); same-task
+                    # redeliveries (revision / restart) keep the context.
+                    if should_reset_session(str(task["id"]), load_last_task_id()):
+                        reset_tui_session()
                     prompt = _build_dispatch_prompt(task)
                     _send_to_tmux(prompt)
+                    save_last_task_id(str(task["id"]))
                     _last_dispatched_task_id = task["id"]
                     log.info(
                         "dispatch_poll_loop: dispatched task %s (%s)",

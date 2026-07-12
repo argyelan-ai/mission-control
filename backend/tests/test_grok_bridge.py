@@ -498,3 +498,108 @@ def test_launch_shell_cmd_sources_agent_env_in_window_shell(bridge):
     assert str(bridge.ENV_FILE) in line
     assert "; set +a; exec " in line
     assert not line.startswith("sh -c")  # tmux already runs the line via sh -c
+
+
+# ── session reset on task switch (ADR-068 addendum) ──────────────────────────────
+#
+# Dispatch semantics (dispatch.py:8-18): a NEW task must start with a fresh
+# context. The v2 TUI paste model lost that property — tasks were pasted into
+# the accumulated conversation. The bridge now sends the TUI's session-reset
+# slash command (/new, verified live: instant, no picker outside a git repo)
+# on a GENUINE task switch only:
+#   - different task id than the last dispatched one  → reset
+#   - same task id, new attempt (revision/request_changes/re-dispatch) → NO reset
+#   - no known last task (first dispatch ever)        → NO reset
+# The last dispatched task id is persisted to disk so a bridge restart cannot
+# erase switch detection (in-memory dedup resets on restart; the file does not).
+
+
+def test_should_reset_session_decision_table(bridge):
+    """Reset ONLY on a genuine task switch: known last task, different new task."""
+    # First dispatch ever (no persisted last task) → no reset.
+    assert bridge.should_reset_session("task-b", None) is False
+    assert bridge.should_reset_session("task-b", "") is False
+    # Same task re-dispatch (revision / request_changes / recovery) → no reset.
+    assert bridge.should_reset_session("task-a", "task-a") is False
+    # Genuine switch → reset.
+    assert bridge.should_reset_session("task-b", "task-a") is True
+
+
+def test_last_task_id_persists_to_disk(bridge, tmp_path, monkeypatch):
+    """Switch detection must survive a bridge restart → file-backed, not memory."""
+    state_file = tmp_path / "last-task-id"
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", state_file)
+    assert bridge.load_last_task_id() is None
+    bridge.save_last_task_id("task-a")
+    assert state_file.read_text(encoding="utf-8").strip() == "task-a"
+    assert bridge.load_last_task_id() == "task-a"
+
+
+def test_reset_tui_session_sends_literal_command_then_cr(bridge, monkeypatch):
+    """The reset command goes in as LITERAL keys + raw CR (-H 0d) — never through
+    the bracketed-paste path (a paste-mode TUI would swallow the slash command;
+    CR is the universal submit, see poll.sh Bug 2026-05-15)."""
+    calls = _tmux_recorder(monkeypatch, bridge, running=True, pane="❯")
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+    bridge.reset_tui_session()
+    sends = [c for c in calls if c and c[0] == "send-keys"]
+    assert any("-l" in c and bridge.RESET_COMMAND in c for c in sends), sends
+    assert any("-H" in c and "0d" in c for c in sends), sends
+    # No load-buffer/paste-buffer for the slash command.
+    assert not any(c[0] in ("load-buffer", "paste-buffer") for c in calls)
+
+
+def test_dispatch_task_resets_session_on_task_switch(bridge, tmp_path, monkeypatch):
+    """Task A done → task B arrives: reset fires BEFORE context+paste of B."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    bridge.save_last_task_id("task-a")
+    order: list[str] = []
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: order.append("reset"))
+    monkeypatch.setattr(bridge, "deliver_task_context", lambda task: order.append("context"))
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: order.append("paste"))
+
+    ok = bridge.dispatch_task({"id": "task-b", "title": "x", "prompt": "y"}, {})
+    assert ok is True
+    assert order == ["reset", "context", "paste"]
+    # Persisted pointer moved on to task-b.
+    assert bridge.load_last_task_id() == "task-b"
+
+
+def test_dispatch_task_no_reset_on_same_task_revision(bridge, tmp_path, monkeypatch):
+    """Same task, fresh attempt id (operator revision / request_changes):
+    the agent keeps its context — NO reset."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    bridge.save_last_task_id("task-a")
+    order: list[str] = []
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: order.append("reset"))
+    monkeypatch.setattr(bridge, "deliver_task_context", lambda task: order.append("context"))
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: order.append("paste"))
+
+    ok = bridge.dispatch_task(
+        {"id": "task-a", "dispatch_attempt_id": "attempt-2", "title": "x", "prompt": "y"}, {},
+    )
+    assert ok is True
+    assert order == ["context", "paste"]
+
+
+def test_dispatch_task_no_reset_on_first_dispatch(bridge, tmp_path, monkeypatch):
+    """No persisted last task (fresh install / first ever dispatch) → no reset."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    order: list[str] = []
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: order.append("reset"))
+    monkeypatch.setattr(bridge, "deliver_task_context", lambda task: order.append("context"))
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: order.append("paste"))
+
+    ok = bridge.dispatch_task({"id": "task-a", "title": "x", "prompt": "y"}, {})
+    assert ok is True
+    assert order == ["context", "paste"]
+    assert bridge.load_last_task_id() == "task-a"
+
+
+def test_reset_command_default_is_new(bridge):
+    """grok TUI: /new starts a fresh session (verified live 2026-07-12 — instant,
+    no worktree picker because the grok workspace is not a git repo)."""
+    assert bridge.RESET_COMMAND == "/new"

@@ -59,18 +59,20 @@ class HermesAdapter:
 
 
 class GrokAdapter:
-    """Grok Build CLI as a host harness (ADR-066).
+    """Grok Build CLI as a host harness (ADR-066, delivery model superseded by ADR-068).
 
-    Unlike Hermes (a persistent tmux TUI bound to a vLLM runtime), grok is a
-    headless per-dispatch subprocess that talks ONLY to xAI cloud over its own
-    OAuth. So `protocol` is the fixed "grok" wire protocol (harness_compat), and
-    `build_agent_env` renders NO provider env — just the MC_* control-plane vars
-    the grok-bridge needs to poll/heartbeat. The runtime binding is a display
-    anchor only; grok reads its model/endpoint from its own cloud session.
+    Like Hermes, grok runs as a persistent tmux TUI (session "grok") that the
+    grok-bridge pastes dispatches into (ADR-068 — the v1 headless per-dispatch
+    subprocess is retired; `-p` is banned fleet-wide). It talks ONLY to xAI
+    cloud over its own OAuth. So `protocol` is the fixed "grok" wire protocol
+    (harness_compat), and `build_agent_env` renders NO provider env — just the
+    MC_* control-plane vars the grok-bridge needs to poll/heartbeat. The
+    runtime binding is a display anchor only; grok reads its model/endpoint
+    from its own cloud session. The bridge resets the TUI session (`/new`) on
+    a genuine task switch — see ADR-068 Nachtrag 2026-07-12.
 
     reload() reuses the generic host lifecycle path (launchctl kickstart of the
-    grok-bridge plist). grok has no persistent LLM session to kill — restarting
-    the bridge re-sources agent.env for the next dispatch, which IS the reload.
+    grok-bridge plist), which re-sources agent.env for the next dispatch.
     """
 
     harness = "grok"
