@@ -64,17 +64,44 @@ def _api(method: str, path: str, **kwargs) -> dict:
 # that task actions performed by the agent are attributed to the AGENT
 # (author_type='agent') instead of the admin user shown as '👤 Du' — which also
 # stops the self-notification echo loop (own comments are filtered out on poll).
-MC_AGENT_TOKEN = os.environ.get("MC_AGENT_TOKEN", "").strip()
+#
+# Resolved at CALL time, never snapshotted at import (live incident 2026-07-12:
+# the long-lived hermes gateway spawned this server with a stale/poisoned token
+# in its process env — every agent-scoped call failed for days while the admin
+# JWT path kept working). Fallback: the agent.env file pointed to by
+# MC_AGENT_ENV_FILE (set e.g. in the hermes gateway plist), which also picks up
+# token rotations without a process restart.
+
+def _agent_token() -> str:
+    token = os.environ.get("MC_AGENT_TOKEN", "").strip()
+    if token:
+        return token
+    env_file = os.environ.get("MC_AGENT_ENV_FILE", "").strip()
+    if env_file:
+        try:
+            with open(env_file, encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line.startswith("MC_AGENT_TOKEN="):
+                        value = line.partition("=")[2].strip()
+                        # agent.env values may carry one layer of shell quoting.
+                        if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+                            value = value[1:-1]
+                        return value.strip()
+        except OSError:
+            pass
+    return ""
 
 def _api_agent(method: str, path: str, **kwargs):
     """Call an agent-scoped endpoint AS the agent. Returns None when no agent
     token is available so callers can fall back to the admin _api()."""
-    if not MC_AGENT_TOKEN:
+    token = _agent_token()
+    if not token:
         return None
     try:
         with httpx.Client(timeout=15) as c:
             r = c.request(method, f"{MC_BASE}{path}",
-                          headers={"Authorization": f"Bearer {MC_AGENT_TOKEN}"}, **kwargs)
+                          headers={"Authorization": f"Bearer {token}"}, **kwargs)
             r.raise_for_status()
             return r.json()
     except httpx.HTTPStatusError as e:
