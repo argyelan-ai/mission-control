@@ -455,3 +455,52 @@ async def test_dispatch_agent_entry_survives_fk_enforcement(monkeypatch):
             assert task is not None
     finally:
         await fk_engine.dispose()
+
+
+# ── /compose response contract ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_parses_sidecar_response(monkeypatch):
+    """The sidecar's ComposeResponse names the field `output_path` (see
+    docker/mc-playwright/media.py) — NOT `video_path` like RecordResponse.
+    compose_challenge crashed with KeyError('video_path') on the first live
+    side-by-side run (2026-07-12); existing flow tests mock compose_challenge
+    away, so pin the parsing contract here."""
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # Exact shape of media.ComposeResponse
+            return {"output_path": "/shared-deliverables/bench-x/grid.mp4",
+                    "bytes": 123, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            assert url.endswith("/compose")
+            assert set(json) >= {"inputs", "labels", "layout", "output_path"}
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    ch.id = uuid.uuid4()
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    result = await orchestrator.compose_challenge(ch, entries)
+    assert result == "/shared-deliverables/bench-x/grid.mp4"

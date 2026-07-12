@@ -353,7 +353,10 @@ async def compose_challenge(
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()
-        return resp.json()["video_path"]
+        # ComposeResponse (service.py) names the field output_path — NOT
+        # video_path like /record's RecordResponse (KeyError incident
+        # 2026-07-12, first live side-by-side compose).
+        return resp.json()["output_path"]
 
 
 async def _render_and_compose(
