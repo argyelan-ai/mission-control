@@ -942,7 +942,20 @@ async def record(req: RecordRequest):
                 await page.wait_for_timeout(
                     int((req.duration_s + RECORD_SETTLE_S) * 1000)
                 )
-                await page.screenshot(path=str(screenshot_path), full_page=False)
+                # Screenshot ist sekundaer zum Video und darf den Record nie
+                # scheitern lassen: Seiten mit Endlos-Animation (Canvas/rAF)
+                # reissen Playwrights Frame-Stabilitaets-Wartezeit in den
+                # Timeout (Vorfall 2026-07-12, Horror-Forest-Bench).
+                # animations="disabled" + kurzer Timeout + best effort.
+                try:
+                    await page.screenshot(
+                        path=str(screenshot_path),
+                        full_page=False,
+                        animations="disabled",
+                        timeout=10000,
+                    )
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("record: screenshot skipped (%s)", e)
                 video = page.video
                 await context.close()  # flushes the webm to record_video_dir
                 webm_path = await video.path()
@@ -965,7 +978,8 @@ async def record(req: RecordRequest):
     )
     return RecordResponse(
         video_path=str(video_path),
-        screenshot_path=str(screenshot_path),
+        # "" wenn der Screenshot uebersprungen wurde (siehe best-effort oben)
+        screenshot_path=str(screenshot_path) if screenshot_path.exists() else "",
         duration_s=req.duration_s,
         bytes=video_path.stat().st_size,
     )
