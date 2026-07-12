@@ -86,7 +86,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: "Animate 100 bouncing balls", mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 
@@ -121,7 +121,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: null,
       prompt_text: "Custom text", mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 
@@ -157,6 +157,53 @@ describe("NewChallengeDialog — template picker", () => {
     });
   });
 
+  it("sends display_tag per model (typed value; null when left blank)", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    // Fill mandatory fields (Freitext path)
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Tag Test");
+    const textarea = screen.getByPlaceholderText(/prompt/i);
+    await userEvent.type(textarea, "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(z\. B\./i), "Qwen");
+
+    // Tag input shows the derived default as placeholder (spark row)
+    const tagInput = screen.getByRole("textbox", { name: /tag 1/i });
+    expect((tagInput as HTMLInputElement).placeholder).toContain("VLLM · SPARK");
+
+    // Type a custom tag
+    await userEvent.type(tagInput, "OMP · DGX SPARK");
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          models: [expect.objectContaining({ label: "Qwen", display_tag: "OMP · DGX SPARK" })],
+        })
+      );
+    });
+  });
+
+  it("sends display_tag: null when the tag field is left empty", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Tag Test");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(z\. B\./i), "Qwen");
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          models: [expect.objectContaining({ display_tag: null })],
+        })
+      );
+    });
+  });
+
   it("prefillTemplate prop preselects the template in the dropdown", async () => {
     const prefill: PromptTemplate = {
       id: "tpl-2",
@@ -180,7 +227,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: editedText, mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 

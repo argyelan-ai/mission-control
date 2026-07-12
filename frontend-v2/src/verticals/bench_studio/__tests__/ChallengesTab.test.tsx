@@ -33,19 +33,20 @@ const CHALLENGE: BenchChallenge = {
   composed_video_path: null,
   content_pipeline_id: null,
   error: null,
+  archived_at: null,
   created_at: "2026-07-11T10:00:00Z",
   updated_at: "2026-07-11T10:00:00Z",
   entries: [
     {
       id: "e-1", challenge_id: "ch-1", model_label: "DeepSeek",
-      source_kind: "spark", spark_model: "deepseek-x", agent_id: null,
+      source_kind: "spark", spark_model: "deepseek-x", agent_id: null, display_tag: null,
       task_id: null, status: "rendered", artifact_path: "/sd/a/index.html",
       video_path: "/sd/a.mp4", screenshot_path: null,
       metrics: { duration_ms: 42000, tok_per_s: 87 }, error: null,
     },
     {
       id: "e-2", challenge_id: "ch-1", model_label: "Claude",
-      source_kind: "agent", spark_model: null, agent_id: "a-1",
+      source_kind: "agent", spark_model: null, agent_id: "a-1", display_tag: null,
       task_id: "t-1", status: "generating", artifact_path: null,
       video_path: null, screenshot_path: null, metrics: {}, error: null,
     },
@@ -85,5 +86,24 @@ describe("ChallengesTab", () => {
     vi.mocked(benchApi.challenges.list).mockResolvedValue([]);
     renderTab();
     expect(await screen.findByText(/Noch keine Challenges/)).toBeTruthy();
+  });
+
+  it("hides archived by default; 'Archiv anzeigen' re-queries with includeArchived", async () => {
+    const user = (await import("@testing-library/user-event")).default;
+    renderTab();
+    await screen.findByText("Bouncing balls");
+    expect(vi.mocked(benchApi.challenges.list)).toHaveBeenCalledWith(false);
+
+    const archived: BenchChallenge = {
+      ...CHALLENGE, id: "ch-2", title: "Old run", status: "review",
+      archived_at: "2026-07-12T10:00:00Z",
+    };
+    vi.mocked(benchApi.challenges.list).mockResolvedValue([CHALLENGE, archived]);
+
+    await user.click(screen.getByRole("button", { name: /Archiv anzeigen/ }));
+    expect(await screen.findByText("Old run")).toBeTruthy();
+    expect(vi.mocked(benchApi.challenges.list)).toHaveBeenCalledWith(true);
+    // Archived row is marked:
+    expect(screen.getByText("archiviert")).toBeTruthy();
   });
 });

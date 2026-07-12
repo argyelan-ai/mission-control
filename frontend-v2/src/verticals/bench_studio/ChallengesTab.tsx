@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Plus, FlaskConical } from "lucide-react";
+import { Plus, FlaskConical, Archive } from "lucide-react";
 import { C } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
 import { benchApi } from "@/verticals/bench_studio/api";
@@ -38,6 +38,7 @@ export function ChallengesTab({
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
 
   // Prefill from Prompt Library ("Challenge starten"):
   useEffect(() => {
@@ -46,8 +47,8 @@ export function ChallengesTab({
 
   // Live progress via 5s polling — no generic SSE hook exists for bench.
   const { data: challenges } = useQuery({
-    queryKey: ["bench-challenges"],
-    queryFn: benchApi.challenges.list,
+    queryKey: ["bench-challenges", showArchived],
+    queryFn: () => benchApi.challenges.list(showArchived),
     refetchInterval: 5000,
   });
 
@@ -63,13 +64,26 @@ export function ChallengesTab({
         <span className="text-sm" style={{ color: C.textSecondary }}>
           {rows.length} Challenges
         </span>
-        <button
-          onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
-          style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-        >
-          <Plus size={14} /> Neue Challenge
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowArchived((v) => !v)}
+            aria-pressed={showArchived}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
+            style={{
+              color: showArchived ? C.accent : C.textSecondary,
+              border: `1px solid ${showArchived ? C.borderAccent : C.border}`,
+            }}
+          >
+            <Archive size={13} /> Archiv anzeigen
+          </button>
+          <button
+            onClick={() => setCreateOpen(true)}
+            className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
+            style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
+          >
+            <Plus size={14} /> Neue Challenge
+          </button>
+        </div>
       </div>
 
       {rows.length === 0 && (
@@ -131,9 +145,16 @@ function ChallengeRow({
             ))}
           </div>
         </div>
-        <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
-          {challenge.status}
-        </Pill>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {challenge.archived_at && (
+            <Pill color={C.textMuted} variant="outline">
+              archiviert
+            </Pill>
+          )}
+          <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
+            {challenge.status}
+          </Pill>
+        </div>
       </div>
       {challenge.error && (
         <div className="mt-2 text-xs" style={{ color: C.error }}>

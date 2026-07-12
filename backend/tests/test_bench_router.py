@@ -53,6 +53,19 @@ async def test_create_challenge_freezes_prompt_and_fans_out(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_create_challenge_persists_display_tag(auth_client):
+    """Optional per-entry display_tag is persisted (blank -> NULL)."""
+    body = _create_body()
+    body["models"][0]["display_tag"] = "OMP · DGX SPARK"
+    body["models"][1]["display_tag"] = "   "  # whitespace-only -> normalized to NULL
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 201, resp.text
+    tags = {e["model_label"]: e["display_tag"] for e in resp.json()["entries"]}
+    assert tags["DeepSeek"] == "OMP · DGX SPARK"
+    assert tags["Claude"] is None
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_requires_prompt(auth_client):
     resp = await auth_client.post(
         "/api/v1/bench/challenges", json=_create_body(prompt_text=None)
@@ -243,3 +256,167 @@ async def test_entry_retry_endpoint_requires_failed(auth_client, session):
 async def test_unauthenticated_401(client):
     resp = await client.get("/api/v1/bench/challenges")
     assert resp.status_code == 401
+
+
+# ── Operator lifecycle: stop / archive / delete (2026-07-12) ──────────────
+
+
+async def _seed_challenge(session, *, status="review", entries=()):
+    ch = BenchChallenge(title="T", prompt_text="p", status=status)
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    rows = []
+    for spec in entries:
+        e = BenchEntry(challenge_id=ch.id, **spec)
+        session.add(e)
+        rows.append(e)
+    await session.commit()
+    for e in rows:
+        await session.refresh(e)
+    return ch, rows
+
+
+@pytest.mark.asyncio
+async def test_stop_challenge_409_when_not_running(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="review")
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/stop")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_stop_challenge_fails_open_entries_keeps_terminal(auth_client, session):
+    ch, entries = await _seed_challenge(
+        session,
+        status="generating",
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "generating"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/stop")
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["status"] == "failed"
+    assert data["error"] == "stopped by operator"
+    by_label = {e["model_label"]: e for e in data["entries"]}
+    assert by_label["A"]["status"] == "failed"
+    assert by_label["A"]["error"] == "stopped by operator"
+    # Rendered entry keeps its state:
+    assert by_label["B"]["status"] == "rendered"
+    assert by_label["B"]["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_stop_challenge_stops_open_fleet_task(auth_client, session, make_board, make_task):
+    """Agent entry mid-generation -> its fleet task is stopped through the
+    same mechanism as the Tasks-UI stop button (run_control='stopped')."""
+    from app.models.task import Task
+    from datetime import datetime, timezone
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(
+        board.id, title="[Bench] running", status="in_progress",
+        dispatched_at=datetime.now(timezone.utc),
+    )
+    ch, _ = await _seed_challenge(
+        session,
+        status="generating",
+        entries=[
+            {"model_label": "A", "source_kind": "agent", "status": "generating",
+             "task_id": task.id},
+        ],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/stop")
+    assert resp.status_code == 200, resp.text
+
+    stopped = await session.get(Task, task.id)
+    await session.refresh(stopped)
+    assert stopped.run_control == "stopped"
+    assert stopped.status == "blocked"
+
+
+@pytest.mark.asyncio
+async def test_archive_unarchive_and_list_filtering(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="review")
+
+    # Running challenges cannot be archived:
+    running, _ = await _seed_challenge(session, status="generating")
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{running.id}/archive")
+    assert resp.status_code == 409
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/archive")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["archived_at"] is not None
+
+    # Default listing hides it; include_archived returns it:
+    listing = await auth_client.get("/api/v1/bench/challenges")
+    assert all(c["id"] != str(ch.id) for c in listing.json())
+    listing_all = await auth_client.get("/api/v1/bench/challenges?include_archived=true")
+    assert any(c["id"] == str(ch.id) for c in listing_all.json())
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/unarchive")
+    assert resp.status_code == 200
+    assert resp.json()["archived_at"] is None
+    listing = await auth_client.get("/api/v1/bench/challenges")
+    assert any(c["id"] == str(ch.id) for c in listing.json())
+
+
+@pytest.mark.asyncio
+async def test_delete_challenge_409_while_running(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="rendering")
+    resp = await auth_client.delete(f"/api/v1/bench/challenges/{ch.id}")
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_delete_challenge_removes_rows_and_artifact_dir(
+    auth_client, session, tmp_path, monkeypatch
+):
+    from sqlmodel import select as _select
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, _ = await _seed_challenge(
+        session,
+        status="failed",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "failed"}],
+    )
+    art_dir = tmp_path / f"bench-{ch.id}"
+    art_dir.mkdir(parents=True)
+    (art_dir / "grid.mp4").write_bytes(b"x")
+
+    ch_id = ch.id  # capture before expire_all (expired attrs can't lazy-load async)
+    resp = await auth_client.delete(f"/api/v1/bench/challenges/{ch_id}")
+    assert resp.status_code == 204
+
+    # The app deleted through its own session — drop this session's identity
+    # map before re-reading, otherwise the cached row masks the delete.
+    session.expire_all()
+    assert await session.get(BenchChallenge, ch_id) is None
+    remaining = (
+        await session.exec(_select(BenchEntry).where(BenchEntry.challenge_id == ch_id))
+    ).all()
+    assert remaining == []
+    assert not art_dir.exists()
+    # The shared root itself must survive:
+    assert tmp_path.exists()
+
+
+@pytest.mark.asyncio
+async def test_delete_challenge_artifacts_never_leaves_root(tmp_path, monkeypatch):
+    """Containment guard: a challenge_dir that resolves outside the shared
+    root (or to the root itself) is never deleted."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    outside = tmp_path.parent / "outside-marker"
+    outside.mkdir(exist_ok=True)
+
+    # Point challenge_dir at the root itself -> refused.
+    monkeypatch.setattr(orchestrator, "challenge_dir", lambda _id: tmp_path)
+    orchestrator.delete_challenge_artifacts(uuid.uuid4())
+    assert tmp_path.exists()
+
+    # Point it outside the root -> refused.
+    monkeypatch.setattr(orchestrator, "challenge_dir", lambda _id: outside)
+    orchestrator.delete_challenge_artifacts(uuid.uuid4())
+    assert outside.exists()

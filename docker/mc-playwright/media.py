@@ -8,6 +8,7 @@ service.py imports VIEWPORTS + the models + the builders from here.
 """
 from __future__ import annotations
 
+import html as _html
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -64,13 +65,46 @@ class RecordResponse(BaseModel):
     bytes: int
 
 
+class BrandingModelSpec(BaseModel):
+    """One model's chip in the branded frame (label + tag, e.g. 'LOCAL · SPARK')."""
+    label: str
+    tag: str
+
+
+class BrandingOutroRow(BaseModel):
+    """One row of the outro results table."""
+    name: str
+    time: str
+    size: str
+
+
+class BrandingSpec(BaseModel):
+    """POST /compose branding payload — fills the argyelan frame/outro templates
+    and composites the two recordings into the frame's video slots instead of
+    the plain labeled grid. See templates/bench/{frame,outro}.html."""
+    title: str
+    run_label: str
+    prompt_line: str
+    models: List[BrandingModelSpec]
+    outro_rows: List[BrandingOutroRow]
+
+    @model_validator(mode="after")
+    def _check(self) -> "BrandingSpec":
+        if len(self.models) != 2:
+            raise ValueError("branding.models muss genau 2 Eintraege haben (side-by-side only)")
+        return self
+
+
 class ComposeRequest(BaseModel):
-    """POST /compose — N mp4 recordings -> one labeled grid video (H.264)."""
+    """POST /compose — N mp4 recordings -> one labeled grid video (H.264),
+    or (with `branding` set) two recordings composited into the branded
+    argyelan frame + a 2s outro card appended."""
     inputs: List[str] = Field(min_length=1, max_length=4)
     labels: List[str]
     layout: Literal["grid"] = "grid"
     speed_labels: Optional[List[str]] = None  # e.g. ["42 s", "87 tok/s"] — appended to labels
     output_path: str
+    branding: Optional[BrandingSpec] = None
 
     @model_validator(mode="after")
     def _check(self) -> "ComposeRequest":
@@ -78,6 +112,8 @@ class ComposeRequest(BaseModel):
             raise ValueError("labels muss gleich viele Eintraege haben wie inputs")
         if self.speed_labels is not None and len(self.speed_labels) != len(self.inputs):
             raise ValueError("speed_labels muss gleich viele Eintraege haben wie inputs")
+        if self.branding is not None and len(self.inputs) != 2:
+            raise ValueError("branding unterstuetzt genau 2 inputs (side-by-side only)")
         return self
 
 
@@ -103,12 +139,33 @@ def escape_drawtext(text: str) -> str:
     )
 
 
-def build_transcode_cmd(src: str, dst: str) -> List[str]:
+# Head-trim for /record (2026-07-12): Playwright starts recording at context
+# creation, so the first frames show Chromium's default white page before the
+# HTML's first paint — a white flash at the start of every bench video. Fix:
+# record RECORD_SETTLE_S extra seconds and cut them off the head in the
+# transcode step — the delivered mp4 keeps the requested duration_s and
+# starts on real content.
+RECORD_SETTLE_S = 1.0
+
+
+def build_transcode_cmd(src: str, dst: str, trim_start_s: float = 0.0) -> List[str]:
     """webm (Playwright record_video) -> H.264 mp4, X-compatible
-    (yuv420p + faststart), constant 30 fps, no audio track."""
-    return [
+    (yuv420p + faststart), constant 30 fps, no audio track.
+
+    trim_start_s > 0 cuts that many seconds off the HEAD of the recording
+    (white-flash fix, see RECORD_SETTLE_S). The `-ss` sits AFTER `-i`
+    deliberately: output-side seeking decodes from the start and trims
+    frame-accurately, while input-side `-ss` snaps to keyframes — with
+    Playwright's sparse-keyframe webm that cuts visibly wrong. Output
+    duration = source duration - trim_start_s.
+    """
+    cmd = [
         FFMPEG_BIN, "-y",
         "-i", src,
+    ]
+    if trim_start_s > 0:
+        cmd += ["-ss", str(trim_start_s)]
+    cmd += [
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-r", "30",
@@ -118,6 +175,7 @@ def build_transcode_cmd(src: str, dst: str) -> List[str]:
         "-an",
         dst,
     ]
+    return cmd
 
 
 def build_compose_cmd(
@@ -180,3 +238,113 @@ def build_compose_cmd(
         output_path,
     ]
     return cmd
+
+
+# ── Branded compose (2026-07-12, Benchmark Studio video branding) ───────────
+#
+# Slot geometry is canonical from templates/bench/frame.html: two 872x560
+# slots at (64,290) and (984,290) on a 1920x1080 frame. The frame + outro PNG
+# screenshots are rendered by the caller (service.py, via Playwright) from
+# the filled HTML templates — this module stays pure (no playwright import).
+
+SLOT_WIDTH = 872
+SLOT_HEIGHT = 560
+SLOT_A_XY = (64, 290)
+SLOT_B_XY = (984, 290)
+SLOT_BG_COLOR = "0x090B10"  # matches .slot background in shared.css
+OUTRO_DURATION_S = 2.0
+FRAME_SIZE = "1920x1080"
+
+
+def fill_bench_template(template_text: str, tokens: dict) -> str:
+    """Replaces every `{{TOKEN}}` placeholder with the html-escaped value.
+
+    Pure str.replace — no Jinja, matches the rest of this module's
+    "boring and testable" style. Unknown tokens present in `tokens` but not
+    in the template are simply unused (no error); tokens referenced in the
+    template but missing from `tokens` are left as literal `{{TOKEN}}` text
+    (fail loud in the rendered screenshot, not silently).
+    """
+    out = template_text
+    for key, value in tokens.items():
+        out = out.replace("{{" + key + "}}", _html.escape(str(value)))
+    return out
+
+
+def render_outro_rows_html(rows: List["BrandingOutroRow"]) -> str:
+    """Builds the outro table row markup for the `{{ROWS}}` placeholder in
+    templates/bench/outro.html — one `.row` div per BrandingOutroRow, values
+    html-escaped. No winner-highlight styling (Mark's decision 2026-07-12:
+    the human judges, the card stays neutral)."""
+    parts = []
+    for row in rows:
+        name = _html.escape(row.name)
+        time_val = _html.escape(row.time)
+        size_val = _html.escape(row.size)
+        parts.append(
+            f'<div class="row"><span class="name">{name}</span>'
+            f'<span class="val">{time_val}</span>'
+            f'<span class="val">{size_val}</span></div>'
+        )
+    return "".join(parts)
+
+
+def build_branded_compose_cmd(
+    inputs: List[str],
+    frame_png: str,
+    outro_png: str,
+    output_path: str,
+    *,
+    outro_duration_s: float = OUTRO_DURATION_S,
+    fps: int = 30,
+) -> List[str]:
+    """Branded side-by-side compose: overlays the two recordings into the
+    frame's video slots, then appends a static outro card for
+    `outro_duration_s` seconds. Single ffmpeg invocation (no intermediate
+    files):
+      - the frame PNG is looped indefinitely as the background; the overlay
+        chain uses shortest=1 (same contract as build_compose_cmd's
+        hstack/xstack) so the branded main segment ends exactly when the
+        (shorter of the two, same-duration) recordings end — no need to know
+        duration_s up front,
+      - the outro PNG is looped for a fixed outro_duration_s,
+      - the two segments are joined with the concat filter.
+
+    Requires exactly 2 inputs (side-by-side only — enforced by
+    ComposeRequest/BrandingSpec at the request-validation layer already;
+    this builder trusts its caller).
+    """
+    if len(inputs) != 2:
+        raise ValueError("build_branded_compose_cmd erwartet genau 2 inputs")
+
+    (ax, ay) = SLOT_A_XY
+    (bx, by) = SLOT_B_XY
+
+    filter_complex = ";".join([
+        f"[1:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[va]",
+        f"[2:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[vb]",
+        f"[0:v][va]overlay={ax}:{ay}:shortest=1[bg1]",
+        f"[bg1][vb]overlay={bx}:{by}:shortest=1[main]",
+        f"[main]fps={fps},format=yuv420p[mainv]",
+        f"[3:v]fps={fps},format=yuv420p[outrov]",
+        "[mainv][outrov]concat=n=2:v=1:a=0[outv]",
+    ])
+
+    return [
+        FFMPEG_BIN, "-y",
+        "-loop", "1", "-i", frame_png,
+        "-i", inputs[0],
+        "-i", inputs[1],
+        "-loop", "1", "-t", str(outro_duration_s), "-i", outro_png,
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "medium",
+        "-crf", "20",
+        "-movflags", "+faststart",
+        "-an",
+        output_path,
+    ]

@@ -8,6 +8,8 @@ export interface BenchEntry {
   source_kind: "spark" | "agent";
   spark_model: string | null;
   agent_id: string | null;
+  // Custom chip tag in the branded video frame; null = harness-derived default.
+  display_tag: string | null;
   task_id: string | null;
   status: "pending" | "generating" | "generated" | "rendered" | "failed";
   artifact_path: string | null;
@@ -43,6 +45,8 @@ export interface BenchChallenge {
   composed_video_path: string | null;
   content_pipeline_id: string | null;
   error: string | null;
+  // Operator archive (soft-hide) — list hides archived unless requested.
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   entries: BenchEntry[];
@@ -53,6 +57,9 @@ export interface BenchModelSpec {
   source_kind: "spark" | "agent";
   spark_model?: string | null;
   agent_id?: string | null;
+  // Custom chip tag for the branded video (e.g. "OMP · DGX SPARK");
+  // empty/undefined = harness-derived default (backend).
+  display_tag?: string | null;
 }
 
 export interface BenchChallengeCreate {

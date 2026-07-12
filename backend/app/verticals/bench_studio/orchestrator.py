@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -332,15 +333,99 @@ def format_speed_label(metrics: dict) -> str:
     return " · ".join(parts)
 
 
+def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
+    """First non-empty line of the prompt, truncated for the frame's
+    single-line PROMPT footer (spec: video-branding, 2026-07-12)."""
+    for line in (prompt_text or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:max_len]
+    return ""
+
+
+def _format_outro_time(metrics: dict) -> str:
+    duration_ms = (metrics or {}).get("duration_ms")
+    if not duration_ms:
+        return "—"
+    return f"{duration_ms / 60000:.1f} min"
+
+
+def _format_outro_size(artifact_path: str | None) -> str:
+    if not artifact_path:
+        return "—"
+    try:
+        size_kb = Path(artifact_path).stat().st_size / 1024
+        return f"{size_kb:.0f} KB"
+    except OSError:
+        return "—"
+
+
+async def _build_branding_payload(
+    session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
+) -> dict:
+    """Video-branding payload (spec: bench-video-branding, 2026-07-12) for the
+    mc-playwright /compose branded path — fills the argyelan frame + outro
+    templates. Only ever called for exactly 2 side_by_side entries."""
+    from app.models.agent import Agent
+
+    # run_label: zero-padded 3-digit count of bench_challenges created
+    # at-or-before this one — a stable per-series run number.
+    prior_ids = (
+        await session.exec(
+            select(BenchChallenge.id).where(
+                BenchChallenge.created_at <= challenge.created_at
+            )
+        )
+    ).all()
+    run_label = f"{len(prior_ids):03d}"
+
+    models: list[dict] = []
+    outro_rows: list[dict] = []
+    for entry in ordered:
+        if entry.display_tag:
+            # Operator override (bench_entries.display_tag) always wins.
+            tag = entry.display_tag
+        elif entry.source_kind == "spark":
+            tag = "VLLM · SPARK"
+        else:
+            # Agent entries: harness-derived default (e.g. omp -> "OMP",
+            # grok -> "GROK"); agent name as fallback when no harness is set.
+            tag = "AGENT"
+            if entry.agent_id is not None:
+                agent = await session.get(Agent, entry.agent_id)
+                if agent is not None:
+                    if agent.harness:
+                        tag = agent.harness.upper()
+                    elif agent.name:
+                        tag = agent.name.upper()
+        models.append({"label": entry.model_label, "tag": tag})
+        outro_rows.append({
+            "name": entry.model_label,
+            "time": _format_outro_time(entry.metrics or {}),
+            "size": _format_outro_size(entry.artifact_path),
+        })
+
+    return {
+        "title": challenge.title,
+        "run_label": run_label,
+        "prompt_line": _first_prompt_line(challenge.prompt_text),
+        "models": models,
+        "outro_rows": outro_rows,
+    }
+
+
 async def compose_challenge(
+    session: AsyncSession,
     challenge: BenchChallenge,
     rendered: list[BenchEntry],
     *,
     speed_labels: bool = False,
     output_name: str = "grid.mp4",
 ) -> str:
-    """POST /compose on mc-playwright (PR 1) — grid video with model labels.
-    Returns the composed video_path. Raises on failure."""
+    """POST /compose on mc-playwright (PR 1) — grid video with model labels,
+    or (side_by_side with exactly 2 rendered entries) the branded frame +
+    outro video (spec: bench-video-branding, 2026-07-12). Returns the
+    composed video_path. Raises on failure."""
     ordered = sorted(rendered, key=lambda e: e.model_label)
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
@@ -350,6 +435,11 @@ async def compose_challenge(
     }
     if speed_labels:
         payload["speed_labels"] = [format_speed_label(e.metrics or {}) for e in ordered]
+    # speed_labels re-compose (drafts.py "grid-speeds.mp4" for X posts with
+    # per-model metric overlays) stays on the plain grid path — branding is
+    # only for the primary review composition, not the metrics variant.
+    if not speed_labels and challenge.mode == "side_by_side" and len(ordered) == 2:
+        payload["branding"] = await _build_branding_payload(session, challenge, ordered)
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()
@@ -396,7 +486,7 @@ async def _render_and_compose(
         session.add(challenge)
         await session.commit()
         try:
-            challenge.composed_video_path = await compose_challenge(challenge, rendered)
+            challenge.composed_video_path = await compose_challenge(session, challenge, rendered)
         except Exception as exc:  # noqa: BLE001
             challenge.status = "failed"
             challenge.error = f"compose failed: {exc}"[:2000]
@@ -461,6 +551,82 @@ async def reconcile_challenge(
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)
+
+
+# ── Operator lifecycle: stop + artifact cleanup (2026-07-12) ───────────────
+
+STOPPED_BY_OPERATOR = "stopped by operator"
+
+
+async def stop_challenge(
+    session: AsyncSession, challenge: BenchChallenge, user_id: str
+) -> None:
+    """Operator stop for a running challenge.
+
+    Non-terminal entries (pending/generating) -> failed with a stop marker;
+    rendered/generated entries keep their state. The challenge itself goes to
+    `failed` (deliberate reuse: every existing gate — entry retry, rerender,
+    drafts — already treats `failed` correctly; a new "stopped" status would
+    have to be threaded through all of them for zero benefit).
+
+    Open fleet tasks of stopped agent entries are stopped through the same
+    mechanism as the Tasks-UI stop button (services.operations.stop_task_run:
+    run_control="stopped", poll.sh sees state="stopped" and ends the session
+    cleanly — no container restarts). Tasks without an active run are
+    skipped silently (best effort, audit trail untouched).
+    """
+    from app.services.operations import stop_task_run
+
+    entries = (
+        await session.exec(
+            select(BenchEntry).where(BenchEntry.challenge_id == challenge.id)
+        )
+    ).all()
+
+    stop_task_ids: list[uuid.UUID] = []
+    for entry in entries:
+        if entry.status in ("pending", "generating"):
+            if (
+                entry.source_kind == "agent"
+                and entry.task_id is not None
+                and entry.status == "generating"
+            ):
+                stop_task_ids.append(entry.task_id)
+            entry.status = "failed"
+            entry.error = STOPPED_BY_OPERATOR
+            session.add(entry)
+
+    challenge.status = "failed"
+    challenge.error = STOPPED_BY_OPERATOR
+    session.add(challenge)
+    await session.commit()
+
+    for task_id in stop_task_ids:
+        try:
+            await stop_task_run(
+                session, task_id, user_id, reason="bench challenge stopped"
+            )
+            await session.commit()
+        except HTTPException as exc:
+            # 409 = no active run (already done/failed) — nothing to stop.
+            logger.info("bench stop: task %s not stopped (%s)", task_id, exc.detail)
+        except Exception:  # noqa: BLE001 — stop must never fail the endpoint
+            logger.exception("bench stop: task %s stop failed", task_id)
+            await session.rollback()
+
+
+def delete_challenge_artifacts(challenge_id: uuid.UUID) -> None:
+    """Removes /shared-deliverables/bench-<id>/ with path-containment guard
+    (same style as the sidecar's _require_shared_path): the resolved target
+    must live strictly below the shared-deliverables root — never delete
+    outside it, never delete the root itself."""
+    root = SHARED_DELIVERABLES.resolve()
+    target = challenge_dir(challenge_id).resolve()
+    if target == root or not target.is_relative_to(root):
+        logger.warning("bench delete: refusing artifact cleanup outside root: %s", target)
+        return
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
 
 
 # ── Background entrypoints (own session — called via asyncio.create_task) ─

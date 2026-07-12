@@ -91,3 +91,7 @@ docs/omp-bridge-REPORT.md
 # generated locally by tools/generate-*.py
 docs/code-map.md
 docs/agent-state.md
+
+# Fontshare fonts are licensed for use but must not be redistributed
+# verbatim — generated at Docker build time by fetch_fonts.py, never in git.
+docker/mc-playwright/templates/bench/fonts/embedded-fonts.css

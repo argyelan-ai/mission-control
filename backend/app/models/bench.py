@@ -49,6 +49,11 @@ class BenchChallenge(SQLModel, table=True):
         ),
     )
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Operator archive (soft-hide): list endpoint excludes archived challenges
+    # by default. Only terminal/review states may be archived.
+    archived_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),
@@ -78,6 +83,9 @@ class BenchEntry(SQLModel, table=True):
     model_label: str  # display label, also used for the artifact directory
     source_kind: str  # spark | agent (extensible later: "api", spec §8)
     spark_model: str | None = None  # vLLM model name override (spark entries)
+    # Custom chip tag for the branded video frame (e.g. "OMP · DGX SPARK").
+    # NULL -> harness-derived default (orchestrator._build_branding_payload).
+    display_tag: str | None = None
     agent_id: uuid.UUID | None = Field(
         default=None,
         sa_column=Column(Uuid, ForeignKey("agents.id", ondelete="SET NULL"), nullable=True),

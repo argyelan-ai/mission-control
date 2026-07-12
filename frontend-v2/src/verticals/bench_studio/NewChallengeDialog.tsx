@@ -10,7 +10,7 @@ import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { benchApi } from "@/verticals/bench_studio/api";
 import type { BenchModelSpec, PromptTemplate } from "./types";
 
-const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "" };
+const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
 
 export function NewChallengeDialog({
   open,
@@ -57,7 +57,10 @@ export function NewChallengeDialog({
         prompt_template_id: templateId,
         prompt_text: promptText,
         mode,
-        models,
+        models: models.map((m) => ({
+          ...m,
+          display_tag: m.display_tag?.trim() || null,
+        })),
         series_label: seriesLabel.trim() || null,
       }),
     onSuccess: () => {
@@ -93,6 +96,15 @@ export function NewChallengeDialog({
 
   function setModel(i: number, patch: Partial<BenchModelSpec>) {
     setModels((prev) => prev.map((m, idx) => (idx === i ? { ...m, ...patch } : m)));
+  }
+
+  // Derived chip-tag default — mirrors the backend fallback
+  // (bench_studio/orchestrator._build_branding_payload): spark -> vLLM,
+  // agent -> harness uppercased, agent name as last resort.
+  function derivedTag(m: BenchModelSpec): string {
+    if (m.source_kind === "spark") return "VLLM · SPARK";
+    const agent = (agents ?? []).find((a) => a.id === m.agent_id);
+    return (agent?.harness ?? agent?.name ?? "AGENT").toUpperCase();
   }
 
   const valid =
@@ -235,6 +247,14 @@ export function NewChallengeDialog({
                   ))}
                 </select>
               )}
+              <input
+                value={m.display_tag ?? ""}
+                onChange={(e) => setModel(i, { display_tag: e.target.value })}
+                placeholder={`Tag (${derivedTag(m)})`}
+                aria-label={`Tag ${i + 1}`}
+                className="rounded-lg p-2 text-sm outline-none flex-1"
+                style={inputStyle}
+              />
               <button
                 onClick={() => setModels((prev) => prev.filter((_, idx) => idx !== i))}
                 disabled={models.length <= 1}

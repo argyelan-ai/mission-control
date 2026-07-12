@@ -28,7 +28,7 @@ export function PromptLibraryTab({
   // Usage history: challenges referencing a template via the frozen-copy FK.
   const { data: challenges } = useQuery({
     queryKey: ["bench-challenges"],
-    queryFn: benchApi.challenges.list,
+    queryFn: () => benchApi.challenges.list(),
   });
 
   const removeMutation = useMutation({

@@ -1,0 +1,31 @@
+/* argyelan bench video cards — shared DNA (DESIGN-DNA-v2) */
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg:#06070A; --bg2:#0D0F17; --card:#12141F;
+  --text:#F0F0F5; --text2:#9CA3AF; --muted:#6B7280;
+  --cyan:#00E5FF; --cyan-deep:#22D3EE; --line:#1B1F2E;
+}
+html,body { width:1920px; height:1080px; overflow:hidden; }
+body {
+  background:var(--bg); color:var(--text);
+  font-family:'General Sans',sans-serif;
+  position:relative;
+}
+/* coordinate ticks on the frame edges */
+.ticks-x, .ticks-y { position:absolute; opacity:.5; }
+.ticks-x { top:0; left:0; right:0; height:8px;
+  background-image:linear-gradient(90deg, #2A3040 1px, transparent 1px);
+  background-size:64px 8px; }
+.ticks-y { top:0; bottom:0; left:0; width:8px;
+  background-image:linear-gradient(#2A3040 1px, transparent 1px);
+  background-size:8px 64px; }
+.mono { font-family:'JetBrains Mono',monospace; }
+.label { font-family:'JetBrains Mono',monospace; text-transform:uppercase;
+  letter-spacing:.08em; font-size:20px; color:var(--text2); }
+.label .accent { color:var(--cyan); }
+.display { font-family:'Clash Display',sans-serif; letter-spacing:-0.02em; }
+.brandmark { display:flex; align-items:center; gap:14px; }
+.brandmark .sq { width:16px; height:16px; background:var(--cyan); }
+.brandmark .name { font-family:'JetBrains Mono',monospace; font-size:24px;
+  letter-spacing:.08em; color:var(--text); }
+.brandmark .name b { color:var(--cyan); font-weight:500; }
