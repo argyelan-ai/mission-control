@@ -11,19 +11,6 @@ body {
   font-family:'General Sans',sans-serif;
   position:relative;
 }
-/* measured grid — the argyelan signature */
-.grid-bg {
-  position:absolute; inset:0;
-  background-image:
-    linear-gradient(var(--line) 1px, transparent 1px),
-    linear-gradient(90deg, var(--line) 1px, transparent 1px);
-  background-size:64px 64px;
-  opacity:.35;
-}
-.grid-bg::after { /* darker vignette so content wins the squint test */
-  content:''; position:absolute; inset:0;
-  background:radial-gradient(ellipse 70% 60% at 38% 42%, transparent 30%, rgba(6,7,10,.82) 100%);
-}
 /* coordinate ticks on the frame edges */
 .ticks-x, .ticks-y { position:absolute; opacity:.5; }
 .ticks-x { top:0; left:0; right:0; height:8px;
@@ -32,10 +19,6 @@ body {
 .ticks-y { top:0; bottom:0; left:0; width:8px;
   background-image:linear-gradient(#2A3040 1px, transparent 1px);
   background-size:8px 64px; }
-.cross { position:absolute; width:14px; height:14px; opacity:.9; }
-.cross::before, .cross::after { content:''; position:absolute; background:var(--cyan); }
-.cross::before { left:6px; top:0; width:2px; height:14px; }
-.cross::after  { top:6px; left:0; width:14px; height:2px; }
 .mono { font-family:'JetBrains Mono',monospace; }
 .label { font-family:'JetBrains Mono',monospace; text-transform:uppercase;
   letter-spacing:.08em; font-size:20px; color:var(--text2); }
