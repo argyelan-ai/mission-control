@@ -292,6 +292,7 @@ async def test_dispatch_agent_entry_creates_task_and_dispatches(
     task = await session.get(Task, entries[0].task_id)
     assert task.assigned_agent_id == agent.id
     assert task.is_auto_created is True
+    assert task.human_review_required is True  # bench: human judges, never the lead
     assert "index.html" in task.description
     assert ch.prompt_text in task.description
 

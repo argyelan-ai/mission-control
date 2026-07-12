@@ -223,6 +223,10 @@ async def dispatch_agent_entry(
         assigned_agent_id=agent.id,
         is_auto_created=True,
         auto_reason=f"bench_studio challenge {challenge.id}",
+        # Operator decision 2026-07-12: bench results are judged by the human
+        # (the artifact IS the review), never by an agent reviewer / the board
+        # lead — a lead review burns frontier tokens for zero benefit.
+        human_review_required=True,
     )
     session.add(task)
     # Flush the Task INSERT before linking it: there is no ORM relationship
