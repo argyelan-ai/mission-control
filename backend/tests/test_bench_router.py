@@ -22,6 +22,7 @@ def _no_background(monkeypatch):
     never let them run inside tests."""
     monkeypatch.setattr(orchestrator, "start_challenge", AsyncMock())
     monkeypatch.setattr(orchestrator, "rerender_challenge", AsyncMock())
+    monkeypatch.setattr(orchestrator, "recompose_challenge", AsyncMock())
     monkeypatch.setattr(orchestrator, "retry_entry", AsyncMock())
 
 
@@ -420,3 +421,98 @@ async def test_delete_challenge_artifacts_never_leaves_root(tmp_path, monkeypatc
     monkeypatch.setattr(orchestrator, "challenge_dir", lambda _id: outside)
     orchestrator.delete_challenge_artifacts(uuid.uuid4())
     assert outside.exists()
+
+
+# ── edit + recompose (2026-07-12) ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_patch_challenge_title(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="review")
+    resp = await auth_client.patch(
+        f"/api/v1/bench/challenges/{ch.id}", json={"title": "Better Title"}
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Better Title"
+
+
+@pytest.mark.asyncio
+async def test_patch_challenge_409_while_running(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="composing")
+    resp = await auth_client.patch(
+        f"/api/v1/bench/challenges/{ch.id}", json={"title": "Nope"}
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_patch_entry_label_and_tag(auth_client, session):
+    ch, entries = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "Old", "source_kind": "spark", "status": "rendered",
+                  "video_path": "/sd/a.mp4", "display_tag": "OLD TAG"}],
+    )
+    entry = entries[0]
+    resp = await auth_client.patch(
+        f"/api/v1/bench/entries/{entry.id}",
+        json={"model_label": "Qwen 3.6", "display_tag": "OMP · DGX SPARK"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["model_label"] == "Qwen 3.6"
+    assert data["display_tag"] == "OMP · DGX SPARK"
+
+    # Empty display_tag clears the override (harness default applies again):
+    resp = await auth_client.patch(
+        f"/api/v1/bench/entries/{entry.id}", json={"display_tag": ""}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["display_tag"] is None
+    # Omitting a field leaves it untouched:
+    assert resp.json()["model_label"] == "Qwen 3.6"
+
+
+@pytest.mark.asyncio
+async def test_patch_entry_409_while_running(auth_client, session):
+    ch, entries = await _seed_challenge(
+        session, status="rendering",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered"}],
+    )
+    resp = await auth_client.patch(
+        f"/api/v1/bench/entries/{entries[0].id}", json={"model_label": "B"}
+    )
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_recompose_endpoint(auth_client, session):
+    ch, _ = await _seed_challenge(
+        session, status="review",
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
+    assert resp.status_code == 200, resp.text
+    orchestrator.recompose_challenge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_recompose_endpoint_guards(auth_client, session):
+    # Mid-run -> 409:
+    running, _ = await _seed_challenge(session, status="composing")
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{running.id}/recompose")
+    assert resp.status_code == 409
+
+    # Not enough recordings -> 422:
+    ch, _ = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "video_path": "/sd/a.mp4"}],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
+    assert resp.status_code == 422
+    orchestrator.recompose_challenge.assert_not_called()

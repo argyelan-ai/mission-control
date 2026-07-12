@@ -16,8 +16,10 @@ vi.mock("@/verticals/bench_studio/api", () => ({
       archive: vi.fn(),
       unarchive: vi.fn(),
       remove: vi.fn(),
+      update: vi.fn(),
+      recompose: vi.fn(),
     },
-    entries: { retry: vi.fn() },
+    entries: { retry: vi.fn(), update: vi.fn() },
     promptTemplates: { list: vi.fn().mockResolvedValue([]) },
     sharedSubpath: (p: string) => p.replace(/^\/shared-deliverables\//, ""),
   },
@@ -155,5 +157,105 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     await screen.findByText("Challenge löschen?");
     await userEvent.click(screen.getByRole("button", { name: /Abbrechen/ }));
     expect(benchApi.challenges.remove).not.toHaveBeenCalled();
+  });
+});
+
+// ── edit + recompose (2026-07-12) ─────────────────────────────────────────
+
+import type { BenchEntry } from "../types";
+
+function makeEntry(over: Partial<BenchEntry> = {}): BenchEntry {
+  return {
+    id: "e-1",
+    challenge_id: "ch-1",
+    model_label: "Qwen 3.6",
+    source_kind: "spark",
+    spark_model: null,
+    agent_id: null,
+    display_tag: null,
+    task_id: null,
+    status: "rendered",
+    artifact_path: null,
+    video_path: "/sd/a.mp4",
+    screenshot_path: null,
+    metrics: {},
+    error: null,
+    ...over,
+  };
+}
+
+describe("ChallengeDetail — edit + recompose", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("'Video neu erstellen' calls recompose when 2 recordings exist", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [
+          makeEntry({ id: "e-1", video_path: "/sd/a.mp4" }),
+          makeEntry({ id: "e-2", model_label: "Grok", video_path: "/sd/b.mp4" }),
+        ],
+      })
+    );
+    vi.mocked(benchApi.challenges.recompose).mockResolvedValue({ ok: true });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Video neu erstellen/ });
+    await userEvent.click(btn);
+    await waitFor(() => {
+      expect(benchApi.challenges.recompose).toHaveBeenCalledWith("ch-1");
+    });
+  });
+
+  it("hides recompose without enough recordings or while running", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ entries: [makeEntry()] })
+    );
+    renderDetail();
+    await screen.findByRole("button", { name: /Challenge bearbeiten/ });
+    expect(screen.queryByRole("button", { name: /Video neu erstellen/ })).toBeNull();
+  });
+
+  it("edit dialog saves title and changed entry fields only", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [
+          makeEntry({ id: "e-1", model_label: "Qwen 3.6", display_tag: null }),
+          makeEntry({ id: "e-2", model_label: "Grok 4.5", video_path: "/sd/b.mp4" }),
+        ],
+      })
+    );
+    vi.mocked(benchApi.challenges.update).mockResolvedValue(makeChallenge());
+    vi.mocked(benchApi.entries.update).mockResolvedValue(makeEntry());
+
+    renderDetail();
+    await userEvent.click(await screen.findByRole("button", { name: /Challenge bearbeiten/ }));
+
+    // Change the title:
+    const titleInput = await screen.findByRole("textbox", { name: /Titel/ });
+    await userEvent.clear(titleInput);
+    await userEvent.type(titleInput, "Better Title");
+
+    // Change entry 1's label + tag; leave entry 2 untouched:
+    const labelInput = screen.getByRole("textbox", { name: /Modell-Name 1/ });
+    await userEvent.clear(labelInput);
+    await userEvent.type(labelInput, "Qwen 3.6 35B A3B");
+    const tagInput = screen.getByRole("textbox", { name: /^Tag 1$/ });
+    await userEvent.type(tagInput, "OMP · DGX SPARK");
+
+    await userEvent.click(screen.getByRole("button", { name: /Speichern/ }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.update).toHaveBeenCalledWith("ch-1", {
+        title: "Better Title",
+      });
+      expect(benchApi.entries.update).toHaveBeenCalledWith("e-1", {
+        model_label: "Qwen 3.6 35B A3B",
+        display_tag: "OMP · DGX SPARK",
+      });
+    });
+    // Unchanged entry is not PATCHed:
+    expect(benchApi.entries.update).toHaveBeenCalledTimes(1);
   });
 });

@@ -72,10 +72,12 @@ class BrandingModelSpec(BaseModel):
 
 
 class BrandingOutroRow(BaseModel):
-    """One row of the outro results table."""
+    """One row of the outro results table. `cost` is optional (default em
+    dash) so older callers without cost attribution stay compatible."""
     name: str
     time: str
     size: str
+    cost: str = "\u2014"
 
 
 class BrandingSpec(BaseModel):
@@ -281,10 +283,12 @@ def render_outro_rows_html(rows: List["BrandingOutroRow"]) -> str:
         name = _html.escape(row.name)
         time_val = _html.escape(row.time)
         size_val = _html.escape(row.size)
+        cost_val = _html.escape(row.cost)
         parts.append(
             f'<div class="row"><span class="name">{name}</span>'
             f'<span class="val">{time_val}</span>'
-            f'<span class="val">{size_val}</span></div>'
+            f'<span class="val">{size_val}</span>'
+            f'<span class="val">{cost_val}</span></div>'
         )
     return "".join(parts)
 
