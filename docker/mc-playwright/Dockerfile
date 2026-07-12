@@ -30,4 +30,8 @@ ENV PYTHONUNBUFFERED=1
 
 EXPOSE 8790
 
-CMD ["uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8790"]
+# /shared-deliverables is a named volume owned by root (this container). The
+# backend runs as mcuser(1000) and must create bench-<id>/ dirs in it
+# (bench_studio artifact collection) — give the volume /tmp semantics
+# (1777) before serving. Non-fatal if the mount is absent (tests).
+CMD ["sh", "-c", "chmod 1777 /shared-deliverables 2>/dev/null; exec uvicorn service:app --host 0.0.0.0 --port 8790"]

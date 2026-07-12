@@ -646,6 +646,17 @@ async def execute_review_decision(
         if task.status == "done":
             await _merge_pr_if_exists(session, task, actor_agent)
 
+            # Vertical hooks (news_studio pipeline advance, bench_studio artifact
+            # collection). The PATCH routers (tasks.py, agent_task_status.py) fire
+            # these on status=done — this review-approve path is the third way a
+            # task reaches done and skipped them (2026-07-12 incident: bench entry
+            # stuck in 'generating' after `mc approve`). Hooks self-filter and
+            # swallow errors.
+            session.add(task)
+            await session.commit()
+            from app.verticals import hooks as vertical_hooks
+            await vertical_hooks.run_task_done_hooks(session, task)
+
         # Test handoff: dispatch a tester agent for user_test (if one exists)
         if task.status == "user_test":
             try:

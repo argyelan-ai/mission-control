@@ -223,8 +223,18 @@ async def dispatch_agent_entry(
         assigned_agent_id=agent.id,
         is_auto_created=True,
         auto_reason=f"bench_studio challenge {challenge.id}",
+        # Operator decision 2026-07-12: bench results are judged by the human
+        # (the artifact IS the review), never by an agent reviewer / the board
+        # lead — a lead review burns frontier tokens for zero benefit.
+        human_review_required=True,
     )
     session.add(task)
+    # Flush the Task INSERT before linking it: there is no ORM relationship
+    # between Task and BenchEntry, so the unit of work has no dependency edge
+    # and may emit the bench_entries UPDATE before the tasks INSERT — a
+    # ForeignKeyViolation on Postgres (invisible in SQLite tests, no FK
+    # enforcement there).
+    await session.flush()
     entry.task_id = task.id
     entry.status = "generating"
     session.add(entry)
@@ -248,12 +258,24 @@ async def on_task_done(session: AsyncSession, task) -> None:
             select(TaskDeliverable).where(TaskDeliverable.task_id == task.id)
         )
     ).all()
+    # Resolve through fs_service: deliverable paths are stored in the AGENT's
+    # view (e.g. /deliverables/<task>/... which is ~/.mc/deliverables/<slug>/...
+    # on the host → /deliverables/<slug>/... in the backend container). A naive
+    # Path(d.path).exists() misses the slug segment and always fails for
+    # docker-agent deliverables (2026-07-12 incident).
+    from app.services.fs_service import resolve_deliverable
+
     html_src: Path | None = None
     for d in rows:
         if d.path and d.path.endswith(".html"):
-            candidate = Path(d.path)
-            if candidate.exists():
-                html_src = candidate
+            resolved = await resolve_deliverable(d, session, target="container")
+            # Resolver returns None for unknown prefixes — fall back to the raw
+            # path for already-backend-local paths (sidecar dirs, tests).
+            for candidate in filter(None, (resolved, d.path)):
+                if Path(candidate).exists():
+                    html_src = Path(candidate)
+                    break
+            if html_src:
                 break
 
     if html_src is None:
@@ -331,7 +353,10 @@ async def compose_challenge(
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
         resp.raise_for_status()
-        return resp.json()["video_path"]
+        # ComposeResponse (service.py) names the field output_path — NOT
+        # video_path like /record's RecordResponse (KeyError incident
+        # 2026-07-12, first live side-by-side compose).
+        return resp.json()["output_path"]
 
 
 async def _render_and_compose(
@@ -472,6 +497,10 @@ async def start_challenge(challenge_id: uuid.UUID) -> None:
         except Exception:  # noqa: BLE001 — spec §7: nothing hangs silently
             logger.exception("bench challenge %s fan-out crashed", challenge_id)
             try:
+                # A failed flush leaves the session in pending-rollback state —
+                # without this the failure write below raises PendingRollbackError
+                # and the challenge hangs in 'generating' forever.
+                await session.rollback()
                 challenge = await session.get(BenchChallenge, challenge_id)
                 if challenge is not None and challenge.status == "generating":
                     challenge.status = "failed"
@@ -518,6 +547,7 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("bench challenge %s rerender crashed", challenge_id)
             try:
+                await session.rollback()  # clear pending-rollback state (see start_challenge)
                 challenge = await session.get(BenchChallenge, challenge_id)
                 if challenge is not None:
                     challenge.status = "failed"

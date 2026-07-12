@@ -73,6 +73,11 @@ backend/scripts/test_news_bridge.py
 backend/app/verticals/*
 !backend/app/verticals/__init__.py
 !backend/app/verticals/hooks.py
+# bench_studio is a PUBLIC vertical (ADR-069) — un-ignore it so new files
+# aren't silently skipped (its first commit had to be force-added and
+# dragged __pycache__ into the index).
+!backend/app/verticals/bench_studio/
+backend/app/verticals/bench_studio/__pycache__/
 frontend-v2/src/verticals/
 frontend-v2/src/app/content/
 frontend-v2/src/app/news/

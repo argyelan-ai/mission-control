@@ -1045,7 +1045,32 @@ def _cmd_deliverable(args, client, cfg):
             marker = f".mc-deliverables/{task_id}/"
             if marker in relative:
                 relative = relative.split(marker, 1)[1]
-            path = _os.path.join(deliverables_root, relative)
+            dest = _os.path.join(deliverables_root, relative)
+            # "Relativer Pfad im Workspace (bevorzugt)": die Datei liegt im
+            # CWD des Agenten — in die Deliverables-Zone KOPIEREN, nicht nur
+            # den Pfad umschreiben (sonst Phantom-Row, Vorfall 2026-07-12).
+            if not _os.path.isfile(dest) and _os.path.isfile(relative):
+                _os.makedirs(_os.path.dirname(dest), exist_ok=True)
+                _shutil.copy2(relative, dest)
+                print(f"(auto-copied {relative} → {dest})", file=sys.stderr)
+            path = dest
+
+        # Phantom-Guard (Horror-Forest-Vorfall 2026-07-12): ein Pfad in der
+        # eigenen Deliverables-Zone wurde bisher ungeprueft registriert — der
+        # Agent gab den ZIEL-Pfad an, ohne die Datei dorthin zu kopieren, und
+        # die UI lief in 404s. Registrierung nur wenn die Datei existiert.
+        # (Sidecar-Prefix /shared-deliverables/ bleibt ungeprueft: auf dem
+        # Host nicht gemountet, dort waere ein Existenz-Check falsch-negativ.)
+        if path and not is_url and path.startswith(agent_prefix) \
+                and not _os.path.isfile(path):
+            raise UsageError(
+                f"Deliverable-Datei existiert nicht: {path}\n"
+                f"Registrierung abgebrochen (sonst zeigt die UI ins Leere).\n"
+                f"Fix-Optionen:\n"
+                f"  (a) Datei zuerst erzeugen/hinkopieren: cp <quelle> '{path}'\n"
+                f"  (b) Workspace-relativen Pfad angeben (wird auto-kopiert)\n"
+                f"  (c) Nur Text: --type document --content \"...\" (ohne --path)"
+            )
 
     body = {
         "deliverable_type": args.type,

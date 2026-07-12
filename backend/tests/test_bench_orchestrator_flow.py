@@ -292,6 +292,7 @@ async def test_dispatch_agent_entry_creates_task_and_dispatches(
     task = await session.get(Task, entries[0].task_id)
     assert task.assigned_agent_id == agent.id
     assert task.is_auto_created is True
+    assert task.human_review_required is True  # bench: human judges, never the lead
     assert "index.html" in task.description
     assert ch.prompt_text in task.description
 
@@ -382,3 +383,124 @@ async def test_rerender_challenge_crash_writes_failed_status(session, monkeypatc
     assert updated_ch is not None
     assert updated_ch.status == "failed"
     assert updated_ch.error is not None
+
+
+# ── FK flush-order regression (Postgres-only bug, invisible with FKs off) ──
+
+
+@pytest.mark.asyncio
+async def test_dispatch_agent_entry_survives_fk_enforcement(monkeypatch):
+    """dispatch_agent_entry must INSERT the Task before the bench_entries
+    UPDATE that references it. There is no relationship() between the two
+    mappers, so the unit of work has no dependency edge — without an explicit
+    flush the UPDATE can run first, a ForeignKeyViolation on Postgres
+    (2026-07-12 incident: first live challenge stuck in 'generating').
+    The shared test engine runs with FKs off (see conftest note), so this
+    test uses its own SQLite engine with PRAGMA foreign_keys=ON.
+    """
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import StaticPool
+    from sqlmodel import SQLModel
+
+    from app.models.agent import Agent
+    from app.models.board import Board
+    from app.models.task import Task
+
+    fk_engine = create_async_engine(
+        "sqlite+aiosqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+
+    @event.listens_for(fk_engine.sync_engine, "connect")
+    def _enable_fk(dbapi_conn, _record):
+        cursor = dbapi_conn.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+    async with fk_engine.begin() as conn:
+        await conn.run_sync(SQLModel.metadata.create_all)
+
+    try:
+        async with AsyncSession(fk_engine, expire_on_commit=False) as session:
+            board = Board(id=uuid.uuid4(), name="B", slug="b-fk")
+            session.add(board)
+            await session.commit()
+            agent = Agent(id=uuid.uuid4(), name="Cody", board_id=board.id,
+                          agent_runtime="cli-bridge")
+            session.add(agent)
+            await session.commit()
+            ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+            session.add(ch)
+            await session.commit()
+            entry = BenchEntry(challenge_id=ch.id, model_label="Claude",
+                               source_kind="agent", agent_id=agent.id)
+            session.add(entry)
+            await session.commit()
+
+            # Neutralize the fire-and-forget dispatch (orchestrator does a
+            # function-local import, so patch the source module). Patching
+            # asyncio.create_task itself would break AsyncSession.__aexit__.
+            monkeypatch.setattr(
+                "app.services.dispatch.auto_dispatch_task", AsyncMock()
+            )
+
+            await orchestrator.dispatch_agent_entry(session, entry, ch)
+            await session.refresh(entry)
+
+            assert entry.status == "generating"
+            assert entry.task_id is not None
+            task = await session.get(Task, entry.task_id)
+            assert task is not None
+    finally:
+        await fk_engine.dispose()
+
+
+# ── /compose response contract ─────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_parses_sidecar_response(monkeypatch):
+    """The sidecar's ComposeResponse names the field `output_path` (see
+    docker/mc-playwright/media.py) — NOT `video_path` like RecordResponse.
+    compose_challenge crashed with KeyError('video_path') on the first live
+    side-by-side run (2026-07-12); existing flow tests mock compose_challenge
+    away, so pin the parsing contract here."""
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            # Exact shape of media.ComposeResponse
+            return {"output_path": "/shared-deliverables/bench-x/grid.mp4",
+                    "bytes": 123, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            assert url.endswith("/compose")
+            assert set(json) >= {"inputs", "labels", "layout", "output_path"}
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    ch.id = uuid.uuid4()
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    result = await orchestrator.compose_challenge(ch, entries)
+    assert result == "/shared-deliverables/bench-x/grid.mp4"
