@@ -27,8 +27,14 @@ def _load_bridge():
 
 
 @pytest.fixture
-def bridge():
-    return _load_bridge()
+def bridge(monkeypatch, tmp_path):
+    mod = _load_bridge()
+    # Isolate the persisted last-task-id from the REAL host path — without this,
+    # any test driving dispatch_poll_loop() writes the placeholder task id into
+    # ~/.mc/agents/hermes/logs/last-task-id on the dev machine (found live
+    # 2026-07-12 during the E2E run).
+    monkeypatch.setattr(mod, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    return mod
 
 
 def test_host_and_port_constants(bridge):

@@ -36,7 +36,7 @@ def _load_bridge():
 
 
 @pytest.fixture
-def bridge():
+def bridge(monkeypatch, tmp_path):
     mod = _load_bridge()
     # Reset module-scoped state between tests (import caches it).
     mod._active_task = None
@@ -45,6 +45,11 @@ def bridge():
     mod._nudges_sent = 0
     mod._last_dispatched_task_id = None
     mod._last_dispatched_attempt_id = None
+    # Isolate the persisted last-task-id from the REAL host path — without this,
+    # any test driving dispatch_task() writes ~/.mc/agents/grok/logs/last-task-id
+    # on the dev machine (found live 2026-07-12: placeholder "t1" leaked into the
+    # production bridge state and skewed the E2E fresh-dispatch scenario).
+    monkeypatch.setattr(mod, "LAST_TASK_FILE", tmp_path / "last-task-id")
     return mod
 
 
