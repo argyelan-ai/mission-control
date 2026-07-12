@@ -182,6 +182,9 @@ class TaskCreate(BaseModel):
     e2e_test_required: bool | None = None
     human_review_required: bool | None = None
     blocker_to_operator: bool | None = None
+    # Skip review gate — scheduler/automated tasks don't need a review stage.
+    # Matches Task.skip_review (models/task.py) enforced in work_context.py.
+    skip_review: bool = False
     # Fields restored after review FB-2 (2026-04-21) — they exist on
     # Task model but had been dropped from TaskCreate schema, so the UI
     # was sending them and pydantic silently discarded them.
