@@ -225,6 +225,12 @@ async def dispatch_agent_entry(
         auto_reason=f"bench_studio challenge {challenge.id}",
     )
     session.add(task)
+    # Flush the Task INSERT before linking it: there is no ORM relationship
+    # between Task and BenchEntry, so the unit of work has no dependency edge
+    # and may emit the bench_entries UPDATE before the tasks INSERT — a
+    # ForeignKeyViolation on Postgres (invisible in SQLite tests, no FK
+    # enforcement there).
+    await session.flush()
     entry.task_id = task.id
     entry.status = "generating"
     session.add(entry)
@@ -472,6 +478,10 @@ async def start_challenge(challenge_id: uuid.UUID) -> None:
         except Exception:  # noqa: BLE001 — spec §7: nothing hangs silently
             logger.exception("bench challenge %s fan-out crashed", challenge_id)
             try:
+                # A failed flush leaves the session in pending-rollback state —
+                # without this the failure write below raises PendingRollbackError
+                # and the challenge hangs in 'generating' forever.
+                await session.rollback()
                 challenge = await session.get(BenchChallenge, challenge_id)
                 if challenge is not None and challenge.status == "generating":
                     challenge.status = "failed"
@@ -518,6 +528,7 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("bench challenge %s rerender crashed", challenge_id)
             try:
+                await session.rollback()  # clear pending-rollback state (see start_challenge)
                 challenge = await session.get(BenchChallenge, challenge_id)
                 if challenge is not None:
                     challenge.status = "failed"
