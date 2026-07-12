@@ -45,6 +45,8 @@ export interface BenchChallenge {
   composed_video_path: string | null;
   content_pipeline_id: string | null;
   error: string | null;
+  // Operator archive (soft-hide) — list hides archived unless requested.
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
   entries: BenchEntry[];

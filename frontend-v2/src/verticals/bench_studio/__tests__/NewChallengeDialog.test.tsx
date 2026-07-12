@@ -86,7 +86,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: "Animate 100 bouncing balls", mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 
@@ -121,7 +121,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: null,
       prompt_text: "Custom text", mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 
@@ -227,7 +227,7 @@ describe("NewChallengeDialog — template picker", () => {
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: editedText, mode: "side_by_side",
       status: "generating", series_label: null, series_no: null,
-      composed_video_path: null, content_pipeline_id: null, error: null,
+      composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
 

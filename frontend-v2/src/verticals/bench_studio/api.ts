@@ -9,7 +9,10 @@ import type {
 
 export const benchApi = {
   challenges: {
-    list: () => request<BenchChallenge[]>("/api/v1/bench/challenges"),
+    list: (includeArchived = false) =>
+      request<BenchChallenge[]>(
+        `/api/v1/bench/challenges${includeArchived ? "?include_archived=true" : ""}`
+      ),
     get: (id: string) => request<BenchChallenge>(`/api/v1/bench/challenges/${id}`),
     create: (body: BenchChallengeCreate) =>
       request<BenchChallenge>("/api/v1/bench/challenges", {
@@ -28,6 +31,20 @@ export const benchApi = {
       request<{ ok: boolean }>(`/api/v1/bench/challenges/${id}/rerender`, {
         method: "POST",
       }),
+    stop: (id: string) =>
+      request<BenchChallenge>(`/api/v1/bench/challenges/${id}/stop`, {
+        method: "POST",
+      }),
+    archive: (id: string) =>
+      request<BenchChallenge>(`/api/v1/bench/challenges/${id}/archive`, {
+        method: "POST",
+      }),
+    unarchive: (id: string) =>
+      request<BenchChallenge>(`/api/v1/bench/challenges/${id}/unarchive`, {
+        method: "POST",
+      }),
+    remove: (id: string) =>
+      request<void>(`/api/v1/bench/challenges/${id}`, { method: "DELETE" }),
   },
   entries: {
     retry: (id: string) =>

@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+from fastapi import HTTPException
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -550,6 +551,82 @@ async def reconcile_challenge(
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)
+
+
+# ── Operator lifecycle: stop + artifact cleanup (2026-07-12) ───────────────
+
+STOPPED_BY_OPERATOR = "stopped by operator"
+
+
+async def stop_challenge(
+    session: AsyncSession, challenge: BenchChallenge, user_id: str
+) -> None:
+    """Operator stop for a running challenge.
+
+    Non-terminal entries (pending/generating) -> failed with a stop marker;
+    rendered/generated entries keep their state. The challenge itself goes to
+    `failed` (deliberate reuse: every existing gate — entry retry, rerender,
+    drafts — already treats `failed` correctly; a new "stopped" status would
+    have to be threaded through all of them for zero benefit).
+
+    Open fleet tasks of stopped agent entries are stopped through the same
+    mechanism as the Tasks-UI stop button (services.operations.stop_task_run:
+    run_control="stopped", poll.sh sees state="stopped" and ends the session
+    cleanly — no container restarts). Tasks without an active run are
+    skipped silently (best effort, audit trail untouched).
+    """
+    from app.services.operations import stop_task_run
+
+    entries = (
+        await session.exec(
+            select(BenchEntry).where(BenchEntry.challenge_id == challenge.id)
+        )
+    ).all()
+
+    stop_task_ids: list[uuid.UUID] = []
+    for entry in entries:
+        if entry.status in ("pending", "generating"):
+            if (
+                entry.source_kind == "agent"
+                and entry.task_id is not None
+                and entry.status == "generating"
+            ):
+                stop_task_ids.append(entry.task_id)
+            entry.status = "failed"
+            entry.error = STOPPED_BY_OPERATOR
+            session.add(entry)
+
+    challenge.status = "failed"
+    challenge.error = STOPPED_BY_OPERATOR
+    session.add(challenge)
+    await session.commit()
+
+    for task_id in stop_task_ids:
+        try:
+            await stop_task_run(
+                session, task_id, user_id, reason="bench challenge stopped"
+            )
+            await session.commit()
+        except HTTPException as exc:
+            # 409 = no active run (already done/failed) — nothing to stop.
+            logger.info("bench stop: task %s not stopped (%s)", task_id, exc.detail)
+        except Exception:  # noqa: BLE001 — stop must never fail the endpoint
+            logger.exception("bench stop: task %s stop failed", task_id)
+            await session.rollback()
+
+
+def delete_challenge_artifacts(challenge_id: uuid.UUID) -> None:
+    """Removes /shared-deliverables/bench-<id>/ with path-containment guard
+    (same style as the sidecar's _require_shared_path): the resolved target
+    must live strictly below the shared-deliverables root — never delete
+    outside it, never delete the root itself."""
+    root = SHARED_DELIVERABLES.resolve()
+    target = challenge_dir(challenge_id).resolve()
+    if target == root or not target.is_relative_to(root):
+        logger.warning("bench delete: refusing artifact cleanup outside root: %s", target)
+        return
+    if target.exists():
+        shutil.rmtree(target, ignore_errors=True)
 
 
 # ── Background entrypoints (own session — called via asyncio.create_task) ─

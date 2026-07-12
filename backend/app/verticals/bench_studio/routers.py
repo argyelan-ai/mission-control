@@ -141,14 +141,14 @@ async def create_challenge(
 
 @router.get("/challenges")
 async def list_challenges(
+    include_archived: bool = False,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    challenges = (
-        await session.exec(
-            select(BenchChallenge).order_by(BenchChallenge.created_at.desc())  # type: ignore[attr-defined]
-        )
-    ).all()
+    stmt = select(BenchChallenge).order_by(BenchChallenge.created_at.desc())  # type: ignore[attr-defined]
+    if not include_archived:
+        stmt = stmt.where(BenchChallenge.archived_at == None)  # noqa: E711 — SQLAlchemy IS NULL
+    challenges = (await session.exec(stmt)).all()
     all_entries = (await session.exec(select(BenchEntry))).all()
     by_challenge: dict[uuid.UUID, list[BenchEntry]] = {}
     for e in all_entries:
@@ -217,6 +217,110 @@ async def rerender_challenge(
         name=f"rerender_challenge({challenge.id})"
     )
     return {"ok": True}
+
+
+# ── Operator lifecycle: stop / archive / delete (2026-07-12) ──────────────
+
+# A challenge counts as "mid-run" in these states — stop first, then delete.
+RUNNING_STATUSES = ("generating", "rendering", "composing")
+# Only settled challenges may be archived (review is the human gate = settled).
+ARCHIVABLE_STATUSES = ("review", "drafted", "published", "failed")
+
+
+@router.post("/challenges/{challenge_id}/stop")
+async def stop_challenge(
+    challenge_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Operator stop: running entries -> failed ('stopped by operator'),
+    challenge -> failed, open fleet tasks stopped via the Tasks-UI stop
+    mechanism (run_control='stopped' — no container restarts)."""
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.status not in RUNNING_STATUSES:
+        raise HTTPException(
+            409,
+            f"Challenge is {challenge.status!r} — stop only while running "
+            f"({'/'.join(RUNNING_STATUSES)}).",
+        )
+    await orchestrator.stop_challenge(session, challenge, str(current_user.id))
+    entries = await _entries_for(session, challenge_id)
+    return _serialize(challenge, entries)
+
+
+@router.post("/challenges/{challenge_id}/archive")
+async def archive_challenge(
+    challenge_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.status not in ARCHIVABLE_STATUSES:
+        raise HTTPException(
+            409,
+            f"Challenge is {challenge.status!r} — archive only from "
+            f"{'/'.join(ARCHIVABLE_STATUSES)}.",
+        )
+    if challenge.archived_at is None:
+        from datetime import datetime, timezone
+
+        challenge.archived_at = datetime.now(timezone.utc)
+        session.add(challenge)
+        await session.commit()
+    entries = await _entries_for(session, challenge_id)
+    return _serialize(challenge, entries)
+
+
+@router.post("/challenges/{challenge_id}/unarchive")
+async def unarchive_challenge(
+    challenge_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.archived_at is not None:
+        challenge.archived_at = None
+        session.add(challenge)
+        await session.commit()
+    entries = await _entries_for(session, challenge_id)
+    return _serialize(challenge, entries)
+
+
+@router.delete("/challenges/{challenge_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_challenge(
+    challenge_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Hard-delete challenge + entries + the artifact directory
+    /shared-deliverables/bench-<id>/ (path-containment guarded). Linked fleet
+    tasks stay untouched (audit trail; bench_entries.task_id is SET NULL /
+    entries are deleted here anyway). Mid-run challenges must be stopped
+    first (409)."""
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409,
+            f"Challenge is {challenge.status!r} — stop it before deleting.",
+        )
+    # Delete entries explicitly: the DB-level FK cascade
+    # (bench_entries.challenge_id ondelete=CASCADE, migration 0154) covers
+    # Postgres, but SQLite test runs don't enforce FKs — same rows either way.
+    entries = await _entries_for(session, challenge_id)
+    for e in entries:
+        await session.delete(e)
+    await session.delete(challenge)
+    await session.commit()
+    orchestrator.delete_challenge_artifacts(challenge_id)
+    logger.info("bench challenge %s deleted (%d entries)", challenge_id, len(entries))
 
 
 @router.post("/entries/{entry_id}/retry")

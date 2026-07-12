@@ -49,6 +49,11 @@ class BenchChallenge(SQLModel, table=True):
         ),
     )
     error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    # Operator archive (soft-hide): list endpoint excludes archived challenges
+    # by default. Only terminal/review states may be archived.
+    archived_at: datetime | None = Field(
+        default=None, sa_column=Column(DateTime(timezone=True), nullable=True)
+    )
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()")),

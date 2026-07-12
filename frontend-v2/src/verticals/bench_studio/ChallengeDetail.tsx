@@ -2,11 +2,23 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Download, RefreshCw, RotateCcw, Send } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  Download,
+  Loader2,
+  RefreshCw,
+  RotateCcw,
+  Send,
+  Square,
+  Trash2,
+} from "lucide-react";
 import { api, getToken } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
+import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
@@ -51,11 +63,48 @@ export function ChallengeDetail({
 }) {
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const { data: challenge } = useQuery({
     queryKey: ["bench-challenge", challengeId],
     queryFn: () => benchApi.challenges.get(challengeId),
     refetchInterval: 5000, // polling — no generic SSE hook for bench
+  });
+
+  function invalidate() {
+    qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
+    qc.invalidateQueries({ queryKey: ["bench-challenges"] });
+  }
+
+  const stopMutation = useMutation({
+    mutationFn: () => benchApi.challenges.stop(challengeId),
+    onSuccess: () => {
+      notify.success("Challenge gestoppt");
+      invalidate();
+    },
+    onError: () => notify.error("Stop nicht möglich"),
+  });
+
+  const archiveMutation = useMutation({
+    mutationFn: (archived: boolean) =>
+      archived
+        ? benchApi.challenges.unarchive(challengeId)
+        : benchApi.challenges.archive(challengeId),
+    onSuccess: (ch) => {
+      notify.success(ch.archived_at ? "Challenge archiviert" : "Archivierung aufgehoben");
+      invalidate();
+    },
+    onError: () => notify.error("Archivieren nicht möglich"),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => benchApi.challenges.remove(challengeId),
+    onSuccess: () => {
+      notify.success("Challenge gelöscht");
+      qc.invalidateQueries({ queryKey: ["bench-challenges"] });
+      onBack();
+    },
+    onError: () => notify.error("Löschen nicht möglich"),
   });
 
   const rerenderMutation = useMutation({
@@ -79,6 +128,9 @@ export function ChallengeDetail({
   if (!challenge) return null;
   const canDraft = challenge.status === "review" || challenge.status === "drafted";
   const canRerender = ["review", "drafted", "failed"].includes(challenge.status);
+  // Mirrors the backend gates (routers.RUNNING_STATUSES / ARCHIVABLE_STATUSES):
+  const isRunning = ["generating", "rendering", "composing"].includes(challenge.status);
+  const canArchive = ["review", "drafted", "published", "failed"].includes(challenge.status);
 
   return (
     <div className="flex flex-col gap-5">
@@ -94,8 +146,51 @@ export function ChallengeDetail({
           <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>
             {challenge.status}
           </Pill>
+          {challenge.archived_at && (
+            <Pill color={C.textMuted} variant="outline">
+              archiviert
+            </Pill>
+          )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
+          {isRunning && (
+            <button
+              onClick={() => stopMutation.mutate()}
+              disabled={stopMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
+              style={{ color: C.error, border: `1px solid ${C.error}55` }}
+            >
+              <Square size={13} /> Stoppen
+            </button>
+          )}
+          {canArchive && (
+            <button
+              onClick={() => archiveMutation.mutate(challenge.archived_at !== null)}
+              disabled={archiveMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
+              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+            >
+              {challenge.archived_at ? (
+                <>
+                  <ArchiveRestore size={13} /> Entarchivieren
+                </>
+              ) : (
+                <>
+                  <Archive size={13} /> Archivieren
+                </>
+              )}
+            </button>
+          )}
+          {!isRunning && (
+            <button
+              onClick={() => setDeleteOpen(true)}
+              aria-label="Challenge löschen"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
+              style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
           <button
             onClick={() => rerenderMutation.mutate()}
             disabled={!canRerender}
@@ -195,6 +290,59 @@ export function ChallengeDetail({
       </section>
 
       <DraftDialog challenge={challenge} open={draftOpen} onClose={() => setDraftOpen(false)} />
+
+      {/* Delete confirm — same pattern as files/DeleteFilesDialog (no window.confirm) */}
+      <ResponsiveModal
+        open={deleteOpen}
+        onClose={() => setDeleteOpen(false)}
+        aria-labelledby="delete-challenge-title"
+      >
+        <div
+          className="px-5 pt-4 pb-3 shrink-0"
+          style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
+        >
+          <h2
+            id="delete-challenge-title"
+            className="text-base font-semibold"
+            style={{ color: C.textPrimary }}
+          >
+            Challenge löschen?
+          </h2>
+        </div>
+        <div className="px-5 py-3">
+          <p className="text-sm" style={{ color: C.textSecondary }}>
+            „{challenge.title}" wird endgültig gelöscht — inklusive aller Videos und
+            Artefakte unter /shared-deliverables. Verknüpfte Fleet-Tasks bleiben
+            erhalten (Audit-Trail). Nicht rückgängig machbar.
+          </p>
+        </div>
+        <div
+          className="flex items-center justify-end gap-2 px-5 py-3 shrink-0"
+          style={{ borderTop: `1px solid ${C.borderSubtle}` }}
+        >
+          <button
+            onClick={() => setDeleteOpen(false)}
+            disabled={deleteMutation.isPending}
+            className="px-3.5 py-2 rounded-lg text-sm font-medium disabled:opacity-60"
+            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+          >
+            Abbrechen
+          </button>
+          <button
+            onClick={() => deleteMutation.mutate()}
+            disabled={deleteMutation.isPending}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold disabled:opacity-70"
+            style={{ background: C.error, color: C.textPrimary }}
+          >
+            {deleteMutation.isPending ? (
+              <Loader2 size={15} className="animate-spin" />
+            ) : (
+              <Trash2 size={15} />
+            )}
+            Löschen
+          </button>
+        </div>
+      </ResponsiveModal>
     </div>
   );
 }
