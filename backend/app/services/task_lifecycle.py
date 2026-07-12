@@ -969,7 +969,10 @@ class ReviewRejectionResult(NamedTuple):
       - "redispatched" — dev found, allowed, re-dispatched immediately.
       - "queued"       — dev found, allowed, but busy → queued for them.
       - "no_developer" — no developer could be reconstructed; task forced
-        to inbox unassigned, System-Kommentar for Lead-Triage.
+        to inbox unassigned + explicitly kicked via auto_dispatch_task
+        (routes to the Board Lead — an unassigned inbox task has no other
+        self-collecting mechanism, task_runner/watchdog both require
+        assigned_agent_id IS NOT NULL).
       - "dispatch_blocked" — dev found but check_dispatch_allowed()
         vetoed (paused/asleep/run_control/halted); task forced to inbox,
         assigned to the dev, System-Kommentar with the reason.
@@ -1067,9 +1070,13 @@ async def handle_review_rejection(
     if not original_dev:
         # Bug C branch (a): no developer reconstructable at all. Force the
         # task to inbox unassigned instead of leaving whatever provisional
-        # status the caller set — task_runner / Lead-Triage picks up
-        # unassigned inbox tasks; a ghost in_progress-without-agent never
-        # gets touched again.
+        # status the caller set — an unassigned inbox task is NOT self-
+        # collecting: task_runner / get_next_task / the watchdog all require
+        # assigned_agent_id IS NOT NULL, so nothing would ever pick this up
+        # on its own (verified 2026-07-12 review). auto_dispatch_task's
+        # find_dispatch_target() routes unassigned tasks to the Board Lead,
+        # so we explicitly kick a dispatch here instead of leaving the task
+        # to rot silently.
         _old_status = task.status
         task.status = "inbox"
         task.assigned_agent_id = None
@@ -1082,7 +1089,7 @@ async def handle_review_rejection(
             comment_type="system",
             content=(
                 "Rework angefordert, urspruenglicher Entwickler nicht ermittelbar "
-                "— Lead-Triage."
+                "— an Board Lead weitergeleitet."
             ),
         ))
         await record_task_event(
@@ -1094,10 +1101,12 @@ async def handle_review_rejection(
         await session.commit()
         await emit_event(
             session, "task.review_rejected",
-            f"Review abgelehnt: '{task.title}' — kein Entwickler ermittelbar, Lead-Triage",
+            f"Review abgelehnt: '{task.title}' — kein Entwickler ermittelbar, an Board Lead weitergeleitet",
             board_id=board_id, task_id=task.id,
             severity="warning",
         )
+        from app.services.dispatch import auto_dispatch_task
+        asyncio.create_task(auto_dispatch_task(task.id, board_id))
         return ReviewRejectionResult(None, "no_developer")
 
     if rejecting_agent and original_dev.id == rejecting_agent.id:

@@ -31,8 +31,11 @@ async def test_request_changes_no_developer_lands_in_inbox_not_ghost_in_progress
 ):
     """(a) No developer reconstructable (no ActivityEvent history, no
     progress/resolution comments, subtask so no Board-Lead fallback) ->
-    task must end on inbox + unassigned + a system comment for Lead-Triage,
-    NEVER stuck as in_progress with assigned_agent_id=None."""
+    task must end on inbox + unassigned + a system comment + an explicit
+    auto_dispatch_task kick (an unassigned inbox task is NOT self-collecting
+    — task_runner/watchdog require assigned_agent_id IS NOT NULL, so nothing
+    would ever pick it back up on its own), NEVER stuck as in_progress with
+    assigned_agent_id=None."""
     from app.models.task import Task, TaskComment
     from app.services.task_lifecycle import execute_review_decision
 
@@ -45,13 +48,16 @@ async def test_request_changes_no_developer_lands_in_inbox_not_ghost_in_progress
     )
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
-        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock):
+        with patch("app.services.task_lifecycle.emit_event", new_callable=AsyncMock), \
+             patch("app.services.dispatch.auto_dispatch_task", new_callable=AsyncMock) as mock_dispatch:
             t = await s.get(Task, task.id)
             await execute_review_decision(
                 s, t, board.id, "request_changes",
                 "Bitte den Fehler in der Validierung beheben.",
                 actor_user_id=uuid.uuid4(),
             )
+
+    mock_dispatch.assert_called_once_with(task.id, board.id)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         updated = await s.get(Task, task.id)
@@ -67,7 +73,7 @@ async def test_request_changes_no_developer_lands_in_inbox_not_ghost_in_progress
         )).all()
         system_comments = [
             c for c in comments
-            if c.comment_type == "system" and "Lead-Triage" in c.content
+            if c.comment_type == "system" and "Board Lead" in c.content
         ]
         assert system_comments, "expected a system comment explaining the Lead-Triage handoff"
 
@@ -199,3 +205,41 @@ async def test_review_rework_dispatch_message_includes_operator_comment(fake_red
 
     assert marker in msg, "operator's request_changes comment missing from the rework dispatch message"
     assert "Review-Feedback" in msg
+
+
+@pytest.mark.asyncio
+async def test_dispatch_message_omits_review_feedback_block_when_not_rework(
+    fake_redis, make_board, make_task, make_agent,
+):
+    """Negative case: a comment_type='review' comment sitting on a task that
+    is NOT a review_rework re-dispatch must not surface the
+    'Review-Feedback' block — the block is specific to the rework path, not
+    a general review-comment leak into every dispatch message."""
+    from app.models.task import Task, TaskComment
+    from app.services.task_context_builder import _load_dispatch_context
+    from app.services.dispatch_message_builder import _format_dispatch_message
+
+    board = await make_board(name="Not-Rework Board", slug=f"nr-{uuid.uuid4().hex[:8]}")
+    dev = await make_agent(name="Cody", role="developer", board_id=board.id)
+    task = await make_task(
+        board_id=board.id, title="Regular task, not a rework re-dispatch",
+        status="inbox", assigned_agent_id=dev.id,
+        dispatch_intent=None,
+    )
+    marker = "UNRELATED-REVIEW-COMMENT-MARKER-9982"
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(TaskComment(
+            task_id=task.id, author_type="user",
+            comment_type="review",
+            content=f"not ship-ready: {marker} — unrelated leftover comment.",
+        ))
+        await s.commit()
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        t = await s.get(Task, task.id)
+        a = await s.get(__import__("app.models.agent", fromlist=["Agent"]).Agent, dev.id)
+        ctx = await _load_dispatch_context(t, a, s)
+        msg = _format_dispatch_message(t, a, ctx)
+
+    assert "Review-Feedback" not in msg
+    assert marker not in msg
