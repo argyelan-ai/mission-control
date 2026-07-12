@@ -19,7 +19,7 @@ import os
 import re
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from fastapi import HTTPException
 from sqlalchemy import or_, and_
@@ -728,11 +728,18 @@ async def execute_review_decision(
         )
 
     elif decision == "request_changes":
-        # Status provisionally in_progress (fallback if no developer is found)
+        # Status provisionally in_progress — only stands for the "noop"
+        # outcome below (e.g. rejecting_agent == original_dev). Every other
+        # outcome of handle_review_rejection resolves + commits the task's
+        # final status itself (Bug C, 2026-07-12): it must never be left
+        # sitting in this provisional in_progress state with no agent
+        # working it — that was the silent ghost-state bug.
         task.status = "in_progress"
 
-        # handle_review_rejection overwrites to inbox + dispatched_at
-        # if the rework dispatch succeeds → the task runner's ACK check kicks in
+        # handle_review_rejection mutates + commits `task` in place (same
+        # ORM instance) in every non-"noop" outcome, so task.status already
+        # reflects the authoritative final state (inbox) by the time this
+        # returns — nothing further to reconcile here.
         await handle_review_rejection(
             session, task, board_id, rejecting_agent=actor_agent,
         )
@@ -954,18 +961,51 @@ async def handle_test_handoff(
     return tester
 
 
+class ReviewRejectionResult(NamedTuple):
+    """Outcome of handle_review_rejection (Bug C, 2026-07-12).
+
+    developer: the original developer, if one could be determined.
+    outcome:
+      - "redispatched" — dev found, allowed, re-dispatched immediately.
+      - "queued"       — dev found, allowed, but busy → queued for them.
+      - "no_developer" — no developer could be reconstructed; task forced
+        to inbox unassigned, System-Kommentar for Lead-Triage.
+      - "dispatch_blocked" — dev found but check_dispatch_allowed()
+        vetoed (paused/asleep/run_control/halted); task forced to inbox,
+        assigned to the dev, System-Kommentar with the reason.
+      - "noop" — nothing to do (e.g. rejecting_agent == original_dev);
+        caller's provisional status stands unchanged (pre-existing
+        behavior, not part of the Bug C fix).
+    """
+    developer: Agent | None
+    outcome: Literal[
+        "redispatched", "queued", "no_developer", "dispatch_blocked", "noop",
+    ]
+
+
 async def handle_review_rejection(
     session: AsyncSession,
     task: Task,
     board_id: uuid.UUID,
     rejecting_agent: Agent | None = None,
-) -> Agent | None:
+) -> ReviewRejectionResult:
     """Review rejection: send the task back to the original developer.
 
     Shared between agent_scoped.py and tasks.py.
     Includes a busy check, queue fallback, and rejection counter.
 
-    Returns: original developer or None.
+    Bug C (2026-07-12): previously this returned a bare `None` when no
+    developer could be found, or when check_dispatch_allowed() vetoed the
+    re-dispatch — silently, without persisting any state change. The caller
+    (execute_review_decision) had already optimistically set
+    task.status="in_progress" and committed it regardless, leaving a ghost
+    in_progress task with assigned_agent_id=None that no watchdog recognizes
+    and that never gets picked up again. Both branches now explicitly
+    resolve the task to a claimable `inbox` state (mirrors
+    resolve_unblock_action's explicit-branches pattern) and return a
+    ReviewRejectionResult so the caller never has to guess.
+
+    Returns: ReviewRejectionResult (developer + outcome, see above).
     """
     from app.routers.agent_scoped import _find_last_developer
 
@@ -1025,18 +1065,87 @@ async def handle_review_rejection(
             )
 
     if not original_dev:
-        return None
+        # Bug C branch (a): no developer reconstructable at all. Force the
+        # task to inbox unassigned instead of leaving whatever provisional
+        # status the caller set — task_runner / Lead-Triage picks up
+        # unassigned inbox tasks; a ghost in_progress-without-agent never
+        # gets touched again.
+        _old_status = task.status
+        task.status = "inbox"
+        task.assigned_agent_id = None
+        task.dispatched_at = None
+        task.ack_at = None
+        session.add(task)
+        session.add(TaskComment(
+            task_id=task.id,
+            author_type="system",
+            comment_type="system",
+            content=(
+                "Rework angefordert, urspruenglicher Entwickler nicht ermittelbar "
+                "— Lead-Triage."
+            ),
+        ))
+        await record_task_event(
+            session, task.id, _old_status, "inbox",
+            changed_by="system",
+            agent_id=rejecting_agent.id if rejecting_agent else None,
+            reason="review_rejection_no_developer",
+        )
+        await session.commit()
+        await emit_event(
+            session, "task.review_rejected",
+            f"Review abgelehnt: '{task.title}' — kein Entwickler ermittelbar, Lead-Triage",
+            board_id=board_id, task_id=task.id,
+            severity="warning",
+        )
+        return ReviewRejectionResult(None, "no_developer")
 
     if rejecting_agent and original_dev.id == rejecting_agent.id:
-        return None  # Same agent, no re-dispatch needed
+        return ReviewRejectionResult(None, "noop")  # Same agent, no re-dispatch needed
 
     # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_rework"
     from app.services.operations import check_dispatch_allowed
     allowed, reason = await check_dispatch_allowed(task, original_dev, session)
     if not allowed:
+        # Bug C branch (b): a developer WAS found, but dispatch is currently
+        # not allowed (agent paused/asleep, run_control, halted, ...). Force
+        # inbox — assigned to the developer, so once dispatch is allowed
+        # again the normal claim/requeue flow re-delivers it (see
+        # resolve_unblock_action's redispatch/requeue mechanics reused
+        # elsewhere) instead of sitting silently as a ghost in_progress task.
         logger.info("Review-Rejection re-dispatch blocked: '%s' — %s", task.title, reason)
-        return None
+        _old_status = task.status
+        task.status = "inbox"
+        task.assigned_agent_id = original_dev.id
+        task.dispatched_at = None
+        task.ack_at = None
+        session.add(task)
+        session.add(TaskComment(
+            task_id=task.id,
+            author_type="system",
+            comment_type="system",
+            content=(
+                f"Rework fuer {original_dev.name} angefordert, Dispatch aktuell "
+                f"nicht erlaubt ({reason}). Task wartet in der Inbox — wird "
+                "automatisch zugestellt, sobald Dispatch wieder erlaubt ist."
+            ),
+        ))
+        await record_task_event(
+            session, task.id, _old_status, "inbox",
+            changed_by="system",
+            agent_id=rejecting_agent.id if rejecting_agent else None,
+            reason="review_rejection_dispatch_blocked",
+        )
+        await session.commit()
+        await emit_event(
+            session, "task.review_rejected",
+            f"Review abgelehnt: '{task.title}' — Dispatch fuer {original_dev.name} "
+            f"blockiert ({reason}), wartet in Inbox",
+            board_id=board_id, task_id=task.id, agent_id=original_dev.id,
+            severity="warning",
+        )
+        return ReviewRejectionResult(original_dev, "dispatch_blocked")
 
     # Release the reviewer lock
     if rejecting_agent and rejecting_agent.current_task_id == task.id:
@@ -1116,7 +1225,9 @@ async def handle_review_rejection(
         await session.commit()
         asyncio.create_task(auto_dispatch_task(task.id, board_id))
 
-    return original_dev
+    return ReviewRejectionResult(
+        original_dev, "queued" if dev_active else "redispatched",
+    )
 
 
 async def resolve_unblock_action(

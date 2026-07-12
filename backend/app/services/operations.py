@@ -24,7 +24,7 @@ from app.redis_client import RedisKeys, get_redis
 from app.config import settings
 from app.services.activity import emit_event
 from app.services.task_lifecycle import clear_spawn_tracking, record_task_event
-from app.utils import utcnow
+from app.utils import ensure_aware, utcnow
 
 logger = logging.getLogger(__name__)
 
@@ -163,7 +163,7 @@ async def check_dispatch_allowed(
     # (poll-based runtimes pull tasks actively; watchdog + ACK-timeout in
     # task_runner handle the real liveness escalation).
     if agent and agent.last_seen_at:
-        seconds_since_heartbeat = (utcnow() - agent.last_seen_at).total_seconds()
+        seconds_since_heartbeat = (utcnow() - ensure_aware(agent.last_seen_at)).total_seconds()
         if seconds_since_heartbeat > 900:  # > 15 min
             logger.warning(
                 "Dispatch warning: Agent %s hat seit %.0f Min keinen Heartbeat "

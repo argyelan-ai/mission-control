@@ -1702,7 +1702,9 @@ class NativeTuiController:
         cmd = f"exec {self.launcher} {shlex.quote(cwd)}"
         self._run(["respawn-window", "-k", "-t", self.target, cmd])
 
-    def inject_file(self, path: str) -> None:
+    def inject_file(
+        self, path: str, *, max_attempts: int = 3, retry_backoff: float = 5.0,
+    ) -> bool:
         """Inject the dispatch as an `@/abs/path` mention (no body paste).
 
         Verified in-container (omp v16.2.13 TUI): typing `@<existing-path>`
@@ -1713,12 +1715,71 @@ class NativeTuiController:
           3. `Enter`           -> submits; omp resolves `@path` -> Read(file).
         Escape is a no-op when no popup is showing, so this is safe either way.
         Small key delays let the TUI process each event in order.
+
+        Bug B (2026-07-12, live incident): the previous version fired these
+        three `send-keys` calls and returned unconditionally — no return-code
+        check, no verification the text actually left the composer. A
+        transient `subprocess.run(..., timeout=15)` TimeoutExpired inside
+        `_run` (swallowed there, returns rc=1) then silently no-op'd: the
+        task stayed `in_progress`, the agent "working", the TUI sitting at
+        an empty Welcome screen forever. Additionally, in-container replays
+        showed the autocomplete's Enter-swallow occasionally survives the
+        Escape too (timing-dependent) — a second Enter reliably recovers it.
+
+        Now: verify via `capture-pane` that the `@path` text actually left
+        the composer after Enter; if not, send one extra bare Enter (cheap,
+        handles the lone swallowed-Enter case) and re-check; if STILL not
+        submitted, retry the full sequence up to `max_attempts` times with a
+        backoff. Returns True once verified submitted, False if it
+        definitively failed after all attempts — the caller MUST treat False
+        as a hard failure (see `_native_watchdog_kill` in run_native_turn /
+        run_native_continue, which escalates to the existing blocked-task
+        fallback instead of waiting out the multi-minute idle watchdog).
         """
-        self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
-        self._sleep(self.key_delay)
-        self._run(["send-keys", "-t", self.target, "Escape"])
-        self._sleep(self.key_delay)
-        self._run(["send-keys", "-t", self.target, "Enter"])
+        for attempt in range(1, max_attempts + 1):
+            self._run(["send-keys", "-t", self.target, "--", f"@{path}"])
+            self._sleep(self.key_delay)
+            self._run(["send-keys", "-t", self.target, "Escape"])
+            self._sleep(self.key_delay)
+            self._run(["send-keys", "-t", self.target, "Enter"])
+            self._sleep(self.key_delay)
+
+            if self._injection_submitted(path):
+                return True
+
+            # Swallowed-Enter fallback: one extra bare Enter, no retyping.
+            self._run(["send-keys", "-t", self.target, "Enter"])
+            self._sleep(self.key_delay)
+            if self._injection_submitted(path):
+                return True
+
+            if attempt < max_attempts:
+                sys.stderr.write(
+                    f"[native] inject_file: not verified submitted after "
+                    f"attempt {attempt}/{max_attempts} (target={self.target}) "
+                    f"— retrying in {retry_backoff}s\n"
+                )
+                self._sleep(retry_backoff)
+
+        sys.stderr.write(
+            f"[native] inject_file: FAILED after {max_attempts} attempts "
+            f"(target={self.target}) — giving up, caller must escalate\n"
+        )
+        return False
+
+    def _injection_submitted(self, path: str) -> bool:
+        """Best-effort check that the `@path` mention left the composer.
+
+        If the raw `@path` text is still sitting in the (last lines of the)
+        captured pane, the Enter never registered as a submit — needs a
+        retry. A `capture-pane` failure (tmux hiccup) is treated as
+        "not verified" so the caller retries rather than assuming success.
+        """
+        rc, out = self._run(["capture-pane", "-t", self.target, "-p"])
+        if rc != 0:
+            return False
+        tail = (out or "")[-400:]
+        return f"@{path}" not in tail
 
     def reset_conversation(self) -> None:
         """`/new` slash-reset (same process, same cwd). Kept as an alternative
@@ -1951,7 +2012,13 @@ def run_native_turn(
 
     # 3. Inject the wrapped dispatch via an @file mention (no paste of the body).
     _write_task_file(task_file_path, prompt)
-    controller.inject_file(task_file_path)
+    if not controller.inject_file(task_file_path):
+        # Bug B: injection definitively failed (retries exhausted) — escalate
+        # immediately via the same watchdog-kill path used for a dead/wedged
+        # TUI, instead of silently waiting out the multi-minute idle timeout
+        # with nothing ever having been typed. Feeds the existing
+        # retry-then-blocker policy in drive_live_run.
+        return _native_watchdog_kill(controller, outcome, cwd)
 
     # 4. Tail the hook signal for this task's terminal turn.
     return _observe_native_turn(
@@ -1991,7 +2058,10 @@ def run_native_continue(
         return _native_watchdog_kill(controller, outcome, cwd)
 
     _write_task_file(task_file_path, nudge_prompt)
-    controller.inject_file(task_file_path)
+    if not controller.inject_file(task_file_path):
+        # Bug B: same escalation as run_native_turn — a failed nudge
+        # injection must not sit silently in_progress either.
+        return _native_watchdog_kill(controller, outcome, cwd)
 
     return _observe_native_turn(
         controller, outcome, cwd=cwd, turn_deadline=turn_deadline,
