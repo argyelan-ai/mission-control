@@ -156,6 +156,60 @@ def test_validate_media_missing_files_do_not_count_toward_limits(tmp_path):
     assert not any("Nur 1 Video" in e for e in result.errors)
 
 
+# ── validate_media: size limits (X media limits, verified Jul 2026:
+#    video max 512MB, image max 5MB) ─────────────────────────────────────────
+
+
+def _write_bytes(root, rel: str, size: int):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with p.open("wb") as f:
+        f.truncate(size)
+    return p
+
+
+def test_validate_media_video_within_size_limit_ok(tmp_path):
+    video = _write_bytes(tmp_path, "bench-1/grid.mp4", 1024)
+    result = x_publisher.validate_media([str(video)], root=tmp_path)
+    assert result.ok is True
+
+
+def test_validate_media_video_over_size_limit_fails(tmp_path):
+    video = _write_bytes(tmp_path, "bench-1/grid.mp4", x_publisher.MAX_VIDEO_BYTES + 1)
+    result = x_publisher.validate_media([str(video)], root=tmp_path)
+    assert result.ok is False
+    assert any("512" in e and "MB" in e for e in result.errors)
+
+
+def test_validate_media_video_at_size_limit_ok(tmp_path):
+    video = _write_bytes(tmp_path, "bench-1/grid.mp4", x_publisher.MAX_VIDEO_BYTES)
+    result = x_publisher.validate_media([str(video)], root=tmp_path)
+    assert result.ok is True
+
+
+def test_validate_media_image_within_size_limit_ok(tmp_path):
+    image = _write_bytes(tmp_path, "bench-1/shot.png", 1024)
+    result = x_publisher.validate_media([str(image)], root=tmp_path)
+    assert result.ok is True
+
+
+def test_validate_media_image_over_size_limit_fails(tmp_path):
+    image = _write_bytes(tmp_path, "bench-1/shot.png", x_publisher.MAX_IMAGE_BYTES + 1)
+    result = x_publisher.validate_media([str(image)], root=tmp_path)
+    assert result.ok is False
+    assert any("5" in e and "MB" in e for e in result.errors)
+
+
+def test_validate_media_multiple_oversized_images_report_each(tmp_path):
+    paths = [
+        str(_write_bytes(tmp_path, f"bench-1/shot-{i}.jpg", x_publisher.MAX_IMAGE_BYTES + 1))
+        for i in range(2)
+    ]
+    result = x_publisher.validate_media(paths, root=tmp_path)
+    assert result.ok is False
+    assert sum(1 for e in result.errors if "MB" in e) == 2
+
+
 # ── post_text: missing secrets ──────────────────────────────────────────────
 
 
