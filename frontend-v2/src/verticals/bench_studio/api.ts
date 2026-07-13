@@ -4,6 +4,7 @@ import { request } from "@/lib/api";
 import type {
   BenchChallenge,
   BenchChallengeCreate,
+  BenchEntry,
   PromptTemplate,
 } from "./types";
 
@@ -45,11 +46,25 @@ export const benchApi = {
       }),
     remove: (id: string) =>
       request<void>(`/api/v1/bench/challenges/${id}`, { method: "DELETE" }),
+    update: (id: string, body: { title: string }) =>
+      request<BenchChallenge>(`/api/v1/bench/challenges/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      }),
+    recompose: (id: string) =>
+      request<{ ok: boolean }>(`/api/v1/bench/challenges/${id}/recompose`, {
+        method: "POST",
+      }),
   },
   entries: {
     retry: (id: string) =>
       request<{ ok: boolean }>(`/api/v1/bench/entries/${id}/retry`, {
         method: "POST",
+      }),
+    update: (id: string, body: { model_label?: string; display_tag?: string }) =>
+      request<BenchEntry>(`/api/v1/bench/entries/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
       }),
   },
   // Prompt Library CRUD (core API from PR 2)

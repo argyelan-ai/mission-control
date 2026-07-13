@@ -52,6 +52,22 @@ class BenchDraftCreate(BaseModel):
     board_id: uuid.UUID | None = None
 
 
+class BenchChallengeUpdate(BaseModel):
+    """Operator edit after a run — only presentation fields."""
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+
+
+class BenchEntryUpdate(BaseModel):
+    """Operator edit after a run — model name + chip tag (both feed the
+    branded video). Empty-string display_tag clears the override."""
+    # pydantic v2 reserves the "model_" namespace — model_label is a domain
+    # name here (mirrors bench_entries.model_label), so opt out.
+    model_config = {"protected_namespaces": ()}
+
+    model_label: str | None = Field(default=None, min_length=1, max_length=80)
+    display_tag: str | None = Field(default=None, max_length=80)
+
+
 def _serialize(challenge: BenchChallenge, entries: list[BenchEntry]) -> dict:
     return {
         **challenge.model_dump(),
@@ -225,6 +241,90 @@ async def rerender_challenge(
 RUNNING_STATUSES = ("generating", "rendering", "composing")
 # Only settled challenges may be archived (review is the human gate = settled).
 ARCHIVABLE_STATUSES = ("review", "drafted", "published", "failed")
+
+
+@router.patch("/challenges/{challenge_id}")
+async def update_challenge(
+    challenge_id: uuid.UUID,
+    body: BenchChallengeUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Operator edit (title) after a run — 409 while mid-run. Follow with
+    POST .../recompose to rebuild the branded video with the new title."""
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409, f"Challenge is {challenge.status!r} — edit only when not mid-run."
+        )
+    if body.title is not None:
+        challenge.title = body.title.strip() or challenge.title
+        session.add(challenge)
+        await session.commit()
+    entries = await _entries_for(session, challenge_id)
+    return _serialize(challenge, entries)
+
+
+@router.patch("/entries/{entry_id}")
+async def update_entry(
+    entry_id: uuid.UUID,
+    body: BenchEntryUpdate,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Operator edit (model_label / display_tag) after a run — 409 while the
+    challenge is mid-run. display_tag="" clears the override (harness default
+    applies again)."""
+    entry = await session.get(BenchEntry, entry_id)
+    if entry is None:
+        raise HTTPException(404, "Entry not found")
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is not None and challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409, f"Challenge is {challenge.status!r} — edit only when not mid-run."
+        )
+    fields = body.model_dump(exclude_unset=True)
+    if "model_label" in fields and fields["model_label"]:
+        entry.model_label = fields["model_label"].strip() or entry.model_label
+    if "display_tag" in fields:
+        entry.display_tag = (fields["display_tag"] or "").strip() or None
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    return entry.model_dump()
+
+
+@router.post("/challenges/{challenge_id}/recompose")
+async def recompose_challenge(
+    challenge_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Rebuild ONLY the branded compose from the existing recordings — no
+    re-record, much faster than rerender. For side_by_side challenges whose
+    entries already have video_path (409/422 otherwise)."""
+    challenge = await session.get(BenchChallenge, challenge_id)
+    if challenge is None:
+        raise HTTPException(404, "Challenge not found")
+    if challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409, f"Challenge is {challenge.status!r} — wait for the run to settle."
+        )
+    entries = await _entries_for(session, challenge_id)
+    recorded = [e for e in entries if e.video_path]
+    if challenge.mode != "side_by_side" or len(recorded) < 2:
+        raise HTTPException(
+            422,
+            "recompose needs a side_by_side challenge with >=2 recorded entries "
+            "— use rerender for everything else.",
+        )
+    create_tracked_task(
+        orchestrator.recompose_challenge(challenge.id),
+        name=f"recompose_challenge({challenge.id})",
+    )
+    return {"ok": True}
 
 
 @router.post("/challenges/{challenge_id}/stop")

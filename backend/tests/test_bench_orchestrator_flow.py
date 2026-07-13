@@ -796,3 +796,295 @@ async def test_compose_challenge_speed_labels_skip_branding(session, monkeypatch
     )
     assert "branding" not in captured
     assert "speed_labels" in captured
+
+
+# ── work-time derivation from task_events (outro TIME fix, 2026-07-12) ─────
+
+
+async def _add_events(session, task_id, steps):
+    """steps: list of (from_status, to_status, changed_by, at)."""
+    from app.models.task import TaskEvent
+
+    for from_status, to_status, changed_by, at in steps:
+        session.add(TaskEvent(
+            task_id=task_id, from_status=from_status, to_status=to_status,
+            changed_by=changed_by, created_at=at,
+        ))
+    await session.commit()
+
+
+@pytest.mark.asyncio
+async def test_task_work_duration_from_events(session, make_board, make_task):
+    """Span = first ->in_progress to FIRST agent in_progress->review."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] t")
+    t0 = datetime(2026, 7, 12, 12, 0, 0)
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", t0),
+        ("in_progress", "review", "agent", t0 + timedelta(seconds=90)),
+        # Review ping-pong afterwards must NOT count:
+        ("review", "in_progress", "user", t0 + timedelta(minutes=30)),
+        ("in_progress", "review", "agent", t0 + timedelta(minutes=45)),
+        ("review", "done", "user", t0 + timedelta(hours=2)),
+    ])
+    assert await orchestrator.task_work_duration_ms(session, task.id) == 90_000
+
+
+@pytest.mark.asyncio
+async def test_task_work_duration_survives_redispatch_reset(session, make_board, make_task):
+    """Real live shape (task 6c9517df, horror-forest run): a manual
+    in_progress->inbox reset mid-run. The event span still measures start of
+    work to the first agent review transition."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] t")
+    t0 = datetime(2026, 7, 12, 13, 58, 37)
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", t0),
+        ("in_progress", "inbox", "user", t0 + timedelta(seconds=29)),   # manual reset
+        ("in_progress", "review", "agent", t0 + timedelta(seconds=80)),
+        ("review", "done", "user", t0 + timedelta(minutes=5)),
+    ])
+    assert await orchestrator.task_work_duration_ms(session, task.id) == 80_000
+
+
+@pytest.mark.asyncio
+async def test_task_work_duration_none_without_review_event(session, make_board, make_task):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] t")
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", datetime(2026, 7, 12, 12, 0, 0)),
+    ])
+    assert await orchestrator.task_work_duration_ms(session, task.id) is None
+    # And with no events at all:
+    task2 = await make_task(board.id, title="[Bench] t2")
+    assert await orchestrator.task_work_duration_ms(session, task2.id) is None
+
+
+@pytest.mark.asyncio
+async def test_on_task_done_stores_event_derived_duration(
+    session, tmp_path, monkeypatch, make_board, make_task
+):
+    """on_task_done must store the event-derived WORK time, not
+    completed_at - dispatched_at (which includes the review wait)."""
+    from app.models.deliverable import TaskDeliverable
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    now = datetime.now(timezone.utc)
+    task = await make_task(
+        board.id, title="[Bench] one-shot", status="done",
+        # Timestamp diff would say 2 hours — wrong (includes review wait):
+        dispatched_at=now - timedelta(hours=2), completed_at=now,
+    )
+    t0 = datetime(2026, 7, 12, 12, 0, 0)
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", t0),
+        ("in_progress", "review", "agent", t0 + timedelta(seconds=48)),
+        ("review", "done", "user", t0 + timedelta(hours=2)),
+    ])
+
+    src = tmp_path / "agent-out" / "index.html"
+    src.parent.mkdir(parents=True)
+    src.write_text("<html><body>x</body></html>")
+    session.add(TaskDeliverable(task_id=task.id, deliverable_type="file",
+                                title="index.html", path=str(src)))
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent",
+                      "status": "generating", "task_id": task.id}],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry",
+                        AsyncMock(return_value={"video_path": "/v.mp4", "screenshot_path": "/s.png"}))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/g.mp4"))
+
+    await orchestrator.on_task_done(session, task)
+    await session.refresh(entries[0])
+    assert entries[0].metrics["duration_ms"] == 48_000  # events, not 2h
+
+
+@pytest.mark.asyncio
+async def test_on_task_done_falls_back_to_timestamps_without_events(
+    session, tmp_path, monkeypatch, make_board, make_task
+):
+    from app.models.deliverable import TaskDeliverable
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    now = datetime.now(timezone.utc)
+    task = await make_task(
+        board.id, title="[Bench] one-shot", status="done",
+        dispatched_at=now - timedelta(seconds=42), completed_at=now,
+    )
+    src = tmp_path / "agent-out" / "index.html"
+    src.parent.mkdir(parents=True)
+    src.write_text("<html></html>")
+    session.add(TaskDeliverable(task_id=task.id, deliverable_type="file",
+                                title="index.html", path=str(src)))
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "agent",
+                      "status": "generating", "task_id": task.id}],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry",
+                        AsyncMock(return_value={"video_path": "/v.mp4", "screenshot_path": "/s.png"}))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/g.mp4"))
+
+    await orchestrator.on_task_done(session, task)
+    await session.refresh(entries[0])
+    assert entries[0].metrics["duration_ms"] == 42_000
+
+
+# ── outro COST column (2026-07-12) ─────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_outro_cost_from_model_usage_events(session, monkeypatch, make_board, make_task, make_agent):
+    """Agent entry with attributed model_usage_events -> summed '$x.xx';
+    agent entry without attribution -> '—'; spark -> 'local'."""
+    from app.models.model_usage import ModelUsageEvent
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+    task = await make_task(board.id, title="[Bench] priced")
+
+    for i, cost in enumerate((0.30, 0.12)):
+        session.add(ModelUsageEvent(
+            task_id=task.id, harness="host", model="grok-4.5",
+            session_id="s1", message_uuid=f"m-{uuid.uuid4().hex}", cost_usd=cost,
+            ts=datetime(2026, 7, 12, 12, 0, i), source_file="test.jsonl",
+        ))
+    await session.commit()
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="Grok 4.5", source_kind="agent",
+                   agent_id=agent.id, task_id=task.id, status="rendered",
+                   video_path="/sd/a.mp4", metrics={"duration_ms": 60000}),
+        BenchEntry(challenge_id=ch.id, model_label="Qwen", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4",
+                   metrics={"duration_ms": 90000}),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+
+    rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows["Grok 4.5"]["cost"] == "$0.42"
+    assert rows["Qwen"]["cost"] == "local"
+
+
+@pytest.mark.asyncio
+async def test_outro_cost_dash_without_attribution(session, monkeypatch, make_board, make_task, make_agent):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+    task = await make_task(board.id, title="[Bench] unpriced")
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="agent",
+                   agent_id=agent.id, task_id=task.id, status="rendered",
+                   video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="agent",
+                   agent_id=agent.id, status="rendered", video_path="/sd/b.mp4"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+    rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows["A"]["cost"] == "—"  # task without usage rows
+    assert rows["B"]["cost"] == "—"  # entry without task at all
+
+
+@pytest.mark.asyncio
+async def test_branding_time_derived_defensively_from_events(session, monkeypatch, make_board, make_task):
+    """Entry without stored duration_ms but with task_events -> the payload
+    builder derives the time on the fly."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] t")
+    t0 = datetime(2026, 7, 12, 12, 0, 0)
+    await _add_events(session, task.id, [
+        ("inbox", "in_progress", "agent", t0),
+        ("in_progress", "review", "agent", t0 + timedelta(minutes=6)),
+    ])
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="agent",
+                   task_id=task.id, status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+    rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows["A"]["time"] == "6.0 min"  # from events
+    assert rows["B"]["time"] == "—"        # spark without metrics -> dash
+
+
+# ── recompose (compose-only rebuild, 2026-07-12) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_recompose_challenge_rebuilds_compose_only(session, monkeypatch):
+    monkeypatch.setattr("app.database.engine", test_engine)
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    compose_mock = AsyncMock(return_value="/sd/branded-v2.mp4")
+    record_mock = AsyncMock()
+    monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
+    monkeypatch.setattr(orchestrator, "record_entry", record_mock)
+
+    await orchestrator.recompose_challenge(ch.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated = await vs.get(BenchChallenge, ch.id)
+    assert updated.status == "review"
+    assert updated.composed_video_path == "/sd/branded-v2.mp4"
+    compose_mock.assert_awaited_once()
+    record_mock.assert_not_awaited()  # compose ONLY — no re-record
+
+
+@pytest.mark.asyncio
+async def test_recompose_challenge_fails_without_recordings(session, monkeypatch):
+    monkeypatch.setattr("app.database.engine", test_engine)
+    ch, _ = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark",
+                      "status": "rendered", "video_path": "/sd/a.mp4"}],
+    )
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock())
+    await orchestrator.recompose_challenge(ch.id)
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated = await vs.get(BenchChallenge, ch.id)
+    assert updated.status == "failed"
+    assert "recompose" in updated.error

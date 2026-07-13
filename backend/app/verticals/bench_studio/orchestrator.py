@@ -243,6 +243,69 @@ async def dispatch_agent_entry(
     asyncio.create_task(auto_dispatch_task(task.id, task.board_id))
 
 
+async def task_work_duration_ms(session: AsyncSession, task_id: uuid.UUID) -> int | None:
+    """Real WORK time of a bench agent task, derived from task_events.
+
+    task.completed_at - task.dispatched_at is wrong for bench entries: the
+    span includes the human review wait, and review handoffs / re-dispatches
+    reset dispatched_at (task_lifecycle._handle_review et al.) — so the value
+    is often inflated or missing entirely (verified on the live
+    cherry-blossom/horror-forest runs, 2026-07-12).
+
+    Correct span: first `* -> in_progress` event (work start) to the FIRST
+    `in_progress -> review` event by the working agent (work end — the
+    one-shot artifact exists at that moment; everything after is review
+    ping-pong). Returns None when either endpoint is missing.
+    """
+    from app.models.task import TaskEvent
+
+    events = (
+        await session.exec(
+            select(TaskEvent)
+            .where(TaskEvent.task_id == task_id)
+            .order_by(TaskEvent.created_at)  # type: ignore[arg-type]
+        )
+    ).all()
+    start = next((e for e in events if e.to_status == "in_progress"), None)
+    end = next(
+        (
+            e
+            for e in events
+            if e.from_status == "in_progress"
+            and e.to_status == "review"
+            and e.changed_by == "agent"
+        ),
+        None,
+    )
+    if start is None or end is None or end.created_at <= start.created_at:
+        return None
+    return int((end.created_at - start.created_at).total_seconds() * 1000)
+
+
+async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | None:
+    """Attributed LLM cost of a task: sum of model_usage_events.cost_usd.
+
+    Coverage (2026-07-12 audit of the live data): model_usage_events has
+    per-task attribution columns and 118k+ priced rows, but only host-harness
+    rows carry task_id today (token_harvester's workspace/branch heuristic);
+    cli-bridge and sparky harvests are unattributed, and the Grok TUI reports
+    no token usage at all (known gap). So this returns None for most agent
+    entries until harvester attribution improves — the outro then shows "—".
+    """
+    from sqlalchemy import func
+
+    from app.models.model_usage import ModelUsageEvent
+
+    total = (
+        await session.exec(
+            select(func.sum(ModelUsageEvent.cost_usd)).where(
+                ModelUsageEvent.task_id == task_id
+            )
+        )
+    ).one()
+    return float(total) if total is not None else None
+
+
 async def on_task_done(session: AsyncSession, task) -> None:
     """task_done_hook (core registry, ADR-044): collect the index.html
     deliverable of a bench agent task. Self-filters — silent no-op for tasks
@@ -289,10 +352,16 @@ async def on_task_done(session: AsyncSession, task) -> None:
         shutil.copyfile(html_src, out_path)
         entry.artifact_path = str(out_path)
         metrics = dict(entry.metrics or {})
-        if task.completed_at and task.dispatched_at:
-            metrics["duration_ms"] = int(
+        # Real work time from task_events (see task_work_duration_ms — the
+        # completed_at - dispatched_at span includes review wait and gets
+        # reset by review handoffs). Fallback: old timestamp diff.
+        duration_ms = await task_work_duration_ms(session, task.id)
+        if duration_ms is None and task.completed_at and task.dispatched_at:
+            duration_ms = int(
                 (task.completed_at - task.dispatched_at).total_seconds() * 1000
             )
+        if duration_ms is not None:
+            metrics["duration_ms"] = duration_ms
         entry.metrics = metrics
         entry.status = "generated"
         entry.error = None
@@ -343,11 +412,22 @@ def _first_prompt_line(prompt_text: str, max_len: int = 110) -> str:
     return ""
 
 
-def _format_outro_time(metrics: dict) -> str:
-    duration_ms = (metrics or {}).get("duration_ms")
+def _format_outro_time(duration_ms: int | None) -> str:
     if not duration_ms:
         return "—"
     return f"{duration_ms / 60000:.1f} min"
+
+
+def _format_outro_cost(cost_usd: float | None, source_kind: str) -> str:
+    """Outro cost cell. Spark entries run on the local DGX — no per-token
+    cost, shown as "local" (clearer than a fake $0). Agent entries show the
+    attributed sum when model_usage_events has one, else "—" (most agent
+    runs today — see task_cost_usd coverage note)."""
+    if source_kind == "spark":
+        return "local"
+    if cost_usd is None:
+        return "—"
+    return f"${cost_usd:.2f}"
 
 
 def _format_outro_size(artifact_path: str | None) -> str:
@@ -399,10 +479,22 @@ async def _build_branding_payload(
                     elif agent.name:
                         tag = agent.name.upper()
         models.append({"label": entry.model_label, "tag": tag})
+
+        # Time: stored metrics first; for agent entries without a stored
+        # value (old runs, hook races) derive defensively from task_events.
+        duration_ms = (entry.metrics or {}).get("duration_ms")
+        if duration_ms is None and entry.task_id is not None:
+            duration_ms = await task_work_duration_ms(session, entry.task_id)
+
+        cost_usd = None
+        if entry.source_kind != "spark" and entry.task_id is not None:
+            cost_usd = await task_cost_usd(session, entry.task_id)
+
         outro_rows.append({
             "name": entry.model_label,
-            "time": _format_outro_time(entry.metrics or {}),
+            "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
+            "cost": _format_outro_cost(cost_usd, entry.source_kind),
         })
 
     return {
@@ -722,6 +814,57 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
                     await session.commit()
             except Exception:
                 logger.exception("bench challenge %s rerender failure write failed", challenge_id)
+
+
+async def recompose_challenge(challenge_id: uuid.UUID) -> None:
+    """Background: rebuild ONLY the branded compose from the existing
+    recordings (no re-record — much faster than rerender). Used after
+    title/label/tag edits: the recordings are untouched, only the branded
+    frame/outro overlays change."""
+    from app.database import engine
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        try:
+            challenge = await session.get(BenchChallenge, challenge_id)
+            if challenge is None:
+                return
+            entries = (
+                await session.exec(
+                    select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                )
+            ).all()
+            candidates = [e for e in entries if e.video_path]
+            if len(candidates) < 2 or challenge.mode != "side_by_side":
+                challenge.status = "failed"
+                challenge.error = (
+                    "recompose needs a side_by_side challenge with >=2 recorded "
+                    "entries — use rerender instead"
+                )
+                session.add(challenge)
+                await session.commit()
+                return
+            challenge.status = "composing"
+            challenge.error = None
+            session.add(challenge)
+            await session.commit()
+            challenge.composed_video_path = await compose_challenge(
+                session, challenge, candidates
+            )
+            challenge.status = "review"
+            session.add(challenge)
+            await session.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception("bench challenge %s recompose crashed", challenge_id)
+            try:
+                await session.rollback()
+                challenge = await session.get(BenchChallenge, challenge_id)
+                if challenge is not None:
+                    challenge.status = "failed"
+                    challenge.error = "recompose crashed — see backend logs"
+                    session.add(challenge)
+                    await session.commit()
+            except Exception:
+                logger.exception("bench challenge %s recompose failure write failed", challenge_id)
 
 
 async def retry_entry(entry_id: uuid.UUID) -> None:

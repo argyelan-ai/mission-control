@@ -7,7 +7,9 @@ import {
   ArchiveRestore,
   ArrowLeft,
   Download,
+  Film,
   Loader2,
+  Pencil,
   RefreshCw,
   RotateCcw,
   Send,
@@ -23,7 +25,7 @@ import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
 import { DraftDialog } from "./DraftDialog";
-import type { BenchEntry } from "./types";
+import type { BenchChallenge, BenchEntry } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -64,6 +66,7 @@ export function ChallengeDetail({
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
 
   const { data: challenge } = useQuery({
     queryKey: ["bench-challenge", challengeId],
@@ -116,6 +119,15 @@ export function ChallengeDetail({
     onError: () => notify.error("Rerender nicht möglich"),
   });
 
+  const recomposeMutation = useMutation({
+    mutationFn: () => benchApi.challenges.recompose(challengeId),
+    onSuccess: () => {
+      notify.success("Video wird neu erstellt");
+      invalidate();
+    },
+    onError: () => notify.error("Recompose nicht möglich"),
+  });
+
   const retryMutation = useMutation({
     mutationFn: (entryId: string) => benchApi.entries.retry(entryId),
     onSuccess: () => {
@@ -131,6 +143,11 @@ export function ChallengeDetail({
   // Mirrors the backend gates (routers.RUNNING_STATUSES / ARCHIVABLE_STATUSES):
   const isRunning = ["generating", "rendering", "composing"].includes(challenge.status);
   const canArchive = ["review", "drafted", "published", "failed"].includes(challenge.status);
+  // Recompose = branded video rebuild from existing recordings (no re-record):
+  const canRecompose =
+    !isRunning &&
+    challenge.mode === "side_by_side" &&
+    challenge.entries.filter((e) => e.video_path).length >= 2;
 
   return (
     <div className="flex flex-col gap-5">
@@ -179,6 +196,26 @@ export function ChallengeDetail({
                   <Archive size={13} /> Archivieren
                 </>
               )}
+            </button>
+          )}
+          {!isRunning && (
+            <button
+              onClick={() => setEditOpen(true)}
+              aria-label="Challenge bearbeiten"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
+              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+            >
+              <Pencil size={13} /> Bearbeiten
+            </button>
+          )}
+          {canRecompose && (
+            <button
+              onClick={() => recomposeMutation.mutate()}
+              disabled={recomposeMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
+              style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+            >
+              <Film size={13} /> Video neu erstellen
             </button>
           )}
           {!isRunning && (
@@ -291,6 +328,16 @@ export function ChallengeDetail({
 
       <DraftDialog challenge={challenge} open={draftOpen} onClose={() => setDraftOpen(false)} />
 
+      {/* Mounted only while open so the form re-seeds from fresh data each time */}
+      {editOpen && (
+        <EditChallengeDialog
+          challenge={challenge}
+          open={editOpen}
+          onClose={() => setEditOpen(false)}
+          onSaved={invalidate}
+        />
+      )}
+
       {/* Delete confirm — same pattern as files/DeleteFilesDialog (no window.confirm) */}
       <ResponsiveModal
         open={deleteOpen}
@@ -344,5 +391,141 @@ export function ChallengeDetail({
         </div>
       </ResponsiveModal>
     </div>
+  );
+}
+
+/** Edit dialog: challenge title + per-entry model name / chip tag.
+ *  Same Leitstand pattern as NewChallengeDialog (ResponsiveModal + dark
+ *  inputs). Saves only changed fields; recompose stays a separate,
+ *  deliberate action in the header ("Video neu erstellen"). */
+function EditChallengeDialog({
+  challenge,
+  open,
+  onClose,
+  onSaved,
+}: {
+  challenge: BenchChallenge;
+  open: boolean;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [title, setTitle] = useState(challenge.title);
+  const [entryEdits, setEntryEdits] = useState<
+    Record<string, { model_label: string; display_tag: string }>
+  >(() =>
+    Object.fromEntries(
+      challenge.entries.map((e) => [
+        e.id,
+        { model_label: e.model_label, display_tag: e.display_tag ?? "" },
+      ])
+    )
+  );
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (title.trim() && title.trim() !== challenge.title) {
+        await benchApi.challenges.update(challenge.id, { title: title.trim() });
+      }
+      for (const entry of challenge.entries) {
+        const edit = entryEdits[entry.id];
+        if (!edit) continue;
+        const changed =
+          edit.model_label.trim() !== entry.model_label ||
+          edit.display_tag.trim() !== (entry.display_tag ?? "");
+        if (changed && edit.model_label.trim()) {
+          await benchApi.entries.update(entry.id, {
+            model_label: edit.model_label.trim(),
+            display_tag: edit.display_tag.trim(),
+          });
+        }
+      }
+    },
+    onSuccess: () => {
+      notify.success("Änderungen gespeichert");
+      onSaved();
+      onClose();
+    },
+    onError: () => notify.error("Speichern nicht möglich"),
+  });
+
+  const inputStyle = {
+    backgroundColor: C.bgDeep,
+    color: C.textPrimary,
+    border: `1px solid ${C.border}`,
+  } as const;
+
+  function setEdit(id: string, patch: Partial<{ model_label: string; display_tag: string }>) {
+    setEntryEdits((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } }));
+  }
+
+  return (
+    <ResponsiveModal open={open} onClose={onClose} aria-label="Challenge bearbeiten">
+      <div
+        className="flex flex-col gap-4 p-5 rounded-xl w-full max-h-[85vh] overflow-y-auto"
+        style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
+      >
+        <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
+          Challenge bearbeiten
+        </h3>
+
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Titel"
+          aria-label="Titel"
+          className="rounded-lg p-2.5 text-sm outline-none"
+          style={inputStyle}
+        />
+
+        <div className="flex flex-col gap-2">
+          <span className="text-sm font-medium" style={{ color: C.textSecondary }}>
+            Modelle
+          </span>
+          {challenge.entries.map((entry, i) => (
+            <div key={entry.id} className="flex gap-2 items-center">
+              <input
+                value={entryEdits[entry.id]?.model_label ?? ""}
+                onChange={(e) => setEdit(entry.id, { model_label: e.target.value })}
+                placeholder="Modell-Name"
+                aria-label={`Modell-Name ${i + 1}`}
+                className="rounded-lg p-2 text-sm outline-none flex-1"
+                style={inputStyle}
+              />
+              <input
+                value={entryEdits[entry.id]?.display_tag ?? ""}
+                onChange={(e) => setEdit(entry.id, { display_tag: e.target.value })}
+                placeholder="Tag (leer = Harness-Default)"
+                aria-label={`Tag ${i + 1}`}
+                className="rounded-lg p-2 text-sm outline-none flex-1"
+                style={inputStyle}
+              />
+            </div>
+          ))}
+          <span className="text-xs" style={{ color: C.textMuted }}>
+            Danach „Video neu erstellen" klicken, um das gebrandete Video mit den
+            neuen Namen zu bauen (nutzt die vorhandenen Aufnahmen).
+          </span>
+        </div>
+
+        <div className="flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            disabled={mutation.isPending}
+            className="px-3 py-1.5 rounded-lg text-sm disabled:opacity-60"
+            style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
+          >
+            Abbrechen
+          </button>
+          <button
+            onClick={() => mutation.mutate()}
+            disabled={mutation.isPending || !title.trim()}
+            className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+            style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
+          >
+            Speichern
+          </button>
+        </div>
+      </div>
+    </ResponsiveModal>
   );
 }
