@@ -270,14 +270,59 @@ describe("ChallengeDetail — edit + recompose", () => {
 // be a standing credential leak once the copyable/shareable link is opened
 // on a phone or lands in browser history). The token is minted lazily on
 // click via entries.viewToken().
+//
+// window.open() itself must happen SYNCHRONOUSLY inside the click handler —
+// Safari/iOS only waives the popup blocker within the same tick as the user
+// gesture. The token is minted afterwards and the already-open blank tab is
+// redirected via tab.location.href (standard "open blank, fill in later"
+// pattern) — a naive `await mint(); window.open(url)` gets silently blocked.
 
 describe("ChallengeDetail — Öffnen button", () => {
+  let fakeTab: { location: { href: string }; close: ReturnType<typeof vi.fn>; closed: boolean };
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubGlobal("open", vi.fn());
+    fakeTab = { location: { href: "" }, close: vi.fn(), closed: false };
+    vi.stubGlobal("open", vi.fn(() => fakeTab));
   });
 
-  it("mints a view-token on click and opens the view URL with it in a new tab", async () => {
+  it("opens a blank tab synchronously, then redirects it once the view-token is minted", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+    vi.mocked(benchApi.entries.viewToken).mockResolvedValue({
+      token: "scoped-view-token",
+      expires_in: 1800,
+    });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    // Blank tab opened right away — valid windowFeatures token only:
+    expect(window.open).toHaveBeenCalledWith("", "_blank", "noopener");
+
+    await waitFor(() => {
+      expect(benchApi.entries.viewToken).toHaveBeenCalledWith("ch-1", "e-1");
+    });
+    await waitFor(() => {
+      expect(fakeTab.location.href).toBe(
+        "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token"
+      );
+    });
+  });
+
+  it("falls back to same-tab navigation when the popup blocker returns null", async () => {
+    vi.mocked(window.open).mockReturnValue(null);
+    const originalLocation = window.location;
+    // jsdom's window.location isn't directly assignable — replace it for this test only:
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, href: "" },
+    });
+
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
@@ -293,16 +338,15 @@ describe("ChallengeDetail — Öffnen button", () => {
     await userEvent.click(btn);
 
     await waitFor(() => {
-      expect(benchApi.entries.viewToken).toHaveBeenCalledWith("ch-1", "e-1");
+      expect(window.location.href).toBe(
+        "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token"
+      );
     });
-    expect(window.open).toHaveBeenCalledWith(
-      "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token",
-      "_blank",
-      "noopener,noreferrer"
-    );
+
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
   });
 
-  it("shows an error and never opens a tab when minting the view-token fails", async () => {
+  it("closes the blank tab and shows an error when minting the view-token fails", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
@@ -317,7 +361,8 @@ describe("ChallengeDetail — Öffnen button", () => {
     await waitFor(() => {
       expect(notify.error).toHaveBeenCalled();
     });
-    expect(window.open).not.toHaveBeenCalled();
+    expect(fakeTab.close).toHaveBeenCalled();
+    expect(fakeTab.location.href).toBe("");
   });
 
   it("does not render 'Öffnen' when the entry has no artifact yet", async () => {
