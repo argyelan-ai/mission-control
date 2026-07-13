@@ -259,3 +259,67 @@ describe("ChallengeDetail — edit + recompose", () => {
     expect(benchApi.entries.update).toHaveBeenCalledTimes(1);
   });
 });
+
+// ── grid-video spinner + cache-staleness (2026-07-13) ──────────────────────
+
+describe("ChallengeDetail — grid video spinner", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows a spinner instead of the video while composing, even with a stale composed_video_path", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "composing",
+        composed_video_path: "/shared-deliverables/bench-x/grid-old.mp4",
+        entries: [
+          makeEntry({ id: "e-1", video_path: "/sd/a.mp4" }),
+          makeEntry({ id: "e-2", model_label: "Grok", video_path: "/sd/b.mp4" }),
+        ],
+      })
+    );
+
+    renderDetail();
+    expect(await screen.findByText("Video wird zusammengesetzt…")).toBeTruthy();
+    // The stale video must NOT be rendered while composing:
+    expect(screen.queryByText("/shared-deliverables/bench-x/grid-old.mp4")).toBeNull();
+  });
+
+  it("shows a spinner while rendering", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ status: "rendering", entries: [makeEntry()] })
+    );
+    renderDetail();
+    expect(await screen.findByText("Aufnahmen werden gerendert…")).toBeTruthy();
+  });
+
+  it("shows the composed video once review is reached", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        composed_video_path: "/shared-deliverables/bench-x/grid-abc123.mp4",
+        entries: [makeEntry({ id: "e-1" }), makeEntry({ id: "e-2", model_label: "Grok" })],
+      })
+    );
+    renderDetail();
+    expect(
+      await screen.findByText("/shared-deliverables/bench-x/grid-abc123.mp4")
+    ).toBeTruthy();
+    expect(screen.queryByText("Video wird zusammengesetzt…")).toBeNull();
+  });
+
+  it("shows a per-entry spinner while an entry is still generating", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "generating",
+        entries: [
+          makeEntry({ id: "e-1", status: "generating", video_path: null }),
+          makeEntry({ id: "e-2", model_label: "Grok", status: "pending", video_path: null }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByText("Wird generiert…")).toBeTruthy();
+    expect(await screen.findByText("Wartet…")).toBeTruthy();
+  });
+});
