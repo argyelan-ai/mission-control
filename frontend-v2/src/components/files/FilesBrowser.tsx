@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ChevronUp, ChevronDown, Loader2, AlertCircle, FolderOpen } from "lucide-react";
 import { api } from "@/lib/api";
@@ -8,10 +8,11 @@ import type { FsEntry, FsRoot } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
 import { colorForAgent } from "@/components/vault/agentColors";
-import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "./fileUtils";
+import { fileIcon, fileIconColor, humanSize, isImageFile, mtimeToIso } from "./fileUtils";
 
 export type SortKey = "name" | "size" | "mtime";
 export type SortDir = "asc" | "desc";
+export type ViewMode = "list" | "grid";
 
 /** Folders always group above files; sort within each group by the active column. */
 export function sortEntries(entries: FsEntry[], key: SortKey, dir: SortDir): FsEntry[] {
@@ -43,11 +44,13 @@ interface FilesBrowserProps {
   onToggleSelect: (subpath: string, on: boolean) => void;
   /** Toggle every file in the current directory at once. */
   onToggleSelectAll: (subpaths: string[], on: boolean) => void;
+  /** "list" (table, default) or "grid" (thumbnail cards). */
+  view?: ViewMode;
 }
 
 export function FilesBrowser({
   root, subpath, onNavigate, onSelectFile, selectedSubpath,
-  selected, onToggleSelect, onToggleSelectAll,
+  selected, onToggleSelect, onToggleSelectAll, view = "list",
 }: FilesBrowserProps) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["files-list", root.key, subpath],
@@ -125,6 +128,21 @@ export function FilesBrowser({
           <FolderOpen size={28} style={{ color: C.textDim }} />
           <p className="text-sm" style={{ color: C.textMuted }}>This folder is empty</p>
         </div>
+      ) : view === "grid" ? (
+        <FileGrid
+          root={root}
+          subpath={subpath}
+          entries={entries}
+          selectedSubpath={selectedSubpath}
+          selected={selected}
+          onNavigate={onNavigate}
+          onSelectFile={onSelectFile}
+          onToggleSelect={onToggleSelect}
+          fileSubpaths={fileSubpaths}
+          allSelected={allSelected}
+          someSelected={someSelected}
+          onToggleSelectAll={onToggleSelectAll}
+        />
       ) : (
         <table className="w-full">
           <thead>
@@ -286,5 +304,166 @@ function SortHeader({
         <Arrow size={12} style={{ color: active ? C.accent : "transparent" }} />
       </span>
     </th>
+  );
+}
+
+// ── Grid view ────────────────────────────────────────────────────────────────
+
+/** Fetches the raw bytes for an image entry and exposes them as an object URL
+ *  (the <img> tag can't carry the Bearer header the content endpoint needs).
+ *  Cleans up the object URL on unmount/change to avoid leaking blobs while
+ *  browsing large media folders. */
+function useThumbnailUrl(rootKey: string, subpath: string, enabled: boolean): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!enabled) return;
+    let cancelled = false;
+    let objectUrl: string | null = null;
+    api.files.fetchBlob(rootKey, subpath).then((u) => {
+      if (cancelled) {
+        URL.revokeObjectURL(u);
+        return;
+      }
+      objectUrl = u;
+      setUrl(u);
+    }).catch(() => {
+      // Broken/missing file — fall back to the generic icon, no error UI needed.
+    });
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [rootKey, subpath, enabled]);
+
+  return url;
+}
+
+function FileGridCard({
+  root, entry, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
+}: {
+  root: FsRoot;
+  entry: FsEntry;
+  subpath: string;
+  selected: boolean;
+  checked: boolean;
+  onNavigate: (subpath: string) => void;
+  onSelectFile: (subpath: string) => void;
+  onToggleSelect: (subpath: string, on: boolean) => void;
+}) {
+  const entrySubpath = subpath ? `${subpath}/${entry.name}` : entry.name;
+  const Icon = fileIcon(entry.name, entry.is_directory);
+  const color = fileIconColor(entry.name, entry.is_directory);
+  const showThumb = !entry.is_directory && isImageFile(entry.name);
+  const thumbUrl = useThumbnailUrl(root.key, entrySubpath, showThumb);
+
+  return (
+    <div
+      className="relative flex flex-col rounded-xl overflow-hidden cursor-pointer transition-colors group"
+      style={{ background: selected ? C.accentSubtle : C.bgElevated, border: `1px solid ${selected ? C.borderAccent : C.borderSubtle}` }}
+      onClick={() => entry.is_directory ? onNavigate(entrySubpath) : onSelectFile(entrySubpath)}
+    >
+      {!entry.is_directory && (
+        <div className="absolute top-1.5 left-1.5 z-10" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={checked}
+            aria-label={`Select ${entry.name}`}
+            onChange={(e) => onToggleSelect(entrySubpath, e.target.checked)}
+            className="cursor-pointer"
+            style={{ accentColor: C.accent }}
+          />
+        </div>
+      )}
+
+      <div className="flex items-center justify-center aspect-square" style={{ background: C.bgDeep }}>
+        {thumbUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- authenticated blob URL, next/image can't fetch it
+          <img src={thumbUrl} alt={entry.name} className="w-full h-full object-cover" />
+        ) : (
+          <Icon size={36} style={{ color }} />
+        )}
+      </div>
+
+      <div className="px-2 py-2 min-w-0">
+        {entry.display_name ? (
+          <>
+            <div className="text-xs truncate" style={{ color: C.textPrimary }} title={entry.display_name}>
+              {entry.display_name}
+            </div>
+            <div className="text-[10px] font-mono truncate" style={{ color: C.textDim }} title={entry.name}>
+              {entry.name}
+            </div>
+          </>
+        ) : (
+          <div className="text-xs truncate" style={{ color: C.textPrimary }} title={entry.name}>
+            {entry.name}
+          </div>
+        )}
+        {entry.agent_slug && (
+          <div className="mt-1">
+            <AgentBadge slug={entry.agent_slug} />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FileGrid({
+  root, subpath, entries, selectedSubpath, selected,
+  onNavigate, onSelectFile, onToggleSelect,
+  fileSubpaths, allSelected, someSelected, onToggleSelectAll,
+}: {
+  root: FsRoot;
+  subpath: string;
+  entries: FsEntry[];
+  selectedSubpath?: string | null;
+  selected: Set<string>;
+  onNavigate: (subpath: string) => void;
+  onSelectFile: (subpath: string) => void;
+  onToggleSelect: (subpath: string, on: boolean) => void;
+  fileSubpaths: string[];
+  allSelected: boolean;
+  someSelected: boolean;
+  onToggleSelectAll: (subpaths: string[], on: boolean) => void;
+}) {
+  const selectAllRef = useRef<HTMLInputElement | null>(null);
+
+  return (
+    <div className="p-4">
+      {fileSubpaths.length > 0 && (
+        <label className="flex items-center gap-2 mb-3 text-xs cursor-pointer w-fit" style={{ color: C.textMuted }}>
+          <input
+            ref={(el) => {
+              selectAllRef.current = el;
+              if (el) el.indeterminate = someSelected;
+            }}
+            type="checkbox"
+            checked={allSelected}
+            aria-label="Select all files"
+            onChange={(e) => onToggleSelectAll(fileSubpaths, e.target.checked)}
+            className="cursor-pointer"
+            style={{ accentColor: C.accent }}
+          />
+          Select all
+        </label>
+      )}
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(130px, 1fr))" }}>
+        {entries.map((entry) => (
+          <FileGridCard
+            key={entry.name}
+            root={root}
+            entry={entry}
+            subpath={subpath}
+            selected={selectedSubpath === (subpath ? `${subpath}/${entry.name}` : entry.name)}
+            checked={selected.has(subpath ? `${subpath}/${entry.name}` : entry.name)}
+            onNavigate={onNavigate}
+            onSelectFile={onSelectFile}
+            onToggleSelect={onToggleSelect}
+          />
+        ))}
+      </div>
+    </div>
   );
 }

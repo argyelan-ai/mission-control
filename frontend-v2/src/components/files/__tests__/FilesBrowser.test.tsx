@@ -282,6 +282,97 @@ describe("FilesBrowser", () => {
   });
 });
 
+// ── Grid view ────────────────────────────────────────────────────────────────
+
+describe("FilesBrowser — grid view", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("renders a card per entry, folders and files alike", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({ name: "report.pdf" }),
+        mkEntry({ name: "screenshots", type: "directory", is_directory: true }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} view="grid" {...noSel} />
+    );
+    expect(await screen.findByText("report.pdf")).toBeInTheDocument();
+    expect(screen.getByText("screenshots")).toBeInTheDocument();
+  });
+
+  it("navigates into a folder card, and opens a file card in the preview", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({ name: "report.pdf" }),
+        mkEntry({ name: "screenshots", type: "directory", is_directory: true }),
+      ],
+    });
+    const onNavigate = vi.fn();
+    const onSelectFile = vi.fn();
+    renderWithQuery(
+      <FilesBrowser
+        root={ROOT} subpath="" onNavigate={onNavigate} onSelectFile={onSelectFile} view="grid" {...noSel}
+      />
+    );
+    await userEvent.click(await screen.findByText("screenshots"));
+    expect(onNavigate).toHaveBeenCalledWith("screenshots");
+    await userEvent.click(screen.getByText("report.pdf"));
+    expect(onSelectFile).toHaveBeenCalledWith("report.pdf");
+  });
+
+  it("fetches a real thumbnail for image files via the authenticated blob endpoint", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [mkEntry({ name: "photo.png" })],
+    });
+    const fetchBlob = vi.spyOn(api.files, "fetchBlob").mockResolvedValue("blob:mock-url");
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} view="grid" {...noSel} />
+    );
+    await screen.findByText("photo.png");
+    await waitFor(() => expect(fetchBlob).toHaveBeenCalledWith("vault", "photo.png"));
+    await waitFor(() => expect(screen.getByAltText("photo.png")).toHaveAttribute("src", "blob:mock-url"));
+  });
+
+  it("does NOT fetch a thumbnail for non-image files", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [mkEntry({ name: "notes.md" })],
+    });
+    const fetchBlob = vi.spyOn(api.files, "fetchBlob");
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} view="grid" {...noSel} />
+    );
+    await screen.findByText("notes.md");
+    expect(fetchBlob).not.toHaveBeenCalled();
+  });
+
+  it("renders display_name + agent badge on grid cards too", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({
+          name: "3f9b7c2e-1234-4a11-9abc-1234567890ab",
+          type: "directory",
+          is_directory: true,
+          display_name: "Fix login redirect bug",
+          agent_slug: "rex",
+        }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} view="grid" {...noSel} />
+    );
+    expect(await screen.findByText("Fix login redirect bug")).toBeInTheDocument();
+    expect(screen.getByText("rex")).toBeInTheDocument();
+  });
+});
+
 describe("sortEntries", () => {
   const dir = (name: string) => mkEntry({ name, type: "directory", is_directory: true });
   const file = (name: string, size: number, mtime: number) => mkEntry({ name, size, mtime });
