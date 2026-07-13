@@ -142,6 +142,10 @@ export function ChallengeDetail({
   const canRerender = ["review", "drafted", "failed"].includes(challenge.status);
   // Mirrors the backend gates (routers.RUNNING_STATUSES / ARCHIVABLE_STATUSES):
   const isRunning = ["generating", "rendering", "composing"].includes(challenge.status);
+  // Grid video specifically: while rendering/composing the DB still points at
+  // the previous composed_video_path (recompose overwrites it only on
+  // success) — show a spinner instead of that stale video.
+  const isComposingVideo = ["rendering", "composing"].includes(challenge.status);
   const canArchive = ["review", "drafted", "published", "failed"].includes(challenge.status);
   // Recompose = branded video rebuild from existing recordings (no re-record):
   const canRecompose =
@@ -256,17 +260,32 @@ export function ChallengeDetail({
         </div>
       )}
 
-      {/* Grid video (side_by_side) */}
-      {challenge.composed_video_path && (
+      {/* Grid video (side_by_side) — spinner while rendering/composing so the
+          (possibly stale) previous video is never shown mid-run. */}
+      {challenge.mode === "side_by_side" && (isComposingVideo || challenge.composed_video_path) && (
         <section>
           <h3 className="text-sm font-medium mb-2" style={{ color: C.textSecondary }}>
             Grid-Video
           </h3>
           <div className="rounded-xl p-3" style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.borderSubtle}` }}>
-            <FilePreview
-              fileUrl={sharedUrl(challenge.composed_video_path)}
-              path={challenge.composed_video_path}
-            />
+            {isComposingVideo ? (
+              <div
+                className="flex flex-col items-center justify-center gap-2 py-10"
+                style={{ color: C.textSecondary }}
+              >
+                <Loader2 size={22} className="animate-spin" style={{ color: C.accent }} />
+                <span className="text-sm">
+                  {challenge.status === "rendering"
+                    ? "Aufnahmen werden gerendert…"
+                    : "Video wird zusammengesetzt…"}
+                </span>
+              </div>
+            ) : (
+              <FilePreview
+                fileUrl={sharedUrl(challenge.composed_video_path!)}
+                path={challenge.composed_video_path!}
+              />
+            )}
           </div>
         </section>
       )}
@@ -296,6 +315,16 @@ export function ChallengeDetail({
               <FilePreview fileUrl={sharedUrl(entry.video_path)} path={entry.video_path} />
             ) : entry.screenshot_path ? (
               <FilePreview fileUrl={sharedUrl(entry.screenshot_path)} path={entry.screenshot_path} />
+            ) : entry.status === "generating" || entry.status === "pending" ? (
+              <div
+                className="flex items-center justify-center gap-2 py-8 rounded-lg"
+                style={{ backgroundColor: C.bgDeep, color: C.textMuted }}
+              >
+                <Loader2 size={15} className="animate-spin" />
+                <span className="text-xs">
+                  {entry.status === "generating" ? "Wird generiert…" : "Wartet…"}
+                </span>
+              </div>
             ) : null}
             {entry.error && (
               <span className="text-xs" style={{ color: C.error }}>{entry.error}</span>

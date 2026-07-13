@@ -228,6 +228,15 @@ async def rerender_challenge(
             409,
             f"Challenge is {challenge.status!r} — rerender only from review/drafted/failed/rendering/composing.",
         )
+    # An open X-Post approval still points at the current video path
+    # (Approval.payload.media_paths, frozen at draft time) — rerender would
+    # rename AND delete that file (_cleanup_old_compose), breaking the
+    # approve-then-post flow days later (2026-07-13 incident).
+    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
+        raise HTTPException(
+            409,
+            "Open X-Post approval references the current video — approve or reject it first.",
+        )
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),
         name=f"rerender_challenge({challenge.id})"
@@ -319,6 +328,13 @@ async def recompose_challenge(
             422,
             "recompose needs a side_by_side challenge with >=2 recorded entries "
             "— use rerender for everything else.",
+        )
+    # Same guard as rerender: a pending X-Post approval's media_paths still
+    # point at the current file — recompose would rename AND delete it.
+    if await orchestrator.pending_x_post_approval(session, challenge_id) is not None:
+        raise HTTPException(
+            409,
+            "Open X-Post approval references the current video — approve or reject it first.",
         )
     create_tracked_task(
         orchestrator.recompose_challenge(challenge.id),

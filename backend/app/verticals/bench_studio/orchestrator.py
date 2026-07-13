@@ -64,6 +64,59 @@ def challenge_dir(challenge_id: uuid.UUID) -> Path:
     return SHARED_DELIVERABLES / f"bench-{challenge_id}"
 
 
+def _versioned_output_name(prefix: str = "grid") -> str:
+    """Cache-busting filename for a compose output: '<prefix>-<8 hex>.mp4'.
+
+    Every compose gets a fresh name so the browser never keeps serving a
+    stale cached video for the same challenge after a recompose/rerender —
+    the old fixed 'grid.mp4' name was indistinguishable to the browser's
+    HTTP cache from run to run (incident 2026-07-13, hit Mark twice)."""
+    return f"{prefix}-{uuid.uuid4().hex[:8]}.mp4"
+
+
+async def pending_x_post_approval(session: AsyncSession, challenge_id: uuid.UUID):
+    """The pending x_post Approval referencing this challenge, if any — None
+    otherwise. Filter pending x_post approvals in SQL; match
+    bench_challenge_id in Python (JSON column, avoids DB-specific operators).
+
+    Shared guard: drafts.create_draft uses it to reject a second draft while
+    one is still pending; routers.rerender_challenge/recompose_challenge use
+    it (inverted) to block overwriting the video a pending post approval
+    still points at — Approval.payload.media_paths freezes a path at draft
+    time, and a later recompose/rerender both renames AND deletes the old
+    file (_cleanup_old_compose), so approving the post days later would try
+    to post a file that no longer exists (2026-07-13 incident)."""
+    from app.models.approval import Approval
+
+    pending = (
+        await session.exec(
+            select(Approval).where(
+                Approval.action_type == "x_post",
+                Approval.status == "pending",
+            )
+        )
+    ).all()
+    for approval in pending:
+        payload = approval.payload or {}
+        if payload.get("bench_challenge_id") == str(challenge_id):
+            return approval
+    return None
+
+
+def _cleanup_old_compose(old_path: str | None, new_path: str | None) -> None:
+    """Best-effort removal of a superseded composed video. Versioned
+    filenames mean the previous file is otherwise orphaned on disk forever
+    after every recompose/rerender."""
+    if not old_path or old_path == new_path:
+        return
+    try:
+        old = Path(old_path)
+        if old.exists():
+            old.unlink()
+    except OSError:
+        logger.warning("bench compose cleanup: failed to remove %s", old_path)
+
+
 def _trim_leading_prose(text: str) -> str:
     """Cut any prose before the first <!doctype or <html tag.
 
@@ -512,12 +565,18 @@ async def compose_challenge(
     rendered: list[BenchEntry],
     *,
     speed_labels: bool = False,
-    output_name: str = "grid.mp4",
+    output_name: str | None = None,
 ) -> str:
     """POST /compose on mc-playwright (PR 1) — grid video with model labels,
     or (side_by_side with exactly 2 rendered entries) the branded frame +
     outro video (spec: bench-video-branding, 2026-07-12). Returns the
-    composed video_path. Raises on failure."""
+    composed video_path. Raises on failure.
+
+    output_name defaults to a fresh versioned filename (_versioned_output_name)
+    so every compose produces a distinct file — callers that need a stable
+    name (drafts.py's "grid-speeds.mp4") pass it explicitly."""
+    if output_name is None:
+        output_name = _versioned_output_name()
     ordered = sorted(rendered, key=lambda e: e.model_label)
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
@@ -794,6 +853,7 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
                 session.add(challenge)
                 await session.commit()
                 return
+            old_video = challenge.composed_video_path
             for e in candidates:
                 e.status = "generated"
                 e.error = None
@@ -802,6 +862,7 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
             session.add(challenge)
             await session.commit()
             await _render_and_compose(session, challenge, candidates)
+            _cleanup_old_compose(old_video, challenge.composed_video_path)
         except Exception:  # noqa: BLE001
             logger.exception("bench challenge %s rerender crashed", challenge_id)
             try:
@@ -843,6 +904,7 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
                 session.add(challenge)
                 await session.commit()
                 return
+            old_video = challenge.composed_video_path
             challenge.status = "composing"
             challenge.error = None
             session.add(challenge)
@@ -853,6 +915,7 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
             challenge.status = "review"
             session.add(challenge)
             await session.commit()
+            _cleanup_old_compose(old_video, challenge.composed_video_path)
         except Exception:  # noqa: BLE001
             logger.exception("bench challenge %s recompose crashed", challenge_id)
             try:

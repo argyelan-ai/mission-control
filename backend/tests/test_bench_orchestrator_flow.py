@@ -2,6 +2,7 @@
 task_done hook, partial failure -> grid from survivors)."""
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -1088,3 +1089,150 @@ async def test_recompose_challenge_fails_without_recordings(session, monkeypatch
         updated = await vs.get(BenchChallenge, ch.id)
     assert updated.status == "failed"
     assert "recompose" in updated.error
+
+
+# ── compose output versioning + cleanup (cache-busting, 2026-07-13) ────────
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_default_output_name_is_versioned(session, monkeypatch):
+    """No explicit output_name -> a fresh 'grid-<hex>.mp4' every call, never
+    the old fixed 'grid.mp4' — the browser must never see the same URL for
+    two different videos (recompose/rerender cache-staleness incident)."""
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured_paths: list[str] = []
+
+    class FakeResp:
+        def __init__(self, output_path):
+            self._output_path = output_path
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": self._output_path, "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured_paths.append(json["output_path"])
+            return FakeResp(json["output_path"])
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    result_1 = await orchestrator.compose_challenge(session, ch, entries)
+    result_2 = await orchestrator.compose_challenge(session, ch, entries)
+
+    assert result_1 != result_2
+    assert Path(result_1).name.startswith("grid-") and Path(result_1).name.endswith(".mp4")
+    assert Path(result_1).name != "grid.mp4"
+    assert Path(result_2).name != "grid.mp4"
+    assert captured_paths[0] != captured_paths[1]
+
+
+@pytest.mark.asyncio
+async def test_recompose_challenge_cleans_up_old_video_file(session, monkeypatch, tmp_path):
+    """After a successful recompose, the previous composed video is removed
+    from disk — versioned filenames would otherwise orphan it forever."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    old_video = tmp_path / "grid-aaaaaaaa.mp4"
+    old_video.write_bytes(b"old")
+    new_video = tmp_path / "grid-bbbbbbbb.mp4"
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.status = "review"
+    ch.composed_video_path = str(old_video)
+    session.add(ch)
+    await session.commit()
+
+    compose_mock = AsyncMock(return_value=str(new_video))
+    monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
+
+    await orchestrator.recompose_challenge(ch.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated = await vs.get(BenchChallenge, ch.id)
+    assert updated.composed_video_path == str(new_video)
+    assert not old_video.exists()  # cleaned up
+
+
+@pytest.mark.asyncio
+async def test_rerender_challenge_cleans_up_old_video_file(session, monkeypatch, tmp_path):
+    """rerender re-nulls composed_video_path before recomposing — the
+    previous file must still be removed once the new one lands."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    old_video = tmp_path / "grid-old11111.mp4"
+    old_video.write_bytes(b"old")
+    new_video = tmp_path / "grid-new22222.mp4"
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4", "artifact_path": "/tmp/a/index.html"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4", "artifact_path": "/tmp/b/index.html"},
+        ],
+    )
+    ch.status = "review"
+    ch.composed_video_path = str(old_video)
+    session.add(ch)
+    await session.commit()
+
+    _record_ok(monkeypatch)
+    compose_mock = AsyncMock(return_value=str(new_video))
+    monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
+
+    await orchestrator.rerender_challenge(ch.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated = await vs.get(BenchChallenge, ch.id)
+    assert updated.composed_video_path == str(new_video)
+    assert not old_video.exists()  # cleaned up
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_compose_noop_when_same_path(tmp_path):
+    """Same path (or None) -> never delete — guards against a compose that
+    happens to return the identical name (shouldn't happen, but must be safe)."""
+    video = tmp_path / "grid-xxxx.mp4"
+    video.write_bytes(b"x")
+    orchestrator._cleanup_old_compose(str(video), str(video))
+    assert video.exists()
+    orchestrator._cleanup_old_compose(None, str(video))
+    assert video.exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_compose_missing_file_is_safe(tmp_path):
+    """Old path already gone (manual cleanup, double-run) -> no crash."""
+    orchestrator._cleanup_old_compose(str(tmp_path / "does-not-exist.mp4"), "/sd/new.mp4")
