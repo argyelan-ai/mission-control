@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -205,6 +205,55 @@ async def list_files(
     return {"root": root, "subpath": subpath, "entries": out}
 
 
+# --- /search ?type= friendly-group mapping ---------------------------------
+#
+# The indexer stores whatever mimetypes.guess_type() returns, so many source
+# files carry a NULL or generic mime (`.tsx`, `.rs`, `.go`, `.svelte`, …) and a
+# raw mime substring match for "code"/"markdown" would silently return nothing.
+# These groups therefore also match on filename extension. Extensionless code
+# files (Dockerfile / Makefile) are matched by exact name.
+
+_CODE_EXTS: tuple[str, ...] = (
+    ".py", ".pyi", ".ipynb", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".go", ".rs", ".rb", ".java", ".kt", ".kts", ".scala", ".c", ".h", ".cpp",
+    ".cc", ".cxx", ".hpp", ".hh", ".cs", ".php", ".swift", ".m", ".mm", ".sh",
+    ".bash", ".zsh", ".fish", ".ps1", ".sql", ".json", ".jsonc", ".yaml",
+    ".yml", ".toml", ".ini", ".cfg", ".html", ".htm", ".xml", ".css", ".scss",
+    ".sass", ".less", ".vue", ".svelte", ".lua", ".r", ".pl", ".pm", ".ex",
+    ".exs", ".erl", ".clj", ".cljs", ".hs", ".ml", ".dart", ".groovy",
+    ".gradle", ".proto", ".tf",
+)
+_CODE_EXACT_NAMES: tuple[str, ...] = ("Dockerfile", "Makefile", "Rakefile", "Gemfile")
+
+
+def _type_filter(entry, type_str: str):
+    """Translate a friendly ``?type=`` group into a SQL WHERE condition.
+
+    ``image``/``video``/``audio`` → mime prefix; ``pdf`` → pdf mime or ``.pdf``;
+    ``markdown`` → markdown mime or ``.md``/``.markdown``/``.mdx``; ``code`` →
+    known source extensions (mime is unreliable for these). Any unrecognised
+    value keeps the legacy raw-mime substring match (backward compatible).
+    """
+    t = type_str.strip().lower()
+    if t in ("image", "video", "audio"):
+        return entry.mime.ilike(f"{t}/%")
+    if t == "pdf":
+        return or_(entry.mime.ilike("%pdf%"), entry.name.ilike("%.pdf"))
+    if t == "markdown":
+        return or_(
+            entry.mime.ilike("%markdown%"),
+            entry.name.ilike("%.md"),
+            entry.name.ilike("%.markdown"),
+            entry.name.ilike("%.mdx"),
+        )
+    if t == "code":
+        conds = [entry.name.ilike(f"%{ext}") for ext in _CODE_EXTS]
+        conds += [entry.name.ilike(nm) for nm in _CODE_EXACT_NAMES]
+        return or_(*conds)
+    # Unknown group → legacy behaviour (raw mime substring).
+    return entry.mime.ilike(f"%{type_str}%")
+
+
 @router.get("/search")
 async def search_files(
     q: str = "",
@@ -224,7 +273,7 @@ async def search_files(
     if agent:
         stmt = stmt.where(FileIndexEntry.agent_slug == agent)
     if type:
-        stmt = stmt.where(FileIndexEntry.mime.ilike(f"%{type}%"))
+        stmt = stmt.where(_type_filter(FileIndexEntry, type))
     # Deterministic order so offset/limit paging is stable across page turns.
     capped = min(max(limit, 1), 500)
     stmt = (

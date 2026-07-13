@@ -300,6 +300,83 @@ async def test_list_resolution_is_batched_no_n_plus_1(
     assert counts["agents"] == 1, counts
 
 
+# --- /search ?type= friendly-group filter -----------------------------------
+
+
+def _seed_typed_files(tmp_path):
+    """Seed one file per type-group under the media root (host-backed, indexable)."""
+    root = tmp_path / ".mc" / "media"
+    root.mkdir(parents=True, exist_ok=True)
+    files = [
+        "photo.png",      # image/png
+        "clip.mp4",       # video/mp4
+        "song.mp3",       # audio/mpeg
+        "report.pdf",     # application/pdf
+        "readme.md",      # markdown
+        "main.py",        # code (mime text/x-python)
+        "widget.tsx",     # code (mime often NULL — extension-only match)
+        "styles.css",     # code (text/css)
+        "config.json",    # code (application/json)
+        "Dockerfile",     # code (no extension → exact-name match)
+        "notes.txt",      # plain text — matches no friendly group
+    ]
+    for f in files:
+        (root / f).write_text("x")
+    return root
+
+
+async def _search_names(auth_client, type_str):
+    resp = await auth_client.get(
+        "/api/v1/files/search", params={"type": type_str, "root": "media"}
+    )
+    assert resp.status_code == 200, resp.text
+    return {r["name"] for r in resp.json()["results"]}
+
+
+@pytest.mark.parametrize(
+    "type_str,expected",
+    [
+        ("image", {"photo.png"}),
+        ("video", {"clip.mp4"}),
+        ("audio", {"song.mp3"}),
+        ("pdf", {"report.pdf"}),
+        ("markdown", {"readme.md"}),
+        ("code", {"main.py", "widget.tsx", "styles.css", "config.json", "Dockerfile"}),
+    ],
+)
+async def test_search_type_groups(
+    auth_client: AsyncClient, tmp_path, monkeypatch, type_str, expected
+):
+    monkeypatch.setattr(settings, "home_host", str(tmp_path))
+    _seed_typed_files(tmp_path)
+    r = await auth_client.post("/api/v1/files/reindex")
+    assert r.status_code == 200
+    names = await _search_names(auth_client, type_str)
+    assert expected <= names, f"{type_str}: missing {expected - names}"
+    # never leak across groups: notes.txt is in no friendly group
+    assert "notes.txt" not in names
+    # markdown must not be swept into code, and vice-versa
+    if type_str == "code":
+        assert "readme.md" not in names
+    if type_str == "markdown":
+        assert "main.py" not in names
+
+
+async def test_search_unknown_type_falls_back_to_mime_substring(
+    auth_client: AsyncClient, tmp_path, monkeypatch
+):
+    """Backward-compat: an unmapped value still matches as a raw mime substring."""
+    monkeypatch.setattr(settings, "home_host", str(tmp_path))
+    _seed_typed_files(tmp_path)
+    r = await auth_client.post("/api/v1/files/reindex")
+    assert r.status_code == 200
+    # "python" is not a friendly group → legacy mime substring hits text/x-python
+    names = await _search_names(auth_client, "python")
+    assert "main.py" in names
+    # and it must NOT accidentally pull unrelated files
+    assert "photo.png" not in names
+
+
 async def test_open_container_only_root_409(auth_client: AsyncClient):
     # shared-deliverables (Docker named volume) has no host path → can't reveal
     resp = await auth_client.post(
