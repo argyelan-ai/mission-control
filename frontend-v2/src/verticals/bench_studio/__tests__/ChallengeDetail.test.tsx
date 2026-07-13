@@ -19,9 +19,11 @@ vi.mock("@/verticals/bench_studio/api", () => ({
       update: vi.fn(),
       recompose: vi.fn(),
     },
-    entries: { retry: vi.fn(), update: vi.fn() },
+    entries: { retry: vi.fn(), update: vi.fn(), viewToken: vi.fn() },
     promptTemplates: { list: vi.fn().mockResolvedValue([]) },
     sharedSubpath: (p: string) => p.replace(/^\/shared-deliverables\//, ""),
+    entryViewUrl: (challengeId: string, entryId: string, viewToken: string) =>
+      `/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=${viewToken}`,
   },
 }));
 
@@ -43,6 +45,7 @@ vi.mock("../DraftDialog", () => ({
 }));
 
 import { benchApi } from "@/verticals/bench_studio/api";
+import { notify } from "@/lib/notify";
 import { ChallengeDetail } from "../ChallengeDetail";
 
 function makeChallenge(over: Partial<BenchChallenge> = {}): BenchChallenge {
@@ -369,5 +372,118 @@ describe("ChallengeDetail — grid video spinner", () => {
     renderDetail();
     expect(await screen.findByText("Wird generiert…")).toBeTruthy();
     expect(await screen.findByText("Wartet…")).toBeTruthy();
+  });
+});
+
+// ── "Öffnen" button (view rendered artifact as a real page) ───────────────
+//
+// Click-based, not a plain <a href>: the URL carries a short-lived,
+// resource-scoped view-token (never the operator's session JWT — that would
+// be a standing credential leak once the copyable/shareable link is opened
+// on a phone or lands in browser history). The token is minted lazily on
+// click via entries.viewToken().
+//
+// window.open() itself must happen SYNCHRONOUSLY inside the click handler —
+// Safari/iOS only waives the popup blocker within the same tick as the user
+// gesture. The token is minted afterwards and the already-open blank tab is
+// redirected via tab.location.href (standard "open blank, fill in later"
+// pattern) — a naive `await mint(); window.open(url)` gets silently blocked.
+
+describe("ChallengeDetail — Öffnen button", () => {
+  let fakeTab: { location: { href: string }; close: ReturnType<typeof vi.fn>; closed: boolean };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fakeTab = { location: { href: "" }, close: vi.fn(), closed: false };
+    vi.stubGlobal("open", vi.fn(() => fakeTab));
+  });
+
+  it("opens a blank tab synchronously, then redirects it once the view-token is minted", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+    vi.mocked(benchApi.entries.viewToken).mockResolvedValue({
+      token: "scoped-view-token",
+      expires_in: 1800,
+    });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    // Blank tab opened right away — valid windowFeatures token only:
+    expect(window.open).toHaveBeenCalledWith("", "_blank", "noopener");
+
+    await waitFor(() => {
+      expect(benchApi.entries.viewToken).toHaveBeenCalledWith("ch-1", "e-1");
+    });
+    await waitFor(() => {
+      expect(fakeTab.location.href).toBe(
+        "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token"
+      );
+    });
+  });
+
+  it("falls back to same-tab navigation when the popup blocker returns null", async () => {
+    vi.mocked(window.open).mockReturnValue(null);
+    const originalLocation = window.location;
+    // jsdom's window.location isn't directly assignable — replace it for this test only:
+    Object.defineProperty(window, "location", {
+      configurable: true,
+      value: { ...originalLocation, href: "" },
+    });
+
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+    vi.mocked(benchApi.entries.viewToken).mockResolvedValue({
+      token: "scoped-view-token",
+      expires_in: 1800,
+    });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(window.location.href).toBe(
+        "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token"
+      );
+    });
+
+    Object.defineProperty(window, "location", { configurable: true, value: originalLocation });
+  });
+
+  it("closes the blank tab and shows an error when minting the view-token fails", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+    vi.mocked(benchApi.entries.viewToken).mockRejectedValue(new Error("boom"));
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalled();
+    });
+    expect(fakeTab.close).toHaveBeenCalled();
+    expect(fakeTab.location.href).toBe("");
+  });
+
+  it("does not render 'Öffnen' when the entry has no artifact yet", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ entries: [makeEntry({ id: "e-1", artifact_path: null })] })
+    );
+
+    renderDetail();
+    await screen.findByText("Qwen 3.6");
+    expect(screen.queryByRole("button", { name: /Öffnen/ })).toBeNull();
   });
 });

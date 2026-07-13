@@ -7,6 +7,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   Download,
+  ExternalLink,
   Film,
   Loader2,
   Pencil,
@@ -46,6 +47,33 @@ async function downloadFile(absPath: string, filename: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** Opens the entry's rendered page in a new tab, with a short-lived
+ *  view-token instead of the operator's session JWT in the URL (that URL is
+ *  meant to be copied/shared/opened on a phone — review finding).
+ *
+ *  The tab is opened SYNCHRONOUSLY, inside the click handler, before the
+ *  `await` — Safari/iOS only allows window.open() to bypass the popup
+ *  blocker within the same tick as the user gesture that triggered it. Mint
+ *  the token afterwards and redirect the already-open blank tab via
+ *  location.href. If the tab couldn't be opened at all (global popup
+ *  blocker / browser setting), fall back to a same-tab navigation so the
+ *  mobile "Öffnen" flow still works. */
+async function openEntryView(challengeId: string, entryId: string) {
+  const tab = window.open("", "_blank", "noopener");
+  try {
+    const { token } = await benchApi.entries.viewToken(challengeId, entryId);
+    const url = benchApi.entryViewUrl(challengeId, entryId, token);
+    if (tab) {
+      tab.location.href = url;
+    } else {
+      window.location.href = url;
+    }
+  } catch {
+    tab?.close();
+    notify.error("Öffnen nicht möglich");
+  }
 }
 
 function metricsLine(m: BenchEntry["metrics"]): string {
@@ -333,15 +361,24 @@ export function ChallengeDetail({
             )}
             <div className="flex items-center gap-2 mt-auto">
               {entry.artifact_path && (
-                <button
-                  onClick={() =>
-                    downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)
-                  }
-                  className="flex items-center gap-1 text-xs"
-                  style={{ color: C.textSecondary }}
-                >
-                  <Download size={12} /> HTML
-                </button>
+                <>
+                  <button
+                    onClick={() => openEntryView(challengeId, entry.id)}
+                    className="flex items-center gap-1 text-xs"
+                    style={{ color: C.accent }}
+                  >
+                    <ExternalLink size={12} /> Öffnen
+                  </button>
+                  <button
+                    onClick={() =>
+                      downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)
+                    }
+                    className="flex items-center gap-1 text-xs"
+                    style={{ color: C.textSecondary }}
+                  >
+                    <Download size={12} /> HTML
+                  </button>
+                </>
               )}
               {entry.status === "failed" && (
                 <button
