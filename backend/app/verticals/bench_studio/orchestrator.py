@@ -496,9 +496,13 @@ def _format_outro_size(artifact_path: str | None) -> str:
 async def _build_branding_payload(
     session: AsyncSession, challenge: BenchChallenge, ordered: list[BenchEntry]
 ) -> dict:
-    """Video-branding payload (spec: bench-video-branding, 2026-07-12) for the
-    mc-playwright /compose branded path — fills the argyelan frame + outro
-    templates. Only ever called for exactly 2 side_by_side entries."""
+    """Video-branding payload (spec: bench-video-branding, 2026-07-12; single-
+    video-branding 2026-07-13) for the mc-playwright /compose branded path —
+    fills the argyelan frame + outro templates. Called for 1 entry (single
+    mode, or a side_by_side run degraded to 1 survivor) or 2 entries
+    (side_by_side). `models`/`outro_rows` are built generically off `ordered`
+    so the length just flows through — mc-playwright picks frame.html vs
+    frame_single.html based on len(models)."""
     from app.models.agent import Agent
 
     # run_label: zero-padded 3-digit count of bench_challenges created
@@ -568,9 +572,9 @@ async def compose_challenge(
     output_name: str | None = None,
 ) -> str:
     """POST /compose on mc-playwright (PR 1) — grid video with model labels,
-    or (side_by_side with exactly 2 rendered entries) the branded frame +
-    outro video (spec: bench-video-branding, 2026-07-12). Returns the
-    composed video_path. Raises on failure.
+    or (1 or 2 rendered entries) the branded frame + outro video (spec:
+    bench-video-branding, 2026-07-12; single-video-branding 2026-07-13).
+    Returns the composed video_path. Raises on failure.
 
     output_name defaults to a fresh versioned filename (_versioned_output_name)
     so every compose produces a distinct file — callers that need a stable
@@ -589,7 +593,10 @@ async def compose_challenge(
     # speed_labels re-compose (drafts.py "grid-speeds.mp4" for X posts with
     # per-model metric overlays) stays on the plain grid path — branding is
     # only for the primary review composition, not the metrics variant.
-    if not speed_labels and challenge.mode == "side_by_side" and len(ordered) == 2:
+    # 1 or 2 entries -> branded (solo/side-by-side); 3-4 entries (side_by_side
+    # models list beyond the branded pair) fall through to the plain grid
+    # path unchanged (pre-existing behaviour, regression-safe).
+    if not speed_labels and len(ordered) in (1, 2):
         payload["branding"] = await _build_branding_payload(session, challenge, ordered)
     async with httpx.AsyncClient(timeout=COMPOSE_TIMEOUT_S) as cli:
         resp = await cli.post(f"{PLAYWRIGHT_BASE}/compose", json=payload)
@@ -632,7 +639,16 @@ async def _render_and_compose(
         await session.commit()
         return
 
-    if challenge.mode == "side_by_side" and len(rendered) >= 2:
+    # side_by_side always composes (2 rendered -> branded pair, degraded to
+    # 1 survivor -> branded solo instead of the raw recording); single mode
+    # composes its 1 entry into the branded solo frame (2026-07-13,
+    # single-video-branding — previously single mode never composed and
+    # shipped the raw, unbranded recording).
+    should_compose = (
+        (challenge.mode == "side_by_side" and len(rendered) >= 1)
+        or (challenge.mode == "single" and len(rendered) == 1)
+    )
+    if should_compose:
         challenge.status = "composing"
         session.add(challenge)
         await session.commit()
@@ -881,7 +897,9 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
     """Background: rebuild ONLY the branded compose from the existing
     recordings (no re-record — much faster than rerender). Used after
     title/label/tag edits: the recordings are untouched, only the branded
-    frame/outro overlays change."""
+    frame/outro overlays change. Works for 1 recorded entry (solo frame) or
+    2 (side-by-side frame) — any other count needs rerender instead
+    (2026-07-13, single-video-branding)."""
     from app.database import engine
 
     async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -895,11 +913,10 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
                 )
             ).all()
             candidates = [e for e in entries if e.video_path]
-            if len(candidates) < 2 or challenge.mode != "side_by_side":
+            if len(candidates) not in (1, 2):
                 challenge.status = "failed"
                 challenge.error = (
-                    "recompose needs a side_by_side challenge with >=2 recorded "
-                    "entries — use rerender instead"
+                    "recompose needs 1 or 2 recorded entries — use rerender instead"
                 )
                 session.add(challenge)
                 await session.commit()

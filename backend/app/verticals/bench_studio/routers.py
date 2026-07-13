@@ -312,8 +312,9 @@ async def recompose_challenge(
     current_user=Depends(require_user),
 ):
     """Rebuild ONLY the branded compose from the existing recordings — no
-    re-record, much faster than rerender. For side_by_side challenges whose
-    entries already have video_path (409/422 otherwise)."""
+    re-record, much faster than rerender. For challenges with 1 (solo) or 2
+    (side-by-side) entries that already have video_path (409/422 otherwise;
+    2026-07-13, single-video-branding)."""
     challenge = await session.get(BenchChallenge, challenge_id)
     if challenge is None:
         raise HTTPException(404, "Challenge not found")
@@ -323,11 +324,10 @@ async def recompose_challenge(
         )
     entries = await _entries_for(session, challenge_id)
     recorded = [e for e in entries if e.video_path]
-    if challenge.mode != "side_by_side" or len(recorded) < 2:
+    if len(recorded) not in (1, 2):
         raise HTTPException(
             422,
-            "recompose needs a side_by_side challenge with >=2 recorded entries "
-            "— use rerender for everything else.",
+            "recompose needs 1 or 2 recorded entries — use rerender for everything else.",
         )
     # Same guard as rerender: a pending X-Post approval's media_paths still
     # point at the current file — recompose would rename AND delete it.

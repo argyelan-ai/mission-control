@@ -82,8 +82,10 @@ class BrandingOutroRow(BaseModel):
 
 class BrandingSpec(BaseModel):
     """POST /compose branding payload — fills the argyelan frame/outro templates
-    and composites the two recordings into the frame's video slots instead of
-    the plain labeled grid. See templates/bench/{frame,outro}.html."""
+    and composites the recording(s) into the frame's video slot(s) instead of
+    the plain labeled grid. 1 model -> single-slot frame_single.html, 2 models
+    -> side-by-side frame.html (2026-07-13, single-video branding).
+    See templates/bench/{frame,frame_single,outro}.html."""
     title: str
     run_label: str
     prompt_line: str
@@ -92,15 +94,17 @@ class BrandingSpec(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> "BrandingSpec":
-        if len(self.models) != 2:
-            raise ValueError("branding.models muss genau 2 Eintraege haben (side-by-side only)")
+        if len(self.models) not in (1, 2):
+            raise ValueError(
+                "branding.models muss 1 (solo) oder 2 (side-by-side) Eintraege haben"
+            )
         return self
 
 
 class ComposeRequest(BaseModel):
     """POST /compose — N mp4 recordings -> one labeled grid video (H.264),
-    or (with `branding` set) two recordings composited into the branded
-    argyelan frame + a 2s outro card appended."""
+    or (with `branding` set) one or two recordings composited into the
+    branded argyelan frame + a 2s outro card appended."""
     inputs: List[str] = Field(min_length=1, max_length=4)
     labels: List[str]
     layout: Literal["grid"] = "grid"
@@ -114,8 +118,10 @@ class ComposeRequest(BaseModel):
             raise ValueError("labels muss gleich viele Eintraege haben wie inputs")
         if self.speed_labels is not None and len(self.speed_labels) != len(self.inputs):
             raise ValueError("speed_labels muss gleich viele Eintraege haben wie inputs")
-        if self.branding is not None and len(self.inputs) != 2:
-            raise ValueError("branding unterstuetzt genau 2 inputs (side-by-side only)")
+        if self.branding is not None and len(self.inputs) != len(self.branding.models):
+            raise ValueError(
+                "branding.models muss gleich viele Eintraege haben wie inputs (1 oder 2)"
+            )
         return self
 
 
@@ -242,17 +248,24 @@ def build_compose_cmd(
     return cmd
 
 
-# ── Branded compose (2026-07-12, Benchmark Studio video branding) ───────────
+# ── Branded compose (2026-07-12, Benchmark Studio video branding;
+#    2026-07-13, single-video branding) ──────────────────────────────────────
 #
-# Slot geometry is canonical from templates/bench/frame.html: two 872x560
-# slots at (64,290) and (984,290) on a 1920x1080 frame. The frame + outro PNG
-# screenshots are rendered by the caller (service.py, via Playwright) from
-# the filled HTML templates — this module stays pure (no playwright import).
+# Slot geometry is canonical from templates/bench/frame.html (side-by-side)
+# and templates/bench/frame_single.html (solo): the side-by-side frame has
+# two 872x560 slots at (64,290) and (984,290); the single frame has one
+# 1792x560 slot at (64,290) — full inner width, same top/bottom margins, on
+# the shared 1920x1080 frame. The frame + outro PNG screenshots are rendered
+# by the caller (service.py, via Playwright) from the filled HTML templates
+# — this module stays pure (no playwright import).
 
 SLOT_WIDTH = 872
 SLOT_HEIGHT = 560
 SLOT_A_XY = (64, 290)
 SLOT_B_XY = (984, 290)
+SLOT_SINGLE_WIDTH = 1792
+SLOT_SINGLE_HEIGHT = 560
+SLOT_SINGLE_XY = (64, 290)
 SLOT_BG_COLOR = "0x090B10"  # matches .slot background in shared.css
 OUTRO_DURATION_S = 2.0
 FRAME_SIZE = "1920x1080"
@@ -302,48 +315,70 @@ def build_branded_compose_cmd(
     outro_duration_s: float = OUTRO_DURATION_S,
     fps: int = 30,
 ) -> List[str]:
-    """Branded side-by-side compose: overlays the two recordings into the
-    frame's video slots, then appends a static outro card for
-    `outro_duration_s` seconds. Single ffmpeg invocation (no intermediate
-    files):
+    """Branded compose: overlays the recording(s) into the frame's video
+    slot(s), then appends a static outro card for `outro_duration_s` seconds.
+    Single ffmpeg invocation (no intermediate files):
       - the frame PNG is looped indefinitely as the background; the overlay
         chain uses shortest=1 (same contract as build_compose_cmd's
         hstack/xstack) so the branded main segment ends exactly when the
-        (shorter of the two, same-duration) recordings end — no need to know
+        (shortest, same-duration) recording(s) end — no need to know
         duration_s up front,
       - the outro PNG is looped for a fixed outro_duration_s,
       - the two segments are joined with the concat filter.
 
-    Requires exactly 2 inputs (side-by-side only — enforced by
+    Accepts exactly 1 (solo, frame_single.html geometry) or 2 inputs
+    (side-by-side, frame.html geometry) — enforced by
     ComposeRequest/BrandingSpec at the request-validation layer already;
-    this builder trusts its caller).
+    this builder trusts its caller for the input/frame pairing. 2-input
+    output is byte-identical to the pre-single-video-branding builder
+    (2026-07-13 regression contract).
     """
-    if len(inputs) != 2:
-        raise ValueError("build_branded_compose_cmd erwartet genau 2 inputs")
+    if len(inputs) not in (1, 2):
+        raise ValueError("build_branded_compose_cmd erwartet 1 oder 2 inputs")
 
-    (ax, ay) = SLOT_A_XY
-    (bx, by) = SLOT_B_XY
+    if len(inputs) == 2:
+        (ax, ay) = SLOT_A_XY
+        (bx, by) = SLOT_B_XY
+        filter_complex = ";".join([
+            f"[1:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[va]",
+            f"[2:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[vb]",
+            f"[0:v][va]overlay={ax}:{ay}:shortest=1[bg1]",
+            f"[bg1][vb]overlay={bx}:{by}:shortest=1[main]",
+            f"[main]fps={fps},format=yuv420p[mainv]",
+            f"[3:v]fps={fps},format=yuv420p[outrov]",
+            "[mainv][outrov]concat=n=2:v=1:a=0[outv]",
+        ])
+        cmd = [
+            FFMPEG_BIN, "-y",
+            "-loop", "1", "-i", frame_png,
+            "-i", inputs[0],
+            "-i", inputs[1],
+            "-loop", "1", "-t", str(outro_duration_s), "-i", outro_png,
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+        ]
+    else:
+        (sx, sy) = SLOT_SINGLE_XY
+        filter_complex = ";".join([
+            f"[1:v]scale={SLOT_SINGLE_WIDTH}:{SLOT_SINGLE_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={SLOT_SINGLE_WIDTH}:{SLOT_SINGLE_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[vs]",
+            f"[0:v][vs]overlay={sx}:{sy}:shortest=1[main]",
+            f"[main]fps={fps},format=yuv420p[mainv]",
+            f"[2:v]fps={fps},format=yuv420p[outrov]",
+            "[mainv][outrov]concat=n=2:v=1:a=0[outv]",
+        ])
+        cmd = [
+            FFMPEG_BIN, "-y",
+            "-loop", "1", "-i", frame_png,
+            "-i", inputs[0],
+            "-loop", "1", "-t", str(outro_duration_s), "-i", outro_png,
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+        ]
 
-    filter_complex = ";".join([
-        f"[1:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
-        f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[va]",
-        f"[2:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
-        f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[vb]",
-        f"[0:v][va]overlay={ax}:{ay}:shortest=1[bg1]",
-        f"[bg1][vb]overlay={bx}:{by}:shortest=1[main]",
-        f"[main]fps={fps},format=yuv420p[mainv]",
-        f"[3:v]fps={fps},format=yuv420p[outrov]",
-        "[mainv][outrov]concat=n=2:v=1:a=0[outv]",
-    ])
-
-    return [
-        FFMPEG_BIN, "-y",
-        "-loop", "1", "-i", frame_png,
-        "-i", inputs[0],
-        "-i", inputs[1],
-        "-loop", "1", "-t", str(outro_duration_s), "-i", outro_png,
-        "-filter_complex", filter_complex,
-        "-map", "[outv]",
+    cmd += [
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-preset", "medium",
@@ -352,3 +387,4 @@ def build_branded_compose_cmd(
         "-an",
         output_path,
     ]
+    return cmd

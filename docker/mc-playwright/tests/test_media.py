@@ -14,6 +14,9 @@ from media import (
     SLOT_B_XY,
     SLOT_BG_COLOR,
     SLOT_HEIGHT,
+    SLOT_SINGLE_HEIGHT,
+    SLOT_SINGLE_WIDTH,
+    SLOT_SINGLE_XY,
     SLOT_WIDTH,
     VIEWPORTS,
     BrandingModelSpec,
@@ -254,9 +257,36 @@ def _branding(n_models: int = 2) -> BrandingSpec:
     )
 
 
-def test_branding_spec_requires_exactly_two_models():
+def test_branding_spec_allows_one_model_solo():
+    spec = _branding(n_models=1)
+    assert len(spec.models) == 1
+
+
+def test_branding_spec_allows_two_models_side_by_side():
+    spec = _branding(n_models=2)
+    assert len(spec.models) == 2
+
+
+def test_branding_spec_rejects_zero_models():
     with pytest.raises(ValidationError):
-        _branding(n_models=1)
+        BrandingSpec(
+            title="t", run_label="001", prompt_line="p", models=[], outro_rows=[]
+        )
+
+
+def test_branding_spec_rejects_more_than_two_models():
+    with pytest.raises(ValidationError):
+        BrandingSpec(
+            title="t",
+            run_label="001",
+            prompt_line="p",
+            models=[
+                BrandingModelSpec(label="A", tag="A"),
+                BrandingModelSpec(label="B", tag="B"),
+                BrandingModelSpec(label="C", tag="C"),
+            ],
+            outro_rows=[],
+        )
 
 
 def test_compose_request_branding_ok_with_two_inputs():
@@ -264,25 +294,44 @@ def test_compose_request_branding_ok_with_two_inputs():
         inputs=["/d/a.mp4", "/d/b.mp4"],
         labels=["Qwen", "Grok"],
         output_path="/d/branded.mp4",
-        branding=_branding(),
+        branding=_branding(n_models=2),
     )
     assert req.branding is not None
 
 
-def test_compose_request_branding_rejects_wrong_input_count():
+def test_compose_request_branding_ok_with_one_input():
+    req = ComposeRequest(
+        inputs=["/d/a.mp4"],
+        labels=["Qwen"],
+        output_path="/d/branded.mp4",
+        branding=_branding(n_models=1),
+    )
+    assert req.branding is not None
+    assert len(req.branding.models) == 1
+
+
+def test_compose_request_branding_rejects_input_model_count_mismatch():
+    # 2 inputs but branding.models has only 1 (or vice versa) -> reject.
     with pytest.raises(ValidationError):
         ComposeRequest(
-            inputs=["/d/a.mp4", "/d/b.mp4", "/d/c.mp4"],
-            labels=["Qwen", "Grok", "Claude"],
+            inputs=["/d/a.mp4", "/d/b.mp4"],
+            labels=["Qwen", "Grok"],
             output_path="/d/branded.mp4",
-            branding=_branding(),
+            branding=_branding(n_models=1),
         )
     with pytest.raises(ValidationError):
         ComposeRequest(
             inputs=["/d/a.mp4"],
             labels=["Qwen"],
             output_path="/d/branded.mp4",
-            branding=_branding(),
+            branding=_branding(n_models=2),
+        )
+    with pytest.raises(ValidationError):
+        ComposeRequest(
+            inputs=["/d/a.mp4", "/d/b.mp4", "/d/c.mp4"],
+            labels=["Qwen", "Grok", "Claude"],
+            output_path="/d/branded.mp4",
+            branding=_branding(n_models=2),
         )
 
 
@@ -324,6 +373,35 @@ def test_fill_bench_template_all_frame_tokens_replaced():
     assert "{{" not in out
     for v in tokens.values():
         assert v in out
+
+
+def test_fill_bench_template_all_frame_single_tokens_replaced():
+    tokens = {
+        "TITLE": "SVG timeline animation",
+        "RUN_LABEL": "019",
+        "MODEL": "Qwen 3.6 35B A3B",
+        "TAG": "LOCAL · SPARK",
+        "PROMPT_LINE": "single HTML file · timeline animation",
+        "MODE_LINE": "solo run",
+    }
+    template = " ".join(f"{{{{{k}}}}}" for k in tokens)
+    out = fill_bench_template(template, tokens)
+    assert "{{" not in out
+    for v in tokens.values():
+        assert v in out
+
+
+def test_frame_single_html_template_has_all_expected_tokens():
+    """Contract pin: frame_single.html's placeholders must match exactly what
+    service.py's _render_branding_assets fills for a 1-model BrandingSpec —
+    TITLE/RUN_LABEL/MODEL/TAG/PROMPT_LINE/MODE_LINE (2026-07-13)."""
+    from pathlib import Path
+
+    template = (
+        Path(__file__).resolve().parent.parent / "templates" / "bench" / "frame_single.html"
+    ).read_text(encoding="utf-8")
+    for token in ("TITLE", "RUN_LABEL", "MODEL", "TAG", "PROMPT_LINE", "MODE_LINE"):
+        assert f"{{{{{token}}}}}" in template, f"missing {{{{{token}}}}} in frame_single.html"
 
 
 # ── render_outro_rows_html ──────────────────────────────────────────────────
@@ -400,8 +478,97 @@ def test_build_branded_compose_cmd_h264_output():
     assert cmd[-1] == "/d/out.mp4"
 
 
-def test_build_branded_compose_cmd_requires_exactly_two_inputs():
+def test_build_branded_compose_cmd_rejects_zero_or_more_than_two_inputs():
     with pytest.raises(ValueError):
         build_branded_compose_cmd(
-            ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+            [], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
         )
+    with pytest.raises(ValueError):
+        build_branded_compose_cmd(
+            ["/d/a.mp4", "/d/b.mp4", "/d/c.mp4"],
+            "/d/frame.png", "/d/outro.png", "/d/out.mp4",
+        )
+
+
+# ── build_branded_compose_cmd — single-slot (solo) variant ─────────────────
+
+
+def test_build_branded_compose_cmd_single_slot_coords_and_pad_color():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    sx, sy = SLOT_SINGLE_XY
+    assert f"overlay={sx}:{sy}:shortest=1" in fc
+    assert f"scale={SLOT_SINGLE_WIDTH}:{SLOT_SINGLE_HEIGHT}" in fc
+    assert f"color={SLOT_BG_COLOR}" in fc
+    # only one overlay in the solo variant (SLOT_SINGLE_XY happens to match
+    # SLOT_A_XY, both (64,290) — the side-by-side frame's second slot at
+    # SLOT_B_XY must not appear).
+    bx, by = SLOT_B_XY
+    assert f"overlay={bx}:{by}" not in fc
+    assert fc.count("overlay=") == 1
+
+
+def test_build_branded_compose_cmd_single_slot_concat_structure():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    fc = cmd[cmd.index("-filter_complex") + 1]
+    assert "[mainv][outrov]concat=n=2:v=1:a=0[outv]" in fc
+    assert cmd[cmd.index("-map") + 1] == "[outv]"
+
+
+def test_build_branded_compose_cmd_single_slot_inputs_order():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    i_positions = [i for i, tok in enumerate(cmd) if tok == "-i"]
+    inputs_in_order = [cmd[i + 1] for i in i_positions]
+    assert inputs_in_order == ["/d/frame.png", "/d/a.mp4", "/d/outro.png"]
+
+
+def test_build_branded_compose_cmd_single_slot_h264_output():
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    assert "libx264" in cmd and "yuv420p" in cmd and "+faststart" in cmd
+    assert cmd[-1] == "/d/out.mp4"
+
+
+def test_build_branded_compose_cmd_two_input_output_unchanged_by_single_support():
+    """Regression pin (2026-07-13): adding the 1-input path must not alter a
+    single byte of the existing 2-input command — same filter_complex, same
+    input order, same encode flags."""
+    cmd = build_branded_compose_cmd(
+        ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
+    )
+    ax, ay = SLOT_A_XY
+    bx, by = SLOT_B_XY
+    assert cmd == [
+        "ffmpeg", "-y",
+        "-loop", "1", "-i", "/d/frame.png",
+        "-i", "/d/a.mp4",
+        "-i", "/d/b.mp4",
+        "-loop", "1", "-t", "2.0", "-i", "/d/outro.png",
+        "-filter_complex",
+        ";".join([
+            f"[1:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[va]",
+            f"[2:v]scale={SLOT_WIDTH}:{SLOT_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={SLOT_WIDTH}:{SLOT_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color={SLOT_BG_COLOR}[vb]",
+            f"[0:v][va]overlay={ax}:{ay}:shortest=1[bg1]",
+            f"[bg1][vb]overlay={bx}:{by}:shortest=1[main]",
+            "[main]fps=30,format=yuv420p[mainv]",
+            "[3:v]fps=30,format=yuv420p[outrov]",
+            "[mainv][outrov]concat=n=2:v=1:a=0[outv]",
+        ]),
+        "-map", "[outv]",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-preset", "medium",
+        "-crf", "20",
+        "-movflags", "+faststart",
+        "-an",
+        "/d/out.mp4",
+    ]

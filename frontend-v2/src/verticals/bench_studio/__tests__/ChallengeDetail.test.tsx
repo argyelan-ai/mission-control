@@ -208,13 +208,61 @@ describe("ChallengeDetail — edit + recompose", () => {
     });
   });
 
-  it("hides recompose without enough recordings or while running", async () => {
+  it("hides recompose with no recordings at all", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
-      makeChallenge({ entries: [makeEntry()] })
+      makeChallenge({ entries: [makeEntry({ video_path: null })] })
     );
     renderDetail();
     await screen.findByRole("button", { name: /Challenge bearbeiten/ });
     expect(screen.queryByRole("button", { name: /Video neu erstellen/ })).toBeNull();
+  });
+
+  // Single-video-branding (2026-07-13): the backend now composes a branded
+  // solo frame from just 1 recording, for "single" mode AND for a
+  // side_by_side run that degraded to 1 survivor — so the button must show
+  // for both, not just the 2-entry side_by_side case.
+  it("'Video neu erstellen' calls recompose for a single-mode challenge with 1 recording", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        mode: "single",
+        entries: [makeEntry({ id: "e-1", video_path: "/sd/a.mp4" })],
+      })
+    );
+    vi.mocked(benchApi.challenges.recompose).mockResolvedValue({ ok: true });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Video neu erstellen/ });
+    await userEvent.click(btn);
+    await waitFor(() => {
+      expect(benchApi.challenges.recompose).toHaveBeenCalledWith("ch-1");
+    });
+  });
+
+  it("shows recompose for a side_by_side challenge degraded to 1 surviving recording", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        mode: "side_by_side",
+        entries: [
+          makeEntry({ id: "e-1", video_path: "/sd/a.mp4" }),
+          makeEntry({ id: "e-2", model_label: "Grok", status: "failed", video_path: null }),
+        ],
+      })
+    );
+    renderDetail();
+    await screen.findByRole("button", { name: /Video neu erstellen/ });
+  });
+
+  it("labels the composed video 'Benchmark-Video' for single mode, 'Grid-Video' for side_by_side", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        mode: "single",
+        composed_video_path: "/sd/branded-solo.mp4",
+        entries: [makeEntry({ id: "e-1", video_path: "/sd/a.mp4" })],
+      })
+    );
+    renderDetail();
+    await screen.findByText("Benchmark-Video");
+    expect(screen.queryByText("Grid-Video")).toBeNull();
   });
 
   it("edit dialog saves title and changed entry fields only", async () => {

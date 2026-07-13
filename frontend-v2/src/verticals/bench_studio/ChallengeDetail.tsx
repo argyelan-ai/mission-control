@@ -147,11 +147,12 @@ export function ChallengeDetail({
   // success) — show a spinner instead of that stale video.
   const isComposingVideo = ["rendering", "composing"].includes(challenge.status);
   const canArchive = ["review", "drafted", "published", "failed"].includes(challenge.status);
-  // Recompose = branded video rebuild from existing recordings (no re-record):
+  // Recompose = branded video rebuild from existing recordings (no re-record).
+  // Backend accepts 1 (solo frame) or 2 (side-by-side frame) recorded
+  // entries regardless of mode (single-video-branding, 2026-07-13) — the
+  // 422 from the backend guard stays the source of truth for edge cases.
   const canRecompose =
-    !isRunning &&
-    challenge.mode === "side_by_side" &&
-    challenge.entries.filter((e) => e.video_path).length >= 2;
+    !isRunning && challenge.entries.filter((e) => e.video_path).length >= 1;
 
   return (
     <div className="flex flex-col gap-5">
@@ -260,12 +261,13 @@ export function ChallengeDetail({
         </div>
       )}
 
-      {/* Grid video (side_by_side) — spinner while rendering/composing so the
-          (possibly stale) previous video is never shown mid-run. */}
-      {challenge.mode === "side_by_side" && (isComposingVideo || challenge.composed_video_path) && (
+      {/* Composed video (branded solo frame for single/1-survivor, grid for
+          side_by_side) — spinner while rendering/composing so the (possibly
+          stale) previous video is never shown mid-run. */}
+      {(isComposingVideo || challenge.composed_video_path) && (
         <section>
           <h3 className="text-sm font-medium mb-2" style={{ color: C.textSecondary }}>
-            Grid-Video
+            {challenge.mode === "side_by_side" ? "Grid-Video" : "Benchmark-Video"}
           </h3>
           <div className="rounded-xl p-3" style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.borderSubtle}` }}>
             {isComposingVideo ? (
