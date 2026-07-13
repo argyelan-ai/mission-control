@@ -77,6 +77,16 @@ GROK_PERMISSION_MODE = os.environ.get("GROK_PERMISSION_MODE", "acceptEdits")
 # Extra flags for the grok launch (space-separated); empty by default.
 GROK_EXTRA_FLAGS = os.environ.get("GROK_EXTRA_FLAGS", "")
 
+# Session-reset on GENUINE task switch (ADR-068 addendum). Dispatch semantics
+# (dispatch.py:8-18) promise a fresh context per NEW task; the TUI paste model
+# would otherwise accumulate every task into one conversation. `/new` verified
+# live 2026-07-12: instant fresh session, no picker (workspace is not a git
+# repo, so grok never offers the worktree variant).
+RESET_COMMAND = os.environ.get("GROK_RESET_COMMAND", "/new")
+# Last dispatched task id, persisted to DISK so a bridge restart cannot erase
+# switch detection (the in-memory dedup below resets on restart; this doesn't).
+LAST_TASK_FILE = LOG_DIR / "last-task-id"
+
 # Path the copied `mc` CLI reads task context from (mc_cli/config.py:from_env —
 # file wins over stale process env). poll.sh writes it for the claude fleet; this
 # bridge MUST re-provide it BEFORE each paste or the agent's own `mc ack|finish`
@@ -287,6 +297,57 @@ def paste_and_submit(text: str) -> None:
     _tmux(["send-keys", "-t", SESSION, "Enter"])
 
 
+def load_last_task_id() -> Optional[str]:
+    """Read the persisted last-dispatched task id (None if never dispatched)."""
+    try:
+        value = LAST_TASK_FILE.read_text(encoding="utf-8").strip()
+        return value or None
+    except FileNotFoundError:
+        return None
+    except OSError as e:  # unreadable state file → treat as unknown, never crash
+        log.warning("load_last_task_id: %s — treating as no prior task", e)
+        return None
+
+
+def save_last_task_id(task_id: str) -> None:
+    """Persist the last-dispatched task id for switch detection across restarts."""
+    try:
+        LAST_TASK_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_TASK_FILE.write_text(f"{task_id}\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("save_last_task_id: %s — switch detection may miss one restart", e)
+
+
+def should_reset_session(new_task_id: str, last_task_id: Optional[str]) -> bool:
+    """Reset ONLY on a genuine task switch (dispatch.py:8-18 semantics).
+
+    - different task than the last dispatched one → True (fresh context)
+    - same task (revision / request_changes / re-dispatch / bridge-restart
+      redelivery) → False (the agent keeps its working context)
+    - no known prior task → False (nothing to clear)
+    """
+    return bool(last_task_id) and new_task_id != last_task_id
+
+
+def reset_tui_session() -> None:
+    """Submit RESET_COMMAND (/new) into the grok TUI and wait until it is ready.
+
+    The slash command goes in as LITERAL keys + raw CR (-H 0d) — NEVER through
+    the bracketed-paste path: a TUI in paste-mode would render the command as
+    text instead of executing it, and CR is the universal submit across the
+    fleet's TUIs (poll.sh Bug 2026-05-15: `Enter` = LF is swallowed by raw-mode
+    ptys). Afterwards poll for the prompt glyph so the subsequent task paste
+    lands in the FRESH session, not mid-reset.
+    """
+    log.info("task switch — resetting grok TUI session (%s)", RESET_COMMAND)
+    _tmux(["send-keys", "-t", SESSION, "-l", RESET_COMMAND])
+    time.sleep(0.4)
+    _tmux(["send-keys", "-t", SESSION, "-H", "0d"])
+    time.sleep(1.0)
+    if not wait_for_agent_healthy(timeout=15):
+        log.warning("reset_tui_session: no ready glyph after reset — pasting anyway (fail-open)")
+
+
 def deliver_task_context(task: dict) -> None:
     """Publish the task's MC context so the agent's own `mc` calls resolve it.
 
@@ -448,8 +509,14 @@ def dispatch_task(task: dict, env: dict) -> bool:
         except Exception as e:  # noqa: BLE001
             log.error("dispatch_task: session autostart failed: %s — skipping", e)
             return False
+    # Fresh context per NEW task (dispatch.py:8-18); same-task re-dispatches
+    # (revision / request_changes / restart redelivery) keep the context.
+    tid = str(task.get("id") or "")
+    if should_reset_session(tid, load_last_task_id()):
+        reset_tui_session()
     deliver_task_context(task)
     paste_and_submit(build_dispatch_prompt(task))
+    save_last_task_id(tid)
     _mark_active(task)
     log.info(
         "dispatched task %s (%s) into tmux session %s",

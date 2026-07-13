@@ -315,3 +315,85 @@ async def test_admin_create_deliverable_404_when_task_not_in_board(auth_client, 
         },
     )
     assert resp.status_code == 404
+
+
+# ── dynamic agent-token resolution (live incident 2026-07-12) ────────────────────
+#
+# mc-mcp.py snapshotted MC_AGENT_TOKEN at import. The hermes GATEWAY (launchd,
+# long-lived) spawns mc-mcp with a stale/poisoned or absent token in its process
+# env — every agent-scoped call (comments, checklist, finish) failed for days
+# while status-PATCHes (admin JWT path) kept working. The token must resolve at
+# CALL time: process env first, then the agent.env file pointed to by
+# MC_AGENT_ENV_FILE (set in the gateway plist), so a token rotation or a stale
+# parent env never breaks agent attribution again.
+
+
+def test_agent_token_prefers_process_env(mc_mcp_module, monkeypatch):
+    monkeypatch.setenv("MC_AGENT_TOKEN", "  tok-from-env  ")
+    assert mc_mcp_module._agent_token() == "tok-from-env"
+
+
+def test_agent_token_falls_back_to_env_file(mc_mcp_module, monkeypatch, tmp_path):
+    env_file = tmp_path / "agent.env"
+    env_file.write_text(
+        "# comment\nMC_BASE_URL=http://x\nMC_AGENT_TOKEN=tok-from-file\nOTHER=1\n"
+    )
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("MC_AGENT_ENV_FILE", str(env_file))
+    assert mc_mcp_module._agent_token() == "tok-from-file"
+
+
+def test_agent_token_env_file_strips_quotes(mc_mcp_module, monkeypatch, tmp_path):
+    env_file = tmp_path / "agent.env"
+    env_file.write_text("MC_AGENT_TOKEN='tok-quoted'\n")
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.setenv("MC_AGENT_ENV_FILE", str(env_file))
+    assert mc_mcp_module._agent_token() == "tok-quoted"
+
+
+def test_agent_token_empty_when_nothing_available(mc_mcp_module, monkeypatch):
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
+    assert mc_mcp_module._agent_token() == ""
+
+
+def test_agent_token_resolves_at_call_time_not_import_time(mc_mcp_module, monkeypatch):
+    """A long-lived MCP process must pick up a rotated token without restart."""
+    monkeypatch.setenv("MC_AGENT_TOKEN", "tok-1")
+    assert mc_mcp_module._agent_token() == "tok-1"
+    monkeypatch.setenv("MC_AGENT_TOKEN", "tok-2")
+    assert mc_mcp_module._agent_token() == "tok-2"
+
+
+def test_api_agent_uses_dynamic_token(mc_mcp_module, monkeypatch):
+    """_api_agent must consult _agent_token() per call — not a module constant."""
+    monkeypatch.setenv("MC_AGENT_TOKEN", "tok-dynamic")
+    seen = {}
+
+    class _FakeResp:
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return {"ok": True}
+
+    class _FakeClient:
+        def __init__(self, **kw):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def request(self, method, url, headers=None, **kw):
+            seen["auth"] = (headers or {}).get("Authorization")
+            return _FakeResp()
+
+    monkeypatch.setattr(mc_mcp_module.httpx, "Client", _FakeClient)
+    r = mc_mcp_module._api_agent("POST", "/agent/x")
+    assert r == {"ok": True}
+    assert seen["auth"] == "Bearer tok-dynamic"
+
+
+def test_api_agent_returns_none_without_any_token(mc_mcp_module, monkeypatch):
+    monkeypatch.delenv("MC_AGENT_TOKEN", raising=False)
+    monkeypatch.delenv("MC_AGENT_ENV_FILE", raising=False)
+    assert mc_mcp_module._api_agent("POST", "/agent/x") is None

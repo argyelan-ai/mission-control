@@ -35,8 +35,16 @@ fi
 # --yolo bypasses dangerous-command approval prompts: Hermes runs as an
 # unattended MC worker, so an interactive approval prompt would hang the
 # session forever (Phase 25, ADR-030). Do not drop this flag.
+#
+# The loop (re-)sources agent.env ITSELF: tmux windows inherit env from the
+# tmux SERVER, not from the client running new-session — the `set -a` block
+# above never reaches the window process when the server already exists
+# (grok lesson, see grok-bridge _grok_launch_shell_cmd). Live incident
+# 2026-07-12: hermes ran 5 days with a 4.4KB quote-mangled MC_AGENT_TOKEN —
+# mc comment/finish failed, tasks hung in review. In-loop sourcing also
+# refreshes a rotated token on every watchdog restart.
 "$TMUX_BIN" new-session -d -s "$SESSION" -x 220 -y 50 \
-  "while true; do $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
+  "while true; do set -a; . $ENV_FILE; set +a; $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
 
 # Web-terminal scroll: forward wheel events to the native Hermes TUI so mouse
 # scroll walks the OUTPUT, not Hermes' input history. Every cli-bridge agent

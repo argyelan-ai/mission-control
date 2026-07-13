@@ -174,3 +174,40 @@ Betroffene Dateien (Fix): `scripts/mc-cli/mc_cli/commands.py`,
 `backend/app/services/dispatch_message_builder.py`. Tests:
 `scripts/mc-cli/tests/test_deliverable_paths.py`,
 `backend/tests/test_dispatch_message_slim.py`.
+
+## Nachtrag (2026-07-12) — Session-Reset bei echtem Task-Wechsel
+
+**Lücke:** Der v2-Umbau auf persistente TUIs übernahm vom poll.sh-Muster nur das
+*Paste*-Modell, nicht das `/clear`-on-task-switch. Damit verletzten grok- und
+hermes-bridge die zentral dokumentierte Dispatch-Semantik (`dispatch.py:8-18`:
+dispatch = neuer Task ⇒ frischer Kontext) — jeder neue Task landete in der
+akkumulierten Konversation des vorherigen (live beobachtet: Hermes 30% Kontext-Füllung
+über Tasks hinweg; v1-headless hatte frischen Kontext implizit gratis, v2 verlor die
+Eigenschaft unbemerkt).
+
+**Entscheidung (Mark, 2026-07-12):** Reset **nur bei echtem Task-Wechsel** —
+`neue task_id ≠ zuletzt dispatchte task_id`. Ausdrücklich **kein** Reset bei
+Revision/`request_changes`/Re-Dispatch **desselben** Tasks (neue `dispatch_attempt_id`,
+gleiche `task_id`): der Agent behält dort seinen Arbeitskontext. Kein Reset ohne
+bekannten Vorgänger-Task (fail-safe nach Erstinstallation).
+
+**Mechanik:**
+
+- **grok:** `/new` als Literal-Keys + raw CR (`send-keys -H 0d`, poll.sh Bug
+  2026-05-15: LF wird von raw-mode ptys geschluckt), danach Ready-Glyph-Poll vor dem
+  Task-Paste. Live verifiziert: sofortiger Session-Rotate, kein Worktree-Picker
+  (Workspace ist kein Git-Repo). Override: `GROK_RESET_COMMAND`.
+- **hermes:** `/new now` via `_send_to_tmux` — das Inline-Skip-Token `now`
+  (hermes-agent `cli.py::_split_destructive_skip`) umgeht das Confirm-Modal für
+  destruktive Slash-Commands nicht-interaktiv. Settle-Sleep vor dem Paste.
+  Overrides: `HERMES_RESET_COMMAND`, `HERMES_RESET_SETTLE_SECONDS`.
+- **Persistenz:** Die zuletzt dispatchte task_id liegt als Datei
+  (`…/logs/last-task-id`) auf Disk — ein Bridge-Restart löscht die
+  Wechsel-Erkennung nicht (der In-Memory-Dedup-Cache schon). Same-task-Redelivery
+  nach Restart pastet daher ohne Reset erneut (bestehendes Verhalten, jetzt
+  explizit kontextschonend).
+
+Betroffene Dateien: `scripts/grok-bridge.py`, `scripts/hermes-bridge.py`. Tests:
+`backend/tests/test_grok_bridge.py`, `backend/tests/test_hermes_bridge.py`
+(Decision-Table, Persistenz, Submit-Mechanik, Ordnung reset→context→paste,
+Same-Task-No-Reset).

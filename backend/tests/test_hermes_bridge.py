@@ -27,8 +27,14 @@ def _load_bridge():
 
 
 @pytest.fixture
-def bridge():
-    return _load_bridge()
+def bridge(monkeypatch, tmp_path):
+    mod = _load_bridge()
+    # Isolate the persisted last-task-id from the REAL host path — without this,
+    # any test driving dispatch_poll_loop() writes the placeholder task id into
+    # ~/.mc/agents/hermes/logs/last-task-id on the dev machine (found live
+    # 2026-07-12 during the E2E run).
+    monkeypatch.setattr(mod, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    return mod
 
 
 def test_host_and_port_constants(bridge):
@@ -459,3 +465,113 @@ def test_dispatch_loop_delivers_new_comments_to_tmux(bridge, monkeypatch, tmp_pa
     assert "Onboarding" in sent[0]
     assert "task-xxx" in sent[0]
     assert "Schritt 3" in sent[0]
+
+
+# ── session reset on task switch (ADR-068 addendum, hermes twin) ─────────────────
+#
+# Same gap as grok-bridge: dispatch semantics (dispatch.py:8-18) promise a fresh
+# context per NEW task, but the paste model accumulated every task into one
+# conversation (observed live: 30% context fill from prior tasks). The bridge now
+# submits the hermes TUI's session-reset command on a GENUINE task switch only.
+# hermes-agent gates /new behind a destructive-command confirm modal; the inline
+# skip token `now` (cli.py _split_destructive_skip) bypasses it non-interactively.
+
+
+def test_should_reset_session_decision_table(bridge):
+    assert bridge.should_reset_session("task-b", None) is False
+    assert bridge.should_reset_session("task-b", "") is False
+    assert bridge.should_reset_session("task-a", "task-a") is False
+    assert bridge.should_reset_session("task-b", "task-a") is True
+
+
+def test_last_task_id_persists_to_disk(bridge, tmp_path, monkeypatch):
+    state_file = tmp_path / "last-task-id"
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", state_file)
+    assert bridge.load_last_task_id() is None
+    bridge.save_last_task_id("task-a")
+    assert bridge.load_last_task_id() == "task-a"
+
+
+def test_reset_command_default_skips_confirm_modal(bridge):
+    """hermes-agent asks 'Approve Once / Always / Cancel' on bare /new — the
+    bridge must use the documented non-interactive skip token."""
+    assert bridge.RESET_COMMAND == "/new now"
+
+
+def test_reset_tui_session_sends_command_and_enter(bridge, monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        bridge._sp, "run",
+        lambda args, **kw: calls.append(list(args)) or MagicMock(returncode=0),
+    )
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+    bridge.reset_tui_session()
+    joined = [" ".join(c) for c in calls]
+    assert any("send-keys" in j and "/new now" in j for j in joined), joined
+    assert any("send-keys" in j and "Enter" in j for j in joined), joined
+
+
+def _poll_loop_one_task(bridge, monkeypatch, tmp_path, task_id, order):
+    """Run one dispatch_poll_loop iteration delivering task_id; record actions."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: order.append("reset"))
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda prompt: order.append("send"))
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+
+    payload = {
+        "state": "new_task",
+        "task": {"id": task_id, "board_id": "b", "title": "t", "prompt": "p"},
+    }
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self._body
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise SystemExit("break")
+        return _FakeResp(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+
+
+def test_poll_loop_resets_session_on_task_switch(bridge, monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    bridge.save_last_task_id("task-a")
+    order: list[str] = []
+    _poll_loop_one_task(bridge, monkeypatch, tmp_path, "task-b", order)
+    assert order == ["reset", "send"]
+    assert bridge.load_last_task_id() == "task-b"
+
+
+def test_poll_loop_no_reset_without_prior_task(bridge, monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    order: list[str] = []
+    _poll_loop_one_task(bridge, monkeypatch, tmp_path, "task-a", order)
+    assert order == ["send"]
+    assert bridge.load_last_task_id() == "task-a"
+
+
+def test_poll_loop_no_reset_on_same_task_redelivery(bridge, monkeypatch, tmp_path):
+    """Bridge restart re-offers the un-acked same task → re-send WITHOUT reset
+    (the in-memory dedup is gone after restart, the disk pointer is not)."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    bridge.save_last_task_id("task-a")
+    order: list[str] = []
+    _poll_loop_one_task(bridge, monkeypatch, tmp_path, "task-a", order)
+    assert order == ["send"]

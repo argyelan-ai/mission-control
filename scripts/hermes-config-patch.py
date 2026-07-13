@@ -27,6 +27,18 @@ AUTONOMOUS_WORKER_PATCHES: dict = {
     "approvals.timeout": 0,  # 0 = wait indefinitely (entwertet durch --yolo)
     "mcp_servers.mc.command": str(VENV_PY),
     "mcp_servers.mc.args": [str(MC_MCP_SCRIPT)],
+    # hermes-agent spawns MCP servers with a SANITIZED env (_build_safe_env) —
+    # neither the TUI's nor the gateway's process env reaches mc-mcp.py. The
+    # per-server env block is the only reliable channel. mc-mcp.py reads the
+    # agent token from this file at CALL time (survives token rotation + stale
+    # long-lived gateways). Live incident 2026-07-12: without this, agent-scoped
+    # calls (comments/checklist/finish) failed for days.
+    "mcp_servers.mc.env": {
+        "MC_AGENT_ENV_FILE": str(
+            Path(os.environ.get("HOME_HOST", os.path.expanduser("~")))
+            / ".mc" / "agents" / "hermes" / "agent.env"
+        ),
+    },
 }
 
 

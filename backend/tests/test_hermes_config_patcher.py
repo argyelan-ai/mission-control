@@ -111,3 +111,18 @@ def test_model_block_untouched_when_env_missing(fake_config, monkeypatch):
     mod.main()
     result = pyyaml.safe_load(fake_config.read_text())
     assert result["model"]["provider"] == "ollama-cloud"  # guard held
+
+
+def test_mc_mcp_server_gets_agent_env_file(fake_config, monkeypatch):
+    """The mc MCP server must receive MC_AGENT_ENV_FILE via its per-server env
+    block: hermes-agent spawns MCP servers with a SANITIZED env (_build_safe_env),
+    so neither the TUI's nor the gateway's process env reaches mc-mcp.py. Live
+    incident 2026-07-12: agent-scoped calls (comments/checklist/finish) failed
+    for days — mc-mcp.py had no MC_AGENT_TOKEN and no file fallback pointer."""
+    mod = _load_module()
+    monkeypatch.setattr(mod, "CONFIG_PATH", fake_config)
+    monkeypatch.setattr(mod, "BACKUP_PATH", fake_config.with_suffix(".bak"))
+    assert mod.main() == 0
+    cfg = pyyaml.safe_load(fake_config.read_text())
+    env = cfg["mcp_servers"]["mc"].get("env") or {}
+    assert env.get("MC_AGENT_ENV_FILE", "").endswith("/.mc/agents/hermes/agent.env")
