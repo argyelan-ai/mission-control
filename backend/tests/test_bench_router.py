@@ -507,12 +507,27 @@ async def test_recompose_endpoint_guards(auth_client, session):
     resp = await auth_client.post(f"/api/v1/bench/challenges/{running.id}/recompose")
     assert resp.status_code == 409
 
-    # Not enough recordings -> 422:
+    # No recordings at all -> 422:
+    ch, _ = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated"}],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
+    assert resp.status_code == 422
+    orchestrator.recompose_challenge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recompose_endpoint_allows_single_recorded_entry(auth_client, session):
+    """Single-video-branding (2026-07-13): recompose no longer requires
+    side_by_side + >=2 recordings — 1 recorded entry (solo frame) is valid
+    too, e.g. for a "single" mode challenge or a side_by_side run that
+    degraded to 1 survivor."""
     ch, _ = await _seed_challenge(
         session, status="review",
         entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
                   "video_path": "/sd/a.mp4"}],
     )
     resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
-    assert resp.status_code == 422
-    orchestrator.recompose_challenge.assert_not_called()
+    assert resp.status_code == 200, resp.text
+    orchestrator.recompose_challenge.assert_called_once()

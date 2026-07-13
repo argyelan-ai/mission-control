@@ -86,9 +86,12 @@ async def test_advance_renders_composes_and_reaches_review(session, monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_partial_failure_grid_from_survivors(session, monkeypatch):
-    """One entry failed in generation, one render fails -> grid is built from
-    the remaining survivor(s); challenge still reaches review (spec §4)."""
+async def test_partial_failure_composes_branded_solo_from_survivor(session, monkeypatch):
+    """One entry failed in generation, one render fails -> only 1 survivor
+    remains from a side_by_side challenge. Single-video-branding (2026-07-13):
+    compose_challenge still runs — the survivor gets the branded solo frame
+    instead of shipping the raw, unbranded recording. Challenge reaches
+    review either way (spec §4)."""
     ch, entries = await _seed(
         session,
         entry_specs=[
@@ -107,16 +110,17 @@ async def test_partial_failure_grid_from_survivors(session, monkeypatch):
         return {"video_path": "/sd/a.mp4", "screenshot_path": "/sd/a.png"}
 
     monkeypatch.setattr(orchestrator, "record_entry", flaky_record)
-    compose_mock = AsyncMock(return_value="/sd/grid.mp4")
+    compose_mock = AsyncMock(return_value="/sd/branded-solo.mp4")
     monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
 
     await orchestrator.maybe_advance(session, ch.id)
     await session.refresh(ch)
 
     assert ch.status == "review"
-    # Only 1 survivor -> side_by_side compose is skipped (single video stands in)
-    compose_mock.assert_not_awaited()
-    assert ch.composed_video_path is None
+    compose_mock.assert_awaited_once()
+    (_, _, rendered_arg), _ = compose_mock.await_args
+    assert [e.model_label for e in rendered_arg] == ["A"]
+    assert ch.composed_video_path == "/sd/branded-solo.mp4"
     statuses = {}
     for e in entries:
         await session.refresh(e)
@@ -162,7 +166,10 @@ async def test_compose_failure_fails_challenge(session, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_single_mode_skips_compose(session, monkeypatch):
+async def test_single_mode_composes_branded_solo(session, monkeypatch):
+    """Single-video-branding (2026-07-13): single mode now composes its 1
+    entry into the branded solo frame instead of shipping the raw recording
+    (previously this mode never called compose_challenge at all)."""
     ch, entries = await _seed(
         session,
         mode="single",
@@ -172,12 +179,13 @@ async def test_single_mode_skips_compose(session, monkeypatch):
         ],
     )
     _record_ok(monkeypatch)
-    compose_mock = AsyncMock()
+    compose_mock = AsyncMock(return_value="/sd/branded-solo.mp4")
     monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
     await orchestrator.maybe_advance(session, ch.id)
     await session.refresh(ch)
     assert ch.status == "review"
-    compose_mock.assert_not_awaited()
+    compose_mock.assert_awaited_once()
+    assert ch.composed_video_path == "/sd/branded-solo.mp4"
 
 
 # ── task_done hook ────────────────────────────────────────────────────────
@@ -584,6 +592,42 @@ async def test_compose_challenge_sends_branding_for_two_entries(session, monkeyp
     assert rows_by_name["Grok 4.5"]["time"] == "9.4 min"
     # No artifact_path on either entry here -> size falls back to "—"
     assert rows_by_name["Qwen 3.6 35B A3B"]["size"] == "—"
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_sends_branding_for_one_entry(session, monkeypatch):
+    """single mode (or a side_by_side run degraded to 1 survivor) + exactly
+    1 rendered entry -> compose_challenge still attaches a `branding` payload
+    with a single-item models/outro_rows list (2026-07-13,
+    single-video-branding). mc-playwright picks frame_single.html purely off
+    len(models) == 1 — the orchestrator payload shape is otherwise identical
+    to the 2-entry case."""
+    ch = BenchChallenge(title="One shot", prompt_text="Build a thing.", mode="single")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="Qwen 3.6 35B A3B", source_kind="spark",
+                   status="rendered", video_path="/sd/qwen.mp4",
+                   metrics={"duration_ms": 768000}, artifact_path=None),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+
+    result = await orchestrator.compose_challenge(session, ch, entries)
+    assert result == "/sd/branded.mp4"
+
+    branding = captured["branding"]
+    assert len(branding["models"]) == 1
+    assert branding["models"][0]["label"] == "Qwen 3.6 35B A3B"
+    assert branding["models"][0]["tag"] == "VLLM · SPARK"
+    assert len(branding["outro_rows"]) == 1
+    assert branding["outro_rows"][0]["time"] == "12.8 min"
+    assert len(captured["inputs"]) == 1
 
 
 @pytest.mark.asyncio
