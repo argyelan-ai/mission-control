@@ -19,11 +19,11 @@ vi.mock("@/verticals/bench_studio/api", () => ({
       update: vi.fn(),
       recompose: vi.fn(),
     },
-    entries: { retry: vi.fn(), update: vi.fn() },
+    entries: { retry: vi.fn(), update: vi.fn(), viewToken: vi.fn() },
     promptTemplates: { list: vi.fn().mockResolvedValue([]) },
     sharedSubpath: (p: string) => p.replace(/^\/shared-deliverables\//, ""),
-    entryViewUrl: (challengeId: string, entryId: string) =>
-      `/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=test-token`,
+    entryViewUrl: (challengeId: string, entryId: string, viewToken: string) =>
+      `/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=${viewToken}`,
   },
 }));
 
@@ -45,6 +45,7 @@ vi.mock("../DraftDialog", () => ({
 }));
 
 import { benchApi } from "@/verticals/bench_studio/api";
+import { notify } from "@/lib/notify";
 import { ChallengeDetail } from "../ChallengeDetail";
 
 function makeChallenge(over: Partial<BenchChallenge> = {}): BenchChallenge {
@@ -262,28 +263,61 @@ describe("ChallengeDetail — edit + recompose", () => {
   });
 });
 
-// ── "Öffnen" link (view rendered artifact as a real page) ─────────────────
+// ── "Öffnen" button (view rendered artifact as a real page) ───────────────
+//
+// Click-based, not a plain <a href>: the URL carries a short-lived,
+// resource-scoped view-token (never the operator's session JWT — that would
+// be a standing credential leak once the copyable/shareable link is opened
+// on a phone or lands in browser history). The token is minted lazily on
+// click via entries.viewToken().
 
-describe("ChallengeDetail — Öffnen link", () => {
+describe("ChallengeDetail — Öffnen button", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubGlobal("open", vi.fn());
   });
 
-  it("renders an 'Öffnen' link to the view endpoint for entries with an artifact", async () => {
+  it("mints a view-token on click and opens the view URL with it in a new tab", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
       })
     );
+    vi.mocked(benchApi.entries.viewToken).mockResolvedValue({
+      token: "scoped-view-token",
+      expires_in: 1800,
+    });
 
     renderDetail();
-    const link = await screen.findByRole("link", { name: /Öffnen/ });
-    expect(link).toHaveAttribute(
-      "href",
-      "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=test-token"
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(benchApi.entries.viewToken).toHaveBeenCalledWith("ch-1", "e-1");
+    });
+    expect(window.open).toHaveBeenCalledWith(
+      "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=scoped-view-token",
+      "_blank",
+      "noopener,noreferrer"
     );
-    expect(link).toHaveAttribute("target", "_blank");
-    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  });
+
+  it("shows an error and never opens a tab when minting the view-token fails", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+    vi.mocked(benchApi.entries.viewToken).mockRejectedValue(new Error("boom"));
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalled();
+    });
+    expect(window.open).not.toHaveBeenCalled();
   });
 
   it("does not render 'Öffnen' when the entry has no artifact yet", async () => {
@@ -293,6 +327,6 @@ describe("ChallengeDetail — Öffnen link", () => {
 
     renderDetail();
     await screen.findByText("Qwen 3.6");
-    expect(screen.queryByRole("link", { name: /Öffnen/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Öffnen/ })).toBeNull();
   });
 });

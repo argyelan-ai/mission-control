@@ -1,5 +1,8 @@
 """Benchmark Studio router — operator-facing, JWT via require_user
-(same auth dependency as the core approvals/files routers)."""
+(same auth dependency as the core approvals/files routers). Exception: the
+entry HTML view route uses require_bench_view, which additionally accepts a
+short-lived resource-scoped view-token (see auth.create_bench_view_token) —
+that route's URL is meant to be copied/shared/opened on a phone."""
 from __future__ import annotations
 
 import logging
@@ -13,7 +16,7 @@ from pydantic import BaseModel, Field
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import create_bench_view_token, require_bench_view, require_user
 from app.database import get_session
 from app.models.bench import BenchChallenge, BenchEntry
 from app.utils import create_tracked_task
@@ -210,16 +213,39 @@ _ARTIFACT_CSP = (
 )
 
 
-@router.get("/challenges/{challenge_id}/entries/{entry_id}/view", response_class=HTMLResponse)
-async def view_bench_entry(
+@router.post("/challenges/{challenge_id}/entries/{entry_id}/view-token")
+async def mint_bench_entry_view_token(
     challenge_id: uuid.UUID,
     entry_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
+    """Mints a short-lived, resource-scoped token for the /view route below —
+    only an operator with a full session may mint one. Frontend fetches this
+    right before opening the link so the shareable/copyable URL never carries
+    the operator's long-lived session JWT (see require_bench_view)."""
+    entry = await session.get(BenchEntry, entry_id)
+    if entry is None or entry.challenge_id != challenge_id:
+        raise HTTPException(404, "Entry not found")
+    expires_minutes = 30
+    token = create_bench_view_token(
+        str(current_user.id), str(challenge_id), str(entry_id), expires_minutes=expires_minutes
+    )
+    return {"token": token, "expires_in": expires_minutes * 60}
+
+
+@router.get("/challenges/{challenge_id}/entries/{entry_id}/view", response_class=HTMLResponse)
+async def view_bench_entry(
+    challenge_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    _auth=Depends(require_bench_view),
+):
     """Serve a rendered entry's index.html as a real page — interactive,
-    openable from any device (auth via ?token= query, same fallback
-    require_user already offers for WS/stream URLs opened in a bare tab)."""
+    openable from any device. Auth accepts a normal operator session OR a
+    short-lived view-token scoped to this exact entry (see view-token above
+    and require_bench_view) — never a bare session JWT in the URL, since
+    this link is meant to be copied/shared/opened on a phone."""
     entry = await session.get(BenchEntry, entry_id)
     if entry is None or entry.challenge_id != challenge_id:
         raise HTTPException(404, "Entry not found")
@@ -240,6 +266,10 @@ async def view_bench_entry(
             "Content-Security-Policy": _ARTIFACT_CSP,
             "X-Content-Type-Options": "nosniff",
             "Cache-Control": "no-store",
+            # The view URL itself carries a resource-scoped token — never let
+            # it leak onward as a Referer header to whatever the artifact's
+            # (untrusted, model-generated) markup might still try to load.
+            "Referrer-Policy": "no-referrer",
         },
     )
 

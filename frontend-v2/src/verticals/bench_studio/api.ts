@@ -1,6 +1,6 @@
 // Vertical-owned API namespace (ADR-044 §4). Uses the core request() helper
 // (auth header + BASE_URL) — vertical -> core imports are allowed.
-import { BASE_URL, getToken, request } from "@/lib/api";
+import { BASE_URL, request } from "@/lib/api";
 import type {
   BenchChallenge,
   BenchChallengeCreate,
@@ -66,6 +66,14 @@ export const benchApi = {
         method: "PATCH",
         body: JSON.stringify(body),
       }),
+    /** Mints a short-lived (30 min), resource-scoped view-token for
+     *  entryViewUrl below — requires a full operator session (Bearer/JWT via
+     *  the core request() helper), unlike the view URL itself. */
+    viewToken: (challengeId: string, entryId: string) =>
+      request<{ token: string; expires_in: number }>(
+        `/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view-token`,
+        { method: "POST" }
+      ),
   },
   // Prompt Library CRUD (core API from PR 2)
   promptTemplates: {
@@ -86,12 +94,15 @@ export const benchApi = {
   /** Absolute /shared-deliverables path -> subpath for the core files API
    *  ("shared-deliverables" root, see backend fs_roots.py). */
   sharedSubpath: (absPath: string) => absPath.replace(/^\/shared-deliverables\//, ""),
-  /** Opens a rendered entry's index.html as a real interactive page (new
-   *  tab, works on mobile). `<a href>` can't carry a Bearer header, so the
-   *  token rides in the query string — same fallback require_user already
-   *  offers WS/stream URLs opened bare (frontend-v2/src/lib/sse.ts pattern).
-   *  Backend sandboxes the response (CSP `sandbox`, opaque origin) so the
-   *  model-generated page can never read this app's localStorage/token. */
-  entryViewUrl: (challengeId: string, entryId: string) =>
-    `${BASE_URL}/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=${getToken()}`,
+  /** Builds the URL for a rendered entry's index.html — a real interactive
+   *  page, works on mobile. `<a href>` can't carry a Bearer header, so auth
+   *  rides in the query string, but NEVER the operator's session JWT: this
+   *  link is copyable/shareable by design (mobile "Öffnen"), and a full
+   *  session token in a shared/history'd URL would be a standing admin
+   *  credential leak. Pass the short-lived token from entries.viewToken()
+   *  instead — backend additionally sandboxes the response (CSP `sandbox`,
+   *  opaque origin) so the model-generated page can never read this app's
+   *  localStorage. */
+  entryViewUrl: (challengeId: string, entryId: string, viewToken: string) =>
+    `${BASE_URL}/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=${viewToken}`,
 };

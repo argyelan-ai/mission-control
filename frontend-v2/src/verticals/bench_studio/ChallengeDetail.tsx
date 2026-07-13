@@ -49,6 +49,22 @@ async function downloadFile(absPath: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+/** Mints a short-lived view-token first, then opens the entry's rendered
+ *  page in a new tab — never puts the operator's session JWT in a URL
+ *  that's meant to be copied/shared/opened on a phone (review finding). */
+async function openEntryView(challengeId: string, entryId: string) {
+  try {
+    const { token } = await benchApi.entries.viewToken(challengeId, entryId);
+    window.open(
+      benchApi.entryViewUrl(challengeId, entryId, token),
+      "_blank",
+      "noopener,noreferrer"
+    );
+  } catch {
+    notify.error("Öffnen nicht möglich");
+  }
+}
+
 function metricsLine(m: BenchEntry["metrics"]): string {
   const parts: string[] = [];
   if (m.duration_ms) parts.push(`${(m.duration_ms / 1000).toFixed(0)} s`);
@@ -304,15 +320,13 @@ export function ChallengeDetail({
             <div className="flex items-center gap-2 mt-auto">
               {entry.artifact_path && (
                 <>
-                  <a
-                    href={benchApi.entryViewUrl(challengeId, entry.id)}
-                    target="_blank"
-                    rel="noopener noreferrer"
+                  <button
+                    onClick={() => openEntryView(challengeId, entry.id)}
                     className="flex items-center gap-1 text-xs"
                     style={{ color: C.accent }}
                   >
                     <ExternalLink size={12} /> Öffnen
-                  </a>
+                  </button>
                   <button
                     onClick={() =>
                       downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)

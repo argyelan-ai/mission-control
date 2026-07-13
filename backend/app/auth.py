@@ -43,6 +43,38 @@ def create_access_token(
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=JWT_ALGORITHM)
 
 
+# ── Narrow-purpose view tokens ──────────────────────────────────────────────
+#
+# Short-lived JWTs bound to a single resource (e.g. one bench entry) — for
+# links that are copyable/shareable by design (an <a href> a bare browser
+# tab opens) where a full-lifetime session JWT would be a standing credential
+# leak (link gets copied/shared/kept in history -> full admin access until
+# the session token itself expires/is revoked). Same secret + algorithm as
+# create_access_token, but a distinct "scope" claim that require_user
+# explicitly refuses (see below) — a scoped token only ever authorizes the
+# one dependency built for it, never the general session routes.
+
+BENCH_VIEW_SCOPE = "bench_view"
+
+
+def create_bench_view_token(
+    user_id: str,
+    challenge_id: str,
+    entry_id: str,
+    expires_minutes: int = 30,
+) -> str:
+    expire = datetime.now(timezone.utc) + timedelta(minutes=expires_minutes)
+    payload = {
+        "sub": user_id,
+        "scope": BENCH_VIEW_SCOPE,
+        "challenge_id": challenge_id,
+        "entry_id": entry_id,
+        "exp": expire,
+        "iat": datetime.now(timezone.utc),
+    }
+    return jwt.encode(payload, settings.jwt_secret_key, algorithm=JWT_ALGORITHM)
+
+
 # ── Password Hashing (bcrypt) ────────────────────────────────────────────────
 
 def hash_password(password: str) -> str:
@@ -111,6 +143,12 @@ async def require_user(
     # 1. Try JWT decode
     try:
         payload = jwt.decode(raw_token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+        if payload.get("scope"):
+            # Narrow-purpose tokens (e.g. create_bench_view_token) are only
+            # valid on their own dedicated dependency — never as a general
+            # session token, even though they're signed with the same
+            # secret. Fall through exactly like a decode failure.
+            raise JWTError("scoped token not valid for session auth")
         user_id = payload.get("sub")
         if user_id:
             try:
@@ -171,6 +209,34 @@ async def require_user(
         )
 
     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+
+async def require_bench_view(
+    challenge_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    request: Request,
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+    token: str | None = Query(None, alias="token"),
+    session: AsyncSession = Depends(get_session),
+):
+    """Auth for the bench entry HTML view route only: accepts EITHER a
+    normal operator session (JWT/legacy token, via require_user) OR a
+    create_bench_view_token() scoped to this exact challenge_id/entry_id.
+    challenge_id/entry_id are bound in the token itself, so a leaked view
+    link only ever exposes the one artifact it was minted for."""
+    raw_token = credentials.credentials if credentials else token
+    if raw_token:
+        try:
+            payload = jwt.decode(raw_token, settings.jwt_secret_key, algorithms=[JWT_ALGORITHM])
+            if (
+                payload.get("scope") == BENCH_VIEW_SCOPE
+                and payload.get("challenge_id") == str(challenge_id)
+                and payload.get("entry_id") == str(entry_id)
+            ):
+                return payload
+        except JWTError:
+            pass
+    return await require_user(request, credentials, token, session)
 
 
 # ── Agent Auth ────────────────────────────────────────────────────────────────

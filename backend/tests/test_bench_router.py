@@ -649,3 +649,151 @@ async def test_view_entry_404_when_entry_belongs_to_other_challenge(
         f"/api/v1/bench/challenges/{ch1.id}/entries/{entries2[0].id}/view"
     )
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_view_entry_sets_no_referrer_policy(auth_client, session, tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated"}],
+    )
+    entry = entries[0]
+    art_dir = tmp_path / f"bench-{ch.id}" / "A"
+    art_dir.mkdir(parents=True)
+    (art_dir / "index.html").write_text("hi", encoding="utf-8")
+    entry.artifact_path = str(art_dir / "index.html")
+    session.add(entry)
+    await session.commit()
+
+    resp = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view")
+    assert resp.status_code == 200
+    assert resp.headers["referrer-policy"] == "no-referrer"
+
+
+# ── Scoped view-token (link is copyable/shareable — never a session JWT) ──
+
+
+async def _seed_viewable_entry(session, tmp_path, monkeypatch):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated"}],
+    )
+    entry = entries[0]
+    art_dir = tmp_path / f"bench-{ch.id}" / "A"
+    art_dir.mkdir(parents=True)
+    (art_dir / "index.html").write_text("scoped-ok", encoding="utf-8")
+    entry.artifact_path = str(art_dir / "index.html")
+    session.add(entry)
+    await session.commit()
+    return ch, entry
+
+
+@pytest.mark.asyncio
+async def test_mint_view_token_and_use_it(auth_client, session, tmp_path, monkeypatch):
+    ch, entry = await _seed_viewable_entry(session, tmp_path, monkeypatch)
+
+    mint = await auth_client.post(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view-token"
+    )
+    assert mint.status_code == 200, mint.text
+    body = mint.json()
+    assert body["expires_in"] == 30 * 60
+    view_token = body["token"]
+    assert view_token != auth_client.headers["Authorization"].split(" ", 1)[1]
+
+    # Bare tab, no Authorization header at all — only the minted view-token:
+    auth_client.headers.pop("Authorization", None)
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view?token={view_token}"
+    )
+    assert resp.status_code == 200
+    assert resp.text == "scoped-ok"
+
+
+@pytest.mark.asyncio
+async def test_mint_view_token_404_for_mismatched_challenge(auth_client, session):
+    ch1, _ = await _seed_challenge(session)
+    ch2, entries2 = await _seed_challenge(
+        session, entries=[{"model_label": "A", "source_kind": "spark", "status": "generated"}]
+    )
+    resp = await auth_client.post(
+        f"/api/v1/bench/challenges/{ch1.id}/entries/{entries2[0].id}/view-token"
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_view_token_rejected_for_a_different_entry(auth_client, session, tmp_path, monkeypatch):
+    """A view-token is bound to one exact challenge_id/entry_id — it must not
+    unlock a sibling entry's artifact even within the same challenge."""
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, rows = await _seed_challenge(
+        session,
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "generated"},
+            {"model_label": "B", "source_kind": "spark", "status": "generated"},
+        ],
+    )
+    for row, label in zip(rows, ("A", "B")):
+        art_dir = tmp_path / f"bench-{ch.id}" / label
+        art_dir.mkdir(parents=True)
+        (art_dir / "index.html").write_text(label, encoding="utf-8")
+        row.artifact_path = str(art_dir / "index.html")
+        session.add(row)
+    await session.commit()
+    entry_a, entry_b = rows
+
+    mint = await auth_client.post(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry_a.id}/view-token"
+    )
+    view_token = mint.json()["token"]
+
+    auth_client.headers.pop("Authorization", None)
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry_b.id}/view?token={view_token}"
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_view_token_expired_is_rejected(auth_client, session, tmp_path, monkeypatch):
+    from app.auth import create_bench_view_token
+
+    ch, entry = await _seed_viewable_entry(session, tmp_path, monkeypatch)
+    expired = create_bench_view_token(
+        str(uuid.uuid4()), str(ch.id), str(entry.id), expires_minutes=-1
+    )
+    auth_client.headers.pop("Authorization", None)
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view?token={expired}"
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_view_token_does_not_work_on_other_routes(auth_client, session, tmp_path, monkeypatch):
+    """A bench-view token must never authorize a general session route, even
+    though it's signed with the same secret — require_user explicitly
+    refuses any token carrying a "scope" claim."""
+    ch, entry = await _seed_viewable_entry(session, tmp_path, monkeypatch)
+    mint = await auth_client.post(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view-token"
+    )
+    view_token = mint.json()["token"]
+
+    resp = await auth_client.get(
+        "/api/v1/bench/challenges", headers={"Authorization": f"Bearer {view_token}"}
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_view_entry_still_works_with_full_session_jwt(auth_client, session, tmp_path, monkeypatch):
+    """Session JWTs keep working on the view route unchanged (operator
+    browsing the app itself, not a shared bare-tab link)."""
+    ch, entry = await _seed_viewable_entry(session, tmp_path, monkeypatch)
+    resp = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view")
+    assert resp.status_code == 200
+    assert resp.text == "scoped-ok"
