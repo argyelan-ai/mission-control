@@ -647,6 +647,20 @@ class MCLifecycle:
     def set_blocker(self, task_id: str, *, blocker_type: str, question: str) -> None: ...
     def comment(self, task_id: str, text: str) -> None: ...
 
+    def task_is_active(self, task_id: str) -> Optional[bool]:
+        """Is `task_id` still the agent's live current task?
+
+        True/False when determinable, None when it cannot be determined
+        (best-effort, fail-open — callers must treat None exactly like True,
+        i.e. keep nudging/retrying as before). Used by `drive_live_run` to
+        stop nudging/retrying a task that was already completed or reassigned
+        by the operator out-of-band (e.g. a human closed the task manually
+        while a long live run was still going — see the 2026-07-12 Bench-
+        Studio incident where the bridge kept posting continue-nudges on an
+        already-done task for 40 minutes).
+        """
+        return None
+
 
 class LoggingLifecycle(MCLifecycle):
     """Prototype hook set — logs the INTENDED mc-CLI call, never hits backend."""
@@ -681,6 +695,11 @@ class LoggingLifecycle(MCLifecycle):
     def comment(self, task_id: str, text: str) -> None:
         self.calls.append(("comment", task_id))
         self._sink(f"[mc-stub] mc comment          (task={task_id})  # {text}")
+
+    def task_is_active(self, task_id: str) -> Optional[bool]:
+        self.calls.append(("task_is_active", task_id))
+        self._sink(f"[mc-stub] mc me               (task={task_id})  # undeterminable in stub, fail-open")
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1218,6 +1237,36 @@ class McCliLifecycle(MCLifecycle):
         # abort the retry loop).
         self._run(task_id, ["comment", "progress", text], best_effort=True)
 
+    def task_is_active(self, task_id: str) -> Optional[bool]:
+        """`mc me` -> compare its `current_task.id` against `task_id`.
+
+        Best-effort by design (fail-open, never raises): a garbled/absent
+        `current_task` or any parse/subprocess failure returns None, which
+        `drive_live_run` treats exactly like True (keep nudging/retrying —
+        the pre-existing behavior). Only a CONFIRMED mismatch (or a null
+        `current_task`, i.e. the agent has no live task at all) returns
+        False, which stops the nudge/retry loop.
+        """
+        rc, stdout_text = self._run(task_id, ["me"], best_effort=True)
+        if rc != 0:
+            return None
+        try:
+            idx = stdout_text.index("{")
+        except ValueError:
+            return None
+        try:
+            data = json.loads(stdout_text[idx:])
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(data, dict):
+            return None
+        current_task = data.get("current_task")
+        if not current_task:
+            return False
+        if not isinstance(current_task, dict):
+            return None
+        return str(current_task.get("id")) == str(task_id)
+
 
 def _set_task_lock(active: bool) -> None:
     path = os.environ.get("OMP_TASK_LOCK_FILE", TASK_LOCK_FILE)
@@ -1281,6 +1330,20 @@ def drive_live_run(
         )
         # Continue-Nudge: resume the SAME session with a follow-up prompt (Fix B).
         if action.action == "continue" and continue_once is not None and continues > 0:
+            # Stop nudging a task the operator already closed/reassigned out-
+            # of-band (2026-07-12 Bench-Studio incident: 40min of continue-
+            # nudges + comments on an already-done task). Only a CONFIRMED
+            # False stops the loop — True/None (undeterminable) keep the
+            # exact old fail-open behavior.
+            if lifecycle.task_is_active(task_id) is False:
+                sys.stderr.write(
+                    "[drive_live_run] task no longer active (done/review/reassigned) "
+                    "-> stopping without nudge\n"
+                )
+                return LifecycleAction(
+                    action="halted_external", classification=cls,
+                    reflection=outcome.reflection_block,
+                )
             lifecycle.comment(
                 task_id, f"omp {cls.reason}; continue-nudge, {continues} left"
             )
@@ -1291,6 +1354,15 @@ def drive_live_run(
             outcome = continue_once(nudge_prompt)
             continue
         if action.action == "retry" and attempts_left > 0:
+            if lifecycle.task_is_active(task_id) is False:
+                sys.stderr.write(
+                    "[drive_live_run] task no longer active (done/review/reassigned) "
+                    "-> stopping without nudge\n"
+                )
+                return LifecycleAction(
+                    action="halted_external", classification=cls,
+                    reflection=outcome.reflection_block,
+                )
             lifecycle.comment(task_id, f"omp abort ({cls.reason}); retrying, {attempts_left} left")
             attempts_left -= 1
             # Fresh session = fresh nudge history: a retry relaunches a BRAND-NEW

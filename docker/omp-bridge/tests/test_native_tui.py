@@ -594,6 +594,103 @@ def test_continue_without_executor_collapses_to_blocker():
 
 
 # ---------------------------------------------------------------------------
+# task_is_active() gate — 2026-07-12 Bench-Studio incident: the bridge kept
+# posting continue-nudges + comments on a task the operator had already
+# closed manually, for 40 minutes, because drive_live_run had no way to see
+# that the task was no longer live. A CONFIRMED False must stop the loop
+# WITHOUT any nudge/comment; True/None (undeterminable) must be a complete
+# no-op vs the pre-existing behavior (fail-open).
+# ---------------------------------------------------------------------------
+
+class _RecordingTaskActive(_Recording):
+    """`_Recording` plus a scriptable `task_is_active` return value."""
+
+    def __init__(self, active):
+        super().__init__()
+        self._active = active
+
+    def task_is_active(self, task_id):
+        self.calls.append(("task_is_active", task_id))
+        return self._active
+
+
+def test_task_inactive_stops_continue_nudge_without_comment():
+    def continue_once(nudge):  # pragma: no cover — must never be called
+        raise AssertionError("continue_once must not fire once task_is_active() is False")
+
+    lc = _RecordingTaskActive(active=False)
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "halted_external"
+    # No comment, no nudge, no blocker/finish — the task is no longer ours to touch.
+    assert not any(c[0] in ("comment", "blocker", "finish") for c in lc.calls)
+    assert any(c[0] == "task_is_active" for c in lc.calls)
+
+
+def test_task_inactive_stops_retry_without_relaunch():
+    def run_once():  # pragma: no cover — must not be called a 2nd time
+        raise AssertionError("run_once must not re-fire once task_is_active() is False")
+
+    calls = {"n": 0}
+
+    def first_then_crash():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return _crash_outcome()
+        return run_once()
+
+    lc = _RecordingTaskActive(active=False)
+    action = bridge.drive_live_run(
+        lc, first_then_crash, task_id="T1",
+        board_requires_review=True, retries_left=1,
+        continues_left=0, pre_acked=True,
+    )
+    assert action.action == "halted_external"
+    assert calls["n"] == 1
+    assert not any(c[0] in ("comment", "blocker", "finish") for c in lc.calls)
+
+
+def test_task_is_active_none_keeps_old_nudge_behavior():
+    # None = undeterminable -> must behave EXACTLY like the pre-existing
+    # fail-open path (proven by the same assertions as the plain _Recording
+    # test above): the nudge still fires and budget still exhausts to blocker.
+    nudges = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return _silent_abort_outcome()
+
+    lc = _RecordingTaskActive(active=None)
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "blocker"
+    assert len(nudges) == 2
+
+
+def test_task_is_active_true_keeps_old_nudge_behavior():
+    nudges = []
+
+    def continue_once(nudge):
+        nudges.append(nudge)
+        return _finish_outcome()
+
+    lc = _RecordingTaskActive(active=True)
+    action = bridge.drive_live_run(
+        lc, _silent_abort_outcome, task_id="T1",
+        board_requires_review=True, retries_left=0,
+        continues_left=2, continue_once=continue_once, pre_acked=True,
+    )
+    assert action.action == "finish"
+    assert len(nudges) == 1
+
+
+# ---------------------------------------------------------------------------
 # Fix 1 — escalating, simpler second nudge: the 2nd+ nudge for the SAME Kind
 # (i.e. the first nudge did not fix it) switches to a maximally minimal,
 # copy-paste template instead of repeating the identical prose a weak model

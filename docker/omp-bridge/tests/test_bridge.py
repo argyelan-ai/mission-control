@@ -16,6 +16,7 @@ golden assertions run against GROUND TRUTH, not only synthetic data.
 from __future__ import annotations
 
 import io
+import json
 import os
 import sys
 
@@ -460,6 +461,88 @@ def test_mc_cli_finish_checklist_open_falls_back_to_blocked_when_review_also_fai
         "when the review rescue fails, MUST fall back to blocked, "
         "never a silent in_progress return", subs,
     )
+
+
+# ---------------------------------------------------------------------------
+# McCliLifecycle.task_is_active() — parses `mc me` to tell drive_live_run
+# whether a task is still the agent's live current task (2026-07-12
+# Bench-Studio incident: the bridge kept nudging/commenting on an already-
+# closed task for 40min because it had no way to check). Best-effort by
+# design: only a confirmed mismatch/null current_task returns False; any
+# subprocess/parse failure returns None (fail-open, same as "keep going").
+# ---------------------------------------------------------------------------
+
+class _StdoutProc:
+    def __init__(self, rc, stdout):
+        self.returncode = rc
+        self.stdout = stdout
+        self.stderr = ""  # `_run` falls back to stdout when stderr is empty
+
+
+def _fake_run_me(stdout: str, rc: int = 0):
+    def fake_run(cmd, **kw):
+        return _StdoutProc(rc, stdout)
+    return fake_run
+
+
+def _mc_cli_task_is_active(run_fn, task_id="T1"):
+    lc = bridge.McCliLifecycle(
+        api_url="http://x", token="t", task_id=task_id,
+        board_id="B", attempt_id="A", mc_bin="mc",
+    )
+    orig = bridge.subprocess.run
+    bridge.subprocess.run = run_fn
+    try:
+        return lc.task_is_active(task_id)
+    finally:
+        bridge.subprocess.run = orig
+
+
+def test_task_is_active_matches_current_task_id():
+    stdout = json.dumps({"id": "agent-1", "current_task": {"id": "T1", "status": "in_progress"}})
+    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
+    assert result is True
+
+
+def test_task_is_active_mismatched_current_task_id():
+    stdout = json.dumps({"id": "agent-1", "current_task": {"id": "OTHER-TASK"}})
+    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
+    assert result is False
+
+
+def test_task_is_active_null_current_task():
+    stdout = json.dumps({"id": "agent-1", "current_task": None})
+    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
+    assert result is False
+
+
+def test_task_is_active_tolerates_leading_noise_before_json():
+    # `mc` binaries sometimes print a warning line (deprecation notice, npm
+    # update nag, ...) before the JSON payload — parsing must find the first
+    # `{` rather than choking on the leading garbage.
+    stdout = "warning: some noisy preamble\n" + json.dumps(
+        {"id": "agent-1", "current_task": {"id": "T1"}}
+    )
+    result = _mc_cli_task_is_active(_fake_run_me(stdout), task_id="T1")
+    assert result is True
+
+
+def test_task_is_active_garbage_output_returns_none():
+    result = _mc_cli_task_is_active(_fake_run_me("not json at all, no braces"), task_id="T1")
+    assert result is None
+
+
+def test_task_is_active_nonzero_exit_returns_none():
+    result = _mc_cli_task_is_active(_fake_run_me("{}", rc=1), task_id="T1")
+    assert result is None
+
+
+def test_task_is_active_subprocess_raises_returns_none():
+    def raising_run(cmd, **kw):
+        raise OSError("mc binary not found")
+
+    result = _mc_cli_task_is_active(raising_run, task_id="T1")
+    assert result is None
 
 
 # ---------------------------------------------------------------------------
