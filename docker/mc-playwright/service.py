@@ -798,11 +798,13 @@ async def verify(req: VerifyRequest):
 
 FFMPEG_TIMEOUT_S = 300
 
-# Bench-video branding templates (frame.html + outro.html + shared.css +
-# fonts/embedded-fonts.css, see docker/mc-playwright/templates/bench/).
+# Bench-video branding templates (frame.html + frame_single.html + outro.html
+# + shared.css + fonts/embedded-fonts.css, see
+# docker/mc-playwright/templates/bench/).
 BENCH_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates" / "bench"
 BENCH_FRAME_VIEWPORT = {"width": 1920, "height": 1080}
 BENCH_MODE_LINE = "side by side"  # frame.html's fixed {{MODE_LINE}} value
+BENCH_MODE_LINE_SINGLE = "solo run"  # frame_single.html's fixed {{MODE_LINE}} value
 
 
 async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
@@ -828,22 +830,35 @@ async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
 
 
 async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> tuple[Path, Path]:
-    """Fills frame.html + outro.html with the branding payload and
-    screenshots both to PNGs inside render_dir. Returns (frame_png, outro_png)."""
-    frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
+    """Fills frame.html (2 models) or frame_single.html (1 model) + outro.html
+    with the branding payload and screenshots both to PNGs inside render_dir.
+    Returns (frame_png, outro_png)."""
     outro_template = (BENCH_TEMPLATES_DIR / "outro.html").read_text(encoding="utf-8")
 
-    model_a, model_b = branding.models
-    frame_tokens = {
-        "TITLE": branding.title,
-        "RUN_LABEL": branding.run_label,
-        "MODEL_A": model_a.label,
-        "TAG_A": model_a.tag,
-        "MODEL_B": model_b.label,
-        "TAG_B": model_b.tag,
-        "PROMPT_LINE": branding.prompt_line,
-        "MODE_LINE": BENCH_MODE_LINE,
-    }
+    if len(branding.models) == 2:
+        frame_template = (BENCH_TEMPLATES_DIR / "frame.html").read_text(encoding="utf-8")
+        model_a, model_b = branding.models
+        frame_tokens = {
+            "TITLE": branding.title,
+            "RUN_LABEL": branding.run_label,
+            "MODEL_A": model_a.label,
+            "TAG_A": model_a.tag,
+            "MODEL_B": model_b.label,
+            "TAG_B": model_b.tag,
+            "PROMPT_LINE": branding.prompt_line,
+            "MODE_LINE": BENCH_MODE_LINE,
+        }
+    else:
+        frame_template = (BENCH_TEMPLATES_DIR / "frame_single.html").read_text(encoding="utf-8")
+        (model,) = branding.models
+        frame_tokens = {
+            "TITLE": branding.title,
+            "RUN_LABEL": branding.run_label,
+            "MODEL": model.label,
+            "TAG": model.tag,
+            "PROMPT_LINE": branding.prompt_line,
+            "MODE_LINE": BENCH_MODE_LINE_SINGLE,
+        }
     frame_html = fill_bench_template(frame_template, frame_tokens)
 
     outro_tokens = {"RUN_LABEL": branding.run_label}
@@ -991,10 +1006,12 @@ async def compose(req: ComposeRequest):
     (2x1 / 3x1 / 2x2 je nach Anzahl). speed_labels (optional) werden an die
     Labels angehaengt (z.B. 'DeepSeek · 87 tok/s').
 
-    Mit `branding` gesetzt (immer genau 2 inputs, ComposeRequest validiert
-    das bereits): statt des neutralen Grids werden die zwei Aufnahmen in die
-    Slots des argyelan-Frame-Templates compositiert + ein 2s Outro-Card
-    angehaengt (Benchmark Studio Video-Branding, 2026-07-12)."""
+    Mit `branding` gesetzt (1 oder 2 inputs, ComposeRequest validiert dass
+    inputs/branding.models gleich viele Eintraege haben): statt des neutralen
+    Grids wird/werden die Aufnahme(n) in den Slot(s) des argyelan-Frame-
+    Templates (frame.html bei 2, frame_single.html bei 1) compositiert + ein
+    2s Outro-Card angehaengt (Benchmark Studio Video-Branding, 2026-07-12;
+    Single-Video-Branding 2026-07-13)."""
     for raw in req.inputs:
         resolved = _require_shared_path(raw, "input")
         if not resolved.is_file():

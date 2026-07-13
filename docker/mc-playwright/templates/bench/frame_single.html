@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="fonts/embedded-fonts.css">
+<link rel="stylesheet" href="shared.css">
+<style>
+.top { position:absolute; left:64px; right:64px; top:44px;
+  display:flex; justify-content:space-between; align-items:flex-end; }
+.top h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:52px;
+  letter-spacing:-0.02em; margin-top:14px; }
+.top .meta { text-align:right; font-family:'JetBrains Mono',monospace;
+  font-size:19px; color:var(--muted); letter-spacing:.08em; line-height:1.9;
+  text-transform:uppercase; }
+.top .meta b { color:var(--text2); font-weight:500; }
+.slot { position:absolute; top:290px; left:64px; right:64px; height:560px;
+  background:#090B10; border:1px solid #232838; }
+.slot .ph { position:absolute; inset:0; display:flex; align-items:center;
+  justify-content:center; font-family:'JetBrains Mono',monospace; font-size:22px;
+  color:#2E3444; letter-spacing:.3em; }
+.chip { position:absolute; top:236px; left:64px; right:64px; display:flex;
+  justify-content:space-between; align-items:center; }
+.chip .model { font-family:'JetBrains Mono',monospace; font-size:23px;
+  color:var(--text); letter-spacing:.08em; text-transform:uppercase;
+  padding-left:18px; border-left:3px solid var(--cyan); }
+.chip .speed { font-family:'JetBrains Mono',monospace; font-size:21px;
+  color:var(--cyan); letter-spacing:.05em; }
+.bottom { position:absolute; left:64px; right:64px; bottom:44px;
+  display:flex; justify-content:space-between; align-items:center; }
+.prompt { font-family:'JetBrains Mono',monospace; font-size:19px; color:var(--muted);
+  letter-spacing:.05em; max-width:1150px; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; }
+.prompt b { color:var(--text2); font-weight:500; }
+</style></head><body>
+<div class="ticks-x"></div><div class="ticks-y"></div>
+<div class="top">
+  <div>
+    <span class="label">argyelan <span class="accent">/</span> llm bench · run {{RUN_LABEL}}</span>
+    <h1>{{TITLE}}</h1>
+  </div>
+  <div class="meta">one prompt · one shot<br><b>{{MODE_LINE}}</b></div>
+</div>
+<div class="chip"><span class="model">{{MODEL}}</span><span class="speed">{{TAG}}</span></div>
+<div class="slot"><div class="ph">VIDEO</div></div>
+<div class="bottom">
+  <div class="prompt"><b>PROMPT</b> — {{PROMPT_LINE}}</div>
+  <div class="brandmark"><span class="sq"></span><span class="name">argyelan<b>.ai</b></span></div>
+</div>
+</body></html>
