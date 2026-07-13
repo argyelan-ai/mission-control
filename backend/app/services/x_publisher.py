@@ -91,11 +91,20 @@ VIDEO_EXTENSIONS = {".mp4"}
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 MAX_IMAGES_PER_TWEET = 4
 
+# X media size limits (verified Jul 2026 against developer.x.com/en/docs/x-api/v1/
+# media/upload-media/uploading-media/media-best-practices — video 512MB, image 5MB).
+# Duration (140s standard-tier cap) is NOT pre-validated here: the backend container
+# has no ffprobe, so an over-duration video is instead caught fail-loud during X's own
+# processing (state == "failed" -> MediaUploadError, see _wait_for_video_processing).
+MAX_VIDEO_BYTES = 512 * 1024 * 1024
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+
 
 def validate_media(media_paths: list[str], *, root: Path | None = None) -> DraftValidation:
     """Validates a tweet media set: 1 video (mp4) OR up to 4 images (png/jpg),
-    never mixed; files must exist and live under `root` (default:
-    /shared-deliverables — the volume shared with mc-playwright)."""
+    never mixed; files must exist, live under `root` (default:
+    /shared-deliverables — the volume shared with mc-playwright), and stay
+    within X's size limits (video 512MB, image 5MB)."""
     effective_root = (root or MEDIA_ROOT).resolve()
     errors: list[str] = []
 
@@ -119,8 +128,22 @@ def validate_media(media_paths: list[str], *, root: Path | None = None) -> Draft
             continue
         suffix = resolved.suffix.lower()
         if suffix in VIDEO_EXTENSIONS:
+            size = resolved.stat().st_size
+            if size > MAX_VIDEO_BYTES:
+                errors.append(
+                    f"Video zu gross: {size / (1024 * 1024):.1f}MB "
+                    f"(max {MAX_VIDEO_BYTES // (1024 * 1024)}MB): {raw}"
+                )
+                continue
             videos.append(resolved)
         elif suffix in IMAGE_EXTENSIONS:
+            size = resolved.stat().st_size
+            if size > MAX_IMAGE_BYTES:
+                errors.append(
+                    f"Bild zu gross: {size / (1024 * 1024):.1f}MB "
+                    f"(max {MAX_IMAGE_BYTES // (1024 * 1024)}MB): {raw}"
+                )
+                continue
             images.append(resolved)
         else:
             errors.append(f"Nicht unterstuetzter Medientyp '{suffix}': {raw}")
