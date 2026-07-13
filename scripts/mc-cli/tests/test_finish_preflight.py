@@ -513,3 +513,147 @@ def test_checklist_skip_unknown_id_raises_usage_error():
     ])
     with pytest.raises(UsageError):
         commands._cmd_checklist(_ChecklistSkipArgs(item_id="nonexistent"), client, cfg)
+
+
+# ── Human-Review-Gate — `mc finish` / `mc done` downgrade to 'review' ──────
+#
+# Bench-Studio-Vorfall 2026-07-12: Task.human_review_required=True, aber
+# `mc finish` zielte auf 'done' -> Backend-400 -> Bridge blockte den Task
+# still fuer 40min. `_preflight_finish` / `_cmd_done` muessen den Zielstatus
+# selbst downgraden statt den Agent gegen die 400 laufen zu lassen.
+
+
+def _task_hr(status="in_progress", agent_id=AGENT_ID, human_review_required=True):
+    t = _task(status=status, agent_id=agent_id)
+    t["human_review_required"] = human_review_required
+    return t
+
+
+def test_finish_on_human_review_task_targets_review_not_done():
+    """target_status='done' (default `mc finish`) but human_review_required
+    -> PATCH must go to 'review', not 'done'."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_hr(status="in_progress")),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "review"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"]["status"] == "review"
+
+
+def test_finish_on_human_review_task_already_in_review_skips_patch():
+    """Idempotence check must run against the ADJUSTED target — a
+    human-review task already sitting in 'review' is a clean no-op, not a
+    duplicate PATCH attempt."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_hr(status="review")),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    assert not any(c["method"] in ("POST", "PATCH") for c in client.calls)
+
+
+def test_finish_on_plain_task_keeps_done_behavior():
+    """Regression guard: a task WITHOUT human_review_required must still
+    finish straight to 'done' (default _task() has no such key)."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"]["status"] == "done"
+
+
+def test_finish_human_review_patch_failure_hints_mc_review(capsys):
+    """Downgraded target -> recovery hint must say `mc review`, not `mc done`."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_hr(status="in_progress")),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", RuntimeError("HTTP 500")),
+    ])
+    with pytest.raises(RuntimeError):
+        commands._cmd_finish(_Args(), client, cfg)
+    err = capsys.readouterr().err
+    assert "mc review" in err
+
+
+class _DoneArgs:
+    def __init__(self, force=False, task_id=None):
+        self.force = force
+        self.task_id = task_id
+
+
+def test_done_on_human_review_task_patches_review():
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_hr(status="in_progress")),
+        ("PATCH", "/tasks/", {"status": "review"}),
+    ])
+    rc = commands._cmd_done(_DoneArgs(), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"]["status"] == "review"
+
+
+def test_done_on_human_review_task_already_in_review_is_noop():
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_hr(status="review")),
+    ])
+    rc = commands._cmd_done(_DoneArgs(), client, cfg)
+    assert rc == 0
+    assert not any(c["method"] == "PATCH" for c in client.calls)
+
+
+# ── `mc me` — must emit full JSON, not the generic id-shortcut ─────────────
+#
+# `_emit()`'s "dict with an 'id' key -> print just the id" shortcut exists for
+# resource-creation responses (e.g. `mc create-task` -> print the new task id
+# for scripting). `/api/v1/agent/me` also returns a dict with "id" (the
+# agent's OWN id), which collided with that shortcut and silently broke the
+# documented `mc me | jq -r .current_task.id` usage (see the --task-id help
+# text above) — and the omp-bridge `task_is_active()` check depends on this
+# JSON to determine whether a task is still live.
+
+
+def test_me_prints_full_json_not_bare_id(capsys):
+    cfg = MagicMock()
+    client = MagicMock()
+    client.request.return_value = {
+        "id": "agent-uuid",
+        "name": "Sparky",
+        "current_task": {"id": TASK_ID, "title": "x", "status": "in_progress"},
+    }
+    rc = commands._cmd_me(_Args(), client, cfg)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "agent-uuid" in out
+    assert TASK_ID in out
+    assert "current_task" in out
+
+
+def test_done_on_plain_task_keeps_done_behavior():
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_done(_DoneArgs(), client, cfg)
+    assert rc == 0
+    patch_call = next(c for c in client.calls if c["method"] == "PATCH")
+    assert patch_call["body"]["status"] == "done"

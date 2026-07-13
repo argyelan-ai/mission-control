@@ -112,6 +112,25 @@ def _cmd_done(args, client, cfg):
         if closed:
             import sys as _sys
             print(f"# --force: {closed} offene Checklist-Item(s) auf done gesetzt", file=_sys.stderr)
+
+    # Human-Review-Gate: gleiches Downgrade wie in `_preflight_finish` — der
+    # Task-Flag `human_review_required` ist Mark's Abnahme-Gate, das Backend
+    # lehnt PATCH 'done' sonst mit 400 ab (Bench-Studio-Vorfall 2026-07-12).
+    _, _, base = _agent_base(cfg)
+    task = client.request("GET", f"{base}/detail")
+    if task.get("human_review_required"):
+        if task.get("status") == "review":
+            print(
+                "# Task wartet bereits auf Human-Review (Mark) — Status ist schon 'review', nichts zu tun",
+                file=sys.stderr,
+            )
+            return 0
+        print(
+            "# Task erfordert Human-Review (Mark) — Status wird auf 'review' statt 'done' gesetzt",
+            file=sys.stderr,
+        )
+        return _patch_status(client, cfg, "review")
+
     return _patch_status(client, cfg, "done")
 
 
@@ -465,10 +484,22 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
     task = client.request("GET", f"{base}/detail")
     current = task.get("status")
 
+    # Human-Review-Gate: Backend lehnt PATCH auf 'done' mit 400 ab, wenn der
+    # Task `human_review_required` traegt (Mark muss selbst abnehmen). Bridge
+    # kennt nur den Board-weiten Flag, nicht diesen Per-Task-Flag — darum hier
+    # downgraden BEVOR der PATCH versucht wird, statt den Agent gegen die 400
+    # laufen zu lassen (Bench-Studio-Vorfall 2026-07-12).
+    if target_status == "done" and task.get("human_review_required"):
+        target_status = "review"
+        print(
+            "# Task erfordert Human-Review (Mark) — Status wird auf 'review' statt 'done' gesetzt",
+            file=sys.stderr,
+        )
+
     # Idempotenz: wenn Task bereits im Ziel-Status, NICHT erneut posten.
     # Spart Junk-Reflections wenn der Agent `mc finish` zweimal aufruft.
     if current == target_status:
-        return {"should_post_comment": False, "task": task, "skip_patch": True}
+        return {"should_post_comment": False, "task": task, "skip_patch": True, "target_status": target_status}
 
     if current not in _FINISH_ALLOWED_FROM:
         raise UsageError(
@@ -518,6 +549,7 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
         "task": task,
         "skip_patch": False,
         "recent_reflection": own_recent_reflection,
+        "target_status": target_status,
     }
 
 
@@ -586,6 +618,9 @@ def _cmd_finish(args, client, cfg):
         if closed:
             print(f"# --force: {closed} offene Checklist-Item(s) auf done gesetzt", file=sys.stderr)
     pre = _preflight_finish(client, cfg, target_status)
+    # Preflight kann den Zielstatus downgraden (done -> review bei
+    # human_review_required) — ab hier IMMER den adjustierten Wert nutzen.
+    target_status = pre.get("target_status", target_status)
 
     if pre.get("skip_patch"):
         # Task ist schon im Ziel-Status — beides skipped, klares Signal.
@@ -616,7 +651,7 @@ def _cmd_finish(args, client, cfg):
             print(
                 f"# Reflexion wurde gepostet, aber Status-PATCH fehlgeschlagen: {exc}\n"
                 f"# Retry NUR den Status (kein neuer Comment) mit:\n"
-                f"#   mc {'review' if args.review else 'done'}",
+                f"#   mc {'review' if target_status == 'review' else 'done'}",
                 file=sys.stderr,
             )
         raise
@@ -1560,7 +1595,13 @@ def _cmd_me(args, client, cfg):
     scopes, cli_skills, cli_plugins, skill_filter, current_task, provision_status.
     """
     resp = client.request("GET", "/api/v1/agent/me")
-    _emit(resp)
+    # NICHT ueber _emit() — dessen dict-mit-"id"-Kurzform wuerde hier nur die
+    # eigene Agent-UUID drucken (das Response-Dict hat "id" wie jede Resource).
+    # `mc me` verspricht seit je her vollen JSON-Output (Tipp oben: `mc me |
+    # jq -r .current_task.id`), und der omp-Bridge task_is_active()-Check
+    # (docker/omp-bridge/bridge.py) parst current_task aus genau diesem Output.
+    if resp is not None:
+        print(json.dumps(resp, indent=2, default=str))
     return 0
 
 
