@@ -16,6 +16,7 @@ import { FilesBrowser } from "@/components/files/FilesBrowser";
 import { FilesActionBar } from "@/components/files/FilesActionBar";
 import { FilePreviewPanel } from "@/components/files/FilePreviewPanel";
 import { TrashView } from "@/components/files/TrashView";
+import { FilesSearchFilters, type FilesSearchFilterState } from "@/components/files/FilesSearchFilters";
 import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "@/components/files/fileUtils";
 
 /** Sentinel root key for the synthetic Trash pseudo-root. Double-underscore
@@ -71,17 +72,36 @@ export default function FilesPage() {
 
   const searching = debouncedQuery.length > 0;
 
+  const [searchFilters, setSearchFilters] = useState<FilesSearchFilterState>({});
+  function updateSearchFilters(next: Partial<FilesSearchFilterState>) {
+    setSearchFilters((prev) => ({ ...prev, ...next }));
+    setSearchPage(0);
+  }
+
   const { data: searchData, isLoading: loadingSearch } = useQuery({
-    queryKey: ["files-search", debouncedQuery, searchPage],
+    queryKey: ["files-search", debouncedQuery, searchPage, searchFilters],
     queryFn: () =>
       api.files.search({
         q: debouncedQuery,
         limit: SEARCH_PAGE_SIZE,
         offset: searchPage * SEARCH_PAGE_SIZE,
+        type: searchFilters.type,
+        agent: searchFilters.agent,
+        root: searchFilters.root,
       }),
     enabled: searching,
     placeholderData: (prev) => prev,
   });
+
+  // Agent dropdown only ever offers agents actually present in the current
+  // result set — no separate agents endpoint needed for this filter.
+  const agentsInResults = useMemo(() => {
+    const slugs = new Set<string>();
+    for (const r of searchData?.results ?? []) {
+      if (r.agent_slug) slugs.add(r.agent_slug);
+    }
+    return [...slugs].sort();
+  }, [searchData]);
 
   // The index refreshes on a 10-min cadence, so a freshly written file (e.g. a
   // just-registered deliverable) isn't searchable until the next walk. Give the
@@ -195,6 +215,12 @@ export default function FilesPage() {
         ) : searching ? (
           /* ── Search results ── */
           <>
+            <FilesSearchFilters
+              filters={searchFilters}
+              onChange={updateSearchFilters}
+              roots={roots}
+              agents={agentsInResults}
+            />
             <SearchResults
               results={searchData?.results ?? []}
               loading={loadingSearch}

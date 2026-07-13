@@ -172,7 +172,11 @@ describe("FilesBrowser", () => {
     );
     await screen.findByText("a.txt");
     await userEvent.click(screen.getByRole("checkbox", { name: "Select all files" }));
-    expect(onToggleSelectAll).toHaveBeenCalledWith(["a.txt", "b.txt"], true);
+    // Order follows the active sort (default: mtime desc) — only membership matters here.
+    const [subpaths, on] = onToggleSelectAll.mock.calls[0];
+    expect(subpaths).toEqual(expect.arrayContaining(["a.txt", "b.txt"]));
+    expect(subpaths).toHaveLength(2);
+    expect(on).toBe(true);
   });
 
   it("header checkbox is indeterminate when only some files are selected", async () => {
@@ -190,6 +194,72 @@ describe("FilesBrowser", () => {
     const header = screen.getByRole("checkbox", { name: "Select all files" }) as HTMLInputElement;
     expect(header.indeterminate).toBe(true);
     expect(header.checked).toBe(false);
+  });
+
+  // ── Readability (display_name, agent badge, default sort) ──────────────────
+
+  it("renders display_name as the primary label with the raw name as muted subtext", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({
+          name: "3f9b7c2e-1234-4a11-9abc-1234567890ab",
+          type: "directory",
+          is_directory: true,
+          display_name: "Fix login redirect bug",
+        }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
+    );
+    expect(await screen.findByText("Fix login redirect bug")).toBeInTheDocument();
+    expect(screen.getByText("3f9b7c2e-1234-4a11-9abc-1234567890ab")).toBeInTheDocument();
+  });
+
+  it("falls back to the raw name when display_name is absent (defensive rendering)", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [mkEntry({ name: "notes.md" })],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
+    );
+    expect(await screen.findByText("notes.md")).toBeInTheDocument();
+  });
+
+  it("shows an agent badge when agent_slug is present", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [mkEntry({ name: "report.pdf", agent_slug: "rex" })],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
+    );
+    await screen.findByText("report.pdf");
+    expect(screen.getByText("rex")).toBeInTheDocument();
+  });
+
+  it("defaults to newest-first (mtime desc) without any user interaction", async () => {
+    vi.spyOn(api.files, "list").mockResolvedValue({
+      root: "vault", subpath: "",
+      entries: [
+        mkEntry({ name: "old.txt", mtime: 100 }),
+        mkEntry({ name: "new.txt", mtime: 300 }),
+        mkEntry({ name: "mid.txt", mtime: 200 }),
+      ],
+    });
+    renderWithQuery(
+      <FilesBrowser root={ROOT} subpath="" onNavigate={() => {}} onSelectFile={() => {}} {...noSel} />
+    );
+    await screen.findByText("new.txt");
+    const rows = screen.getAllByRole("row").slice(1); // drop header row
+    const names = rows.map((r) => r.textContent);
+    expect(names[0]).toContain("new.txt");
+    expect(names[1]).toContain("mid.txt");
+    expect(names[2]).toContain("old.txt");
+    // Modified header reflects the active column + direction.
+    expect(screen.getByText("Modified").closest("th")).toHaveAttribute("aria-sort", "descending");
   });
 
   it("clicking a row checkbox does NOT navigate or open the file", async () => {

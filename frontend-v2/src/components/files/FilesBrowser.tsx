@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import type { FsEntry, FsRoot } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
+import { colorForAgent } from "@/components/vault/agentColors";
 import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "./fileUtils";
 
 export type SortKey = "name" | "size" | "mtime";
@@ -61,7 +62,9 @@ export function FilesBrowser({
     else onNavigate(parts.slice(0, index + 1).join("/"));
   }
 
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "name", dir: "asc" });
+  // Newest-first by default — that's what you're looking for right after an
+  // agent finishes a task, far more often than alphabetical order.
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "mtime", dir: "desc" });
 
   function toggleSort(key: SortKey) {
     setSort((s) => (s.key === key ? { key, dir: s.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
@@ -166,6 +169,45 @@ export function FilesBrowser({
   );
 }
 
+/** Small mono chip identifying the agent that produced a deliverable. Reuses
+ *  the stable slug→hue hash so the same agent always gets the same color,
+ *  matching the Vault/Memory identity dots. */
+function AgentBadge({ slug }: { slug: string }) {
+  const color = colorForAgent(slug);
+  return (
+    <span
+      className="inline-flex items-center shrink-0 font-mono text-[10px] px-1.5 py-0.5 rounded"
+      style={{ background: `${color}1A`, color }}
+      title={`Agent: ${slug}`}
+    >
+      {slug}
+    </span>
+  );
+}
+
+/** Display label for a folder/file: `display_name` (e.g. a task title) as the
+ *  primary label with the raw name (often a task UUID) shown small and muted
+ *  underneath — full name always available via `title` for a11y/tooltips. */
+function EntryLabel({ entry }: { entry: FsEntry }) {
+  if (entry.display_name) {
+    return (
+      <div className="min-w-0">
+        <div className="text-sm truncate" style={{ color: C.textPrimary }} title={entry.display_name}>
+          {entry.display_name}
+        </div>
+        <div className="text-[11px] font-mono truncate" style={{ color: C.textDim }} title={entry.name}>
+          {entry.name}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <span className="text-sm truncate" style={{ color: C.textPrimary }}>
+      {entry.name}
+    </span>
+  );
+}
+
 function FileRow({
   entry, subpath, selected, checked, onNavigate, onSelectFile, onToggleSelect,
 }: {
@@ -205,7 +247,8 @@ function FileRow({
       <td className="px-4 py-2.5">
         <div className="flex items-center gap-2.5 min-w-0">
           <Icon size={15} style={{ color, flexShrink: 0 }} />
-          <span className="text-sm truncate" style={{ color: C.textPrimary }}>{entry.name}</span>
+          <EntryLabel entry={entry} />
+          {entry.agent_slug && <AgentBadge slug={entry.agent_slug} />}
           {entry.is_directory && <ChevronRight size={13} style={{ color: C.textDim, flexShrink: 0 }} />}
         </div>
       </td>
