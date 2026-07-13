@@ -3,24 +3,28 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import {
-  Search, RefreshCw, X, FolderOpen, Trash2, type LucideIcon,
-} from "lucide-react";
-import * as Icons from "lucide-react";
+import { Search, RefreshCw, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { api } from "@/lib/api";
 import type { FsRoot, FsSearchResult } from "@/lib/types";
 import { C } from "@/lib/colors";
 import { timeAgo } from "@/lib/utils";
-import { FilesBrowser } from "@/components/files/FilesBrowser";
+import { FilesBrowser, type ViewMode } from "@/components/files/FilesBrowser";
 import { FilesActionBar } from "@/components/files/FilesActionBar";
 import { FilePreviewPanel } from "@/components/files/FilePreviewPanel";
 import { TrashView } from "@/components/files/TrashView";
+import { FilesSidebar, TRASH_KEY } from "@/components/files/FilesSidebar";
+import { FilesViewToggle } from "@/components/files/FilesViewToggle";
+import { FilesSearchFilters, type FilesSearchFilterState } from "@/components/files/FilesSearchFilters";
 import { fileIcon, fileIconColor, humanSize, mtimeToIso } from "@/components/files/fileUtils";
 
-/** Sentinel root key for the synthetic Trash pseudo-root. Double-underscore
- *  so it can never collide with a real fs_roots slug (all simple slugs). */
-const TRASH_KEY = "__trash__";
+// Roots where a filename tells you almost nothing (screenshots, generated
+// storyboard frames, misc media) — thumbnails beat a UUID-ish name list.
+const GRID_DEFAULT_ROOTS = new Set(["media", "mcp-screenshots", "storyboard-images"]);
+
+function viewStorageKey(rootKey: string) {
+  return `mc:files:view:${rootKey}`;
+}
 
 // 300ms debounce — matches useVaultSearch.
 function useDebounced<T>(value: T, delay: number): T {
@@ -30,12 +34,6 @@ function useDebounced<T>(value: T, delay: number): T {
     return () => clearTimeout(t);
   }, [value, delay]);
   return debounced;
-}
-
-/** Resolve a backend icon-name hint (PascalCase lucide name) to a component. */
-function rootIcon(name: string): LucideIcon {
-  const map = Icons as unknown as Record<string, LucideIcon>;
-  return map[name] ?? FolderOpen;
 }
 
 export default function FilesPage() {
@@ -71,17 +69,64 @@ export default function FilesPage() {
 
   const searching = debouncedQuery.length > 0;
 
+  const [searchFilters, setSearchFilters] = useState<FilesSearchFilterState>({});
+  function updateSearchFilters(next: Partial<FilesSearchFilterState>) {
+    setSearchFilters((prev) => ({ ...prev, ...next }));
+    setSearchPage(0);
+  }
+
   const { data: searchData, isLoading: loadingSearch } = useQuery({
-    queryKey: ["files-search", debouncedQuery, searchPage],
+    queryKey: ["files-search", debouncedQuery, searchPage, searchFilters],
     queryFn: () =>
       api.files.search({
         q: debouncedQuery,
         limit: SEARCH_PAGE_SIZE,
         offset: searchPage * SEARCH_PAGE_SIZE,
+        type: searchFilters.type,
+        agent: searchFilters.agent,
+        root: searchFilters.root,
       }),
     enabled: searching,
     placeholderData: (prev) => prev,
   });
+
+  // Agent dropdown only ever offers agents actually present in the current
+  // result set — no separate agents endpoint needed for this filter.
+  const agentsInResults = useMemo(() => {
+    const slugs = new Set<string>();
+    for (const r of searchData?.results ?? []) {
+      if (r.agent_slug) slugs.add(r.agent_slug);
+    }
+    return [...slugs].sort();
+  }, [searchData]);
+
+  // Grid vs. list is a per-root preference (screenshots want thumbnails,
+  // code/vault want a scannable list) — persisted so it survives reloads.
+  const [view, setView] = useState<ViewMode>("list");
+  useEffect(() => {
+    if (!activeRootKey || activeRootKey === TRASH_KEY) return;
+    try {
+      const stored = localStorage.getItem(viewStorageKey(activeRootKey));
+      if (stored === "grid" || stored === "list") {
+        setView(stored);
+        return;
+      }
+    } catch {
+      // storage unavailable — fall through to the root-type default
+    }
+    setView(GRID_DEFAULT_ROOTS.has(activeRootKey) ? "grid" : "list");
+  }, [activeRootKey]);
+
+  function changeView(next: ViewMode) {
+    setView(next);
+    if (activeRootKey) {
+      try {
+        localStorage.setItem(viewStorageKey(activeRootKey), next);
+      } catch {
+        // best-effort persistence only
+      }
+    }
+  }
 
   // The index refreshes on a 10-min cadence, so a freshly written file (e.g. a
   // just-registered deliverable) isn't searchable until the next walk. Give the
@@ -138,7 +183,7 @@ export default function FilesPage() {
 
   return (
     <AppShell>
-      <div className="max-w-6xl mx-auto">
+      <div className="max-w-[1400px] mx-auto">
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
@@ -195,6 +240,12 @@ export default function FilesPage() {
         ) : searching ? (
           /* ── Search results ── */
           <>
+            <FilesSearchFilters
+              filters={searchFilters}
+              onChange={updateSearchFilters}
+              roots={roots}
+              agents={agentsInResults}
+            />
             <SearchResults
               results={searchData?.results ?? []}
               loading={loadingSearch}
@@ -226,88 +277,45 @@ export default function FilesPage() {
             )}
           </>
         ) : (
-          <>
-            {/* Root selector — tab strip */}
-            <div className="flex gap-1 mb-5 overflow-x-auto tab-strip pb-1">
-              {roots.map((r) => {
-                const Icon = rootIcon(r.icon);
-                const active = r.key === activeRootKey;
-                return (
-                  <button
-                    key={r.key}
-                    onClick={() => switchRoot(r.key)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors cursor-pointer shrink-0"
-                    style={{
-                      background: active ? C.accentSubtle : "transparent",
-                      color: active ? C.accent : C.textSecondary,
-                      border: `1px solid ${active ? C.borderAccent : "transparent"}`,
-                    }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = C.textPrimary; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = C.textSecondary; }}
-                  >
-                    <Icon size={15} style={{ color: active ? C.accent : C.textMuted }} />
-                    {r.label}
-                    <span
-                      className="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full"
-                      style={{ background: C.bgElevated, color: C.textMuted }}
-                    >
-                      {r.indexed_count}
-                    </span>
-                  </button>
-                );
-              })}
+          /* ── Finder-style master-detail: root sidebar + browser ── */
+          <div className="flex flex-col md:flex-row gap-5">
+            <FilesSidebar roots={roots} activeKey={activeRootKey} onSelect={switchRoot} />
 
-              {/* Synthetic Trash pseudo-root — not in /roots, never an FsRoot */}
-              {(() => {
-                const active = activeRootKey === TRASH_KEY;
-                return (
-                  <button
-                    onClick={() => switchRoot(TRASH_KEY)}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-colors cursor-pointer shrink-0"
-                    style={{
-                      background: active ? C.accentSubtle : "transparent",
-                      color: active ? C.accent : C.textSecondary,
-                      border: `1px solid ${active ? C.borderAccent : "transparent"}`,
-                    }}
-                    onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = C.textPrimary; }}
-                    onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = C.textSecondary; }}
-                  >
-                    <Trash2 size={15} style={{ color: active ? C.accent : C.textMuted }} />
-                    Trash
-                  </button>
-                );
-              })()}
+            <div className="flex-1 min-w-0">
+              {activeRootKey === TRASH_KEY ? (
+                <motion.div
+                  key={TRASH_KEY}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <TrashView />
+                </motion.div>
+              ) : activeRoot && (
+                <motion.div
+                  key={activeRoot.key}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  <div className="flex items-center justify-end mb-3">
+                    <FilesViewToggle view={view} onChange={changeView} />
+                  </div>
+                  <FilesBrowser
+                    view={view}
+                    root={activeRoot}
+                    subpath={subpath}
+                    onNavigate={(p) => { setSubpath(p); setSelectedFile(null); setSelected(new Set()); }}
+                    onSelectFile={setSelectedFile}
+                    selectedSubpath={selectedFile}
+                    selected={selected}
+                    onToggleSelect={toggleSelect}
+                    onToggleSelectAll={toggleSelectAll}
+                  />
+                </motion.div>
+              )}
             </div>
-
-            {activeRootKey === TRASH_KEY ? (
-              <motion.div
-                key={TRASH_KEY}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <TrashView />
-              </motion.div>
-            ) : activeRoot && (
-              <motion.div
-                key={activeRoot.key}
-                initial={{ opacity: 0, y: 8 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.2 }}
-              >
-                <FilesBrowser
-                  root={activeRoot}
-                  subpath={subpath}
-                  onNavigate={(p) => { setSubpath(p); setSelectedFile(null); setSelected(new Set()); }}
-                  onSelectFile={setSelectedFile}
-                  selectedSubpath={selectedFile}
-                  selected={selected}
-                  onToggleSelect={toggleSelect}
-                  onToggleSelectAll={toggleSelectAll}
-                />
-              </motion.div>
-            )}
-          </>
+          </div>
         )}
       </div>
 
