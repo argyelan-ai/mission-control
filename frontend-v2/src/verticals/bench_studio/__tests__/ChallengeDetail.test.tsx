@@ -22,6 +22,8 @@ vi.mock("@/verticals/bench_studio/api", () => ({
     entries: { retry: vi.fn(), update: vi.fn() },
     promptTemplates: { list: vi.fn().mockResolvedValue([]) },
     sharedSubpath: (p: string) => p.replace(/^\/shared-deliverables\//, ""),
+    entryViewUrl: (challengeId: string, entryId: string) =>
+      `/api/v1/bench/challenges/${challengeId}/entries/${entryId}/view?token=test-token`,
   },
 }));
 
@@ -257,5 +259,40 @@ describe("ChallengeDetail — edit + recompose", () => {
     });
     // Unchanged entry is not PATCHed:
     expect(benchApi.entries.update).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ── "Öffnen" link (view rendered artifact as a real page) ─────────────────
+
+describe("ChallengeDetail — Öffnen link", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders an 'Öffnen' link to the view endpoint for entries with an artifact", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", artifact_path: "/shared-deliverables/bench-ch-1/A/index.html" })],
+      })
+    );
+
+    renderDetail();
+    const link = await screen.findByRole("link", { name: /Öffnen/ });
+    expect(link).toHaveAttribute(
+      "href",
+      "/api/v1/bench/challenges/ch-1/entries/e-1/view?token=test-token"
+    );
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
+  });
+
+  it("does not render 'Öffnen' when the entry has no artifact yet", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ entries: [makeEntry({ id: "e-1", artifact_path: null })] })
+    );
+
+    renderDetail();
+    await screen.findByText("Qwen 3.6");
+    expect(screen.queryByRole("link", { name: /Öffnen/ })).toBeNull();
   });
 });

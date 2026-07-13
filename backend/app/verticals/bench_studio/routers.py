@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import uuid
+from pathlib import Path
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -185,6 +187,61 @@ async def get_challenge(
     # Poll-fallback for failed agent tasks (they never fire task_done):
     await orchestrator.reconcile_challenge(session, challenge, entries)
     return _serialize(challenge, entries)
+
+
+# Every generated artifact is a single self-contained index.html — inline
+# CSS/JS, no external requests (hard requirement baked into the generation
+# prompt, orchestrator.GENERATION_SYSTEM_PROMPT / AGENT_BRIEF_TEMPLATE). So
+# there is no sibling-asset case to serve, only the one file per entry.
+#
+# The content is model-generated and therefore untrusted. Serving it as
+# text/html on the app's own origin would otherwise let its JS read the
+# operator's JWT out of localStorage (same-origin storage is shared by
+# scheme+host+port, not by path). Content-Security-Policy: sandbox (without
+# allow-same-origin) forces the response into a unique opaque origin even
+# when opened as a plain top-level tab — no access to the real origin's
+# storage/cookies, no top-level navigation, no popups. connect-src/default-src
+# 'none' additionally blocks any network call the artifact might still try
+# (defense in depth on top of the "no external requests" generation rule).
+_ARTIFACT_CSP = (
+    "sandbox allow-scripts; "
+    "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+    "img-src data:; font-src data:; connect-src 'none'; frame-ancestors 'self'"
+)
+
+
+@router.get("/challenges/{challenge_id}/entries/{entry_id}/view", response_class=HTMLResponse)
+async def view_bench_entry(
+    challenge_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Serve a rendered entry's index.html as a real page — interactive,
+    openable from any device (auth via ?token= query, same fallback
+    require_user already offers for WS/stream URLs opened in a bare tab)."""
+    entry = await session.get(BenchEntry, entry_id)
+    if entry is None or entry.challenge_id != challenge_id:
+        raise HTTPException(404, "Entry not found")
+    if not entry.artifact_path:
+        raise HTTPException(404, "No artifact for this entry")
+
+    root = orchestrator.SHARED_DELIVERABLES.resolve()
+    target = Path(entry.artifact_path).resolve()
+    if target == root or not target.is_relative_to(root):
+        raise HTTPException(400, "Artifact path escapes the shared-deliverables root")
+    if not target.is_file():
+        raise HTTPException(404, "Artifact file not found on disk")
+
+    html = target.read_text(encoding="utf-8", errors="replace")
+    return HTMLResponse(
+        content=html,
+        headers={
+            "Content-Security-Policy": _ARTIFACT_CSP,
+            "X-Content-Type-Options": "nosniff",
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.post("/challenges/{challenge_id}/draft", status_code=status.HTTP_201_CREATED)

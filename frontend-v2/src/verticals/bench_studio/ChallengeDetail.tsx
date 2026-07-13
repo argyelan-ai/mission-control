@@ -7,6 +7,7 @@ import {
   ArchiveRestore,
   ArrowLeft,
   Download,
+  ExternalLink,
   Film,
   Loader2,
   Pencil,
@@ -302,15 +303,26 @@ export function ChallengeDetail({
             )}
             <div className="flex items-center gap-2 mt-auto">
               {entry.artifact_path && (
-                <button
-                  onClick={() =>
-                    downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)
-                  }
-                  className="flex items-center gap-1 text-xs"
-                  style={{ color: C.textSecondary }}
-                >
-                  <Download size={12} /> HTML
-                </button>
+                <>
+                  <a
+                    href={benchApi.entryViewUrl(challengeId, entry.id)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="flex items-center gap-1 text-xs"
+                    style={{ color: C.accent }}
+                  >
+                    <ExternalLink size={12} /> Öffnen
+                  </a>
+                  <button
+                    onClick={() =>
+                      downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)
+                    }
+                    className="flex items-center gap-1 text-xs"
+                    style={{ color: C.textSecondary }}
+                  >
+                    <Download size={12} /> HTML
+                  </button>
+                </>
               )}
               {entry.status === "failed" && (
                 <button

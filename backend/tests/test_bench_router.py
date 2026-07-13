@@ -516,3 +516,136 @@ async def test_recompose_endpoint_guards(auth_client, session):
     resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
     assert resp.status_code == 422
     orchestrator.recompose_challenge.assert_not_called()
+
+
+# ── Serve rendered HTML artifact (mobile-friendly "Open" link) ────────────
+
+
+@pytest.mark.asyncio
+async def test_view_entry_serves_html_with_sandbox_csp(
+    auth_client, session, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated",
+                  "artifact_path": None}],
+    )
+    entry = entries[0]
+    art_dir = tmp_path / f"bench-{ch.id}" / "A"
+    art_dir.mkdir(parents=True)
+    (art_dir / "index.html").write_text("<html><body>hi</body></html>", encoding="utf-8")
+    entry.artifact_path = str(art_dir / "index.html")
+    session.add(entry)
+    await session.commit()
+
+    resp = await auth_client.get(f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view")
+    assert resp.status_code == 200, resp.text
+    assert resp.text == "<html><body>hi</body></html>"
+    assert resp.headers["content-type"].startswith("text/html")
+    csp = resp.headers["content-security-policy"]
+    assert "sandbox allow-scripts" in csp
+    assert "allow-same-origin" not in csp
+    assert resp.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_view_entry_works_with_query_token_bare_tab(client, session, tmp_path, monkeypatch):
+    """Bare browser tabs can't send an Authorization header — same ?token=
+    fallback the WS/stream URLs already rely on (require_user Query dep)."""
+    from app.auth import create_access_token
+    from app.models.user import User
+    from sqlmodel.ext.asyncio.session import AsyncSession as _AsyncSession
+    from tests.conftest import test_engine
+
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    user_id = uuid.uuid4()
+    async with _AsyncSession(test_engine, expire_on_commit=False) as s:
+        s.add(User(id=user_id, email="tab@mc.local", name="Tab", role="admin", is_active=True))
+        await s.commit()
+    token = create_access_token(str(user_id), "admin")
+
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated"}],
+    )
+    entry = entries[0]
+    art_dir = tmp_path / f"bench-{ch.id}" / "A"
+    art_dir.mkdir(parents=True)
+    (art_dir / "index.html").write_text("ok", encoding="utf-8")
+    entry.artifact_path = str(art_dir / "index.html")
+    session.add(entry)
+    await session.commit()
+
+    resp = await client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entry.id}/view?token={token}"
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_view_entry_404_without_artifact(auth_client, session):
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "pending",
+                  "artifact_path": None}],
+    )
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entries[0].id}/view"
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_view_entry_404_when_file_missing_on_disk(
+    auth_client, session, tmp_path, monkeypatch
+):
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", tmp_path)
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated",
+                  "artifact_path": str(tmp_path / "gone" / "index.html")}],
+    )
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entries[0].id}/view"
+    )
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_view_entry_400_when_artifact_path_escapes_shared_root(
+    auth_client, session, tmp_path, monkeypatch
+):
+    """Containment guard: an artifact_path pointing outside SHARED_DELIVERABLES
+    (e.g. a corrupted/tampered row) is refused, never served."""
+    shared_root = tmp_path / "shared"
+    shared_root.mkdir()
+    monkeypatch.setattr(orchestrator, "SHARED_DELIVERABLES", shared_root)
+    outside = tmp_path.parent / "outside-view-marker"
+    outside.mkdir(exist_ok=True)
+    (outside / "index.html").write_text("nope", encoding="utf-8")
+    ch, entries = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated",
+                  "artifact_path": str(outside / "index.html")}],
+    )
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch.id}/entries/{entries[0].id}/view"
+    )
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_view_entry_404_when_entry_belongs_to_other_challenge(
+    auth_client, session, tmp_path
+):
+    ch1, _ = await _seed_challenge(session)
+    ch2, entries2 = await _seed_challenge(
+        session,
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "generated",
+                  "artifact_path": str(tmp_path / "index.html")}],
+    )
+    resp = await auth_client.get(
+        f"/api/v1/bench/challenges/{ch1.id}/entries/{entries2[0].id}/view"
+    )
+    assert resp.status_code == 404
