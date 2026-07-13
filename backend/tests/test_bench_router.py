@@ -516,3 +516,129 @@ async def test_recompose_endpoint_guards(auth_client, session):
     resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
     assert resp.status_code == 422
     orchestrator.recompose_challenge.assert_not_called()
+
+
+# ── pending x_post approval guard on rerender/recompose (2026-07-13) ───────
+# Approval.payload.media_paths freezes a video path at draft time; rerender/
+# recompose rename AND delete the superseded file (_cleanup_old_compose) —
+# without this guard, approving the post days later would try to post a
+# file that no longer exists.
+
+
+@pytest.mark.asyncio
+async def test_recompose_blocked_by_pending_x_post_approval(auth_client, session, make_board, tmp_path):
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    old_video = tmp_path / "grid-old.mp4"
+    old_video.write_bytes(b"old")
+
+    ch, _ = await _seed_challenge(
+        session, status="review",
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.composed_video_path = str(old_video)
+    session.add(ch)
+    await session.commit()
+
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="bench draft",
+        payload={"bench_challenge_id": str(ch.id), "media_paths": [str(old_video)]},
+        status="pending",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
+    assert resp.status_code == 409
+    assert "X-Post" in resp.json()["detail"]
+    orchestrator.recompose_challenge.assert_not_called()
+    assert old_video.exists()  # file must not be touched while the guard blocks
+
+
+@pytest.mark.asyncio
+async def test_recompose_allowed_after_approval_resolved(auth_client, session, make_board):
+    """Once the approval is no longer pending (approved/rejected), recompose
+    (and its cleanup) is safe again — media_paths won't be read anymore."""
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    ch, _ = await _seed_challenge(
+        session, status="review",
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="bench draft",
+        payload={"bench_challenge_id": str(ch.id)}, status="approved",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/recompose")
+    assert resp.status_code == 200, resp.text
+    orchestrator.recompose_challenge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_rerender_blocked_by_pending_x_post_approval(auth_client, session, make_board):
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    ch, _ = await _seed_challenge(session, status="review")
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="bench draft",
+        payload={"bench_challenge_id": str(ch.id)}, status="pending",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp.status_code == 409
+    assert "X-Post" in resp.json()["detail"]
+    orchestrator.rerender_challenge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_rerender_allowed_when_approval_rejected(auth_client, session, make_board):
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    ch, _ = await _seed_challenge(session, status="review")
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="bench draft",
+        payload={"bench_challenge_id": str(ch.id)}, status="rejected",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp.status_code == 200
+    orchestrator.rerender_challenge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_pending_x_post_approval_for_unrelated_challenge_does_not_block(
+    auth_client, session, make_board
+):
+    """A pending x_post approval for a DIFFERENT challenge must not block
+    this one — guard matches on bench_challenge_id, not just action_type."""
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    other_ch, _ = await _seed_challenge(session, status="review")
+    ch, _ = await _seed_challenge(session, status="review")
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="unrelated draft",
+        payload={"bench_challenge_id": str(other_ch.id)}, status="pending",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp.status_code == 200
+    orchestrator.rerender_challenge.assert_called_once()

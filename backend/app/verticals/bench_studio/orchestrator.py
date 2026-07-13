@@ -74,6 +74,35 @@ def _versioned_output_name(prefix: str = "grid") -> str:
     return f"{prefix}-{uuid.uuid4().hex[:8]}.mp4"
 
 
+async def pending_x_post_approval(session: AsyncSession, challenge_id: uuid.UUID):
+    """The pending x_post Approval referencing this challenge, if any — None
+    otherwise. Filter pending x_post approvals in SQL; match
+    bench_challenge_id in Python (JSON column, avoids DB-specific operators).
+
+    Shared guard: drafts.create_draft uses it to reject a second draft while
+    one is still pending; routers.rerender_challenge/recompose_challenge use
+    it (inverted) to block overwriting the video a pending post approval
+    still points at — Approval.payload.media_paths freezes a path at draft
+    time, and a later recompose/rerender both renames AND deletes the old
+    file (_cleanup_old_compose), so approving the post days later would try
+    to post a file that no longer exists (2026-07-13 incident)."""
+    from app.models.approval import Approval
+
+    pending = (
+        await session.exec(
+            select(Approval).where(
+                Approval.action_type == "x_post",
+                Approval.status == "pending",
+            )
+        )
+    ).all()
+    for approval in pending:
+        payload = approval.payload or {}
+        if payload.get("bench_challenge_id") == str(challenge_id):
+            return approval
+    return None
+
+
 def _cleanup_old_compose(old_path: str | None, new_path: str | None) -> None:
     """Best-effort removal of a superseded composed video. Versioned
     filenames mean the previous file is otherwise orphaned on disk forever

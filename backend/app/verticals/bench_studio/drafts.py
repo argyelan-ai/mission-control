@@ -27,7 +27,7 @@ from app.models.board import Board
 from app.models.content import ContentPipeline
 from app.services import x_publisher
 
-from .orchestrator import compose_challenge
+from .orchestrator import compose_challenge, pending_x_post_approval
 
 logger = logging.getLogger("mc.bench_studio")
 
@@ -52,23 +52,11 @@ async def create_draft(
         )
 
     # Guard: reject if a pending x_post Approval already exists for this challenge.
-    # Filter pending x_post approvals in SQL; match bench_challenge_id in Python
-    # (JSON column — avoids DB-specific JSON operators).
-    pending_x_posts = (
-        await session.exec(
-            select(Approval).where(
-                Approval.action_type == "x_post",
-                Approval.status == "pending",
-            )
+    if await pending_x_post_approval(session, challenge.id) is not None:
+        raise HTTPException(
+            409,
+            "pending x_post approval exists for this challenge — resolve it first",
         )
-    ).all()
-    for existing in pending_x_posts:
-        payload = existing.payload or {}
-        if payload.get("bench_challenge_id") == str(challenge.id):
-            raise HTTPException(
-                409,
-                "pending x_post approval exists for this challenge — resolve it first",
-            )
 
     validation = x_publisher.validate_draft(tweet_text)
     if not validation.ok:
