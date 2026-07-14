@@ -17,7 +17,7 @@ class ActivityEvent(SQLModel, table=True):
         default=None, foreign_key="boards.id", nullable=True, index=True
     )
     task_id: uuid.UUID | None = Field(
-        default=None, foreign_key="tasks.id", nullable=True
+        default=None, foreign_key="tasks.id", nullable=True, index=True
     )
     agent_id: uuid.UUID | None = Field(
         default=None, foreign_key="agents.id", nullable=True

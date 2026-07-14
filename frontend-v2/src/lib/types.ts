@@ -454,6 +454,37 @@ export interface TaskEvent {
   created_at: string;
 }
 
+// ── Task Flight Recorder (Timeline) ─────────────────────────────────────────
+
+export interface TaskTimelineEntry {
+  ts: string;
+  source: "milestone" | "task_event" | "activity_event" | "comment";
+  kind: string;
+  title: string;
+  detail?: string | null;
+  actor?: string | null;
+  meta?: Record<string, unknown> | null;
+}
+
+export interface TaskTimelineResponse {
+  task: {
+    id: string;
+    board_id: string;
+    title: string;
+    status: TaskStatus;
+    priority: Priority;
+    assigned_agent_id: string | null;
+    created_at: string;
+    dispatched_at: string | null;
+    ack_at: string | null;
+    blocked_at: string | null;
+    completed_at: string | null;
+  };
+  entries: TaskTimelineEntry[];
+  total: number;
+  truncated: boolean;
+}
+
 // ── Pipeline ──────────────────────────────────────────────────────────────────
 
 export interface PipelineTask {

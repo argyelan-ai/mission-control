@@ -707,6 +707,8 @@ export const api = {
       request<TaskDependencyInfo[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/dependencies`),
     events: (boardId: string, taskId: string) =>
       request<TaskEvent[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/events`),
+    timeline: (boardId: string, taskId: string) =>
+      request<import("./types").TaskTimelineResponse>(`/api/v1/boards/${boardId}/tasks/${taskId}/timeline`),
     comments: {
       list: (boardId: string, taskId: string) =>
         request<TaskComment[]>(`/api/v1/boards/${boardId}/tasks/${taskId}/comments`),
