@@ -699,22 +699,29 @@ async def reconcile_challenge(
 ) -> None:
     """GET-time fallback sweep: agent tasks that ended in `failed` never fire
     the task_done hook — mark their entries failed so nothing hangs silently
-    (spec §7, lesson from the Grok review: uncaught -> eternal in_progress)."""
+    (spec §7, lesson from the Grok review: uncaught -> eternal in_progress).
+
+    Also self-heals entries whose task was deleted (FK SET NULL on
+    tasks.id): task_id=None means the task_done hook can never fire for that
+    entry again, so it would otherwise hang at `generating` forever."""
     from app.models.task import Task
 
     changed = False
     for entry in entries:
-        if (
-            entry.status == "generating"
-            and entry.source_kind == "agent"
-            and entry.task_id is not None
-        ):
-            task = await session.get(Task, entry.task_id)
-            if task is not None and task.status == "failed":
-                entry.status = "failed"
-                entry.error = "agent task failed"
-                session.add(entry)
-                changed = True
+        if entry.status != "generating" or entry.source_kind != "agent":
+            continue
+        if entry.task_id is None:
+            entry.status = "failed"
+            entry.error = "agent task deleted"
+            session.add(entry)
+            changed = True
+            continue
+        task = await session.get(Task, entry.task_id)
+        if task is not None and task.status == "failed":
+            entry.status = "failed"
+            entry.error = "agent task failed"
+            session.add(entry)
+            changed = True
     if changed:
         await session.commit()
         await maybe_advance(session, challenge.id)

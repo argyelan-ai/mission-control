@@ -355,6 +355,54 @@ async def test_reconcile_marks_failed_agent_tasks(
     assert ch.status == "failed"  # only entry failed -> all failed
 
 
+@pytest.mark.asyncio
+async def test_reconcile_marks_failed_when_task_deleted(session, monkeypatch):
+    """When the underlying task is deleted, the FK SET NULLs task_id but the
+    entry is left at generating/agent — the old reconcile skipped these
+    (task_id is not None was required), so the entry hung forever with no
+    way for the task_done hook to ever fire again. Reconcile must self-heal
+    them to failed instead."""
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Claude", "source_kind": "agent",
+             "status": "generating", "task_id": None},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "failed"
+    assert entries[0].error == "agent task deleted"
+    assert ch.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_reconcile_leaves_entry_with_live_task_untouched(
+    session, monkeypatch, make_board, make_task
+):
+    """Entry whose task_id points at an existing, non-failed task must not
+    be touched by the self-heal — only a deleted (task_id=None) or actually
+    failed task should flip the entry."""
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] x", status="in_progress")
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "Claude", "source_kind": "agent",
+             "status": "generating", "task_id": task.id},
+        ],
+    )
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+    await orchestrator.reconcile_challenge(session, ch, entries)
+    await session.refresh(entries[0])
+    await session.refresh(ch)
+    assert entries[0].status == "generating"
+    assert entries[0].error is None
+    assert ch.status == "generating"
+
+
 # ── rerender_challenge outer exception handler ─────────────────────────────
 
 
