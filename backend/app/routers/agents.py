@@ -1118,6 +1118,15 @@ async def delete_agent(
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
 
+    # Two-stage lifecycle (2026-07-13): hard delete is gated on archive.
+    # An agent must be archived (runtime stopped) before it can be deleted —
+    # prevents nuking a live agent whose process/container is still running.
+    if agent.archived_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Agent muss erst archiviert werden, bevor er gelöscht werden kann.",
+        )
+
     # Gateway cleanup removed (Phase 29). DB delete + FK cleanup is now
     # the sole persistence; cli-bridge containers are managed centrally
     # via docker_agent_sync.
@@ -1218,6 +1227,14 @@ async def delete_agent(
     # Filesystem / compose teardown runs AFTER the commit succeeds — best-effort,
     # so an rmtree or lock error never resurrects a half-deleted agent.
     if host_snapshot is not None:
+        # Job was booted out by archive; re-run is idempotent. Do it before the
+        # rmtree so the running job is gone before its plist file disappears.
+        try:
+            from app.services.agent_bootstrap import _run_launchctl_bootout
+            _slug = host_snapshot.slug or (host_snapshot.name or "").lower().replace(" ", "-")
+            _run_launchctl_bootout(f"com.mc.agent.{_slug}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("launchd bootout for %s failed: %s", agent_name, e)
         try:
             from app.services.host_provisioning import teardown_host_agent_files
             teardown_host_agent_files(host_snapshot)
@@ -1230,6 +1247,24 @@ async def delete_agent(
             await prune_compose_agent(compose_slug)
         except Exception as e:  # noqa: BLE001
             logger.warning("compose prune for %s failed: %s", agent_name, e)
+        try:
+            from app.services.docker_agent_sync import remove_docker_agent_container
+            remove_docker_agent_container(compose_slug)  # accepts a raw slug string
+        except Exception as e:  # noqa: BLE001
+            logger.warning("container remove for %s failed: %s", agent_name, e)
+
+    # Redis purge — drop this agent's queue/lock/pending keys so a recreated
+    # agent with a fresh UUID never inherits stale state. Keyed by agent UUID.
+    try:
+        from app.redis_client import get_redis
+        redis = await get_redis()
+        pattern = f"mc:agent:{agent_id}:*"
+        keys = [k async for k in redis.scan_iter(match=pattern)]
+        if keys:
+            await redis.delete(*keys)
+            logger.info("purged %d redis keys for agent %s", len(keys), agent_id)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("redis purge for %s failed: %s", agent_name, e)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

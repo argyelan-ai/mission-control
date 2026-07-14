@@ -15,6 +15,7 @@ from sqlmodel import select
 
 from app.models.secret import Secret
 from app.services.encryption import safe_decrypt
+from app.utils import utcnow
 
 
 async def _vault_token(async_session, slug: str) -> str | None:
@@ -115,7 +116,7 @@ async def test_delete_agent_removes_vault_secret(auth_client, async_session):
     from app.models.agent import Agent
     from app.services.secrets_helper import upsert_agent_token_secret
 
-    agent = Agent(name="DeleteMe", agent_runtime="cli-bridge")
+    agent = Agent(name="DeleteMe", agent_runtime="cli-bridge", archived_at=utcnow())
     async_session.add(agent)
     await async_session.commit()
     await async_session.refresh(agent)
@@ -139,7 +140,7 @@ async def test_delete_agent_removes_vault_secret_after_rename(auth_client, async
     from app.models.agent import Agent
     from app.services.secrets_helper import upsert_agent_token_secret
 
-    agent = Agent(name="Renamed One", agent_runtime="cli-bridge")
+    agent = Agent(name="Renamed One", agent_runtime="cli-bridge", archived_at=utcnow())
     async_session.add(agent)
     await async_session.commit()
     await async_session.refresh(agent)
@@ -211,7 +212,7 @@ async def test_delete_agent_without_vault_secret_still_succeeds(auth_client, asy
     written must still delete cleanly (no 500)."""
     from app.models.agent import Agent
 
-    agent = Agent(name="NoSecret", agent_runtime="cli-bridge")
+    agent = Agent(name="NoSecret", agent_runtime="cli-bridge", archived_at=utcnow())
     async_session.add(agent)
     await async_session.commit()
     await async_session.refresh(agent)
