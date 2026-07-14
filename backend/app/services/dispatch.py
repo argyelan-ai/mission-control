@@ -243,13 +243,15 @@ async def find_dispatch_target(
     Returns: (agent, decision_reason) — reason is a short string for logging.
     """
     # Explicit assignment via assigned_agent_id always takes priority over board-lead-first
+    # (unless the assigned agent has been archived — archived agents are never
+    # dispatch targets, so we fall through to normal selection instead).
     if task.assigned_agent_id:
         assigned = await session.get(Agent, task.assigned_agent_id)
-        if assigned:
+        if assigned and assigned.archived_at is None:
             return assigned, "explicit_assignment"
 
     result = await session.exec(
-        select(Agent).where(Agent.board_id == board_id)
+        select(Agent).where(Agent.board_id == board_id, Agent.archived_at.is_(None))
     )
     agents = result.all()
 
@@ -261,7 +263,11 @@ async def find_dispatch_target(
     # (cli-bridge / host / claude-code / free-code-bridge / manual). These
     # actively pick up tasks via poll.sh / launchd. The gateway-session filter
     # was dropped with Phase 30 — agent runtime is the sole source of truth.
+    # Archived agents are guarded here too so any fallback/eligibility path
+    # (not just the board query above) never selects one.
     def _is_online(agent: Agent) -> bool:
+        if getattr(agent, "archived_at", None) is not None:
+            return False
         return getattr(agent, "agent_runtime", None) in NON_GATEWAY_RUNTIMES
 
     # Orchestrator has the highest priority (Boss via CLI-bridge)

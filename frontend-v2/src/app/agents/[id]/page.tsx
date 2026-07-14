@@ -35,6 +35,7 @@ import type {
   ScheduledJob, CustomSkill, CliPlugin,
 } from "@/lib/types";
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
+import { AgentActions } from "@/components/agent/AgentActions";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -1686,7 +1687,6 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // SSE updates
   const handleAgentEvent = useCallback(
@@ -1800,15 +1800,6 @@ export default function AgentDetailPage() {
       notify.success("Agents reconfigured -- templates + USER.md + MEMORY.md pushed");
     },
     onError: () => notify.error("Failed to reconfigure"),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: () => api.agents.delete(id),
-    onSuccess: () => {
-      notify.success(`${agent?.emoji ?? ""} ${agent?.name ?? "Agent"} deleted`);
-      router.push("/agents");
-    },
-    onError: () => notify.error("Delete failed"),
   });
 
   if (!agent) {
@@ -2054,32 +2045,11 @@ export default function AgentDetailPage() {
                 </>
               )}
 
+              {/* Lifecycle: Archive → (Restore) → Delete. Delete is gated on
+                  archived state (backend 409 otherwise); AgentActions surfaces
+                  409/422 detail in the toast. */}
               <div className="col-span-2 max-sm:mt-1 sm:col-auto sm:ml-auto">
-                {showDeleteConfirm ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-[11px]" style={{ color: C.error }}>Sure?</span>
-                    <button
-                      onClick={() => deleteMutation.mutate()}
-                      className="flex-1 text-[11px] px-2.5 py-1 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer font-medium sm:flex-none"
-                      style={{ backgroundColor: `${C.error}26`, color: C.error }}
-                    >
-                      Yes, delete
-                    </button>
-                    <button
-                      onClick={() => setShowDeleteConfirm(false)}
-                      className="flex-1 text-[11px] px-2.5 py-1 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer text-[var(--color-text-muted)] sm:flex-none"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => setShowDeleteConfirm(true)}
-                    className="flex w-full items-center justify-center gap-1.5 text-[11px] px-2.5 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer transition-colors text-[var(--color-text-muted)] hover:text-[#C23838] max-sm:border max-sm:border-[rgba(255,255,255,0.06)] sm:w-auto"
-                  >
-                    <Trash2 size={12} /> Delete
-                  </button>
-                )}
+                <AgentActions agent={agent} onDeleted={() => router.push("/agents")} />
               </div>
             </div>
           </GlassCard>

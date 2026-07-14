@@ -326,6 +326,7 @@ async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> Non
 async def list_agents(
     board_id: uuid.UUID | None = Query(None),
     include_unassigned: bool = Query(False),
+    include_archived: bool = Query(False),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
@@ -337,6 +338,8 @@ async def list_agents(
             (Agent.board_id == board_id) | (Agent.board_id == None)  # noqa: E711
         )
     # without board_id: all
+    if not include_archived:
+        query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
     return result.all()
@@ -1046,6 +1049,47 @@ async def preview_runtime_switch(
     return result_obj.to_dict()
 
 
+@router.post("/agents/{agent_id}/archive")
+async def archive_agent_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Archive an agent: stop its runtime (launchd/Docker), keep DB+files+token.
+
+    Reversible via /restore. Refuses (409) if the agent is mid-task.
+    """
+    from app.services.agent_lifecycle import archive_agent, AgentBusyError, SingletonAgentError
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        agent = await archive_agent(session, agent)
+    except AgentBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except SingletonAgentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"id": str(agent.id), "archived_at": agent.archived_at}
+
+
+@router.post("/agents/{agent_id}/restore")
+async def restore_agent_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Restore an archived agent: clear archived state, bring the runtime back up."""
+    from app.services.agent_lifecycle import restore_agent, SingletonAgentError
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        agent = await restore_agent(session, agent)
+    except SingletonAgentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    return {"id": str(agent.id), "archived_at": agent.archived_at}
+
+
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
     agent_id: uuid.UUID,
@@ -1081,6 +1125,27 @@ async def delete_agent(
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Singleton host bridges (boss/hermes/grok) are managed via launchd/the
+    # Runtime Cockpit, not this generic delete path — checked BEFORE the
+    # archived-required gate below so they get a clear 422 instead of a
+    # confusing "must archive first" 409 (they can never be archived either).
+    from app.services.agent_lifecycle import _is_singleton_bridge
+
+    if _is_singleton_bridge(agent):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{agent.slug} ist eine Singleton-Host-Bridge und wird über launchd/das Runtime-Cockpit verwaltet, nicht über Archive/Delete",
+        )
+
+    # Two-stage lifecycle (2026-07-13): hard delete is gated on archive.
+    # An agent must be archived (runtime stopped) before it can be deleted —
+    # prevents nuking a live agent whose process/container is still running.
+    if agent.archived_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Agent muss erst archiviert werden, bevor er gelöscht werden kann.",
+        )
 
     # Gateway cleanup removed (Phase 29). DB delete + FK cleanup is now
     # the sole persistence; cli-bridge containers are managed centrally
@@ -1182,6 +1247,14 @@ async def delete_agent(
     # Filesystem / compose teardown runs AFTER the commit succeeds — best-effort,
     # so an rmtree or lock error never resurrects a half-deleted agent.
     if host_snapshot is not None:
+        # Job was booted out by archive; re-run is idempotent. Do it before the
+        # rmtree so the running job is gone before its plist file disappears.
+        try:
+            from app.services.agent_bootstrap import _run_launchctl_bootout
+            _slug = host_snapshot.slug or (host_snapshot.name or "").lower().replace(" ", "-")
+            _run_launchctl_bootout(f"com.mc.agent.{_slug}")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("launchd bootout for %s failed: %s", agent_name, e)
         try:
             from app.services.host_provisioning import teardown_host_agent_files
             teardown_host_agent_files(host_snapshot)
@@ -1194,6 +1267,32 @@ async def delete_agent(
             await prune_compose_agent(compose_slug)
         except Exception as e:  # noqa: BLE001
             logger.warning("compose prune for %s failed: %s", agent_name, e)
+        try:
+            from app.services.docker_agent_sync import remove_docker_agent_container
+            remove_docker_agent_container(compose_slug)  # accepts a raw slug string
+        except Exception as e:  # noqa: BLE001
+            logger.warning("container remove for %s failed: %s", agent_name, e)
+
+    # Redis purge — drop this agent's queue/lock/pending keys so a recreated
+    # agent with a fresh UUID never inherits stale state. Keyed by agent UUID.
+    try:
+        from app.redis_client import get_redis
+        redis = await get_redis()
+        pattern = f"mc:agent:{agent_id}:*"
+        keys = [k async for k in redis.scan_iter(match=pattern)]
+        if keys:
+            await redis.delete(*keys)
+            logger.info("purged %d redis keys for agent %s", len(keys), agent_id)
+        # Metrics cache + rate-limit key live under separate namespaces
+        # (mc:cache:agent:* / mc:ratelimit:agent:*) and are missed by the
+        # mc:agent:{id}:* scan above — purge them explicitly so a recreated
+        # agent with a fresh UUID never inherits stale cache/rate-limit state.
+        await redis.delete(
+            RedisKeys.agent_metrics_cache(str(agent_id)),
+            RedisKeys.agent_rate_limit(str(agent_id)),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("redis purge for %s failed: %s", agent_name, e)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

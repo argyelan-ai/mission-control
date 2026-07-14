@@ -7,7 +7,7 @@ import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
-  Layout, ChevronDown, Trash2, MoreVertical,
+  Layout, ChevronDown, Archive, MoreVertical,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
@@ -24,6 +24,7 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Agent, Board } from "@/lib/types";
 import { HARNESS_LABELS, type Harness } from "@/lib/types";
 import { AgentWizard } from "./wizard/AgentWizard";
+import { AgentActions, extractDetail } from "@/components/agent/AgentActions";
 import type { WizardState } from "./wizard/types";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
@@ -135,90 +136,6 @@ function AssignBoardModal({
               Assign
             </button>
           </div>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
-
-// ── Delete Confirmation Modal ───────────────────────────────────────────────
-
-function DeleteAgentModal({
-  agent,
-  onClose,
-  onConfirm,
-  isPending,
-}: {
-  agent: Agent;
-  onClose: () => void;
-  onConfirm: () => void;
-  isPending: boolean;
-}) {
-  return (
-    <div className={modalOverlayClass} onClick={onClose}>
-      <div className={modalBackdropClass} />
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 8 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95, y: 8 }}
-        transition={{ duration: 0.2, ease }}
-        className="relative w-full max-w-sm rounded-t-2xl sm:rounded-2xl overflow-hidden p-6 max-h-[90dvh] overflow-y-auto"
-        style={modalCardStyle}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-3 mb-4">
-          <div
-            className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
-            style={{ backgroundColor: CINEMA.errorBg }}
-          >
-            <Trash2 size={18} className="text-[var(--color-status-error)]" />
-          </div>
-          <div>
-            <div className="font-medium text-[var(--color-text-primary)]">Delete agent?</div>
-            <div className="text-sm text-[var(--color-text-muted)]">
-              {agent.emoji} {agent.name}
-            </div>
-          </div>
-        </div>
-
-        <p className="text-sm mb-2 text-[var(--color-text-secondary)]">
-          This action cannot be undone. Chat history and metrics will
-          also be lost.
-        </p>
-
-        {agent.provision_status === "provisioned" && (
-          <p
-            className="text-xs mb-4 px-3 py-2 rounded-xl"
-            style={{
-              backgroundColor: CINEMA.warningBg,
-              color: "var(--color-status-warning)",
-              border: `1px solid ${CINEMA.warningBorder}`,
-            }}
-          >
-            Gateway session will be reset.
-          </p>
-        )}
-
-        <div className="flex gap-3 mt-4">
-          <button
-            onClick={onClose}
-            className="flex-1 px-4 py-2.5 rounded-xl text-sm cursor-pointer transition-colors text-[var(--color-text-secondary)]"
-            style={{
-              backgroundColor: CINEMA.surfaceBg,
-              border: `1px solid ${CINEMA.border}`,
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={isPending}
-            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium cursor-pointer transition-colors disabled:opacity-50 text-white"
-            style={{ backgroundColor: C.error }}
-          >
-            {isPending ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-            Delete
-          </button>
         </div>
       </motion.div>
     </div>
@@ -493,7 +410,7 @@ function AgentActionsSheet({
   showAllAgents,
   resettingId,
   onReset,
-  onDelete,
+  onArchive,
   onAssignBoard,
   onClose,
 }: {
@@ -502,7 +419,7 @@ function AgentActionsSheet({
   showAllAgents: boolean;
   resettingId: string | null;
   onReset: (a: Agent) => void;
-  onDelete: (a: Agent) => void;
+  onArchive: (a: Agent) => void;
   onAssignBoard: (a: Agent) => void;
   onClose: () => void;
 }) {
@@ -601,11 +518,11 @@ function AgentActionsSheet({
             </button>
           )}
           <button
-            onClick={() => { onClose(); onDelete(agent); }}
+            onClick={() => { onClose(); onArchive(agent); }}
             className={itemCls}
-            style={{ color: C.error }}
+            style={{ color: C.warning }}
           >
-            <Trash2 size={15} /> Delete agent
+            <Archive size={15} /> Archivieren
           </button>
         </div>
       </motion.div>
@@ -624,7 +541,6 @@ export default function AgentsPage() {
   const [wizardInitial, setWizardInitial] = useState<Partial<WizardState> | undefined>(undefined);
   const [showAllAgents, setShowAllAgents] = useState(false);
   const [assignBoardAgent, setAssignBoardAgent] = useState<Agent | null>(null);
-  const [deletingAgent, setDeletingAgent] = useState<Agent | null>(null);
   const [menuAgent, setMenuAgent] = useState<Agent | null>(null);
   const [resettingId, setResettingId] = useState<string | null>(null);
 
@@ -653,6 +569,18 @@ export default function AgentsPage() {
     queryFn: () => api.boards.list(),
   });
 
+  // Archived agents (registry-wide, incl. board-less). include_archived returns
+  // active + archived, so filter down to the tombstoned ones for the section.
+  const { data: archivedRaw } = useQuery({
+    queryKey: ["agents", "archived"],
+    queryFn: () => api.agents.list(undefined, true, true),
+    refetchInterval: 60_000,
+  });
+  const archivedAgents = useMemo(
+    () => (archivedRaw ?? []).filter((a) => a.archived_at != null),
+    [archivedRaw]
+  );
+
   const boardsMap = useMemo(
     () => Object.fromEntries((boards ?? []).map((b) => [b.id, b.name])),
     [boards]
@@ -672,17 +600,16 @@ export default function AgentsPage() {
     }
   };
 
-  const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.agents.delete(id),
-    onSuccess: () => {
-      notify.success("Agent deleted");
-      setDeletingAgent(null);
+  // Active agents are archived (not hard-deleted) from the roster — hard delete
+  // is gated on archived state (backend 409). Surface 409 (busy) / 422
+  // (singleton bridge) detail verbatim instead of a generic toast.
+  const archiveMutation = useMutation({
+    mutationFn: (agent: Agent) => api.agents.archive(agent.id),
+    onSuccess: (_res, agent) => {
+      notify.success(`${agent.name} archiviert`);
       qc.invalidateQueries({ queryKey: ["agents"] });
     },
-    onError: () => {
-      notify.error("Delete failed");
-      setDeletingAgent(null);
-    },
+    onError: (e) => notify.error(extractDetail(e)),
   });
 
   // "online" = alive (heartbeating): idle/working count too — previously the
@@ -828,6 +755,47 @@ export default function AgentsPage() {
                 </p>
               </GlassCard>
             )}
+
+            {/* Archiviert — tombstoned agents (runtime stopped, DB+files kept).
+                Muted, below the active fleet. Restore brings them back; Delete
+                is the one irreversible path (enabled only here). */}
+            {archivedAgents.length > 0 && (
+              <div className="pt-2">
+                <div className="flex items-center gap-2 mb-2 px-1">
+                  <Archive size={13} style={{ color: C.textMuted }} />
+                  <h2 className="text-[11px] font-medium uppercase tracking-[0.05em]" style={{ color: C.textMuted }}>
+                    Archiviert ({archivedAgents.length})
+                  </h2>
+                </div>
+                <div
+                  className="rounded-xl overflow-hidden"
+                  style={{ backgroundColor: C.bgBase, border: `1px solid ${C.borderSubtle}`, opacity: 0.85 }}
+                >
+                  {archivedAgents.map((agent, i) => (
+                    <div
+                      key={agent.id}
+                      className="flex items-center gap-3 px-3 sm:px-4 min-h-[52px] py-2 flex-wrap"
+                      style={{ borderTop: i > 0 ? `1px solid ${C.borderSubtle}` : undefined }}
+                    >
+                      <span className="text-base leading-none shrink-0 w-6 text-center opacity-70" aria-hidden>
+                        {agent.emoji ?? "🤖"}
+                      </span>
+                      <Link href={`/agents/${agent.id}`} className="min-w-0 flex-1">
+                        <span className="text-[13px] font-medium truncate block" style={{ color: C.textSecondary }}>
+                          {agent.name}
+                        </span>
+                        {agent.archived_at && (
+                          <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
+                            archiviert {timeAgo(agent.archived_at)}
+                          </span>
+                        )}
+                      </Link>
+                      <AgentActions agent={agent} />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -850,7 +818,7 @@ export default function AgentsPage() {
               showAllAgents={showAllAgents}
               resettingId={resettingId}
               onReset={handleReset}
-              onDelete={setDeletingAgent}
+              onArchive={(a) => archiveMutation.mutate(a)}
               onAssignBoard={setAssignBoardAgent}
               onClose={() => setMenuAgent(null)}
             />
@@ -875,17 +843,6 @@ export default function AgentsPage() {
               agent={assignBoardAgent}
               boards={boards ?? []}
               onClose={() => setAssignBoardAgent(null)}
-            />
-          )}
-        </AnimatePresence>
-
-        <AnimatePresence>
-          {deletingAgent && (
-            <DeleteAgentModal
-              agent={deletingAgent}
-              onClose={() => setDeletingAgent(null)}
-              onConfirm={() => deleteMutation.mutate(deletingAgent.id)}
-              isPending={deleteMutation.isPending}
             />
           )}
         </AnimatePresence>

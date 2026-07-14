@@ -28,6 +28,7 @@ def _mk_agent(name="test", is_board_lead=False, role="developer", runtime="openc
     a.role = role
     a.agent_runtime = runtime
     a.assigned_agent_id = None
+    a.archived_at = None
     return a
 
 

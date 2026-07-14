@@ -249,6 +249,61 @@ def _run_launchctl_bootstrap(plist_path: Path) -> dict[str, Any]:
     return result
 
 
+def _launchctl_bootout_argv(label: str) -> list[str]:
+    """Build the argv that UNLOADS a launchd job by its ``label`` from the host's
+    GUI domain — the exact reverse of ``_launchctl_bootstrap_argv``.
+
+    ``bootout`` takes a domain target (``gui/<uid>/<label>``), NOT a plist path.
+    Same launchctl-present-locally vs. SSH-to-host branching as bootstrap, so it
+    works both on a Mac-host backend and inside the Linux backend container.
+    """
+    if shutil.which("launchctl"):
+        return ["launchctl", "bootout", f"gui/{os.getuid()}/{label}"]
+    remote = f"launchctl bootout gui/$(id -u)/{shlex.quote(label)}"
+    return [
+        "ssh",
+        "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no",
+        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", "ConnectTimeout=5",
+        "-i", "/home/mcuser/.ssh/id_rsa",
+        f"{effective_host_ssh_user()}@host.docker.internal",
+        remote,
+    ]
+
+
+def _run_launchctl_bootout(label: str) -> dict[str, Any]:
+    """Run ``launchctl bootout gui/<uid>/<label>`` (locally or via host SSH).
+
+    Tolerates "not loaded" — unloading an already-absent job is benign for an
+    idempotent archive/delete. macOS returns rc==3 (ESRCH "No such process")
+    or an "Operation now in progress"/"No such process" string. Never raises:
+    archive/delete stop steps are best-effort; the DB flag is the truth.
+    Returns dict with returncode, ``unloaded`` bool, ``already_gone`` bool.
+    """
+    cmd = _launchctl_bootout_argv(label)
+    proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+        cmd, capture_output=True, text=True, check=False
+    )
+    combined = f"{proc.stdout or ''}\n{proc.stderr or ''}".lower()
+    already_gone = (
+        proc.returncode == 3
+        or "no such process" in combined
+        or "could not find specified service" in combined
+    )
+    if proc.returncode == 0:
+        logger.info("launchctl bootout %s: ok", label)
+    elif already_gone:
+        logger.info("launchctl bootout %s: not loaded (idempotent)", label)
+    else:
+        logger.warning("launchctl bootout %s: rc=%s %s", label, proc.returncode, combined.strip())
+    return {
+        "returncode": proc.returncode,
+        "unloaded": proc.returncode == 0,
+        "already_gone": already_gone,
+    }
+
+
 async def bootstrap_hermes_agent(
     session: AsyncSession,
     agent: Agent,

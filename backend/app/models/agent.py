@@ -51,6 +51,12 @@ class Agent(SQLModel, table=True):
 
     emoji: str | None = None
     status: str = Field(default="offline")
+    # Archived lifecycle (2026-07-13). NULL = active; set = archived (reversible).
+    # An archived agent's runtime (launchd service / Docker container) is STOPPED
+    # but its DB row + files + token remain, so it can be restored. Delete is
+    # gated on this being set. Kept as a plain timestamp, not a status enum —
+    # `status`/`provision_status` stay orthogonal (runtime/provisioning state).
+    archived_at: datetime | None = Field(default=None, index=True)
     model: str | None = None
     is_board_lead: bool = False
 
