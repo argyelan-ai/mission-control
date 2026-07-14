@@ -863,10 +863,11 @@ export const api = {
 
   // ── Agents ──────────────────────────────────────────────────────────────────
   agents: {
-    list: (boardId?: string, includeUnassigned?: boolean) => {
+    list: (boardId?: string, includeUnassigned?: boolean, includeArchived?: boolean) => {
       const params = new URLSearchParams();
       if (boardId) params.set("board_id", boardId);
       if (includeUnassigned) params.set("include_unassigned", "true");
+      if (includeArchived) params.set("include_archived", "true");
       const qs = params.toString();
       return request<Agent[]>(`/api/v1/agents${qs ? `?${qs}` : ""}`);
     },
@@ -934,6 +935,10 @@ export const api = {
         `/api/v1/agents/${id}/runtime-switch-progress`
       ),
     delete: (id: string) => request<void>(`/api/v1/agents/${id}`, { method: "DELETE" }),
+    archive: (id: string) =>
+      request<{ id: string; archived_at: string | null }>(`/api/v1/agents/${id}/archive`, { method: "POST" }),
+    restore: (id: string) =>
+      request<{ id: string; archived_at: string | null }>(`/api/v1/agents/${id}/restore`, { method: "POST" }),
     config: {
       all: (id: string) => request<Record<string, string | null>>(`/api/v1/agents/${id}/config`),
       get: (id: string, fileType: string) =>

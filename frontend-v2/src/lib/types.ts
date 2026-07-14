@@ -562,6 +562,7 @@ export interface Agent {
   workspace_path: string | null;
   provision_status: ProvisionStatus;
   provisioned_at: string | null;
+  archived_at?: string | null;
   discord_channel_id: string | null;
   discord_channel_name: string | null;
   // Runtime observability
