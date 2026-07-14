@@ -1046,6 +1046,42 @@ async def preview_runtime_switch(
     return result_obj.to_dict()
 
 
+@router.post("/agents/{agent_id}/archive")
+async def archive_agent_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Archive an agent: stop its runtime (launchd/Docker), keep DB+files+token.
+
+    Reversible via /restore. Refuses (409) if the agent is mid-task.
+    """
+    from app.services.agent_lifecycle import archive_agent, AgentBusyError
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    try:
+        agent = await archive_agent(session, agent)
+    except AgentBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    return {"id": str(agent.id), "archived_at": agent.archived_at}
+
+
+@router.post("/agents/{agent_id}/restore")
+async def restore_agent_endpoint(
+    agent_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user = Depends(require_user),
+):
+    """Restore an archived agent: clear archived state, bring the runtime back up."""
+    from app.services.agent_lifecycle import restore_agent
+    agent = await session.get(Agent, agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+    agent = await restore_agent(session, agent)
+    return {"id": str(agent.id), "archived_at": agent.archived_at}
+
+
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_agent(
     agent_id: uuid.UUID,
