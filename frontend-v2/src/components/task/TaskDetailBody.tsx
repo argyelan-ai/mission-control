@@ -34,6 +34,7 @@ import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
 import { TaskComments } from "./TaskComments";
 import { TaskHistory } from "./TaskHistory";
+import { TaskTimeline } from "./TaskTimeline";
 import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
 import { E2ETab } from "./E2ETab";
@@ -430,7 +431,7 @@ export function TaskDetailBody({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"comments" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
+  const [activeTab, setActiveTab] = useState<"comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
 
@@ -466,6 +467,12 @@ export function TaskDetailBody({
     queryKey: ["task-events", task.id],
     queryFn: () => api.tasks.events(boardId, task.id),
     enabled: activeTab === "history",
+  });
+
+  const { data: timeline, isLoading: isTimelineLoading } = useQuery({
+    queryKey: ["task-timeline", boardId, task.id],
+    queryFn: () => api.tasks.timeline(boardId, task.id),
+    enabled: activeTab === "timeline",
   });
 
   const { data: deliverables } = useQuery({
@@ -552,6 +559,7 @@ export function TaskDetailBody({
     ...(task.workspace_path ? [{ key: "workspace" as const, label: "Workspace" }] : []),
     ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: "E2E" }] : []),
     ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: "Transcript" }] : []),
+    { key: "timeline", label: "Timeline" },
     { key: "history", label: "History" },
   ];
 
@@ -869,6 +877,12 @@ export function TaskDetailBody({
             <WorkspaceTab task={task} boardId={boardId} />
           ) : activeTab === "e2e" ? (
             <E2ETab task={task} boardId={boardId} />
+          ) : activeTab === "timeline" ? (
+            <TaskTimeline
+              entries={timeline?.entries ?? []}
+              isLoading={isTimelineLoading}
+              truncated={timeline?.truncated}
+            />
           ) : (
             <TaskHistory events={(events as TaskEvent[]) ?? []} isLoading={isEventsLoading} />
           )}
