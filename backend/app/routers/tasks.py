@@ -1,7 +1,7 @@
 import logging
 import sys
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from app.utils import create_tracked_task, utcnow
 
@@ -1751,10 +1751,20 @@ async def get_task_events(
 
 TIMELINE_CAP = 500
 
+# Window used to decide whether a "task.status_changed" ActivityEvent is a
+# duplicate of a TaskEvent row (both are usually emitted from the same code
+# path within milliseconds of each other) — see _has_matching_task_event().
+_STATUS_CHANGE_DEDUP_WINDOW = timedelta(seconds=2)
+
 # ActivityEvent.event_type -> coarse timeline kind. Anything not matched
-# here falls back to "system". task.status_changed and task.commented are
-# deliberately excluded — they duplicate the richer TaskEvent / TaskComment
-# entries built from their own tables below.
+# here falls back to "system". task.commented and task.created are always
+# skipped (_ACTIVITY_SKIP below) — they unconditionally duplicate the
+# TaskComment / created-milestone entries built from their own sources.
+# task.status_changed is handled separately (see _has_matching_task_event):
+# most call sites pair it with a record_task_event() TaskEvent row (skip the
+# duplicate), but some (e.g. agent_comments.py resolution auto-promote) emit
+# ONLY the ActivityEvent — those are kept, with kind="status_change" so they
+# render identically to their TaskEvent siblings elsewhere in the timeline.
 _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.auto_dispatched": "dispatch",
     "task.pull_dispatched": "dispatch",
@@ -1808,8 +1818,9 @@ _ACTIVITY_KIND_MAP: dict[str, str] = {
     "task.run_resumed": "system",
 }
 
-# Events whose signal is already fully represented elsewhere in the timeline.
-_ACTIVITY_SKIP = {"task.status_changed", "task.commented", "task.created"}
+# Events whose signal is ALWAYS fully represented elsewhere in the timeline
+# (task.status_changed is handled conditionally — see _has_matching_task_event).
+_ACTIVITY_SKIP = {"task.commented", "task.created"}
 
 
 def _truncate(text: str | None, limit: int = 300) -> str | None:
@@ -1818,6 +1829,41 @@ def _truncate(text: str | None, limit: int = 300) -> str | None:
     if len(text) <= limit:
         return text
     return text[:limit].rstrip() + "…"
+
+
+def _format_detail_dict(detail: dict | None) -> str | None:
+    """Compact "key: value" rendering of an ActivityEvent.detail JSON blob
+    (dispatch_failed/blocked/stuck carry their reason in here — MEDIUM 2
+    review fix). Truncated like comment content; the raw dict still travels
+    in full in the entry's `meta.detail` for anything that needs it."""
+    if not detail:
+        return None
+    lines = [f"{k}: {v}" for k, v in detail.items()]
+    return _truncate("\n".join(lines))
+
+
+def _has_matching_task_event(
+    activity_ts: datetime, activity_detail: dict | None, task_events: list["TaskEvent"]
+) -> bool:
+    """True if a TaskEvent row already covers this task.status_changed
+    ActivityEvent (same transition, emitted within the same code path a few
+    milliseconds apart) — in which case the ActivityEvent is a duplicate and
+    gets skipped. False means this ActivityEvent is the ONLY record of the
+    transition (e.g. the resolution auto-promote path in agent_comments.py
+    calls emit_event() but never record_task_event()) and must be kept."""
+    old_status = (activity_detail or {}).get("old_status")
+    new_status = (activity_detail or {}).get("new_status")
+    for te in task_events:
+        if abs(te.created_at - activity_ts) > _STATUS_CHANGE_DEDUP_WINDOW:
+            continue
+        if old_status is not None and new_status is not None:
+            if te.from_status == old_status and te.to_status == new_status:
+                return True
+        else:
+            # No old/new in the detail blob to verify against — a TaskEvent
+            # landed in the same instant is still the stronger signal.
+            return True
+    return False
 
 
 @router.get("/boards/{board_id}/tasks/{task_id}/timeline")
@@ -1849,40 +1895,59 @@ async def get_task_timeline(
     # ── Milestones (Task field timestamps) ──────────────────────────────
     if task.created_at:
         entries.append({
+            "_id": f"milestone-created-{task.id}",
             "ts": task.created_at, "source": "milestone", "kind": "created",
             "title": "Task created", "detail": None, "actor": None, "meta": None,
         })
     if task.dispatched_at:
         entries.append({
+            "_id": f"milestone-dispatched-{task.id}",
             "ts": task.dispatched_at, "source": "milestone", "kind": "dispatched",
             "title": "Dispatched to agent", "detail": None, "actor": None, "meta": None,
         })
     if task.ack_at:
         entries.append({
+            "_id": f"milestone-acked-{task.id}",
             "ts": task.ack_at, "source": "milestone", "kind": "acked",
             "title": "Acknowledged by agent", "detail": None, "actor": None, "meta": None,
         })
     if task.blocked_at:
         entries.append({
+            "_id": f"milestone-blocked-{task.id}",
             "ts": task.blocked_at, "source": "milestone", "kind": "blocked",
             "title": "Blocked", "detail": None, "actor": None, "meta": None,
         })
 
+    # ── Load each source capped to its own most-recent TIMELINE_CAP rows ──
+    # (MEDIUM 3 review fix — these were unbounded). Safe: the final merged
+    # list is also capped to TIMELINE_CAP, so no source can contribute more
+    # than that many rows to the result anyway — fetching more up front was
+    # pure waste (and a full-table-scan risk on a long-lived task).
+
     # ── TaskEvent (status transitions) ──────────────────────────────────
     task_events_result = await session.exec(
-        select(TaskEvent).where(TaskEvent.task_id == task_id)
+        select(TaskEvent)
+        .where(TaskEvent.task_id == task_id)
+        .order_by(TaskEvent.created_at.desc())
+        .limit(TIMELINE_CAP)
     )
     task_events = task_events_result.all()
 
     # ── ActivityEvent (rich task.* signals: dispatch, recovery, review, …) ─
     activity_result = await session.exec(
-        select(ActivityEvent).where(ActivityEvent.task_id == task_id)
+        select(ActivityEvent)
+        .where(ActivityEvent.task_id == task_id)
+        .order_by(ActivityEvent.created_at.desc())
+        .limit(TIMELINE_CAP)
     )
     activity_events = activity_result.all()
 
     # ── TaskComment (all types — system comments carry recovery/nudge/blocker) ─
     comments_result = await session.exec(
-        select(TaskComment).where(TaskComment.task_id == task_id)
+        select(TaskComment)
+        .where(TaskComment.task_id == task_id)
+        .order_by(TaskComment.created_at.desc())
+        .limit(TIMELINE_CAP)
     )
     comments = comments_result.all()
 
@@ -1900,6 +1965,7 @@ async def get_task_timeline(
         from_label = str(e.from_status).replace("_", " ")
         to_label = str(e.to_status).replace("_", " ")
         entries.append({
+            "_id": str(e.id),
             "ts": e.created_at, "source": "task_event", "kind": "status_change",
             "title": f"{from_label} → {to_label}",
             "detail": e.reason, "actor": actor,
@@ -1909,12 +1975,33 @@ async def get_task_timeline(
     for e in activity_events:
         if e.event_type in _ACTIVITY_SKIP:
             continue
-        kind = _ACTIVITY_KIND_MAP.get(e.event_type, "system")
+        if e.event_type == "task.status_changed":
+            # MEDIUM 1 review fix: only skip when a TaskEvent already covers
+            # this exact transition — some call sites (resolution
+            # auto-promote) emit ONLY the ActivityEvent, and dropping those
+            # unconditionally silently lost real transitions from the timeline.
+            if _has_matching_task_event(e.created_at, e.detail, task_events):
+                continue
+            old_status = (e.detail or {}).get("old_status")
+            new_status = (e.detail or {}).get("new_status")
+            kind = "status_change"
+            title = (
+                f"{str(old_status).replace('_', ' ')} → {str(new_status).replace('_', ' ')}"
+                if old_status and new_status else e.title
+            )
+        else:
+            kind = _ACTIVITY_KIND_MAP.get(e.event_type, "system")
+            title = e.title
         actor = agent_name_map.get(e.agent_id) if e.agent_id else None
         entries.append({
+            "_id": str(e.id),
             "ts": e.created_at, "source": "activity_event", "kind": kind,
-            "title": e.title, "detail": None, "actor": actor,
-            "meta": {"event_type": e.event_type, "severity": e.severity},
+            "title": title,
+            # MEDIUM 2 review fix: detail dict (the dispatch_failed/blocked/
+            # stuck reason lives here) is no longer discarded — compact
+            # "key: value" string for display, full dict in meta.detail.
+            "detail": _format_detail_dict(e.detail), "actor": actor,
+            "meta": {"event_type": e.event_type, "severity": e.severity, "detail": e.detail},
         })
 
     for c in comments:
@@ -1925,15 +2012,20 @@ async def get_task_timeline(
         else:
             actor = "System"
         entries.append({
+            "_id": str(c.id),
             "ts": c.created_at, "source": "comment", "kind": c.comment_type,
             "title": c.comment_type.replace("_", " ").capitalize(),
             "detail": _truncate(c.content), "actor": actor,
             "meta": None,
         })
 
-    # ── Sort ascending, stable tiebreak ─────────────────────────────────
+    # ── Sort ascending, stable 3-way tiebreak (ts, source, id) ───────────
+    # The id tiebreak matters for entries sharing an identical timestamp
+    # (fast-path code emits several events in the same instant) — without
+    # it, entries.sort()'s stability depended on insertion order alone,
+    # which is an implementation detail, not a documented contract.
     _SOURCE_ORDER = {"milestone": 0, "task_event": 1, "activity_event": 2, "comment": 3}
-    entries.sort(key=lambda x: (x["ts"], _SOURCE_ORDER.get(x["source"], 9)))
+    entries.sort(key=lambda x: (x["ts"], _SOURCE_ORDER.get(x["source"], 9), x["_id"]))
 
     total = len(entries)
     truncated = total > TIMELINE_CAP
@@ -1941,6 +2033,9 @@ async def get_task_timeline(
         # Cap keeps the most RECENT entries — the oldest are the least
         # useful for "why is this task stuck right now?" triage.
         entries = entries[-TIMELINE_CAP:]
+
+    for entry in entries:
+        del entry["_id"]
 
     return {
         "task": {

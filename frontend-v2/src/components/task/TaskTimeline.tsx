@@ -165,7 +165,7 @@ export function TaskTimeline({ entries, isLoading, truncated }: TaskTimelineProp
     <div>
       {truncated && (
         <div className="mb-2 text-[11px]" style={{ color: C.textMuted }}>
-          Showing the most recent {entries.length} events — older entries were capped.
+          Zeige die letzten {entries.length} Ereignisse — ältere ausgeblendet.
         </div>
       )}
       <div className="overflow-y-auto pr-1" style={{ maxHeight: 500 }}>

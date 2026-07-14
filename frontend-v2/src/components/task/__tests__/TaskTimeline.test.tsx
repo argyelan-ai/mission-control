@@ -70,6 +70,6 @@ describe("TaskTimeline", () => {
         truncated={true}
       />
     );
-    expect(screen.getByText(/older entries were capped/)).toBeInTheDocument();
+    expect(screen.getByText(/ältere ausgeblendet/)).toBeInTheDocument();
   });
 });
