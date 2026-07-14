@@ -107,6 +107,9 @@ async def archive_agent(session: AsyncSession, agent: Agent) -> Agent:
             agent_bootstrap._run_launchctl_bootout(_host_agent_plist_label(agent))
         elif runtime == "cli-bridge":
             docker_agent_sync.stop_docker_agent_container(agent)
+            from app.services.compose_renderer import prune_compose_agent
+            slug = agent.slug or (agent.name or "").lower().replace(" ", "-")
+            await prune_compose_agent(slug)
         # manual: nothing to stop
     except Exception as e:  # noqa: BLE001 — best-effort; flag is the truth
         logger.warning("archive stop for %s failed (flag set anyway): %s", agent.name, e)
@@ -137,7 +140,9 @@ async def restore_agent(session: AsyncSession, agent: Agent) -> Agent:
         if runtime == "host":
             agent_bootstrap._run_launchctl_bootstrap(_host_agent_plist_path(agent))
         elif runtime == "cli-bridge":
-            docker_agent_sync.start_docker_agent_container(agent)
+            from app.services.compose_renderer import write_compose_agents
+            await write_compose_agents(session)
+            docker_agent_sync.ensure_agent_container_started(agent)
     except Exception as e:  # noqa: BLE001 — best-effort
         logger.warning("restore start for %s failed (flag cleared anyway): %s", agent.name, e)
 

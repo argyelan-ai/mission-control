@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from app.models.agent import Agent
 from app.services import agent_lifecycle
+from app.services import compose_renderer
 
 
 @pytest.mark.asyncio
@@ -24,9 +25,26 @@ async def test_archive_free_clibridge_agent_stops_container_and_sets_flag(sessio
     agent = Agent(name="Dev", slug="dev", agent_runtime="cli-bridge")
     session.add(agent); await session.commit()
     with patch.object(agent_lifecycle.docker_agent_sync, "stop_docker_agent_container",
-                      return_value={"ok": "true"}) as stop:
+                      return_value={"ok": "true"}) as stop, \
+         patch.object(compose_renderer, "prune_compose_agent",
+                      return_value={"changed": "true"}) as prune:
         await agent_lifecycle.archive_agent(session, agent)
     stop.assert_called_once()
+    prune.assert_called_once_with("dev")
+    await session.refresh(agent)
+    assert agent.archived_at is not None
+
+
+@pytest.mark.asyncio
+async def test_archive_host_agent_does_not_prune_compose(session):
+    """Host agents are not compose-managed — the prune call must be cli-bridge-only."""
+    agent = Agent(name="HostDev2", slug="hostdev2", agent_runtime="host")
+    session.add(agent); await session.commit()
+    with patch.object(agent_lifecycle.agent_bootstrap, "_run_launchctl_bootout",
+                      return_value={"unloaded": True}), \
+         patch.object(compose_renderer, "prune_compose_agent") as prune:
+        await agent_lifecycle.archive_agent(session, agent)
+    prune.assert_not_called()
     await session.refresh(agent)
     assert agent.archived_at is not None
 
@@ -70,9 +88,12 @@ async def test_restore_clears_flag_and_starts_container(session):
     from app.utils import utcnow
     agent = Agent(name="Dev", slug="dev", agent_runtime="cli-bridge", archived_at=utcnow())
     session.add(agent); await session.commit()
-    with patch.object(agent_lifecycle.docker_agent_sync, "start_docker_agent_container",
-                      return_value={"ok": "true"}) as start:
+    with patch.object(agent_lifecycle.docker_agent_sync, "ensure_agent_container_started",
+                      return_value={"ok": "true"}) as start, \
+         patch.object(compose_renderer, "write_compose_agents",
+                      return_value={"changed": "true"}) as write:
         await agent_lifecycle.restore_agent(session, agent)
+    write.assert_called_once_with(session)
     start.assert_called_once()
     await session.refresh(agent)
     assert agent.archived_at is None
