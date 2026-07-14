@@ -29,6 +29,32 @@ except Exception:  # pragma: no cover — fallback if import cycle
     class AgentBusyError(Exception):
         """Raised when an agent cannot be archived because it is mid-task."""
 
+        def __init__(self, message, *, current_task_id=None):
+            super().__init__(message)
+            self.current_task_id = current_task_id
+
+
+class SingletonAgentError(Exception):
+    """Raised when archive/restore/delete is attempted on a singleton host bridge.
+
+    boss/hermes/grok are bound to hardcoded launchd jobs (com.openclaw.boss /
+    com.mc.hermes-bridge / com.mc.grok-bridge) managed by the Runtime Cockpit —
+    NOT the generic com.mc.agent.<slug> job the archive/restore/delete path
+    would target. A generic agent that merely uses harness=hermes (e.g. a
+    throwaway agent) is unaffected — this only fires for agent_runtime=="host"
+    with slug in {boss, hermes, grok}.
+    """
+
+
+_SINGLETON_BRIDGE_SLUGS = {"boss", "hermes", "grok"}
+
+
+def _is_singleton_bridge(agent: Agent) -> bool:
+    return (
+        getattr(agent, "agent_runtime", None) == "host"
+        and (agent.slug or "").lower() in _SINGLETON_BRIDGE_SLUGS
+    )
+
 
 def _host_agent_plist_label(agent: Agent) -> str:
     """Label of a generic (wizard-provisioned) host agent's launchd job.
@@ -63,6 +89,10 @@ async def archive_agent(session: AsyncSession, agent: Agent) -> Agent:
     Idempotent: an already-archived agent is a no-op. The stop step is
     best-effort — failure logs a warning but still sets archived_at.
     """
+    if _is_singleton_bridge(agent):
+        raise SingletonAgentError(
+            f"{agent.slug} ist eine Singleton-Host-Bridge und wird über launchd/das Runtime-Cockpit verwaltet, nicht über Archive/Delete"
+        )
     if agent.archived_at is not None:
         return agent  # idempotent no-op
     if _is_busy(agent):
@@ -95,6 +125,10 @@ async def restore_agent(session: AsyncSession, agent: Agent) -> Agent:
 
     Idempotent: a non-archived agent is a no-op. The start step is best-effort.
     """
+    if _is_singleton_bridge(agent):
+        raise SingletonAgentError(
+            f"{agent.slug} ist eine Singleton-Host-Bridge und wird über launchd/das Runtime-Cockpit verwaltet, nicht über Archive/Delete"
+        )
     if agent.archived_at is None:
         return agent  # idempotent no-op
 

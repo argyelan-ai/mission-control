@@ -76,3 +76,45 @@ async def test_restore_clears_flag_and_starts_container(session):
     start.assert_called_once()
     await session.refresh(agent)
     assert agent.archived_at is None
+
+
+# ── Singleton-bridge guard ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_archive_singleton_host_bridge_raises(session):
+    agent = Agent(name="Hermes", slug="hermes", agent_runtime="host")
+    session.add(agent); await session.commit()
+    with patch.object(agent_lifecycle.agent_bootstrap, "_run_launchctl_bootout") as bootout:
+        with pytest.raises(agent_lifecycle.SingletonAgentError):
+            await agent_lifecycle.archive_agent(session, agent)
+    bootout.assert_not_called()
+    await session.refresh(agent)
+    assert agent.archived_at is None
+
+
+@pytest.mark.asyncio
+async def test_archive_host_agent_that_merely_uses_hermes_harness_is_not_singleton(session):
+    """A throwaway generic agent with slug='dev' is NOT a singleton bridge even
+    if it happens to run harness=hermes — only slug in {boss,hermes,grok} +
+    agent_runtime=='host' counts."""
+    agent = Agent(name="Dev", slug="dev", agent_runtime="host", harness="hermes")
+    session.add(agent); await session.commit()
+    with patch.object(agent_lifecycle.agent_bootstrap, "_run_launchctl_bootout",
+                      return_value={"unloaded": True}) as bootout:
+        await agent_lifecycle.archive_agent(session, agent)
+    bootout.assert_called_once()
+    await session.refresh(agent)
+    assert agent.archived_at is not None
+
+
+@pytest.mark.asyncio
+async def test_restore_singleton_host_bridge_raises(session):
+    from app.utils import utcnow
+    agent = Agent(name="Grok", slug="grok", agent_runtime="host", archived_at=utcnow())
+    session.add(agent); await session.commit()
+    with patch.object(agent_lifecycle.agent_bootstrap, "_run_launchctl_bootstrap") as bootstrap:
+        with pytest.raises(agent_lifecycle.SingletonAgentError):
+            await agent_lifecycle.restore_agent(session, agent)
+    bootstrap.assert_not_called()
+    await session.refresh(agent)
+    assert agent.archived_at is not None

@@ -1059,7 +1059,7 @@ async def archive_agent_endpoint(
 
     Reversible via /restore. Refuses (409) if the agent is mid-task.
     """
-    from app.services.agent_lifecycle import archive_agent, AgentBusyError
+    from app.services.agent_lifecycle import archive_agent, AgentBusyError, SingletonAgentError
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
@@ -1067,6 +1067,8 @@ async def archive_agent_endpoint(
         agent = await archive_agent(session, agent)
     except AgentBusyError as e:
         raise HTTPException(status_code=409, detail=str(e))
+    except SingletonAgentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"id": str(agent.id), "archived_at": agent.archived_at}
 
 
@@ -1077,11 +1079,14 @@ async def restore_agent_endpoint(
     current_user = Depends(require_user),
 ):
     """Restore an archived agent: clear archived state, bring the runtime back up."""
-    from app.services.agent_lifecycle import restore_agent
+    from app.services.agent_lifecycle import restore_agent, SingletonAgentError
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
-    agent = await restore_agent(session, agent)
+    try:
+        agent = await restore_agent(session, agent)
+    except SingletonAgentError as e:
+        raise HTTPException(status_code=422, detail=str(e))
     return {"id": str(agent.id), "archived_at": agent.archived_at}
 
 
@@ -1120,6 +1125,18 @@ async def delete_agent(
     agent = await session.get(Agent, agent_id)
     if not agent:
         raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Singleton host bridges (boss/hermes/grok) are managed via launchd/the
+    # Runtime Cockpit, not this generic delete path — checked BEFORE the
+    # archived-required gate below so they get a clear 422 instead of a
+    # confusing "must archive first" 409 (they can never be archived either).
+    from app.services.agent_lifecycle import _is_singleton_bridge
+
+    if _is_singleton_bridge(agent):
+        raise HTTPException(
+            status_code=422,
+            detail=f"{agent.slug} ist eine Singleton-Host-Bridge und wird über launchd/das Runtime-Cockpit verwaltet, nicht über Archive/Delete",
+        )
 
     # Two-stage lifecycle (2026-07-13): hard delete is gated on archive.
     # An agent must be archived (runtime stopped) before it can be deleted —
@@ -1266,6 +1283,14 @@ async def delete_agent(
         if keys:
             await redis.delete(*keys)
             logger.info("purged %d redis keys for agent %s", len(keys), agent_id)
+        # Metrics cache + rate-limit key live under separate namespaces
+        # (mc:cache:agent:* / mc:ratelimit:agent:*) and are missed by the
+        # mc:agent:{id}:* scan above — purge them explicitly so a recreated
+        # agent with a fresh UUID never inherits stale cache/rate-limit state.
+        await redis.delete(
+            RedisKeys.agent_metrics_cache(str(agent_id)),
+            RedisKeys.agent_rate_limit(str(agent_id)),
+        )
     except Exception as e:  # noqa: BLE001
         logger.warning("redis purge for %s failed: %s", agent_name, e)
 
