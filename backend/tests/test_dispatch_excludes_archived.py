@@ -16,6 +16,19 @@ async def test_archived_agent_not_dispatch_target(session, make_board, make_task
 
 
 @pytest.mark.asyncio
+async def test_archived_explicit_assignment_falls_through(session, make_board, make_task):
+    from app.models.agent import Agent
+    board = await make_board()
+    archived = Agent(name="ArchivedAssignee", slug="archivedassignee", agent_runtime="cli-bridge",
+                     board_id=board.id, archived_at=utcnow())
+    session.add(archived); await session.commit()
+    task = await make_task(board_id=board.id, assigned_agent_id=archived.id)
+    target, reason = await find_dispatch_target(session, task, board.id)
+    assert target is None or target.id != archived.id
+    assert reason != "explicit_assignment"
+
+
+@pytest.mark.asyncio
 async def test_active_agent_still_dispatch_target(session, make_board, make_task):
     from app.models.agent import Agent
     board = await make_board()
