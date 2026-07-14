@@ -15,19 +15,22 @@ import os
 import shutil
 import sys
 import time
+import uuid
 from dataclasses import asdict
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import func, update
+from sqlalchemy import func, or_, update
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.auth import Role, require_role, require_user
 from app.database import get_session
+from app.models.agent import Agent
 from app.models.deliverable import TaskDeliverable
 from app.models.file_index import FileIndexEntry
+from app.models.task import Task
 from app.services import file_indexer, fs_service, trash_service
 from app.services.fs_roots import (
     RootBlocked,
@@ -95,6 +98,55 @@ def _entry_dict(e) -> dict:
     return asdict(e)
 
 
+# Fields the frontend expects on EVERY /list entry (null unless resolved).
+_READABILITY_NULLS = {"display_name": None, "agent_slug": None, "task_id": None}
+
+
+async def _resolve_deliverable_task_dirs(
+    entries, session: AsyncSession
+) -> dict[str, dict]:
+    """Map deliverables directory names that are task UUIDs → human-readable label.
+
+    Only directory entries whose name parses as a UUID are candidates. All of
+    them are resolved in ONE tasks query + ONE agents query (no N+1). A UUID
+    whose task was deleted stays unresolved (caller emits all-null for it).
+    """
+    parsed: dict[str, uuid.UUID] = {}
+    for e in entries:
+        if not e.is_directory:
+            continue
+        try:
+            parsed[e.name] = uuid.UUID(e.name)
+        except (ValueError, AttributeError):
+            continue
+    if not parsed:
+        return {}
+
+    tasks = (
+        await session.exec(select(Task).where(Task.id.in_(list(parsed.values()))))
+    ).all()
+    by_id = {t.id: t for t in tasks}
+
+    agent_ids = {t.assigned_agent_id for t in tasks if t.assigned_agent_id is not None}
+    agents: dict[uuid.UUID, Agent] = {}
+    if agent_ids:
+        rows = (await session.exec(select(Agent).where(Agent.id.in_(list(agent_ids))))).all()
+        agents = {a.id: a for a in rows}
+
+    resolved: dict[str, dict] = {}
+    for name, tid in parsed.items():
+        task = by_id.get(tid)
+        if task is None:
+            continue  # deleted task → stays null
+        agent = agents.get(task.assigned_agent_id) if task.assigned_agent_id else None
+        resolved[name] = {
+            "display_name": task.title,
+            "agent_slug": fs_service.agent_slug(agent),
+            "task_id": str(tid),
+        }
+    return resolved
+
+
 # --- endpoints (static segments only — no path params to order) ------------
 
 @router.get("/roots")
@@ -129,6 +181,7 @@ async def list_roots(
 async def list_files(
     root: str,
     subpath: str = "",
+    session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
     try:
@@ -139,7 +192,66 @@ async def list_files(
         raise HTTPException(status_code=400, detail="Invalid path")
     except fs_service.FsNotFound:
         raise HTTPException(status_code=404, detail="Not found")
-    return {"root": root, "subpath": subpath, "entries": [_entry_dict(e) for e in entries]}
+
+    # Under the deliverables root, directory names are bare task UUIDs — resolve
+    # them to human-readable task titles + owning agent slug (batched, no N+1).
+    resolved: dict[str, dict] = {}
+    if root == "deliverables":
+        resolved = await _resolve_deliverable_task_dirs(entries, session)
+
+    out = []
+    for e in entries:
+        out.append({**_entry_dict(e), **_READABILITY_NULLS, **resolved.get(e.name, {})})
+    return {"root": root, "subpath": subpath, "entries": out}
+
+
+# --- /search ?type= friendly-group mapping ---------------------------------
+#
+# The indexer stores whatever mimetypes.guess_type() returns, so many source
+# files carry a NULL or generic mime (`.tsx`, `.rs`, `.go`, `.svelte`, …) and a
+# raw mime substring match for "code"/"markdown" would silently return nothing.
+# These groups therefore also match on filename extension. Extensionless code
+# files (Dockerfile / Makefile) are matched by exact name.
+
+_CODE_EXTS: tuple[str, ...] = (
+    ".py", ".pyi", ".ipynb", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx",
+    ".go", ".rs", ".rb", ".java", ".kt", ".kts", ".scala", ".c", ".h", ".cpp",
+    ".cc", ".cxx", ".hpp", ".hh", ".cs", ".php", ".swift", ".m", ".mm", ".sh",
+    ".bash", ".zsh", ".fish", ".ps1", ".sql", ".json", ".jsonc", ".yaml",
+    ".yml", ".toml", ".ini", ".cfg", ".html", ".htm", ".xml", ".css", ".scss",
+    ".sass", ".less", ".vue", ".svelte", ".lua", ".r", ".pl", ".pm", ".ex",
+    ".exs", ".erl", ".clj", ".cljs", ".hs", ".ml", ".dart", ".groovy",
+    ".gradle", ".proto", ".tf",
+)
+_CODE_EXACT_NAMES: tuple[str, ...] = ("Dockerfile", "Makefile", "Rakefile", "Gemfile")
+
+
+def _type_filter(entry, type_str: str):
+    """Translate a friendly ``?type=`` group into a SQL WHERE condition.
+
+    ``image``/``video``/``audio`` → mime prefix; ``pdf`` → pdf mime or ``.pdf``;
+    ``markdown`` → markdown mime or ``.md``/``.markdown``/``.mdx``; ``code`` →
+    known source extensions (mime is unreliable for these). Any unrecognised
+    value keeps the legacy raw-mime substring match (backward compatible).
+    """
+    t = type_str.strip().lower()
+    if t in ("image", "video", "audio"):
+        return entry.mime.ilike(f"{t}/%")
+    if t == "pdf":
+        return or_(entry.mime.ilike("%pdf%"), entry.name.ilike("%.pdf"))
+    if t == "markdown":
+        return or_(
+            entry.mime.ilike("%markdown%"),
+            entry.name.ilike("%.md"),
+            entry.name.ilike("%.markdown"),
+            entry.name.ilike("%.mdx"),
+        )
+    if t == "code":
+        conds = [entry.name.ilike(f"%{ext}") for ext in _CODE_EXTS]
+        conds += [entry.name.ilike(nm) for nm in _CODE_EXACT_NAMES]
+        return or_(*conds)
+    # Unknown group → legacy behaviour (raw mime substring).
+    return entry.mime.ilike(f"%{type_str}%")
 
 
 @router.get("/search")
@@ -161,7 +273,7 @@ async def search_files(
     if agent:
         stmt = stmt.where(FileIndexEntry.agent_slug == agent)
     if type:
-        stmt = stmt.where(FileIndexEntry.mime.ilike(f"%{type}%"))
+        stmt = stmt.where(_type_filter(FileIndexEntry, type))
     # Deterministic order so offset/limit paging is stable across page turns.
     capped = min(max(limit, 1), 500)
     stmt = (

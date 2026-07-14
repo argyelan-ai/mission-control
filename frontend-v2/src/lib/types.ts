@@ -351,6 +351,11 @@ export interface FsEntry {
   mime: string | null;
   mtime: number;
   is_directory: boolean;
+  /** Task title for Deliverables UUID-named folders. Absent/null on older
+   *  servers and on roots that don't map to a task (vault, media, ...). */
+  display_name?: string | null;
+  agent_slug?: string | null;
+  task_id?: string | null;
 }
 
 // ── Task Workspace (read-only browser over task.workspace_path) ────────────

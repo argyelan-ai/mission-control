@@ -26,6 +26,11 @@ export function getExtension(name: string): string {
   return dot >= 0 ? name.slice(dot + 1).toLowerCase() : "";
 }
 
+/** True for extensions that render as a real thumbnail in grid view. */
+export function isImageFile(name: string): boolean {
+  return EXT_GROUPS[getExtension(name)] === "image";
+}
+
 /** Lucide icon for a file/folder entry, chosen by extension group. */
 export function fileIcon(name: string, isDirectory: boolean): LucideIcon {
   if (isDirectory) return Folder;
