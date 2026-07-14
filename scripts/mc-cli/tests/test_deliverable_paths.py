@@ -243,3 +243,63 @@ def test_relative_workspace_file_is_auto_copied(monkeypatch):
         # the phantom guard must catch that too (belt and braces).
         commands._cmd_deliverable(_Args(path="index.html"), client, cfg)
     assert copies == [("index.html", dest)]
+
+
+# ── Zone-prefix doubling (Task 3a17837f, 2026-07-13) ────────────────────────
+# An agent registered a workspace-relative path that already included the
+# canonical zone prefix, e.g. `deliverables/<task_id>/index.html`. The old
+# code blindly joined it onto `deliverables_root`, doubling the prefix to
+# `/deliverables/<task_id>/deliverables/<task_id>/index.html` — auto-copy
+# landed there, the DB row pointed at the doubled path, and the UI 404'd.
+# The zone prefix must be stripped before the join, same as the legacy
+# `.mc-deliverables/<task_id>/` marker already is.
+
+
+def test_container_relative_path_with_zone_prefix_not_doubled(monkeypatch):
+    import shutil
+    _force_container(monkeypatch)
+    given = f"deliverables/{TASK_ID}/index.html"
+    dest = f"/deliverables/{TASK_ID}/index.html"
+    # Source file lives at the given workspace-relative path (with prefix);
+    # nothing exists at dest yet.
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == given)
+    copies = []
+    monkeypatch.setattr(shutil, "copy2", lambda src, dst: copies.append((src, dst)))
+    monkeypatch.setattr(os, "makedirs", lambda *a, **kw: None)
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError):
+        # copy2 mocked away → dest still doesn't exist → phantom guard fires.
+        # What we're asserting here is that dest/copy target is NOT doubled.
+        commands._cmd_deliverable(_Args(path=given), client, cfg)
+    assert copies == [(given, dest)]
+
+
+def test_host_relative_path_with_dotmc_zone_prefix_not_doubled(monkeypatch):
+    import shutil
+    _force_host(monkeypatch)
+    given = f".mc/deliverables/{TASK_ID}/index.html"
+    dest = f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/index.html"
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == given)
+    copies = []
+    monkeypatch.setattr(shutil, "copy2", lambda src, dst: copies.append((src, dst)))
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError):
+        commands._cmd_deliverable(_Args(path=given), client, cfg)
+    assert copies == [(given, dest)]
+
+
+def test_host_relative_path_with_tilde_zone_prefix_not_doubled(monkeypatch):
+    import shutil
+    _force_host(monkeypatch)
+    given = f"~/.mc/deliverables/{TASK_ID}/index.html"
+    dest = f"{FAKE_HOME}/.mc/deliverables/{TASK_ID}/index.html"
+    monkeypatch.setattr(os.path, "isfile", lambda p: p == given)
+    copies = []
+    monkeypatch.setattr(shutil, "copy2", lambda src, dst: copies.append((src, dst)))
+    client = _mock_client()
+    cfg = _mock_cfg()
+    with pytest.raises(UsageError):
+        commands._cmd_deliverable(_Args(path=given), client, cfg)
+    assert copies == [(given, dest)]

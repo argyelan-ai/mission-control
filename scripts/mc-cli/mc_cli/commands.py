@@ -1076,18 +1076,37 @@ def _cmd_deliverable(args, client, cfg):
             # Relativer Pfad → auto-rewrite nach /deliverables/<task_id>/<rel>.
             # Strip literal "./" prefix (nur das, nicht lstrip der alles frisst).
             relative = path[2:] if path.startswith("./") else path
+            source_relative = relative
             # Legacy-Form ".mc-deliverables/<task_id>/foo" → extrahiere Dateiname
             marker = f".mc-deliverables/{task_id}/"
             if marker in relative:
                 relative = relative.split(marker, 1)[1]
+            else:
+                # Zonen-Prefix-Verdopplung (Task 3a17837f, 2026-07-13): Agent
+                # registriert bereits einen zonen-relativen Pfad wie
+                # "deliverables/<task_id>/foo" (Container) bzw.
+                # ".mc/deliverables/<task_id>/foo" / "~/.mc/deliverables/<task_id>/foo"
+                # (Host) — blindes os.path.join verdoppelt den Prefix. Strip
+                # analog zum Legacy-Marker, wenn er im Pfad vorkommt.
+                zone_markers = (
+                    f"deliverables/{task_id}/",
+                    f".mc/deliverables/{task_id}/",
+                    f"~/.mc/deliverables/{task_id}/",
+                )
+                for zone_marker in zone_markers:
+                    if zone_marker in relative:
+                        relative = relative.split(zone_marker, 1)[1]
+                        break
             dest = _os.path.join(deliverables_root, relative)
             # "Relativer Pfad im Workspace (bevorzugt)": die Datei liegt im
             # CWD des Agenten — in die Deliverables-Zone KOPIEREN, nicht nur
             # den Pfad umschreiben (sonst Phantom-Row, Vorfall 2026-07-12).
-            if not _os.path.isfile(dest) and _os.path.isfile(relative):
+            # Quelle bleibt der ungestrippte Pfad — die Datei liegt dort, wo
+            # der Agent sie tatsaechlich angegeben hat.
+            if not _os.path.isfile(dest) and _os.path.isfile(source_relative):
                 _os.makedirs(_os.path.dirname(dest), exist_ok=True)
-                _shutil.copy2(relative, dest)
-                print(f"(auto-copied {relative} → {dest})", file=sys.stderr)
+                _shutil.copy2(source_relative, dest)
+                print(f"(auto-copied {source_relative} → {dest})", file=sys.stderr)
             path = dest
 
         # Phantom-Guard (Horror-Forest-Vorfall 2026-07-12): ein Pfad in der
