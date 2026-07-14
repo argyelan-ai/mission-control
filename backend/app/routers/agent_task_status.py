@@ -1831,6 +1831,9 @@ async def agent_update_task(
                 task.started_at = task.ack_at
         if new_status == "done" and old_status != "done":
             task.completed_at = utcnow()
+            # See task_lifecycle.execute_review_decision for why "done"
+            # resets the sticky dispatch_intent label.
+            task.dispatch_intent = "root"
             agent.total_tasks_completed += 1
             # Release the lock on terminal status (like with failed in
             # task_lifecycle.apply_terminal_unassign)

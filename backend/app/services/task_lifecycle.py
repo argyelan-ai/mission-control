@@ -641,6 +641,15 @@ async def execute_review_decision(
 
             task.status = "done"
             task.completed_at = utcnow()
+            # Follow-up (PR #109 review, 2026-07-14): dispatch_intent is a
+            # per-review-cycle label ("review_rework" etc.) consumed by
+            # dispatch_message_builder to gate the Review-Feedback block and
+            # by operations.is_continuation_flow. Nothing else resets it —
+            # left stale, it leaks a rework-cycle-specific block (with a
+            # STALE review comment) into a later, unrelated dispatch of the
+            # same task row. "done" is the point every review cycle
+            # unambiguously concludes, so it's the natural reset point.
+            task.dispatch_intent = "root"
 
         # PR merge — only for a real done, NOT for user_test (test gate before merge)
         if task.status == "done":
@@ -739,12 +748,12 @@ async def execute_review_decision(
         )
 
     elif decision == "request_changes":
-        # Status provisionally in_progress — only stands for the "noop"
-        # outcome below (e.g. rejecting_agent == original_dev). Every other
-        # outcome of handle_review_rejection resolves + commits the task's
-        # final status itself (Bug C, 2026-07-12): it must never be left
-        # sitting in this provisional in_progress state with no agent
-        # working it — that was the silent ghost-state bug.
+        # Provisional only — handle_review_rejection ALWAYS resolves + commits
+        # the task's final status itself (every outcome does, including the
+        # former same-agent "noop" case, follow-up fix 2026-07-14). It must
+        # never be left sitting in this provisional in_progress state with no
+        # agent working it — that was the silent ghost-state bug (Bug C,
+        # 2026-07-12).
         task.status = "in_progress"
 
         # handle_review_rejection mutates + commits `task` in place (same
@@ -987,13 +996,17 @@ class ReviewRejectionResult(NamedTuple):
       - "dispatch_blocked" — dev found but check_dispatch_allowed()
         vetoed (paused/asleep/run_control/halted); task forced to inbox,
         assigned to the dev, System-Kommentar with the reason.
-      - "noop" — nothing to do (e.g. rejecting_agent == original_dev);
-        caller's provisional status stands unchanged (pre-existing
-        behavior, not part of the Bug C fix).
+
+    Same-agent reject (rejecting_agent == original_dev, e.g. a developer
+    classified as their own reviewer) used to short-circuit to a "noop"
+    outcome here, leaving the task in the caller's provisional in_progress
+    state untouched — the same ghost-state bug class as Bug C, just missed
+    by that fix. Follow-up (2026-07-14): removed the special case; it now
+    falls through to "redispatched"/"queued" like every other developer.
     """
     developer: Agent | None
     outcome: Literal[
-        "redispatched", "queued", "no_developer", "dispatch_blocked", "noop",
+        "redispatched", "queued", "no_developer", "dispatch_blocked",
     ]
 
 
@@ -1120,8 +1133,19 @@ async def handle_review_rejection(
         asyncio.create_task(auto_dispatch_task(task.id, board_id))
         return ReviewRejectionResult(None, "no_developer")
 
-    if rejecting_agent and original_dev.id == rejecting_agent.id:
-        return ReviewRejectionResult(None, "noop")  # Same agent, no re-dispatch needed
+    # Self-reject (rejecting_agent == original_dev, e.g. a developer-turned-
+    # reviewer classified as their own original developer, see
+    # get_review_worker_agent_ids) used to `return noop` here and leave the
+    # task sitting in the caller's provisional in_progress status with no
+    # comment, no event, and stale dispatch bookkeeping (dispatched_at/
+    # ack_at from the earlier review-handoff dispatch) — the same
+    # ghost-state bug class as Bug C above, just unreachable by the two
+    # branches that bug fixed. There's no reason to special-case it: the
+    # agent is already the target of the redispatch below, the busy-check
+    # excludes this task by id, and check_dispatch_allowed still applies —
+    # falling through gives the same explicit inbox+comment+redispatch
+    # treatment (with a fresh review_rework dispatch message) as every
+    # other outcome.
 
     # Set dispatch_intent + operational controls guard
     task.dispatch_intent = "review_rework"

@@ -313,6 +313,9 @@ async def agent_add_comment(
         if task.parent_task_id is not None:
             task.status = "done"
             task.completed_at = utcnow()
+            # See task_lifecycle.execute_review_decision for why "done"
+            # resets the sticky dispatch_intent label.
+            task.dispatch_intent = "root"
         else:
             task.status = "review"
         # Prevent stale dispatch_attempt_id (audit trail).

@@ -1457,6 +1457,9 @@ async def update_task(
             task.ack_at = utcnow()  # ACK — manual or via UI
         elif new_status == "done" and old_status != "done":
             task.completed_at = utcnow()
+            # See task_lifecycle.execute_review_decision for why "done"
+            # resets the sticky dispatch_intent label.
+            task.dispatch_intent = "root"
 
     # Log task event (event sourcing)
     if "status" in updates:
