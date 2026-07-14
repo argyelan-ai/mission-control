@@ -326,6 +326,7 @@ async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> Non
 async def list_agents(
     board_id: uuid.UUID | None = Query(None),
     include_unassigned: bool = Query(False),
+    include_archived: bool = Query(False),
     session: AsyncSession = Depends(get_session),
     current_user = Depends(require_user),
 ):
@@ -337,6 +338,8 @@ async def list_agents(
             (Agent.board_id == board_id) | (Agent.board_id == None)  # noqa: E711
         )
     # without board_id: all
+    if not include_archived:
+        query = query.where(Agent.archived_at.is_(None))
     query = query.order_by(Agent.name)
     result = await session.exec(query)
     return result.all()
