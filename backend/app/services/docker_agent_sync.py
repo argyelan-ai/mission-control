@@ -31,6 +31,7 @@ Exceptions:
 """
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 from app.config import settings
@@ -992,6 +993,55 @@ def ensure_agent_container_started(agent: Agent) -> dict[str, str]:
     if _agent_container_running(container_name):
         return {"status": "already-running", "container": container_name, "mode": "none"}
     return restart_docker_agent_container(agent, force_recreate=True)
+
+
+def _agent_container_cmd(agent: "Agent | str", docker_args: list[str], action: str) -> dict[str, str]:
+    """Run ``docker <args> mc-agent-<slug>`` with the mc-agent-* guard.
+
+    Shared body for stop/start/remove. Accepts either an Agent or a raw slug
+    string (the delete path passes a string captured before the ORM row expires).
+    Best-effort: returns a status dict, never raises on a non-zero docker exit
+    (caller is archive/delete teardown).
+
+    NOTE: the codebase's actual slug helper is the module-local ``_agent_slug``
+    (derived from ``agent.name``, see ``restart_docker_agent_container``) — there
+    is no ``fs_service.agent_slug`` in this module, so we use ``_agent_slug``
+    here to match every other call site in this file.
+    """
+    slug = agent if isinstance(agent, str) else _agent_slug(agent)
+    container_name = f"mc-agent-{slug}"
+    assert container_name.startswith("mc-agent-"), (
+        f"{action} must only ever target mc-agent-* containers, got {container_name}"
+    )
+    try:
+        proc = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            ["docker", *docker_args, container_name],
+            capture_output=True, text=True, check=False, timeout=60,
+        )
+        if proc.returncode == 0:
+            logger.info("%s %s: ok", action, container_name)
+            return {"ok": "true", "container": container_name}
+        logger.warning("%s %s: rc=%s %s", action, container_name, proc.returncode, (proc.stderr or "").strip())
+        return {"ok": "false", "container": container_name, "error": (proc.stderr or "").strip()}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("%s %s failed: %s", action, container_name, e)
+        return {"ok": "false", "container": container_name, "error": str(e)}
+
+
+def stop_docker_agent_container(agent: "Agent | str") -> dict[str, str]:
+    """Stop (not remove) the agent's cli-bridge container. Reversible via start."""
+    return _agent_container_cmd(agent, ["stop", "-t", "5"], "stop_docker_agent_container")
+
+
+def start_docker_agent_container(agent: "Agent | str") -> dict[str, str]:
+    """Start a previously-stopped agent container (restore path)."""
+    return _agent_container_cmd(agent, ["start"], "start_docker_agent_container")
+
+
+def remove_docker_agent_container(agent: "Agent | str") -> dict[str, str]:
+    """Force-remove the agent container (delete path). Container should already
+    be stopped by archive, but ``rm -f`` handles a still-running one too."""
+    return _agent_container_cmd(agent, ["rm", "-f"], "remove_docker_agent_container")
 
 
 async def wait_for_agent_healthy(
