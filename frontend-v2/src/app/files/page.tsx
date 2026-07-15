@@ -298,11 +298,9 @@ export default function FilesPage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <div className="flex items-center justify-end mb-3">
-                    <FilesViewToggle view={view} onChange={changeView} />
-                  </div>
                   <FilesBrowser
                     view={view}
+                    headerActions={<FilesViewToggle view={view} onChange={changeView} />}
                     root={activeRoot}
                     subpath={subpath}
                     onNavigate={(p) => { setSubpath(p); setSelectedFile(null); setSelected(new Set()); }}
