@@ -442,6 +442,175 @@ async def test_rerender_challenge_crash_writes_failed_status(session, monkeypatc
     assert updated_ch.error is not None
 
 
+# ── Cross-entry run-claim release (2026-07-15 review fix) ──────────────────
+#
+# The router takes a per-challenge Redis claim (SET NX EX) before scheduling
+# any of these three background functions, to stop two overlapping runs on
+# the SAME challenge (e.g. two different entries' rerender buttons clicked
+# in quick succession) from racing on challenge.composed_video_path/status.
+# Each background function must release that claim in a `finally` on every
+# exit path — these tests seed the claim exactly like the router would and
+# verify it's gone once the function returns, success or crash.
+
+
+def _use_fake_redis(monkeypatch, fake_redis):
+    import app.redis_client as redis_client_mod
+
+    monkeypatch.setattr(redis_client_mod, "_redis", fake_redis)
+    return redis_client_mod
+
+
+@pytest.mark.asyncio
+async def test_rerender_challenge_releases_run_claim_after_success(
+    session, monkeypatch, fake_redis
+):
+    monkeypatch.setattr("app.database.engine", test_engine)
+    redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                      "artifact_path": "/a/index.html", "video_path": "/sd/a.mp4"}],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    claim_key = redis_client_mod.RedisKeys.bench_challenge_run_claim(str(ch.id))
+    await fake_redis.set(claim_key, "1", ex=1800)  # simulates the router's claim
+
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock(return_value={
+        "video_path": "/sd/a-new.mp4", "screenshot_path": None,
+    }))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g.mp4"))
+
+    await orchestrator.rerender_challenge(ch.id)
+
+    assert await fake_redis.get(claim_key) is None
+
+
+@pytest.mark.asyncio
+async def test_rerender_challenge_releases_run_claim_on_crash(session, monkeypatch, fake_redis):
+    monkeypatch.setattr("app.database.engine", test_engine)
+    redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                      "artifact_path": "/a/index.html", "video_path": "/a/clip.mp4"}],
+    )
+    ch.status = "rendering"
+    session.add(ch)
+    await session.commit()
+
+    claim_key = redis_client_mod.RedisKeys.bench_challenge_run_claim(str(ch.id))
+    await fake_redis.set(claim_key, "1", ex=1800)
+
+    monkeypatch.setattr(
+        orchestrator, "_render_and_compose",
+        AsyncMock(side_effect=RuntimeError("injected crash")),
+    )
+
+    await orchestrator.rerender_challenge(ch.id)
+
+    assert await fake_redis.get(claim_key) is None
+
+
+@pytest.mark.asyncio
+async def test_recompose_challenge_releases_run_claim_after_run(session, monkeypatch, fake_redis):
+    monkeypatch.setattr("app.database.engine", test_engine)
+    redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/a.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    claim_key = redis_client_mod.RedisKeys.bench_challenge_run_claim(str(ch.id))
+    await fake_redis.set(claim_key, "1", ex=1800)
+
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g2.mp4"))
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock())
+
+    await orchestrator.recompose_challenge(ch.id)
+
+    assert await fake_redis.get(claim_key) is None
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_releases_run_claim_after_run(session, monkeypatch, fake_redis):
+    """Covers both the happy path and the record-failure fallback — the
+    claim must come off in either case, keyed off the entry's challenge_id
+    even though rerender_entry's public signature only takes entry_id."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                      "artifact_path": "/a/index.html", "video_path": "/sd/a-old.mp4"}],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    claim_key = redis_client_mod.RedisKeys.bench_challenge_run_claim(str(ch.id))
+    await fake_redis.set(claim_key, "1", ex=1800)  # simulates the router's claim
+
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock(return_value={
+        "video_path": "/sd/a-new.mp4", "screenshot_path": None,
+    }))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g.mp4"))
+
+    await orchestrator.rerender_entry(entries[0].id)
+
+    assert await fake_redis.get(claim_key) is None
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_releases_run_claim_fail_open_when_redis_down(
+    session, monkeypatch
+):
+    """A Redis outage during release must not raise out of the background
+    task — best-effort, logged, self-heals via TTL."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    import app.redis_client as redis_client_mod
+
+    async def _broken_get_redis():
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr(redis_client_mod, "get_redis", _broken_get_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                      "artifact_path": "/a/index.html", "video_path": "/sd/a-old.mp4"}],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    monkeypatch.setattr(orchestrator, "record_entry", AsyncMock(return_value={
+        "video_path": "/sd/a-new.mp4", "screenshot_path": None,
+    }))
+    monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g.mp4"))
+
+    # Must complete without raising despite the broken redis client.
+    await orchestrator.rerender_entry(entries[0].id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated_ch = await vs.get(BenchChallenge, ch.id)
+    assert updated_ch.status == "review"
+
+
 # ── Per-entry rerender (2026-07-15) ────────────────────────────────────────
 
 

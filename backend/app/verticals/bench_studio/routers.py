@@ -28,6 +28,45 @@ logger = logging.getLogger("mc.bench_studio")
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio"])
 
+BENCH_CHALLENGE_RUN_CLAIM_TTL_S = 1800  # self-heal net if the bg task dies without releasing
+
+
+async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
+    """Atomic per-challenge claim (SET NX EX) taken right before scheduling
+    a render/compose background task.
+
+    All three run-starting endpoints (challenge-wide rerender, recompose,
+    per-entry rerender) end up mutating the SAME challenge row
+    (composed_video_path / status) — the per-entry rerender's rate limit is
+    keyed by entry_id, so it alone can't stop two DIFFERENT entries' buttons
+    on the SAME challenge from being clicked in quick succession and racing
+    each other (2026-07-15 review finding). The background task releases
+    this claim in a `finally`
+    (orchestrator._release_challenge_run_claim) — the TTL here is only a
+    self-heal net for a task that dies without releasing.
+
+    Redis outage -> fail-open (logged): the pre-existing challenge.status
+    guard in each endpoint is the fallback, same trade-off as the per-entry
+    rate limit."""
+    from app.redis_client import RedisKeys, get_redis
+
+    try:
+        redis = await get_redis()
+        claimed = await redis.set(
+            RedisKeys.bench_challenge_run_claim(str(challenge_id)),
+            "1", nx=True, ex=BENCH_CHALLENGE_RUN_CLAIM_TTL_S,
+        )
+        if not claimed:
+            raise HTTPException(
+                409, "Challenge already has a render/compose run in progress."
+            )
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — a Redis outage must never block the endpoint
+        logger.warning(
+            "bench challenge %s run-claim check skipped (redis unavailable)", challenge_id
+        )
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────
 
@@ -324,6 +363,7 @@ async def rerender_challenge(
             409,
             "Open X-Post approval references the current video — approve or reject it first.",
         )
+    await _claim_challenge_run(challenge_id)
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),
         name=f"rerender_challenge({challenge.id})"
@@ -423,6 +463,7 @@ async def recompose_challenge(
             409,
             "Open X-Post approval references the current video — approve or reject it first.",
         )
+    await _claim_challenge_run(challenge_id)
     create_tracked_task(
         orchestrator.recompose_challenge(challenge.id),
         name=f"recompose_challenge({challenge.id})",
@@ -586,6 +627,11 @@ async def rerender_entry(
             "bench entry %s rerender: rate-limit check skipped (redis unavailable)", entry_id
         )
 
+    # Challenge-level claim (409 if another run is already in flight for
+    # THIS challenge) — the cooldown above only rate-limits repeat clicks on
+    # THIS entry, it can't stop two different entries' rerender buttons on
+    # the same challenge from racing each other's render+compose.
+    await _claim_challenge_run(entry.challenge_id)
     create_tracked_task(
         orchestrator.rerender_entry(entry.id),
         name=f"rerender_entry({entry.id})"

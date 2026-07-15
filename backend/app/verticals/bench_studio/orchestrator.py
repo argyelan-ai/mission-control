@@ -117,6 +117,25 @@ def _cleanup_old_compose(old_path: str | None, new_path: str | None) -> None:
         logger.warning("bench compose cleanup: failed to remove %s", old_path)
 
 
+async def _release_challenge_run_claim(challenge_id: uuid.UUID) -> None:
+    """Releases the per-challenge run-claim the router took (SET NX EX,
+    routers._claim_challenge_run) before scheduling this background task —
+    called from a `finally` in rerender_challenge/recompose_challenge/
+    rerender_entry so the claim is freed on every exit path (success,
+    handled failure, or a crash the outer except re-raises through).
+    Best-effort: a stuck claim self-heals via its TTL, so a Redis outage
+    here must never raise out of a background task."""
+    try:
+        from app.redis_client import RedisKeys, get_redis
+
+        redis = await get_redis()
+        await redis.delete(RedisKeys.bench_challenge_run_claim(str(challenge_id)))
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "bench challenge %s run-claim release skipped (redis unavailable)", challenge_id
+        )
+
+
 def _trim_leading_prose(text: str) -> str:
     """Cut any prose before the first <!doctype or <html tag.
 
@@ -855,49 +874,52 @@ async def rerender_challenge(challenge_id: uuid.UUID) -> None:
     """Background: re-run render + compose from the existing artifacts."""
     from app.database import engine
 
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        try:
-            challenge = await session.get(BenchChallenge, challenge_id)
-            if challenge is None:
-                return
-            entries = (
-                await session.exec(
-                    select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
-                )
-            ).all()
-            candidates = [
-                e
-                for e in entries
-                if e.artifact_path and e.status in ("generated", "rendered", "failed")
-            ]
-            if not candidates:
-                challenge.status = "failed"
-                challenge.error = "nothing to render — no entry has an artifact"
-                session.add(challenge)
-                await session.commit()
-                return
-            old_video = challenge.composed_video_path
-            for e in candidates:
-                e.status = "generated"
-                e.error = None
-                session.add(e)
-            challenge.composed_video_path = None
-            session.add(challenge)
-            await session.commit()
-            await _render_and_compose(session, challenge, candidates)
-            _cleanup_old_compose(old_video, challenge.composed_video_path)
-        except Exception:  # noqa: BLE001
-            logger.exception("bench challenge %s rerender crashed", challenge_id)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             try:
-                await session.rollback()  # clear pending-rollback state (see start_challenge)
                 challenge = await session.get(BenchChallenge, challenge_id)
-                if challenge is not None:
+                if challenge is None:
+                    return
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                    )
+                ).all()
+                candidates = [
+                    e
+                    for e in entries
+                    if e.artifact_path and e.status in ("generated", "rendered", "failed")
+                ]
+                if not candidates:
                     challenge.status = "failed"
-                    challenge.error = "rerender crashed — see backend logs"
+                    challenge.error = "nothing to render — no entry has an artifact"
                     session.add(challenge)
                     await session.commit()
-            except Exception:
-                logger.exception("bench challenge %s rerender failure write failed", challenge_id)
+                    return
+                old_video = challenge.composed_video_path
+                for e in candidates:
+                    e.status = "generated"
+                    e.error = None
+                    session.add(e)
+                challenge.composed_video_path = None
+                session.add(challenge)
+                await session.commit()
+                await _render_and_compose(session, challenge, candidates)
+                _cleanup_old_compose(old_video, challenge.composed_video_path)
+            except Exception:  # noqa: BLE001
+                logger.exception("bench challenge %s rerender crashed", challenge_id)
+                try:
+                    await session.rollback()  # clear pending-rollback state (see start_challenge)
+                    challenge = await session.get(BenchChallenge, challenge_id)
+                    if challenge is not None:
+                        challenge.status = "failed"
+                        challenge.error = "rerender crashed — see backend logs"
+                        session.add(challenge)
+                        await session.commit()
+                except Exception:
+                    logger.exception("bench challenge %s rerender failure write failed", challenge_id)
+    finally:
+        await _release_challenge_run_claim(challenge_id)
 
 
 async def recompose_challenge(challenge_id: uuid.UUID) -> None:
@@ -909,49 +931,52 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
     (2026-07-13, single-video-branding)."""
     from app.database import engine
 
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        try:
-            challenge = await session.get(BenchChallenge, challenge_id)
-            if challenge is None:
-                return
-            entries = (
-                await session.exec(
-                    select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
-                )
-            ).all()
-            candidates = [e for e in entries if e.video_path]
-            if len(candidates) not in (1, 2):
-                challenge.status = "failed"
-                challenge.error = (
-                    "recompose needs 1 or 2 recorded entries — use rerender instead"
-                )
-                session.add(challenge)
-                await session.commit()
-                return
-            old_video = challenge.composed_video_path
-            challenge.status = "composing"
-            challenge.error = None
-            session.add(challenge)
-            await session.commit()
-            challenge.composed_video_path = await compose_challenge(
-                session, challenge, candidates
-            )
-            challenge.status = "review"
-            session.add(challenge)
-            await session.commit()
-            _cleanup_old_compose(old_video, challenge.composed_video_path)
-        except Exception:  # noqa: BLE001
-            logger.exception("bench challenge %s recompose crashed", challenge_id)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             try:
-                await session.rollback()
                 challenge = await session.get(BenchChallenge, challenge_id)
-                if challenge is not None:
+                if challenge is None:
+                    return
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge_id)
+                    )
+                ).all()
+                candidates = [e for e in entries if e.video_path]
+                if len(candidates) not in (1, 2):
                     challenge.status = "failed"
-                    challenge.error = "recompose crashed — see backend logs"
+                    challenge.error = (
+                        "recompose needs 1 or 2 recorded entries — use rerender instead"
+                    )
                     session.add(challenge)
                     await session.commit()
-            except Exception:
-                logger.exception("bench challenge %s recompose failure write failed", challenge_id)
+                    return
+                old_video = challenge.composed_video_path
+                challenge.status = "composing"
+                challenge.error = None
+                session.add(challenge)
+                await session.commit()
+                challenge.composed_video_path = await compose_challenge(
+                    session, challenge, candidates
+                )
+                challenge.status = "review"
+                session.add(challenge)
+                await session.commit()
+                _cleanup_old_compose(old_video, challenge.composed_video_path)
+            except Exception:  # noqa: BLE001
+                logger.exception("bench challenge %s recompose crashed", challenge_id)
+                try:
+                    await session.rollback()
+                    challenge = await session.get(BenchChallenge, challenge_id)
+                    if challenge is not None:
+                        challenge.status = "failed"
+                        challenge.error = "recompose crashed — see backend logs"
+                        session.add(challenge)
+                        await session.commit()
+                except Exception:
+                    logger.exception("bench challenge %s recompose failure write failed", challenge_id)
+    finally:
+        await _release_challenge_run_claim(challenge_id)
 
 
 async def rerender_entry(entry_id: uuid.UUID) -> None:
@@ -963,82 +988,92 @@ async def rerender_entry(entry_id: uuid.UUID) -> None:
     recompose_challenge above."""
     from app.database import engine
 
-    async with AsyncSession(engine, expire_on_commit=False) as session:
-        try:
-            entry = await session.get(BenchEntry, entry_id)
-            if entry is None:
-                return
-            challenge = await session.get(BenchChallenge, entry.challenge_id)
-            if challenge is None:
-                return
-
-            old_video = challenge.composed_video_path
-            challenge.status = "rendering"
-            challenge.error = None
-            session.add(challenge)
-            entry.status = "generated"
-            entry.error = None
-            session.add(entry)
-            await session.commit()
-
+    # Discovered once the entry is loaded — the finally below needs it to
+    # release the router's per-challenge run-claim, even though this
+    # function's public signature is keyed by entry_id.
+    challenge_id: uuid.UUID | None = None
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
             try:
-                result = await record_entry(entry)
-                entry.video_path = result.get("video_path")
-                entry.screenshot_path = result.get("screenshot_path")
-                entry.status = "rendered"
+                entry = await session.get(BenchEntry, entry_id)
+                if entry is None:
+                    return
+                challenge = await session.get(BenchChallenge, entry.challenge_id)
+                if challenge is None:
+                    return
+                challenge_id = challenge.id
+
+                old_video = challenge.composed_video_path
+                challenge.status = "rendering"
+                challenge.error = None
+                session.add(challenge)
+                entry.status = "generated"
                 entry.error = None
-            except Exception as exc:  # noqa: BLE001
-                entry.status = "failed"
-                entry.error = f"render failed: {exc}"[:2000]
-                logger.warning("bench entry %s rerender failed: %s", entry.id, exc)
-            session.add(entry)
-            await session.commit()
+                session.add(entry)
+                await session.commit()
 
-            entries = (
-                await session.exec(
-                    select(BenchEntry).where(BenchEntry.challenge_id == challenge.id)
-                )
-            ).all()
-            candidates = [e for e in entries if e.video_path]
-            if not candidates:
-                challenge.status = "failed"
-                challenge.error = "entry rerender failed and no other recording survives"
+                try:
+                    result = await record_entry(entry)
+                    entry.video_path = result.get("video_path")
+                    entry.screenshot_path = result.get("screenshot_path")
+                    entry.status = "rendered"
+                    entry.error = None
+                except Exception as exc:  # noqa: BLE001
+                    entry.status = "failed"
+                    entry.error = f"render failed: {exc}"[:2000]
+                    logger.warning("bench entry %s rerender failed: %s", entry.id, exc)
+                session.add(entry)
+                await session.commit()
+
+                entries = (
+                    await session.exec(
+                        select(BenchEntry).where(BenchEntry.challenge_id == challenge.id)
+                    )
+                ).all()
+                candidates = [e for e in entries if e.video_path]
+                if not candidates:
+                    challenge.status = "failed"
+                    challenge.error = "entry rerender failed and no other recording survives"
+                    session.add(challenge)
+                    await session.commit()
+                    return
+
+                challenge.status = "composing"
                 session.add(challenge)
                 await session.commit()
-                return
+                try:
+                    challenge.composed_video_path = await compose_challenge(
+                        session, challenge, candidates
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    challenge.status = "failed"
+                    challenge.error = f"compose failed: {exc}"[:2000]
+                    session.add(challenge)
+                    await session.commit()
+                    return
 
-            challenge.status = "composing"
-            session.add(challenge)
-            await session.commit()
-            try:
-                challenge.composed_video_path = await compose_challenge(
-                    session, challenge, candidates
-                )
-            except Exception as exc:  # noqa: BLE001
-                challenge.status = "failed"
-                challenge.error = f"compose failed: {exc}"[:2000]
+                challenge.status = "review"
                 session.add(challenge)
                 await session.commit()
-                return
-
-            challenge.status = "review"
-            session.add(challenge)
-            await session.commit()
-            _cleanup_old_compose(old_video, challenge.composed_video_path)
-        except Exception:  # noqa: BLE001
-            logger.exception("bench entry %s rerender crashed", entry_id)
-            try:
-                await session.rollback()  # clear pending-rollback state (see start_challenge)
-                ent = await session.get(BenchEntry, entry_id)
-                if ent is not None:
-                    ch = await session.get(BenchChallenge, ent.challenge_id)
-                    if ch is not None:
-                        ch.status = "failed"
-                        ch.error = "entry rerender crashed — see backend logs"
-                        session.add(ch)
-                        await session.commit()
-            except Exception:
-                logger.exception("bench entry %s rerender failure write failed", entry_id)
+                _cleanup_old_compose(old_video, challenge.composed_video_path)
+            except Exception:  # noqa: BLE001
+                logger.exception("bench entry %s rerender crashed", entry_id)
+                try:
+                    await session.rollback()  # clear pending-rollback state (see start_challenge)
+                    ent = await session.get(BenchEntry, entry_id)
+                    if ent is not None:
+                        challenge_id = ent.challenge_id
+                        ch = await session.get(BenchChallenge, ent.challenge_id)
+                        if ch is not None:
+                            ch.status = "failed"
+                            ch.error = "entry rerender crashed — see backend logs"
+                            session.add(ch)
+                            await session.commit()
+                except Exception:
+                    logger.exception("bench entry %s rerender failure write failed", entry_id)
+    finally:
+        if challenge_id is not None:
+            await _release_challenge_run_claim(challenge_id)
 
 
 async def retry_entry(entry_id: uuid.UUID) -> None:

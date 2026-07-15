@@ -742,6 +742,102 @@ async def test_entry_rerender_rate_limit_fails_open_when_redis_down(
     orchestrator.rerender_entry.assert_called_once()
 
 
+# ── Challenge-level run-claim (2026-07-15 review fix) ───────────────────────
+#
+# The per-entry rerender cooldown is keyed by entry_id, so it alone can't
+# stop two DIFFERENT entries' rerender buttons on the SAME challenge from
+# racing each other's render+compose. A challenge-level Redis claim
+# (SET NX EX) closes that gap — and is shared by rerender_challenge/
+# recompose_challenge too, closing their pre-existing TOCTOU on the same
+# status guard. orchestrator.* stays mocked (_no_background) so the claim
+# is never released mid-test — exactly what lets these tests observe it.
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_claim_blocks_second_entry_same_challenge(
+    auth_client, session, fake_redis
+):
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/sd/a/index.html"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/sd/b/index.html"},
+        ],
+    )
+
+    resp1 = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp1.status_code == 200, resp1.text
+
+    # Different entry -> the per-entry cooldown doesn't apply, but the
+    # challenge-level claim (still held because orchestrator.rerender_entry
+    # is mocked and never releases it) must block this.
+    resp2 = await auth_client.post(f"/api/v1/bench/entries/{rows[1].id}/rerender")
+    assert resp2.status_code == 409
+    assert "run in progress" in resp2.json()["detail"]
+    orchestrator.rerender_entry.assert_called_once()  # only the first call
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_claim_blocks_challenge_wide_rerender(
+    auth_client, session, fake_redis
+):
+    """Cross-endpoint: an in-flight per-entry rerender must also block the
+    challenge-wide rerender/recompose buttons on the same challenge."""
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    resp1 = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp1.status_code == 200, resp1.text
+
+    resp2 = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp2.status_code == 409
+    assert "run in progress" in resp2.json()["detail"]
+    orchestrator.rerender_challenge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_challenge_rerender_claim_blocks_entry_rerender(auth_client, session, fake_redis):
+    """And the reverse: a challenge-wide rerender must claim the challenge
+    too, blocking a per-entry rerender started right after."""
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    resp1 = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
+    assert resp1.status_code == 200, resp1.text
+
+    resp2 = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp2.status_code == 409
+    assert "run in progress" in resp2.json()["detail"]
+    orchestrator.rerender_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_claim_fails_open_when_redis_down(auth_client, session, monkeypatch):
+    """Same fail-open contract as the per-entry cooldown: a Redis outage on
+    the challenge-claim check must never block the endpoint."""
+    import app.redis_client as redis_client_mod
+
+    async def _broken_get_redis():
+        raise ConnectionError("redis unreachable")
+
+    monkeypatch.setattr(redis_client_mod, "get_redis", _broken_get_redis)
+
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp.status_code == 200, resp.text
+    orchestrator.rerender_entry.assert_called_once()
+
+
 @pytest.mark.asyncio
 async def test_pending_x_post_approval_for_unrelated_challenge_does_not_block(
     auth_client, session, make_board
