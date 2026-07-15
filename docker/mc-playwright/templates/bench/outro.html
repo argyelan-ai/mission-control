@@ -7,8 +7,8 @@
 .kicker .tick { width:44px; height:2px; background:var(--cyan); }
 h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
   letter-spacing:-0.02em; }
-.table { margin-top:70px; width:1230px; font-family:'JetBrains Mono',monospace; }
-.row { display:grid; grid-template-columns: 520px 240px 240px 230px;
+.table { margin-top:70px; width:1450px; font-family:'JetBrains Mono',monospace; }
+.row { display:grid; grid-template-columns: 430px 180px 180px 180px 320px;
   padding:26px 28px; border-bottom:1px solid var(--line); align-items:baseline; }
 .row.head { color:var(--muted); font-size:18px; letter-spacing:.08em;
   text-transform:uppercase; border-bottom:1px solid #232838; }
@@ -31,7 +31,7 @@ h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
     <span class="label">argyelan <span class="accent">/</span> llm bench · run {{RUN_LABEL}} · results</span></div>
   <h1>The numbers.</h1>
   <div class="table">
-    <div class="row head"><span>Model</span><span>Time</span><span>Size</span><span>Cost</span></div>
+    <div class="row head"><span>Model</span><span>Time</span><span>Size</span><span>Cost</span><span>Tokens</span></div>
     {{ROWS}}
   </div>
 </div>

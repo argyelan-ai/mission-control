@@ -478,6 +478,24 @@ def test_render_outro_rows_html_escapes_values():
     assert "&amp;" in html and "&lt;b&gt;" in html
 
 
+def test_render_outro_rows_html_defaults_cost_and_tokens_to_em_dash():
+    """Older callers that don't pass cost/tokens stay compatible — both
+    default to the em dash (2026-07-15)."""
+    rows = [BrandingOutroRow(name="A", time="1 min", size="1 KB")]
+    html = render_outro_rows_html(rows)
+    assert html.count("—") == 2
+
+
+def test_render_outro_rows_html_includes_tokens_column():
+    rows = [
+        BrandingOutroRow(name="Grok 4.5", time="9.4 min", size="61 KB",
+                          cost="$0.42", tokens="12.4k → 1.8k"),
+    ]
+    html = render_outro_rows_html(rows)
+    assert html.count('class="val"') == 4
+    assert "12.4k → 1.8k" in html
+
+
 # ── build_branded_compose_cmd ────────────────────────────────────────────────
 
 
