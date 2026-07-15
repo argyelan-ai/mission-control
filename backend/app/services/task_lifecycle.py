@@ -780,6 +780,79 @@ async def execute_review_decision(
     await session.commit()
 
 
+async def system_finalize_task_done(
+    session: AsyncSession,
+    task: Task,
+    board_id: uuid.UUID,
+    *,
+    old_status: str,
+    reason: str = "review_approved",
+) -> None:
+    """System-initiated 'task -> done' finalization — no human/agent review
+    decision involved. Reuses the same primitives execute_review_decision's
+    straight-to-done approve branch calls (PR merge, task_done_hooks,
+    TaskEvent, activity, auto-memory/feedback-lesson capture, dependent-task
+    dispatch, Board-Lead notify) so there is only one place that knows what
+    "done" means — not a second lifecycle (no_second_lifecycle).
+
+    Not folded into execute_review_decision itself: that function also
+    carries the user_test gate, the report-back hard-gate, the self-review
+    escalation, and comment/decision bookkeeping — none of which apply to a
+    system auto-finalize with no reviewer and no comment. Kept standalone so
+    a bug in one path can't silently change the other's tested behavior.
+
+    Used by the bench_studio review-hook (task_review_hooks, ADR-071,
+    2026-07-15): bench agent tasks skip human review entirely — the
+    artifact IS the review, judged in the Bench Studio UI — so review must
+    become done immediately, not sit waiting for `mc approve`.
+    """
+    task.status = "done"
+    task.completed_at = utcnow()
+    task.dispatch_intent = "root"
+    session.add(task)
+    await session.commit()
+
+    await _merge_pr_if_exists(session, task, None)
+    session.add(task)
+    await session.commit()
+    from app.verticals import hooks as vertical_hooks
+    await vertical_hooks.run_task_done_hooks(session, task)
+
+    await record_task_event(
+        session, task.id, old_status, "done",
+        changed_by="system",
+        reason=reason,
+    )
+    await emit_event(
+        session, "task.review_approved",
+        f"Review approved von System — '{task.title}'",
+        board_id=board_id, task_id=task.id,
+        detail={"decision": "approved", "actor": "System"},
+    )
+
+    trigger_auto_memory(task, "done", old_status)
+    await trigger_feedback_lesson(session, task, "done", old_status)
+
+    from app.models.task import TaskDependency
+    from app.services.dispatch import dependencies_met, auto_dispatch_task
+    dep_result = await session.exec(
+        select(TaskDependency).where(TaskDependency.depends_on_task_id == task.id)
+    )
+    for dep in dep_result.all():
+        dependent_task = await session.get(Task, dep.task_id)
+        if (dependent_task
+                and dependent_task.status in ("inbox", "in_progress")
+                and not dependent_task.dispatched_at
+                and await dependencies_met(session, dependent_task)):
+            from app.utils import create_tracked_task
+            create_tracked_task(auto_dispatch_task(dependent_task.id, dependent_task.board_id))
+
+    from app.utils import create_tracked_task
+    create_tracked_task(
+        _notify_lead_on_completion(session, task, board_id, "System")
+    )
+
+
 async def handle_review_handoff(
     session: AsyncSession,
     task: Task,
@@ -874,12 +947,24 @@ async def handle_human_review_handoff(
     `review` with assigned_agent_id=None, which is enough for the Inbox
     query (filters on status=review) to surface it. Mark decides via the
     existing POST .../review endpoint.
+
+    Vertical task_review_hooks get first say (bench_studio, 2026-07-15):
+    a hook may finalize the task straight to done itself (system_finalize_
+    task_done) when a generic "wait for Mark" step would be pointless — the
+    artifact is judged elsewhere (Bench Studio UI), not via this Task review
+    gate. Errors inside a hook are logged + swallowed by run_task_review_
+    hooks, so a broken hook just falls through to the normal flow below
+    instead of crashing the request.
     """
     # Release the developer lock (clear current_task_id) — same as the
     # agent-reviewer path, the developer is done with this task either way.
     if developer and developer.current_task_id == task.id:
         developer.current_task_id = None
         session.add(developer)
+
+    from app.verticals import hooks as vertical_hooks
+    if await vertical_hooks.run_task_review_hooks(session, task):
+        return
 
     task.assigned_agent_id = None
     task.ack_at = None

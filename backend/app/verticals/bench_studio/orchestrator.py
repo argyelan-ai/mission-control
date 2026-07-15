@@ -277,9 +277,16 @@ async def dispatch_agent_entry(
         assigned_agent_id=agent.id,
         is_auto_created=True,
         auto_reason=f"bench_studio challenge {challenge.id}",
-        # Operator decision 2026-07-12: bench results are judged by the human
-        # (the artifact IS the review), never by an agent reviewer / the board
-        # lead — a lead review burns frontier tokens for zero benefit.
+        # Operator decision 2026-07-12 (agent/Lead reviewer) + 2026-07-15
+        # (Mark's manual approve, too): bench results are judged by the
+        # human in the Bench Studio UI (challenge status 'review' + video) —
+        # never by an agent reviewer / the board lead (burns frontier tokens
+        # for zero benefit), and not via a second manual `mc approve` gate
+        # either. human_review_required=True still matters: it routes the
+        # task to handle_human_review_handoff instead of dispatching a Rex-
+        # style agent reviewer. The bench_studio task_review_hook
+        # (on_task_review, registered below) intercepts there and finalizes
+        # review -> done immediately, so this never actually waits for Mark.
         human_review_required=True,
     )
     session.add(task)
@@ -357,6 +364,34 @@ async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | No
         )
     ).one()
     return float(total) if total is not None else None
+
+
+async def on_task_review(session: AsyncSession, task) -> bool:
+    """task_review_hook (core registry): bench agent tasks skip human review
+    entirely — review -> done fires immediately once the one-shot lands, so
+    on_task_done (artifact collection below) runs right away instead of
+    waiting on `mc approve`. The human still judges the result, just in the
+    Bench Studio UI (challenge status 'review' + rendered video), not via
+    the generic Task review gate. Self-filters — False (no-op) for tasks
+    without a bench entry, so the normal human-review flow still applies to
+    every other task on the board.
+
+    Operator decision 2026-07-15 — supersedes the 2026-07-12 decision (see
+    dispatch_agent_entry below) that only ruled out an agent/Lead reviewer;
+    it did not yet rule out Mark's manual approve step, which this closes.
+    """
+    result = await session.exec(select(BenchEntry).where(BenchEntry.task_id == task.id))
+    if result.first() is None:
+        return False
+
+    from app.services.task_lifecycle import system_finalize_task_done
+
+    await system_finalize_task_done(
+        session, task, task.board_id,
+        old_status="review",
+        reason="bench_studio_auto_finalize",
+    )
+    return True
 
 
 async def on_task_done(session: AsyncSession, task) -> None:
