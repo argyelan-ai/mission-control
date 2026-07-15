@@ -1083,6 +1083,17 @@ class TaskRunnerService:
                     "Stale-Check Auto-Promote: Task '%s' hatte resolution-Kommentar von %s → review",
                     task.title[:60], agent.name,
                 )
+                # human_review_required tasks (e.g. bench_studio) must go
+                # through the same human-review handoff the PATCH routers use
+                # — otherwise they silently sit in review forever (the
+                # watchdog skips human_review_required tasks on purpose, no
+                # Telegram ping fires, and a vertical's task_review_hooks
+                # never get a chance to auto-finalize). Behavior-neutral for
+                # non-human-review tasks: this branch never called
+                # handle_review_handoff before either, so it still doesn't.
+                if getattr(task, "human_review_required", None):
+                    from app.services.task_lifecycle import handle_human_review_handoff
+                    await handle_human_review_handoff(session, task, task.board_id, developer=agent)
                 continue
 
             minutes_since_activity = (now - last_activity).total_seconds() / 60

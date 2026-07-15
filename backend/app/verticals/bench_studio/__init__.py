@@ -5,7 +5,7 @@ mc-playwright records videos -> ffmpeg grid -> Studio review -> X-post draft
 via the CORE Approval + ContentPipeline lifecycles (no second lifecycle).
 
 Strippable: delete this directory and the app boots unchanged. Coupling into
-core exclusively via app.verticals.hooks (task_done_hooks +
+core exclusively via app.verticals.hooks (task_review_hooks + task_done_hooks +
 x_post_resolved_hooks). Core NEVER imports this package.
 """
 from __future__ import annotations
@@ -16,10 +16,12 @@ def register(app) -> None:
     from app.verticals import hooks
 
     from .drafts import on_x_post_resolved  # noqa: PLC0415
-    from .orchestrator import on_task_done  # noqa: PLC0415
+    from .orchestrator import on_task_done, on_task_review  # noqa: PLC0415
     from .routers import router  # noqa: PLC0415
 
     app.include_router(router)
+    if on_task_review not in hooks.task_review_hooks:
+        hooks.task_review_hooks.append(on_task_review)
     if on_task_done not in hooks.task_done_hooks:
         hooks.task_done_hooks.append(on_task_done)
     if on_x_post_resolved not in hooks.x_post_resolved_hooks:

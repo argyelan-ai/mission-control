@@ -33,6 +33,32 @@ async def run_task_done_hooks(session: Any, task: Any) -> None:
             logger.exception("task_done hook %s failed", getattr(hook, "__name__", hook))
 
 
+# Async hooks, called when a task lands in status=review, before the generic
+# "wait for a human reviewer" flow runs (task_lifecycle.handle_human_review_
+# handoff). Signature: async (session, task) -> bool. Return True when the
+# hook fully handled/finalized the task itself (e.g. bench_studio finalizing
+# a one-shot bench task straight to done) — the caller then skips its own
+# default review-wait side effects. Return False for a no-op / self-filtered
+# skip. Errors are logged and swallowed (treated as False, i.e. "not
+# handled") — a broken hook falls back to the normal human-review flow
+# instead of breaking the request.
+task_review_hooks: list[Callable[..., Awaitable[bool]]] = []
+
+
+async def run_task_review_hooks(session: Any, task: Any) -> bool:
+    """Run all task_review_hooks; first True wins. Log errors, never propagate."""
+    import logging
+
+    logger = logging.getLogger("mc.verticals.hooks")
+    for hook in task_review_hooks:
+        try:
+            if await hook(session, task):
+                return True
+        except Exception:
+            logger.exception("task_review hook %s failed", getattr(hook, "__name__", hook))
+    return False
+
+
 # Async hooks, called after an x_post approval is resolved — approved AND
 # rejected. Signature:
 #   async (session, approval, resolution_status: str, result: dict | None) -> None
