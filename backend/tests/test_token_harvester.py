@@ -73,6 +73,54 @@ def _make_line(
     return json.dumps(line)
 
 
+def _make_omp_line(
+    *,
+    short_id: str = "74f7a91e",
+    model: str = "Qwen/Qwen3.6-35B-A3B-FP8",
+    provider: str | None = "mc-openai",
+    timestamp: str = "2026-07-15T16:29:37.102Z",
+    input_tokens: int = 28848,
+    output_tokens: int = 135,
+    cache_read: int = 0,
+    cache_write: int = 0,
+    role: str = "assistant",
+    type_: str = "message",
+) -> str:
+    """Builds a real-shaped omp JSONL line (ADR-045 headless harness).
+
+    Sampled verbatim from mc-agent-sparky (2026-07-15, Qwen/Spark) — top-level
+    id/model/provider, camelCase usage keys, no sessionId/uuid of its own.
+    """
+    line: dict = {
+        "type": type_,
+        "id": short_id,
+        "parentId": "54c8d3f0",
+        "timestamp": timestamp,
+        "message": {
+            "role": role,
+            "usage": {
+                "input": input_tokens,
+                "output": output_tokens,
+                "cacheRead": cache_read,
+                "cacheWrite": cache_write,
+                "totalTokens": input_tokens + output_tokens,
+                "cost": {
+                    "input": 0.00403872,
+                    "output": 0.000135,
+                    "cacheRead": 0,
+                    "cacheWrite": 0,
+                    "total": 0.00417372,
+                },
+            },
+        },
+        "model": model,
+        "api": "openai-completions",
+    }
+    if provider is not None:
+        line["provider"] = provider
+    return json.dumps(line)
+
+
 # ── parse_transcript_line ──────────────────────────────────────────────────
 
 
@@ -157,6 +205,73 @@ class TestParseTranscriptLine:
         assert rec is not None
         assert rec["cache_read_tokens"] == 0
         assert rec["cache_write_tokens"] == 0
+
+
+# ── parse_transcript_line — omp schema (ADR-045) ────────────────────────────
+
+
+class TestParseOmpLine:
+    def test_omp_line_parsed(self):
+        line = _make_omp_line()
+        rec = parse_transcript_line(line, session_id="sess-omp-1")
+        assert rec is not None
+        assert rec["uuid"] == "sess-omp-1:74f7a91e"
+        assert rec["model"] == "Qwen/Qwen3.6-35B-A3B-FP8"
+        assert rec["provider"] == "mc-openai"
+        assert rec["input_tokens"] == 28848
+        assert rec["output_tokens"] == 135
+        assert rec["cache_read_tokens"] == 0
+        assert rec["cache_write_tokens"] == 0
+
+    def test_omp_dedup_key_namespaced_by_session(self):
+        """omp's 8-hex id is collision-prone across sessions — the dedup key
+        must be namespaced by session_id, not the bare id."""
+        line = _make_omp_line(short_id="dupe")
+        rec_a = parse_transcript_line(line, session_id="session-a")
+        rec_b = parse_transcript_line(line, session_id="session-b")
+        assert rec_a["uuid"] != rec_b["uuid"]
+        assert rec_a["uuid"] == "session-a:dupe"
+        assert rec_b["uuid"] == "session-b:dupe"
+
+    def test_omp_line_without_session_id_uses_empty_prefix(self):
+        line = _make_omp_line(short_id="abc123")
+        rec = parse_transcript_line(line)
+        assert rec is not None
+        assert rec["uuid"] == ":abc123"
+
+    def test_omp_user_line_skipped(self):
+        line = _make_omp_line(role="user")
+        assert parse_transcript_line(line, session_id="s") is None
+
+    def test_omp_missing_usage_skipped(self):
+        d = json.loads(_make_omp_line())
+        del d["message"]["usage"]
+        assert parse_transcript_line(json.dumps(d), session_id="s") is None
+
+    def test_omp_missing_model_skipped(self):
+        d = json.loads(_make_omp_line())
+        del d["model"]
+        assert parse_transcript_line(json.dumps(d), session_id="s") is None
+
+    def test_omp_missing_id_skipped(self):
+        d = json.loads(_make_omp_line())
+        del d["id"]
+        assert parse_transcript_line(json.dumps(d), session_id="s") is None
+
+    def test_omp_without_provider_field_omits_provider_key(self):
+        line = _make_omp_line(provider=None)
+        rec = parse_transcript_line(line, session_id="s")
+        assert rec is not None
+        assert rec.get("provider") is None
+
+    def test_claude_line_unaffected_by_session_id_arg(self):
+        """Claude Code lines keep their own sessionId — the extra session_id
+        kwarg (introduced for omp) must be a no-op for them."""
+        line = _make_line(uuid_="claude-1", session_id="sess-001")
+        rec = parse_transcript_line(line, session_id="ignored-for-claude")
+        assert rec is not None
+        assert rec["uuid"] == "claude-1"
+        assert rec["session_id"] == "sess-001"
 
 
 # ── match_price ────────────────────────────────────────────────────────────
@@ -317,6 +432,19 @@ class TestHarvestFile:
         records = harvest_file(str(jsonl), processed_lines=0)
         assert len(records) == 2
         assert {r["uuid"] for r in records} == {"uuid-A", "uuid-B"}
+
+    def test_omp_file_derives_session_id_from_filename(self, tmp_path):
+        """omp writes one JSONL per session with no sessionId field — harvest_file
+        must derive it from the filename and namespace the dedup key with it."""
+        from app.services.token_harvester import harvest_file
+
+        jsonl = tmp_path / "2026-07-15T16-29-31-091Z_019f669c-aa50.jsonl"
+        jsonl.write_text(_make_omp_line(short_id="idA") + "\n")
+
+        records = harvest_file(str(jsonl), processed_lines=0)
+        assert len(records) == 1
+        assert records[0]["uuid"] == "2026-07-15T16-29-31-091Z_019f669c-aa50:idA"
+        assert records[0]["session_id"] == "2026-07-15T16-29-31-091Z_019f669c-aa50"
 
     def test_skip_lines_are_not_returned(self, tmp_path):
         """(d,e) synthetic + user → not in records."""
@@ -488,6 +616,72 @@ class TestRunHarvestIntegration:
         result = await async_db_session.exec(select(ModelUsageEvent))
         events = result.all()
         assert any(e.message_uuid == "harvest-001" for e in events)
+
+    async def test_harvest_omp_sessions_glob(self, tmp_path, async_db_session):
+        """omp writes to {slug}/omp-sessions/... (ADR-045) — a distinct glob
+        from claude-config/projects. Root-cause regression test: this glob was
+        entirely missing before the fix, so omp harnesses harvested 0 events."""
+        from app.services.token_harvester import run_harvest
+
+        agents_dir = tmp_path / "agents"
+        sparky_dir = agents_dir / "sparky" / "omp-sessions" / "--workspace--"
+        sparky_dir.mkdir(parents=True)
+        session_file = sparky_dir / "2026-07-15T16-29-31-091Z_019f669c.jsonl"
+        session_file.write_text(
+            _make_omp_line(short_id="omp001", model="Qwen/Qwen3.6-35B-A3B-FP8") + "\n"
+        )
+
+        sparky_id = uuid.uuid4()
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={"sparky": sparky_id},
+        )
+
+        assert stats["new_events"] == 1
+        result = await async_db_session.exec(select(ModelUsageEvent))
+        events = result.all()
+        assert len(events) == 1
+        ev = events[0]
+        assert ev.harness == "sparky"
+        assert ev.agent_id == sparky_id
+        assert ev.message_uuid == "2026-07-15T16-29-31-091Z_019f669c:omp001"
+        assert ev.input_tokens == 28848
+        assert ev.output_tokens == 135
+        # Top-level `provider` wins over the "/"-in-model-name lmstudio heuristic.
+        assert ev.provider == "mc-openai"
+
+    async def test_harvest_both_claude_config_and_omp_sessions_for_same_agent(
+        self, tmp_path, async_db_session
+    ):
+        """Sparky has both legacy claude-config transcripts and new omp-sessions
+        transcripts on disk — both globs must be harvested, not just one."""
+        from app.services.token_harvester import run_harvest
+
+        agents_dir = tmp_path / "agents"
+        claude_dir = agents_dir / "sparky" / "claude-config" / "projects" / "p"
+        claude_dir.mkdir(parents=True)
+        (claude_dir / "s.jsonl").write_text(
+            _make_line(uuid_="claude-evt", model="claude-sonnet-4-6") + "\n"
+        )
+
+        omp_dir = agents_dir / "sparky" / "omp-sessions" / "--workspace--"
+        omp_dir.mkdir(parents=True)
+        (omp_dir / "sess.jsonl").write_text(_make_omp_line(short_id="omp-evt") + "\n")
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+        )
+
+        assert stats["new_events"] == 2
+        result = await async_db_session.exec(select(ModelUsageEvent))
+        uuids = {e.message_uuid for e in result.all()}
+        assert "claude-evt" in uuids
+        assert any(u.endswith(":omp-evt") for u in uuids)
 
     async def test_dedup_same_uuid(self, tmp_path, async_db_session):
         """(c) Same uuid twice → only once in DB."""
