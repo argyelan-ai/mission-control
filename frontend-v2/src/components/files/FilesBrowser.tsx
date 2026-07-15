@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ChevronUp, ChevronDown, Loader2, AlertCircle, FolderOpen } from "lucide-react";
 import { api } from "@/lib/api";
@@ -46,11 +46,13 @@ interface FilesBrowserProps {
   onToggleSelectAll: (subpaths: string[], on: boolean) => void;
   /** "list" (table, default) or "grid" (thumbnail cards). */
   view?: ViewMode;
+  /** Right-aligned controls in the breadcrumb header (e.g. the view toggle). */
+  headerActions?: ReactNode;
 }
 
 export function FilesBrowser({
   root, subpath, onNavigate, onSelectFile, selectedSubpath,
-  selected, onToggleSelect, onToggleSelectAll, view = "list",
+  selected, onToggleSelect, onToggleSelectAll, view = "list", headerActions,
 }: FilesBrowserProps) {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["files-list", root.key, subpath],
@@ -88,30 +90,34 @@ export function FilesBrowser({
 
   return (
     <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
-      {/* Breadcrumb */}
+      {/* Breadcrumb + header actions (view toggle lives here so the panel top
+          stays flush with the sidebar — no extra row above the panel) */}
       <div
-        className="flex items-center gap-1 flex-wrap px-4 py-3"
+        className="flex items-center gap-3 px-4 py-2"
         style={{ fontSize: 12, color: C.textMuted, borderBottom: `1px solid ${C.borderSubtle}` }}
       >
-        <button
-          onClick={() => navigateToBreadcrumb(-1)}
-          className="hover:underline cursor-pointer font-medium"
-          style={{ color: parts.length > 0 ? C.accent : C.textPrimary }}
-        >
-          {root.label}
-        </button>
-        {parts.map((part, i) => (
-          <span key={i} className="flex items-center gap-1">
-            <ChevronRight size={11} style={{ color: C.textDim }} />
-            <button
-              onClick={() => navigateToBreadcrumb(i)}
-              className="hover:underline cursor-pointer"
-              style={{ color: i === parts.length - 1 ? C.textPrimary : C.accent }}
-            >
-              {part}
-            </button>
-          </span>
-        ))}
+        <div className="flex items-center gap-1 flex-wrap flex-1 min-w-0">
+          <button
+            onClick={() => navigateToBreadcrumb(-1)}
+            className="hover:underline cursor-pointer font-medium"
+            style={{ color: parts.length > 0 ? C.accent : C.textPrimary }}
+          >
+            {root.label}
+          </button>
+          {parts.map((part, i) => (
+            <span key={i} className="flex items-center gap-1">
+              <ChevronRight size={11} style={{ color: C.textDim }} />
+              <button
+                onClick={() => navigateToBreadcrumb(i)}
+                className="hover:underline cursor-pointer"
+                style={{ color: i === parts.length - 1 ? C.textPrimary : C.accent }}
+              >
+                {part}
+              </button>
+            </span>
+          ))}
+        </div>
+        {headerActions && <div className="shrink-0">{headerActions}</div>}
       </div>
 
       {isLoading ? (
