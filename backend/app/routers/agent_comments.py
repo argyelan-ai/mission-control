@@ -367,10 +367,21 @@ async def agent_add_comment(
         from app.services.task_lifecycle import update_agent_active_task
         await update_agent_active_task(session, agent.id, task, new_status, "in_progress")
 
-        # Review handoff: only for review (subtasks go straight to done)
+        # Review handoff: only for review (subtasks go straight to done).
+        # Mirror the PATCH routers' human_review_required gate (tasks.py,
+        # agent_task_status.py) — unconditionally calling handle_review_handoff
+        # here dispatched an agent reviewer even for tasks routed to Mark /
+        # a vertical review-hook (e.g. bench_studio: burns frontier tokens on
+        # a review nobody wants, and skips the task_review_hooks that would
+        # otherwise finalize the task straight to done — review-hook fix,
+        # 2026-07-15).
         if new_status == "review":
-            from app.services.task_lifecycle import handle_review_handoff
-            await handle_review_handoff(session, task, board_id, developer=agent)
+            if not getattr(task, "human_review_required", None):
+                from app.services.task_lifecycle import handle_review_handoff
+                await handle_review_handoff(session, task, board_id, developer=agent)
+            else:
+                from app.services.task_lifecycle import handle_human_review_handoff
+                await handle_human_review_handoff(session, task, board_id, developer=agent)
 
     # ── Lead-Eskalation (Fix A): Lead entscheidet, dass der Blocker ein
     # Operator-Fall ist → sofort Stufe 2 (Approval + Telegram), Triage-Frist

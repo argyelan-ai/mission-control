@@ -805,52 +805,69 @@ async def system_finalize_task_done(
     2026-07-15): bench agent tasks skip human review entirely — the
     artifact IS the review, judged in the Bench Studio UI — so review must
     become done immediately, not sit waiting for `mc approve`.
+
+    Everything AFTER the initial done-commit below is best-effort: once
+    status=done + completed_at are committed, the finalization counts as
+    successful — a later step raising (e.g. emit_event's Redis broadcast)
+    must never leave the task stuck half-finalized, and especially must
+    never let a caller's error-swallowing wrapper (run_task_review_hooks)
+    treat this as "not handled" and fall through to a stale-state fallback
+    that fights a task that's already done (Critical fix, 2026-07-15 review).
     """
     task.status = "done"
     task.completed_at = utcnow()
     task.dispatch_intent = "root"
+    task.review_decision = "approved"
+    task.review_decided_at = utcnow()
     session.add(task)
     await session.commit()
 
-    await _merge_pr_if_exists(session, task, None)
-    session.add(task)
-    await session.commit()
-    from app.verticals import hooks as vertical_hooks
-    await vertical_hooks.run_task_done_hooks(session, task)
+    try:
+        await _merge_pr_if_exists(session, task, None)
+        session.add(task)
+        await session.commit()
+        from app.verticals import hooks as vertical_hooks
+        await vertical_hooks.run_task_done_hooks(session, task)
 
-    await record_task_event(
-        session, task.id, old_status, "done",
-        changed_by="system",
-        reason=reason,
-    )
-    await emit_event(
-        session, "task.review_approved",
-        f"Review approved von System — '{task.title}'",
-        board_id=board_id, task_id=task.id,
-        detail={"decision": "approved", "actor": "System"},
-    )
+        await record_task_event(
+            session, task.id, old_status, "done",
+            changed_by="system",
+            reason=reason,
+        )
+        await emit_event(
+            session, "task.review_approved",
+            f"Review approved von System — '{task.title}'",
+            board_id=board_id, task_id=task.id,
+            detail={"decision": "approved", "actor": "System"},
+        )
 
-    trigger_auto_memory(task, "done", old_status)
-    await trigger_feedback_lesson(session, task, "done", old_status)
+        trigger_auto_memory(task, "done", old_status)
+        await trigger_feedback_lesson(session, task, "done", old_status)
 
-    from app.models.task import TaskDependency
-    from app.services.dispatch import dependencies_met, auto_dispatch_task
-    dep_result = await session.exec(
-        select(TaskDependency).where(TaskDependency.depends_on_task_id == task.id)
-    )
-    for dep in dep_result.all():
-        dependent_task = await session.get(Task, dep.task_id)
-        if (dependent_task
-                and dependent_task.status in ("inbox", "in_progress")
-                and not dependent_task.dispatched_at
-                and await dependencies_met(session, dependent_task)):
-            from app.utils import create_tracked_task
-            create_tracked_task(auto_dispatch_task(dependent_task.id, dependent_task.board_id))
+        from app.models.task import TaskDependency
+        from app.services.dispatch import dependencies_met, auto_dispatch_task
+        dep_result = await session.exec(
+            select(TaskDependency).where(TaskDependency.depends_on_task_id == task.id)
+        )
+        for dep in dep_result.all():
+            dependent_task = await session.get(Task, dep.task_id)
+            if (dependent_task
+                    and dependent_task.status in ("inbox", "in_progress")
+                    and not dependent_task.dispatched_at
+                    and await dependencies_met(session, dependent_task)):
+                from app.utils import create_tracked_task
+                create_tracked_task(auto_dispatch_task(dependent_task.id, dependent_task.board_id))
 
-    from app.utils import create_tracked_task
-    create_tracked_task(
-        _notify_lead_on_completion(session, task, board_id, "System")
-    )
+        from app.utils import create_tracked_task
+        create_tracked_task(
+            _notify_lead_on_completion(session, task, board_id, "System")
+        )
+    except Exception:
+        logger.exception(
+            "system_finalize_task_done: post-commit step failed for task %s "
+            "(task is done regardless — only a follow-up side effect was lost)",
+            task.id,
+        )
 
 
 async def handle_review_handoff(
@@ -964,6 +981,25 @@ async def handle_human_review_handoff(
 
     from app.verticals import hooks as vertical_hooks
     if await vertical_hooks.run_task_review_hooks(session, task):
+        return
+
+    # Defensive re-check (Critical fix, 2026-07-15 review): a hook may have
+    # raised AFTER already committing task.status="done" (system_finalize_
+    # task_done's post-commit steps are best-effort/exception-swallowed, see
+    # its docstring) — run_task_review_hooks would then report "not handled"
+    # even though the task IS already finalized. Without this guard the
+    # "wait for Mark" mutations below would stomp a done task back into a
+    # contradictory state (status=done but completed_at/review_decision
+    # reset, a stray "wartet auf Mark" comment, a Telegram ping for
+    # something that's already finished) that isn't even fixable via the
+    # review UI (execute_review_decision requires status=="review").
+    if task.status != "review":
+        logger.warning(
+            "handle_human_review_handoff: task %s left 'review' status before "
+            "the wait-for-Mark fallback ran (now '%s') — skipping fallback, "
+            "a task_review_hook likely finalized it despite reporting an error",
+            task.id, task.status,
+        )
         return
 
     task.assigned_agent_id = None

@@ -380,6 +380,14 @@ async def on_task_review(session: AsyncSession, task) -> bool:
     dispatch_agent_entry below) that only ruled out an agent/Lead reviewer;
     it did not yet rule out Mark's manual approve step, which this closes.
     """
+    if task.status != "review":
+        # Idempotency guard (2026-07-15 review): the registry can fire this
+        # hook more than once for the same task (e.g. a retry after a
+        # transient error elsewhere in the caller's chain) — re-finalizing
+        # an already-done task would overwrite completed_at/review_decision
+        # with fresh values and re-run every side effect a second time.
+        return False
+
     result = await session.exec(select(BenchEntry).where(BenchEntry.task_id == task.id))
     if result.first() is None:
         return False
