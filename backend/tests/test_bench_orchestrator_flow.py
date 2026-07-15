@@ -547,9 +547,7 @@ async def test_recompose_challenge_releases_run_claim_after_run(session, monkeyp
 
 @pytest.mark.asyncio
 async def test_rerender_entry_releases_run_claim_after_run(session, monkeypatch, fake_redis):
-    """Covers both the happy path and the record-failure fallback — the
-    claim must come off in either case, keyed off the entry's challenge_id
-    even though rerender_entry's public signature only takes entry_id."""
+    """The happy path — claim must come off after a normal successful run."""
     monkeypatch.setattr("app.database.engine", test_engine)
     redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
 
@@ -570,9 +568,50 @@ async def test_rerender_entry_releases_run_claim_after_run(session, monkeypatch,
     }))
     monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g.mp4"))
 
-    await orchestrator.rerender_entry(entries[0].id)
+    await orchestrator.rerender_entry(entries[0].id, ch.id)
 
     assert await fake_redis.get(claim_key) is None
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_releases_run_claim_when_entry_vanished(
+    session, monkeypatch, fake_redis
+):
+    """Zombie-claim regression (2026-07-15, verify-work finding): if the
+    entry is deleted in the window between the router's claim and this
+    task's first DB read, the early `entry is None -> return` must still
+    release the claim — otherwise the challenge is wrongly stuck at 409
+    "run in progress" for the claim's full 30-minute TTL even though
+    nothing is actually running. challenge_id now comes in as an explicit
+    parameter (not derived from the entry row) specifically so this path
+    can still release it."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    redis_client_mod = _use_fake_redis(monkeypatch, fake_redis)
+
+    ch, entries = await _seed(
+        session,
+        entry_specs=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                      "artifact_path": "/a/index.html", "video_path": "/sd/a-old.mp4"}],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+    entry_id = entries[0].id
+
+    claim_key = redis_client_mod.RedisKeys.bench_challenge_run_claim(str(ch.id))
+    await fake_redis.set(claim_key, "1", ex=1800)  # simulates the router's claim
+
+    # Simulate the entry having been deleted in the window between the
+    # router's claim and the background task's first read.
+    await session.delete(entries[0])
+    await session.commit()
+
+    await orchestrator.rerender_entry(entry_id, ch.id)
+
+    assert await fake_redis.get(claim_key) is None
+    # A fresh claim must be possible again — the run-claim gate isn't
+    # wrongly stuck open.
+    assert await fake_redis.set(claim_key, "1", nx=True, ex=1800)
 
 
 @pytest.mark.asyncio
@@ -604,7 +643,7 @@ async def test_rerender_entry_releases_run_claim_fail_open_when_redis_down(
     monkeypatch.setattr(orchestrator, "compose_challenge", AsyncMock(return_value="/sd/g.mp4"))
 
     # Must complete without raising despite the broken redis client.
-    await orchestrator.rerender_entry(entries[0].id)
+    await orchestrator.rerender_entry(entries[0].id, ch.id)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as vs:
         updated_ch = await vs.get(BenchChallenge, ch.id)
@@ -641,7 +680,7 @@ async def test_rerender_entry_rerecords_one_and_recomposes(session, monkeypatch)
     monkeypatch.setattr(orchestrator, "record_entry", record_mock)
     monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
 
-    await orchestrator.rerender_entry(target.id)
+    await orchestrator.rerender_entry(target.id, ch.id)
 
     record_mock.assert_awaited_once()
     assert record_mock.await_args.args[0].id == target.id  # only the target entry
@@ -686,7 +725,7 @@ async def test_rerender_entry_record_failure_falls_back_to_survivors(session, mo
     compose_mock = AsyncMock(return_value="/sd/grid-new.mp4")
     monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
 
-    await orchestrator.rerender_entry(target.id)
+    await orchestrator.rerender_entry(target.id, ch.id)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as vs:
         updated_ch = await vs.get(BenchChallenge, ch.id)
@@ -725,7 +764,7 @@ async def test_rerender_entry_crash_writes_failed_status(session, monkeypatch):
         AsyncMock(side_effect=RuntimeError("compose also crashes")),
     )
 
-    await orchestrator.rerender_entry(entries[0].id)
+    await orchestrator.rerender_entry(entries[0].id, ch.id)
 
     async with AsyncSession(test_engine, expire_on_commit=False) as vs:
         updated_ch = await vs.get(BenchChallenge, ch.id)

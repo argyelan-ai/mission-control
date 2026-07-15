@@ -633,7 +633,7 @@ async def rerender_entry(
     # the same challenge from racing each other's render+compose.
     await _claim_challenge_run(entry.challenge_id)
     create_tracked_task(
-        orchestrator.rerender_entry(entry.id),
+        orchestrator.rerender_entry(entry.id, entry.challenge_id),
         name=f"rerender_entry({entry.id})"
     )
     return {"ok": True}

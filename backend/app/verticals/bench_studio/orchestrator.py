@@ -979,19 +979,22 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
         await _release_challenge_run_claim(challenge_id)
 
 
-async def rerender_entry(entry_id: uuid.UUID) -> None:
+async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
     """Background: re-record ONLY this entry from its existing artifact, then
     recompose the whole challenge from every entry that still has a video
     (2026-07-15, per-entry rerender). Cheaper than rerender_challenge when a
     single model's recording looks off — other entries' recordings are
     untouched. Reuses compose_challenge (no copy) like rerender_challenge/
-    recompose_challenge above."""
+    recompose_challenge above.
+
+    Takes challenge_id explicitly (the router already knows it — it's what
+    the run-claim was taken on) rather than deriving it from the entry row:
+    deriving it requires a DB read that can fail (entry deleted between the
+    router's claim and this task's first read), which used to skip the
+    claim-release finally below and leak the claim for its full 30-minute
+    TTL (2026-07-15 review fix, verify-work finding)."""
     from app.database import engine
 
-    # Discovered once the entry is loaded — the finally below needs it to
-    # release the router's per-challenge run-claim, even though this
-    # function's public signature is keyed by entry_id.
-    challenge_id: uuid.UUID | None = None
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             try:
@@ -1001,7 +1004,6 @@ async def rerender_entry(entry_id: uuid.UUID) -> None:
                 challenge = await session.get(BenchChallenge, entry.challenge_id)
                 if challenge is None:
                     return
-                challenge_id = challenge.id
 
                 old_video = challenge.composed_video_path
                 challenge.status = "rendering"
@@ -1062,7 +1064,6 @@ async def rerender_entry(entry_id: uuid.UUID) -> None:
                     await session.rollback()  # clear pending-rollback state (see start_challenge)
                     ent = await session.get(BenchEntry, entry_id)
                     if ent is not None:
-                        challenge_id = ent.challenge_id
                         ch = await session.get(BenchChallenge, ent.challenge_id)
                         if ch is not None:
                             ch.status = "failed"
@@ -1072,8 +1073,7 @@ async def rerender_entry(entry_id: uuid.UUID) -> None:
                 except Exception:
                     logger.exception("bench entry %s rerender failure write failed", entry_id)
     finally:
-        if challenge_id is not None:
-            await _release_challenge_run_claim(challenge_id)
+        await _release_challenge_run_claim(challenge_id)
 
 
 async def retry_entry(entry_id: uuid.UUID) -> None:
