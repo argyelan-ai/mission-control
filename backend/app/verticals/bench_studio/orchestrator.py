@@ -954,6 +954,93 @@ async def recompose_challenge(challenge_id: uuid.UUID) -> None:
                 logger.exception("bench challenge %s recompose failure write failed", challenge_id)
 
 
+async def rerender_entry(entry_id: uuid.UUID) -> None:
+    """Background: re-record ONLY this entry from its existing artifact, then
+    recompose the whole challenge from every entry that still has a video
+    (2026-07-15, per-entry rerender). Cheaper than rerender_challenge when a
+    single model's recording looks off — other entries' recordings are
+    untouched. Reuses compose_challenge (no copy) like rerender_challenge/
+    recompose_challenge above."""
+    from app.database import engine
+
+    async with AsyncSession(engine, expire_on_commit=False) as session:
+        try:
+            entry = await session.get(BenchEntry, entry_id)
+            if entry is None:
+                return
+            challenge = await session.get(BenchChallenge, entry.challenge_id)
+            if challenge is None:
+                return
+
+            old_video = challenge.composed_video_path
+            challenge.status = "rendering"
+            challenge.error = None
+            session.add(challenge)
+            entry.status = "generated"
+            entry.error = None
+            session.add(entry)
+            await session.commit()
+
+            try:
+                result = await record_entry(entry)
+                entry.video_path = result.get("video_path")
+                entry.screenshot_path = result.get("screenshot_path")
+                entry.status = "rendered"
+                entry.error = None
+            except Exception as exc:  # noqa: BLE001
+                entry.status = "failed"
+                entry.error = f"render failed: {exc}"[:2000]
+                logger.warning("bench entry %s rerender failed: %s", entry.id, exc)
+            session.add(entry)
+            await session.commit()
+
+            entries = (
+                await session.exec(
+                    select(BenchEntry).where(BenchEntry.challenge_id == challenge.id)
+                )
+            ).all()
+            candidates = [e for e in entries if e.video_path]
+            if not candidates:
+                challenge.status = "failed"
+                challenge.error = "entry rerender failed and no other recording survives"
+                session.add(challenge)
+                await session.commit()
+                return
+
+            challenge.status = "composing"
+            session.add(challenge)
+            await session.commit()
+            try:
+                challenge.composed_video_path = await compose_challenge(
+                    session, challenge, candidates
+                )
+            except Exception as exc:  # noqa: BLE001
+                challenge.status = "failed"
+                challenge.error = f"compose failed: {exc}"[:2000]
+                session.add(challenge)
+                await session.commit()
+                return
+
+            challenge.status = "review"
+            session.add(challenge)
+            await session.commit()
+            _cleanup_old_compose(old_video, challenge.composed_video_path)
+        except Exception:  # noqa: BLE001
+            logger.exception("bench entry %s rerender crashed", entry_id)
+            try:
+                await session.rollback()  # clear pending-rollback state (see start_challenge)
+                ent = await session.get(BenchEntry, entry_id)
+                if ent is not None:
+                    ch = await session.get(BenchChallenge, ent.challenge_id)
+                    if ch is not None:
+                        ch.status = "failed"
+                        ch.error = "entry rerender crashed — see backend logs"
+                        session.add(ch)
+                        await session.commit()
+            except Exception:
+                logger.exception("bench entry %s rerender failure write failed", entry_id)
+
+
 async def retry_entry(entry_id: uuid.UUID) -> None:
     """Background: retry a single failed entry from scratch, then re-advance."""
     from app.database import engine

@@ -526,6 +526,73 @@ async def delete_challenge(
     logger.info("bench challenge %s deleted (%d entries)", challenge_id, len(entries))
 
 
+BENCH_ENTRY_RERENDER_COOLDOWN_S = 60
+
+
+@router.post("/entries/{entry_id}/rerender")
+async def rerender_entry(
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Per-entry rerender (2026-07-15): re-record just this entry, then
+    recompose the challenge — cheaper than the challenge-wide rerender when
+    only one model's video looks off. Rate-limited per entry (60s cooldown
+    via Redis SET NX EX) so a double-click can't fan out two overlapping
+    render+compose runs for the same entry."""
+    entry = await session.get(BenchEntry, entry_id)
+    if entry is None:
+        raise HTTPException(404, "Entry not found")
+    if not entry.artifact_path or entry.status not in ("generated", "rendered", "failed"):
+        raise HTTPException(
+            409,
+            f"Entry is {entry.status!r} — rerender only from generated/rendered/failed "
+            "with a recorded artifact.",
+        )
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is not None and challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409, f"Challenge is {challenge.status!r} — wait for the run to settle."
+        )
+    # Same guard as challenge-wide rerender/recompose: a pending X-Post
+    # approval's media_paths still point at the current video — this would
+    # rename AND delete that file (_cleanup_old_compose).
+    if await orchestrator.pending_x_post_approval(session, entry.challenge_id) is not None:
+        raise HTTPException(
+            409,
+            "Open X-Post approval references the current video — approve or reject it first.",
+        )
+
+    from app.redis_client import RedisKeys, get_redis
+
+    cooldown_key = RedisKeys.bench_entry_rerender_cooldown(str(entry_id))
+    try:
+        redis = await get_redis()
+        claimed = await redis.set(
+            cooldown_key, "1", nx=True, ex=BENCH_ENTRY_RERENDER_COOLDOWN_S
+        )
+        if not claimed:
+            ttl = await redis.ttl(cooldown_key)
+            retry_after = ttl if ttl and ttl > 0 else BENCH_ENTRY_RERENDER_COOLDOWN_S
+            raise HTTPException(
+                429,
+                f"Rerender already running for this entry — try again in {retry_after}s.",
+                headers={"Retry-After": str(retry_after)},
+            )
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — a Redis outage must never block the endpoint
+        logger.warning(
+            "bench entry %s rerender: rate-limit check skipped (redis unavailable)", entry_id
+        )
+
+    create_tracked_task(
+        orchestrator.rerender_entry(entry.id),
+        name=f"rerender_entry({entry.id})"
+    )
+    return {"ok": True}
+
+
 @router.post("/entries/{entry_id}/retry")
 async def retry_entry(
     entry_id: uuid.UUID,

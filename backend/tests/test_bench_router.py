@@ -24,6 +24,7 @@ def _no_background(monkeypatch):
     monkeypatch.setattr(orchestrator, "rerender_challenge", AsyncMock())
     monkeypatch.setattr(orchestrator, "recompose_challenge", AsyncMock())
     monkeypatch.setattr(orchestrator, "retry_entry", AsyncMock())
+    monkeypatch.setattr(orchestrator, "rerender_entry", AsyncMock())
 
 
 def _create_body(**over):
@@ -635,6 +636,110 @@ async def test_rerender_allowed_when_approval_rejected(auth_client, session, mak
     resp = await auth_client.post(f"/api/v1/bench/challenges/{ch.id}/rerender")
     assert resp.status_code == 200
     orchestrator.rerender_challenge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_endpoint_guards(auth_client, session):
+    ch, _ = await _seed_challenge(session, status="review")
+    resp = await auth_client.post(f"/api/v1/bench/entries/{uuid.uuid4()}/rerender")
+    assert resp.status_code == 404
+
+    entry = BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                       status="pending")
+    session.add(entry)
+    await session.commit()
+    await session.refresh(entry)
+    # pending, no artifact_path -> 409
+    resp = await auth_client.post(f"/api/v1/bench/entries/{entry.id}/rerender")
+    assert resp.status_code == 409
+
+    entry.artifact_path = "/sd/a/index.html"
+    entry.status = "failed"
+    session.add(entry)
+    await session.commit()
+    resp = await auth_client.post(f"/api/v1/bench/entries/{entry.id}/rerender")
+    assert resp.status_code == 200, resp.text
+    orchestrator.rerender_entry.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_409_when_challenge_running(auth_client, session):
+    ch, rows = await _seed_challenge(
+        session, status="rendering",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp.status_code == 409
+    assert "wait for the run to settle" in resp.json()["detail"]
+    orchestrator.rerender_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_blocked_by_pending_x_post_approval(auth_client, session, make_board):
+    from app.models.approval import Approval
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    session.add(Approval(
+        board_id=board.id, action_type="x_post", description="bench draft",
+        payload={"bench_challenge_id": str(ch.id)}, status="pending",
+    ))
+    await session.commit()
+
+    resp = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp.status_code == 409
+    assert "X-Post" in resp.json()["detail"]
+    orchestrator.rerender_entry.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_rate_limited(auth_client, session, fake_redis):
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    entry_id = rows[0].id
+
+    resp1 = await auth_client.post(f"/api/v1/bench/entries/{entry_id}/rerender")
+    assert resp1.status_code == 200, resp1.text
+    orchestrator.rerender_entry.assert_called_once()
+
+    resp2 = await auth_client.post(f"/api/v1/bench/entries/{entry_id}/rerender")
+    assert resp2.status_code == 429
+    assert "Retry-After" in resp2.headers
+    assert int(resp2.headers["Retry-After"]) > 0
+    orchestrator.rerender_entry.assert_called_once()  # still just the first call
+
+
+@pytest.mark.asyncio
+async def test_entry_rerender_rate_limit_fails_open_when_redis_down(
+    auth_client, session, monkeypatch
+):
+    """A Redis outage must never block the endpoint (best-effort limiter)."""
+    import app.redis_client as redis_client_mod
+
+    async def _broken_get_redis():
+        raise ConnectionError("redis unreachable")
+
+    # rerender_entry does `from app.redis_client import get_redis` inside the
+    # function body — patching the module attribute is enough, the lookup
+    # happens at call time.
+    monkeypatch.setattr(redis_client_mod, "get_redis", _broken_get_redis)
+
+    ch, rows = await _seed_challenge(
+        session, status="review",
+        entries=[{"model_label": "A", "source_kind": "spark", "status": "rendered",
+                  "artifact_path": "/sd/a/index.html"}],
+    )
+    resp = await auth_client.post(f"/api/v1/bench/entries/{rows[0].id}/rerender")
+    assert resp.status_code == 200, resp.text
+    orchestrator.rerender_entry.assert_called_once()
 
 
 @pytest.mark.asyncio

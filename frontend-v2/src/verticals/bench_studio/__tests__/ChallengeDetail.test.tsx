@@ -19,7 +19,7 @@ vi.mock("@/verticals/bench_studio/api", () => ({
       update: vi.fn(),
       recompose: vi.fn(),
     },
-    entries: { retry: vi.fn(), update: vi.fn(), viewToken: vi.fn() },
+    entries: { retry: vi.fn(), rerender: vi.fn(), update: vi.fn(), viewToken: vi.fn() },
     promptTemplates: { list: vi.fn().mockResolvedValue([]) },
     sharedSubpath: (p: string) => p.replace(/^\/shared-deliverables\//, ""),
     entryViewUrl: (challengeId: string, entryId: string, viewToken: string) =>
@@ -485,5 +485,148 @@ describe("ChallengeDetail — Öffnen button", () => {
     renderDetail();
     await screen.findByText("Qwen 3.6");
     expect(screen.queryByRole("button", { name: /Öffnen/ })).toBeNull();
+  });
+});
+
+// ── per-entry rerender button (2026-07-15) ──────────────────────────────
+
+describe("ChallengeDetail — per-entry rerender", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows Rerender for an entry with a recorded artifact and fires the mutation", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        entries: [
+          makeEntry({
+            id: "e-1",
+            status: "rendered",
+            artifact_path: "/shared-deliverables/bench-ch-1/A/index.html",
+          }),
+        ],
+      })
+    );
+    vi.mocked(benchApi.entries.rerender).mockResolvedValue({ ok: true });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(benchApi.entries.rerender).toHaveBeenCalledWith("e-1");
+    });
+    expect(notify.success).toHaveBeenCalled();
+  });
+
+  it("hides Rerender for an entry without an artifact_path", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [makeEntry({ id: "e-1", status: "rendered", artifact_path: null })],
+      })
+    );
+    renderDetail();
+    await screen.findByText("Qwen 3.6");
+    expect(screen.queryByRole("button", { name: /neu rendern/ })).toBeNull();
+  });
+
+  it("hides Rerender while the entry is still generating (no settled status)", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "generating",
+        entries: [
+          makeEntry({
+            id: "e-1",
+            status: "generating",
+            video_path: null,
+            artifact_path: "/shared-deliverables/bench-ch-1/A/index.html",
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    await screen.findByText("Wird generiert…");
+    expect(screen.queryByRole("button", { name: /neu rendern/ })).toBeNull();
+  });
+
+  it("shows Rerender for a failed entry that still has a recorded artifact", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        entries: [
+          makeEntry({
+            id: "e-1",
+            status: "failed",
+            video_path: null,
+            artifact_path: "/shared-deliverables/bench-ch-1/A/index.html",
+            error: "render failed: sidecar timeout",
+          }),
+        ],
+      })
+    );
+    renderDetail();
+    expect(await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ })).toBeTruthy();
+  });
+
+  it("shows the in-button spinner once the challenge flips to rendering after the click", async () => {
+    const entry = makeEntry({
+      id: "e-1",
+      status: "rendered",
+      artifact_path: "/shared-deliverables/bench-ch-1/A/index.html",
+    });
+    vi.mocked(benchApi.challenges.get)
+      .mockResolvedValueOnce(makeChallenge({ status: "review", entries: [entry] }))
+      .mockResolvedValue(
+        makeChallenge({ status: "rendering", entries: [{ ...entry, status: "generated" }] })
+      );
+    vi.mocked(benchApi.entries.rerender).mockResolvedValue({ ok: true });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(benchApi.challenges.get).toHaveBeenCalledTimes(2);
+    });
+    // Once the poll picks up 'rendering', the button carries a spinner and
+    // is disabled — consistent with the existing isRunning convention.
+    await waitFor(() => {
+      const rerenderBtn = screen.getByRole("button", { name: /Qwen 3.6 neu rendern/ });
+      expect(rerenderBtn).toBeDisabled();
+    });
+  });
+
+  it("shows the backend's cooldown message on a 429 and does not leave the button spinning", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        entries: [
+          makeEntry({
+            id: "e-1",
+            status: "rendered",
+            artifact_path: "/shared-deliverables/bench-ch-1/A/index.html",
+          }),
+        ],
+      })
+    );
+    vi.mocked(benchApi.entries.rerender).mockRejectedValue(
+      new Error(
+        'API 429: {"detail":"Rerender already running for this entry — try again in 42s."}'
+      )
+    );
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(notify.error).toHaveBeenCalledWith(
+        "Rerender already running for this entry — try again in 42s."
+      );
+    });
+    // Challenge status never left 'review' — the button must not stay
+    // spinning after a rejected request.
+    expect(screen.getByRole("button", { name: /Qwen 3.6 neu rendern/ })).not.toBeDisabled();
   });
 });

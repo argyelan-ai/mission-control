@@ -442,6 +442,128 @@ async def test_rerender_challenge_crash_writes_failed_status(session, monkeypatc
     assert updated_ch.error is not None
 
 
+# ── Per-entry rerender (2026-07-15) ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_rerecords_one_and_recomposes(session, monkeypatch):
+    """Only the targeted entry gets re-recorded; the other entry's existing
+    video is reused untouched for the recompose."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/a/index.html", "video_path": "/sd/a-old.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/b/index.html", "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.status = "review"
+    ch.composed_video_path = "/sd/grid-old.mp4"
+    session.add(ch)
+    await session.commit()
+    target = entries[0]
+
+    record_mock = AsyncMock(return_value={
+        "video_path": "/sd/a-new.mp4", "screenshot_path": "/sd/a-new.png",
+    })
+    compose_mock = AsyncMock(return_value="/sd/grid-new.mp4")
+    monkeypatch.setattr(orchestrator, "record_entry", record_mock)
+    monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
+
+    await orchestrator.rerender_entry(target.id)
+
+    record_mock.assert_awaited_once()
+    assert record_mock.await_args.args[0].id == target.id  # only the target entry
+
+    compose_mock.assert_awaited_once()
+    composed_entries = compose_mock.await_args.args[2]
+    assert {e.model_label for e in composed_entries} == {"A", "B"}  # both, not just target
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated_ch = await vs.get(BenchChallenge, ch.id)
+        updated_a = await vs.get(BenchEntry, target.id)
+        updated_b = await vs.get(BenchEntry, entries[1].id)
+    assert updated_ch.status == "review"
+    assert updated_ch.composed_video_path == "/sd/grid-new.mp4"
+    assert updated_a.status == "rendered"
+    assert updated_a.video_path == "/sd/a-new.mp4"
+    assert updated_b.video_path == "/sd/b.mp4"  # untouched
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_record_failure_falls_back_to_survivors(session, monkeypatch):
+    """If the re-record itself fails, the entry flips to failed but the
+    challenge still recomposes from whichever entries still have a video."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/a/index.html", "video_path": "/sd/a-old.mp4"},
+            {"model_label": "B", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/b/index.html", "video_path": "/sd/b.mp4"},
+        ],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+    target = entries[0]
+
+    monkeypatch.setattr(
+        orchestrator, "record_entry", AsyncMock(side_effect=RuntimeError("sidecar down")),
+    )
+    compose_mock = AsyncMock(return_value="/sd/grid-new.mp4")
+    monkeypatch.setattr(orchestrator, "compose_challenge", compose_mock)
+
+    await orchestrator.rerender_entry(target.id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated_ch = await vs.get(BenchChallenge, ch.id)
+        updated_a = await vs.get(BenchEntry, target.id)
+    assert updated_a.status == "failed"
+    assert "render failed" in updated_a.error
+    # target's old video_path is untouched (still present) -> still a
+    # candidate, so compose still runs from the surviving recordings.
+    compose_mock.assert_awaited_once()
+    assert updated_ch.status == "review"
+    assert updated_ch.composed_video_path == "/sd/grid-new.mp4"
+
+
+@pytest.mark.asyncio
+async def test_rerender_entry_crash_writes_failed_status(session, monkeypatch):
+    """Same 'nothing hangs silently' contract as rerender_challenge/
+    recompose_challenge: an uncaught exception must flip the challenge to
+    failed, not leave it stuck in rendering/composing forever."""
+    monkeypatch.setattr("app.database.engine", test_engine)
+    ch, entries = await _seed(
+        session,
+        entry_specs=[
+            {"model_label": "A", "source_kind": "spark", "status": "rendered",
+             "artifact_path": "/a/index.html", "video_path": "/sd/a.mp4"},
+        ],
+    )
+    ch.status = "review"
+    session.add(ch)
+    await session.commit()
+
+    monkeypatch.setattr(
+        orchestrator, "record_entry", AsyncMock(side_effect=RuntimeError("injected crash")),
+    )
+    monkeypatch.setattr(
+        orchestrator, "compose_challenge",
+        AsyncMock(side_effect=RuntimeError("compose also crashes")),
+    )
+
+    await orchestrator.rerender_entry(entries[0].id)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as vs:
+        updated_ch = await vs.get(BenchChallenge, ch.id)
+    assert updated_ch.status == "failed"
+    assert updated_ch.error is not None
+
+
 # ── FK flush-order regression (Postgres-only bug, invisible with FKs off) ──
 
 

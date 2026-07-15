@@ -88,6 +88,13 @@ class RedisKeys:
         return f"mc:ratelimit:agent:{agent_id}:api"
 
     @staticmethod
+    def bench_entry_rerender_cooldown(entry_id: str) -> str:
+        """Per-entry rerender rate limit (SET NX EX) — bench_studio's
+        per-video rerender button. Prevents double-click/spam fan-out of
+        overlapping render+compose runs for the same entry."""
+        return f"mc:bench:entry:{entry_id}:rerender-cooldown"
+
+    @staticmethod
     def system_metrics_history() -> str:
         return "mc:metrics:system:history"
 
