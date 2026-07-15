@@ -61,6 +61,15 @@ export const benchApi = {
       request<{ ok: boolean }>(`/api/v1/bench/entries/${id}/retry`, {
         method: "POST",
       }),
+    /** Re-records ONLY this entry from its existing artifact, then
+     *  recomposes the challenge — cheaper than challenges.rerender() when
+     *  just one model's video looks off. Rate-limited server-side (60s
+     *  cooldown per entry) — throws with the backend's "try again in Ns"
+     *  detail on 429. */
+    rerender: (id: string) =>
+      request<{ ok: boolean }>(`/api/v1/bench/entries/${id}/rerender`, {
+        method: "POST",
+      }),
     update: (id: string, body: { model_label?: string; display_tag?: string }) =>
       request<BenchEntry>(`/api/v1/bench/entries/${id}`, {
         method: "PATCH",

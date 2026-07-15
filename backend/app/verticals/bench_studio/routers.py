@@ -28,6 +28,45 @@ logger = logging.getLogger("mc.bench_studio")
 
 router = APIRouter(prefix="/api/v1/bench", tags=["bench-studio"])
 
+BENCH_CHALLENGE_RUN_CLAIM_TTL_S = 1800  # self-heal net if the bg task dies without releasing
+
+
+async def _claim_challenge_run(challenge_id: uuid.UUID) -> None:
+    """Atomic per-challenge claim (SET NX EX) taken right before scheduling
+    a render/compose background task.
+
+    All three run-starting endpoints (challenge-wide rerender, recompose,
+    per-entry rerender) end up mutating the SAME challenge row
+    (composed_video_path / status) — the per-entry rerender's rate limit is
+    keyed by entry_id, so it alone can't stop two DIFFERENT entries' buttons
+    on the SAME challenge from being clicked in quick succession and racing
+    each other (2026-07-15 review finding). The background task releases
+    this claim in a `finally`
+    (orchestrator._release_challenge_run_claim) — the TTL here is only a
+    self-heal net for a task that dies without releasing.
+
+    Redis outage -> fail-open (logged): the pre-existing challenge.status
+    guard in each endpoint is the fallback, same trade-off as the per-entry
+    rate limit."""
+    from app.redis_client import RedisKeys, get_redis
+
+    try:
+        redis = await get_redis()
+        claimed = await redis.set(
+            RedisKeys.bench_challenge_run_claim(str(challenge_id)),
+            "1", nx=True, ex=BENCH_CHALLENGE_RUN_CLAIM_TTL_S,
+        )
+        if not claimed:
+            raise HTTPException(
+                409, "Challenge already has a render/compose run in progress."
+            )
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — a Redis outage must never block the endpoint
+        logger.warning(
+            "bench challenge %s run-claim check skipped (redis unavailable)", challenge_id
+        )
+
 
 # ── Schemas ───────────────────────────────────────────────────────────────
 
@@ -324,6 +363,7 @@ async def rerender_challenge(
             409,
             "Open X-Post approval references the current video — approve or reject it first.",
         )
+    await _claim_challenge_run(challenge_id)
     create_tracked_task(
         orchestrator.rerender_challenge(challenge.id),
         name=f"rerender_challenge({challenge.id})"
@@ -423,6 +463,7 @@ async def recompose_challenge(
             409,
             "Open X-Post approval references the current video — approve or reject it first.",
         )
+    await _claim_challenge_run(challenge_id)
     create_tracked_task(
         orchestrator.recompose_challenge(challenge.id),
         name=f"recompose_challenge({challenge.id})",
@@ -524,6 +565,78 @@ async def delete_challenge(
     await session.commit()
     orchestrator.delete_challenge_artifacts(challenge_id)
     logger.info("bench challenge %s deleted (%d entries)", challenge_id, len(entries))
+
+
+BENCH_ENTRY_RERENDER_COOLDOWN_S = 60
+
+
+@router.post("/entries/{entry_id}/rerender")
+async def rerender_entry(
+    entry_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Per-entry rerender (2026-07-15): re-record just this entry, then
+    recompose the challenge — cheaper than the challenge-wide rerender when
+    only one model's video looks off. Rate-limited per entry (60s cooldown
+    via Redis SET NX EX) so a double-click can't fan out two overlapping
+    render+compose runs for the same entry."""
+    entry = await session.get(BenchEntry, entry_id)
+    if entry is None:
+        raise HTTPException(404, "Entry not found")
+    if not entry.artifact_path or entry.status not in ("generated", "rendered", "failed"):
+        raise HTTPException(
+            409,
+            f"Entry is {entry.status!r} — rerender only from generated/rendered/failed "
+            "with a recorded artifact.",
+        )
+    challenge = await session.get(BenchChallenge, entry.challenge_id)
+    if challenge is not None and challenge.status in RUNNING_STATUSES:
+        raise HTTPException(
+            409, f"Challenge is {challenge.status!r} — wait for the run to settle."
+        )
+    # Same guard as challenge-wide rerender/recompose: a pending X-Post
+    # approval's media_paths still point at the current video — this would
+    # rename AND delete that file (_cleanup_old_compose).
+    if await orchestrator.pending_x_post_approval(session, entry.challenge_id) is not None:
+        raise HTTPException(
+            409,
+            "Open X-Post approval references the current video — approve or reject it first.",
+        )
+
+    from app.redis_client import RedisKeys, get_redis
+
+    cooldown_key = RedisKeys.bench_entry_rerender_cooldown(str(entry_id))
+    try:
+        redis = await get_redis()
+        claimed = await redis.set(
+            cooldown_key, "1", nx=True, ex=BENCH_ENTRY_RERENDER_COOLDOWN_S
+        )
+        if not claimed:
+            ttl = await redis.ttl(cooldown_key)
+            retry_after = ttl if ttl and ttl > 0 else BENCH_ENTRY_RERENDER_COOLDOWN_S
+            raise HTTPException(
+                429,
+                f"Rerender already running for this entry — try again in {retry_after}s.",
+                headers={"Retry-After": str(retry_after)},
+            )
+    except HTTPException:
+        raise
+    except Exception:  # noqa: BLE001 — a Redis outage must never block the endpoint
+        logger.warning(
+            "bench entry %s rerender: rate-limit check skipped (redis unavailable)", entry_id
+        )
+
+    # Challenge-level claim (409 if another run is already in flight for
+    # THIS challenge) — the cooldown above only rate-limits repeat clicks on
+    # THIS entry, it can't stop two different entries' rerender buttons on
+    # the same challenge from racing each other's render+compose.
+    await _claim_challenge_run(entry.challenge_id)
+    create_tracked_task(
+        orchestrator.rerender_entry(entry.id, entry.challenge_id),
+        name=f"rerender_entry({entry.id})"
+    )
+    return {"ok": True}
 
 
 @router.post("/entries/{entry_id}/retry")

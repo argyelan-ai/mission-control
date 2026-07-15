@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -76,6 +76,31 @@ async function openEntryView(challengeId: string, entryId: string) {
   }
 }
 
+/** request() throws `Error("API <status>: <raw body>")` — pull the backend's
+ *  `detail` string back out (e.g. the 429 cooldown message with seconds
+ *  remaining) so the toast shows the real reason instead of a generic one. */
+function apiErrorDetail(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    const match = err.message.match(/^API \d+: ([\s\S]*)$/);
+    if (match) {
+      try {
+        const body = JSON.parse(match[1]);
+        if (typeof body?.detail === "string" && body.detail) return body.detail;
+      } catch {
+        // body wasn't JSON — fall through to fallback
+      }
+    }
+  }
+  return fallback;
+}
+
+/** Mirrors the backend guard in routers.rerender_entry: needs a recorded
+ *  artifact and a settled per-entry status. */
+function canRerenderEntry(entry: BenchEntry): boolean {
+  return Boolean(entry.artifact_path) &&
+    ["generated", "rendered", "failed"].includes(entry.status);
+}
+
 function metricsLine(m: BenchEntry["metrics"]): string {
   const parts: string[] = [];
   if (m.duration_ms) parts.push(`${(m.duration_ms / 1000).toFixed(0)} s`);
@@ -95,12 +120,29 @@ export function ChallengeDetail({
   const [draftOpen, setDraftOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // The entry whose per-entry rerender we last kicked off — drives the
+  // in-button spinner while the background render+compose run is in flight
+  // (tracked via challenge.status polling, since the POST itself returns
+  // immediately once the task is scheduled).
+  const [rerenderEntryId, setRerenderEntryId] = useState<string | null>(null);
 
   const { data: challenge } = useQuery({
     queryKey: ["bench-challenge", challengeId],
     queryFn: () => benchApi.challenges.get(challengeId),
     refetchInterval: 5000, // polling — no generic SSE hook for bench
   });
+
+  // Once the run this entry kicked off settles (review/failed/etc.), release
+  // the spinner — isRunning below already re-enables the other buttons.
+  useEffect(() => {
+    if (
+      rerenderEntryId &&
+      challenge &&
+      !["rendering", "composing"].includes(challenge.status)
+    ) {
+      setRerenderEntryId(null);
+    }
+  }, [challenge?.status, rerenderEntryId, challenge]);
 
   function invalidate() {
     qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
@@ -163,6 +205,19 @@ export function ChallengeDetail({
       qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
     },
     onError: () => notify.error("Retry nicht möglich"),
+  });
+
+  const entryRerenderMutation = useMutation({
+    mutationFn: (entryId: string) => benchApi.entries.rerender(entryId),
+    onMutate: (entryId: string) => setRerenderEntryId(entryId),
+    onSuccess: () => {
+      notify.success("Rerender gestartet");
+      qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
+    },
+    onError: (err) => {
+      setRerenderEntryId(null);
+      notify.error(apiErrorDetail(err, "Rerender nicht möglich"));
+    },
   });
 
   if (!challenge) return null;
@@ -389,6 +444,28 @@ export function ChallengeDetail({
                   <RotateCcw size={12} /> Retry
                 </button>
               )}
+              {canRerenderEntry(entry) && (() => {
+                const isRerenderingThisEntry =
+                  (entryRerenderMutation.isPending &&
+                    entryRerenderMutation.variables === entry.id) ||
+                  (rerenderEntryId === entry.id && isComposingVideo);
+                return (
+                  <button
+                    onClick={() => entryRerenderMutation.mutate(entry.id)}
+                    disabled={isRunning || entryRerenderMutation.isPending}
+                    aria-label={`${entry.model_label} neu rendern`}
+                    className="flex items-center gap-1 text-xs disabled:opacity-40"
+                    style={{ color: C.textSecondary }}
+                  >
+                    {isRerenderingThisEntry ? (
+                      <Loader2 size={12} className="animate-spin" style={{ color: C.accent }} />
+                    ) : (
+                      <RefreshCw size={12} />
+                    )}
+                    Rerender
+                  </button>
+                );
+              })()}
             </div>
           </div>
         ))}

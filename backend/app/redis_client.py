@@ -88,6 +88,26 @@ class RedisKeys:
         return f"mc:ratelimit:agent:{agent_id}:api"
 
     @staticmethod
+    def bench_entry_rerender_cooldown(entry_id: str) -> str:
+        """Per-entry rerender rate limit (SET NX EX) — bench_studio's
+        per-video rerender button. Prevents double-click/spam fan-out of
+        overlapping render+compose runs for the same entry."""
+        return f"mc:bench:entry:{entry_id}:rerender-cooldown"
+
+    @staticmethod
+    def bench_challenge_run_claim(challenge_id: str) -> str:
+        """Per-challenge run claim (SET NX EX) — bench_studio's rerender/
+        recompose endpoints (challenge-wide AND per-entry) all touch the
+        same challenge.composed_video_path/status, so two overlapping runs
+        on the same challenge (e.g. two different entries' rerender buttons
+        clicked in quick succession — the per-entry rate limit alone
+        doesn't prevent this) must never race. The router claims it before
+        scheduling the background task; the background task releases it in
+        a finally. TTL is a self-heal net if the task dies without
+        releasing."""
+        return f"mc:bench:challenge:{challenge_id}:run-claim"
+
+    @staticmethod
     def system_metrics_history() -> str:
         return "mc:metrics:system:history"
 
