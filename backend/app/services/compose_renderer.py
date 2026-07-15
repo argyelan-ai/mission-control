@@ -21,6 +21,11 @@ is treated as all-scopes for backward-compat). Injection adds a
 ``${HOME}/.mc/vault:/vault:rw`` volume entry plus ``AGENT_VAULT_PATH``,
 ``AGENT_VAULT_INBOX``, and ``AGENT_SLUG`` environment variables per service.
 
+Services whose resolved image is ``OMP_IMAGE`` (ADR-045 headless harness)
+additionally get an omp session-transcript mount (see
+``_OMP_SESSIONS_TARGET`` / ``_ensure_omp_sessions_volume``) — without it the
+token harvester never sees omp's JSONL transcripts.
+
 Atomic write: rendered to a tmpfile (`<path>.tmp`), then `os.replace()` on the
 target. The previous file is moved to `<path>.bak` first.
 """
@@ -188,6 +193,15 @@ _VAULT_VOLUME_TEMPLATE = "      - ${HOME}/.mc/vault:/vault:rw"
 # auflösen (compose-up läuft mit HOME=HOME_HOST, docker_agent_sync.py).
 _REFERENCES_VOLUME_TEMPLATE = "      - ${HOME}/.mc/references:${HOME}/.mc/references:ro"
 
+# omp session transcripts (ADR-045 headless harness): omp writes JSONL
+# turn-by-turn transcripts to $HOME/.omp/profiles/mc-agent/agent/sessions
+# inside the container. No host mount existed for this before the token
+# harvester fix (root cause: model_usage_events stayed empty for omp agents
+# since 2026-07-05) — every restart/recreate silently discarded the
+# transcripts the harvester needs. Target path must match the omp-bridge
+# entrypoint's OMP_PROFILE=mc-agent convention (docker/omp-bridge/entrypoint.sh).
+_OMP_SESSIONS_TARGET = "/home/agent/.omp/profiles/mc-agent/agent/sessions"
+
 
 def _find_block_range(
     body_lines: list[str], key: str
@@ -313,6 +327,28 @@ def _ensure_references_volume(body_lines: list[str]) -> list[str]:
         else:
             body.append("    volumes:")
             body.append(_REFERENCES_VOLUME_TEMPLATE)
+    return body
+
+
+def _ensure_omp_sessions_volume(body_lines: list[str], slug: str) -> list[str]:
+    """Mounts the omp session-transcript directory for omp-harness services.
+
+    Idempotent via substring marker, same insert-only pattern as
+    ``_ensure_vault_entries``/``_ensure_references_volume``. Called only for
+    services whose resolved image is ``OMP_IMAGE`` — see the caller in
+    ``_rewrite_compose``.
+    """
+    marker = f"/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}"
+    body = list(body_lines)
+    if marker not in "\n".join(body):
+        line = f"      - ${{HOME}}/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}"
+        vol_range = _find_block_range(body, "volumes")
+        if vol_range is not None:
+            _, end = vol_range
+            body.insert(end, line)
+        else:
+            body.append("    volumes:")
+            body.append(line)
     return body
 
 
@@ -460,9 +496,28 @@ def _rewrite_compose(
                     f"{indent}image: {target_image}",
                 )
 
+        # Resolve the FINAL image for this service (override > pre-existing
+        # explicit image: line, unmodified since no override applies > anchor
+        # default) so the omp-sessions mount below is decided the same way
+        # regardless of whether this run carries a DB-sourced override or is
+        # just re-rewriting an already-correct static file (idempotency check
+        # in tests calls _rewrite_compose with image_overrides={}).
+        if target_image is not None:
+            final_image = target_image
+        elif explicit_image_line_idx is not None:
+            existing_img_match = re.match(r"^\s*image:\s*(\S+)\s*$", body_lines[explicit_image_line_idx])
+            final_image = existing_img_match.group(1) if existing_img_match else anchor_inherited_image
+        else:
+            final_image = anchor_inherited_image
+
         # Inject vault mount + env vars if this agent has vault:write scope.
         if wants_vault:
             body_lines = _ensure_vault_entries(body_lines, slug)
+
+        # omp headless harness (ADR-045) needs its session-transcript dir
+        # mounted so the token harvester can see it — see _OMP_SESSIONS_TARGET.
+        if final_image == OMP_IMAGE:
+            body_lines = _ensure_omp_sessions_volume(body_lines, slug)
 
         # Referenz-Dateien-Mount für ALLE Agent-Services (ADR-053).
         body_lines = _ensure_references_volume(body_lines)
@@ -541,6 +596,8 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
         f"      - ${{HOME}}/.mc/deliverables/{slug}:/deliverables",
         _REFERENCES_VOLUME_TEMPLATE,
     ]
+    if image == OMP_IMAGE:
+        lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}")
     if is_vault_writer:
         lines.append("      - ${HOME}/.mc/vault:/vault:rw")
 

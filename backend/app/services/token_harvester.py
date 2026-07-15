@@ -1,10 +1,18 @@
 """Token Harvester — reads JSONL transcripts and writes model_usage_events.
 
 Data sources:
-  - ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl (cli-bridge + sparky + hermes)
+  - ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl (cli-bridge + hermes,
+    Claude Code JSONL schema — type=="assistant")
+  - ~/.mc/agents/{slug}/omp-sessions/**/*.jsonl (omp headless harness, ADR-045 —
+    e.g. Sparky on Qwen/Spark. Distinct schema — type=="message", see
+    parse_transcript_line)
   - ~/.claude/projects/**/*.jsonl (boss-host + operator's private sessions → boss attribution heuristic!)
 
-Dedup key: top-level `uuid` (UNIQUE). message.id has 1042+ collisions — NEVER dedupe on that!
+Dedup key: top-level `uuid` (UNIQUE) for Claude Code lines. message.id has
+1042+ collisions — NEVER dedupe on that! omp lines carry no top-level uuid at
+all (only a collision-prone 8-hex `id`) — their dedup key is synthesized as
+``{session_id}:{id}`` where session_id comes from the JSONL filename (omp
+writes one file per session, no sessionId field in the line itself).
 Idempotent: can run over the same files any number of times.
 Offset resume: harvest_state stores processed_lines → only reads new lines.
 """
@@ -45,14 +53,23 @@ _MC_BRANCH_PREFIX = "task/"
 # ── Pure helper functions (testable without a DB) ─────────────────────────
 
 
-def parse_transcript_line(line: str) -> dict[str, Any] | None:
-    """Parses a JSONL line from a Claude Code transcript.
+def parse_transcript_line(line: str, session_id: str | None = None) -> dict[str, Any] | None:
+    """Parses one JSONL line from either a Claude Code or an omp transcript.
 
-    Filters:
-    - Only type=assistant
-    - Only when message.usage is present
-    - Only when message.model is present and NOT '<synthetic>'
-    - Only when a top-level uuid is present
+    Dispatches on the top-level ``type`` field:
+    - ``"assistant"`` → Claude Code schema (nested message.model/message.usage,
+      top-level uuid).
+    - ``"message"`` → omp schema (ADR-045 headless harness — top-level
+      model/provider, camelCase usage keys, no top-level uuid).
+    Anything else (user lines, unknown types, invalid JSON) → None.
+
+    Args:
+        line: One raw JSONL line.
+        session_id: Only consulted for omp lines (which have no sessionId
+            field of their own) — the caller derives it from the JSONL
+            filename via ``_derive_omp_session_id`` and passes it through so
+            the dedup key can be namespaced per session. Ignored for Claude
+            Code lines, which carry their own ``sessionId``.
 
     Returns a normalized dict, or None if the line is filtered out.
     """
@@ -61,9 +78,22 @@ def parse_transcript_line(line: str) -> dict[str, Any] | None:
     except (json.JSONDecodeError, ValueError):
         return None
 
-    if d.get("type") != "assistant":
-        return None
+    msg_type = d.get("type")
+    if msg_type == "assistant":
+        return _parse_claude_line(d)
+    if msg_type == "message":
+        return _parse_omp_line(d, session_id)
+    return None
 
+
+def _parse_claude_line(d: dict[str, Any]) -> dict[str, Any] | None:
+    """Parses a Claude Code transcript line (``type == "assistant"``).
+
+    Filters:
+    - Only when message.usage is present
+    - Only when message.model is present and NOT '<synthetic>'
+    - Only when a top-level uuid is present
+    """
     msg_uuid = d.get("uuid")
     if not msg_uuid:
         return None
@@ -102,6 +132,78 @@ def parse_transcript_line(line: str) -> dict[str, Any] | None:
     }
 
 
+def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any] | None:
+    """Parses an omp transcript line (``type == "message"``, ADR-045).
+
+    Real sample (Sparky/Qwen on Spark, 2026-07-15)::
+
+        {"type":"message","id":"74f7a91e","message":{"role":"assistant","usage":
+         {"input":28848,"output":135,"cacheRead":0,"cacheWrite":0,
+          "cost":{"input":0.004,...,"total":0.0042}}},
+         "model":"Qwen/Qwen3.6-35B-A3B-FP8","provider":"mc-openai", ...}
+
+    Filters:
+    - Only when message.role == "assistant"
+    - Only when message.usage is present
+    - Only when a top-level model is present
+
+    Dedup key: omp has no top-level uuid — only a short (8 hex) `id` that
+    collides across sessions. Since one JSONL file == one omp session, the
+    caller-supplied session_id namespaces it: ``{session_id}:{id}``.
+
+    Cost: omp's own `usage.cost` reflects a generic per-token price table
+    baked into the omp binary — not Mark's actual cost, which for a local
+    Spark/vLLM model is $0. We deliberately ignore it and let the existing
+    ModelPrice-based pipeline (match_price/_compute_cost_usd, applied
+    uniformly to every harness in _process_jsonl_file) decide: no matching
+    price row → cost_usd stays NULL, same as any other unlisted model.
+    """
+    message = d.get("message")
+    if not message:
+        return None
+    if message.get("role") != "assistant":
+        return None
+
+    usage = message.get("usage")
+    if not usage:
+        return None
+
+    model = d.get("model")
+    if not model:
+        return None
+
+    short_id = d.get("id")
+    if not short_id:
+        return None
+
+    sess = session_id or ""
+    msg_uuid = f"{sess}:{short_id}"
+
+    return {
+        "uuid": msg_uuid,
+        "msg_id": short_id,  # For debug only — NOT for dedup!
+        "session_id": sess,
+        "timestamp": d.get("timestamp", ""),
+        "cwd": d.get("cwd", ""),
+        "git_branch": d.get("gitBranch"),
+        "model": model,
+        "provider": d.get("provider"),
+        "input_tokens": usage.get("input", 0) or 0,
+        "output_tokens": usage.get("output", 0) or 0,
+        "cache_read_tokens": usage.get("cacheRead", 0) or 0,
+        "cache_write_tokens": usage.get("cacheWrite", 0) or 0,
+    }
+
+
+def _derive_omp_session_id(path: str) -> str:
+    """omp writes one JSONL file per session — the filename (minus the
+    extension) is the natural session id, e.g.
+    ``2026-07-15T16-29-31-091Z_019f669c-....jsonl``. Only consulted by
+    ``_parse_omp_line``; Claude Code lines carry their own sessionId field
+    and ignore this."""
+    return Path(path).stem
+
+
 def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     """Reads a JSONL file from `processed_lines` onward and returns parsed records.
 
@@ -117,6 +219,7 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
         List of parsed records (may contain duplicate uuids → DB does the dedup).
     """
     records: list[dict[str, Any]] = []
+    session_id = _derive_omp_session_id(path)
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             for i, line in enumerate(f):
@@ -125,7 +228,7 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                 line = line.strip()
                 if not line:
                     continue
-                rec = parse_transcript_line(line)
+                rec = parse_transcript_line(line, session_id=session_id)
                 if rec is not None:
                     records.append(rec)
     except OSError as e:
@@ -432,34 +535,40 @@ async def run_harvest(
         "backfilled_task_id": 0,
     }
 
-    # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl ────
+    # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl
+    #    AND ~/.mc/agents/{slug}/omp-sessions/**/*.jsonl (ADR-045 omp harness,
+    #    e.g. Sparky — no host mount existed for this before this fix, so the
+    #    glob was silently finding zero files for omp agents) ──────────────
     for base_str in agent_base_paths:
         base = Path(base_str)
         if not base.exists():
             continue
-        # Glob: {slug}/claude-config/projects/**/*.jsonl AND subagents/*.jsonl
-        for jsonl_path in sorted(base.glob("*/claude-config/projects/**/*.jsonl")):
-            # Slug from the path segment directly under base
-            try:
-                rel = jsonl_path.relative_to(base)
-                slug = rel.parts[0]
-            except (ValueError, IndexError):
-                slug = "unknown"
+        for pattern in (
+            "*/claude-config/projects/**/*.jsonl",
+            "*/omp-sessions/**/*.jsonl",
+        ):
+            for jsonl_path in sorted(base.glob(pattern)):
+                # Slug from the path segment directly under base
+                try:
+                    rel = jsonl_path.relative_to(base)
+                    slug = rel.parts[0]
+                except (ValueError, IndexError):
+                    slug = "unknown"
 
-            agent_id = agent_slug_map.get(slug)
-            harness = _harness_from_slug(slug)
+                agent_id = agent_slug_map.get(slug)
+                harness = _harness_from_slug(slug)
 
-            await _process_jsonl_file(
-                session=session,
-                path=str(jsonl_path),
-                agent_id=agent_id,
-                harness=harness,
-                is_boss_path=False,
-                all_prices=all_prices,
-                state_map=state_map,
-                stats=stats,
-                task_workspace_map=task_workspace_map,
-            )
+                await _process_jsonl_file(
+                    session=session,
+                    path=str(jsonl_path),
+                    agent_id=agent_id,
+                    harness=harness,
+                    is_boss_path=False,
+                    all_prices=all_prices,
+                    state_map=state_map,
+                    stats=stats,
+                    task_workspace_map=task_workspace_map,
+                )
 
     # ── Boss paths: ~/.claude/projects/**/*.jsonl ───────────────────────────
     for base_str in boss_base_paths:
@@ -586,7 +695,10 @@ async def _process_jsonl_file(
                 rec["cache_write_tokens"],
             )
 
-        provider = _provider_from_model(model)
+        # Top-level `provider` (omp lines only) wins over the heuristic — it
+        # comes straight from the API response and avoids the heuristic
+        # misclassifying "Organization/model" style Qwen models as lmstudio.
+        provider = rec.get("provider") or _provider_from_model(model)
         task_id = _resolve_task_for_rec(rec, ts)
 
         event = ModelUsageEvent(
