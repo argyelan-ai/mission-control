@@ -137,6 +137,8 @@ def test_build_pipe_encode_cmd_default_2k():
     cmd = build_pipe_encode_cmd("/shared-deliverables/out.mp4")
     assert cmd == [
         "ffmpeg", "-y",
+        "-loglevel", "error",
+        "-nostats",
         "-f", "image2pipe",
         "-framerate", "30",
         "-i", "-",
@@ -150,6 +152,14 @@ def test_build_pipe_encode_cmd_default_2k():
         "-an",
         "/shared-deliverables/out.mp4",
     ]
+
+
+def test_build_pipe_encode_cmd_silences_stderr_stats():
+    """Review finding (2026-07-15): unsilenced ffmpeg stats fill the stderr
+    pipe buffer on long recordings and deadlock the caller's stdin writes."""
+    cmd = build_pipe_encode_cmd("/sd/out.mp4")
+    assert "-nostats" in cmd
+    assert cmd[cmd.index("-loglevel") + 1] == "error"
 
 
 def test_build_pipe_encode_cmd_reads_stdin_not_a_file():
@@ -186,6 +196,24 @@ def test_deterministic_shim_defines_mc_tick():
     assert "__mcTick" in shim
     assert "requestAnimationFrame" in shim
     assert "getAnimations" in shim
+
+
+def test_deterministic_shim_clamps_zero_delay_timers():
+    """Review finding (2026-07-15): a self-rearming setTimeout(fn, 0) must
+    not stay perpetually "due" at the same virtual time — that would hang
+    __mcTick's timer-draining loop forever (vt never advances) instead of
+    firing at most ~stepMs times per tick. The old code only clamped
+    setInterval (Math.max(1,d)), not setTimeout (Math.max(0,d))."""
+    shim = load_deterministic_shim()
+    assert "Math.max(0,d)" not in shim
+
+
+def test_deterministic_shim_has_timer_iteration_cap():
+    """Belt-and-braces on top of the delay clamp: __mcTick must hard-cap how
+    many timers it drains per tick so no pathological chain can turn one
+    frame's tick into an unbounded synchronous loop."""
+    shim = load_deterministic_shim()
+    assert "MC_TICK_MAX_TIMER_ITERATIONS" in shim
 
 
 # ── build_compose_cmd cell size (2026-07-15, 2K bump) ─────────────────────

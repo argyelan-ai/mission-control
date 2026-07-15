@@ -175,9 +175,21 @@ def build_pipe_encode_cmd(
 ) -> List[str]:
     """JPEG frames on stdin (image2pipe) -> H.264 mp4, X-compatible
     (yuv420p + faststart), scaled to width x height, constant fps, no audio.
+
+    `-loglevel error -nostats` (2026-07-15, review finding): ffmpeg's default
+    progress stats line writes continuously to stderr; on a long recording
+    the caller only reads stderr once at the end (after stdin closes), so
+    the OS pipe buffer (~64KB) fills, ffmpeg blocks writing to stderr, and
+    the caller's stdin.write/drain calls block right behind it — a
+    classic subprocess pipe deadlock on anything past a few hundred frames.
+    Silencing stats removes the main offender; the caller additionally
+    drains stderr concurrently as belt-and-braces (see
+    service.py's _capture_deterministic).
     """
     return [
         FFMPEG_BIN, "-y",
+        "-loglevel", "error",
+        "-nostats",
         "-f", "image2pipe",
         "-framerate", str(fps),
         "-i", "-",

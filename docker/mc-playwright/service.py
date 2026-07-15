@@ -932,6 +932,32 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         )
 
 
+# How much of ffmpeg's stderr tail to keep for error messages — everything
+# else read past this is discarded (see _drain_stderr_tail below).
+FFMPEG_STDERR_TAIL_BYTES = 2000
+
+
+async def _drain_stderr_tail(stream: asyncio.StreamReader) -> bytearray:
+    """Continuously reads an ffmpeg subprocess's stderr in the background
+    and keeps only the last FFMPEG_STDERR_TAIL_BYTES (2026-07-15, review
+    finding): stderr=PIPE has a small OS pipe buffer (~64KB); if nothing
+    reads it while the caller is busy writing frames to stdin, ffmpeg
+    blocks writing stderr, which blocks stdin.drain() right behind it —
+    a classic subprocess deadlock on any recording long enough to fill the
+    buffer (`-nostats` in build_pipe_encode_cmd removes ffmpeg's main
+    reason to write continuously, this task is the belt-and-braces half of
+    the fix: even unexpected/verbose stderr output can never back up).
+    """
+    tail = bytearray()
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            return tail
+        tail += chunk
+        if len(tail) > FFMPEG_STDERR_TAIL_BYTES:
+            del tail[: -FFMPEG_STDERR_TAIL_BYTES]
+
+
 async def _capture_deterministic(
     page: Page,
     n_frames: int,
@@ -944,8 +970,13 @@ async def _capture_deterministic(
     image2pipe stdin — no intermediate frame files. Also grabs one PNG at
     the midpoint frame for screenshot_path (thumbnail).
 
-    Raises HTTPException(502) on any ffmpeg failure/timeout; never leaves a
-    zombie ffmpeg process behind (killed in the except path).
+    Raises HTTPException(502) on any ffmpeg failure; never leaves a zombie
+    ffmpeg process behind on ANY exit path, including asyncio.CancelledError
+    (which asyncio.wait_for's timeout raises into this coroutine and which
+    does NOT subclass Exception — a plain `except Exception: kill()` block
+    silently misses it, 2026-07-15 review finding). The `finally` below
+    checks the process's actual returncode instead of relying on which
+    exception type unwound the stack, so it's exit-path-agnostic.
     """
     cdp = await page.context.new_cdp_session(page)
     mid_frame = n_frames // 2
@@ -953,11 +984,21 @@ async def _capture_deterministic(
     ffmpeg_proc = await asyncio.create_subprocess_exec(
         *ffmpeg_cmd,
         stdin=asyncio.subprocess.PIPE,
-        stdout=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE,
     )
     assert ffmpeg_proc.stdin is not None
+    assert ffmpeg_proc.stderr is not None
+    stderr_task = asyncio.ensure_future(_drain_stderr_tail(ffmpeg_proc.stderr))
 
+    # `except BaseException` (not just Exception) deliberately: an outer
+    # asyncio.wait_for timeout raises CancelledError into this coroutine,
+    # which subclasses BaseException, NOT Exception — a plain
+    # `except Exception` misses it entirely, ffmpeg is never killed, and the
+    # process leaks (2026-07-15 review finding). capture_exc is re-raised
+    # below, after cleanup, so cancellation semantics still propagate
+    # correctly to asyncio.wait_for's caller.
+    capture_exc: BaseException | None = None
     try:
         for i in range(n_frames):
             await page.evaluate("(ms) => window.__mcTick(ms)", frame_ms)
@@ -977,20 +1018,31 @@ async def _capture_deterministic(
                     screenshot_path.write_bytes(base64.b64decode(thumb["data"]))
                 except Exception as e:  # noqa: BLE001 — thumbnail is best-effort
                     logger.warning("record: thumbnail capture skipped (%s)", e)
-    except Exception:
-        ffmpeg_proc.kill()
-        await ffmpeg_proc.wait()
-        raise
+    except BaseException as e:  # noqa: BLE001 — see docstring: re-raised below after cleanup
+        capture_exc = e
     finally:
+        # Runs on every exit path (normal completion, exception, or
+        # CancelledError) — closing stdin signals ffmpeg there are no more
+        # frames; if it's still alive after that (capture died mid-stream,
+        # or was cancelled), kill it rather than leak an orphaned process
+        # holding the output file open.
         if not ffmpeg_proc.stdin.is_closing():
             ffmpeg_proc.stdin.close()
+        if ffmpeg_proc.returncode is None:
+            try:
+                await asyncio.wait_for(ffmpeg_proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                ffmpeg_proc.kill()
+                await ffmpeg_proc.wait()
+        stderr_tail = bytes(await stderr_task)
 
-    stdout, stderr = await ffmpeg_proc.communicate()
+    if capture_exc is not None:
+        raise capture_exc
     if ffmpeg_proc.returncode != 0:
         raise HTTPException(
             502,
             f"ffmpeg (pipe encode) failed (rc={ffmpeg_proc.returncode}): "
-            f"{stderr.decode(errors='replace')[-800:]}",
+            f"{stderr_tail.decode(errors='replace')}",
         )
 
 
@@ -1018,7 +1070,17 @@ async def record(req: RecordRequest):
 
     viewport ist bei /record derzeit fix (RECORD_VIEWPORT, 16:9) statt aus
     dem `viewport`-Request-Feld (das bleibt fuer /snapshot etc. relevant) —
-    Bench-Videos sind immer Desktop-Grid-Material."""
+    Bench-Videos sind immer Desktop-Grid-Material. req.viewport wird
+    trotzdem entgegengenommen (Schema-Pflichtfeld) und bei einem Wert
+    != "desktop" geloggt statt still ignoriert (2026-07-15, Review-Finding:
+    Contract-Drift zwischen dem was der Request verspricht und dem was der
+    Sidecar tatsaechlich tut soll sichtbar sein, nicht stumm verschluckt)."""
+    if req.viewport != "desktop":
+        logger.warning(
+            "record: req.viewport=%r wird ignoriert — /record captured seit "
+            "2026-07-15 immer mit RECORD_VIEWPORT (%s @%dx)",
+            req.viewport, RECORD_VIEWPORT, RECORD_DEVICE_SCALE,
+        )
     out_dir = _require_shared_path(req.output_dir, "output_dir")
     if req.html_path:
         html = _require_shared_path(req.html_path, "html_path")
@@ -1070,6 +1132,16 @@ async def record(req: RecordRequest):
                     f"deterministic capture timeout nach {RECORD_CAPTURE_TIMEOUT_S}s "
                     f"({n_frames} frames @ {RECORD_FPS}fps)",
                 )
+            except HTTPException:
+                raise
+            except Exception as e:
+                # Review finding (2026-07-15): only asyncio.TimeoutError was
+                # caught here — a BrokenPipeError (ffmpeg dies mid-stream), a
+                # page crash, or any other capture failure fell through as a
+                # raw unhandled 500 instead of this module's convention
+                # (every subprocess/browser failure surfaces as a clean 502
+                # with context, see _run_ffmpeg / _do_form_login / etc.).
+                raise HTTPException(502, f"deterministic capture failed: {e}")
         finally:
             await browser.close()
 
