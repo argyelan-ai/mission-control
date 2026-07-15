@@ -26,17 +26,30 @@ FFMPEG_BIN = "ffmpeg"
 # installs fonts-dejavu-core so this path is guaranteed.
 DEJAVU_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 
-# Grid cell size: 2x2 -> 1920x1080, 2x1 -> 1920x540, 3x1 -> 2880x540.
-CELL_WIDTH = 960
-CELL_HEIGHT = 540
+# Grid cell size (2026-07-15, 2K bump): 2x2 -> 2560x1440, 2x1 -> 2560x720,
+# 3x1 -> 3840x720.
+CELL_WIDTH = 1280
+CELL_HEIGHT = 720
+
+# deterministic-clock shim installed via page.add_init_script() by /record
+# (see deterministic_shim.js for the root cause + mechanism). Loaded as a
+# file rather than inlined so it stays independently readable/editable and
+# unit-testable without importing playwright.
+DETERMINISTIC_SHIM_PATH = Path(__file__).resolve().parent / "deterministic_shim.js"
+
+
+def load_deterministic_shim() -> str:
+    return DETERMINISTIC_SHIM_PATH.read_text(encoding="utf-8")
 
 
 # ── Request/Response models ──────────────────────────────────────────────────
 
 
 class RecordRequest(BaseModel):
-    """POST /record — load a page (URL or local HTML file), record duration_s
-    seconds of video, save recording.mp4 (H.264) + screenshot.png to output_dir."""
+    """POST /record — load a page (URL or local HTML file), deterministically
+    capture duration_s seconds of video at a virtualized 30fps page clock
+    (see deterministic_shim.js), save recording.mp4 (H.264, 2560x1440) +
+    screenshot.png to output_dir."""
     html_path: Optional[str] = None
     url: Optional[str] = None
     duration_s: int = Field(default=10, ge=1, le=60)
@@ -147,43 +160,37 @@ def escape_drawtext(text: str) -> str:
     )
 
 
-# Head-trim for /record (2026-07-12): Playwright starts recording at context
-# creation, so the first frames show Chromium's default white page before the
-# HTML's first paint — a white flash at the start of every bench video. Fix:
-# record RECORD_SETTLE_S extra seconds and cut them off the head in the
-# transcode step — the delivered mp4 keeps the requested duration_s and
-# starts on real content.
-RECORD_SETTLE_S = 1.0
-
-
-def build_transcode_cmd(src: str, dst: str, trim_start_s: float = 0.0) -> List[str]:
-    """webm (Playwright record_video) -> H.264 mp4, X-compatible
-    (yuv420p + faststart), constant 30 fps, no audio track.
-
-    trim_start_s > 0 cuts that many seconds off the HEAD of the recording
-    (white-flash fix, see RECORD_SETTLE_S). The `-ss` sits AFTER `-i`
-    deliberately: output-side seeking decodes from the start and trims
-    frame-accurately, while input-side `-ss` snaps to keyframes — with
-    Playwright's sparse-keyframe webm that cuts visibly wrong. Output
-    duration = source duration - trim_start_s.
+# Deterministic frame-pipe encode for /record (2026-07-15, replaces the
+# real-time Playwright record_video + transcode path — see
+# deterministic_shim.js for why: headless/no-GPU Chromium can't render heavy
+# canvas benches at 60fps in real time, so a real-time capture is itself in
+# slow motion no matter how good the transcode is). service.py now captures
+# one CDP screenshot per *virtual* frame and pipes the raw JPEG bytes
+# straight into ffmpeg's stdin as an image2pipe stream — this builder is
+# that ffmpeg invocation. No white-flash settle/trim is needed here: capture
+# only starts after page.goto's "load" event, so there's no pre-paint
+# Chromium-default-page frame to cut.
+def build_pipe_encode_cmd(
+    dst: str, *, width: int = 2560, height: int = 1440, fps: int = 30
+) -> List[str]:
+    """JPEG frames on stdin (image2pipe) -> H.264 mp4, X-compatible
+    (yuv420p + faststart), scaled to width x height, constant fps, no audio.
     """
-    cmd = [
+    return [
         FFMPEG_BIN, "-y",
-        "-i", src,
-    ]
-    if trim_start_s > 0:
-        cmd += ["-ss", str(trim_start_s)]
-    cmd += [
+        "-f", "image2pipe",
+        "-framerate", str(fps),
+        "-i", "-",
+        "-vf", f"scale={width}:{height}",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
-        "-r", "30",
+        "-r", str(fps),
         "-preset", "medium",
         "-crf", "20",
         "-movflags", "+faststart",
         "-an",
         dst,
     ]
-    return cmd
 
 
 def build_compose_cmd(
@@ -249,26 +256,31 @@ def build_compose_cmd(
 
 
 # ── Branded compose (2026-07-12, Benchmark Studio video branding;
-#    2026-07-13, single-video branding) ──────────────────────────────────────
+#    2026-07-13, single-video branding; 2026-07-15, 2x/retina bump) ─────────
 #
 # Slot geometry is canonical from templates/bench/frame.html (side-by-side)
-# and templates/bench/frame_single.html (solo): the side-by-side frame has
-# two 872x560 slots at (64,290) and (984,290); the single frame has one
-# 1792x560 slot at (64,290) — full inner width, same top/bottom margins, on
-# the shared 1920x1080 frame. The frame + outro PNG screenshots are rendered
-# by the caller (service.py, via Playwright) from the filled HTML templates
-# — this module stays pure (no playwright import).
+# and templates/bench/frame_single.html (solo) in CSS pixels at a 1920x1080
+# viewport: the side-by-side frame has two 872x560 slots at (64,290) and
+# (984,290); the single frame has one 1792x560 slot at (64,290) — full inner
+# width, same top/bottom margins. service.py screenshots those templates at
+# device_scale_factor=2 (sharp text/lines on the branding card) which
+# doubles every physical pixel of the resulting frame/outro PNGs to
+# 3840x2160 — so every SLOT_* constant below is the CSS geometry x2 to stay
+# in the same pixel space as the frame PNG and the recording overlay (ffmpeg
+# operates on physical pixels, not CSS pixels). The frame + outro PNG
+# screenshots are rendered by the caller (service.py, via Playwright) from
+# the filled HTML templates — this module stays pure (no playwright import).
 
-SLOT_WIDTH = 872
-SLOT_HEIGHT = 560
-SLOT_A_XY = (64, 290)
-SLOT_B_XY = (984, 290)
-SLOT_SINGLE_WIDTH = 1792
-SLOT_SINGLE_HEIGHT = 560
-SLOT_SINGLE_XY = (64, 290)
+SLOT_WIDTH = 1744
+SLOT_HEIGHT = 1120
+SLOT_A_XY = (128, 580)
+SLOT_B_XY = (1968, 580)
+SLOT_SINGLE_WIDTH = 3584
+SLOT_SINGLE_HEIGHT = 1120
+SLOT_SINGLE_XY = (128, 580)
 SLOT_BG_COLOR = "0x090B10"  # matches .slot background in shared.css
 OUTRO_DURATION_S = 2.0
-FRAME_SIZE = "1920x1080"
+FRAME_SIZE = "3840x2160"
 
 
 def fill_bench_template(template_text: str, tokens: dict) -> str:
