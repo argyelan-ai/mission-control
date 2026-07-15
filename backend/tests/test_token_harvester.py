@@ -76,6 +76,7 @@ def _make_line(
 def _make_omp_line(
     *,
     short_id: str = "74f7a91e",
+    response_id: str | None = "chatcmpl-915e3d69480ffb2c",
     model: str = "Qwen/Qwen3.6-35B-A3B-FP8",
     provider: str | None = "mc-openai",
     timestamp: str = "2026-07-15T16:29:37.102Z",
@@ -85,38 +86,52 @@ def _make_omp_line(
     cache_write: int = 0,
     role: str = "assistant",
     type_: str = "message",
+    model_top_level: bool = False,
+    provider_top_level: bool = False,
 ) -> str:
     """Builds a real-shaped omp JSONL line (ADR-045 headless harness).
 
-    Sampled verbatim from mc-agent-sparky (2026-07-15, Qwen/Spark) — top-level
-    id/model/provider, camelCase usage keys, no sessionId/uuid of its own.
+    Verified in-container against mc-agent-sparky (2026-07-15, Qwen/Spark):
+    everything except type/id/parentId/timestamp lives INSIDE `message` —
+    model, provider, usage, responseId are all message.* fields, NOT
+    top-level. ``model_top_level``/``provider_top_level`` exist only to test
+    the top-level fallback path, not because real omp puts them there.
     """
+    message: dict = {
+        "role": role,
+        "usage": {
+            "input": input_tokens,
+            "output": output_tokens,
+            "cacheRead": cache_read,
+            "cacheWrite": cache_write,
+            "totalTokens": input_tokens + output_tokens,
+            "cost": {
+                "input": 0.00403872,
+                "output": 0.000135,
+                "cacheRead": 0,
+                "cacheWrite": 0,
+                "total": 0.00417372,
+            },
+        },
+        "api": "openai-completions",
+    }
+    if not model_top_level:
+        message["model"] = model
+    if provider is not None and not provider_top_level:
+        message["provider"] = provider
+    if response_id is not None:
+        message["responseId"] = response_id
+
     line: dict = {
         "type": type_,
         "id": short_id,
         "parentId": "54c8d3f0",
         "timestamp": timestamp,
-        "message": {
-            "role": role,
-            "usage": {
-                "input": input_tokens,
-                "output": output_tokens,
-                "cacheRead": cache_read,
-                "cacheWrite": cache_write,
-                "totalTokens": input_tokens + output_tokens,
-                "cost": {
-                    "input": 0.00403872,
-                    "output": 0.000135,
-                    "cacheRead": 0,
-                    "cacheWrite": 0,
-                    "total": 0.00417372,
-                },
-            },
-        },
-        "model": model,
-        "api": "openai-completions",
+        "message": message,
     }
-    if provider is not None:
+    if model_top_level:
+        line["model"] = model
+    if provider is not None and provider_top_level:
         line["provider"] = provider
     return json.dumps(line)
 
@@ -215,7 +230,7 @@ class TestParseOmpLine:
         line = _make_omp_line()
         rec = parse_transcript_line(line, session_id="sess-omp-1")
         assert rec is not None
-        assert rec["uuid"] == "sess-omp-1:74f7a91e"
+        assert rec["uuid"] == "sess-omp-1:chatcmpl-915e3d69480ffb2c"
         assert rec["model"] == "Qwen/Qwen3.6-35B-A3B-FP8"
         assert rec["provider"] == "mc-openai"
         assert rec["input_tokens"] == 28848
@@ -223,18 +238,66 @@ class TestParseOmpLine:
         assert rec["cache_read_tokens"] == 0
         assert rec["cache_write_tokens"] == 0
 
+    def test_omp_real_sample_1to1(self):
+        """The literal line captured from mc-agent-sparky's real omp-sessions
+        JSONL (2026-07-15, anonymized only in tool-call argument content —
+        every field relevant to parsing is untouched). Root-cause regression
+        guard: an earlier fixture wrongly modeled model/provider/usage as
+        top-level fields (they're nested under message), which made
+        _parse_omp_line silently return None for every real omp line while
+        all fixture-based tests kept passing."""
+        raw_line = (
+            '{"type":"message","id":"74f7a91e","parentId":"54c8d3f0",'
+            '"timestamp":"2026-07-15T16:29:37.102Z","message":{"role":"assistant",'
+            '"content":[{"type":"thinking","thinking":"...","thinkingSignature":"reasoning"},'
+            '{"type":"toolCall","id":"chatcmpl-tool-80828a71e75b3b75","name":"bash",'
+            '"arguments":{"command":"mc ack","i":"Ack task"}}],'
+            '"api":"openai-completions","provider":"mc-openai",'
+            '"model":"Qwen/Qwen3.6-35B-A3B-FP8",'
+            '"usage":{"input":28848,"output":135,"cacheRead":0,"cacheWrite":0,'
+            '"totalTokens":28983,"cost":{"input":0.00403872,"output":0.000135,'
+            '"cacheRead":0,"cacheWrite":0,"total":0.00417372}},'
+            '"stopReason":"toolUse","timestamp":1784132972177,'
+            '"responseId":"chatcmpl-915e3d69480ffb2c","duration":4860.83,"ttft":1301.74,'
+            '"contextSnapshot":{"promptTokens":28848,"nonMessageTokens":20602}}}'
+        )
+        rec = parse_transcript_line(
+            raw_line, session_id="2026-07-15T16-29-31-091Z_019f669c-aa50"
+        )
+        assert rec is not None
+        assert rec["model"] == "Qwen/Qwen3.6-35B-A3B-FP8"
+        assert rec["provider"] == "mc-openai"
+        assert rec["input_tokens"] == 28848
+        assert rec["output_tokens"] == 135
+        assert rec["uuid"] == (
+            "2026-07-15T16-29-31-091Z_019f669c-aa50:chatcmpl-915e3d69480ffb2c"
+        )
+
+    def test_omp_dedup_prefers_responseId_over_short_id(self):
+        """message.responseId (a full chatcmpl-* id) is far less
+        collision-prone than the top-level `id` (8 hex) and must win when
+        present."""
+        line = _make_omp_line(short_id="dupe", response_id="chatcmpl-unique-xyz")
+        rec = parse_transcript_line(line, session_id="s")
+        assert rec["uuid"] == "s:chatcmpl-unique-xyz"
+
+    def test_omp_dedup_falls_back_to_short_id_without_responseId(self):
+        line = _make_omp_line(short_id="dupe", response_id=None)
+        rec = parse_transcript_line(line, session_id="s")
+        assert rec["uuid"] == "s:dupe"
+
     def test_omp_dedup_key_namespaced_by_session(self):
-        """omp's 8-hex id is collision-prone across sessions — the dedup key
-        must be namespaced by session_id, not the bare id."""
-        line = _make_omp_line(short_id="dupe")
+        """The dedup key must be namespaced by session_id even when
+        responseId is stable/shared, since one JSONL file == one session."""
+        line = _make_omp_line(response_id="same-response-id")
         rec_a = parse_transcript_line(line, session_id="session-a")
         rec_b = parse_transcript_line(line, session_id="session-b")
         assert rec_a["uuid"] != rec_b["uuid"]
-        assert rec_a["uuid"] == "session-a:dupe"
-        assert rec_b["uuid"] == "session-b:dupe"
+        assert rec_a["uuid"] == "session-a:same-response-id"
+        assert rec_b["uuid"] == "session-b:same-response-id"
 
     def test_omp_line_without_session_id_uses_empty_prefix(self):
-        line = _make_omp_line(short_id="abc123")
+        line = _make_omp_line(response_id="abc123")
         rec = parse_transcript_line(line)
         assert rec is not None
         assert rec["uuid"] == ":abc123"
@@ -250,8 +313,22 @@ class TestParseOmpLine:
 
     def test_omp_missing_model_skipped(self):
         d = json.loads(_make_omp_line())
-        del d["model"]
+        del d["message"]["model"]
         assert parse_transcript_line(json.dumps(d), session_id="s") is None
+
+    def test_omp_model_falls_back_to_top_level_if_present(self):
+        """Real omp never puts model top-level, but the fallback protects
+        against a future omp version moving it there without us noticing."""
+        line = _make_omp_line(model_top_level=True, model="fallback-model")
+        rec = parse_transcript_line(line, session_id="s")
+        assert rec is not None
+        assert rec["model"] == "fallback-model"
+
+    def test_omp_provider_falls_back_to_top_level_if_present(self):
+        line = _make_omp_line(provider_top_level=True, provider="fallback-provider")
+        rec = parse_transcript_line(line, session_id="s")
+        assert rec is not None
+        assert rec["provider"] == "fallback-provider"
 
     def test_omp_missing_id_skipped(self):
         d = json.loads(_make_omp_line())
@@ -439,7 +516,7 @@ class TestHarvestFile:
         from app.services.token_harvester import harvest_file
 
         jsonl = tmp_path / "2026-07-15T16-29-31-091Z_019f669c-aa50.jsonl"
-        jsonl.write_text(_make_omp_line(short_id="idA") + "\n")
+        jsonl.write_text(_make_omp_line(short_id="idA", response_id=None) + "\n")
 
         records = harvest_file(str(jsonl), processed_lines=0)
         assert len(records) == 1
@@ -628,7 +705,8 @@ class TestRunHarvestIntegration:
         sparky_dir.mkdir(parents=True)
         session_file = sparky_dir / "2026-07-15T16-29-31-091Z_019f669c.jsonl"
         session_file.write_text(
-            _make_omp_line(short_id="omp001", model="Qwen/Qwen3.6-35B-A3B-FP8") + "\n"
+            _make_omp_line(short_id="omp001", response_id=None, model="Qwen/Qwen3.6-35B-A3B-FP8")
+            + "\n"
         )
 
         sparky_id = uuid.uuid4()
@@ -668,7 +746,9 @@ class TestRunHarvestIntegration:
 
         omp_dir = agents_dir / "sparky" / "omp-sessions" / "--workspace--"
         omp_dir.mkdir(parents=True)
-        (omp_dir / "sess.jsonl").write_text(_make_omp_line(short_id="omp-evt") + "\n")
+        (omp_dir / "sess.jsonl").write_text(
+            _make_omp_line(short_id="omp-evt", response_id=None) + "\n"
+        )
 
         stats = await run_harvest(
             async_db_session,
