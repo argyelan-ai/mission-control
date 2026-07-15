@@ -1463,6 +1463,124 @@ async def test_branding_time_derived_defensively_from_events(session, monkeypatc
     assert rows["B"]["time"] == "—"        # spark without metrics -> dash
 
 
+# ── outro TOKENS column (2026-07-15) ────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_task_token_usage_sums_input_output(session, make_task, make_board):
+    from app.models.model_usage import ModelUsageEvent
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] tok")
+
+    for i, (inp, out) in enumerate(((1000, 200), (400, 90))):
+        session.add(ModelUsageEvent(
+            task_id=task.id, harness="host", model="grok-4.5",
+            session_id="s1", message_uuid=f"m-{uuid.uuid4().hex}",
+            input_tokens=inp, output_tokens=out,
+            ts=datetime(2026, 7, 15, 12, 0, i), source_file="test.jsonl",
+        ))
+    await session.commit()
+
+    usage = await orchestrator.task_token_usage(session, task.id)
+    assert usage == (1400, 290)
+
+
+@pytest.mark.asyncio
+async def test_task_token_usage_none_without_events(session, make_task, make_board):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    task = await make_task(board.id, title="[Bench] tok-empty")
+
+    usage = await orchestrator.task_token_usage(session, task.id)
+    assert usage is None
+
+
+def test_format_tok_count_thresholds():
+    assert orchestrator._format_tok_count(0) == "0"
+    assert orchestrator._format_tok_count(999) == "999"
+    assert orchestrator._format_tok_count(1000) == "1.0k"
+    assert orchestrator._format_tok_count(12_400) == "12.4k"
+    assert orchestrator._format_tok_count(999_999) == "1000.0k"
+    assert orchestrator._format_tok_count(1_800_000) == "1.8M"
+
+
+def test_format_outro_tokens():
+    assert orchestrator._format_outro_tokens(None) == "—"
+    assert orchestrator._format_outro_tokens((12_400, 1_800)) == "12.4k → 1.8k"
+    assert orchestrator._format_outro_tokens((500, 90)) == "500 → 90"
+
+
+@pytest.mark.asyncio
+async def test_outro_tokens_from_model_usage_events(session, monkeypatch, make_board, make_task, make_agent):
+    """Agent entry with attributed model_usage_events -> summed 'in → out';
+    entry without attribution (or without a task at all) -> '—'."""
+    from app.models.model_usage import ModelUsageEvent
+
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+    task = await make_task(board.id, title="[Bench] priced-tok")
+
+    for i, (inp, out) in enumerate(((10_000, 1_500), (2_400, 300))):
+        session.add(ModelUsageEvent(
+            task_id=task.id, harness="host", model="grok-4.5",
+            session_id="s1", message_uuid=f"m-{uuid.uuid4().hex}",
+            input_tokens=inp, output_tokens=out,
+            ts=datetime(2026, 7, 15, 12, 0, i), source_file="test.jsonl",
+        ))
+    await session.commit()
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="Grok 4.5", source_kind="agent",
+                   agent_id=agent.id, task_id=task.id, status="rendered",
+                   video_path="/sd/a.mp4", metrics={"duration_ms": 60000}),
+        BenchEntry(challenge_id=ch.id, model_label="Qwen", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4",
+                   metrics={"duration_ms": 90000}),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+
+    rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows["Grok 4.5"]["tokens"] == "12.4k → 1.8k"
+    assert rows["Qwen"]["tokens"] == "—"  # spark entry has no task_id
+
+
+@pytest.mark.asyncio
+async def test_outro_tokens_dash_without_attribution(session, monkeypatch, make_board, make_task, make_agent):
+    board = await make_board(slug=f"b-{uuid.uuid4().hex[:6]}")
+    agent = await make_agent(board_id=board.id, name="Grok-Agent", harness="grok")
+    task = await make_task(board.id, title="[Bench] unpriced-tok")
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side")
+    session.add(ch)
+    await session.commit()
+    await session.refresh(ch)
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="agent",
+                   agent_id=agent.id, task_id=task.id, status="rendered",
+                   video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="agent",
+                   agent_id=agent.id, status="rendered", video_path="/sd/b.mp4"),
+    ]
+    for e in entries:
+        session.add(e)
+    await session.commit()
+
+    captured = _fake_compose_client(monkeypatch)
+    await orchestrator.compose_challenge(session, ch, entries)
+    rows = {r["name"]: r for r in captured["branding"]["outro_rows"]}
+    assert rows["A"]["tokens"] == "—"  # task without usage rows
+    assert rows["B"]["tokens"] == "—"  # entry without task at all
+
+
 # ── recompose (compose-only rebuild, 2026-07-12) ───────────────────────────
 
 

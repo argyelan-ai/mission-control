@@ -398,6 +398,32 @@ async def task_cost_usd(session: AsyncSession, task_id: uuid.UUID) -> float | No
     return float(total) if total is not None else None
 
 
+async def task_token_usage(
+    session: AsyncSession, task_id: uuid.UUID
+) -> tuple[int, int] | None:
+    """Attributed token usage of a task: (sum input_tokens, sum output_tokens)
+    from model_usage_events. Same coverage caveat as task_cost_usd — most
+    agent entries have no attributed rows today, so this returns None and
+    the outro shows "—" (see task_cost_usd docstring for the harvester gap).
+    """
+    from sqlalchemy import func
+
+    from app.models.model_usage import ModelUsageEvent
+
+    row = (
+        await session.exec(
+            select(
+                func.sum(ModelUsageEvent.input_tokens),
+                func.sum(ModelUsageEvent.output_tokens),
+            ).where(ModelUsageEvent.task_id == task_id)
+        )
+    ).one()
+    input_sum, output_sum = row
+    if input_sum is None and output_sum is None:
+        return None
+    return (int(input_sum or 0), int(output_sum or 0))
+
+
 async def on_task_review(session: AsyncSession, task) -> bool:
     """task_review_hook (core registry): bench agent tasks skip human review
     entirely — review -> done fires immediately once the one-shot lands, so
@@ -558,6 +584,26 @@ def _format_outro_cost(cost_usd: float | None, source_kind: str) -> str:
     return f"${cost_usd:.2f}"
 
 
+def _format_tok_count(n: int) -> str:
+    """Compact human-readable token count: exact below 1000, k/M above
+    (1 decimal), matching the outro table's terse style."""
+    if n < 1_000:
+        return str(n)
+    if n < 1_000_000:
+        return f"{n / 1_000:.1f}k"
+    return f"{n / 1_000_000:.1f}M"
+
+
+def _format_outro_tokens(usage: tuple[int, int] | None) -> str:
+    """'12.4k → 1.8k' (input -> output), or "—" when no model_usage_events
+    are attributed to the task (same coverage gap as cost — see
+    task_token_usage)."""
+    if usage is None:
+        return "—"
+    input_tokens, output_tokens = usage
+    return f"{_format_tok_count(input_tokens)} → {_format_tok_count(output_tokens)}"
+
+
 def _format_outro_size(artifact_path: str | None) -> str:
     if not artifact_path:
         return "—"
@@ -622,11 +668,16 @@ async def _build_branding_payload(
         if entry.source_kind != "spark" and entry.task_id is not None:
             cost_usd = await task_cost_usd(session, entry.task_id)
 
+        token_usage = None
+        if entry.task_id is not None:
+            token_usage = await task_token_usage(session, entry.task_id)
+
         outro_rows.append({
             "name": entry.model_label,
             "time": _format_outro_time(duration_ms),
             "size": _format_outro_size(entry.artifact_path),
             "cost": _format_outro_cost(cost_usd, entry.source_kind),
+            "tokens": _format_outro_tokens(token_usage),
         })
 
     return {
