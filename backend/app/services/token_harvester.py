@@ -10,9 +10,11 @@ Data sources:
 
 Dedup key: top-level `uuid` (UNIQUE) for Claude Code lines. message.id has
 1042+ collisions — NEVER dedupe on that! omp lines carry no top-level uuid at
-all (only a collision-prone 8-hex `id`) — their dedup key is synthesized as
-``{session_id}:{id}`` where session_id comes from the JSONL filename (omp
-writes one file per session, no sessionId field in the line itself).
+all (only a collision-prone top-level 8-hex `id`) — their dedup key is
+synthesized as ``{session_id}:{message.responseId or id}`` where session_id
+comes from the JSONL filename (omp writes one file per session, no sessionId
+field in the line itself) and responseId (a chatcmpl-* id from the backing
+API) is preferred over the collision-prone short id when present.
 Idempotent: can run over the same files any number of times.
 Offset resume: harvest_state stores processed_lines → only reads new lines.
 """
@@ -59,8 +61,8 @@ def parse_transcript_line(line: str, session_id: str | None = None) -> dict[str,
     Dispatches on the top-level ``type`` field:
     - ``"assistant"`` → Claude Code schema (nested message.model/message.usage,
       top-level uuid).
-    - ``"message"`` → omp schema (ADR-045 headless harness — top-level
-      model/provider, camelCase usage keys, no top-level uuid).
+    - ``"message"`` → omp schema (ADR-045 headless harness — model/provider/
+      usage nested under message, camelCase usage keys, no top-level uuid).
     Anything else (user lines, unknown types, invalid JSON) → None.
 
     Args:
@@ -135,21 +137,34 @@ def _parse_claude_line(d: dict[str, Any]) -> dict[str, Any] | None:
 def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any] | None:
     """Parses an omp transcript line (``type == "message"``, ADR-045).
 
-    Real sample (Sparky/Qwen on Spark, 2026-07-15)::
+    Real sample (Sparky/Qwen on Spark, 2026-07-15, verified in-container —
+    everything except type/id/parentId/timestamp lives INSIDE ``message``,
+    not top-level — an earlier revision of this function got that wrong from
+    a misread sample and silently harvested 0 events)::
 
-        {"type":"message","id":"74f7a91e","message":{"role":"assistant","usage":
-         {"input":28848,"output":135,"cacheRead":0,"cacheWrite":0,
-          "cost":{"input":0.004,...,"total":0.0042}}},
-         "model":"Qwen/Qwen3.6-35B-A3B-FP8","provider":"mc-openai", ...}
+        {"type":"message","id":"74f7a91e","parentId":"54c8d3f0",
+         "timestamp":"2026-07-15T16:29:37.102Z",
+         "message":{"role":"assistant","content":[...],
+           "api":"openai-completions","provider":"mc-openai",
+           "model":"Qwen/Qwen3.6-35B-A3B-FP8",
+           "usage":{"input":28848,"output":135,"cacheRead":0,"cacheWrite":0,
+             "totalTokens":28983,
+             "cost":{"input":0.004,...,"total":0.0042}},
+           "stopReason":"toolUse","timestamp":1784132972177,
+           "responseId":"chatcmpl-915e3d69480ffb2c", ...}}
 
     Filters:
     - Only when message.role == "assistant"
     - Only when message.usage is present
-    - Only when a top-level model is present
+    - Only when a model is present (message.model, falls back to a top-level
+      model if a future omp version ever puts it there)
 
-    Dedup key: omp has no top-level uuid — only a short (8 hex) `id` that
-    collides across sessions. Since one JSONL file == one omp session, the
-    caller-supplied session_id namespaces it: ``{session_id}:{id}``.
+    Dedup key: omp has no top-level uuid. ``message.responseId`` (a full
+    chatcmpl-* id from the backing API) is far less collision-prone than the
+    top-level ``id`` (8 hex, generated per omp turn, collides across
+    sessions) — preferred when present, with ``id`` as fallback. Since one
+    JSONL file == one omp session, the caller-supplied session_id namespaces
+    it: ``{session_id}:{responseId or id}``.
 
     Cost: omp's own `usage.cost` reflects a generic per-token price table
     baked into the omp binary — not Mark's actual cost, which for a local
@@ -168,16 +183,17 @@ def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any]
     if not usage:
         return None
 
-    model = d.get("model")
+    model = message.get("model") or d.get("model")
     if not model:
         return None
 
     short_id = d.get("id")
     if not short_id:
         return None
+    dedup_id = message.get("responseId") or short_id
 
     sess = session_id or ""
-    msg_uuid = f"{sess}:{short_id}"
+    msg_uuid = f"{sess}:{dedup_id}"
 
     return {
         "uuid": msg_uuid,
@@ -187,7 +203,7 @@ def _parse_omp_line(d: dict[str, Any], session_id: str | None) -> dict[str, Any]
         "cwd": d.get("cwd", ""),
         "git_branch": d.get("gitBranch"),
         "model": model,
-        "provider": d.get("provider"),
+        "provider": message.get("provider") or d.get("provider"),
         "input_tokens": usage.get("input", 0) or 0,
         "output_tokens": usage.get("output", 0) or 0,
         "cache_read_tokens": usage.get("cacheRead", 0) or 0,
