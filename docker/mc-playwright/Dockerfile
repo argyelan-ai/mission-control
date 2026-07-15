@@ -25,6 +25,7 @@ RUN pip install --no-cache-dir \
 
 COPY media.py /app/media.py
 COPY service.py /app/service.py
+COPY deterministic_shim.js /app/deterministic_shim.js
 COPY templates/ /app/templates/
 
 # Bench-video branding fonts: fetched + inlined at build time (never

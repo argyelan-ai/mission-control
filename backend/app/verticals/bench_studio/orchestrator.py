@@ -38,9 +38,22 @@ SHARED_DELIVERABLES = Path(os.environ.get("SHARED_DELIVERABLES", "/shared-delive
 PLAYWRIGHT_BASE = os.environ.get("MC_PLAYWRIGHT_URL", "http://mc-playwright:8790")
 
 RECORD_DURATION_S = 10       # spec §4: default 10 s
-RECORD_VIEWPORT = "desktop"  # 1440x900 (mc-playwright VIEWPORTS)
-RECORD_TIMEOUT_S = 180.0
-COMPOSE_TIMEOUT_S = 300.0
+# 2026-07-15: the mc-playwright sidecar's /record now ignores this and
+# always captures at a fixed 1440x810 @2x device scale (deterministic
+# frame-pipe capture, see docker/mc-playwright/service.py RECORD_VIEWPORT).
+# Still sent — RecordRequest.viewport is a required enum field and sending
+# it is harmless — but it no longer controls the output resolution.
+RECORD_VIEWPORT = "desktop"
+# Deterministic capture measured at ~12x video length live (10s video ->
+# ~122s capture+encode, docker/mc-playwright's per-frame CDP screenshot +
+# JS eval cost dominates, not the encode). 180s was tuned for the old
+# real-time record_video path and now clips mid-capture; 900s covers up to
+# the max 60s duration_s with headroom.
+RECORD_TIMEOUT_S = 900.0
+# Compose now overlays/encodes 3840x2160 branded frames + 2K plain-grid
+# inputs (2026-07-15 resolution bump) — slower than the old 1920x1080/2K
+# path, bump the client-side timeout to match.
+COMPOSE_TIMEOUT_S = 600.0
 SPARK_TIMEOUT_S = 300.0
 SPARK_MAX_TOKENS = 16384
 

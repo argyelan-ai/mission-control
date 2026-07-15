@@ -8,8 +8,10 @@ import pytest
 from pydantic import ValidationError
 
 from media import (
+    CELL_HEIGHT,
+    CELL_WIDTH,
     DEJAVU_BOLD,
-    RECORD_SETTLE_S,
+    DETERMINISTIC_SHIM_PATH,
     SLOT_A_XY,
     SLOT_B_XY,
     SLOT_BG_COLOR,
@@ -26,9 +28,10 @@ from media import (
     RecordRequest,
     build_branded_compose_cmd,
     build_compose_cmd,
-    build_transcode_cmd,
+    build_pipe_encode_cmd,
     escape_drawtext,
     fill_bench_template,
+    load_deterministic_shim,
     render_outro_rows_html,
 )
 
@@ -127,14 +130,19 @@ def test_escape_drawtext_plain_label_unchanged():
     assert escape_drawtext("DeepSeek-V4 · 87 tok/s") == "DeepSeek-V4 · 87 tok/s"
 
 
-# ── build_transcode_cmd ───────────────────────────────────────────────────────
+# ── build_pipe_encode_cmd (2026-07-15, deterministic frame-pipe capture) ──────
 
 
-def test_build_transcode_cmd():
-    cmd = build_transcode_cmd("/tmp/in.webm", "/shared-deliverables/out.mp4")
+def test_build_pipe_encode_cmd_default_2k():
+    cmd = build_pipe_encode_cmd("/shared-deliverables/out.mp4")
     assert cmd == [
         "ffmpeg", "-y",
-        "-i", "/tmp/in.webm",
+        "-loglevel", "error",
+        "-nostats",
+        "-f", "image2pipe",
+        "-framerate", "30",
+        "-i", "-",
+        "-vf", "scale=2560:1440",
         "-c:v", "libx264",
         "-pix_fmt", "yuv420p",
         "-r", "30",
@@ -146,31 +154,73 @@ def test_build_transcode_cmd():
     ]
 
 
-def test_build_transcode_cmd_head_trim_is_output_side_seek():
-    """White-flash fix: trim_start_s cuts the head via ACCURATE (output-side)
-    seek — `-ss` must come AFTER `-i`, otherwise ffmpeg snaps to keyframes and
-    the cut lands visibly wrong on Playwright's sparse-keyframe webm. Output
-    duration semantics: delivered mp4 = source duration - trim_start_s (the
-    /record endpoint records duration_s + RECORD_SETTLE_S extra for this, so
-    the delivered file keeps the requested duration_s)."""
-    cmd = build_transcode_cmd(
-        "/tmp/in.webm", "/sd/out.mp4", trim_start_s=RECORD_SETTLE_S
-    )
+def test_build_pipe_encode_cmd_silences_stderr_stats():
+    """Review finding (2026-07-15): unsilenced ffmpeg stats fill the stderr
+    pipe buffer on long recordings and deadlock the caller's stdin writes."""
+    cmd = build_pipe_encode_cmd("/sd/out.mp4")
+    assert "-nostats" in cmd
+    assert cmd[cmd.index("-loglevel") + 1] == "error"
+
+
+def test_build_pipe_encode_cmd_reads_stdin_not_a_file():
+    cmd = build_pipe_encode_cmd("/sd/out.mp4")
     i_idx = cmd.index("-i")
-    ss_idx = cmd.index("-ss")
-    assert ss_idx > i_idx  # output-side seek = frame accurate
-    assert cmd[ss_idx + 1] == str(RECORD_SETTLE_S)
-    # Codec flags unchanged behind the trim:
-    assert "libx264" in cmd and "yuv420p" in cmd and cmd[-1] == "/sd/out.mp4"
+    assert cmd[i_idx + 1] == "-"  # stdin, not a webm path — no intermediate file
 
 
-def test_build_transcode_cmd_no_trim_no_ss():
-    cmd = build_transcode_cmd("/tmp/in.webm", "/sd/out.mp4", trim_start_s=0.0)
+def test_build_pipe_encode_cmd_custom_dimensions_and_fps():
+    cmd = build_pipe_encode_cmd("/sd/out.mp4", width=1920, height=1080, fps=24)
+    assert "-vf" in cmd
+    assert cmd[cmd.index("-vf") + 1] == "scale=1920:1080"
+    assert cmd[cmd.index("-framerate") + 1] == "24"
+    assert cmd[cmd.index("-r") + 1] == "24"
+
+
+def test_build_pipe_encode_cmd_no_ss_trim_needed():
+    """Deterministic capture starts only after page.goto's load event — no
+    pre-paint white-flash frame exists to trim, unlike the old real-time
+    record_video path."""
+    cmd = build_pipe_encode_cmd("/sd/out.mp4")
     assert "-ss" not in cmd
 
 
-def test_record_settle_default_one_second():
-    assert RECORD_SETTLE_S == 1.0
+# ── deterministic_shim.js ──────────────────────────────────────────────────
+
+
+def test_deterministic_shim_file_exists():
+    assert DETERMINISTIC_SHIM_PATH.is_file()
+
+
+def test_deterministic_shim_defines_mc_tick():
+    shim = load_deterministic_shim()
+    assert "__mcTick" in shim
+    assert "requestAnimationFrame" in shim
+    assert "getAnimations" in shim
+
+
+def test_deterministic_shim_clamps_zero_delay_timers():
+    """Review finding (2026-07-15): a self-rearming setTimeout(fn, 0) must
+    not stay perpetually "due" at the same virtual time — that would hang
+    __mcTick's timer-draining loop forever (vt never advances) instead of
+    firing at most ~stepMs times per tick. The old code only clamped
+    setInterval (Math.max(1,d)), not setTimeout (Math.max(0,d))."""
+    shim = load_deterministic_shim()
+    assert "Math.max(0,d)" not in shim
+
+
+def test_deterministic_shim_has_timer_iteration_cap():
+    """Belt-and-braces on top of the delay clamp: __mcTick must hard-cap how
+    many timers it drains per tick so no pathological chain can turn one
+    frame's tick into an unbounded synchronous loop."""
+    shim = load_deterministic_shim()
+    assert "MC_TICK_MAX_TIMER_ITERATIONS" in shim
+
+
+# ── build_compose_cmd cell size (2026-07-15, 2K bump) ─────────────────────
+
+
+def test_cell_size_is_2k():
+    assert (CELL_WIDTH, CELL_HEIGHT) == (1280, 720)
 
 
 # ── build_compose_cmd ─────────────────────────────────────────────────────────
@@ -537,9 +587,11 @@ def test_build_branded_compose_cmd_single_slot_h264_output():
 
 
 def test_build_branded_compose_cmd_two_input_output_unchanged_by_single_support():
-    """Regression pin (2026-07-13): adding the 1-input path must not alter a
-    single byte of the existing 2-input command — same filter_complex, same
-    input order, same encode flags."""
+    """Regression pin (2026-07-13; slot geometry doubled 2026-07-15 for the
+    2x/retina branding-card bump — SLOT_* constants below are imported live
+    from media.py so this stays byte-pinned to whatever geometry is current):
+    same filter_complex shape, same input order, same encode flags as the
+    1-input path leaves untouched."""
     cmd = build_branded_compose_cmd(
         ["/d/a.mp4", "/d/b.mp4"], "/d/frame.png", "/d/outro.png", "/d/out.mp4"
     )

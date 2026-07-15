@@ -21,6 +21,7 @@ Interaktions-Mode (2026-04-23):
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import os
 import re
@@ -36,7 +37,6 @@ from fastapi import FastAPI, HTTPException
 from playwright.async_api import Browser, BrowserContext, Page, async_playwright
 from pydantic import BaseModel, Field
 from media import (
-    RECORD_SETTLE_S,
     VIEWPORTS,
     BrandingSpec,
     ComposeRequest,
@@ -45,8 +45,9 @@ from media import (
     RecordResponse,
     build_branded_compose_cmd,
     build_compose_cmd,
-    build_transcode_cmd,
+    build_pipe_encode_cmd,
     fill_bench_template,
+    load_deterministic_shim,
     render_outro_rows_html,
 )
 
@@ -787,16 +788,39 @@ async def verify(req: VerifyRequest):
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Record & Compose (2026-07-11, Benchmark Studio Baustein 2)
+# Record & Compose (2026-07-11, Benchmark Studio Baustein 2;
+#                    2026-07-15, deterministic frame-pipe capture)
 # ──────────────────────────────────────────────────────────────────────────────
 #
-# /record:  HTML-Datei oder URL laden, N Sekunden Video aufnehmen (Playwright
-#           record_video, webm) + Screenshot, dann ffmpeg-Transcode zu H.264
-#           mp4 (X-kompatibel). /compose: N mp4s -> beschriftetes Grid-Video.
+# /record:  HTML-Datei oder URL laden, N Frames deterministisch aufnehmen
+#           (virtualisierte Page-Clock, siehe deterministic_shim.js) + ein
+#           CDP-Screenshot pro Frame, direkt als image2pipe-Stream in ffmpeg
+#           gepiped -> H.264 mp4 (X-kompatibel) + screenshot.png.
+#           /compose: N mp4s -> beschriftetes Grid-Video.
 # Lehre aus dem Grok-Review: JEDER Subprocess laeuft mit Timeout + captured
 # stderr — nichts haengt still.
 
 FFMPEG_TIMEOUT_S = 300
+
+# Deterministic /record capture constants (2026-07-15). Root cause: headless
+# Chromium without a GPU renders heavy canvas/particle bench pages at
+# ~11fps in wall-clock terms — Playwright's real-time record_video then
+# captures that slow motion faithfully, so the "bug" was never the encoder,
+# it was recording real time at all. Fix: virtualize the page's clock
+# (deterministic_shim.js) and step it exactly 1000/RECORD_FPS ms per
+# captured frame; every frame is therefore "correct" regardless of how long
+# Chromium actually took to render it, and the resulting video is a clean
+# constant-fps playback of the page's intended animation speed.
+RECORD_FPS = 30
+RECORD_VIEWPORT = {"width": 1440, "height": 810}  # 16:9 — no letterbox pad in the compose grid
+RECORD_DEVICE_SCALE = 2  # -> 2880x1620 capture, downscaled to 2560x1440 by ffmpeg
+RECORD_OUTPUT_WIDTH = 2560
+RECORD_OUTPUT_HEIGHT = 1440
+RECORD_WARMUP_TICKS = 3  # let layout/fonts/first-paint settle before capture starts
+# Generous: up to 60s * 30fps = 1800 frames, ~150-250ms/frame (CDP screenshot +
+# JS eval) plus ffmpeg encode tail once stdin closes -> single-digit minutes
+# in practice, budget 15 min so a slow cold run never spuriously 502s.
+RECORD_CAPTURE_TIMEOUT_S = 900
 
 # Bench-video branding templates (frame.html + frame_single.html + outro.html
 # + shared.css + fonts/embedded-fonts.css, see
@@ -810,7 +834,11 @@ BENCH_MODE_LINE_SINGLE = "solo run"  # frame_single.html's fixed {{MODE_LINE}} v
 async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
     """Writes a filled bench template to a scratch dir alongside its shared
     assets (shared.css, fonts/ — referenced via relative href in the
-    template) and screenshots it at the canonical 1920x1080 frame size."""
+    template) and screenshots it at the canonical 1920x1080 CSS viewport,
+    device_scale_factor=2 (2026-07-15) for a sharp 3840x2160 PNG — the
+    branding card's text/lines stay crisp instead of getting blown up by
+    ffmpeg's overlay scale. media.py's SLOT_* constants are the CSS slot
+    geometry x2 to match this physical pixel size."""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         (tmp_dir / "shared.css").symlink_to(BENCH_TEMPLATES_DIR / "shared.css")
@@ -821,7 +849,9 @@ async def _screenshot_bench_card(html_text: str, out_png: Path) -> None:
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             try:
-                context = await browser.new_context(viewport=BENCH_FRAME_VIEWPORT)
+                context = await browser.new_context(
+                    viewport=BENCH_FRAME_VIEWPORT, device_scale_factor=2
+                )
                 page = await context.new_page()
                 await page.goto(html_path.as_uri(), wait_until="networkidle", timeout=30000)
                 await page.screenshot(path=str(out_png))
@@ -902,22 +932,155 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         )
 
 
+# How much of ffmpeg's stderr tail to keep for error messages — everything
+# else read past this is discarded (see _drain_stderr_tail below).
+FFMPEG_STDERR_TAIL_BYTES = 2000
+
+
+async def _drain_stderr_tail(stream: asyncio.StreamReader) -> bytearray:
+    """Continuously reads an ffmpeg subprocess's stderr in the background
+    and keeps only the last FFMPEG_STDERR_TAIL_BYTES (2026-07-15, review
+    finding): stderr=PIPE has a small OS pipe buffer (~64KB); if nothing
+    reads it while the caller is busy writing frames to stdin, ffmpeg
+    blocks writing stderr, which blocks stdin.drain() right behind it —
+    a classic subprocess deadlock on any recording long enough to fill the
+    buffer (`-nostats` in build_pipe_encode_cmd removes ffmpeg's main
+    reason to write continuously, this task is the belt-and-braces half of
+    the fix: even unexpected/verbose stderr output can never back up).
+    """
+    tail = bytearray()
+    while True:
+        chunk = await stream.read(4096)
+        if not chunk:
+            return tail
+        tail += chunk
+        if len(tail) > FFMPEG_STDERR_TAIL_BYTES:
+            del tail[: -FFMPEG_STDERR_TAIL_BYTES]
+
+
+async def _capture_deterministic(
+    page: Page,
+    n_frames: int,
+    frame_ms: float,
+    ffmpeg_cmd: list[str],
+    screenshot_path: Path,
+) -> None:
+    """Ticks the page's virtual clock one frame at a time, CDP-screenshots
+    each settled frame as JPEG, and pipes the bytes straight into an ffmpeg
+    image2pipe stdin — no intermediate frame files. Also grabs one PNG at
+    the midpoint frame for screenshot_path (thumbnail).
+
+    Raises HTTPException(502) on any ffmpeg failure; never leaves a zombie
+    ffmpeg process behind on ANY exit path, including asyncio.CancelledError
+    (which asyncio.wait_for's timeout raises into this coroutine and which
+    does NOT subclass Exception — a plain `except Exception: kill()` block
+    silently misses it, 2026-07-15 review finding). The `finally` below
+    checks the process's actual returncode instead of relying on which
+    exception type unwound the stack, so it's exit-path-agnostic.
+    """
+    cdp = await page.context.new_cdp_session(page)
+    mid_frame = n_frames // 2
+
+    ffmpeg_proc = await asyncio.create_subprocess_exec(
+        *ffmpeg_cmd,
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    assert ffmpeg_proc.stdin is not None
+    assert ffmpeg_proc.stderr is not None
+    stderr_task = asyncio.ensure_future(_drain_stderr_tail(ffmpeg_proc.stderr))
+
+    # `except BaseException` (not just Exception) deliberately: an outer
+    # asyncio.wait_for timeout raises CancelledError into this coroutine,
+    # which subclasses BaseException, NOT Exception — a plain
+    # `except Exception` misses it entirely, ffmpeg is never killed, and the
+    # process leaks (2026-07-15 review finding). capture_exc is re-raised
+    # below, after cleanup, so cancellation semantics still propagate
+    # correctly to asyncio.wait_for's caller.
+    capture_exc: BaseException | None = None
+    try:
+        for i in range(n_frames):
+            await page.evaluate("(ms) => window.__mcTick(ms)", frame_ms)
+            result = await cdp.send(
+                "Page.captureScreenshot",
+                {"format": "jpeg", "quality": 90, "fromSurface": True},
+            )
+            frame_bytes = base64.b64decode(result["data"])
+            ffmpeg_proc.stdin.write(frame_bytes)
+            await ffmpeg_proc.stdin.drain()
+
+            if i == mid_frame:
+                try:
+                    thumb = await cdp.send(
+                        "Page.captureScreenshot", {"format": "png", "fromSurface": True}
+                    )
+                    screenshot_path.write_bytes(base64.b64decode(thumb["data"]))
+                except Exception as e:  # noqa: BLE001 — thumbnail is best-effort
+                    logger.warning("record: thumbnail capture skipped (%s)", e)
+    except BaseException as e:  # noqa: BLE001 — see docstring: re-raised below after cleanup
+        capture_exc = e
+    finally:
+        # Runs on every exit path (normal completion, exception, or
+        # CancelledError) — closing stdin signals ffmpeg there are no more
+        # frames; if it's still alive after that (capture died mid-stream,
+        # or was cancelled), kill it rather than leak an orphaned process
+        # holding the output file open.
+        if not ffmpeg_proc.stdin.is_closing():
+            ffmpeg_proc.stdin.close()
+        if ffmpeg_proc.returncode is None:
+            try:
+                await asyncio.wait_for(ffmpeg_proc.wait(), timeout=10)
+            except asyncio.TimeoutError:
+                ffmpeg_proc.kill()
+                await ffmpeg_proc.wait()
+        stderr_tail = bytes(await stderr_task)
+
+    if capture_exc is not None:
+        raise capture_exc
+    if ffmpeg_proc.returncode != 0:
+        raise HTTPException(
+            502,
+            f"ffmpeg (pipe encode) failed (rc={ffmpeg_proc.returncode}): "
+            f"{stderr_tail.decode(errors='replace')}",
+        )
+
+
 @app.post("/record", response_model=RecordResponse)
 async def record(req: RecordRequest):
-    """Laedt html_path/url, nimmt duration_s Sekunden Video auf (webm via
-    Playwright record_video), transkodiert zu H.264 mp4 und speichert
-    zusaetzlich screenshot.png (Thumbnail/Fallback) nach output_dir.
+    """Laedt html_path/url und nimmt duration_s Sekunden Video deterministisch
+    auf: statt Playwrights record_video (Echtzeit) wird die Page-Uhr virtua-
+    lisiert (deterministic_shim.js) und pro Frame exakt 1000/RECORD_FPS ms
+    weitergeschaltet, dann ein CDP-Screenshot des settled Frames genommen und
+    direkt als image2pipe-Stream in ffmpeg gepiped -> recording.mp4.
 
-    White-flash fix (2026-07-12): die Aufnahme startet bei Page-Creation,
-    also vor dem ersten Paint der Ziel-Seite — Chromiums weisse Default-Page
-    landet als Blitz am Videoanfang. Gegenmassnahmen:
-      1. RECORD_SETTLE_S extra aufnehmen + im Transcode frame-genau vom Kopf
-         schneiden (die eigentliche Korrektur — geliefertes mp4 startet auf
-         echtem Content und behaelt ~duration_s).
-      2. Belt-and-braces: CDP Emulation.setDefaultBackgroundColorOverride
-         faerbt Chromiums Pre-Paint-Hintergrund dunkel (bench-bg #06070A),
-         damit auch der Rest des Settle-Fensters nicht weiss ist. Best
-         effort — wenn der CDP-Call fehlt/fehlschlaegt, rettet der Trim."""
+    Root Cause (2026-07-14, gemessen): headless Chromium ohne GPU rendert
+    schwere Canvas/Partikel-Animationen real nur mit ~11fps statt 60fps —
+    record_video zeichnet diese Zeitlupe originalgetreu auf, das Video wirkt
+    "slow motion + laggy" obwohl der Code korrekt laeuft. Die deterministische
+    Aufnahme umgeht das Problem komplett: jeder Frame ist per Definition
+    "richtig" unabhaengig davon wie lange Chromium zum Rendern gebraucht hat
+    -> konstante 30fps Wiedergabe der beabsichtigten Animationsgeschwindig-
+    keit, egal wie langsam/schnell der Sandbox-Host gerade ist.
+
+    Kein White-Flash-Settle-Trim mehr noetig (das alte RECORD_SETTLE_S/
+    build_transcode_cmd-Duo ist entfallen): die Aufnahme beginnt erst NACH
+    page.goto's "load"-Event, es gibt also keinen Pre-Paint-Blitz der
+    Chromium-Default-Page mehr, der weggeschnitten werden muesste.
+
+    viewport ist bei /record derzeit fix (RECORD_VIEWPORT, 16:9) statt aus
+    dem `viewport`-Request-Feld (das bleibt fuer /snapshot etc. relevant) —
+    Bench-Videos sind immer Desktop-Grid-Material. req.viewport wird
+    trotzdem entgegengenommen (Schema-Pflichtfeld) und bei einem Wert
+    != "desktop" geloggt statt still ignoriert (2026-07-15, Review-Finding:
+    Contract-Drift zwischen dem was der Request verspricht und dem was der
+    Sidecar tatsaechlich tut soll sichtbar sein, nicht stumm verschluckt)."""
+    if req.viewport != "desktop":
+        logger.warning(
+            "record: req.viewport=%r wird ignoriert — /record captured seit "
+            "2026-07-15 immer mit RECORD_VIEWPORT (%s @%dx)",
+            req.viewport, RECORD_VIEWPORT, RECORD_DEVICE_SCALE,
+        )
     out_dir = _require_shared_path(req.output_dir, "output_dir")
     if req.html_path:
         html = _require_shared_path(req.html_path, "html_path")
@@ -925,75 +1088,71 @@ async def record(req: RecordRequest):
             raise HTTPException(422, f"html_path existiert nicht: {req.html_path}")
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    vp = VIEWPORTS[req.viewport]
     screenshot_path = out_dir / "screenshot.png"
     video_path = out_dir / "recording.mp4"
+    n_frames = req.duration_s * RECORD_FPS
+    frame_ms = 1000.0 / RECORD_FPS
 
-    with tempfile.TemporaryDirectory() as tmp:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
+    ffmpeg_cmd = build_pipe_encode_cmd(
+        str(video_path),
+        width=RECORD_OUTPUT_WIDTH,
+        height=RECORD_OUTPUT_HEIGHT,
+        fps=RECORD_FPS,
+    )
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(
+                viewport=RECORD_VIEWPORT,
+                device_scale_factor=RECORD_DEVICE_SCALE,
+            )
+            page = await context.new_page()
+            await page.add_init_script(load_deterministic_shim())
             try:
-                context = await browser.new_context(
-                    viewport=vp,
-                    record_video_dir=tmp,
-                    record_video_size=vp,
-                )
-                page = await context.new_page()
-                try:
-                    # Pre-paint frames dunkel faerben (CDP, chromium-only).
-                    cdp = await context.new_cdp_session(page)
-                    await cdp.send(
-                        "Emulation.setDefaultBackgroundColorOverride",
-                        {"color": {"r": 6, "g": 7, "b": 10, "a": 255}},  # #06070A
-                    )
-                except Exception as e:  # noqa: BLE001 — best effort, trim covers it
-                    logger.warning("record: background override failed (%s)", e)
-                try:
-                    await page.goto(req.target_url, wait_until="load", timeout=30000)
-                except Exception as e:
-                    raise HTTPException(502, f"Navigation failed ({req.target_url}): {e}")
-                # Settle-Fenster + gewuenschte Dauer aufnehmen; das Settle-
-                # Stueck wird im Transcode vom Kopf geschnitten.
-                await page.wait_for_timeout(
-                    int((req.duration_s + RECORD_SETTLE_S) * 1000)
-                )
-                # Screenshot ist sekundaer zum Video und darf den Record nie
-                # scheitern lassen: Seiten mit Endlos-Animation (Canvas/rAF)
-                # reissen Playwrights Frame-Stabilitaets-Wartezeit in den
-                # Timeout (Vorfall 2026-07-12, Horror-Forest-Bench).
-                # animations="disabled" + kurzer Timeout + best effort.
-                try:
-                    await page.screenshot(
-                        path=str(screenshot_path),
-                        full_page=False,
-                        animations="disabled",
-                        timeout=10000,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning("record: screenshot skipped (%s)", e)
-                video = page.video
-                await context.close()  # flushes the webm to record_video_dir
-                webm_path = await video.path()
-            finally:
-                await browser.close()
+                await page.goto(req.target_url, wait_until="load", timeout=30000)
+            except Exception as e:
+                raise HTTPException(502, f"Navigation failed ({req.target_url}): {e}")
 
-        # ffmpeg braucht das webm bevor der TemporaryDirectory-Context endet.
-        # trim_start_s schneidet das Settle-Fenster (weisser Pre-Paint-Blitz)
-        # frame-genau vom Kopf — geliefertes mp4 ~ duration_s.
-        await asyncio.to_thread(
-            _run_ffmpeg,
-            build_transcode_cmd(
-                str(webm_path), str(video_path), trim_start_s=RECORD_SETTLE_S
-            ),
-        )
+            # Let layout/fonts/first-paint settle on the virtual clock before
+            # the actual capture window starts.
+            for _ in range(RECORD_WARMUP_TICKS):
+                await page.evaluate("(ms) => window.__mcTick(ms)", frame_ms)
+
+            try:
+                await asyncio.wait_for(
+                    _capture_deterministic(
+                        page, n_frames, frame_ms, ffmpeg_cmd, screenshot_path
+                    ),
+                    timeout=RECORD_CAPTURE_TIMEOUT_S,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    502,
+                    f"deterministic capture timeout nach {RECORD_CAPTURE_TIMEOUT_S}s "
+                    f"({n_frames} frames @ {RECORD_FPS}fps)",
+                )
+            except HTTPException:
+                raise
+            except Exception as e:
+                # Review finding (2026-07-15): only asyncio.TimeoutError was
+                # caught here — a BrokenPipeError (ffmpeg dies mid-stream), a
+                # page crash, or any other capture failure fell through as a
+                # raw unhandled 500 instead of this module's convention
+                # (every subprocess/browser failure surfaces as a clean 502
+                # with context, see _run_ffmpeg / _do_form_login / etc.).
+                raise HTTPException(502, f"deterministic capture failed: {e}")
+        finally:
+            await browser.close()
 
     logger.info(
-        "record: %s -> %s (%ds, %s)",
-        req.target_url, video_path, req.duration_s, req.viewport,
+        "record: %s -> %s (%ds, %d frames @ %dfps, %dx%d)",
+        req.target_url, video_path, req.duration_s, n_frames, RECORD_FPS,
+        RECORD_OUTPUT_WIDTH, RECORD_OUTPUT_HEIGHT,
     )
     return RecordResponse(
         video_path=str(video_path),
-        # "" wenn der Screenshot uebersprungen wurde (siehe best-effort oben)
+        # "" wenn die Thumbnail-Aufnahme uebersprungen wurde (best-effort)
         screenshot_path=str(screenshot_path) if screenshot_path.exists() else "",
         duration_s=req.duration_s,
         bytes=video_path.stat().st_size,
