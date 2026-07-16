@@ -146,6 +146,28 @@ class ComposeResponse(BaseModel):
     inputs: int
 
 
+class TranscodeRequest(BaseModel):
+    """POST /transcode — re-encodes an existing video (e.g. a bench
+    composed_video_path) to a web-friendly H.264 mp4 + a poster JPEG, for
+    publishing outside the operator app (e.g. a catalog site). Both
+    input_path and output_dir must resolve under /shared-deliverables (same
+    containment check as /record and /compose's input/output paths)."""
+    input_path: str
+    output_dir: str
+    max_width: int = Field(default=1920, ge=16, le=7680)
+    crf: int = Field(default=23, ge=0, le=51)
+    poster_at_s: float = Field(default=1.0, ge=0)
+
+
+class TranscodeResponse(BaseModel):
+    video_path: str
+    poster_path: str
+    width: int
+    height: int
+    duration_s: float
+    size_bytes: int
+
+
 # ── ffmpeg command builders (pure) ───────────────────────────────────────────
 
 
@@ -203,6 +225,41 @@ def build_pipe_encode_cmd(
         "-crf", "20",
         "-movflags", "+faststart",
         "-an",
+        dst,
+    ]
+
+
+def build_transcode_video_cmd(
+    src: str, dst: str, *, max_width: int, crf: int,
+) -> List[str]:
+    """Re-encodes `src` to a web-friendly H.264 mp4: scaled to max_width wide
+    (height auto, kept even via -2 so libx264's yuv420p never chokes on an
+    odd dimension), no audio (bench recordings are silent already)."""
+    return [
+        FFMPEG_BIN, "-y",
+        "-loglevel", "error",
+        "-i", src,
+        "-vf", f"scale={max_width}:-2",
+        "-c:v", "libx264",
+        "-crf", str(crf),
+        "-preset", "slow",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        dst,
+    ]
+
+
+def build_transcode_poster_cmd(src: str, dst: str, *, poster_at_s: float) -> List[str]:
+    """Grabs a single JPEG frame at poster_at_s seconds into `src` — a
+    thumbnail/poster image for the transcoded video."""
+    return [
+        FFMPEG_BIN, "-y",
+        "-loglevel", "error",
+        "-ss", str(poster_at_s),
+        "-i", src,
+        "-frames:v", "1",
+        "-q:v", "3",
         dst,
     ]
 

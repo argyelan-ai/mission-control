@@ -29,6 +29,21 @@ class ApprovalResolve(BaseModel):
     resolver_note: str | None = None
 
 
+# action_types with a dedicated core handler inside resolve_approval below —
+# kept in sync manually (no registry, these are all inline branches in this
+# function). Any action_type NOT in this set gets the generic
+# vertical_hooks.run_approval_resolved_hooks() call instead, so overlay
+# verticals can react to their own custom approval types without core
+# needing to know they exist.
+_CORE_HANDLED_ACTION_TYPES = {
+    "blocker_decision", "promote_approval", "visual_review",
+    "clarification_question", "loop_gate", "spawn_agent", "x_post",
+    "install_skill", "uninstall_skill",
+    "install_plugin", "uninstall_plugin",
+    "install_mcp", "uninstall_mcp",
+}
+
+
 async def _post_install_callback(
     session: AsyncSession,
     approval: Approval,
@@ -732,6 +747,15 @@ async def resolve_approval(
             install_result=install_result,
             install_exception=install_exception,
         )
+
+    # ── Generic vertical hook (ADR-044): action_types without a dedicated
+    # core handler above let overlay verticals react to the resolution
+    # (e.g. a private catalog_publisher's custom approval type). x_post has
+    # its own hook call inside _handle_x_post_resolution — skip it here to
+    # avoid firing run_approval_resolved_hooks twice for the same approval. ──
+    if approval.action_type not in _CORE_HANDLED_ACTION_TYPES:
+        from app.verticals import hooks as vertical_hooks
+        await vertical_hooks.run_approval_resolved_hooks(session, approval, payload.status)
 
     # ── Update Telegram message (remove buttons) ──
     try:

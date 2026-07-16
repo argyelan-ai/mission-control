@@ -43,9 +43,13 @@ from media import (
     ComposeResponse,
     RecordRequest,
     RecordResponse,
+    TranscodeRequest,
+    TranscodeResponse,
     build_branded_compose_cmd,
     build_compose_cmd,
     build_pipe_encode_cmd,
+    build_transcode_poster_cmd,
+    build_transcode_video_cmd,
     fill_bench_template,
     load_deterministic_shim,
     render_outro_rows_html,
@@ -932,6 +936,45 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         )
 
 
+def _run_ffprobe(path: str) -> dict:
+    """Probes width/height/duration of a video via ffprobe -show_entries.
+    Same timeout/error-surface conventions as _run_ffmpeg — never hangs,
+    always a clean 502 on failure instead of a raw subprocess exception."""
+    import json as _json
+
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height:format=duration",
+        "-of", "json",
+        path,
+    ]
+    logger.info("ffprobe: %s", " ".join(cmd))
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(502, f"ffprobe timeout nach {FFMPEG_TIMEOUT_S}s")
+    except FileNotFoundError:
+        raise HTTPException(502, "ffprobe binary nicht gefunden — Image ohne ffmpeg gebaut?")
+    if proc.returncode != 0:
+        raise HTTPException(
+            502,
+            f"ffprobe failed (rc={proc.returncode}): {proc.stderr[-800:]}",
+        )
+    try:
+        data = _json.loads(proc.stdout)
+        stream = data["streams"][0]
+        return {
+            "width": int(stream["width"]),
+            "height": int(stream["height"]),
+            "duration_s": float(data["format"]["duration"]),
+        }
+    except (KeyError, IndexError, ValueError, _json.JSONDecodeError) as e:
+        raise HTTPException(502, f"ffprobe output nicht parsbar: {e}")
+
+
 # How much of ffmpeg's stderr tail to keep for error messages — everything
 # else read past this is discarded (see _drain_stderr_tail below).
 FFMPEG_STDERR_TAIL_BYTES = 2000
@@ -1198,4 +1241,53 @@ async def compose(req: ComposeRequest):
         output_path=str(out_path),
         bytes=out_path.stat().st_size,
         inputs=len(req.inputs),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Transcode (2026-07-16, extension point for publishing outside the operator
+# app — e.g. a private catalog_publisher vertical re-encoding a bench
+# composed_video_path down to a web-friendly size before uploading it
+# somewhere public.)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/transcode", response_model=TranscodeResponse)
+async def transcode(req: TranscodeRequest):
+    """Re-encodes an existing video (input_path) to a scaled H.264 mp4 +
+    JPEG poster in output_dir. Both paths must resolve under
+    /shared-deliverables — same containment convention as /record + /compose."""
+    src = _require_shared_path(req.input_path, "input_path")
+    if not src.is_file():
+        raise HTTPException(422, f"input_path nicht gefunden: {req.input_path}")
+    out_dir = _require_shared_path(req.output_dir, "output_dir")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    video_path = out_dir / "episode.mp4"
+    poster_path = out_dir / "poster.jpg"
+
+    video_cmd = build_transcode_video_cmd(
+        str(src), str(video_path), max_width=req.max_width, crf=req.crf,
+    )
+    await asyncio.to_thread(_run_ffmpeg, video_cmd)
+
+    poster_cmd = build_transcode_poster_cmd(
+        str(src), str(poster_path), poster_at_s=req.poster_at_s,
+    )
+    await asyncio.to_thread(_run_ffmpeg, poster_cmd)
+
+    probe = await asyncio.to_thread(_run_ffprobe, str(video_path))
+
+    logger.info(
+        "transcode: %s -> %s (%dx%d, %.1fs, %d bytes)",
+        src, video_path, probe["width"], probe["height"],
+        probe["duration_s"], video_path.stat().st_size,
+    )
+    return TranscodeResponse(
+        video_path=str(video_path),
+        poster_path=str(poster_path),
+        width=probe["width"],
+        height=probe["height"],
+        duration_s=probe["duration_s"],
+        size_bytes=video_path.stat().st_size,
     )

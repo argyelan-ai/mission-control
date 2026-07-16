@@ -30,6 +30,7 @@ vi.mock("@/verticals/bench_studio/api", () => ({
 vi.mock("@/lib/api", () => ({
   api: { files: { contentUrl: (root: string, sub: string) => `/files/${root}/${sub}` } },
   getToken: () => "test-token",
+  request: vi.fn(),
 }));
 
 vi.mock("@/lib/notify", () => ({
@@ -45,6 +46,7 @@ vi.mock("../DraftDialog", () => ({
 }));
 
 import { benchApi } from "@/verticals/bench_studio/api";
+import { request } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { ChallengeDetail } from "../ChallengeDetail";
 
@@ -628,5 +630,134 @@ describe("ChallengeDetail — per-entry rerender", () => {
     // Challenge status never left 'review' — the button must not stay
     // spinning after a rejected request.
     expect(screen.getByRole("button", { name: /Qwen 3.6 neu rendern/ })).not.toBeDisabled();
+  });
+});
+
+describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("renders no extra buttons when the challenge has no actions", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({ status: "review", actions: [] })
+    );
+    renderDetail();
+    await screen.findByRole("button", { name: /Draft erstellen/ });
+    expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
+  });
+
+  it("renders a registered action button and POSTs to its endpoint on click", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        actions: [
+          {
+            id: "catalog-publish",
+            label: "Publish",
+            style: "primary",
+            method: "POST",
+            endpoint: "/api/v1/catalog/ch-1/publish",
+            confirm: null,
+            disabled: false,
+            disabled_reason: null,
+            busy: false,
+          },
+        ],
+      })
+    );
+    vi.mocked(request).mockResolvedValue({ ok: true });
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: "Publish" });
+    await userEvent.click(btn);
+
+    await waitFor(() => {
+      expect(request).toHaveBeenCalledWith("/api/v1/catalog/ch-1/publish", { method: "POST" });
+    });
+    await waitFor(() => {
+      expect(notify.success).toHaveBeenCalledWith("Publish gestartet");
+    });
+  });
+
+  it("disables the button and shows the disabled_reason as a title when disabled", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        actions: [
+          {
+            id: "catalog-publish",
+            label: "Publish",
+            style: "primary",
+            method: "POST",
+            endpoint: "/api/v1/catalog/ch-1/publish",
+            confirm: null,
+            disabled: true,
+            disabled_reason: "Kein Video vorhanden",
+            busy: false,
+          },
+        ],
+      })
+    );
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: "Publish" });
+    expect(btn).toBeDisabled();
+    expect(btn).toHaveAttribute("title", "Kein Video vorhanden");
+  });
+
+  it("asks for confirmation before firing when confirm is set, and skips the call on cancel", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        actions: [
+          {
+            id: "catalog-unpublish",
+            label: "Unpublish",
+            style: "danger",
+            method: "POST",
+            endpoint: "/api/v1/catalog/ch-1/unpublish",
+            confirm: "Wirklich vom Katalog entfernen?",
+            disabled: false,
+            disabled_reason: null,
+            busy: false,
+          },
+        ],
+      })
+    );
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: "Unpublish" });
+    await userEvent.click(btn);
+
+    expect(confirmSpy).toHaveBeenCalledWith("Wirklich vom Katalog entfernen?");
+    expect(request).not.toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("shows a spinner and disables the button while busy=true", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        status: "review",
+        actions: [
+          {
+            id: "catalog-publish",
+            label: "Publish",
+            style: "primary",
+            method: "POST",
+            endpoint: "/api/v1/catalog/ch-1/publish",
+            confirm: null,
+            disabled: false,
+            disabled_reason: null,
+            busy: true,
+          },
+        ],
+      })
+    );
+
+    renderDetail();
+    const btn = await screen.findByRole("button", { name: "Publish" });
+    expect(btn).toBeDisabled();
   });
 });

@@ -17,7 +17,7 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { api, getToken } from "@/lib/api";
+import { api, getToken, request } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
@@ -26,7 +26,7 @@ import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
 import { DraftDialog } from "./DraftDialog";
-import type { BenchChallenge, BenchEntry } from "./types";
+import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -220,6 +220,32 @@ export function ChallengeDetail({
     },
   });
 
+  // Extension point (ADR-044): action buttons contributed by an overlay
+  // vertical (e.g. a private catalog_publisher). Public build sees no
+  // `actions` on the challenge — nothing renders below.
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const challengeActionMutation = useMutation({
+    mutationFn: (action: ChallengeAction) => request(action.endpoint, { method: action.method }),
+    onMutate: (action: ChallengeAction) => setPendingActionId(action.id),
+    onSuccess: (_data, action) => {
+      notify.success(`${action.label} gestartet`);
+      invalidate();
+    },
+    onError: (err, action) => notify.error(apiErrorDetail(err, `${action.label} nicht möglich`)),
+    onSettled: () => setPendingActionId(null),
+  });
+
+  function runChallengeAction(action: ChallengeAction) {
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    challengeActionMutation.mutate(action);
+  }
+
+  const CHALLENGE_ACTION_STYLE: Record<ChallengeAction["style"], React.CSSProperties> = {
+    default: { color: C.textSecondary, border: `1px solid ${C.border}` },
+    primary: { backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` },
+    danger: { background: C.error, color: C.textPrimary },
+  };
+
   if (!challenge) return null;
   const canDraft = challenge.status === "review" || challenge.status === "drafted";
   const canRerender = ["review", "drafted", "failed"].includes(challenge.status);
@@ -332,6 +358,29 @@ export function ChallengeDetail({
           >
             <Send size={13} /> Draft erstellen
           </button>
+          {/* Extension point (ADR-044): overlay-vertical action buttons
+              (e.g. a private catalog_publisher "Publish"). Empty/absent
+              on the public build — nothing renders. */}
+          {challenge.actions?.map((action) => {
+            const isPendingThisAction =
+              (challengeActionMutation.isPending && pendingActionId === action.id) ||
+              action.busy;
+            return (
+              <button
+                key={action.id}
+                onClick={() => runChallengeAction(action)}
+                disabled={action.disabled || isPendingThisAction}
+                title={action.disabled ? action.disabled_reason ?? undefined : undefined}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+                style={CHALLENGE_ACTION_STYLE[action.style]}
+              >
+                {isPendingThisAction ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : null}
+                {action.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 

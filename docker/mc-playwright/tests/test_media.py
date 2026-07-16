@@ -26,9 +26,12 @@ from media import (
     BrandingSpec,
     ComposeRequest,
     RecordRequest,
+    TranscodeRequest,
     build_branded_compose_cmd,
     build_compose_cmd,
     build_pipe_encode_cmd,
+    build_transcode_poster_cmd,
+    build_transcode_video_cmd,
     escape_drawtext,
     fill_bench_template,
     load_deterministic_shim,
@@ -641,4 +644,64 @@ def test_build_branded_compose_cmd_two_input_output_unchanged_by_single_support(
         "-movflags", "+faststart",
         "-an",
         "/d/out.mp4",
+    ]
+
+
+# ── /transcode (2026-07-16) ─────────────────────────────────────────────────
+
+
+def test_transcode_request_defaults():
+    req = TranscodeRequest(
+        input_path="/shared-deliverables/bench-1/composed.mp4",
+        output_dir="/shared-deliverables/catalog/ep-1",
+    )
+    assert req.max_width == 1920
+    assert req.crf == 23
+    assert req.poster_at_s == 1.0
+
+
+def test_transcode_request_rejects_out_of_range_crf():
+    with pytest.raises(ValidationError):
+        TranscodeRequest(
+            input_path="/sd/a.mp4", output_dir="/sd/out", crf=99,
+        )
+
+
+def test_build_transcode_video_cmd_defaults():
+    cmd = build_transcode_video_cmd(
+        "/sd/composed.mp4", "/sd/out/episode.mp4", max_width=1920, crf=23,
+    )
+    assert cmd == [
+        "ffmpeg", "-y",
+        "-loglevel", "error",
+        "-i", "/sd/composed.mp4",
+        "-vf", "scale=1920:-2",
+        "-c:v", "libx264",
+        "-crf", "23",
+        "-preset", "slow",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        "/sd/out/episode.mp4",
+    ]
+
+
+def test_build_transcode_video_cmd_custom_width_and_crf():
+    cmd = build_transcode_video_cmd(
+        "/sd/in.mp4", "/sd/out.mp4", max_width=1280, crf=28,
+    )
+    assert cmd[cmd.index("-vf") + 1] == "scale=1280:-2"
+    assert cmd[cmd.index("-crf") + 1] == "28"
+
+
+def test_build_transcode_poster_cmd():
+    cmd = build_transcode_poster_cmd("/sd/in.mp4", "/sd/poster.jpg", poster_at_s=2.5)
+    assert cmd == [
+        "ffmpeg", "-y",
+        "-loglevel", "error",
+        "-ss", "2.5",
+        "-i", "/sd/in.mp4",
+        "-frames:v", "1",
+        "-q:v", "3",
+        "/sd/poster.jpg",
     ]
