@@ -4,6 +4,8 @@ Request-model validation + ffmpeg command builders only — the live /record
 and /compose E2E happens at the supervised live gate, not here (no browser,
 no ffmpeg binary needed).
 """
+from pathlib import Path
+
 import pytest
 from pydantic import ValidationError
 
@@ -32,10 +34,12 @@ from media import (
     build_pipe_encode_cmd,
     build_transcode_poster_cmd,
     build_transcode_video_cmd,
+    clamp_poster_at_s,
     escape_drawtext,
     fill_bench_template,
     load_deterministic_shim,
     render_outro_rows_html,
+    resolve_contained_path,
 )
 
 
@@ -705,3 +709,61 @@ def test_build_transcode_poster_cmd():
         "-q:v", "3",
         "/sd/poster.jpg",
     ]
+
+
+# ── clamp_poster_at_s (2026-07-16, review finding F4) ───────────────────────
+
+
+def test_clamp_poster_at_s_within_duration_unchanged():
+    assert clamp_poster_at_s(1.0, 10.0) == 1.0
+
+
+def test_clamp_poster_at_s_past_duration_clamps_with_margin():
+    """A 0.5s clip with the default 1.0s poster_at_s must not seek past
+    EOF — clamp into duration - 0.1s."""
+    assert clamp_poster_at_s(1.0, 0.5) == pytest.approx(0.4)
+
+
+def test_clamp_poster_at_s_very_short_clip_clamps_to_zero():
+    """A clip shorter than the 0.1s margin itself must clamp to 0, never
+    negative."""
+    assert clamp_poster_at_s(1.0, 0.05) == 0.0
+
+
+def test_clamp_poster_at_s_exact_boundary():
+    assert clamp_poster_at_s(5.0, 5.1) == pytest.approx(5.0)
+
+
+# ── resolve_contained_path (2026-07-16, review finding F9: /transcode path
+#    containment — extracted from service.py's _require_shared_path so it's
+#    testable without playwright installed) ─────────────────────────────────
+
+
+def test_resolve_contained_path_accepts_path_under_root():
+    result = resolve_contained_path(
+        "/shared-deliverables/bench-1/composed.mp4", "/shared-deliverables",
+    )
+    assert result == Path("/shared-deliverables/bench-1/composed.mp4")
+
+
+def test_resolve_contained_path_rejects_path_outside_root():
+    assert resolve_contained_path("/etc/passwd", "/shared-deliverables") is None
+
+
+def test_resolve_contained_path_rejects_traversal_outside_root():
+    """`..` segments that walk back out of root must not resolve, even
+    though the raw string starts with the root prefix textually — this is
+    exactly the class of bug path.startswith() checks miss and .resolve()
+    + is_relative_to() catches."""
+    assert resolve_contained_path(
+        "/shared-deliverables/../etc/passwd", "/shared-deliverables",
+    ) is None
+
+
+def test_resolve_contained_path_rejects_sibling_prefix_match():
+    """A textual-prefix match on a sibling directory (`/shared-deliverables-evil`
+    starts with `/shared-deliverables`) must NOT be treated as contained —
+    only a real path-segment containment counts."""
+    assert resolve_contained_path(
+        "/shared-deliverables-evil/x.mp4", "/shared-deliverables",
+    ) is None

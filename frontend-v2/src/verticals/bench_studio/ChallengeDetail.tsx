@@ -109,6 +109,18 @@ function metricsLine(m: BenchEntry["metrics"]): string {
   return parts.join(" · ");
 }
 
+/** Extension-point action buttons (ADR-044) POST to a provider-supplied
+ *  endpoint with the operator's Bearer token attached (request()'s standard
+ *  auth header). A provider that returns an absolute or protocol-relative
+ *  URL — buggy or compromised — would make the browser send that token to
+ *  a third-party host (review finding F3, 2026-07-16). Only same-origin
+ *  absolute paths are allowed: must start with a single "/" and NOT with
+ *  "//" (the latter is protocol-relative and resolves to an arbitrary host
+ *  in a browser, same exfiltration risk as a full https://... URL). */
+export function isSafeChallengeActionEndpoint(endpoint: string): boolean {
+  return endpoint.startsWith("/") && !endpoint.startsWith("//");
+}
+
 export function ChallengeDetail({
   challengeId,
   onBack,
@@ -145,8 +157,13 @@ export function ChallengeDetail({
   }, [challenge?.status, rerenderEntryId, challenge]);
 
   function invalidate() {
-    qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
-    qc.invalidateQueries({ queryKey: ["bench-challenges"] });
+    // Returns the combined Promise so callers that need the button to stay
+    // disabled until the refetch actually lands (F8) can await it; other
+    // call sites below intentionally fire-and-forget.
+    return Promise.all([
+      qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] }),
+      qc.invalidateQueries({ queryKey: ["bench-challenges"] }),
+    ]);
   }
 
   const stopMutation = useMutation({
@@ -227,15 +244,24 @@ export function ChallengeDetail({
   const challengeActionMutation = useMutation({
     mutationFn: (action: ChallengeAction) => request(action.endpoint, { method: action.method }),
     onMutate: (action: ChallengeAction) => setPendingActionId(action.id),
-    onSuccess: (_data, action) => {
+    onSuccess: async (_data, action) => {
       notify.success(`${action.label} gestartet`);
-      invalidate();
+      // Keep the button disabled/spinning until the refetch this triggers
+      // has actually landed (F8, review finding) — invalidateQueries alone
+      // resolves once the refetch is *scheduled*, not once fresh data is
+      // in, so onSettled below would otherwise release the button into a
+      // stale-disabled-window gap the operator could double-click through.
+      await invalidate();
     },
     onError: (err, action) => notify.error(apiErrorDetail(err, `${action.label} nicht möglich`)),
     onSettled: () => setPendingActionId(null),
   });
 
   function runChallengeAction(action: ChallengeAction) {
+    if (!isSafeChallengeActionEndpoint(action.endpoint)) {
+      notify.error("Ungültiger Action-Endpoint — abgebrochen");
+      return;
+    }
     if (action.confirm && !window.confirm(action.confirm)) return;
     challengeActionMutation.mutate(action);
   }
@@ -360,8 +386,12 @@ export function ChallengeDetail({
           </button>
           {/* Extension point (ADR-044): overlay-vertical action buttons
               (e.g. a private catalog_publisher "Publish"). Empty/absent
-              on the public build — nothing renders. */}
-          {challenge.actions?.map((action) => {
+              on the public build — nothing renders. A provider-supplied
+              endpoint that isn't a safe same-origin path (F3) is dropped
+              here — never rendered, so there's no button to click through. */}
+          {challenge.actions
+            ?.filter((action) => isSafeChallengeActionEndpoint(action.endpoint))
+            .map((action) => {
             const isPendingThisAction =
               (challengeActionMutation.isPending && pendingActionId === action.id) ||
               action.busy;

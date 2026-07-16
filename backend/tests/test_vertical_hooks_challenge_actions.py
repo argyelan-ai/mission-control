@@ -134,6 +134,27 @@ async def test_custom_approval_type_fires_generic_hook(auth_client, session):
 
 
 @pytest.mark.asyncio
+async def test_custom_approval_type_rejected_fires_generic_hook_with_rejected(auth_client, session):
+    """Rejection must fire the hook too, not just approval (F9, review
+    finding) — resolution_status must carry "rejected", not "approved"."""
+    _, approval = await _make_approval(session, "catalog_publish")
+
+    seen: list[tuple] = []
+
+    async def hook(sess, appr, resolution_status):
+        seen.append((appr.id, resolution_status))
+
+    vertical_hooks.approval_resolved_hooks.append(hook)
+
+    resp = await auth_client.patch(
+        f"/api/v1/approvals/{approval.id}",
+        json={"status": "rejected"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert seen == [(approval.id, "rejected")]
+
+
+@pytest.mark.asyncio
 async def test_x_post_approval_does_not_fire_generic_hook(auth_client, session):
     """x_post has its own x_post_resolved_hooks call inside
     _handle_x_post_resolution already — the generic approval_resolved_hooks
@@ -153,3 +174,38 @@ async def test_x_post_approval_does_not_fire_generic_hook(auth_client, session):
     )
     assert resp.status_code == 200, resp.text
     assert seen == []
+
+
+# ── F7 (review finding): _CORE_HANDLED_ACTION_TYPES must stay in sync with
+# the actual inline `approval.action_type == "..."` / `in {...}` branches in
+# approvals.py — a drift there means either a real handler silently ALSO
+# gets the generic hook (double-fire), or a newly-added handler is missing
+# from the set and its approvals wrongly skip their intended core behavior
+# path assumptions elsewhere. Parses the source rather than hand-duplicating
+# the list, so it actually catches future drift instead of just re-asserting
+# today's snapshot. ──────────────────────────────────────────────────────
+
+
+def test_core_handled_action_types_matches_inline_handlers():
+    import re
+    from pathlib import Path
+
+    from app.routers import approvals as approvals_module
+    from app.routers.approvals import _CORE_HANDLED_ACTION_TYPES
+
+    source = Path(approvals_module.__file__).read_text()
+
+    # Every inline `approval.action_type == "x"` branch.
+    eq_types = set(re.findall(r'approval\.action_type == "([a-z_]+)"', source))
+
+    # The one inline `approval.action_type in {...}` set (install/uninstall).
+    in_block_match = re.search(r"approval\.action_type in \{([^}]+)\}", source, re.DOTALL)
+    assert in_block_match, "expected an `approval.action_type in {...}` set literal in approvals.py"
+    in_block_types = set(re.findall(r'"([a-z_]+)"', in_block_match.group(1)))
+
+    inline_handled = eq_types | in_block_types
+    assert inline_handled == _CORE_HANDLED_ACTION_TYPES, (
+        "approvals.py's inline action_type branches and _CORE_HANDLED_ACTION_TYPES "
+        f"have drifted apart — only in inline code: {inline_handled - _CORE_HANDLED_ACTION_TYPES}, "
+        f"only in the set: {_CORE_HANDLED_ACTION_TYPES - inline_handled}"
+    )

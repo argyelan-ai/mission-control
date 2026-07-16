@@ -129,14 +129,21 @@ async def collect_challenge_actions(session: Any, challenge: Any, entries: Any) 
     return actions
 
 
-# Async hooks, called after an Approval is resolved (approved OR rejected)
-# whose action_type has NO dedicated core handler (x_post has its own hook
-# call inside _handle_x_post_resolution — see approvals.py's
+# Async hooks, called after an Approval is resolved — approved, rejected,
+# OR expired — whose action_type has NO dedicated core handler (x_post has
+# its own hook call inside _handle_x_post_resolution — see approvals.py's
 # _CORE_HANDLED_ACTION_TYPES set for the full list of core-handled types).
-# Signature: async (session, approval, resolution_status: str) -> None.
-# Lets overlay verticals react to their own custom approval action_types
-# (e.g. a "catalog_publish" approval) without core needing to know they
-# exist. Errors are logged and swallowed.
+# Signature: async (session, approval, resolution_status: str) -> None,
+# where resolution_status is one of "approved" | "rejected" | "expired".
+# Fired from all three approval-resolution pathways that exist in core:
+# the operator PATCH endpoint (resolve_approval), the Telegram quick-resolve
+# link (quick_resolve_confirm), and the watchdog's silent auto-expiry
+# (_check_expired_approvals) — a broken/missing call on any one of them
+# means overlay verticals silently miss that resolution path (2026-07-16
+# review finding: expiry originally fired no hook at all). Lets overlay
+# verticals react to their own custom approval action_types (e.g. a
+# "catalog_publish" approval) without core needing to know they exist.
+# Errors are logged and swallowed.
 approval_resolved_hooks: list[Callable[..., Awaitable[None]]] = []
 
 

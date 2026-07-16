@@ -62,6 +62,8 @@ class HealthChecksMixin:
         """
         from datetime import timedelta
         from app.models.approval import Approval
+        from app.routers.approvals import _CORE_HANDLED_ACTION_TYPES
+        from app.verticals import hooks as vertical_hooks
 
         # Typen, deren Task ohne Entscheidung dauerhaft haengen wuerde.
         renewable_types = {"blocker_decision", "clarification_question"}
@@ -77,6 +79,12 @@ class HealthChecksMixin:
         expired_approvals = result.all()
 
         expired_count = 0
+        # Approvals that actually landed in status=expired this pass (not
+        # renewed) — the generic vertical hook fires for these AFTER the
+        # batch commit below, mirroring the approve/reject resolution paths
+        # in approvals.py (ADR-044, review finding F1: expiry was the only
+        # resolution path that silently skipped overlay verticals).
+        newly_expired_for_hooks: list[Approval] = []
         for approval in expired_approvals:
             if approval.action_type in renewable_types:
                 payload = dict(approval.payload or {})
@@ -120,6 +128,7 @@ class HealthChecksMixin:
             approval.resolved_at = now
             session.add(approval)
             expired_count += 1
+            newly_expired_for_hooks.append(approval)
             await emit_event(
                 session,
                 "approval.expired",
@@ -132,6 +141,9 @@ class HealthChecksMixin:
 
         if expired_approvals:
             await session.commit()
+            for approval in newly_expired_for_hooks:
+                if approval.action_type not in _CORE_HANDLED_ACTION_TYPES:
+                    await vertical_hooks.run_approval_resolved_hooks(session, approval, "expired")
             if expired_count:
                 logger.info("Auto-expired %d approval(s)", expired_count)
 

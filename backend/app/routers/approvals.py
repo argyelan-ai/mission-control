@@ -963,6 +963,14 @@ async def quick_resolve_confirm(
         from app.services.loop_runner import apply_loop_gate_decision
         await apply_loop_gate_decision(session, approval, status)
 
+    # ── Generic vertical hook (ADR-044) — mirrors resolve_approval above:
+    # action_types without a dedicated core handler on THIS pathway let
+    # overlay verticals react even when the approval is resolved via a
+    # Telegram quick-resolve link rather than the operator UI. ──
+    if approval.action_type not in _CORE_HANDLED_ACTION_TYPES:
+        from app.verticals import hooks as vertical_hooks
+        await vertical_hooks.run_approval_resolved_hooks(session, approval, status)
+
     # Update Telegram message
     try:
         await telegram_bot.update_resolved_telegram(approval_id, status)
