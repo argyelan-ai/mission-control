@@ -28,6 +28,8 @@ export function NewChallengeDialog({
   const [mode, setMode] = useState<"single" | "side_by_side">("side_by_side");
   const [seriesLabel, setSeriesLabel] = useState("");
   const [models, setModels] = useState<BenchModelSpec[]>([{ ...EMPTY_MODEL }]);
+  // Row indices where the label was edited by hand — autofill must not overwrite those.
+  const [labelTouched, setLabelTouched] = useState<Set<number>>(new Set());
 
   const { data: agents } = useQuery({
     queryKey: ["agents-for-bench"],
@@ -79,6 +81,7 @@ export function NewChallengeDialog({
     setMode("side_by_side");
     setSeriesLabel("");
     setModels([{ ...EMPTY_MODEL }]);
+    setLabelTouched(new Set());
   }
 
   function handleTemplateSelect(id: string) {
@@ -96,6 +99,38 @@ export function NewChallengeDialog({
 
   function setModel(i: number, patch: Partial<BenchModelSpec>) {
     setModels((prev) => prev.map((m, idx) => (idx === i ? { ...m, ...patch } : m)));
+  }
+
+  // Autofill: übernimmt den gewählten Modell-/Agentennamen ins Label,
+  // solange Mark das Label der Zeile nicht selbst angefasst hat.
+  function setModelWithAutofill(i: number, patch: Partial<BenchModelSpec>) {
+    setModels((prev) =>
+      prev.map((m, idx) => {
+        if (idx !== i) return m;
+        const next = { ...m, ...patch };
+        if (!labelTouched.has(i)) {
+          if (next.source_kind === "spark") {
+            next.label = (next.spark_model ?? "").trim();
+          } else if (next.agent_id) {
+            const agent = (agents ?? []).find((a) => a.id === next.agent_id);
+            next.label = (agent?.model ?? agent?.name ?? "").trim();
+          } else {
+            next.label = "";
+          }
+        }
+        return next;
+      })
+    );
+  }
+
+  function markLabelTouched(i: number, value: string) {
+    setLabelTouched((prev) => {
+      const next = new Set(prev);
+      // Leeres Feld gilt wieder als unberührt → Autofill greift erneut.
+      if (value.trim()) next.add(i);
+      else next.delete(i);
+      return next;
+    });
   }
 
   // Derived chip-tag default — mirrors the backend fallback
@@ -202,15 +237,19 @@ export function NewChallengeDialog({
             <div key={i} className="flex gap-2 items-center">
               <input
                 value={m.label}
-                onChange={(e) => setModel(i, { label: e.target.value })}
+                onChange={(e) => {
+                  markLabelTouched(i, e.target.value);
+                  setModel(i, { label: e.target.value });
+                }}
                 placeholder="Label (z. B. DeepSeek)"
+                aria-label={`Label ${i + 1}`}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
               />
               <select
                 value={m.source_kind}
                 onChange={(e) =>
-                  setModel(i, {
+                  setModelWithAutofill(i, {
                     source_kind: e.target.value as "spark" | "agent",
                     spark_model: "",
                     agent_id: null,
@@ -226,7 +265,7 @@ export function NewChallengeDialog({
               {m.source_kind === "spark" ? (
                 <input
                   value={m.spark_model ?? ""}
-                  onChange={(e) => setModel(i, { spark_model: e.target.value || null })}
+                  onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
                   placeholder="vLLM-Modell (leer = aktiv)"
                   className="rounded-lg p-2 text-sm outline-none flex-1"
                   style={inputStyle}
@@ -234,7 +273,7 @@ export function NewChallengeDialog({
               ) : (
                 <select
                   value={m.agent_id ?? ""}
-                  onChange={(e) => setModel(i, { agent_id: e.target.value || null })}
+                  onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
                   className="rounded-lg p-2 text-sm outline-none flex-1"
                   style={inputStyle}
                   aria-label={`Agent ${i + 1}`}
