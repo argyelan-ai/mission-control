@@ -28,8 +28,16 @@ from app.verticals.bench_studio import orchestrator
 
 @pytest.fixture(autouse=True)
 def _clean_hook_registries():
+    # Snapshot AND clear: installed verticals (e.g. a private overlay) register
+    # providers via register_all() when app.main is first imported — force that
+    # import NOW so the clear below actually wins, regardless of whether the
+    # client fixture (which imports app.main lazily) ran before or after us.
+    import app.main  # noqa: F401
+
     saved_actions = list(vertical_hooks.challenge_actions_providers)
     saved_approval = list(vertical_hooks.approval_resolved_hooks)
+    vertical_hooks.challenge_actions_providers[:] = []
+    vertical_hooks.approval_resolved_hooks[:] = []
     yield
     vertical_hooks.challenge_actions_providers[:] = saved_actions
     vertical_hooks.approval_resolved_hooks[:] = saved_approval
