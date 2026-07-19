@@ -918,6 +918,32 @@ def _cmd_ask(args, client, cfg):
     return 0
 
 
+def _cmd_msg(args, client, cfg):
+    """mc msg — plain non-question message on the current task thread (Task 8).
+
+    Posts status/decision/progress notes onto the task thread. Questions
+    carry awaiting-semantics and go through `mc ask` instead — this
+    endpoint deliberately rejects message_type="question".
+    No board_id noetig: haengt am aktuellen Task des Agents.
+    """
+    resp = client.request(
+        "POST",
+        "/api/v1/agent/tasks/current/messages",
+        body={"body": args.text, "message_type": args.type},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_msg_args(p):
+    p.add_argument("text")
+    p.add_argument(
+        "--type", dest="type", default="message",
+        choices=("message", "status", "decision"),
+        help="Nachrichtentyp (default: message). Fragen -> `mc ask` statt `mc msg`.",
+    )
+
+
 def _add_ask_args(p):
     p.add_argument("question")
     p.add_argument(
@@ -2214,6 +2240,14 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
         handler=_cmd_ask,
         add_args=_add_ask_args,
+    ),
+    "msg": CommandSpec(
+        name="msg",
+        help="Nachricht (message/status/decision) auf den Task-Thread posten — keine Fragen (siehe `mc ask`)",
+        endpoints=("POST /tasks/current/messages",),
+        scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
+        handler=_cmd_msg,
+        add_args=_add_msg_args,
     ),
     "help": CommandSpec(
         name="help",

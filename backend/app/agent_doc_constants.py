@@ -55,6 +55,8 @@ CANONICAL_VERBS: dict[str, str] = {
     "blocked": "Block a task with a question/description for the operator.",
     "failed": "Mark a task as failed.",
     "comment": "Post a comment (progress/blocker/feedback/resolution/handoff/message).",
+    "ask": "Ask a thread-native question — non-blocking by default, --blocking pauses on the answer.",
+    "msg": "Post a plain message/status/decision on the task thread (no questions — use `mc ask`).",
     "checklist": "Manage the task checklist (add/done/skip/list).",
     "question": "Ask the operator a clarifying question.",
     "help": "Ask another agent for help.",
