@@ -740,6 +740,7 @@ async def setup_agent_coordination(
                     agent.name, agent.emoji or "🎯", existing_token, board_id_str,
                     is_board_lead=config["is_board_lead"], scopes=config.get("scopes", []),
                     runtime=getattr(agent, "agent_runtime", "docker") or "docker",
+                    comm_v2=getattr(agent, "comm_v2", False),
                 )
 
         agent.updated_at = utcnow()
@@ -1390,15 +1391,18 @@ def _generate_tools_md(
     is_board_lead: bool = False,
     scopes: list[str] | None = None,
     runtime: str = "docker",
+    comm_v2: bool = False,
 ) -> str:
     """Proxy — delegates to services/tools_md_builder.py.
 
     runtime: "host" (Boss) or "docker" (cli-bridge, default). Only
     determines the phrasing of the vault section (host path vs container mount).
+    comm_v2: Interaction Model 2.0 pilot flag — see generate_tools_md docstring.
     """
     from app.services.tools_md_builder import generate_tools_md
     return generate_tools_md(
-        name, emoji, raw_token, board_id, is_board_lead, scopes, runtime=runtime
+        name, emoji, raw_token, board_id, is_board_lead, scopes, runtime=runtime,
+        comm_v2=comm_v2,
     )
 
 
