@@ -237,6 +237,73 @@ class TestWaitingTimeoutPark:
         assert await fake_redis.get(f"mc:task:{task.id}:waiting_parked") is None
 
 
+# ── Poll session-hold for `waiting` (Task 12 final-review A1) ─────────────
+
+@pytest.mark.asyncio
+class TestPollHoldsWaitingSession:
+    async def test_poll_holds_waiting_and_does_not_claim_inbox(self, client):
+        """A task in `waiting` (mc ask --blocking) parks the session: poll must
+        report `working` (hold), NOT idle, and MUST NOT claim a queued inbox
+        task into the paused session."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        agent, raw_token = await _agent(board.id)
+        waiting = await _waiting_task(board.id, agent.id)
+        # Agent's current session is on the waiting task.
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            a = await s.get(Agent, agent.id)
+            a.current_task_id = waiting.id
+            s.add(a)
+            await s.commit()
+        queued = await _inbox_task(board.id, agent.id)
+
+        with patch("app.services.dispatch.build_agent_task_prompt", return_value="x"):
+            resp = await client.get(
+                "/api/v1/agent/me/poll",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # Session held — not idle (which would clear the lock in poll.sh).
+        assert body["state"] == "working", body
+        assert body["task_id"] == str(waiting.id)
+        assert "task" not in body  # no prompt re-injected into the paused session
+
+        # The queued inbox task was NOT claimed — stays inbox, undispatched.
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            still_queued = await s.get(Task, queued.id)
+            assert still_queued.status == "inbox"
+            assert still_queued.dispatched_at is None
+
+    async def test_poll_claims_inbox_after_park_released_agent(self, client):
+        """Park is the ONLY sanctioned release: once _maybe_park_waiting_task
+        cleared current_task_id, the still-`waiting` task must no longer hold the
+        session — poll claims the queued inbox task (park → claim OK)."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        # Post-park state: agent released (current_task_id=None), task stays waiting.
+        agent, raw_token = await _agent(board.id, current_task_id=None)
+        waiting = await _waiting_task(board.id, agent.id)
+        queued = await _inbox_task(board.id, agent.id)
+
+        with patch("app.services.dispatch.build_agent_task_prompt", return_value="x"):
+            resp = await client.get(
+                "/api/v1/agent/me/poll",
+                headers={"Authorization": f"Bearer {raw_token}"},
+            )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        # The queued inbox task is delivered — the waiting task no longer holds.
+        assert body["state"] == "new_task", body
+        assert body["task"]["id"] == str(queued.id)
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            claimed = await s.get(Task, queued.id)
+            assert claimed.dispatched_at is not None  # claim happened
+            parked = await s.get(Task, waiting.id)
+            assert parked.status == "waiting"  # untouched by the claim
+
+
 # ── Bounded resume recap + parked-resume routing ─────────────────────────
 
 @pytest.mark.asyncio

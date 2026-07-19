@@ -1373,6 +1373,17 @@ async def agent_ask(
             detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
         )
 
+    # Task 12 (final-review A2, defense-in-depth): a blocking ask parks the
+    # task in `waiting` until an answer is delivered — but answer delivery is
+    # gated on the comm_v2 pilot. A non-pilot agent parking here could never be
+    # released (dead task). Reject blocking asks from non-pilots; non-blocking
+    # asks are harmless (the question lands in the thread, visible in web).
+    if payload.blocking and not getattr(agent, "comm_v2", False):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="messaging v2 pilot required for blocking asks",
+        )
+
     if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,

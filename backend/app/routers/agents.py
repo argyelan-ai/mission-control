@@ -2696,7 +2696,13 @@ async def agent_poll(
                 select(Task)
                 .where(Task.id == agent.current_task_id)
                 .where(Task.assigned_agent_id == agent.id)
-                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                # Task 12 (final-review A1): `waiting` (mc ask --blocking) is an
+                # ACTIVE/parked session — key it off current_task_id so poll
+                # holds the session. Deliberately NOT in the updated_at-desc
+                # fallback below: once _maybe_park_waiting_task clears
+                # current_task_id, this branch is skipped and the agent becomes
+                # claimable again (park releases → inbox-claim OK).
+                .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))
                 .limit(1)
             )
             active = _cur_result.first()
@@ -2749,7 +2755,13 @@ async def agent_poll(
                     active = None
 
         if active is not None:
-            if active.ack_at is not None:
+            # Task 12 (final-review A1): a `waiting` task parks the session on
+            # an answer — the agent is alive but paused. Report `working` (hold)
+            # unconditionally so poll.sh leaves the session untouched: no
+            # lock-clear, no inbox-claim, no prompt re-injection into the paused
+            # session. (A waiting task always has ack_at set — it can only reach
+            # waiting from in_progress — but we don't rely on that here.)
+            if active.status == "waiting" or active.ack_at is not None:
                 return {"state": "working", "task_id": str(active.id), **_poll_extra}
             # Prompt was never delivered — fall through and deliver it.
             task = active

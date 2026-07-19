@@ -37,6 +37,7 @@ async def _setup_agent_with_token(
     scopes: list[str] | None = None,
     provision_status: str = "provisioned",
     current_task_id: uuid.UUID | None = None,
+    comm_v2: bool = True,
 ):
     raw_token, token_hash = generate_agent_token()
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
@@ -49,6 +50,7 @@ async def _setup_agent_with_token(
             provision_status=provision_status,
             agent_token_hash=token_hash,
             current_task_id=current_task_id,
+            comm_v2=comm_v2,
         )
         s.add(agent)
         await s.commit()
@@ -224,6 +226,54 @@ class TestMcAsk:
         )
 
         assert resp.status_code == 409
+
+    async def test_blocking_rejected_for_non_comm_v2_agent(self, client: AsyncClient):
+        """(A2) blocking ask from a non-pilot agent -> 403. Delivery of the answer
+        is comm_v2-gated, so a non-pilot parking in `waiting` could never be
+        released (dead task)."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _setup_board(s)
+
+        task = await _setup_task(board.id, status="in_progress")
+        agent, token = await _setup_agent_with_token(
+            name="NonPilot", board_id=board.id, current_task_id=task.id, comm_v2=False,
+        )
+
+        client.headers["Authorization"] = f"Bearer {token}"
+
+        resp = await client.post(
+            "/api/v1/agent/tasks/current/ask",
+            json={"question": "Deploy jetzt?", "blocking": True},
+        )
+
+        assert resp.status_code == 403, resp.text
+        assert "messaging v2 pilot" in resp.json()["detail"]
+
+        # Task was NOT moved to waiting — the gate rejected before any mutation.
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            unchanged = await s.get(Task, task.id)
+            assert unchanged.status == "in_progress"
+
+    async def test_non_blocking_allowed_for_non_comm_v2_agent(self, client: AsyncClient):
+        """(A2) non-blocking ask is harmless for a non-pilot — question lands in
+        the thread (visible in web), task untouched. Allowed for all."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _setup_board(s)
+
+        task = await _setup_task(board.id, status="in_progress")
+        agent, token = await _setup_agent_with_token(
+            name="NonPilot2", board_id=board.id, current_task_id=task.id, comm_v2=False,
+        )
+
+        client.headers["Authorization"] = f"Bearer {token}"
+
+        resp = await client.post(
+            "/api/v1/agent/tasks/current/ask",
+            json={"question": "Nur eine Frage."},
+        )
+
+        assert resp.status_code == 201, resp.text
+        assert resp.json()["your_status"] == "in_progress"
 
     async def test_blocking_requires_in_progress(self, client: AsyncClient):
         """blocking=True from a non-in_progress task is rejected (VALID_TRANSITIONS)."""
