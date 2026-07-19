@@ -35,6 +35,7 @@ vi.mock("@/lib/notify", () => ({
 }));
 
 import { benchApi } from "@/verticals/bench_studio/api";
+import { api } from "@/lib/api";
 import { NewChallengeDialog } from "../NewChallengeDialog";
 
 function renderDialog(props?: { prefillTemplate?: PromptTemplate | null }) {
@@ -275,5 +276,54 @@ describe("NewChallengeDialog — template picker", () => {
         })
       );
     });
+  });
+});
+
+describe("NewChallengeDialog — label autofill", () => {
+  const sparkyAgent = {
+    id: "agent-1",
+    name: "Sparky",
+    model: "Qwen/Qwen3.6-35B-A3B-FP8",
+    harness: "omp",
+  } as never;
+
+  beforeEach(() => {
+    vi.mocked(api.agents.list).mockResolvedValue([sparkyAgent] as never);
+  });
+
+  it("typing a spark model mirrors it into the label while untouched", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const sparkInput = screen.getByPlaceholderText(/vLLM-Modell/);
+    await userEvent.type(sparkInput, "deepseek-v4");
+
+    const labelInput = screen.getByRole("textbox", { name: /label 1/i });
+    expect((labelInput as HTMLInputElement).value).toBe("deepseek-v4");
+  });
+
+  it("selecting an agent fills the label with the agent's model", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    // Switch row to agent source
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /quelle 1/i }), "agent");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: /agent 1/i }), "agent-1");
+
+    const labelInput = screen.getByRole("textbox", { name: /label 1/i });
+    expect((labelInput as HTMLInputElement).value).toBe("Qwen/Qwen3.6-35B-A3B-FP8");
+  });
+
+  it("a hand-edited label is not overwritten by later selection", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const labelInput = screen.getByRole("textbox", { name: /label 1/i });
+    await userEvent.type(labelInput, "Mein Label");
+
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: /quelle 1/i }), "agent");
+    await userEvent.selectOptions(await screen.findByRole("combobox", { name: /agent 1/i }), "agent-1");
+
+    expect((labelInput as HTMLInputElement).value).toBe("Mein Label");
   });
 });
