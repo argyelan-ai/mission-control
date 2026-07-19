@@ -287,30 +287,36 @@ async def agent_add_comment(
         and (task.assigned_agent_id == agent.id or agent.is_board_lead)
         and agent.auto_promote_on_resolution
     ):
-        old_status = task.status
-        # Subtasks go straight to done (review runs at the phase level)
-        if task.parent_task_id is not None:
-            task.status = "done"
-            task.completed_at = utcnow()
-            # See task_lifecycle.execute_review_decision for why "done"
-            # resets the sticky dispatch_intent label.
-            task.dispatch_intent = "root"
+        if getattr(agent, "comm_v2", False):
+            # Interaction Model 2.0 (§3.3/§8.1): comm_v2 agents drive their own
+            # lifecycle via `mc finish` — no silent auto-promote. Nudge instead.
+            from app.services.messaging import maybe_post_finish_nudge
+            await maybe_post_finish_nudge(session, task)
         else:
-            task.status = "review"
-        # Prevent stale dispatch_attempt_id (audit trail).
-        from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
-        await clear_dispatch_attempt_id(
-            session, task,
-            caller="agent_comment",
-            reason="resolution_auto_promote",
-        )
-        task.updated_at = utcnow()
-        session.add(task)
-        auto_promoted = True
-        logger.info(
-            "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
-            agent.name, task.title[:60], task.status,
-        )
+            old_status = task.status
+            # Subtasks go straight to done (review runs at the phase level)
+            if task.parent_task_id is not None:
+                task.status = "done"
+                task.completed_at = utcnow()
+                # See task_lifecycle.execute_review_decision for why "done"
+                # resets the sticky dispatch_intent label.
+                task.dispatch_intent = "root"
+            else:
+                task.status = "review"
+            # Prevent stale dispatch_attempt_id (audit trail).
+            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+            await clear_dispatch_attempt_id(
+                session, task,
+                caller="agent_comment",
+                reason="resolution_auto_promote",
+            )
+            task.updated_at = utcnow()
+            session.add(task)
+            auto_promoted = True
+            logger.info(
+                "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
+                agent.name, task.title[:60], task.status,
+            )
 
     # ── Fulfill report-back contract ──────────────────────────────
     # When the Board Lead posts a report_back comment → contract fulfilled

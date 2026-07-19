@@ -18,8 +18,11 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.comm_constants import MESSAGE_TYPES
-from app.models.task import Task
+from app.models.task import Task, TaskComment
 from app.models.thread import Thread, Message
+from app.utils import ensure_aware
+
+FINISH_NUDGE_BODY = "Du hast Fertigstellung signalisiert — bitte `mc finish` ausführen"
 
 
 async def _next_seq(session: AsyncSession, thread_id: uuid.UUID) -> int:
@@ -148,3 +151,56 @@ async def open_questions(
         return True
 
     return [m for m in messages if is_open(m)]
+
+
+async def last_task_activity(session: AsyncSession, task: Task):
+    """Dual-read last activity for a task (§8.1): the max of the latest
+    TaskComment.created_at and the latest Message.created_at on the task's
+    thread. Superset of the legacy comment-only read — identical for
+    non-pilot agents (no thread/messages), later for comm_v2 agents that
+    also post Messages.
+    """
+    comment_result = await session.exec(
+        select(func.max(TaskComment.created_at)).where(TaskComment.task_id == task.id)
+    )
+    latest_comment = comment_result.one()
+
+    latest_message = None
+    if task.thread_id is not None:
+        message_result = await session.exec(
+            select(func.max(Message.created_at)).where(Message.thread_id == task.thread_id)
+        )
+        latest_message = message_result.one()
+
+    candidates = [ensure_aware(t) for t in (latest_comment, latest_message) if t is not None]
+    return max(candidates) if candidates else None
+
+
+async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:
+    """Post a system Nudge message once, in place of the removed TaskComment
+    resolution auto-promote (comm_v2 agents, §3.3 / §8.1).
+
+    Dedupe: skip if the last system message on the thread is already this
+    nudge — a resolution-signal that persists across watchdog ticks or is
+    detected by both call sites (agent_comments.py + task_runner.py) in the
+    same cycle must not spam the thread.
+    """
+    thread = await ensure_task_thread(session, task)
+
+    result = await session.exec(
+        select(Message)
+        .where(Message.thread_id == thread.id, Message.message_type == "system")
+        .order_by(Message.seq.desc())
+        .limit(1)
+    )
+    last_system = result.first()
+    if last_system is not None and last_system.body == FINISH_NUDGE_BODY:
+        return
+
+    await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="system",
+        message_type="system",
+        body=FINISH_NUDGE_BODY,
+    )

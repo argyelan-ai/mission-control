@@ -34,6 +34,7 @@ from app.redis_client import RedisKeys, get_redis
 from app.scopes import Scope, get_agent_effective_scopes
 from app.services.activity import emit_event
 from app.services.dispatch import auto_dispatch_task
+from app.services.messaging import last_task_activity, maybe_post_finish_nudge
 
 logger = logging.getLogger("mc.task_runner")
 
@@ -1240,10 +1241,18 @@ class TaskRunnerService:
                 await self._handle_cli_bridge_inprogress_recovery(session, task, agent)
                 continue
 
-            # Use last comment or started_at as the reference
+            # Use last comment/message or started_at as the reference.
+            # Dual-read (§8.1): last_task_activity() folds Message activity
+            # (comm_v2 pilots) into the comment-only read this used to be —
+            # superset behavior, byte-identical for agents without a thread.
             last_activity = ensure_aware(task.started_at or task.updated_at)
 
-            # Check the last comment
+            structural_activity = await last_task_activity(session, task)
+            if structural_activity is not None and structural_activity > last_activity:
+                last_activity = structural_activity
+
+            # Still need the last comment specifically for resolution
+            # auto-promote detection below.
             comments_result = await session.exec(
                 select(TaskComment)
                 .where(TaskComment.task_id == task.id)
@@ -1251,10 +1260,6 @@ class TaskRunnerService:
                 .limit(1)
             )
             last_comment = comments_result.first()
-            if last_comment:
-                comment_time = ensure_aware(last_comment.created_at)
-                if comment_time > last_activity:
-                    last_activity = comment_time
 
             # ── Resolution detection: last comment is "resolution" ──
             # Agent reported done but never set status to review.
@@ -1275,6 +1280,11 @@ class TaskRunnerService:
                 and task.status == "in_progress"
                 and agent.auto_promote_on_resolution
             ):
+                if getattr(agent, "comm_v2", False):
+                    # Interaction Model 2.0 (§3.3/§8.1): no silent auto-promote
+                    # for comm_v2 agents — nudge them to `mc finish` instead.
+                    await maybe_post_finish_nudge(session, task)
+                    continue
                 task.status = "review"
                 task.updated_at = utcnow()
                 session.add(task)
