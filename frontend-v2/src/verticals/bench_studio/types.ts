@@ -33,6 +33,22 @@ export type BenchChallengeStatus =
   | "published"
   | "failed";
 
+// Extension point (ADR-044): action buttons contributed by an overlay
+// vertical (e.g. a private catalog_publisher) via the
+// challenge_actions_providers hook. Public build sees an empty/absent
+// array — nothing renders.
+export interface ChallengeAction {
+  id: string;
+  label: string;
+  style: "default" | "primary" | "danger";
+  method: "POST";
+  endpoint: string;
+  confirm: string | null;
+  disabled: boolean;
+  disabled_reason: string | null;
+  busy: boolean;
+}
+
 export interface BenchChallenge {
   id: string;
   title: string;
@@ -50,6 +66,7 @@ export interface BenchChallenge {
   created_at: string;
   updated_at: string;
   entries: BenchEntry[];
+  actions?: ChallengeAction[];
 }
 
 export interface BenchModelSpec {

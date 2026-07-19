@@ -43,12 +43,18 @@ from media import (
     ComposeResponse,
     RecordRequest,
     RecordResponse,
+    TranscodeRequest,
+    TranscodeResponse,
     build_branded_compose_cmd,
     build_compose_cmd,
     build_pipe_encode_cmd,
+    build_transcode_poster_cmd,
+    build_transcode_video_cmd,
+    clamp_poster_at_s,
     fill_bench_template,
     load_deterministic_shim,
     render_outro_rows_html,
+    resolve_contained_path,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -906,11 +912,15 @@ async def _render_branding_assets(branding: BrandingSpec, render_dir: Path) -> t
 
 
 def _require_shared_path(raw: str, what: str) -> Path:
-    """Containment: alle Record/Compose-Pfade muessen unter /shared-deliverables liegen."""
-    resolved = Path(raw).resolve()
-    root = SHARED_DELIVERABLES.resolve()
-    if not resolved.is_relative_to(root):
-        raise HTTPException(422, f"{what} muss unter {root} liegen: {raw}")
+    """Containment: alle Record/Compose/Transcode-Pfade muessen unter
+    /shared-deliverables liegen. Delegates to media.resolve_contained_path
+    (pure, unit-tested in the backend venv — this wrapper only adds the
+    FastAPI-specific 422)."""
+    resolved = resolve_contained_path(raw, str(SHARED_DELIVERABLES))
+    if resolved is None:
+        raise HTTPException(
+            422, f"{what} muss unter {SHARED_DELIVERABLES.resolve()} liegen: {raw}",
+        )
     return resolved
 
 
@@ -929,6 +939,94 @@ def _run_ffmpeg(cmd: list[str]) -> None:
         raise HTTPException(
             502,
             f"ffmpeg failed (rc={proc.returncode}): {proc.stderr[-800:]}",
+        )
+
+
+def _run_ffprobe(path: str) -> dict:
+    """Probes width/height/duration of a video via ffprobe -show_entries.
+    Same timeout/error-surface conventions as _run_ffmpeg — never hangs,
+    always a clean 502 on failure instead of a raw subprocess exception."""
+    import json as _json
+
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=width,height:format=duration",
+        "-of", "json",
+        path,
+    ]
+    logger.info("ffprobe: %s", " ".join(cmd))
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(502, f"ffprobe timeout nach {FFMPEG_TIMEOUT_S}s")
+    except FileNotFoundError:
+        raise HTTPException(502, "ffprobe binary nicht gefunden — Image ohne ffmpeg gebaut?")
+    if proc.returncode != 0:
+        raise HTTPException(
+            502,
+            f"ffprobe failed (rc={proc.returncode}): {proc.stderr[-800:]}",
+        )
+    try:
+        data = _json.loads(proc.stdout)
+        stream = data["streams"][0]
+        return {
+            "width": int(stream["width"]),
+            "height": int(stream["height"]),
+            "duration_s": float(data["format"]["duration"]),
+        }
+    except (KeyError, IndexError, ValueError, _json.JSONDecodeError) as e:
+        raise HTTPException(502, f"ffprobe output nicht parsbar: {e}")
+
+
+async def _run_ffmpeg_async(cmd: list[str]) -> None:
+    """Runs ffmpeg via asyncio.create_subprocess_exec (2026-07-16, review
+    finding F6) instead of _run_ffmpeg's subprocess.run()-in-a-thread: once a
+    blocking subprocess.run() has started inside asyncio.to_thread, an
+    asyncio-level cancellation of the awaiting coroutine (client disconnect,
+    an outer asyncio.wait_for timeout) cannot reach into the worker thread
+    to kill it — the ffmpeg process leaks until ITS OWN timeout fires. A
+    native asyncio subprocess gives us a real handle to kill on any exit
+    path, mirroring /record's _capture_deterministic: `except BaseException`
+    (not just Exception) is deliberate — CancelledError subclasses
+    BaseException, not Exception, and a plain `except Exception` would miss
+    it entirely, leaving the process running. See that function's docstring
+    for the full reasoning; this is the same contract applied to a plain
+    (non-streaming) ffmpeg invocation."""
+    logger.info("ffmpeg (async): %s", " ".join(cmd))
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+    except FileNotFoundError:
+        raise HTTPException(502, "ffmpeg binary nicht gefunden — Image ohne ffmpeg gebaut?")
+
+    capture_exc: BaseException | None = None
+    stderr_tail = b""
+    try:
+        stdout_data, stderr_data = await asyncio.wait_for(
+            proc.communicate(), timeout=FFMPEG_TIMEOUT_S,
+        )
+        stderr_tail = stderr_data or b""
+    except asyncio.TimeoutError:
+        capture_exc = HTTPException(502, f"ffmpeg timeout nach {FFMPEG_TIMEOUT_S}s")
+    except BaseException as e:  # noqa: BLE001 — see docstring: re-raised below after cleanup
+        capture_exc = e
+    finally:
+        # Runs on every exit path (normal completion, exception, timeout, or
+        # CancelledError) — kill anything still alive rather than leak it.
+        if proc.returncode is None:
+            proc.kill()
+            await proc.wait()
+
+    if capture_exc is not None:
+        raise capture_exc
+    if proc.returncode != 0:
+        raise HTTPException(
+            502,
+            f"ffmpeg failed (rc={proc.returncode}): {stderr_tail[-800:].decode(errors='replace')}",
         )
 
 
@@ -1198,4 +1296,69 @@ async def compose(req: ComposeRequest):
         output_path=str(out_path),
         bytes=out_path.stat().st_size,
         inputs=len(req.inputs),
+    )
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Transcode (2026-07-16, extension point for publishing outside the operator
+# app — e.g. a private catalog_publisher vertical re-encoding a bench
+# composed_video_path down to a web-friendly size before uploading it
+# somewhere public.)
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/transcode", response_model=TranscodeResponse)
+async def transcode(req: TranscodeRequest):
+    """Re-encodes an existing video (input_path) to a scaled H.264 mp4 +
+    JPEG poster in output_dir. Both paths must resolve under
+    /shared-deliverables — same containment convention as /record + /compose."""
+    src = _require_shared_path(req.input_path, "input_path")
+    if not src.is_file():
+        raise HTTPException(422, f"input_path nicht gefunden: {req.input_path}")
+    out_dir = _require_shared_path(req.output_dir, "output_dir")
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    video_path = out_dir / "episode.mp4"
+    poster_path = out_dir / "poster.jpg"
+
+    # Probe the SOURCE first (review finding F4): poster_at_s defaults to
+    # 1.0s and is caller-supplied — on a clip shorter than that, ffmpeg's
+    # `-ss` would seek past EOF and silently produce no poster frame at all,
+    # while the endpoint still returned 200. Clamp into the clip's actual
+    # runtime before seeking.
+    src_probe = await asyncio.to_thread(_run_ffprobe, str(src))
+    clamped_poster_at_s = clamp_poster_at_s(req.poster_at_s, src_probe["duration_s"])
+
+    video_cmd = build_transcode_video_cmd(
+        str(src), str(video_path), max_width=req.max_width, crf=req.crf,
+    )
+    await _run_ffmpeg_async(video_cmd)
+
+    poster_cmd = build_transcode_poster_cmd(
+        str(src), str(poster_path), poster_at_s=clamped_poster_at_s,
+    )
+    await _run_ffmpeg_async(poster_cmd)
+    if not poster_path.is_file():
+        # Belt-and-braces: ffmpeg can exit 0 while still writing no output
+        # frame in some seek-past-content edge cases even after clamping
+        # (e.g. an input with no keyframe near the clamped timestamp) —
+        # never report a poster_path that doesn't actually exist.
+        raise HTTPException(
+            502, f"poster.jpg wurde nicht erzeugt (poster_at_s={clamped_poster_at_s})",
+        )
+
+    probe = await asyncio.to_thread(_run_ffprobe, str(video_path))
+
+    logger.info(
+        "transcode: %s -> %s (%dx%d, %.1fs, %d bytes)",
+        src, video_path, probe["width"], probe["height"],
+        probe["duration_s"], video_path.stat().st_size,
+    )
+    return TranscodeResponse(
+        video_path=str(video_path),
+        poster_path=str(poster_path),
+        width=probe["width"],
+        height=probe["height"],
+        duration_s=probe["duration_s"],
+        size_bytes=video_path.stat().st_size,
     )

@@ -212,3 +212,58 @@ async def test_other_approval_types_still_expire():
         fresh = await s.get(Approval, approval.id)
         assert fresh.status == "expired"
     tg.assert_not_awaited()
+
+
+# ── F1 (review finding, 2026-07-16): expiry was the only approval-resolution
+# pathway that never fired the generic vertical hook — an overlay vertical's
+# custom approval type (e.g. catalog_publish) expiring silently would leave
+# it unaware. _check_expired_approvals now fires run_approval_resolved_hooks
+# with resolution_status="expired" for anything outside
+# _CORE_HANDLED_ACTION_TYPES, same as the operator-PATCH and Telegram
+# quick-resolve pathways. ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_expired_non_core_approval_fires_generic_hook():
+    from app.verticals import hooks as vertical_hooks
+
+    approval = await _make_expired_approval("catalog_publish")
+    seen: list[tuple] = []
+
+    async def hook(sess, appr, resolution_status):
+        seen.append((appr.id, resolution_status))
+
+    vertical_hooks.approval_resolved_hooks.append(hook)
+    try:
+        await _run_expiry_check()
+    finally:
+        vertical_hooks.approval_resolved_hooks.remove(hook)
+
+    assert seen == [(approval.id, "expired")]
+
+
+@pytest.mark.asyncio
+async def test_expired_core_handled_approval_does_not_fire_generic_hook():
+    """spawn_agent is in _CORE_HANDLED_ACTION_TYPES (has its own dedicated
+    approve/reject business logic in resolve_approval) but is NOT in the
+    watchdog's renewable_types, so it still lands in status=expired here —
+    the generic hook must nonetheless skip it, same as the resolve/
+    quick-resolve pathways skip x_post."""
+    from app.verticals import hooks as vertical_hooks
+
+    approval = await _make_expired_approval("spawn_agent")
+    seen: list[tuple] = []
+
+    async def hook(sess, appr, resolution_status):
+        seen.append((appr.id, resolution_status))
+
+    vertical_hooks.approval_resolved_hooks.append(hook)
+    try:
+        await _run_expiry_check()
+    finally:
+        vertical_hooks.approval_resolved_hooks.remove(hook)
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        fresh = await s.get(Approval, approval.id)
+        assert fresh.status == "expired"
+    assert seen == []

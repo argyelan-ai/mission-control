@@ -20,6 +20,7 @@ from app.auth import create_bench_view_token, require_bench_view, require_user
 from app.database import get_session
 from app.models.bench import BenchChallenge, BenchEntry
 from app.utils import create_tracked_task
+from app.verticals import hooks
 
 from . import orchestrator
 from .drafts import create_draft
@@ -228,7 +229,14 @@ async def get_challenge(
     entries = await _entries_for(session, challenge_id)
     # Poll-fallback for failed agent tasks (they never fire task_done):
     await orchestrator.reconcile_challenge(session, challenge, entries)
-    return _serialize(challenge, entries)
+    return {
+        **_serialize(challenge, entries),
+        # Extension point (ADR-044): overlay verticals contribute extra
+        # operator action buttons for this challenge (e.g. a private
+        # catalog_publisher's "Publish"). Detail-only — the list endpoint
+        # stays cheap and doesn't run providers for every row.
+        "actions": await hooks.collect_challenge_actions(session, challenge, entries),
+    }
 
 
 # Every generated artifact is a single self-contained index.html — inline

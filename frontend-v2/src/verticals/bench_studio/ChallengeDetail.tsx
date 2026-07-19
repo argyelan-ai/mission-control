@@ -17,7 +17,7 @@ import {
   Square,
   Trash2,
 } from "lucide-react";
-import { api, getToken } from "@/lib/api";
+import { api, getToken, request } from "@/lib/api";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
@@ -26,7 +26,7 @@ import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
 import { DraftDialog } from "./DraftDialog";
-import type { BenchChallenge, BenchEntry } from "./types";
+import type { BenchChallenge, ChallengeAction, BenchEntry } from "./types";
 
 function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
@@ -109,6 +109,18 @@ function metricsLine(m: BenchEntry["metrics"]): string {
   return parts.join(" · ");
 }
 
+/** Extension-point action buttons (ADR-044) POST to a provider-supplied
+ *  endpoint with the operator's Bearer token attached (request()'s standard
+ *  auth header). A provider that returns an absolute or protocol-relative
+ *  URL — buggy or compromised — would make the browser send that token to
+ *  a third-party host (review finding F3, 2026-07-16). Only same-origin
+ *  absolute paths are allowed: must start with a single "/" and NOT with
+ *  "//" (the latter is protocol-relative and resolves to an arbitrary host
+ *  in a browser, same exfiltration risk as a full https://... URL). */
+export function isSafeChallengeActionEndpoint(endpoint: string): boolean {
+  return endpoint.startsWith("/") && !endpoint.startsWith("//");
+}
+
 export function ChallengeDetail({
   challengeId,
   onBack,
@@ -145,8 +157,13 @@ export function ChallengeDetail({
   }, [challenge?.status, rerenderEntryId, challenge]);
 
   function invalidate() {
-    qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
-    qc.invalidateQueries({ queryKey: ["bench-challenges"] });
+    // Returns the combined Promise so callers that need the button to stay
+    // disabled until the refetch actually lands (F8) can await it; other
+    // call sites below intentionally fire-and-forget.
+    return Promise.all([
+      qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] }),
+      qc.invalidateQueries({ queryKey: ["bench-challenges"] }),
+    ]);
   }
 
   const stopMutation = useMutation({
@@ -219,6 +236,41 @@ export function ChallengeDetail({
       notify.error(apiErrorDetail(err, "Rerender nicht möglich"));
     },
   });
+
+  // Extension point (ADR-044): action buttons contributed by an overlay
+  // vertical (e.g. a private catalog_publisher). Public build sees no
+  // `actions` on the challenge — nothing renders below.
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const challengeActionMutation = useMutation({
+    mutationFn: (action: ChallengeAction) => request(action.endpoint, { method: action.method }),
+    onMutate: (action: ChallengeAction) => setPendingActionId(action.id),
+    onSuccess: async (_data, action) => {
+      notify.success(`${action.label} gestartet`);
+      // Keep the button disabled/spinning until the refetch this triggers
+      // has actually landed (F8, review finding) — invalidateQueries alone
+      // resolves once the refetch is *scheduled*, not once fresh data is
+      // in, so onSettled below would otherwise release the button into a
+      // stale-disabled-window gap the operator could double-click through.
+      await invalidate();
+    },
+    onError: (err, action) => notify.error(apiErrorDetail(err, `${action.label} nicht möglich`)),
+    onSettled: () => setPendingActionId(null),
+  });
+
+  function runChallengeAction(action: ChallengeAction) {
+    if (!isSafeChallengeActionEndpoint(action.endpoint)) {
+      notify.error("Ungültiger Action-Endpoint — abgebrochen");
+      return;
+    }
+    if (action.confirm && !window.confirm(action.confirm)) return;
+    challengeActionMutation.mutate(action);
+  }
+
+  const CHALLENGE_ACTION_STYLE: Record<ChallengeAction["style"], React.CSSProperties> = {
+    default: { color: C.textSecondary, border: `1px solid ${C.border}` },
+    primary: { backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` },
+    danger: { background: C.error, color: C.textPrimary },
+  };
 
   if (!challenge) return null;
   const canDraft = challenge.status === "review" || challenge.status === "drafted";
@@ -332,6 +384,33 @@ export function ChallengeDetail({
           >
             <Send size={13} /> Draft erstellen
           </button>
+          {/* Extension point (ADR-044): overlay-vertical action buttons
+              (e.g. a private catalog_publisher "Publish"). Empty/absent
+              on the public build — nothing renders. A provider-supplied
+              endpoint that isn't a safe same-origin path (F3) is dropped
+              here — never rendered, so there's no button to click through. */}
+          {challenge.actions
+            ?.filter((action) => isSafeChallengeActionEndpoint(action.endpoint))
+            .map((action) => {
+            const isPendingThisAction =
+              (challengeActionMutation.isPending && pendingActionId === action.id) ||
+              action.busy;
+            return (
+              <button
+                key={action.id}
+                onClick={() => runChallengeAction(action)}
+                disabled={action.disabled || isPendingThisAction}
+                title={action.disabled ? action.disabled_reason ?? undefined : undefined}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
+                style={CHALLENGE_ACTION_STYLE[action.style]}
+              >
+                {isPendingThisAction ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : null}
+                {action.label}
+              </button>
+            );
+          })}
         </div>
       </div>
 

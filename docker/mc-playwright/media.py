@@ -146,6 +146,58 @@ class ComposeResponse(BaseModel):
     inputs: int
 
 
+class TranscodeRequest(BaseModel):
+    """POST /transcode — re-encodes an existing video (e.g. a bench
+    composed_video_path) to a web-friendly H.264 mp4 + a poster JPEG, for
+    publishing outside the operator app (e.g. a catalog site). Both
+    input_path and output_dir must resolve under /shared-deliverables (same
+    containment check as /record and /compose's input/output paths)."""
+    input_path: str
+    output_dir: str
+    max_width: int = Field(default=1920, ge=16, le=7680)
+    crf: int = Field(default=23, ge=0, le=51)
+    poster_at_s: float = Field(default=1.0, ge=0)
+
+
+class TranscodeResponse(BaseModel):
+    video_path: str
+    poster_path: str
+    width: int
+    height: int
+    duration_s: float
+    size_bytes: int
+
+
+def resolve_contained_path(raw: str, root: str) -> Optional[Path]:
+    """Path-containment check shared by /record, /compose, and /transcode
+    (2026-07-16, extracted for testability — review finding F9: this logic
+    previously lived only in service.py's `_require_shared_path`, which
+    can't be imported in the backend test venv because service.py pulls in
+    `playwright`. Every request path parameter across all three endpoints
+    must resolve under SHARED_DELIVERABLES; this is that resolution,
+    kept pure/framework-free so it's unit-testable here). Resolves both
+    `raw` and `root` to absolute, symlink-free paths and returns `raw`'s
+    resolved form only if it's contained in `root` — None otherwise (e.g.
+    an absolute path elsewhere, or a `..` traversal that escapes root)."""
+    resolved = Path(raw).resolve()
+    resolved_root = Path(root).resolve()
+    if not resolved.is_relative_to(resolved_root):
+        return None
+    return resolved
+
+
+def clamp_poster_at_s(poster_at_s: float, duration_s: float) -> float:
+    """Clamps a caller-supplied poster timestamp into the clip's actual
+    runtime (2026-07-16, review finding F4): TranscodeRequest.poster_at_s
+    defaults to 1.0s, but a very short input clip (e.g. a 0.5s test render)
+    would make ffmpeg's `-ss` seek land past EOF, producing no frame at all
+    — poster.jpg silently never gets written while the endpoint otherwise
+    reports success. The 0.1s margin keeps the seek off the very last
+    frame boundary, which some containers/codecs render as a black/empty
+    frame."""
+    return min(poster_at_s, max(0.0, duration_s - 0.1))
+
+
 # ── ffmpeg command builders (pure) ───────────────────────────────────────────
 
 
@@ -203,6 +255,41 @@ def build_pipe_encode_cmd(
         "-crf", "20",
         "-movflags", "+faststart",
         "-an",
+        dst,
+    ]
+
+
+def build_transcode_video_cmd(
+    src: str, dst: str, *, max_width: int, crf: int,
+) -> List[str]:
+    """Re-encodes `src` to a web-friendly H.264 mp4: scaled to max_width wide
+    (height auto, kept even via -2 so libx264's yuv420p never chokes on an
+    odd dimension), no audio (bench recordings are silent already)."""
+    return [
+        FFMPEG_BIN, "-y",
+        "-loglevel", "error",
+        "-i", src,
+        "-vf", f"scale={max_width}:-2",
+        "-c:v", "libx264",
+        "-crf", str(crf),
+        "-preset", "slow",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        "-an",
+        dst,
+    ]
+
+
+def build_transcode_poster_cmd(src: str, dst: str, *, poster_at_s: float) -> List[str]:
+    """Grabs a single JPEG frame at poster_at_s seconds into `src` — a
+    thumbnail/poster image for the transcoded video."""
+    return [
+        FFMPEG_BIN, "-y",
+        "-loglevel", "error",
+        "-ss", str(poster_at_s),
+        "-i", src,
+        "-frames:v", "1",
+        "-q:v", "3",
         dst,
     ]
 
