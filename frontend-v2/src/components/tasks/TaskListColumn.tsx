@@ -25,6 +25,7 @@ import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
 
 const STATUS_ORDER: TaskStatus[] = [
   "in_progress",
+  "waiting",
   "review",
   "user_test",
   "blocked",
@@ -39,6 +40,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   in_progress: "In Progress",
   review: "Review",
   user_test: "User Test",
+  waiting: "Waiting",
   blocked: "Blocked",
   failed: "Failed",
   aborted: "Aborted",

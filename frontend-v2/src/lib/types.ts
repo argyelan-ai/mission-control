@@ -1,7 +1,7 @@
 // ── Core Entities ──────────────────────────────────────────────────────────────
 
 export type AgentStatus = "online" | "offline" | "busy" | "idle" | "error" | "provisioning" | "restarting" | "archived";
-export type TaskStatus = "inbox" | "in_progress" | "review" | "user_test" | "done" | "blocked" | "failed" | "aborted";
+export type TaskStatus = "inbox" | "in_progress" | "review" | "user_test" | "waiting" | "done" | "blocked" | "failed" | "aborted";
 export type Priority = "low" | "medium" | "high" | "critical";
 export type Severity = "info" | "warning" | "error" | "critical";
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
@@ -505,6 +505,7 @@ export interface TaskPipelineResponse {
     in_progress: PipelineTask[];
     review: PipelineTask[];
     user_test: PipelineTask[];
+    waiting: PipelineTask[];
     blocked: PipelineTask[];
     failed: PipelineTask[];
     aborted: PipelineTask[];

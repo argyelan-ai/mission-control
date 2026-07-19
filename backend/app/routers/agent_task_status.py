@@ -856,7 +856,7 @@ async def agent_get_pipeline(
         )
         agent_map = {str(a.id): a.name for a in agents_result.all()}
 
-    pipeline: dict[str, list] = {"inbox": [], "in_progress": [], "review": [], "blocked": [], "done": [], "failed": []}
+    pipeline: dict[str, list] = {"inbox": [], "in_progress": [], "review": [], "waiting": [], "blocked": [], "done": [], "failed": []}
     for t in tasks:
         bucket = pipeline.get(t.status, pipeline.get("inbox"))
         if bucket is not None:

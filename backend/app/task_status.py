@@ -12,6 +12,7 @@ class TaskStatus(StrEnum):
     IN_PROGRESS = "in_progress"
     REVIEW = "review"
     USER_TEST = "user_test"
+    WAITING = "waiting"
     DONE = "done"
     BLOCKED = "blocked"
     FAILED = "failed"
@@ -19,11 +20,21 @@ class TaskStatus(StrEnum):
 
 
 # Valid status transitions (from → allowed targets)
+#
+# `waiting` (Task 6, answer-wait for `ask --blocking`): the task's session
+# stays alive, it's paused on an operator/agent answer — distinct from
+# `blocked` (external impediment) and `user_test` (Mark's manual test gate).
+# Deliberately NOT inbox -> waiting: a task must be actively worked before it
+# can wait on an answer. Mirrored 1:1 in the Postgres trigger
+# `validate_task_transition` (migration 0159) — that DB-level guard is the
+# only one enforced in production; this dict is what tests exercise since the
+# SQLite test engine doesn't run Postgres triggers.
 VALID_TRANSITIONS: dict[str, set[str]] = {
     TaskStatus.INBOX:       {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
-    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.INBOX, TaskStatus.FAILED},
+    TaskStatus.IN_PROGRESS: {TaskStatus.REVIEW, TaskStatus.DONE, TaskStatus.BLOCKED, TaskStatus.INBOX, TaskStatus.FAILED, TaskStatus.WAITING},
     TaskStatus.REVIEW:      {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.INBOX, TaskStatus.BLOCKED, TaskStatus.FAILED, TaskStatus.USER_TEST},
     TaskStatus.USER_TEST:   {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.REVIEW},
+    TaskStatus.WAITING:     {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
     TaskStatus.BLOCKED:     {TaskStatus.INBOX, TaskStatus.IN_PROGRESS, TaskStatus.FAILED},
     TaskStatus.FAILED:      {TaskStatus.INBOX},
     TaskStatus.DONE:        {TaskStatus.IN_PROGRESS},
@@ -36,6 +47,7 @@ STATUS_LABELS: dict[str, str] = {
     TaskStatus.IN_PROGRESS: "In Progress",
     TaskStatus.REVIEW: "Review",
     TaskStatus.USER_TEST: "User Test",
+    TaskStatus.WAITING: "Waiting",
     TaskStatus.DONE: "Done",
     TaskStatus.BLOCKED: "Blocked",
     TaskStatus.FAILED: "Failed",

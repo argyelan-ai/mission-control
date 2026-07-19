@@ -384,7 +384,7 @@ async def get_pipeline(
     def sort_key(t: Task) -> tuple:
         return (-PRIORITY_ORDER.get(t.priority, 2), -(t.updated_at.timestamp() if t.updated_at else 0))
 
-    pipeline: dict[str, list] = {"inbox": [], "in_progress": [], "review": [], "user_test": [], "blocked": [], "failed": [], "aborted": []}
+    pipeline: dict[str, list] = {"inbox": [], "in_progress": [], "review": [], "user_test": [], "waiting": [], "blocked": [], "failed": [], "aborted": []}
     for t in sorted(active_tasks, key=sort_key):
         if t.status not in pipeline:
             continue

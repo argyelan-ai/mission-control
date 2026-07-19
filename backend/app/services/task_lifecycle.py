@@ -252,6 +252,12 @@ async def apply_terminal_unassign(
 # NOTE: with use_subagent_dispatch=True, workers have parallel sessions.
 # current_task_id can only track ONE task and is therefore just a hint
 # for workers (not a lock). The busy check in dispatch is skipped.
+#
+# `waiting` (Task 6, answer-wait for `ask --blocking`) is NOT a departure
+# from in_progress here — unlike review/done/blocked/inbox, the worker's
+# session stays alive, just paused on an answer. current_task_id (and
+# run_state) must stay exactly as they were. waiting -> blocked (escalation)
+# is handled by apply_terminal_unassign, same as any other ->blocked.
 
 async def update_agent_active_task(
     session: AsyncSession,
@@ -298,7 +304,7 @@ async def update_agent_active_task(
         if new_status == "in_progress" and old_status != "in_progress":
             agent.run_state = "running"
             session.add(agent)
-        elif old_status == "in_progress" and new_status != "in_progress":
+        elif old_status == "in_progress" and new_status not in ("in_progress", "waiting"):
             # run_state only goes to idle if no other task is still in_progress
             other_active = (await session.exec(
                 select(Task).where(
@@ -334,8 +340,10 @@ async def update_agent_active_task(
             agent.run_state = "running"
             session.add(agent)
 
-    elif old_status == "in_progress" and new_status != "in_progress":
-        # Task leaves in_progress — release the agent lock
+    elif old_status == "in_progress" and new_status not in ("in_progress", "waiting"):
+        # Task leaves in_progress — release the agent lock.
+        # "waiting" is exempt (see module doc above): the session is still
+        # alive, only paused on an answer.
         if agent.current_task_id == task.id:
             agent.current_task_id = None
             # run_state based on the new status
