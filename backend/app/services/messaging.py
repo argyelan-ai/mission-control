@@ -153,12 +153,20 @@ async def open_questions(
     return [m for m in messages if is_open(m)]
 
 
-async def last_task_activity(session: AsyncSession, task: Task):
+async def last_task_activity(session: AsyncSession, task: Task, *, comm_v2: bool = False):
     """Dual-read last activity for a task (§8.1): the max of the latest
     TaskComment.created_at and the latest Message.created_at on the task's
-    thread. Superset of the legacy comment-only read — identical for
-    non-pilot agents (no thread/messages), later for comm_v2 agents that
-    also post Messages.
+    thread.
+
+    `comm_v2` scopes the Message half of the read: threads carry system
+    messages (dispatch briefing, waiting-resume "Antwort erhalten" lines) for
+    EVERY task regardless of the assigned agent's comm_v2 status — those
+    aren't comment-signal-equivalent activity for a non-pilot agent, and
+    folding them in would silently shift stale-check timing for the whole
+    fleet. Only comm_v2 agents actually drive the thread themselves, so only
+    for them does Message.created_at count as real activity. Defaults to
+    False (comment-only, byte-identical to the pre-dual-read behavior) —
+    callers must explicitly pass `comm_v2=True` for pilot agents.
     """
     comment_result = await session.exec(
         select(func.max(TaskComment.created_at)).where(TaskComment.task_id == task.id)
@@ -166,7 +174,7 @@ async def last_task_activity(session: AsyncSession, task: Task):
     latest_comment = comment_result.one()
 
     latest_message = None
-    if task.thread_id is not None:
+    if comm_v2 and task.thread_id is not None:
         message_result = await session.exec(
             select(func.max(Message.created_at)).where(Message.thread_id == task.thread_id)
         )
@@ -177,24 +185,39 @@ async def last_task_activity(session: AsyncSession, task: Task):
 
 
 async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:
-    """Post a system Nudge message once, in place of the removed TaskComment
-    resolution auto-promote (comm_v2 agents, §3.3 / §8.1).
+    """Post a system Nudge message once per fertig-signal episode, in place
+    of the removed TaskComment resolution auto-promote (comm_v2 agents,
+    §3.3 / §8.1).
 
-    Dedupe: skip if the last system message on the thread is already this
-    nudge — a resolution-signal that persists across watchdog ticks or is
-    detected by both call sites (agent_comments.py + task_runner.py) in the
-    same cycle must not spam the thread.
+    Dedupe: an "episode" runs from the agent's last Message on the thread to
+    now. Skip if the nudge has already been posted within THIS episode (i.e.
+    a nudge with this exact body exists after the last agent Message). Other
+    system messages (e.g. the waiting-resume "▶ Antwort erhalten" line) may
+    freely interleave without resetting the dedupe — only a new agent
+    Message starts a fresh episode and allows the nudge to fire again.
     """
     thread = await ensure_task_thread(session, task)
 
-    result = await session.exec(
+    last_agent_result = await session.exec(
         select(Message)
-        .where(Message.thread_id == thread.id, Message.message_type == "system")
+        .where(Message.thread_id == thread.id, Message.sender_type == "agent")
         .order_by(Message.seq.desc())
         .limit(1)
     )
-    last_system = result.first()
-    if last_system is not None and last_system.body == FINISH_NUDGE_BODY:
+    last_agent_message = last_agent_result.first()
+    episode_start_seq = last_agent_message.seq if last_agent_message is not None else 0
+
+    existing_nudge_result = await session.exec(
+        select(Message)
+        .where(
+            Message.thread_id == thread.id,
+            Message.message_type == "system",
+            Message.body == FINISH_NUDGE_BODY,
+            Message.seq > episode_start_seq,
+        )
+        .limit(1)
+    )
+    if existing_nudge_result.first() is not None:
         return
 
     await post_message(

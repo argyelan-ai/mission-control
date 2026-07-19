@@ -1247,7 +1247,13 @@ class TaskRunnerService:
             # superset behavior, byte-identical for agents without a thread.
             last_activity = ensure_aware(task.started_at or task.updated_at)
 
-            structural_activity = await last_task_activity(session, task)
+            # comm_v2-scoped (see messaging.last_task_activity docstring): a
+            # non-pilot task's thread can still carry system messages
+            # (dispatch briefing, waiting-resume lines) that must NOT count
+            # as stale-check activity for a non-pilot agent.
+            structural_activity = await last_task_activity(
+                session, task, comm_v2=getattr(agent, "comm_v2", False),
+            )
             if structural_activity is not None and structural_activity > last_activity:
                 last_activity = structural_activity
 
