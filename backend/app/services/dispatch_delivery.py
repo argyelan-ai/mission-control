@@ -21,14 +21,70 @@ from __future__ import annotations
 import logging
 import uuid
 
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.agent import Agent
 from app.models.task import Task
+from app.models.thread import Message
 from app.services.activity import emit_event
 from app.utils import utcnow
 
 logger = logging.getLogger(__name__)
+
+
+# ── Briefing als Message #1 (Interaction 2.0, Task 9) ────────────────────
+# Every successful dispatch persists the final dispatch prompt as a `system`
+# message on the task thread — so the operator (and later the agent) can read
+# the exact briefing that was sent, and so the thread's first message IS the
+# task briefing. Idempotent per dispatch_attempt_id: a poll retry that re-runs
+# delivery with the SAME attempt id must not duplicate the message; a NEW
+# attempt id (re-dispatch, recovery resume, waiting-resume) MAY post a fresh
+# briefing. The attempt id is embedded as an HTML-comment marker at the head of
+# the body — a durable idempotency key that needs no schema change and stays
+# invisible in rendered markdown.
+_BRIEFING_MARKER_PREFIX = "mc:briefing:attempt="
+
+
+def _briefing_marker(attempt_id: str) -> str:
+    return f"<!-- {_BRIEFING_MARKER_PREFIX}{attempt_id} -->"
+
+
+async def persist_briefing_message(
+    task: Task,
+    message: str,
+    session: AsyncSession,
+) -> Message | None:
+    """Persist the dispatch prompt as a `system` message on the task thread.
+
+    Idempotent per `task.dispatch_attempt_id`: if a system message carrying the
+    current attempt's marker already exists, this is a no-op (returns None).
+    Best-effort — the caller wraps this so a messaging failure never aborts a
+    dispatch that already reached the runtime.
+    """
+    from app.services.messaging import ensure_task_thread, post_message
+
+    attempt_id = task.dispatch_attempt_id or "none"
+    thread = await ensure_task_thread(session, task)
+    marker = _briefing_marker(attempt_id)
+
+    existing = (await session.exec(
+        select(Message).where(
+            Message.thread_id == thread.id,
+            Message.message_type == "system",
+        )
+    )).all()
+    for m in existing:
+        if marker in (m.body or ""):
+            return None  # already persisted for this dispatch attempt
+
+    return await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="system",
+        message_type="system",
+        body=f"{marker}\n{message}",
+    )
 
 
 async def _check_runtime_readiness(
@@ -163,5 +219,17 @@ async def _deliver_dispatch_message(
             severity="warning",
             detail={"runtime": runtime, "agent_name": agent.name},
         )
+
+    # Briefing als Message #1 — only on a delivery that actually reached the
+    # runtime (dispatched_at was stamped). push/push_pending are unsent, so no
+    # briefing is persisted for them.
+    if dispatch_mode in ("claude_code", "cli_bridge", "host_poll"):
+        try:
+            await persist_briefing_message(task, message, session)
+        except Exception as e:
+            logger.warning(
+                "Briefing-Message-Persist fehlgeschlagen fuer Task %s: %s",
+                task.id, e,
+            )
 
     return dispatch_mode

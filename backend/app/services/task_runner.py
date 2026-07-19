@@ -19,7 +19,8 @@ Protection mechanisms:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -62,6 +63,77 @@ STALE_PROGRESS_MINUTES_BY_ROLE = {
 
 # Circuit Breaker
 MAX_STALE_CHECKS = 3       # Max status checks per task
+
+# ── Waiting-Timeout Parken (Interaction 2.0, Task 9) ─────────────────────
+# A task parked `waiting` on a blocking answer keeps its agent's session
+# reserved. If the wait drags on AND the agent has other queued work, we
+# release the agent so it can make progress elsewhere; the task resumes via
+# the dispatch path once the answer arrives (build_waiting_resume_recap).
+#
+# The wait timer PAUSES during Nachtruhe (23:00–07:00 Europe/Zurich) — a task
+# that waits overnight must not be parked in the middle of the night when
+# nobody is answering anyway.
+#
+# W1: window + timezone are hardcoded constants. TODO W2 (Settings task):
+# read the quiet window + tz from the operator Settings instead.
+WAITING_QUIET_START_HOUR = 23   # 23:00 Europe/Zurich
+WAITING_QUIET_END_HOUR = 7      # 07:00 Europe/Zurich
+WAITING_QUIET_TZ = "Europe/Zurich"
+
+
+def _quiet_overlap_seconds(
+    start: datetime, end: datetime, quiet_start: int, quiet_end: int, tz: ZoneInfo
+) -> float:
+    """Seconds of [start, end] that fall inside the recurring daily quiet window.
+
+    Handles a window that wraps midnight (quiet_start > quiet_end, e.g. 23→07).
+    """
+    overlap = 0.0
+    day = start.date() - timedelta(days=1)
+    last = end.date() + timedelta(days=1)
+    while day <= last:
+        qs = datetime.combine(day, time(hour=quiet_start), tzinfo=tz)
+        if quiet_start < quiet_end:
+            qe = datetime.combine(day, time(hour=quiet_end), tzinfo=tz)
+        else:
+            qe = datetime.combine(day + timedelta(days=1), time(hour=quiet_end), tzinfo=tz)
+        lo = max(start, qs)
+        hi = min(end, qe)
+        if hi > lo:
+            overlap += (hi - lo).total_seconds()
+        day += timedelta(days=1)
+    return overlap
+
+
+def active_waiting_seconds(
+    waiting_since: datetime,
+    now: datetime,
+    quiet_start: int = WAITING_QUIET_START_HOUR,
+    quiet_end: int = WAITING_QUIET_END_HOUR,
+    tz: str = WAITING_QUIET_TZ,
+) -> int:
+    """Elapsed ACTIVE waiting seconds between waiting_since and now.
+
+    Time inside the daily quiet window [quiet_start, quiet_end) (local `tz`
+    wall-clock) does NOT count. Pure function — tests pass fixed datetimes, no
+    freezegun needed. Aware datetimes are converted to `tz`; naive datetimes
+    are interpreted as already being in `tz` wall time.
+
+    Example: waiting since 22:00 with a 2h timeout — 22:00–23:00 counts (1h),
+    23:00–07:00 pauses, 07:00–08:00 counts (2h total) → 7200 at 08:00.
+    """
+    zone = ZoneInfo(tz)
+
+    def _local(dt: datetime) -> datetime:
+        return dt.replace(tzinfo=zone) if dt.tzinfo is None else dt.astimezone(zone)
+
+    start = _local(waiting_since)
+    end = _local(now)
+    if end <= start:
+        return 0
+    total = (end - start).total_seconds()
+    quiet = _quiet_overlap_seconds(start, end, quiet_start, quiet_end, zone)
+    return int(max(0.0, total - quiet))
 
 # Tier-3 recovery re-dispatch bound (seconds). auto_dispatch_task does real
 # I/O (git clone / worktree setup + delivery) — the task_runner loop is a
@@ -326,6 +398,119 @@ class TaskRunnerService:
             # is always attempted first; only tasks that survived recovery and
             # stayed silent get blocked.
             await self._check_stuck_in_progress(session)
+            # Interaction 2.0 (Task 9): park tasks stuck in `waiting` too long
+            # when the agent has other queued work.
+            await self._check_waiting_timeouts(session)
+
+    # ── Waiting-Timeout Parken (Task 9) ────────────────────────────
+
+    async def _check_waiting_timeouts(self, session: AsyncSession) -> None:
+        """Park a task that has been `waiting` (blocking answer) too long.
+
+        Parking happens ONLY when another dispatchable task is queued for the
+        same agent (§4.2): otherwise the session stays put — releasing the agent
+        would gain nothing. The wait timer counts ACTIVE time only (Nachtruhe
+        pauses it, see active_waiting_seconds). On park: post a system line on
+        the thread, release the agent (clear current_task_id — the mildest
+        release, task stays `waiting` with assigned_agent_id intact so the
+        answer-resume re-dispatches back to the same agent).
+        """
+        from app.comm_constants import WAITING_TIMEOUT_SECONDS
+        from app.models.task import TaskEvent
+        from app.services.messaging import ensure_task_thread, post_message
+
+        result = await session.exec(
+            select(Task).where(
+                Task.status == "waiting",
+                Task.assigned_agent_id.isnot(None),  # type: ignore[arg-type]
+            )
+        )
+        tasks = result.all()
+        now = utcnow()
+        redis = await get_redis()
+
+        for task in tasks:
+            if task.run_control in ("stopped", "manual_hold"):
+                continue
+
+            parked_key = f"mc:task:{task.id}:waiting_parked"
+            if await redis.get(parked_key):
+                continue
+
+            agent = await session.get(Agent, task.assigned_agent_id)
+            if not agent:
+                continue
+
+            # waiting_since = last transition INTO waiting; fall back to
+            # updated_at for legacy rows without the event.
+            ev = (await session.exec(
+                select(TaskEvent)
+                .where(
+                    TaskEvent.task_id == task.id,
+                    TaskEvent.to_status == "waiting",
+                )
+                .order_by(TaskEvent.created_at.desc())  # type: ignore[union-attr]
+                .limit(1)
+            )).first()
+            waiting_since = ensure_aware(ev.created_at if ev else task.updated_at)
+
+            if active_waiting_seconds(waiting_since, now) < WAITING_TIMEOUT_SECONDS:
+                continue
+
+            # Another dispatchable task queued for the same agent?
+            other = (await session.exec(
+                select(Task)
+                .where(
+                    Task.assigned_agent_id == agent.id,
+                    Task.id != task.id,
+                    Task.status == "inbox",
+                )
+                .limit(1)
+            )).first()
+            if not other:
+                continue  # §4.2 — nothing else to do, session stays put
+
+            # ── Park ──
+            thread = await ensure_task_thread(session, task)
+            hours = int(WAITING_TIMEOUT_SECONDS / 3600)
+            await post_message(
+                session,
+                thread_id=thread.id,
+                sender_type="system",
+                message_type="system",
+                body=(
+                    f"⏸ Geparkt — {agent.name} wartet seit über {hours}h auf eine "
+                    f"Antwort und übernimmt derweil anderes. Sobald die Antwort da "
+                    f"ist, wird dieser Task automatisch wieder eingelastet."
+                ),
+            )
+
+            # Release the agent (mildest mechanism): clear current_task_id if it
+            # points here + drop run_state to idle so the queued task can go out.
+            # Task stays `waiting`, assignment intact — resume routes back.
+            if agent.current_task_id == task.id:
+                agent.current_task_id = None
+            if agent.run_state in ("running", None):
+                agent.run_state = "idle"
+            session.add(agent)
+            await session.commit()
+
+            await redis.set(parked_key, "1", ex=86400)
+            await emit_event(
+                session,
+                "task.waiting_parked",
+                f"'{task.title}' geparkt — {agent.name} wartet zu lange auf Antwort, "
+                f"macht derweil '{other.title[:40]}'",
+                board_id=task.board_id,
+                task_id=task.id,
+                agent_id=agent.id,
+                severity="info",
+                detail={"agent_name": agent.name, "queued_task_id": str(other.id)},
+            )
+            logger.info(
+                "Waiting-Timeout Park: '%s' (%s) — Agent freigegeben, '%s' queued",
+                task.title[:60], agent.name, other.title[:40],
+            )
 
     # ── Dispatch ACK Pruefung ──────────────────────────────────────
 
