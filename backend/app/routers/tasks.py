@@ -2481,12 +2481,14 @@ async def post_thread_message(
                     await session.refresh(task)
 
                     recap = await build_waiting_resume_recap(session, task)
-                    # Durable in the timeline + surfaced in the dispatch prompt's
-                    # recovery block on re-delivery.
+                    # Durable in the timeline. comment_type="recovery_recap" is
+                    # NOT one of the types build_recovery_context truncates+surfaces,
+                    # so it won't produce a mangled duplicate — the FULL recap
+                    # reaches the prompt via extra_recovery_context below.
                     session.add(TaskComment(
                         task_id=task.id,
                         author_type="system",
-                        comment_type="progress",
+                        comment_type="recovery_recap",
                         content=recap,
                     ))
                     await session.commit()
@@ -2505,7 +2507,11 @@ async def post_thread_message(
                         await _redis.delete(f"mc:task:{task.id}:waiting_parked")
                     except Exception:
                         pass
-                    create_tracked_task(auto_dispatch_task(task.id, task.board_id))
+                    create_tracked_task(
+                        auto_dispatch_task(
+                            task.id, task.board_id, extra_recovery_context=recap,
+                        )
+                    )
                 else:
                     session.add(task)
                     await session.commit()

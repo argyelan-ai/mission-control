@@ -317,16 +317,57 @@ class TestWaitingResumeRecap:
         assert mock_dispatch.called
         called_task_id = mock_dispatch.call_args.args[0]
         assert called_task_id == task.id
+        # The recap carrying the open question AND the operator answer is passed
+        # to auto_dispatch_task verbatim (extra_recovery_context) — it reaches
+        # the prompt intact (proven by test_recap_reaches_built_prompt_verbatim).
+        passed_recap = mock_dispatch.call_args.kwargs["extra_recovery_context"]
+        assert "Deploy jetzt?" in passed_recap
+        assert "Ja, deploy." in passed_recap
 
         async with AsyncSession(test_engine, expire_on_commit=False) as s:
             resumed = await s.get(Task, task.id)
             assert resumed.status == "in_progress"
             assert resumed.dispatched_at is None  # reset for the re-dispatch
-            # Bounded recap persisted as a durable progress comment.
+            # Bounded recap persisted durably as a recovery_recap comment
+            # (a type build_recovery_context does NOT truncate+surface).
             recaps = (await s.exec(
                 select(TaskComment).where(
                     TaskComment.task_id == task.id,
-                    TaskComment.comment_type == "progress",
+                    TaskComment.comment_type == "recovery_recap",
                 )
             )).all()
             assert any("Weiter geht" in c.content for c in recaps)
+
+    async def test_recap_reaches_built_prompt_verbatim(self):
+        """The REAL dispatch message build (no mock) injects the recovery_context
+        recap verbatim — so the parked-resume answer reaches the agent's prompt.
+        This is the delivery link the recovery-comment truncation would break."""
+        from app.services.dispatch_message_builder import _build_dispatch_message
+        from app.services.task_context_builder import build_waiting_resume_recap
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        agent, _ = await _agent(board.id)
+        task = await _waiting_task(board.id, agent.id)
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            db_task = await s.get(Task, task.id)
+            db_agent = await s.get(Agent, agent.id)
+            thread = await ensure_task_thread(s, db_task)
+            q = await post_message(
+                s, thread_id=thread.id, sender_type="agent", sender_id=agent.id,
+                message_type="question", body="Deploy jetzt?",
+                question_meta={"awaiting": False, "blocking": True, "to": "boss"},
+            )
+            await post_message(
+                s, thread_id=thread.id, sender_type="user",
+                message_type="message", body="Ja, deploy.", reply_to=q.id,
+            )
+            recap = await build_waiting_resume_recap(s, db_task)
+            # No mocking of the message build — the real builder runs.
+            message = await _build_dispatch_message(
+                db_task, db_agent, s, recovery_context=recap,
+            )
+
+        assert "Deploy jetzt?" in message   # the open question
+        assert "Ja, deploy." in message      # the operator's answer, verbatim

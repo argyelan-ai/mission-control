@@ -430,87 +430,108 @@ class TaskRunnerService:
         redis = await get_redis()
 
         for task in tasks:
-            if task.run_control in ("stopped", "manual_hold"):
-                continue
-
-            parked_key = f"mc:task:{task.id}:waiting_parked"
-            if await redis.get(parked_key):
-                continue
-
-            agent = await session.get(Agent, task.assigned_agent_id)
-            if not agent:
-                continue
-
-            # waiting_since = last transition INTO waiting; fall back to
-            # updated_at for legacy rows without the event.
-            ev = (await session.exec(
-                select(TaskEvent)
-                .where(
-                    TaskEvent.task_id == task.id,
-                    TaskEvent.to_status == "waiting",
+            try:
+                await self._maybe_park_waiting_task(
+                    session, task, now, redis, WAITING_TIMEOUT_SECONDS,
+                    TaskEvent, ensure_task_thread, post_message,
                 )
-                .order_by(TaskEvent.created_at.desc())  # type: ignore[union-attr]
-                .limit(1)
-            )).first()
-            waiting_since = ensure_aware(ev.created_at if ev else task.updated_at)
-
-            if active_waiting_seconds(waiting_since, now) < WAITING_TIMEOUT_SECONDS:
-                continue
-
-            # Another dispatchable task queued for the same agent?
-            other = (await session.exec(
-                select(Task)
-                .where(
-                    Task.assigned_agent_id == agent.id,
-                    Task.id != task.id,
-                    Task.status == "inbox",
+            except Exception as e:
+                # One bad task must not abort the whole pass.
+                logger.warning(
+                    "Waiting-Timeout Check fuer Task %s fehlgeschlagen: %s",
+                    task.id, e,
                 )
-                .limit(1)
-            )).first()
-            if not other:
-                continue  # §4.2 — nothing else to do, session stays put
 
-            # ── Park ──
-            thread = await ensure_task_thread(session, task)
-            hours = int(WAITING_TIMEOUT_SECONDS / 3600)
-            await post_message(
-                session,
-                thread_id=thread.id,
-                sender_type="system",
-                message_type="system",
-                body=(
-                    f"⏸ Geparkt — {agent.name} wartet seit über {hours}h auf eine "
-                    f"Antwort und übernimmt derweil anderes. Sobald die Antwort da "
-                    f"ist, wird dieser Task automatisch wieder eingelastet."
-                ),
-            )
+    async def _maybe_park_waiting_task(
+        self, session, task, now, redis, WAITING_TIMEOUT_SECONDS,
+        TaskEvent, ensure_task_thread, post_message,
+    ) -> None:
+        """Park a single `waiting` task if the timer elapsed and work is queued.
 
-            # Release the agent (mildest mechanism): clear current_task_id if it
-            # points here + drop run_state to idle so the queued task can go out.
-            # Task stays `waiting`, assignment intact — resume routes back.
-            if agent.current_task_id == task.id:
-                agent.current_task_id = None
-            if agent.run_state in ("running", None):
-                agent.run_state = "idle"
-            session.add(agent)
-            await session.commit()
+        Extracted so _check_waiting_timeouts can wrap each task in its own
+        try/except — one bad row never aborts the whole pass.
+        """
+        if task.run_control in ("stopped", "manual_hold"):
+            return
 
-            await redis.set(parked_key, "1", ex=86400)
-            await emit_event(
-                session,
-                "task.waiting_parked",
-                f"'{task.title}' geparkt — {agent.name} wartet zu lange auf Antwort, "
-                f"macht derweil '{other.title[:40]}'",
-                board_id=task.board_id,
-                task_id=task.id,
-                agent_id=agent.id,
-                severity="info",
-                detail={"agent_name": agent.name, "queued_task_id": str(other.id)},
+        parked_key = f"mc:task:{task.id}:waiting_parked"
+        if await redis.get(parked_key):
+            return
+
+        agent = await session.get(Agent, task.assigned_agent_id)
+        if not agent:
+            return
+
+        # waiting_since = last transition INTO waiting; fall back to
+        # updated_at for legacy rows without the event.
+        ev = (await session.exec(
+            select(TaskEvent)
+            .where(
+                TaskEvent.task_id == task.id,
+                TaskEvent.to_status == "waiting",
             )
-            logger.info(
-                "Waiting-Timeout Park: '%s' (%s) — Agent freigegeben, '%s' queued",
-                task.title[:60], agent.name, other.title[:40],
+            .order_by(TaskEvent.created_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )).first()
+        waiting_since = ensure_aware(ev.created_at if ev else task.updated_at)
+
+        if active_waiting_seconds(waiting_since, now) < WAITING_TIMEOUT_SECONDS:
+            return
+
+        # Another dispatchable task queued for the same agent?
+        other = (await session.exec(
+            select(Task)
+            .where(
+                Task.assigned_agent_id == agent.id,
+                Task.id != task.id,
+                Task.status == "inbox",
             )
+            .limit(1)
+        )).first()
+        if not other:
+            return  # §4.2 — nothing else to do, session stays put
+
+        # ── Park ──
+        thread = await ensure_task_thread(session, task)
+        hours = int(WAITING_TIMEOUT_SECONDS / 3600)
+        await post_message(
+            session,
+            thread_id=thread.id,
+            sender_type="system",
+            message_type="system",
+            body=(
+                f"⏸ Geparkt — {agent.name} wartet seit über {hours}h auf eine "
+                f"Antwort und übernimmt derweil anderes. Sobald die Antwort da "
+                f"ist, wird dieser Task automatisch wieder eingelastet."
+            ),
+        )
+
+        # Release the agent (mildest mechanism): clear current_task_id if it
+        # points here + drop run_state to idle so the queued task can go out.
+        # Task stays `waiting`, assignment intact — resume routes back.
+        if agent.current_task_id == task.id:
+            agent.current_task_id = None
+        if agent.run_state in ("running", None):
+            agent.run_state = "idle"
+        session.add(agent)
+        await session.commit()
+
+        await redis.set(parked_key, "1", ex=86400)
+        await emit_event(
+            session,
+            "task.waiting_parked",
+            f"'{task.title}' geparkt — {agent.name} wartet zu lange auf Antwort, "
+            f"macht derweil '{other.title[:40]}'",
+            board_id=task.board_id,
+            task_id=task.id,
+            agent_id=agent.id,
+            severity="info",
+            detail={"agent_name": agent.name, "queued_task_id": str(other.id)},
+        )
+        logger.info(
+            "Waiting-Timeout Park: '%s' (%s) — Agent freigegeben, '%s' queued",
+            task.title[:60], agent.name, other.title[:40],
+        )
 
     # ── Dispatch ACK Pruefung ──────────────────────────────────────
 

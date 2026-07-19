@@ -105,3 +105,21 @@ class TestBriefingMessage:
             assert len(msgs) == 2
             assert "Briefing v1" in msgs[0].body
             assert "Briefing v2" in msgs[1].body
+
+    async def test_idempotency_marker_survives_storage(self):
+        """The HTML-comment idempotency marker must be preserved verbatim in the
+        stored body — guards against future body sanitization silently breaking
+        the per-attempt dedup."""
+        from app.services.dispatch_delivery import _briefing_marker
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        task = await _task(board.id, dispatch_attempt_id="attempt-xyz")
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            db_task = await s.get(Task, task.id)
+            msg = await persist_briefing_message(db_task, "Body.", s)
+            assert msg is not None
+            # Re-read from the DB (not the in-memory object) to prove it persisted.
+            stored = await s.get(Message, msg.id)
+            assert _briefing_marker("attempt-xyz") in stored.body
