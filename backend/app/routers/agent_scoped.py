@@ -1433,6 +1433,93 @@ async def agent_ask(
     )
 
 
+class MessageCreate(BaseModel):
+    """Agent posts a plain message/status/decision onto its task thread.
+
+    Questions are NOT allowed here — they carry awaiting semantics and go
+    through POST /tasks/current/ask. `system` lines are backend-authored.
+    """
+    body: str
+    message_type: str = "message"
+    reply_to: uuid.UUID | None = None
+
+    @field_validator("body")
+    @classmethod
+    def _body_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("body darf nicht leer sein")
+        return v
+
+    @field_validator("message_type")
+    @classmethod
+    def _validate_message_type(cls, v: str) -> str:
+        allowed = ("message", "status", "decision")
+        if v not in allowed:
+            raise ValueError(f"message_type muss eines von {allowed} sein (Fragen → /ask)")
+        return v
+
+
+class MessageResponse(BaseModel):
+    message_id: uuid.UUID
+    thread_id: uuid.UUID
+    your_status: str
+
+
+@router.post("/tasks/current/messages", status_code=status.HTTP_201_CREATED)
+async def agent_post_message(
+    payload: MessageCreate,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
+):
+    """Agent posts a plain message on its active task thread (§3.3).
+
+    The first inbound Message on a dispatched task claims it via the shared
+    ACK handshake (same effect as the legacy first-comment ACK) — no other
+    lifecycle side-effects. Delivery to peers/operator rides the poll path.
+    """
+    from app.services.messaging import ensure_task_thread, post_message
+    from app.services.task_lifecycle import apply_ack_handshake
+
+    current_task_id = agent.current_task_id
+    if not current_task_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+        )
+    current_task = await session.get(Task, current_task_id)
+    if not current_task:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+        )
+
+    # First inbound agent Message ACKs the task (idempotent). Non-committing —
+    # the post_message commit below persists the handshake mutations too.
+    apply_ack_handshake(session, current_task, agent)
+
+    thread = await ensure_task_thread(session, current_task)
+    message = await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="agent",
+        sender_id=agent.id,
+        message_type=payload.message_type,
+        body=payload.body,
+        reply_to=payload.reply_to,
+    )
+
+    await session.refresh(current_task)
+    logger.info(
+        "Message: %s posts on task %s (type=%s, status=%s)",
+        agent.name, current_task.id, payload.message_type, current_task.status,
+    )
+    return MessageResponse(
+        message_id=message.id,
+        thread_id=thread.id,
+        your_status=current_task.status,
+    )
+
+
 # PATCH /boards/{board_id}/tasks/{task_id} (the 600-line state-machine
 # endpoint), `_find_reviewer` / `_find_last_developer` etc. now live in
 # routers/agent_task_status.py + services/work_context.py. The shim

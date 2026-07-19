@@ -2366,6 +2366,116 @@ async def get_task_transcript(
     }
 
 
+# ── Thread messages (Interaction 2.0 §9.1 — user/operator side) ────────────────
+
+
+class ThreadMessageCreate(BaseModel):
+    """Operator posts onto a task thread — an answer, note, or decision.
+
+    Questions are an agent-only affair (POST /agent/tasks/current/ask); a
+    `reply_to` pointing at an open question clears its awaiting flag and — if
+    the task was parked `waiting` — resumes it.
+    """
+    body: str
+    reply_to: uuid.UUID | None = None
+    message_type: str = "message"
+
+    @field_validator("body")
+    @classmethod
+    def _body_not_empty(cls, v: str) -> str:
+        if not v.strip():
+            raise ValueError("body darf nicht leer sein")
+        return v
+
+    @field_validator("message_type")
+    @classmethod
+    def _validate_message_type(cls, v: str) -> str:
+        # Operators post message | status | decision. Questions go via /ask;
+        # `system` lines are backend-authored only.
+        allowed = ("message", "status", "decision")
+        if v not in allowed:
+            raise ValueError(f"message_type muss eines von {allowed} sein")
+        return v
+
+
+@router.post("/tasks/{task_id}/thread/messages", status_code=status.HTTP_201_CREATED)
+async def post_thread_message(
+    task_id: uuid.UUID,
+    payload: ThreadMessageCreate,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Operator posts a message onto a task thread.
+
+    If `reply_to` points at an open question, its awaiting flag clears. When
+    that answer empties the thread's open questions AND the task was parked
+    `waiting` (blocking ask, §3.3), the task is explicitly resumed
+    waiting→in_progress and a "▶ Antwort erhalten" system line is posted. The
+    answer itself reaches the agent via the existing poll delivery (Task 4/5).
+    """
+    from app.services.messaging import (
+        answer_clears_awaiting,
+        ensure_task_thread,
+        open_questions,
+        post_message,
+    )
+    from app.services.task_lifecycle import record_task_event
+    from app.task_status import TaskStatus, is_valid_transition
+
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    thread = await ensure_task_thread(session, task)
+
+    message = await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="user",
+        message_type=payload.message_type,
+        body=payload.body,
+        reply_to=payload.reply_to,
+    )
+
+    if payload.reply_to is not None:
+        await answer_clears_awaiting(session, message)
+
+        # Resume (session-alive case): once the answer leaves no open question
+        # on the thread and the task sits in `waiting`, transition it back to
+        # in_progress explicitly (VALID_TRANSITIONS + event). Parking that
+        # happened via dispatch-death is Task 9's concern — not here.
+        if task.status == TaskStatus.WAITING:
+            remaining = await open_questions(session, thread_id=thread.id)
+            if not remaining and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
+                agent_name = "Agent"
+                if task.assigned_agent_id:
+                    agent = await session.get(Agent, task.assigned_agent_id)
+                    if agent:
+                        agent_name = agent.name
+                await record_task_event(
+                    session, task.id, task.status, TaskStatus.IN_PROGRESS,
+                    changed_by="user", reason="answer_received",
+                )
+                task.status = TaskStatus.IN_PROGRESS
+                session.add(task)
+                await session.commit()
+                await session.refresh(task)
+
+                await post_message(
+                    session,
+                    thread_id=thread.id,
+                    sender_type="system",
+                    message_type="system",
+                    body=f"▶ Antwort erhalten — {agent_name} macht weiter",
+                )
+
+    return {
+        "message_id": str(message.id),
+        "thread_id": str(thread.id),
+        "task_status": task.status,
+    }
+
+
 # ── Comments ─────────────────────────────────────────────────────────────────
 
 @router.post("/boards/{board_id}/tasks/{task_id}/comments", status_code=status.HTTP_201_CREATED)

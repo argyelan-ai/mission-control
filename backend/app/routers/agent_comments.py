@@ -256,30 +256,9 @@ async def agent_add_comment(
         raise HTTPException(status_code=404, detail="Task not found")
 
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
-    if (
-        task.assigned_agent_id == agent.id
-        and task.ack_at is None
-        and task.dispatched_at is not None
-    ):
-        task.ack_at = utcnow()
-        if task.status == "inbox":
-            task.status = "in_progress"
-            task.started_at = utcnow()
-        task.updated_at = utcnow()
-        # Also set the active-task lock. Without this, agent.current_task_id
-        # stays None and mc delegate / mc help-request / mc clarification
-        # respond with 409 "Kein aktiver Task". Same skip condition as
-        # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
-        # parallel sessions and don't need the lock. Live bug from Boss's
-        # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
-        # mc delegate failed.
-        from app.config import settings as _auto_ack_settings
-        if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
-            if agent.current_task_id != task.id:
-                agent.current_task_id = task.id
-                session.add(agent)
-        session.add(task)
-        logger.info("Auto-ACK: %s kommentierte Task '%s' → ack_at + current_task_id gesetzt", agent.name, task.title[:60])
+    # Shared handshake (§3.3) — same implementation as the Message channel.
+    from app.services.task_lifecycle import apply_ack_handshake
+    apply_ack_handshake(session, task, agent)
 
     comment = TaskComment(
         task_id=task_id,

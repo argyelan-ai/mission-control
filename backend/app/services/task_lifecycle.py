@@ -62,6 +62,49 @@ async def record_task_event(
     # No separate commit — caller commits together with the status update
 
 
+def apply_ack_handshake(session: AsyncSession, task: Task, agent: Agent) -> bool:
+    """Auto-ACK: the first inbound signal from the assigned agent on a
+    dispatched task claims it (§3.3 handshake).
+
+    Extracted verbatim from the comment-POST path (agent_comments.py) so the
+    old comment channel and the new Message channel (mc message / answer flow)
+    share ONE implementation. Sets `ack_at`, promotes inbox→in_progress, and
+    takes the active-task lock (`agent.current_task_id`). Idempotent: a second
+    call is a no-op because `ack_at` is already set.
+
+    Non-committing — mirrors record_task_event: the caller commits together
+    with whatever else it writes (the comment / message row). Returns True iff
+    this call performed the ACK, so callers can log / emit exactly once.
+    """
+    if not (
+        task.assigned_agent_id == agent.id
+        and task.ack_at is None
+        and task.dispatched_at is not None
+    ):
+        return False
+
+    task.ack_at = utcnow()
+    if task.status == "inbox":
+        task.status = "in_progress"
+        task.started_at = utcnow()
+    task.updated_at = utcnow()
+    # Also set the active-task lock. Without this, agent.current_task_id
+    # stays None and mc delegate / mc help-request / mc clarification
+    # respond with 409 "Kein aktiver Task". Same skip condition as
+    # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
+    # parallel sessions and don't need the lock. Live bug from Boss's
+    # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
+    # mc delegate failed.
+    from app.config import settings as _auto_ack_settings
+    if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
+        if agent.current_task_id != task.id:
+            agent.current_task_id = task.id
+            session.add(agent)
+    session.add(task)
+    logger.info("Auto-ACK: %s claimed Task '%s' → ack_at + current_task_id gesetzt", agent.name, task.title[:60])
+    return True
+
+
 async def reopen_parent_for_new_subtask(
     session: AsyncSession,
     parent_task_id: uuid.UUID,
