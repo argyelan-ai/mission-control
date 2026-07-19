@@ -2549,7 +2549,11 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
         cursor = await _get_or_create_thread_cursor(session, agent.id, thread.id)
         tid = str(thread.id)
         if tid in acked:
-            new_ack = max(cursor.last_acked_seq, int(acked[tid]))
+            # Cap the ack at what was actually delivered — an agent can never
+            # ack past last_delivered_seq. Without the cap a stray/high ack
+            # (e.g. 999) would permanently skip messages that were never sent.
+            capped = min(int(acked[tid]), cursor.last_delivered_seq)
+            new_ack = max(cursor.last_acked_seq, capped)
             if new_ack != cursor.last_acked_seq:
                 cursor.last_acked_seq = new_ack
                 changed = True

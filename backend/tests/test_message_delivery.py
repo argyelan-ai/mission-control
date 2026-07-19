@@ -207,6 +207,44 @@ async def test_own_messages_not_delivered_but_advance_cursor(client: AsyncClient
 
 
 @pytest.mark.asyncio
+async def test_ack_capped_at_last_delivered_seq(client: AsyncClient, async_session):
+    """An ack higher than what was delivered is capped at last_delivered_seq —
+    a not-yet-delivered message is still delivered afterwards (no skip)."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    m1 = await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="one",
+    )
+    m2 = await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="two",
+    )
+
+    first = await _poll(client, token)
+    assert [m["seq"] for m in first.json()["new_messages"]] == [m1.seq, m2.seq]
+
+    # A third message arrives, but the agent (buggy/racey) acks seq 999.
+    m3 = await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="three",
+    )
+    second = await _poll(client, token, acked={str(thread.id): 999})
+
+    cur = (
+        await async_session.exec(
+            select(AgentThreadCursor).where(
+                AgentThreadCursor.agent_id == agent.id,
+                AgentThreadCursor.thread_id == thread.id,
+            )
+        )
+    ).one()
+    await async_session.refresh(cur)
+    assert cur.last_acked_seq == m2.seq  # capped at what was delivered, not 999
+    # m3 (undelivered) is still delivered on this poll — not skipped.
+    assert str(m3.id) in [m["id"] for m in second.json()["new_messages"]]
+
+
+@pytest.mark.asyncio
 async def test_new_messages_absent_without_comm_v2(client: AsyncClient, async_session, monkeypatch):
     """Non-pilot agents (no comm_v2) never see the new_messages field."""
     monkeypatch.setattr(Agent, "comm_v2", False, raising=False)
