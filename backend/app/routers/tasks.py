@@ -2440,13 +2440,15 @@ async def post_thread_message(
     if payload.reply_to is not None:
         await answer_clears_awaiting(session, message)
 
-        # Resume (session-alive case): once the answer leaves no open question
-        # on the thread and the task sits in `waiting`, transition it back to
-        # in_progress explicitly (VALID_TRANSITIONS + event). Parking that
-        # happened via dispatch-death is Task 9's concern — not here.
+        # Resume (session-alive case): only a BLOCKING question parks the task
+        # as `waiting`, so only open blocking questions hold the resume. Once
+        # no open blocking question remains, transition back to in_progress
+        # explicitly (VALID_TRANSITIONS + event) — open non-blocking questions
+        # never gate the resume. Parking via dispatch-death is Task 9's concern.
         if task.status == TaskStatus.WAITING:
             remaining = await open_questions(session, thread_id=thread.id)
-            if not remaining and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
+            blocking_open = [q for q in remaining if (q.question_meta or {}).get("blocking")]
+            if not blocking_open and is_valid_transition(task.status, TaskStatus.IN_PROGRESS):
                 agent_name = "Agent"
                 if task.assigned_agent_id:
                     agent = await session.get(Agent, task.assigned_agent_id)

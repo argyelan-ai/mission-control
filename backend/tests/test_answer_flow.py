@@ -79,7 +79,10 @@ async def _user_token() -> str:
     return create_access_token(str(user_id), "admin")
 
 
-async def _post_question(task: Task, agent_id: uuid.UUID, *, awaiting: bool = True) -> tuple[Thread, Message]:
+async def _post_question(
+    task: Task, agent_id: uuid.UUID, *, awaiting: bool = True, blocking: bool = True,
+    body: str = "Redis oder Postgres?",
+) -> tuple[Thread, Message]:
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         db_task = await s.get(Task, task.id)
         thread = await ensure_task_thread(s, db_task)
@@ -89,8 +92,8 @@ async def _post_question(task: Task, agent_id: uuid.UUID, *, awaiting: bool = Tr
             sender_type="agent",
             sender_id=agent_id,
             message_type="question",
-            body="Redis oder Postgres?",
-            question_meta={"awaiting": awaiting, "to": "boss", "priority": "high"},
+            body=body,
+            question_meta={"awaiting": awaiting, "blocking": blocking, "to": "boss", "priority": "high"},
         )
         return thread, q
 
@@ -149,6 +152,76 @@ class TestAnswerFlow:
         assert poll.status_code == 200
         bodies = [m["body"] for m in poll.json()["new_messages"]]
         assert "Nimm Postgres." in bodies
+
+    async def test_answering_blocking_resumes_despite_open_non_blocking(self, client: AsyncClient):
+        """Resume gate ignores non-blocking questions: a waiting task with one open
+        non-blocking AND one blocking question resumes once the BLOCKING one is answered."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        task = await _task(
+            board.id, status="waiting", dispatched_at=dt.datetime.now(tz=dt.timezone.utc),
+            ack_at=dt.datetime.now(tz=dt.timezone.utc),
+        )
+        agent, _ = await _agent(board.id, current_task_id=task.id)
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            db_task = await s.get(Task, task.id)
+            db_task.assigned_agent_id = agent.id
+            s.add(db_task)
+            await s.commit()
+        # One non-blocking question stays open the whole time.
+        _, non_blocking_q = await _post_question(task, agent.id, awaiting=True, blocking=False, body="FYI ok?")
+        thread, blocking_q = await _post_question(task, agent.id, awaiting=True, blocking=True, body="Deploy jetzt?")
+
+        user_token = await _user_token()
+        client.headers["Authorization"] = f"Bearer {user_token}"
+        resp = await client.post(
+            f"/api/v1/tasks/{task.id}/thread/messages",
+            json={"body": "Ja, deploy.", "reply_to": str(blocking_q.id)},
+        )
+        assert resp.status_code == 201, resp.text
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            resumed = await s.get(Task, task.id)
+            assert resumed.status == "in_progress"  # resumed despite open non-blocking
+            nbq = await s.get(Message, non_blocking_q.id)
+            assert nbq.question_meta["awaiting"] is True  # still open, untouched
+
+    async def test_answering_only_non_blocking_does_not_resume(self, client: AsyncClient):
+        """A waiting task with an open blocking question does NOT resume when only the
+        non-blocking question is answered."""
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            board = await _board(s)
+        task = await _task(
+            board.id, status="waiting", dispatched_at=dt.datetime.now(tz=dt.timezone.utc),
+            ack_at=dt.datetime.now(tz=dt.timezone.utc),
+        )
+        agent, _ = await _agent(board.id, current_task_id=task.id)
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            db_task = await s.get(Task, task.id)
+            db_task.assigned_agent_id = agent.id
+            s.add(db_task)
+            await s.commit()
+        _, non_blocking_q = await _post_question(task, agent.id, awaiting=True, blocking=False, body="FYI ok?")
+        thread, blocking_q = await _post_question(task, agent.id, awaiting=True, blocking=True, body="Deploy jetzt?")
+
+        user_token = await _user_token()
+        client.headers["Authorization"] = f"Bearer {user_token}"
+        resp = await client.post(
+            f"/api/v1/tasks/{task.id}/thread/messages",
+            json={"body": "Ja passt.", "reply_to": str(non_blocking_q.id)},
+        )
+        assert resp.status_code == 201, resp.text
+
+        async with AsyncSession(test_engine, expire_on_commit=False) as s:
+            still = await s.get(Task, task.id)
+            assert still.status == "waiting"  # blocking question still open → no resume
+            bq = await s.get(Message, blocking_q.id)
+            assert bq.question_meta["awaiting"] is True
+            # no resume system line
+            systems = (await s.exec(
+                select(Message).where(Message.thread_id == thread.id, Message.message_type == "system")
+            )).all()
+            assert systems == []
 
     async def test_answer_to_non_blocking_leaves_status(self, client: AsyncClient):
         """(b) Answer to a non-blocking question → task status unchanged (in_progress)."""

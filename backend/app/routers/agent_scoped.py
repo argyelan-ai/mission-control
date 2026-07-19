@@ -1393,6 +1393,7 @@ async def agent_ask(
         body=payload.question,
         question_meta={
             "awaiting": True,
+            "blocking": payload.blocking,
             "to": payload.to,
             "priority": payload.priority,
             "options": payload.options,
