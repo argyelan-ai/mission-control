@@ -48,6 +48,7 @@ from app.models.loop import Loop, LoopRound  # noqa: F401
 from app.models.reference_file import ReferenceFile  # noqa: F401
 from app.models.prompt_template import PromptTemplate  # noqa: F401
 from app.models.bench import BenchChallenge, BenchEntry  # noqa: F401
+from app.models.thread import Thread, Message, AgentThreadCursor  # noqa: F401
 
 __all__ = [
     "AgentMeeting",
@@ -117,4 +118,7 @@ __all__ = [
     "PromptTemplate",
     "BenchChallenge",
     "BenchEntry",
+    "Thread",
+    "Message",
+    "AgentThreadCursor",
 ]
