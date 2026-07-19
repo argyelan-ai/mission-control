@@ -1300,6 +1300,139 @@ async def agent_clarification(
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# mc ask (Task 7, Interaction Model 2.0) — thread-native question, replaces
+# the Approval-based /boards/{board_id}/clarification for new callers.
+# Two stages: non-blocking (fire a question message, keep working) and
+# blocking (question message + status -> waiting, session stays alive —
+# see app/task_status.py VALID_TRANSITIONS + Task 6).
+# ─────────────────────────────────────────────────────────────────────────
+
+
+class AskCreate(BaseModel):
+    question: str
+    blocking: bool = False
+    to: str = "boss"
+    priority: str = "medium"
+    options: list[str] | None = None
+    default: str | None = None
+    deadline: str | None = None
+
+    @field_validator("to")
+    @classmethod
+    def _validate_to(cls, v: str) -> str:
+        from app.comm_constants import QUESTION_TARGETS
+
+        if v not in QUESTION_TARGETS:
+            raise ValueError(f"to must be one of {QUESTION_TARGETS}")
+        return v
+
+    @field_validator("priority")
+    @classmethod
+    def _validate_priority(cls, v: str) -> str:
+        from app.comm_constants import QUESTION_PRIORITIES
+
+        if v not in QUESTION_PRIORITIES:
+            raise ValueError(f"priority must be one of {QUESTION_PRIORITIES}")
+        return v
+
+
+class AskResponse(BaseModel):
+    message_id: uuid.UUID
+    thread_id: uuid.UUID
+    your_status: str
+
+
+@router.post("/tasks/current/ask", status_code=status.HTTP_201_CREATED)
+async def agent_ask(
+    payload: AskCreate,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
+):
+    """Agent asks a question on the task thread — non-blocking by default.
+
+    Non-blocking: posts message_type="question" with question_meta.awaiting
+    True, task status untouched. Blocking: additionally moves the task to
+    `waiting` (Task 6) and posts a `system` line — the worker's session
+    stays alive, paused on an answer.
+    """
+    from app.services.messaging import ensure_task_thread, post_message
+    from app.services.task_lifecycle import record_task_event
+    from app.task_status import TaskStatus, is_valid_transition
+
+    current_task_id = agent.current_task_id
+    if not current_task_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
+        )
+    current_task = await session.get(Task, current_task_id)
+    if not current_task:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kein aktiver Task — ask nur aus aktiver Arbeit heraus moeglich.",
+        )
+
+    if payload.blocking and not is_valid_transition(current_task.status, TaskStatus.WAITING):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Task-Status '{current_task.status}' erlaubt keinen Wechsel zu "
+                f"'waiting' — blocking ask nur waehrend aktiver Arbeit moeglich."
+            ),
+        )
+
+    thread = await ensure_task_thread(session, current_task)
+
+    message = await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="agent",
+        sender_id=agent.id,
+        message_type="question",
+        body=payload.question,
+        question_meta={
+            "awaiting": True,
+            "to": payload.to,
+            "priority": payload.priority,
+            "options": payload.options,
+            "default": payload.default,
+            "deadline": payload.deadline,
+        },
+    )
+
+    your_status = current_task.status
+    if payload.blocking:
+        await record_task_event(
+            session, current_task.id, current_task.status, TaskStatus.WAITING,
+            changed_by="agent", agent_id=agent.id, reason="ask_blocking",
+        )
+        current_task.status = TaskStatus.WAITING
+        session.add(current_task)
+        await session.commit()
+        await session.refresh(current_task)
+        your_status = current_task.status
+
+        await post_message(
+            session,
+            thread_id=thread.id,
+            sender_type="system",
+            message_type="system",
+            body=f"⏸ {agent.name} wartet auf Antwort (blocking)",
+        )
+
+    logger.info(
+        "Ask: %s asks '%s' (blocking=%s, task %s -> %s)",
+        agent.name, payload.question[:60], payload.blocking, current_task.id, your_status,
+    )
+
+    return AskResponse(
+        message_id=message.id,
+        thread_id=thread.id,
+        your_status=your_status,
+    )
+
+
 # PATCH /boards/{board_id}/tasks/{task_id} (the 600-line state-machine
 # endpoint), `_find_reviewer` / `_find_last_developer` etc. now live in
 # routers/agent_task_status.py + services/work_context.py. The shim
