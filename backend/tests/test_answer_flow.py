@@ -29,12 +29,6 @@ from app.services.messaging import ensure_task_thread, post_message
 from .conftest import test_engine
 
 
-@pytest.fixture(autouse=True)
-def _enable_comm_v2(monkeypatch):
-    """Task 11 adds Agent.comm_v2; expose it so the poll delivery gate resolves True."""
-    monkeypatch.setattr(Agent, "comm_v2", True, raising=False)
-
-
 async def _board(session: AsyncSession) -> Board:
     board = Board(id=uuid.uuid4(), name="AF Board", slug=f"af-{uuid.uuid4().hex[:6]}")
     session.add(board)
@@ -55,6 +49,7 @@ async def _agent(board_id: uuid.UUID, current_task_id: uuid.UUID | None = None):
             provision_status="provisioned",
             agent_token_hash=token_hash,
             current_task_id=current_task_id,
+            comm_v2=True,  # pilot agent — poll delivery gate (Task 11)
         )
         s.add(agent)
         await s.commit()

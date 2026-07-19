@@ -6,10 +6,10 @@ Messages on the agent's active task thread and advances
 `last_acked_seq`. Between delivery and ack the messages sit in the redelivery
 window `(last_acked_seq, last_delivered_seq]`, so a lost poll re-delivers.
 
-The `comm_v2` agent flag lands in Task 11 — until then the poll gates the new
-`new_messages` field behind `getattr(agent, "comm_v2", False)`. These tests
-flip it on via a class-level monkeypatch so `getattr` resolves True for the
-endpoint's freshly-loaded Agent instance.
+The poll gates the new `new_messages` field behind `getattr(agent, "comm_v2",
+False)` (Agent.comm_v2, Task 11). These tests create pilot agents with
+comm_v2=True directly so the endpoint's freshly-loaded Agent instance
+resolves True.
 """
 import datetime as dt
 import json
@@ -28,14 +28,7 @@ from app.models.thread import AgentThreadCursor, Message
 from app.services.messaging import ensure_task_thread, post_message
 
 
-@pytest.fixture(autouse=True)
-def _enable_comm_v2(monkeypatch):
-    """Task 11 adds Agent.comm_v2; until then expose it as a class attr so the
-    poll endpoint's `getattr(agent, "comm_v2", False)` gate resolves True."""
-    monkeypatch.setattr(Agent, "comm_v2", True, raising=False)
-
-
-async def _board_agent_task(async_session: AsyncSession):
+async def _board_agent_task(async_session: AsyncSession, *, comm_v2: bool = True):
     board = Board(name="B", slug=f"b-{uuid.uuid4().hex[:6]}")
     async_session.add(board)
     await async_session.commit()
@@ -47,6 +40,7 @@ async def _board_agent_task(async_session: AsyncSession):
         agent_runtime="host",
         agent_token_hash=token_hash,
         board_id=board.id,
+        comm_v2=comm_v2,
     )
     async_session.add(agent)
     await async_session.commit()
@@ -245,10 +239,9 @@ async def test_ack_capped_at_last_delivered_seq(client: AsyncClient, async_sessi
 
 
 @pytest.mark.asyncio
-async def test_new_messages_absent_without_comm_v2(client: AsyncClient, async_session, monkeypatch):
+async def test_new_messages_absent_without_comm_v2(client: AsyncClient, async_session):
     """Non-pilot agents (no comm_v2) never see the new_messages field."""
-    monkeypatch.setattr(Agent, "comm_v2", False, raising=False)
-    board, agent, token, task, thread = await _board_agent_task(async_session)
+    board, agent, token, task, thread = await _board_agent_task(async_session, comm_v2=False)
     await post_message(
         async_session,
         thread_id=thread.id,

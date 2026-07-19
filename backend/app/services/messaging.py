@@ -23,6 +23,7 @@ from app.models.thread import Thread, Message
 from app.utils import ensure_aware
 
 FINISH_NUDGE_BODY = "Du hast Fertigstellung signalisiert — bitte `mc finish` ausführen"
+BACKFILL_SEED_BODY = "Migration: bisheriger Verlauf liegt in den Kommentaren dieses Tasks."
 
 
 async def _next_seq(session: AsyncSession, thread_id: uuid.UUID) -> int:
@@ -182,6 +183,35 @@ async def last_task_activity(session: AsyncSession, task: Task, *, comm_v2: bool
 
     candidates = [ensure_aware(t) for t in (latest_comment, latest_message) if t is not None]
     return max(candidates) if candidates else None
+
+
+async def backfill_task_threads(session: AsyncSession) -> int:
+    """Migration 0160 (async/ORM equivalent — see the migration's own sync/core
+    variant, which runs against `op.get_bind()` in production): give every
+    Task without a thread_id a Thread(kind="task") + a seed system Message at
+    seq 1, so `last_message_at` is never NULL for pre-comm_v2 tasks (§10.4).
+    No comment-to-message mapping here — that is the fleet-wide W2 migration.
+
+    Idempotent: only Tasks with `thread_id IS NULL` are touched, so a second
+    run is a no-op. Tasks that already carry a thread are left untouched.
+    Exists so the backfill logic is exercised by the async test suite; the
+    actual Alembic upgrade step runs the plain-SQL sync variant instead.
+    """
+    result = await session.exec(select(Task).where(Task.thread_id.is_(None)))
+    tasks = result.all()
+
+    count = 0
+    for task in tasks:
+        thread = await ensure_task_thread(session, task)
+        await post_message(
+            session,
+            thread_id=thread.id,
+            sender_type="system",
+            message_type="system",
+            body=BACKFILL_SEED_BODY,
+        )
+        count += 1
+    return count
 
 
 async def maybe_post_finish_nudge(session: AsyncSession, task: Task) -> None:

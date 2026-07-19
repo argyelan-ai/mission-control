@@ -208,6 +208,16 @@ class Agent(SQLModel, table=True):
         sa_column=Column(Boolean, server_default=text("false"), nullable=False),
     )
 
+    # Interaction Model 2.0 — pilot opt-in (Migration 0160). False by default;
+    # flipped per-agent at deploy time. Gates: new_messages in the poll payload
+    # (routers/agents.py), poll.sh's message-path, the auto-promote-on-resolution
+    # shutoff in agent_comments.py/task_runner.py, and the Message-half of the
+    # last_task_activity dual-read (app.services.messaging). See §8.1/§3.3.
+    comm_v2: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default=text("false"), nullable=False),
+    )
+
     requires_git_workflow: bool = Field(default=True)
     # Response language towards the operator (short code, e.g. "en", "de").
     # Templates are English; this only steers how the agent replies.

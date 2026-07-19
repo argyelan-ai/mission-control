@@ -242,6 +242,7 @@ async def _setup_resolution_task(make_board, make_agent, make_task, *, comm_v2: 
     board = await make_board(name="AP Board", slug=f"ap-{uuid.uuid4().hex[:6]}")
     agent = await make_agent(
         name=f"Worker-{uuid.uuid4().hex[:4]}", board_id=board.id, role="developer",
+        comm_v2=comm_v2,
     )
     task = await make_task(
         board_id=board.id, title="Resolution task", status="in_progress",
@@ -261,10 +262,9 @@ async def _setup_resolution_task(make_board, make_agent, make_task, *, comm_v2: 
 class TestAutoPromoteWatchdogPath:
     """task_runner._check_stale_in_progress mirror auto-promote."""
 
-    async def test_comm_v2_agent_nudged_not_promoted(self, make_board, make_agent, make_task, monkeypatch, fake_redis):
+    async def test_comm_v2_agent_nudged_not_promoted(self, make_board, make_agent, make_task, fake_redis):
         """(b) comm_v2 agent's resolution comment → task stays in_progress,
         a system Nudge message appears after a watchdog tick."""
-        monkeypatch.setattr(Agent, "comm_v2", True, raising=False)
         board, agent, task = await _setup_resolution_task(make_board, make_agent, make_task, comm_v2=True)
 
         async with _session() as s:
@@ -280,11 +280,10 @@ class TestAutoPromoteWatchdogPath:
         assert len(system_msgs) == 1
         assert system_msgs[0].body == FINISH_NUDGE_BODY
 
-    async def test_comm_v2_nudge_dedupes_across_ticks(self, make_board, make_agent, make_task, monkeypatch, fake_redis):
+    async def test_comm_v2_nudge_dedupes_across_ticks(self, make_board, make_agent, make_task, fake_redis):
         """A second watchdog tick with the same resolution comment does NOT
         post a second nudge — the thread already has the nudge as its last
         system message."""
-        monkeypatch.setattr(Agent, "comm_v2", True, raising=False)
         board, agent, task = await _setup_resolution_task(make_board, make_agent, make_task, comm_v2=True)
 
         async with _session() as s:
@@ -297,10 +296,9 @@ class TestAutoPromoteWatchdogPath:
         system_msgs = [m for m in messages if m.message_type == "system"]
         assert len(system_msgs) == 1, "dedupe must prevent a second identical nudge"
 
-    async def test_non_pilot_agent_still_auto_promotes(self, make_board, make_agent, make_task, monkeypatch, fake_redis):
+    async def test_non_pilot_agent_still_auto_promotes(self, make_board, make_agent, make_task, fake_redis):
         """(c) Regression: non-pilot (no comm_v2) agent's resolution comment
         still auto-promotes exactly as today."""
-        monkeypatch.setattr(Agent, "comm_v2", False, raising=False)
         board, agent, task = await _setup_resolution_task(make_board, make_agent, make_task, comm_v2=False)
 
         async with _session() as s:
@@ -321,17 +319,16 @@ class TestAutoPromoteAgentCommentsPath:
             json={"comment_type": "resolution", "content": "Fertig."},
         )
 
-    async def test_comm_v2_agent_nudged_not_promoted(self, client: AsyncClient, make_board, make_task, monkeypatch):
+    async def test_comm_v2_agent_nudged_not_promoted(self, client: AsyncClient, make_board, make_task):
         """(b) Live POST path: comm_v2 agent's resolution comment → task
         stays in_progress, nudge message posted (once)."""
-        monkeypatch.setattr(Agent, "comm_v2", True, raising=False)
-
         board = await make_board(name="APC Board", slug=f"apc-{uuid.uuid4().hex[:6]}")
         raw_token, token_hash = generate_agent_token()
         async with _session() as s:
             agent = Agent(
                 id=uuid.uuid4(), name="Comm2Worker", role="developer", board_id=board.id,
                 scopes=[], provision_status="provisioned", agent_token_hash=token_hash,
+                comm_v2=True,
             )
             s.add(agent)
             await s.commit()
@@ -360,11 +357,9 @@ class TestAutoPromoteAgentCommentsPath:
         messages2 = await _thread_messages(still2.thread_id)
         assert len([m for m in messages2 if m.message_type == "system"]) == 1
 
-    async def test_non_pilot_agent_still_auto_promotes(self, client: AsyncClient, make_board, make_task, monkeypatch):
+    async def test_non_pilot_agent_still_auto_promotes(self, client: AsyncClient, make_board, make_task):
         """(c) Regression: non-pilot agent's resolution comment via the live
         endpoint still auto-promotes root tasks to review."""
-        monkeypatch.setattr(Agent, "comm_v2", False, raising=False)
-
         board = await make_board(name="APC2 Board", slug=f"apc2-{uuid.uuid4().hex[:6]}")
         raw_token, token_hash = generate_agent_token()
         async with _session() as s:
