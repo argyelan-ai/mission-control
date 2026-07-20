@@ -2475,7 +2475,13 @@ async def _upsert_cursor(
 
 # Task statuses whose task-thread messages are eligible for delivery — mirror
 # the comment path's active set so the message and comment views stay aligned.
-_MESSAGE_ACTIVE_STATUSES = ["in_progress", "inbox", "review", "blocked", "done", "user_test"]
+# `waiting` MUST be in this list (live pilot finding 2026-07-20): a task
+# parked on a blocking ask is the one state that exists BECAUSE a message
+# (the answer) is expected — without it, anything posted to the thread while
+# the task waits (status updates, "moment, noch was" operator notes, the
+# answer itself if the resume ever decouples from posting) is silently
+# withheld from the agent until the status flips.
+_MESSAGE_ACTIVE_STATUSES = ["in_progress", "inbox", "review", "blocked", "done", "user_test", "waiting"]
 
 
 async def _message_threads_for_agent(agent: Agent, session: AsyncSession) -> list:
