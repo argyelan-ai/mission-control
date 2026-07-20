@@ -41,10 +41,19 @@
 verify_paste_landed() {
     local file="$1"
     local full
-    full=$(grep -v '^$' "$file" 2>/dev/null | head -n 1 | cut -c1-"${PASTE_FINGERPRINT_LEN:-40}")
+    # Markdown-Syntax strippen (live pilot 2026-07-20): claude rendert die
+    # submittete Message — aus "# Neue Nachricht" wird "Neue Nachricht",
+    # ein Fingerprint MIT '#' kann im Pane nie erscheinen.
+    full=$(grep -v '^$' "$file" 2>/dev/null | head -n 1 | sed 's/^[#>*[:space:]]*//' | cut -c1-"${PASTE_FINGERPRINT_LEN:-40}")
     if [ -z "$full" ]; then
         return 0
     fi
+    # Zweiter Anker: die LETZTE nicht-leere Zeile. Bei Queue-Messages ist das
+    # der eindeutige Footer "[thread <uuid> · seq <n> · …]" — er ueberlebt
+    # das Rendering woertlich und identifiziert genau DIESE Message (der
+    # Erstzeilen-Fingerprint ist fuer alle Queue-Messages identisch).
+    local last_line
+    last_line=$(grep -v '^$' "$file" 2>/dev/null | tail -n 1 | sed 's/^[#>*[:space:]]*//' | cut -c1-"${PASTE_FINGERPRINT_LEN:-40}")
     # Progressive fingerprints: full, then 50%, then 25%. Three lengths total.
     local len_full=${#full}
     local len_half=$(( len_full / 2 ))
@@ -67,6 +76,10 @@ verify_paste_landed() {
             if echo "$pane" | grep -qF "$full" 2>/dev/null \
                || echo "$pane" | grep -qF "$fp_half" 2>/dev/null \
                || echo "$pane" | grep -qF "$fp_quarter" 2>/dev/null; then
+                return 0
+            fi
+            if [ -n "$last_line" ] && [ "$last_line" != "$full" ] \
+               && echo "$pane" | grep -qF "$last_line" 2>/dev/null; then
                 return 0
             fi
         fi

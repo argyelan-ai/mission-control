@@ -160,4 +160,29 @@ unset PASTE_PRE_COLLAPSE_COUNT
 PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 verify_paste_landed "$prompt_coll" \
     || fail "case12: unset snapshot must degrade to 0 (any marker counts)"
 
-echo "PASS: all 12 verify_paste_landed cases"
+# ── Case 13: markdown-header fingerprint — pane shows rendered text ───────
+# claude renders "# Neue Nachricht" as "Neue Nachricht" (no '#'). The
+# fingerprint must strip markdown so the rendered form still matches.
+prompt_md=$(mktemp)
+printf '# Neue Nachricht (Interaction 2.0)\n\nInhalt hier\n' > "$prompt_md"
+pane_md=$(mktemp)
+printf 'transcript\nNeue Nachricht (Interaction 2.0)\nInhalt hier\n' > "$pane_md"
+export TMUX_STUB_PANE_FILE="$pane_md"
+PASTE_PRE_COLLAPSE_COUNT=99 PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 \
+    verify_paste_landed "$prompt_md" \
+    || fail "case13: markdown-stripped fingerprint must match rendered header"
+
+# ── Case 14: footer-line anchor — only the unique footer visible ──────────
+# Queue-message first lines are identical across messages; the footer
+# "[thread <uuid> · seq <n> · …]" uniquely identifies THIS message and
+# survives rendering verbatim. Pane shows only the footer → still 0.
+prompt_ft=$(mktemp)
+printf '# Neue Nachricht (Interaction 2.0)\n\nBody\n\n[thread abc-123 · seq 7 · von user · typ message]\n' > "$prompt_ft"
+pane_ft=$(mktemp)
+printf 'transcript stuff\n  [thread abc-123 · seq 7 · von user · typ\n  message]\n' > "$pane_ft"
+export TMUX_STUB_PANE_FILE="$pane_ft"
+PASTE_PRE_COLLAPSE_COUNT=99 PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 \
+    verify_paste_landed "$prompt_ft" \
+    || fail "case14: footer-line anchor must match"
+
+echo "PASS: all 14 verify_paste_landed cases"
