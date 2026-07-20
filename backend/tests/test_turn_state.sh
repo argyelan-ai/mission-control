@@ -61,4 +61,22 @@ export TMUX_STUB_PANE_FILE="$pane_crash"
 out=$(detect_turn_state testsession)
 [ "$out" = "crashed" ] || fail "case4: API error must be crashed, got '$out'"
 
-echo "PASS: all 4 detect_turn_state cases"
+# ── Case 5 (live pilot 2026-07-20, 2. Iteration): Ghost-Text idle ─────────
+# claude-cli 2.1.x fills the idle input box with prompt suggestions /
+# pending-wakeup text ("❯ Antwort abwarten…") — never a bare prompt. With
+# the statusline visible and NO "esc to interrupt", the turn is over: idle.
+# The stale "✻ Cogitated for 15s" summary above must NOT count as working.
+pane_ghost=$(mktemp)
+printf 'prose from last turn\n\xe2\x9c\xbb Cogitated for 15s\n\n\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\n\xe2\x9d\xaf Antwort abwarten, dann quoten\n\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\n  \xe2\x8f\xb5\xe2\x8f\xb5 bypass permissions on (shift+tab to cycle)\n' > "$pane_ghost"
+export TMUX_STUB_PANE_FILE="$pane_ghost"
+out=$(detect_turn_state testsession)
+[ "$out" = "idle" ] || fail "case5: ghost-text prompt + statusline w/o esc-to-interrupt must be idle, got '$out'"
+
+# ── Case 6: live spinner with ellipsis (no esc-to-interrupt visible) ──────
+pane_spin=$(mktemp)
+printf 'output\n\xe2\x9c\xbb Waddling\xe2\x80\xa6 (31s \xc2\xb7 \xe2\x86\x93 1.6k tokens)\n' > "$pane_spin"
+export TMUX_STUB_PANE_FILE="$pane_spin"
+out=$(detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case6: live spinner with ellipsis must be working, got '$out'"
+
+echo "PASS: all 6 detect_turn_state cases"
