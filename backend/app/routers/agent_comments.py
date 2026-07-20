@@ -256,30 +256,9 @@ async def agent_add_comment(
         raise HTTPException(status_code=404, detail="Task not found")
 
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
-    if (
-        task.assigned_agent_id == agent.id
-        and task.ack_at is None
-        and task.dispatched_at is not None
-    ):
-        task.ack_at = utcnow()
-        if task.status == "inbox":
-            task.status = "in_progress"
-            task.started_at = utcnow()
-        task.updated_at = utcnow()
-        # Also set the active-task lock. Without this, agent.current_task_id
-        # stays None and mc delegate / mc help-request / mc clarification
-        # respond with 409 "Kein aktiver Task". Same skip condition as
-        # PATCH-ACK (PR #103): workers in subagent-dispatch mode have
-        # parallel sessions and don't need the lock. Live bug from Boss's
-        # reflection on 2026-04-24: Boss ACKed via comment instead of PATCH,
-        # mc delegate failed.
-        from app.config import settings as _auto_ack_settings
-        if not (_auto_ack_settings.use_subagent_dispatch and not agent.is_board_lead):
-            if agent.current_task_id != task.id:
-                agent.current_task_id = task.id
-                session.add(agent)
-        session.add(task)
-        logger.info("Auto-ACK: %s kommentierte Task '%s' → ack_at + current_task_id gesetzt", agent.name, task.title[:60])
+    # Shared handshake (§3.3) — same implementation as the Message channel.
+    from app.services.task_lifecycle import apply_ack_handshake
+    apply_ack_handshake(session, task, agent)
 
     comment = TaskComment(
         task_id=task_id,
@@ -308,30 +287,36 @@ async def agent_add_comment(
         and (task.assigned_agent_id == agent.id or agent.is_board_lead)
         and agent.auto_promote_on_resolution
     ):
-        old_status = task.status
-        # Subtasks go straight to done (review runs at the phase level)
-        if task.parent_task_id is not None:
-            task.status = "done"
-            task.completed_at = utcnow()
-            # See task_lifecycle.execute_review_decision for why "done"
-            # resets the sticky dispatch_intent label.
-            task.dispatch_intent = "root"
+        if getattr(agent, "comm_v2", False):
+            # Interaction Model 2.0 (§3.3/§8.1): comm_v2 agents drive their own
+            # lifecycle via `mc finish` — no silent auto-promote. Nudge instead.
+            from app.services.messaging import maybe_post_finish_nudge
+            await maybe_post_finish_nudge(session, task)
         else:
-            task.status = "review"
-        # Prevent stale dispatch_attempt_id (audit trail).
-        from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
-        await clear_dispatch_attempt_id(
-            session, task,
-            caller="agent_comment",
-            reason="resolution_auto_promote",
-        )
-        task.updated_at = utcnow()
-        session.add(task)
-        auto_promoted = True
-        logger.info(
-            "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
-            agent.name, task.title[:60], task.status,
-        )
+            old_status = task.status
+            # Subtasks go straight to done (review runs at the phase level)
+            if task.parent_task_id is not None:
+                task.status = "done"
+                task.completed_at = utcnow()
+                # See task_lifecycle.execute_review_decision for why "done"
+                # resets the sticky dispatch_intent label.
+                task.dispatch_intent = "root"
+            else:
+                task.status = "review"
+            # Prevent stale dispatch_attempt_id (audit trail).
+            from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
+            await clear_dispatch_attempt_id(
+                session, task,
+                caller="agent_comment",
+                reason="resolution_auto_promote",
+            )
+            task.updated_at = utcnow()
+            session.add(task)
+            auto_promoted = True
+            logger.info(
+                "Resolution-Auto-Promote: %s schrieb resolution-Kommentar → Task '%s' in_progress→%s",
+                agent.name, task.title[:60], task.status,
+            )
 
     # ── Fulfill report-back contract ──────────────────────────────
     # When the Board Lead posts a report_back comment → contract fulfilled

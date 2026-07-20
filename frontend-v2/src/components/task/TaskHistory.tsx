@@ -12,6 +12,7 @@ const statusColors: Record<string, string> = {
   in_progress: LANE.in_progress,
   review: LANE.review,
   user_test: LANE.user_test,
+  waiting: LANE.waiting,
   done: LANE.done,
   blocked: LANE.blocked,
   failed: LANE.failed,

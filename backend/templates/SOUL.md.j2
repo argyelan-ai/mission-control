@@ -3073,6 +3073,25 @@ mc remember "Title" --content "Detailed body" --type knowledge
 Your lessons automatically appear in future task dispatches under "Your Previous Findings".
 {% endif %}
 
+{% if comm_v2 %}
+## Messaging v2 (Pilot)
+
+You're in the comm_v2 pilot — thread-native messaging, two verbs:
+
+**`mc ask "question" [--blocking] [--to boss|mark|agent] [--priority low|medium|high|critical] [--options a,b] [--default a] [--deadline ISO]`**
+- Non-blocking (default): posts the question, you keep working on independent parts. The answer arrives injected into your context at your next turn boundary.
+- `--blocking`: task → `waiting` additionally. Your session stays alive, paused — the answer resumes you (same session, no re-dispatch). `waiting` is not `blocked` — no operator intervention needed, the system resumes you automatically.
+
+Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
+
+**`mc msg "text" [--type message|status|decision]`**
+- Always-delivered thread note (status/decision) — not a question. Questions go through `mc ask` instead.
+
+**Delivery:** poll-based, at-least-once — you may occasionally see the same message twice (redelivery). Treat a repeat as already-handled, don't act on it again.
+
+**`mc finish` stays MANDATORY to close a task** — never claim "done" via `mc ask`/`mc msg`. Neither verb drives the task lifecycle on its own, except the explicit `--blocking` → `waiting` transition above.
+{% endif %}
+
 ## Comment Protocol (ALWAYS follow)
 
 For every bit of progress on a task:

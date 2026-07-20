@@ -218,6 +218,7 @@ const STATUS_CONFIG: Record<TaskStatus, { color: string; label: string }> = {
   in_progress: { color: LANE.in_progress, label: "Active" },
   review: { color: LANE.review, label: "Review" },
   user_test: { color: LANE.user_test, label: "User Test" },
+  waiting: { color: LANE.waiting, label: "Waiting" },
   done: { color: LANE.done, label: "Done" },
   blocked: { color: LANE.blocked, label: "Blocked" },
   failed: { color: LANE.failed, label: "Failed" },

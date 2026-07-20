@@ -72,6 +72,7 @@ export const LANE: Record<string, string> = {
   in_progress: C.info,     // #2E6FD8
   review: C.warning,       // #B8870A
   user_test: C.accent,     // teal (was purple #8B5CF6)
+  waiting: C.info,         // #2E6FD8 — answer-wait, same info-blue family as in_progress
   blocked: C.error,
   failed: C.error,
   aborted: C.warning,

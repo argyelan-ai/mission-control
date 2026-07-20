@@ -7,7 +7,7 @@ import { C } from "@/lib/colors";
 
 // ── Priority helpers ──────────────────────────────────────────────────────────
 
-type LaneKey = "inbox" | "in_progress" | "review" | "user_test" | "blocked" | "failed" | "aborted" | "done";
+type LaneKey = "inbox" | "in_progress" | "review" | "user_test" | "waiting" | "blocked" | "failed" | "aborted" | "done";
 
 function priorityStripeGradient(priority: string, isDone: boolean): string {
   // Done = calm: heavily muted stripe instead of full green — the saturated

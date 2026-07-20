@@ -821,6 +821,65 @@ async def get_last_checkpoint(session: AsyncSession, task_id: uuid.UUID) -> str 
     return checkpoint.content if checkpoint else None
 
 
+WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 9)
+
+
+async def build_waiting_resume_recap(session: AsyncSession, task: Task) -> str:
+    """Bounded recap for resuming a task that was parked while `waiting`.
+
+    Reads the Interaction-2.0 thread (Task 2 Message channel) rather than
+    TaskComments — the last operator decision and the answered blocking
+    question live there. Reuses build_recovery_context's data-access shape
+    (workspace fallback via the assigned agent) but stays deliberately small:
+    status + workspace + last decision + the open question and its answer.
+    Hard-capped at WAITING_RESUME_RECAP_MAX_CHARS so a parked-agent re-dispatch
+    never balloons the prompt.
+    """
+    from app.models.thread import Message
+
+    parts: list[str] = [f"## Weiter geht's — {task.title}", ""]
+    parts.append(f"**Status:** {task.status}")
+
+    # Workspace hint — Task.workspace_path is authoritative, agent workspace
+    # is the fallback (same precedence as build_recovery_context).
+    _ws = getattr(task, "workspace_path", None)
+    if not _ws and task.assigned_agent_id:
+        agent_obj = await session.get(Agent, task.assigned_agent_id)
+        if agent_obj:
+            _ws = agent_obj.workspace_path
+    if _ws:
+        parts.append(f"**Workspace:** `{_ws}`")
+
+    if task.thread_id is not None:
+        msgs = list((await session.exec(
+            select(Message)
+            .where(Message.thread_id == task.thread_id)
+            .order_by(Message.seq)  # type: ignore[union-attr]
+        )).all())
+
+        # Last operator/agent decision on the thread.
+        decisions = [m for m in msgs if m.message_type == "decision"]
+        if decisions:
+            parts.append(f"\n**Letzte Entscheidung:** {decisions[-1].body.strip()[:300]}")
+
+        # The most recent question and — if answered — its reply.
+        questions = [m for m in msgs if m.message_type == "question"]
+        if questions:
+            q = questions[-1]
+            parts.append(f"\n**Frage:** {q.body.strip()[:250]}")
+            answers = [m for m in msgs if m.reply_to == q.id]
+            if answers:
+                parts.append(f"**Antwort:** {answers[-1].body.strip()[:250]}")
+
+    parts.append(
+        "\n### Naechster Schritt\nDie Antwort ist da — mach genau dort weiter, "
+        "wo du auf sie gewartet hast. Nicht neu anfangen."
+    )
+
+    text = "\n".join(parts)
+    return text[:WAITING_RESUME_RECAP_MAX_CHARS]
+
+
 async def build_recovery_context(session: AsyncSession, task: Task) -> str | None:
     """Compact recovery snippet — Workstream A4.
 
