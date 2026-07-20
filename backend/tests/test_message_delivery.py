@@ -252,3 +252,32 @@ async def test_new_messages_absent_without_comm_v2(client: AsyncClient, async_se
     body = (await _poll(client, token)).json()
     assert "new_messages" not in body
     assert "new_comments" in body
+
+
+@pytest.mark.asyncio
+async def test_waiting_task_thread_still_delivers(client: AsyncClient, async_session):
+    """Live pilot finding 2026-07-20: `waiting` was missing from
+    _MESSAGE_ACTIVE_STATUSES — the ONE state that exists because a message
+    (the blocking answer) is expected got no thread delivery at all.
+    Messages posted while the task waits must reach the agent."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    task.status = "waiting"
+    async_session.add(task)
+    await async_session.commit()
+
+    msg = await post_message(
+        async_session,
+        thread_id=thread.id,
+        sender_type="user",
+        message_type="message",
+        body="antwort waehrend waiting",
+    )
+
+    resp = await _poll(client, token)
+    assert resp.status_code == 200
+    body = resp.json()
+    delivered = [m["id"] for m in body.get("new_messages", [])]
+    assert str(msg.id) in delivered, (
+        "Message an einen waiting-Task muss zugestellt werden "
+        "(_MESSAGE_ACTIVE_STATUSES braucht 'waiting')"
+    )
