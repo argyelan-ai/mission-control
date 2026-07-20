@@ -58,6 +58,7 @@ verify_paste_landed() {
     local max_attempts=${PASTE_PROBE_ATTEMPTS:-3}
     local interval=${PASTE_PROBE_INTERVAL_SEC:-1}
     local scrollback=${PASTE_SCROLLBACK_LINES:-2000}
+    local collapse_tail=${PASTE_COLLAPSE_TAIL_LINES:-40}
     while [ "$attempt" -le "$max_attempts" ]; do
         local pane
         pane=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S "-${scrollback}" 2>/dev/null || echo "")
@@ -66,6 +67,28 @@ verify_paste_landed() {
             if echo "$pane" | grep -qF "$full" 2>/dev/null \
                || echo "$pane" | grep -qF "$fp_half" 2>/dev/null \
                || echo "$pane" | grep -qF "$fp_quarter" 2>/dev/null; then
+                return 0
+            fi
+        fi
+        # claude-cli >= 2.x collapses multi-line pastes to "[Pasted text #N
+        # +M lines]" — the content never renders in the pane, so no
+        # fingerprint length can ever match (live pilot finding 2026-07-20:
+        # every comm_v2 message flush failed verify although the paste
+        # landed, queue wedged, endless redelivery; the dispatch path
+        # double-pasted for the same reason). A collapse marker counts as
+        # landed — but only if the marker COUNT in the tail window (input
+        # area + freshest turn) grew vs. the pre-paste snapshot
+        # (PASTE_PRE_COLLAPSE_COUNT, set by paste_and_submit). A stale
+        # marker from an earlier paste never increases the count, so
+        # back-to-back queue flushes can't false-ack an undelivered
+        # message. Unset snapshot (direct callers, tests) degrades to 0 —
+        # any visible marker counts.
+        local tail_pane marker_count
+        tail_pane=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S "-${collapse_tail}" 2>/dev/null || echo "")
+        if [ -n "$tail_pane" ]; then
+            marker_count=$(printf '%s\n' "$tail_pane" | grep -cF '[Pasted text' 2>/dev/null || true)
+            [ -n "$marker_count" ] || marker_count=0
+            if [ "$marker_count" -gt "${PASTE_PRE_COLLAPSE_COUNT:-0}" ]; then
                 return 0
             fi
         fi

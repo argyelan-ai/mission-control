@@ -216,6 +216,13 @@ paste_and_submit() {
     fi
     local attempt=1
     while [ "$attempt" -le "$PASTE_MAX_ATTEMPTS" ]; do
+        # Pre-paste snapshot fuer den Collapse-Marker-Pfad in
+        # verify_paste_landed (claude-cli >=2.x rendert mehrzeilige Pastes
+        # als "[Pasted text #N +M lines]" — Fingerprint kann nie matchen).
+        # Verify akzeptiert nur einen ZUWACHS der Marker-Anzahl im
+        # Tail-Fenster, darum pro Versuch frisch snapshotten.
+        PASTE_PRE_COLLAPSE_COUNT=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S "-${PASTE_COLLAPSE_TAIL_LINES:-40}" 2>/dev/null | grep -cF '[Pasted text' 2>/dev/null || true)
+        [ -n "$PASTE_PRE_COLLAPSE_COUNT" ] || PASTE_PRE_COLLAPSE_COUNT=0
         tmux load-buffer "$file"
         tmux paste-buffer -t "${SESSION_NAME}:0"
         sleep 0.3
@@ -821,11 +828,16 @@ flush_msg_queue() {
         seq="${f%%__*}"
         rest="${f#*__}"
         tid="${rest%.msg}"
-        if paste_and_submit --no-fail-open "$path"; then
+        local rc=0
+        paste_and_submit --no-fail-open "$path" || rc=$?
+        if [ "$rc" -eq 0 ]; then
             _record_ack "$tid" "$seq"
             rm -f "$path"
-        else
+        elif [ "$rc" -eq 2 ]; then
             log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            return 1
+        else
+            log "flush_msg_queue: Paste fuer seq $seq (thread $tid) FEHLGESCHLAGEN (Verify) — Flush gestoppt, Rest bleibt gequeued, kein Ack."
             return 1
         fi
     done < <(msg_queue_files)

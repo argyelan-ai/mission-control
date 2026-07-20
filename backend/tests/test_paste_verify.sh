@@ -134,4 +134,30 @@ if PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 verify_paste_landed "$promp
     fail "case9: with no match anywhere, PASTE_PROBE_ATTEMPTS=1 must still return 1"
 fi
 
-echo "PASS: all 9 verify_paste_landed cases"
+# ── Case 10 (live pilot 2026-07-20): collapsed paste, marker NEW → 0 ──────
+# claude-cli >=2.x renders multi-line pastes as "[Pasted text #1 +6 lines]" —
+# the content never appears in the pane. With a fresh marker (pre-count 0)
+# verify must treat the paste as landed.
+prompt_coll=$(mktemp)
+printf '# Neue Nachricht (Interaction 2.0)\n\nHallo Welt\n' > "$prompt_coll"
+pane_coll=$(mktemp)
+printf '╭─\n│ >  [Pasted text #1 +6 lines]\n╰\n' > "$pane_coll"
+export TMUX_STUB_PANE_FILE="$pane_coll"
+PASTE_PRE_COLLAPSE_COUNT=0 PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 \
+    verify_paste_landed "$prompt_coll" \
+    || fail "case10: fresh collapse marker (count 1 > pre 0) must return 0"
+
+# ── Case 11: stale marker only (count unchanged vs snapshot) → 1 ──────────
+# A leftover "[Pasted text …]" from an EARLIER paste must not ack a new,
+# undelivered message: pre-count == current count ⇒ no proof, return 1.
+if PASTE_PRE_COLLAPSE_COUNT=1 PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 \
+    verify_paste_landed "$prompt_coll"; then
+    fail "case11: stale collapse marker (count 1 == pre 1) must return 1"
+fi
+
+# ── Case 12: snapshot unset (direct caller / legacy) → any marker counts ──
+unset PASTE_PRE_COLLAPSE_COUNT
+PASTE_PROBE_ATTEMPTS=1 PASTE_PROBE_INTERVAL_SEC=0 verify_paste_landed "$prompt_coll" \
+    || fail "case12: unset snapshot must degrade to 0 (any marker counts)"
+
+echo "PASS: all 12 verify_paste_landed cases"
