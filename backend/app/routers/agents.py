@@ -3181,6 +3181,26 @@ async def agent_heartbeat(
     )
     active_task = active_res.first()
 
+    # `waiting` preserves the hold (Interaction 2.0, Task 12): a blocking ask
+    # parks the session on an answer, and /me/poll's waiting-hold is keyed
+    # off agent.current_task_id. Without this branch the next heartbeat fell
+    # into the else-branch below and cleared current_task_id — poll.sh then
+    # saw state=idle, reset the session, and every blocking answer went
+    # through the parked re-dispatch path instead of live injection (live
+    # pilot finding 2026-07-20). Deliberately PRESERVE-only, keyed off the
+    # existing current_task_id pointer: after _maybe_park_waiting_task
+    # releases the session (clears the pointer), the heartbeat must not
+    # resurrect the hold — a parked waiting task stays parked.
+    if active_task is None and agent.current_task_id is not None:
+        _wait_res = await session.exec(
+            select(_Task).where(
+                _Task.id == agent.current_task_id,
+                _Task.assigned_agent_id == agent.id,
+                _Task.status == "waiting",
+            ).limit(1)
+        )
+        active_task = _wait_res.first()
+
     if active_task is not None:
         # current_task_id lock self-heal: derive from the DB independent of
         # the payload. This fixes the original bug 2 (Sparky.current_task_id=
