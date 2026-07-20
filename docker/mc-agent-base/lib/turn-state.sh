@@ -21,6 +21,17 @@ detect_turn_state() {
         return
     fi
 
+    # claude-cli 2.1.x renders the idle prompt as `❯` + NO-BREAK SPACE
+    # (U+00A0). The `^❯ *$` idle check below only knows plain spaces, so an
+    # idle pane classified as working forever and the comm_v2 message gate
+    # never opened (live pilot finding 2026-07-20). Normalize NBSP to plain
+    # space before any pattern runs.
+    # (printf-octal statt $'\\u00a0' — bash 3.2 auf macOS kennt \\uHHHH nicht,
+    # die Tests laufen auch auf dem Host.)
+    local _nbsp
+    _nbsp=$(printf '\302\240')
+    capture=${capture//${_nbsp}/ }
+
     # Crashed-Markers: NUR echte LLM/Network-Errors die den Turn abbrechen.
     # `Error: Exit code [^0]` war vorher hier — entfernt, weil das ein
     # normaler Bash-Tool-Fehler ist (mc deliverable 422, mkdir, etc). Claude

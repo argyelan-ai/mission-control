@@ -108,6 +108,10 @@ LABEL mc.cli.name="claude" mc.cli.version="${CLAUDE_VERSION}"
 # kollidieren. OAuth wird via env-var (CLAUDE_CODE_OAUTH_TOKEN) durchgereicht,
 # nicht via File.
 ENV CLAUDE_CONFIG_DIR=/home/agent/.claude/
+# claude-cli 2.1.x UI is indistinguishable from openclaude by pane heuristic
+# (ui-detect.sh) — the image declares its runtime so paste_and_submit routes
+# the bracketed-paste end-marker correctly (live pilot finding 2026-07-20).
+ENV PANE_UI_OVERRIDE=claude
 RUN mkdir -p /home/agent/.claude
 
 # SSH: known_hosts pre-populaten für die üblichen Git-Hoster + accept-new
