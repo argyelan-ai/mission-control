@@ -2498,18 +2498,41 @@ async def _message_threads_for_agent(agent: Agent, session: AsyncSession) -> lis
             Task.status.in_(_MESSAGE_ACTIVE_STATUSES),  # type: ignore[union-attr]
         )
     )
-    thread_ids = [t.thread_id for t in active_res.all() if t.thread_id is not None]
-    if not thread_ids:
+    tasks_by_thread = {
+        t.thread_id: t for t in active_res.all() if t.thread_id is not None
+    }
+    if not tasks_by_thread:
         return []
     threads_res = await session.exec(
-        select(Thread).where(Thread.id.in_(thread_ids))  # type: ignore[union-attr]
+        select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
     )
-    return list(threads_res.all())
+    # (thread, task) pairs — _collect_new_messages braucht den Task-Status
+    # fuer die Erst-Cursor-Initialisierung (fast-forward bei done/failed).
+    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
 
 
-async def _get_or_create_thread_cursor(session: AsyncSession, agent_id: uuid.UUID, thread_id: uuid.UUID):
-    """Fetch the (agent, thread) cursor, creating a zeroed one on first sight."""
-    from app.models.thread import AgentThreadCursor
+async def _get_or_create_thread_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    *,
+    fast_forward: bool = False,
+):
+    """Fetch the (agent, thread) cursor, creating one on first sight.
+
+    fast_forward=True initializes a NEWLY created cursor at the thread's
+    current max seq instead of 0 (live pilot finding 2026-07-20, Befund C):
+    on comm_v2 activation the agent's first poll created zeroed cursors for
+    EVERY backfilled thread in scope — 21 historic briefings were pasted
+    into the fresh session. Threads of finished tasks (done/failed) carry
+    no deliverable history; only messages arriving AFTER first sight are
+    relevant. Active-task threads keep the zeroed start — the seq-1
+    briefing redelivery is the at-least-once backup for a failed dispatch
+    paste. Existing cursors are never touched.
+    """
+    from sqlalchemy import func
+
+    from app.models.thread import AgentThreadCursor, Message
 
     res = await session.exec(
         select(AgentThreadCursor).where(
@@ -2519,7 +2542,20 @@ async def _get_or_create_thread_cursor(session: AsyncSession, agent_id: uuid.UUI
     )
     cursor = res.first()
     if cursor is None:
-        cursor = AgentThreadCursor(agent_id=agent_id, thread_id=thread_id)
+        start_seq = 0
+        if fast_forward:
+            max_res = await session.exec(
+                select(func.coalesce(func.max(Message.seq), 0)).where(
+                    Message.thread_id == thread_id
+                )
+            )
+            start_seq = max_res.one()
+        cursor = AgentThreadCursor(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            last_delivered_seq=start_seq,
+            last_acked_seq=start_seq,
+        )
         session.add(cursor)
     return cursor
 
@@ -2555,8 +2591,17 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
 
     out: list[dict] = []
     changed = False
-    for thread in await _message_threads_for_agent(agent, session):
-        cursor = await _get_or_create_thread_cursor(session, agent.id, thread.id)
+    for thread, thread_task in await _message_threads_for_agent(agent, session):
+        cursor = await _get_or_create_thread_cursor(
+            session, agent.id, thread.id,
+            fast_forward=thread_task.status in ("done", "failed"),
+        )
+        if cursor in session.new:
+            # Frisch angelegte Cursor muessen persistiert werden, auch wenn
+            # dieser Poll nichts liefert — sonst rollt die Session den
+            # fast-forward zurueck und der naechste Poll fast-forwardet
+            # ERNEUT ueber inzwischen eingetroffene Messages hinweg.
+            changed = True
         tid = str(thread.id)
         if tid in acked:
             # Cap the ack at what was actually delivered — an agent can never
