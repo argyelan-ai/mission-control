@@ -45,7 +45,7 @@ import sys, json
 try:
     d = json.load(sys.stdin)
     for k, v in d.items():
-        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT"):
+        if k in ("MC_AGENT_TOKEN", "OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_MODEL", "GH_TOKEN", "AGENT_RECYCLER_ENABLED", "OMP_TURN_IDLE_TIMEOUT", "OMP_CONTEXT_WINDOW", "OMP_MAX_TOKENS"):
             print(f"{k}={v}")
 except Exception:
     sys.exit(1)
@@ -71,6 +71,13 @@ except Exception:
         # reads OMP_TURN_IDLE_TIMEOUT with a 300s default when unset.
         _NEW_IDLE_TIMEOUT=$(echo "$_EXPORTS" | grep '^OMP_TURN_IDLE_TIMEOUT=' | cut -d= -f2-)
         [ -n "$_NEW_IDLE_TIMEOUT" ] && export OMP_TURN_IDLE_TIMEOUT="$_NEW_IDLE_TIMEOUT"
+        # Context window + max output for omp's models.yml — backend decides
+        # both in build_runtime_env from the runtime row's max_context_len so a
+        # recipe switch to a smaller model can't leak a stale (Qwen-era) window.
+        _NEW_CTX_WINDOW=$(echo "$_EXPORTS" | grep '^OMP_CONTEXT_WINDOW=' | cut -d= -f2-)
+        [ -n "$_NEW_CTX_WINDOW" ] && export OMP_CONTEXT_WINDOW="$_NEW_CTX_WINDOW"
+        _NEW_MAX_TOKENS=$(echo "$_EXPORTS" | grep '^OMP_MAX_TOKENS=' | cut -d= -f2-)
+        [ -n "$_NEW_MAX_TOKENS" ] && export OMP_MAX_TOKENS="$_NEW_MAX_TOKENS"
         if [ -n "$_NEW_GH_TOKEN" ]; then
             export GH_TOKEN="$_NEW_GH_TOKEN"
             GIT_CRED_FILE="${HOME}/.git-credentials"
@@ -154,8 +161,8 @@ ${_AUTH_LINE}
         # as plain assistant text instead of a collapsible thinking block.
         # Harmless for non-reasoning models (the field simply never arrives).
         reasoning: true
-        contextWindow: 262144
-        maxTokens: 65536
+        contextWindow: ${OMP_CONTEXT_WINDOW:-262144}
+        maxTokens: ${OMP_MAX_TOKENS:-32768}
 YAML
 export OMP_PROFILE
 export OMP_MODEL_SELECTOR="mc-openai/${_MODEL}"
