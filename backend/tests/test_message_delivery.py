@@ -281,3 +281,61 @@ async def test_waiting_task_thread_still_delivers(client: AsyncClient, async_ses
         "Message an einen waiting-Task muss zugestellt werden "
         "(_MESSAGE_ACTIVE_STATUSES braucht 'waiting')"
     )
+
+
+@pytest.mark.asyncio
+async def test_finished_task_thread_fast_forwards_new_cursor(client: AsyncClient, async_session):
+    """Befund C (live pilot 2026-07-20): on comm_v2 activation the first poll
+    created zeroed cursors for every backfilled thread — 21 historic
+    briefings flooded the fresh session. A NEW cursor for a done/failed
+    task's thread starts at max(seq): history is skipped, only messages
+    posted after first sight get delivered."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    for i in range(3):
+        await post_message(
+            async_session,
+            thread_id=thread.id,
+            sender_type="user",
+            message_type="message",
+            body=f"historisch {i}",
+        )
+    task.status = "done"
+    async_session.add(task)
+    await async_session.commit()
+
+    resp = await _poll(client, token)
+    assert resp.status_code == 200
+    assert resp.json()["new_messages"] == [], (
+        "Historie eines done-Threads darf beim Erst-Cursor nicht zugestellt werden"
+    )
+
+    # Eine NACH dem Erst-Cursor gepostete Message kommt weiterhin an.
+    late = await post_message(
+        async_session,
+        thread_id=thread.id,
+        sender_type="user",
+        message_type="message",
+        body="nachzuegler",
+    )
+    resp2 = await _poll(client, token)
+    delivered = [m["id"] for m in resp2.json()["new_messages"]]
+    assert delivered == [str(late.id)]
+
+
+@pytest.mark.asyncio
+async def test_active_task_thread_keeps_zeroed_cursor(client: AsyncClient, async_session):
+    """Counterpart: the ACTIVE task's thread must keep the zeroed start —
+    the seq-1 briefing redelivery is the at-least-once backup for a failed
+    dispatch paste."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    msg = await post_message(
+        async_session,
+        thread_id=thread.id,
+        sender_type="user",
+        message_type="message",
+        body="briefing-backup",
+    )
+
+    resp = await _poll(client, token)
+    delivered = [m["id"] for m in resp.json()["new_messages"]]
+    assert delivered == [str(msg.id)], "aktiver Thread muss ab seq 1 liefern"
