@@ -398,3 +398,81 @@ async def test_build_runtime_env_anthropic_untouched_by_omp_timeout(async_sessio
     env = await build_runtime_env(rt, async_session)
 
     assert "OMP_TURN_IDLE_TIMEOUT" not in env
+
+
+# ── omp context window from runtime row (entrypoint no longer hardcodes it) ──
+#
+# The omp-bridge entrypoint used to hardcode contextWindow: 262144 / maxTokens:
+# 65536 in models.yml. After a recipe switch to a smaller model that stale
+# window leaked through: omp sized turns to 262k and requested the full window
+# as output, exceeding the served model's real cap (HTTP 400) and breaking
+# multi-turn. build_runtime_env now sources the window from the runtime row.
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_context_window_from_runtime(async_session):
+    """max_context_len on the runtime -> OMP_CONTEXT_WINDOW + a half-window,
+    32k-capped OMP_MAX_TOKENS so omp's models.yml matches the served model."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="minimax-reap-omp",
+        display_name="MiniMax REAP",
+        runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="MiniMax-M2.7-REAP-Spark",
+        max_context_len=65536,
+        enabled=True,
+    )
+    agent = Agent(name="ReapAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert env["OMP_CONTEXT_WINDOW"] == "65536"
+    # half the window (32768) is at the 32k cap -> 32768
+    assert env["OMP_MAX_TOKENS"] == "32768"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_max_tokens_capped_for_large_window(async_session):
+    """A large window (Qwen 262k) still caps output at 32k, not half (131k),
+    so a single turn can't eat the whole context."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="qwen-large-ctx",
+        display_name="Qwen 262k",
+        runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="qwen3.6-35b",
+        max_context_len=262144,
+        enabled=True,
+    )
+    agent = Agent(name="QwenAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert env["OMP_CONTEXT_WINDOW"] == "262144"
+    assert env["OMP_MAX_TOKENS"] == "32768"
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_omp_no_context_len_omits_keys(async_session):
+    """max_context_len/preferred both unset -> keys omitted so the entrypoint's
+    :-262144 / :-32768 defaults apply (backward compatible)."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="omp-no-ctx",
+        display_name="No ctx",
+        runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1",
+        model_identifier="some-model",
+        enabled=True,
+    )
+    agent = Agent(name="NoCtxAgent", agent_runtime="cli-bridge", harness="omp")
+
+    env = await build_runtime_env(rt, async_session, agent=agent)
+
+    assert "OMP_CONTEXT_WINDOW" not in env
+    assert "OMP_MAX_TOKENS" not in env

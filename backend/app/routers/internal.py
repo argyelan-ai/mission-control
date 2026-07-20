@@ -109,6 +109,19 @@ async def build_runtime_env(
         )
         if _is_slow_local_runtime:
             tokens["OMP_TURN_IDLE_TIMEOUT"] = "600"
+
+        # omp's models.yml needs the served model's REAL context window. The
+        # entrypoint used to hardcode 262144 (a Qwen-era value); after a recipe
+        # switch to a smaller model that stale window leaked through, so omp
+        # sized turns to a 262k window and asked for the full window as output —
+        # which exceeds the smaller model's real cap (HTTP 400) and derails
+        # multi-turn. Source the window from the runtime row so it always
+        # matches the served model; reserve at least half for prompt/history and
+        # cap output at 32k so a single turn can't consume the whole window.
+        _ctx_window = runtime.max_context_len or runtime.preferred_context_len
+        if _ctx_window:
+            tokens["OMP_CONTEXT_WINDOW"] = str(_ctx_window)
+            tokens["OMP_MAX_TOKENS"] = str(min(_ctx_window // 2, 32768))
         return tokens
     if harness == "claude":
         # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
