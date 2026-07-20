@@ -51,15 +51,33 @@ detect_turn_state() {
     fi
 
     # Working-Markers — nur letzte 20 Zeilen (nicht volle History).
-    # ✻ Churned = Claude hat aufgehoert (Timeout/Stagnation), kein aktiver Turn.
+    # NUR Live-Signale zaehlen (live pilot finding 2026-07-20): claude-cli
+    # laesst die ABGESCHLOSSENE Turn-Summary ("✻ Cogitated for 21s") und
+    # Transcript-Zeilen im Pane stehen — Vergangenheitsverben wie
+    # Cogitated/Crunched/Spelunking als Working-Marker klassifizierten jede
+    # idle Pane dauerhaft als working und das comm_v2-Message-Gate oeffnete
+    # nie. Live heisst: "esc to interrupt" in der Statuszeile oder ein
+    # aktiver Spinner mit Ellipsis ("✻ Verbing… (12s"). ✻ Churned bleibt
+    # ausgenommen (Timeout/Stagnation, kein aktiver Turn).
     local recent
     recent=$(echo "$capture" | tail -20)
-    if echo "$recent" | grep -qE 'Cogitated|Crunched|Spelunking|esc to interrupt|● Bash\(|● Read\(|● Write\(|● Edit\('; then
+    if echo "$recent" | grep -qE 'esc to interrupt|● Bash\(|● Read\(|● Write\(|● Edit\('; then
         echo "working"
         return
     fi
-    if echo "$recent" | grep -qE '✻' && ! echo "$recent" | grep -qE '✻ Churned'; then
+    if echo "$recent" | grep -qE '✻.*…' && ! echo "$recent" | grep -qE '✻ Churned'; then
         echo "working"
+        return
+    fi
+
+    # claude-cli 2.1.x idle: die Inputbox traegt oft Ghost-Text
+    # (Prompt-Suggestions / pending Wakeup-Anzeige) — `^❯ *$` matcht dann
+    # nie. Wenn die Statuszeile OHNE "esc to interrupt" sichtbar ist, ist
+    # der Turn beendet: idle. (Bewusst NACH den Working-Checks — waehrend
+    # eines Turns zeigt die Statuszeile "… · esc to interrupt · …" und
+    # greift oben schon als working.)
+    if echo "$capture" | tail -10 | grep -qE '⏵⏵ bypass permissions|bypass permissions on'; then
+        echo "idle"
         return
     fi
 
