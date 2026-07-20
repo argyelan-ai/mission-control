@@ -66,6 +66,8 @@ RUN mkdir -p /home/agent/.ssh \
     && chmod 600 /home/agent/.ssh/config /home/agent/.ssh/known_hosts
 
 # OpenAI-Routing zu Ollama Cloud (Standard: glm-5.1:cloud)
+# Runtime declaration for ui-detect.sh (see mc-claude-agent Dockerfile note).
+ENV PANE_UI_OVERRIDE=openclaude
 ENV CLAUDE_CODE_USE_OPENAI=1
 ENV OPENAI_BASE_URL=https://ollama.com/v1
 ENV OPENAI_MODEL=glm-5.1:cloud
