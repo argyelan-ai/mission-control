@@ -320,6 +320,66 @@ describe("NewChallengeDialog — record_duration_s (Bench #18 video length)", ()
       );
     });
   });
+
+  it("clears the field to empty and still submits the 20s default (not a raw empty value)", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    await userEvent.clear(durationInput);
+    expect(durationInput.value).toBe("");
+
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Duration Test 3");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(z\. B\./i), "Qwen");
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ record_duration_s: 20 })
+      );
+    });
+  });
+
+  it("blurring the empty field re-normalizes the displayed value to 20", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    await userEvent.clear(durationInput);
+    await userEvent.tab(); // blur
+
+    expect(durationInput.value).toBe("20");
+  });
+
+  it("clamps an out-of-range typed value (e.g. 200) down to the 60s max on blur", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    await userEvent.clear(durationInput);
+    await userEvent.type(durationInput, "200");
+    await userEvent.tab(); // blur
+
+    expect(durationInput.value).toBe("60");
+  });
+
+  it("typing a multi-digit value below 10 is not corrupted by keystroke-level clamping", async () => {
+    // Regression guard: an earlier implementation clamped on every
+    // keystroke, so typing "10" digit-by-digit produced "50" (the
+    // intermediate "1" got clamped to the 5 minimum, then the next "0"
+    // was appended onto THAT). The raw-string + blur-normalize approach
+    // must not reintroduce this.
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    await userEvent.clear(durationInput);
+    await userEvent.type(durationInput, "10");
+
+    expect(durationInput.value).toBe("10");
+  });
 });
 
 describe("NewChallengeDialog — label autofill", () => {
