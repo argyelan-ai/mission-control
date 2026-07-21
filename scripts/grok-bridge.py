@@ -107,6 +107,18 @@ NUDGE_IDLE_TIMEOUT = float(os.environ.get("GROK_NUDGE_IDLE_TIMEOUT", "300"))
 NUDGE_MAX = int(os.environ.get("GROK_NUDGE_MAX", "2"))
 WATCHDOG_INTERVAL = float(os.environ.get("GROK_WATCHDOG_INTERVAL", "30"))
 
+# Interaction Model 2.0 (comm_v2 pilot, W2 bridge parity): Thread-message queue
+# + turn-gate, mirroring docker/shared/poll.sh's queue_or_deliver/msg_gate_open/
+# flush_msg_queue/_record_ack/build_acked_seq_param. Only exercised when the
+# backend actually returns a `new_messages` field on /me/poll (agent.comm_v2=true)
+# — the old `new_comments` path below is untouched and byte-identical otherwise.
+# grok has no native turn-state signal (unlike omp's OMP_TURN_SIGNAL_FILE), so
+# the gate is a pane-quiet heuristic: the tmux pane must be unchanged for
+# MSG_QUIET_SECONDS AND no dispatch/reset must be in flight.
+MSG_QUIET_SECONDS = float(os.environ.get("GROK_MSG_QUIET_SECONDS", "10"))
+MSG_QUEUE_DIR = CONFIG_DIR / "msg-queue"
+MSG_ACK_DIR = CONFIG_DIR / "msg-acked"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("grok-bridge")
 
@@ -121,6 +133,25 @@ _active_task: Optional[dict] = None
 _last_pane: str = ""
 _last_progress_ts: float = 0.0
 _nudges_sent: int = 0
+
+# Message-gate pane-quiet tracking (separate clock from the no-progress
+# watchdog above — the gate must open even when there is no active task, e.g.
+# a follow-up message arriving while the agent sits idle at the prompt).
+_msg_gate_lock = threading.Lock()
+_msg_gate_last_pane: str = ""
+_msg_gate_last_change_ts: float = 0.0
+# True while dispatch_task()/reset_tui_session() is actively driving the TUI —
+# the message gate must stay closed so a queued message is never pasted mid-turn.
+_dispatch_in_flight: bool = False
+
+# /clear-on-done bugfix: reset_tui_session() fires once per task that finishes
+# WITHOUT a follow-up task (idle/cancelled/stopped) so context never grows
+# unbounded after done. Idempotency guard keyed by the finished task id, kept
+# both in-memory and on disk (bridge-restart-safe, same pattern as
+# LAST_TASK_FILE) so a repeated idle poll for the SAME finished task never
+# re-fires /new.
+_last_reset_task_id: Optional[str] = None
+LAST_RESET_TASK_ID_FILE = LOG_DIR / "last-reset-task-id"
 
 
 # ── env-file parsing (kept byte-identical to the backend escaping) ──────────────
@@ -297,6 +328,236 @@ def paste_and_submit(text: str) -> None:
     _tmux(["send-keys", "-t", SESSION, "Enter"])
 
 
+# ── comm_v2 message queue (crash-safe) + turn-gate + flush ──────────────────────
+#
+# Mirrors docker/shared/poll.sh's Interaction-Model-2.0 section (build_acked_seq_
+# param / queue_or_deliver / msg_gate_open / flush_msg_queue / _record_ack /
+# deliver_messages) so the grok host bridge gets the same crash-safe, at-least-
+# once delivery contract the Docker fleet already has. Backend is unchanged: it
+# only returns `new_messages` + accepts `acked_seq` when agent.comm_v2=true.
+
+
+def build_acked_seq_param() -> str:
+    """Serialize MSG_ACK_DIR (thread_id -> highest actually-pasted seq) as a
+    URL-encoded JSON object for the `acked_seq` poll query param. Empty string
+    when nothing has been acked yet (poll.sh: no param appended)."""
+    if not MSG_ACK_DIR.exists():
+        return ""
+    acked: dict[str, int] = {}
+    for f in MSG_ACK_DIR.iterdir():
+        if not f.is_file():
+            continue
+        try:
+            seq = int(f.read_text(encoding="utf-8").strip())
+        except (ValueError, OSError):
+            continue
+        acked[f.name] = seq
+    if not acked:
+        return ""
+    import urllib.parse
+    return urllib.parse.quote(json.dumps(acked))
+
+
+def _record_ack(thread_id: str, seq: int) -> None:
+    """Persist the high-water mark seq actually pasted for `thread_id` — never
+    acked at queue time, only after a verified paste (at-least-once)."""
+    MSG_ACK_DIR.mkdir(parents=True, exist_ok=True)
+    f = MSG_ACK_DIR / thread_id
+    cur = 0
+    try:
+        cur = int(f.read_text(encoding="utf-8").strip() or 0)
+    except (FileNotFoundError, ValueError, OSError):
+        cur = 0
+    if seq > cur:
+        f.write_text(str(seq), encoding="utf-8")
+
+
+def _queue_file_name(seq: int, thread_id: str) -> str:
+    return f"{seq:08d}__{thread_id}.msg"
+
+
+def _parse_queue_file_name(name: str) -> tuple[int, str]:
+    seq_str, _, rest = name.partition("__")
+    tid = rest[:-4] if rest.endswith(".msg") else rest
+    return int(seq_str), tid
+
+
+def build_message_footer(thread_id: str, seq: int, sender: str, message_type: str) -> str:
+    """The footer anchor line every queued message ends with — flush_msg_queue
+    searches the post-paste pane tail for this exact prefix to verify delivery
+    before acking. Same shape as poll.sh's queue_or_deliver footer."""
+    return f"[thread {thread_id} · seq {seq} · von {sender} · typ {message_type}]"
+
+
+def build_message_file_body(m: dict) -> str:
+    """Paste-ready text for one queued message, matching poll.sh's format."""
+    tid = str(m.get("thread_id") or "")
+    seq = int(m.get("seq") or 0)
+    body = str(m.get("body") or "")
+    footer = build_message_footer(tid, seq, str(m.get("sender") or "?"), str(m.get("message_type") or "?"))
+    return "\n".join(["# Neue Nachricht (Interaction 2.0)", "", body, "", footer])
+
+
+def queue_new_messages(messages: list) -> int:
+    """Persist each new_messages entry as its own seq-named file in
+    MSG_QUEUE_DIR BEFORE any paste is attempted (crash-safe). Idempotent:
+    redelivery of the same (seq, thread_id) overwrites the identical file."""
+    if not messages:
+        return 0
+    MSG_QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    n = 0
+    for m in messages:
+        try:
+            seq = int(m["seq"])
+            tid = str(m["thread_id"])
+        except (KeyError, TypeError, ValueError):
+            log.warning("queue_new_messages: malformed message entry skipped: %r", m)
+            continue
+        path = MSG_QUEUE_DIR / _queue_file_name(seq, tid)
+        path.write_text(build_message_file_body(m), encoding="utf-8")
+        n += 1
+    return n
+
+
+def msg_queue_files() -> list[Path]:
+    """Queued message files in seq order (zero-padded filenames sort correctly)."""
+    if not MSG_QUEUE_DIR.exists():
+        return []
+    return sorted(MSG_QUEUE_DIR.glob("*.msg"))
+
+
+def _msg_gate_pane_quiet(now: float, pane: str) -> bool:
+    """Advance the pane-quiet clock; True once the pane has been unchanged for
+    >= MSG_QUIET_SECONDS. Pure w.r.t. tmux (caller supplies now/pane) — same
+    shape as _watchdog_tick so it is unit-testable without a real TUI."""
+    global _msg_gate_last_pane, _msg_gate_last_change_ts
+    with _msg_gate_lock:
+        if pane != _msg_gate_last_pane:
+            _msg_gate_last_pane = pane
+            _msg_gate_last_change_ts = now
+            return False
+        return (now - _msg_gate_last_change_ts) >= MSG_QUIET_SECONDS
+
+
+def msg_gate_open() -> bool:
+    """Turn-gate for message delivery: pane quiet for MSG_QUIET_SECONDS AND no
+    dispatch/reset currently driving the TUI. Closed (False) whenever the
+    session isn't even running — nothing to paste into."""
+    if _dispatch_in_flight:
+        return False
+    if not is_session_running():
+        return False
+    return _msg_gate_pane_quiet(time.monotonic(), capture_pane())
+
+
+def flush_msg_queue() -> None:
+    """Paste all queued messages in seq order. Each paste is verified by
+    searching the post-paste pane tail for its footer anchor — only a verified
+    paste acks (High-Water in MSG_ACK_DIR) and deletes the queue file. The
+    first verify-fail (or gate closing mid-flush) stops the flush; the rest
+    stays queued, unacked — at-least-once, the backend redelivers seq >
+    last_acked_seq on the next poll."""
+    global _dispatch_in_flight
+    for path in msg_queue_files():
+        if not msg_gate_open():
+            log.info("flush_msg_queue: Gate zu waehrend Flush — Rest bleibt gequeued, kein Ack.")
+            return
+        try:
+            seq, tid = _parse_queue_file_name(path.name)
+        except (ValueError, IndexError):
+            log.warning("flush_msg_queue: kann Dateiname nicht parsen, ueberspringe: %s", path.name)
+            continue
+        body = path.read_text(encoding="utf-8")
+        _dispatch_in_flight = True
+        try:
+            paste_and_submit(body)
+            time.sleep(0.5)  # let the TUI render the submitted text into scrollback
+            pane = capture_pane()
+        finally:
+            _dispatch_in_flight = False
+        anchor = f"[thread {tid} · seq {seq}"
+        if anchor in pane:
+            _record_ack(tid, seq)
+            path.unlink(missing_ok=True)
+            log.info("flush_msg_queue: Message seq %s (thread %s) zugestellt, ack bis seq %s", seq, tid, seq)
+        else:
+            log.warning(
+                "flush_msg_queue: Verify fuer seq %s (thread %s) FEHLGESCHLAGEN — Flush gestoppt, "
+                "Rest bleibt gequeued, kein Ack.", seq, tid,
+            )
+            return
+
+
+def deliver_messages(payload: dict) -> None:
+    """Entry point from the poll loop (comm_v2 path only — payload must carry
+    `new_messages`, which the backend only sets for comm_v2 agents). Persists
+    new messages to the queue, then flushes only if the turn-gate is open."""
+    messages = payload.get("new_messages")
+    if messages is None:
+        return
+    n = queue_new_messages(messages)
+    if n:
+        log.info("deliver_messages: %d message(s) queued", n)
+    pending = msg_queue_files()
+    if not pending:
+        return
+    if msg_gate_open():
+        flush_msg_queue()
+    else:
+        log.info(
+            "deliver_messages: Gate zu (Pane nicht ruhig / Dispatch in flight) — "
+            "%d Message(s) bleiben gequeued, kein Ack.", len(pending),
+        )
+
+
+# ── /clear-on-done (task finished without a follow-up) ──────────────────────────
+
+
+def load_last_reset_task_id() -> Optional[str]:
+    try:
+        value = LAST_RESET_TASK_ID_FILE.read_text(encoding="utf-8").strip()
+        return value or None
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        log.warning("load_last_reset_task_id: %s — treating as no prior reset", e)
+        return None
+
+
+def save_last_reset_task_id(task_id: str) -> None:
+    try:
+        LAST_RESET_TASK_ID_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LAST_RESET_TASK_ID_FILE.write_text(f"{task_id}\n", encoding="utf-8")
+    except OSError as e:
+        log.warning("save_last_reset_task_id: %s", e)
+
+
+def maybe_reset_on_done(finished_task_id: Optional[str]) -> None:
+    """BUGFIX: without this, a task finishing with no follow-up dispatch left
+    the grok TUI's context growing forever — only a genuine task SWITCH
+    (should_reset_session, in dispatch_task) ever fired /new. Fires /new once
+    per finished task id (idempotency guard, memory + disk so a bridge restart
+    can't cause a redundant re-reset for the same finished task). Harmless if
+    dispatch_task's switch-reset ALSO fires later for the next task — resetting
+    an already-fresh session is a no-op for the agent."""
+    global _last_reset_task_id
+    if not finished_task_id:
+        return
+    if _last_reset_task_id is None:
+        _last_reset_task_id = load_last_reset_task_id()
+    if _last_reset_task_id == finished_task_id:
+        return
+    if not is_session_running():
+        return
+    log.info(
+        "dispatch_poll_loop: task %s finished with no follow-up — resetting grok TUI session",
+        finished_task_id[:8],
+    )
+    reset_tui_session()
+    _last_reset_task_id = finished_task_id
+    save_last_reset_task_id(finished_task_id)
+
+
 def load_last_task_id() -> Optional[str]:
     """Read the persisted last-dispatched task id (None if never dispatched)."""
     try:
@@ -339,13 +600,18 @@ def reset_tui_session() -> None:
     ptys). Afterwards poll for the prompt glyph so the subsequent task paste
     lands in the FRESH session, not mid-reset.
     """
+    global _dispatch_in_flight
     log.info("task switch — resetting grok TUI session (%s)", RESET_COMMAND)
-    _tmux(["send-keys", "-t", SESSION, "-l", RESET_COMMAND])
-    time.sleep(0.4)
-    _tmux(["send-keys", "-t", SESSION, "-H", "0d"])
-    time.sleep(1.0)
-    if not wait_for_agent_healthy(timeout=15):
-        log.warning("reset_tui_session: no ready glyph after reset — pasting anyway (fail-open)")
+    _dispatch_in_flight = True
+    try:
+        _tmux(["send-keys", "-t", SESSION, "-l", RESET_COMMAND])
+        time.sleep(0.4)
+        _tmux(["send-keys", "-t", SESSION, "-H", "0d"])
+        time.sleep(1.0)
+        if not wait_for_agent_healthy(timeout=15):
+            log.warning("reset_tui_session: no ready glyph after reset — pasting anyway (fail-open)")
+    finally:
+        _dispatch_in_flight = False
 
 
 def deliver_task_context(task: dict) -> None:
@@ -511,11 +777,16 @@ def dispatch_task(task: dict, env: dict) -> bool:
             return False
     # Fresh context per NEW task (dispatch.py:8-18); same-task re-dispatches
     # (revision / request_changes / restart redelivery) keep the context.
+    global _dispatch_in_flight
     tid = str(task.get("id") or "")
-    if should_reset_session(tid, load_last_task_id()):
-        reset_tui_session()
-    deliver_task_context(task)
-    paste_and_submit(build_dispatch_prompt(task))
+    _dispatch_in_flight = True
+    try:
+        if should_reset_session(tid, load_last_task_id()):
+            reset_tui_session()
+        deliver_task_context(task)
+        paste_and_submit(build_dispatch_prompt(task))
+    finally:
+        _dispatch_in_flight = False
     save_last_task_id(tid)
     _mark_active(task)
     log.info(
@@ -566,7 +837,14 @@ def dispatch_poll_loop() -> None:
 
         while True:
             try:
-                req = urllib.request.Request(url, headers=headers)
+                # comm_v2: attach the acked_seq high-water marks so the backend's
+                # two-stage cursor knows what was actually pasted (poll.sh
+                # build_acked_seq_param). Empty when nothing acked yet — byte-
+                # identical request for a non-comm_v2 agent (backend also just
+                # ignores an unknown/empty param either way).
+                enc = build_acked_seq_param()
+                poll_url = f"{url}?acked_seq={enc}" if enc else url
+                req = urllib.request.Request(poll_url, headers=headers)
                 with urllib.request.urlopen(req, timeout=10) as resp:
                     body = resp.read().decode("utf-8")
                 payload = json.loads(body) if body.strip() else None
@@ -576,11 +854,15 @@ def dispatch_poll_loop() -> None:
                     if state == "new_task":
                         task = payload.get("task")
                     elif state in ("idle", "cancelled", "stopped"):
+                        finished_tid = _last_dispatched_task_id
                         if _last_dispatched_task_id is not None:
                             log.info("dispatch_poll_loop: agent %s, clearing dispatch cache", state)
                             _last_dispatched_task_id = None
                             _last_dispatched_attempt_id = None
                         _clear_active()
+                        # BUGFIX /clear-on-done: a task finishing with no follow-up
+                        # must not leave the TUI's context growing forever.
+                        maybe_reset_on_done(finished_tid)
 
                 if task and task.get("id"):
                     tid = str(task["id"])
@@ -597,6 +879,12 @@ def dispatch_poll_loop() -> None:
                 new_comments = (payload or {}).get("new_comments") or []
                 if new_comments:
                     deliver_comments(new_comments)
+
+                # comm_v2 Thread messages (any state) — only present when the
+                # backend has agent.comm_v2=true; absent/None ⇒ no-op, so a
+                # non-pilot agent's poll loop is byte-identical to before.
+                if payload and "new_messages" in payload:
+                    deliver_messages(payload)
             except urllib.error.HTTPError as e:
                 if e.code != 404:
                     log.warning("dispatch_poll_loop: HTTP %s — %s", e.code, e.reason)

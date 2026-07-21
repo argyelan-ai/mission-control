@@ -608,3 +608,285 @@ def test_reset_command_default_is_new(bridge):
     """grok TUI: /new starts a fresh session (verified live 2026-07-12 — instant,
     no worktree picker because the grok workspace is not a git repo)."""
     assert bridge.RESET_COMMAND == "/new"
+
+
+# ── W2 bridge parity: comm_v2 message queue + turn-gate + flush ─────────────────
+#
+# Mirrors docker/shared/poll.sh's Interaction-Model-2.0 section: acked_seq poll
+# param, crash-safe queue-before-paste, a pane-quiet turn-gate (grok has no
+# native turn-state signal), verified flush (footer-anchor search), at-least-
+# once ack semantics, and the /clear-on-done bugfix.
+
+
+@pytest.fixture(autouse=True)
+def _isolate_msg_state(bridge, tmp_path, monkeypatch):
+    """Every comm_v2 test gets its own queue/ack/reset-marker dirs — without
+    this, tests would read/write the real ~/.mc/agents/grok state."""
+    monkeypatch.setattr(bridge, "MSG_QUEUE_DIR", tmp_path / "msg-queue")
+    monkeypatch.setattr(bridge, "MSG_ACK_DIR", tmp_path / "msg-acked")
+    monkeypatch.setattr(bridge, "LAST_RESET_TASK_ID_FILE", tmp_path / "last-reset-task-id")
+    bridge._last_reset_task_id = None
+    bridge._dispatch_in_flight = False
+    bridge._msg_gate_last_pane = ""
+    bridge._msg_gate_last_change_ts = 0.0
+    return bridge
+
+
+def _msg(seq=1, tid="thread-1", body="hi", sender="user", mtype="text"):
+    return {"id": f"m{seq}", "thread_id": tid, "seq": seq, "sender": sender,
+            "message_type": mtype, "body": body, "question_meta": None}
+
+
+def test_build_acked_seq_param_empty_when_no_acks(bridge):
+    assert bridge.build_acked_seq_param() == ""
+
+
+def test_build_acked_seq_param_urlencoded_json(bridge):
+    bridge._record_ack("thread-1", 3)
+    bridge._record_ack("thread-2", 7)
+    enc = bridge.build_acked_seq_param()
+    assert enc != ""
+    import urllib.parse
+    decoded = json.loads(urllib.parse.unquote(enc))
+    assert decoded == {"thread-1": 3, "thread-2": 7}
+
+
+def test_record_ack_is_high_water_mark(bridge):
+    bridge._record_ack("t1", 5)
+    bridge._record_ack("t1", 3)  # lower seq must not regress the mark
+    assert (bridge.MSG_ACK_DIR / "t1").read_text().strip() == "5"
+    bridge._record_ack("t1", 9)
+    assert (bridge.MSG_ACK_DIR / "t1").read_text().strip() == "9"
+
+
+def test_queue_new_messages_writes_seq_named_files_with_footer(bridge):
+    n = bridge.queue_new_messages([_msg(seq=2, tid="th-a"), _msg(seq=10, tid="th-b")])
+    assert n == 2
+    files = sorted(p.name for p in bridge.MSG_QUEUE_DIR.glob("*.msg"))
+    assert files == ["00000002__th-a.msg", "00000010__th-b.msg"]
+    content = (bridge.MSG_QUEUE_DIR / "00000002__th-a.msg").read_text()
+    assert "[thread th-a · seq 2 · von user · typ text]" in content
+    assert "hi" in content
+
+
+def test_queue_new_messages_idempotent_redelivery(bridge):
+    bridge.queue_new_messages([_msg(seq=1, tid="t1", body="first")])
+    bridge.queue_new_messages([_msg(seq=1, tid="t1", body="first")])  # redelivery
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 1
+
+
+def test_queue_new_messages_skips_malformed_entries(bridge):
+    n = bridge.queue_new_messages([{"body": "no seq or thread_id"}, _msg(seq=1)])
+    assert n == 1
+
+
+def test_msg_queue_files_sorted_by_seq(bridge):
+    bridge.queue_new_messages([_msg(seq=10, tid="a"), _msg(seq=2, tid="b"), _msg(seq=1, tid="c")])
+    names = [p.name for p in bridge.msg_queue_files()]
+    assert names == ["00000001__c.msg", "00000002__b.msg", "00000010__a.msg"]
+
+
+def test_msg_gate_closed_when_dispatch_in_flight(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same")
+    bridge._dispatch_in_flight = True
+    assert bridge.msg_gate_open() is False
+
+
+def test_msg_gate_closed_when_session_not_running(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    assert bridge.msg_gate_open() is False
+
+
+def test_msg_gate_pane_quiet_requires_stability_window(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    # First observation of a pane always resets the clock → not quiet yet.
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane="X") is False
+    # Same pane, not enough time elapsed.
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane="X") is False
+    # Same pane, quiet window elapsed → open.
+    assert bridge._msg_gate_pane_quiet(now=111.0, pane="X") is True
+    # Pane changes → clock resets.
+    assert bridge._msg_gate_pane_quiet(now=112.0, pane="Y") is False
+
+
+def test_msg_gate_open_end_to_end(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "❯ ")
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 1)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1000.0)
+    assert bridge.msg_gate_open() is False  # first sight
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1002.0)
+    assert bridge.msg_gate_open() is True  # stable past the window
+
+
+def test_flush_msg_queue_verified_paste_acks_and_removes_file(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="hello")])
+    pasted = []
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: pasted.append(text))
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "...\n[thread th-1 · seq 1 · von user · typ text]\n❯")
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert len(pasted) == 1 and "hello" in pasted[0]
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+    assert bridge._dispatch_in_flight is False  # flag cleared after flush
+
+
+def test_flush_msg_queue_verify_fail_stops_flush_no_ack(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1"), _msg(seq=2, tid="th-1")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Pane never shows the footer anchor — verify fails.
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "nothing useful here")
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert not (bridge.MSG_ACK_DIR / "th-1").exists()
+    # Both files remain queued (at-least-once — nothing acked, nothing deleted).
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 2
+
+
+def test_flush_msg_queue_gate_closing_mid_flush_stops_remaining(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1"), _msg(seq=2, tid="th-1")])
+    gate_calls = {"n": 0}
+
+    def fake_gate():
+        gate_calls["n"] += 1
+        return gate_calls["n"] == 1  # open for the first file only
+
+    monkeypatch.setattr(bridge, "msg_gate_open", fake_gate)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    monkeypatch.setattr(
+        bridge, "capture_pane",
+        lambda: "[thread th-1 · seq 1 · von user · typ text]",
+    )
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    # seq 1 delivered + acked; seq 2 stayed queued because the gate closed.
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    remaining = [p.name for p in bridge.MSG_QUEUE_DIR.glob("*.msg")]
+    assert remaining == ["00000002__th-1.msg"]
+
+
+def test_deliver_messages_noop_when_field_absent(bridge, monkeypatch):
+    """comm_v2=false byte-identical behavior: no `new_messages` key ⇒ no queue dir
+    is even created, no gate check happens."""
+    called = {"gate": False}
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: called.__setitem__("gate", True) or True)
+    bridge.deliver_messages({"state": "idle", "new_comments": []})
+    assert called["gate"] is False
+    assert not bridge.MSG_QUEUE_DIR.exists()
+
+
+def test_deliver_messages_queues_and_flushes_when_gate_open(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    flushed = {"n": 0}
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
+    assert flushed["n"] == 1
+    assert len(bridge.msg_queue_files()) == 1  # flush is mocked, file stays
+
+
+def test_deliver_messages_queues_only_when_gate_closed(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: False)
+    flushed = {"n": 0}
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
+    assert flushed["n"] == 0
+    assert len(bridge.msg_queue_files()) == 1
+
+
+def test_deliver_messages_empty_list_is_noop_for_gate(bridge, monkeypatch):
+    """An empty `new_messages: []` (field present, nothing new) with an
+    already-empty queue must not touch the gate — nothing to flush."""
+    called = {"gate": False}
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: called.__setitem__("gate", True) or True)
+    bridge.deliver_messages({"state": "idle", "new_messages": []})
+    assert called["gate"] is False
+
+
+# ── /clear-on-done bugfix ────────────────────────────────────────────────────────
+
+
+def test_maybe_reset_on_done_fires_once_per_finished_task(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    # Same finished task id again (e.g. repeated idle polls) → no re-fire.
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    # A DIFFERENT finished task → fires again.
+    bridge.maybe_reset_on_done("task-b")
+    assert resets == [1, 1]
+
+
+def test_maybe_reset_on_done_noop_when_no_finished_task(bridge, monkeypatch):
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done(None)
+    assert resets == []
+
+
+def test_maybe_reset_on_done_noop_when_session_not_running(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == []
+
+
+def test_maybe_reset_on_done_idempotency_survives_restart_via_disk(bridge, monkeypatch):
+    """The in-memory marker resets on bridge restart; the disk file must not,
+    so a stale bridge process restart doesn't re-fire /new for an already-
+    reset finished task."""
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    assert bridge.LAST_RESET_TASK_ID_FILE.read_text().strip() == "task-a"
+
+    # Simulate a bridge restart: in-memory marker forgotten, disk persists.
+    bridge._last_reset_task_id = None
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]  # still no re-fire — disk marker caught it
+
+
+def test_dispatch_task_sets_and_clears_dispatch_in_flight(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "deliver_task_context", lambda task: None)
+    seen_in_flight = {}
+
+    def fake_paste(text):
+        seen_in_flight["during_paste"] = bridge._dispatch_in_flight
+
+    monkeypatch.setattr(bridge, "paste_and_submit", fake_paste)
+
+    bridge.dispatch_task({"id": "t1", "title": "x", "prompt": "y"}, {})
+    assert seen_in_flight["during_paste"] is True
+    assert bridge._dispatch_in_flight is False  # cleared after dispatch
+
+
+def test_reset_tui_session_sets_dispatch_in_flight_during_reset(bridge, monkeypatch):
+    calls = _tmux_recorder(monkeypatch, bridge, running=True, pane="❯")
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+    seen = {}
+
+    def fake_wait(*a, **k):
+        seen["during_reset"] = bridge._dispatch_in_flight
+        return True
+
+    monkeypatch.setattr(bridge, "wait_for_agent_healthy", fake_wait)
+    bridge.reset_tui_session()
+    assert seen["during_reset"] is True
+    assert bridge._dispatch_in_flight is False
