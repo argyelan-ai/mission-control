@@ -423,15 +423,30 @@ def _pane_quiet_seconds(now: float, pane: str) -> float:
 
 def msg_gate_open(*, dispatch_in_flight: bool = False) -> bool:
     """Twin of poll.sh:msg_gate_open — pane-quiet heuristic (spec Bridge C):
-    the tmux pane must be unchanged for >= MSG_QUIET_SECONDS AND no task
-    dispatch just happened in this poll iteration.
+    the tmux pane must be unchanged for >= MSG_QUIET_SECONDS, no task dispatch
+    just happened in this poll iteration, AND no task is currently active.
 
     hermes DOES have a capturable tmux pane (unlike a hypothetical headless
     bridge) — that's why we implement the full Pane-Quiet gate + Verify below
     instead of the spec's weaker fallback ("kein Dispatch in flight" only,
     Ack after send-keys returncode with no Verify).
+
+    Review fix (2026-07): pane-quiet alone is NOT a turn boundary. poll.sh's
+    real msg_gate_open checks `detect_turn_state == idle` — a genuine "claude
+    is not working" signal. hermes has no such signal; a long silent tool call
+    or a thinking pause INSIDE an active turn also holds the pane still for
+    >= MSG_QUIET_SECONDS, which would previously have opened the gate and
+    pasted a message mid-turn. We close that gap by additionally requiring
+    "no active task" — using _last_dispatched_task_id (the same state that's
+    only cleared on idle/cancelled/stopped, see dispatch_poll_loop) as the
+    honest proxy for "hermes is between tasks, not mid-turn". This is more
+    conservative than poll.sh (messages only flush between tasks, not at
+    every turn boundary within a task) but hermes has no per-turn signal to
+    do better — flushing mid-turn on a false pane-quiet read would be worse.
     """
     if dispatch_in_flight:
+        return False
+    if _last_dispatched_task_id is not None:
         return False
     if not is_session_running():
         return False
@@ -454,20 +469,53 @@ def _record_ack(tid: str, seq: int) -> None:
         f.write_text(f"{seq}\n", encoding="utf-8")
 
 
+def _anchor_was_submitted(pane: str, anchor: str) -> bool:
+    """True only if `anchor` is visible AND has scrolled OUT of the input
+    line — i.e. it is genuinely part of the submitted transcript, not still
+    sitting un-sent in the edit buffer.
+
+    Review fix (2026-07): grepping the whole pane for the anchor is a
+    false-positive trap. `_send_to_tmux` is send-keys -l (paste text) + a
+    SEPARATE send-keys Enter — exactly the swallowed-end-marker failure mode
+    poll.sh's own paste_and_submit comments call out ("a TUI occasionally
+    swallows the end marker, which would leave a subsequent bare Enter
+    interpreted as a newline INSIDE the paste"). If that happens here, the
+    footer anchor is still visible — just un-submitted, sitting on the
+    pane's trailing input line — and a naive `anchor in pane` check would
+    ack a message that was never actually delivered.
+
+    We don't know hermes' prompt_toolkit glyphs precisely (no live TUI
+    access from this bridge's test/dev environment), so we use the most
+    robust invariant available from a bare pane capture: a submitted paste
+    scrolls into the transcript and something else (an empty/reset input
+    row) renders below it; an un-submitted paste is still the LAST thing
+    visible in the pane. Requiring "anchor present AND not on the trailing
+    non-blank line" holds regardless of the exact prompt rendering.
+    """
+    if anchor not in pane:
+        return False
+    lines = [ln for ln in pane.splitlines() if ln.strip()]
+    if not lines:
+        return False
+    return anchor not in lines[-1]
+
+
 def _verify_msg_delivered(tid: str, seq: int, timeout: float = 2.0) -> bool:
-    """Verify a paste actually landed by looking for its footer anchor
-    (`[thread <tid> · seq <seq> ·`) in the tail of the captured pane.
+    """Verify a paste was actually SUBMITTED (not just visible, possibly
+    stuck un-sent in the input line — see _anchor_was_submitted) by looking
+    for its footer anchor (`[thread <tid> · seq <seq> ·`) having scrolled
+    into the pane's transcript area.
 
     hermes' delivery mechanism (_send_to_tmux) is a blind send-keys -l with no
     built-in ack signal — unlike poll.sh's paste_and_submit --no-fail-open,
     which detects a closed gate mid-paste via its own return code. Capturing
-    the pane after the send and grepping for the anchor is the closest
+    the pane after the send and checking the anchor's position is the closest
     equivalent verify we have for this delivery mechanism.
     """
     anchor = f"[thread {tid} · seq {seq} ·"
     deadline = time.monotonic() + timeout
     while True:
-        if anchor in capture_pane():
+        if _anchor_was_submitted(capture_pane(), anchor):
             return True
         if time.monotonic() >= deadline:
             return False

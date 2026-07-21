@@ -760,6 +760,60 @@ def test_record_ack_writes_high_water_mark(bridge, monkeypatch, tmp_path):
     assert (ack_dir / "tid-1").read_text().strip() == "9"
 
 
+# ────────────────────────────────────────────────────────────────────────
+# Review fix (MAJOR finding 2): verify must not false-positive on a
+# swallowed Enter. `_send_to_tmux` is paste + a SEPARATE Enter send-keys —
+# if the Enter is swallowed the pasted text (footer anchor included) is
+# still visible but stuck, un-submitted, in the trailing input line.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def test_anchor_was_submitted_true_when_anchor_scrolled_into_transcript(bridge):
+    anchor = "[thread tid-1 · seq 1 ·"
+    pane = f"some earlier transcript line\n{anchor} von mark · typ chat]\n\n> "
+    assert bridge._anchor_was_submitted(pane, anchor) is True
+
+
+def test_anchor_was_submitted_false_when_stuck_on_trailing_input_line(bridge):
+    """Swallowed-Enter case: the anchor is the LAST thing in the pane — still
+    sitting in the (un-submitted) input line, not the transcript."""
+    anchor = "[thread tid-1 · seq 1 ·"
+    pane = f"some earlier transcript line\n> hi\n\n{anchor} von mark · typ chat]"
+    assert bridge._anchor_was_submitted(pane, anchor) is False
+
+
+def test_anchor_was_submitted_false_when_anchor_absent(bridge):
+    assert bridge._anchor_was_submitted("nothing relevant here\n> ", "[thread x · seq 1 ·") is False
+
+
+def test_verify_msg_delivered_returns_false_on_swallowed_enter_timeout(bridge, monkeypatch):
+    """The anchor never moves off the trailing line within the timeout window
+    (Enter never actually landed) — verify must give up and return False, not
+    ack a message that's still sitting un-sent in the input buffer."""
+    anchor_line = "[thread tid-1 · seq 1 · von mark · typ chat]"
+    monkeypatch.setattr(bridge, "capture_pane", lambda: f"transcript\n\n{anchor_line}")
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+    ticks = iter([0.0, 0.5, 1.0, 1.5, 2.0, 2.5])
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: next(ticks, 2.5))
+
+    assert bridge._verify_msg_delivered("tid-1", 1, timeout=2.0) is False
+
+
+def test_verify_msg_delivered_returns_true_once_anchor_scrolls_into_transcript(bridge, monkeypatch):
+    """Simulates: first capture right after send (anchor still stuck on the
+    trailing line), a moment later the TUI redraws with the paste submitted
+    and a fresh prompt line below it — verify must pick that up."""
+    anchor_line = "[thread tid-1 · seq 1 · von mark · typ chat]"
+    panes = iter([
+        f"transcript\n\n{anchor_line}",           # stuck — not yet submitted
+        f"transcript\n{anchor_line}\n\n> ",        # submitted — new prompt below
+    ])
+    monkeypatch.setattr(bridge, "capture_pane", lambda: next(panes, f"transcript\n{anchor_line}\n\n> "))
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+
+    assert bridge._verify_msg_delivered("tid-1", 1, timeout=2.0) is True
+
+
 def test_msg_gate_open_false_when_dispatch_in_flight(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "is_session_running", lambda: True)
     assert bridge.msg_gate_open(dispatch_in_flight=True) is False
@@ -788,6 +842,34 @@ def test_msg_gate_open_requires_pane_quiet_for_threshold(bridge, monkeypatch):
     assert bridge.msg_gate_open() is True
 
 
+def test_msg_gate_open_false_when_task_active(bridge, monkeypatch):
+    """Review fix (MAJOR finding 1): pane-quiet alone is not a turn boundary.
+    A long-silent tool call / thinking pause INSIDE an active task's turn
+    also holds the pane still for >= MSG_QUIET_SECONDS — the gate must stay
+    closed the whole time a task is active (hermes has no genuine per-turn
+    signal like poll.sh's detect_turn_state), even if the pane is dead-quiet
+    and no dispatch just happened."""
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 1.0)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same pane, task thinking...")
+    bridge._last_dispatched_task_id = "task-a"  # a task IS currently active
+    # Pane-quiet clock already past the threshold — would open the gate if
+    # the active-task check weren't there (msg_gate_open short-circuits on
+    # the active-task check BEFORE ever touching the pane-quiet clock, so we
+    # prime the clock directly rather than via a first msg_gate_open() call).
+    bridge._msg_pane_state["pane"] = "same pane, task thinking..."
+    bridge._msg_pane_state["last_change_ts"] = 1000.0
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1005.0)
+    assert bridge.msg_gate_open() is False, (
+        "gate must stay closed while a task is active, even with a long-quiet pane"
+    )
+
+    # Once the task ends (idle/cancelled/stopped clears the cache), the same
+    # quiet pane is allowed to open the gate.
+    bridge._last_dispatched_task_id = None
+    assert bridge.msg_gate_open() is True
+
+
 def test_flush_msg_queue_delivers_verifies_and_acks(bridge, monkeypatch, tmp_path):
     queue_dir, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
     bridge.queue_or_deliver({"new_messages": [
@@ -797,8 +879,10 @@ def test_flush_msg_queue_delivers_verifies_and_acks(bridge, monkeypatch, tmp_pat
     monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
     sent: list[str] = []
     monkeypatch.setattr(bridge, "_send_to_tmux", lambda p: sent.append(p))
-    # Verify greps the (mocked) pane for the footer anchor after the send.
-    monkeypatch.setattr(bridge, "capture_pane", lambda: "\n".join(sent))
+    # Verify requires the anchor to have scrolled OFF the trailing line (i.e.
+    # genuinely submitted, not stuck in the input line) — simulate a
+    # successful submit: the pasted text is followed by a fresh empty prompt.
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "\n".join(sent) + "\n\n> ")
 
     bridge.flush_msg_queue()
 
