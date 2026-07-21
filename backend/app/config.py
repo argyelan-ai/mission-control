@@ -328,6 +328,22 @@ class Settings(BaseSettings):
     # gets mounted into the container as :ro via docker-compose.yml.
     token_harvest_paths: list[str] = ["~/.mc/agents"]
 
+    # Token Harvester — Grok source (Bench #18 PR1). Grok Build CLI (host
+    # harness, ADR-066) logs turn-level usage to unified.jsonl (append-only,
+    # same offset-resume mechanics as the JSONL sources above) and writes one
+    # summary.json + prompt_history.jsonl per cwd under sessions_path (model/
+    # cwd/task_id join). Both default relative to the host home like the
+    # paths above — expanduser happens in the harvester.
+    grok_harvest_path: str = "~/.grok/logs/unified.jsonl"
+    grok_sessions_path: str = "~/.grok/sessions"
+
+    # Token Harvester — Hermes source (Bench #18 PR1). Hermes (host harness)
+    # keeps its own sqlite session ledger. NEVER opened live — the harvester
+    # copies state.db (+ -wal/-shm if present) to a temp dir first. Only the
+    # three files are mounted into the backend container (see docker-compose.yml
+    # comment) — the rest of ~/.hermes/ holds secrets (.env, auth.json).
+    hermes_state_db_path: str = "~/.hermes/state.db"
+
 
 settings = Settings()
 

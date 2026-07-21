@@ -12,8 +12,10 @@ Price matching: glob priority, valid_from, no match → None.
 Offset resume: file grows, second run reads only new lines.
 """
 import json
+import os
+import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -1337,3 +1339,774 @@ async def test_backfill_endpoint_requires_admin(client):
     """Non-admin (unauthenticated) requests are rejected."""
     resp = await client.post("/api/v1/admin/usage/backfill-attribution")
     assert resp.status_code in (401, 403)
+
+
+# ── Bench #18 PR1: cwd translation (container → host), Grok source, ────────
+# ── Hermes source ────────────────────────────────────────────────────────
+
+
+class TestTranslateAgentCwd:
+    """_translate_agent_cwd — inverse of dispatch._container_workspace_path.
+    cli-bridge/sparky JSONL transcripts record the CONTAINER cwd
+    (/workspace/...); tasks.workspace_path is the HOST path. Without this
+    rewrite _resolve_task_for_rec's exact-match lookup can never hit."""
+
+    def test_workspace_root_translated(self):
+        from app.services.token_harvester import _translate_agent_cwd, _host_home
+
+        assert _translate_agent_cwd("/workspace", "freecode") == str(
+            _host_home() / ".mc" / "workspaces" / "freecode"
+        )
+
+    def test_workspace_subpath_translated(self):
+        from app.services.token_harvester import _translate_agent_cwd, _host_home
+
+        result = _translate_agent_cwd("/workspace/projects/xyz/.worktrees/task-abc", "rex")
+        assert result == str(
+            _host_home() / ".mc" / "workspaces" / "rex" / "projects/xyz/.worktrees/task-abc"
+        )
+
+    def test_non_workspace_cwd_passthrough(self):
+        """A cwd that doesn't start with /workspace (e.g. already host-side,
+        or a boss-host line) is returned unchanged."""
+        from app.services.token_harvester import _translate_agent_cwd
+
+        assert _translate_agent_cwd("/Users/testuser/some/path", "rex") == \
+            "/Users/testuser/some/path"
+
+    def test_workspacefoo_not_confused_with_workspace(self):
+        """A sibling dir named /workspacefoo must NOT be treated as /workspace
+        (startswith check must anchor on the path boundary)."""
+        from app.services.token_harvester import _translate_agent_cwd
+
+        assert _translate_agent_cwd("/workspacefoo/bar", "rex") == "/workspacefoo/bar"
+
+
+@pytest.mark.asyncio
+class TestCwdTranslationIntegration:
+    """run_harvest end-to-end: a cli-bridge transcript line with a container
+    cwd (/workspace/<slug>) must attribute to the task whose workspace_path
+    is the corresponding host path."""
+
+    async def test_container_cwd_attributes_to_host_task(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest, _host_home, _normalize_workspace_path
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+
+        # Real convention (dispatch._container_workspace_path):
+        # host ~/.mc/workspaces/<slug>/... <-> container /workspace/...
+        host_workspace = str(_host_home() / ".mc" / "workspaces" / "rex" / "some-task-slug")
+
+        line = _make_line(
+            uuid_="cwd-xlate-001",
+            cwd="/workspace/some-task-slug",
+            git_branch="task/some-task-slug",
+        )
+        (rex_dir / "s.jsonl").write_text(line + "\n")
+
+        task_id = uuid.uuid4()
+        task_workspace_map = {
+            _normalize_workspace_path(host_workspace): [{
+                "task_id": task_id,
+                "branch": "task/some-task-slug",
+                "created_at": datetime(2020, 1, 1, tzinfo=timezone.utc),
+                "completed_at": None,
+            }],
+        }
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+            task_workspace_map=task_workspace_map,
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "cwd-xlate-001")
+        )).one()
+        assert event.task_id == task_id
+
+    async def test_untranslated_cwd_would_not_match(self, tmp_path, async_db_session):
+        """Regression guard: without translation, the raw /workspace/... cwd
+        never matches a host-style workspace_path — task_id stays NULL. This
+        documents the bug the fix closes (same fixtures, translation absent
+        because the task_workspace_map key is never hit)."""
+        from app.services.token_harvester import run_harvest, _normalize_workspace_path
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+
+        line = _make_line(uuid_="cwd-xlate-002", cwd="/workspace/other-slug", git_branch=None)
+        (rex_dir / "s.jsonl").write_text(line + "\n")
+
+        # Map keyed by the literal (untranslated) container cwd — a host task
+        # would never have this as its workspace_path in reality.
+        task_workspace_map = {
+            _normalize_workspace_path("/workspace/other-slug"): [{
+                "task_id": uuid.uuid4(),
+                "branch": "task/x",
+                "created_at": datetime(2020, 1, 1, tzinfo=timezone.utc),
+                "completed_at": None,
+            }],
+        }
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+            task_workspace_map=task_workspace_map,
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "cwd-xlate-002")
+        )).one()
+        assert event.task_id is None
+
+
+# ── Grok source (ADR-066 host harness) ──────────────────────────────────────
+
+
+# Real line copied verbatim from ~/.grok/logs/unified.jsonl (2026-07-10,
+# sid 019f4dd6-6505-7510-b05c-b6dfc47a2c2d — a real summary.json for this
+# exact sid is used below too, see _GROK_REAL_SUMMARY).
+_GROK_REAL_LINE = (
+    '{"ts":"2026-07-10T21:02:09.251Z","src":"shell","pid":41213,"lvl":"info",'
+    '"sid":"019f4dd6-6505-7510-b05c-b6dfc47a2c2d","msg":"shell.turn.inference_done",'
+    '"ctx":{"loop_index":1,"model_elapsed_ms":1493,"elapsed_since_turn_start_ms":1494,'
+    '"ttft_ms":767,"itl_p50_ms":0,"attempts":1,"prompt_tokens":18609,'
+    '"cached_prompt_tokens":6016,"completion_tokens":35,"reasoning_tokens":27,'
+    '"tokens_per_sec":48.2}}'
+)
+
+# Real summary.json for the same sid (~/.grok/sessions/<urlenc-cwd>/<sid>/summary.json).
+_GROK_REAL_SUMMARY = {
+    "info": {
+        "id": "019f4dd6-6505-7510-b05c-b6dfc47a2c2d",
+        "cwd": "/private/tmp/claude-502/-Users-Henry-Workspace/c254deb0-476b-4efa-8162-6576f0efbedb/scratchpad",
+    },
+    "session_summary": "",
+    "created_at": "2026-07-10T21:02:04.137856Z",
+    "updated_at": "2026-07-10T21:02:09.366124Z",
+    "num_messages": 4,
+    "num_chat_messages": 8,
+    "current_model_id": "grok-4.5",
+    "next_trace_turn": 1,
+    "chat_format_version": 1,
+    "request_id": "8566b412-eec9-4167-8f2c-2bd751ed97f0",
+    "grok_home": "/Users/Henry/.grok",
+    "last_active_at": "2026-07-10T21:02:09.260043Z",
+    "agent_name": "grok-build-plan",
+    "sandbox_profile": "off",
+    "reasoning_effort": "high",
+}
+
+# Real prompt_history.jsonl line (~/.grok/sessions/<urlenc-cwd>/prompt_history.jsonl,
+# 2026-07-11) — [MC DISPATCH] task_id= regex source.
+_GROK_REAL_PROMPT_HISTORY_LINE = (
+    '{"timestamp":"2026-07-11T13:39:21.584940Z",'
+    '"session_id":"af1f7d2c-25eb-41fd-84b3-47cc4cf4e055",'
+    '"prompt":"[MC DISPATCH] task_id=14513937-c943-4c8f-93c6-b3023a79c04d '
+    'board_id=7bd0be90-c45a-4a15-9037-ebb72f15ba09 '
+    'attempt_id=e2b6dd29-7cbe-4ed4-ba6e-c72e69af5d54\\nTitle: Grok live smoke test"}'
+)
+
+
+class TestParseGrokLine:
+    def test_real_sample_parsed(self):
+        """1:1 real sample — token math + dedup uuid."""
+        from app.services.token_harvester import parse_grok_line
+
+        rec = parse_grok_line(_GROK_REAL_LINE)
+        assert rec is not None
+        assert rec["sid"] == "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
+        assert rec["timestamp"] == "2026-07-10T21:02:09.251Z"
+        # input = prompt_tokens - cached_prompt_tokens = 18609 - 6016
+        assert rec["input_tokens"] == 12593
+        assert rec["cache_read_tokens"] == 6016
+        assert rec["cache_write_tokens"] == 0
+        assert rec["output_tokens"] == 35  # completion_tokens (reasoning included)
+        assert rec["uuid"] == "grok:019f4dd6-6505-7510-b05c-b6dfc47a2c2d:2026-07-10T21:02:09.251Z:1"
+
+    def test_non_inference_done_lines_skipped(self):
+        from app.services.token_harvester import parse_grok_line
+
+        other = json.dumps({"ts": "x", "sid": "s1", "msg": "shell.turn.started", "ctx": {}})
+        assert parse_grok_line(other) is None
+
+    def test_invalid_json_skipped(self):
+        from app.services.token_harvester import parse_grok_line
+
+        assert parse_grok_line("not json{{{") is None
+
+    def test_missing_ctx_skipped(self):
+        from app.services.token_harvester import parse_grok_line
+
+        line = json.dumps({"ts": "x", "sid": "s1", "msg": "shell.turn.inference_done"})
+        assert parse_grok_line(line) is None
+
+    def test_input_tokens_floor_zero(self):
+        """cached_prompt_tokens > prompt_tokens (shouldn't happen, but never
+        go negative)."""
+        from app.services.token_harvester import parse_grok_line
+
+        line = json.dumps({
+            "ts": "2026-01-01T00:00:00.000Z", "sid": "s1",
+            "msg": "shell.turn.inference_done",
+            "ctx": {"loop_index": 1, "prompt_tokens": 10, "cached_prompt_tokens": 50,
+                    "completion_tokens": 5},
+        })
+        rec = parse_grok_line(line)
+        assert rec is not None
+        assert rec["input_tokens"] == 0
+
+
+class TestGrokSessionIndex:
+    def test_real_summary_json_indexed(self, tmp_path):
+        from app.services.token_harvester import _build_grok_session_index
+
+        sess_dir = tmp_path / "sessions" / "%2Fsome%2Fcwd" / "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
+        sess_dir.mkdir(parents=True)
+        (sess_dir / "summary.json").write_text(json.dumps(_GROK_REAL_SUMMARY))
+
+        index = _build_grok_session_index(str(tmp_path / "sessions"))
+        entry = index["019f4dd6-6505-7510-b05c-b6dfc47a2c2d"]
+        assert entry["model"] == "grok-4.5"
+        assert entry["cwd"] == (
+            "/private/tmp/claude-502/-Users-Henry-Workspace/"
+            "c254deb0-476b-4efa-8162-6576f0efbedb/scratchpad"
+        )
+
+    def test_missing_sessions_base_returns_empty(self, tmp_path):
+        from app.services.token_harvester import _build_grok_session_index
+
+        assert _build_grok_session_index(str(tmp_path / "nonexistent")) == {}
+
+
+class TestGrokTaskIndex:
+    def test_real_prompt_history_task_id_extracted(self, tmp_path):
+        from app.services.token_harvester import _build_grok_task_index
+
+        cwd_dir = tmp_path / "sessions" / "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok"
+        cwd_dir.mkdir(parents=True)
+        (cwd_dir / "prompt_history.jsonl").write_text(_GROK_REAL_PROMPT_HISTORY_LINE + "\n")
+
+        index = _build_grok_task_index(str(tmp_path / "sessions"))
+        assert index["af1f7d2c-25eb-41fd-84b3-47cc4cf4e055"] == uuid.UUID(
+            "14513937-c943-4c8f-93c6-b3023a79c04d"
+        )
+
+    def test_no_task_id_prompt_not_indexed(self, tmp_path):
+        from app.services.token_harvester import _build_grok_task_index
+
+        cwd_dir = tmp_path / "sessions" / "%2Fsome%2Fcwd"
+        cwd_dir.mkdir(parents=True)
+        line = json.dumps({"session_id": "s-no-task", "prompt": "just chatting, no dispatch"})
+        (cwd_dir / "prompt_history.jsonl").write_text(line + "\n")
+
+        index = _build_grok_task_index(str(tmp_path / "sessions"))
+        assert "s-no-task" not in index
+
+
+@pytest.mark.asyncio
+class TestGrokHarvestIntegration:
+    """run_harvest end-to-end for the Grok source: unified.jsonl + sessions/
+    (summary.json + prompt_history.jsonl) → ModelUsageEvent."""
+
+    def _write_grok_fixtures(self, tmp_path, *, with_task_id: bool = True):
+        grok_log = tmp_path / "unified.jsonl"
+        grok_log.write_text(_GROK_REAL_LINE + "\n")
+
+        sessions_base = tmp_path / "sessions"
+        cwd_dir_name = "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok"
+        sess_dir = sessions_base / cwd_dir_name / "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
+        sess_dir.mkdir(parents=True)
+        summary = dict(_GROK_REAL_SUMMARY)
+        summary["info"] = dict(summary["info"])
+        summary["info"]["cwd"] = "/Users/Henry/.mc/workspaces/grok"
+        (sess_dir / "summary.json").write_text(json.dumps(summary))
+
+        if with_task_id:
+            history_line = json.dumps({
+                "session_id": "019f4dd6-6505-7510-b05c-b6dfc47a2c2d",
+                "prompt": "[MC DISPATCH] task_id=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa board_id=x",
+            })
+            (sessions_base / cwd_dir_name / "prompt_history.jsonl").write_text(history_line + "\n")
+
+        return grok_log, sessions_base
+
+    async def test_grok_event_inserted_with_task_id_from_prompt_history(
+        self, tmp_path, async_db_session
+    ):
+        from app.services.token_harvester import run_harvest
+
+        grok_log, sessions_base = self._write_grok_fixtures(tmp_path)
+        grok_agent_id = uuid.uuid4()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={"grok": grok_agent_id},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+        assert stats["new_events"] == 1
+        assert stats["grok_skipped_no_summary"] == 0
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )).one()
+        assert event.model == "grok-4.5"
+        assert event.provider == "xai"
+        assert event.agent_id == grok_agent_id
+        assert event.input_tokens == 12593
+        assert event.output_tokens == 35
+        assert event.cache_read_tokens == 6016
+        assert event.task_id == uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+
+    async def test_grok_falls_back_to_cwd_workspace_map_without_prompt_history_task_id(
+        self, tmp_path, async_db_session
+    ):
+        from app.services.token_harvester import run_harvest, _normalize_workspace_path
+
+        grok_log, sessions_base = self._write_grok_fixtures(tmp_path, with_task_id=False)
+        fallback_task_id = uuid.uuid4()
+        task_workspace_map = {
+            _normalize_workspace_path("/Users/Henry/.mc/workspaces/grok"): [{
+                "task_id": fallback_task_id,
+                "branch": "task/x",
+                "created_at": datetime(2020, 1, 1, tzinfo=timezone.utc),
+                "completed_at": None,
+            }],
+        }
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            task_workspace_map=task_workspace_map,
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )).one()
+        assert event.task_id == fallback_task_id
+
+    async def test_grok_event_skipped_without_summary_match(self, tmp_path, async_db_session):
+        """No summary.json for the sid → skipped (counted), never guessed."""
+        from app.services.token_harvester import run_harvest
+
+        grok_log = tmp_path / "unified.jsonl"
+        grok_log.write_text(_GROK_REAL_LINE + "\n")
+        sessions_base = tmp_path / "sessions"
+        sessions_base.mkdir()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+        assert stats["new_events"] == 0
+        assert stats["grok_skipped_no_summary"] == 1
+
+        result = await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )
+        assert result.all() == []
+
+    async def test_grok_price_applied(self, tmp_path, async_db_session):
+        """A grok-4.5* price row (as already exists in prod) computes cost_usd."""
+        from app.services.token_harvester import run_harvest
+
+        price = ModelPrice(
+            id=uuid.uuid4(), model_pattern="grok-4.5*",
+            input_per_mtok=2.0, output_per_mtok=6.0,
+            cache_read_per_mtok=0.2, cache_write_per_mtok=0.0,
+            priority=80, valid_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        async_db_session.add(price)
+        await async_db_session.commit()
+
+        grok_log, sessions_base = self._write_grok_fixtures(tmp_path)
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )).one()
+        assert event.cost_usd is not None
+        assert event.cost_usd > 0
+
+    async def test_grok_idempotent_second_run_zero_new(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest
+
+        grok_log, sessions_base = self._write_grok_fixtures(tmp_path)
+        kwargs = dict(
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+
+        stats1 = await run_harvest(async_db_session, **kwargs)
+        assert stats1["new_events"] == 1
+
+        stats2 = await run_harvest(async_db_session, **kwargs)
+        assert stats2["new_events"] == 0
+
+        result = await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )
+        assert len(result.all()) == 1
+
+
+# ── Hermes source ────────────────────────────────────────────────────────
+
+
+def _make_hermes_db(path: Path) -> None:
+    """Builds a sqlite DB with the REAL Hermes schema (introspected from
+    ~/.hermes/state.db via `sqlite3 -readonly ... .schema`, columns kept
+    verbatim — only the FTS triggers/tables are dropped since they're
+    irrelevant to the harvester and not worth reproducing in a fixture)."""
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            source TEXT NOT NULL,
+            user_id TEXT,
+            model TEXT,
+            model_config TEXT,
+            system_prompt TEXT,
+            parent_session_id TEXT,
+            started_at REAL NOT NULL,
+            ended_at REAL,
+            end_reason TEXT,
+            message_count INTEGER DEFAULT 0,
+            tool_call_count INTEGER DEFAULT 0,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            cache_write_tokens INTEGER DEFAULT 0,
+            reasoning_tokens INTEGER DEFAULT 0,
+            billing_provider TEXT,
+            billing_base_url TEXT,
+            billing_mode TEXT,
+            estimated_cost_usd REAL,
+            actual_cost_usd REAL,
+            cost_status TEXT,
+            cost_source TEXT,
+            pricing_version TEXT,
+            title TEXT,
+            api_call_count INTEGER DEFAULT 0, "handoff_state" TEXT, "handoff_platform" TEXT,
+            "handoff_error" TEXT, "cwd" TEXT, "rewind_count" INTEGER NOT NULL DEFAULT 0,
+            "session_key" TEXT, "chat_id" TEXT, "chat_type" TEXT, "thread_id" TEXT,
+            "display_name" TEXT, "origin_json" TEXT, "expiry_finalized" INTEGER DEFAULT 0,
+            "git_branch" TEXT, "git_repo_root" TEXT, "compression_failure_cooldown_until" REAL,
+            "compression_failure_error" TEXT, "archived" INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (parent_session_id) REFERENCES sessions(id)
+        );
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL REFERENCES sessions(id),
+            role TEXT NOT NULL,
+            content TEXT,
+            tool_call_id TEXT,
+            tool_calls TEXT,
+            tool_name TEXT,
+            timestamp REAL NOT NULL,
+            token_count INTEGER,
+            finish_reason TEXT,
+            reasoning TEXT,
+            reasoning_content TEXT,
+            reasoning_details TEXT,
+            codex_reasoning_items TEXT,
+            codex_message_items TEXT
+            , "platform_message_id" TEXT, "observed" INTEGER DEFAULT 0,
+            "active" INTEGER NOT NULL DEFAULT 1, "compacted" INTEGER NOT NULL DEFAULT 0
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.asyncio
+class TestHermesHarvestIntegration:
+    async def test_finished_session_inserted_with_task_id_from_first_user_message(
+        self, tmp_path, async_db_session
+    ):
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, "
+            "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, cwd, git_branch) "
+            "VALUES (?, 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 1000, 200, 50, 0, '/some/cwd', 'task/x')",
+            ("hermes-sess-001", now - 3600, now),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, 'user', ?, ?)",
+            ("hermes-sess-001",
+             "[MC DISPATCH] task_id=dcc67a52-e8f2-4354-b928-f844074c99ba board_id=x\nTitle: Test",
+             now - 3600),
+        )
+        conn.commit()
+        conn.close()
+
+        hermes_agent_id = uuid.uuid4()
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={"hermes": hermes_agent_id},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        assert stats["new_events"] == 1
+        assert stats["hermes_sessions_scanned"] == 1
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:hermes-sess-001")
+        )).one()
+        assert event.harness == "hermes"
+        assert event.agent_id == hermes_agent_id
+        assert event.input_tokens == 1000
+        assert event.output_tokens == 200
+        assert event.cache_read_tokens == 50
+        assert event.task_id == uuid.UUID("dcc67a52-e8f2-4354-b928-f844074c99ba")
+
+    async def test_unfinished_session_skipped(self, tmp_path, async_db_session):
+        """ended_at IS NULL → not scanned at all."""
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at) "
+            "VALUES ('unfinished-1', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, NULL)",
+            (now,),
+        )
+        conn.commit()
+        conn.close()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        assert stats["new_events"] == 0
+        assert stats["hermes_sessions_scanned"] == 0
+
+    async def test_fallback_to_cwd_git_branch_workspace_map(self, tmp_path, async_db_session):
+        """No task_id in the first user message → fall back to cwd/git_branch
+        workspace map resolution (same _resolve_task_id cascade as JSONL sources)."""
+        from app.services.token_harvester import run_harvest, _normalize_workspace_path
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, cwd, git_branch) "
+            "VALUES ('sess-fallback', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, '/x/workspace', 'task/fallback-slug')",
+            (now - 100, now),
+        )
+        conn.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES "
+            "('sess-fallback', 'user', 'no dispatch marker here', ?)",
+            (now - 100,),
+        )
+        conn.commit()
+        conn.close()
+
+        fallback_task_id = uuid.uuid4()
+        task_workspace_map = {
+            _normalize_workspace_path("/x/workspace"): [{
+                "task_id": fallback_task_id,
+                "branch": "task/fallback-slug",
+                "created_at": datetime(2020, 1, 1, tzinfo=timezone.utc),
+                "completed_at": None,
+            }],
+        }
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            task_workspace_map=task_workspace_map,
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:sess-fallback")
+        )).one()
+        assert event.task_id == fallback_task_id
+
+    async def test_old_session_before_cutoff_excluded(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        old_ts = (datetime.now(timezone.utc) - timedelta(days=60)).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at) "
+            "VALUES ('too-old', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?)",
+            (old_ts, old_ts + 60),
+        )
+        conn.commit()
+        conn.close()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        assert stats["new_events"] == 0
+        assert stats["hermes_sessions_scanned"] == 0
+
+    async def test_idempotent_second_run_zero_new(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('idem-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 500)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        kwargs = dict(
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        stats1 = await run_harvest(async_db_session, **kwargs)
+        assert stats1["new_events"] == 1
+
+        stats2 = await run_harvest(async_db_session, **kwargs)
+        assert stats2["new_events"] == 0
+
+        result = await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "hermes")
+        )
+        assert len(result.all()) == 1
+
+    async def test_wal_missing_fallback_db_only(self, tmp_path, async_db_session):
+        """No -wal/-shm sidecar files exist (or aren't readable) → harvester
+        still works off the plain .db copy (docker-compose individual-file
+        mounts can leave a stale/missing -wal after a WAL-checkpoint recreate)."""
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        # Deliberately do NOT create state.db-wal / state.db-shm.
+        assert not (tmp_path / "state.db-wal").exists()
+
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('wal-less-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 42)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        assert stats["new_events"] == 1
+
+    async def test_hermes_price_applied(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest
+
+        price = ModelPrice(
+            id=uuid.uuid4(), model_pattern="Qwen/Qwen3.6-27B-FP8",
+            input_per_mtok=0.0, output_per_mtok=0.0,
+            cache_read_per_mtok=0.0, cache_write_per_mtok=0.0,
+            priority=90, valid_from=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        )
+        async_db_session.add(price)
+        await async_db_session.commit()
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens, output_tokens) "
+            "VALUES ('priced-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 1000, 1000)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:priced-sess")
+        )).one()
+        assert event.cost_usd == 0.0  # matched (local model, $0), not None (unmatched)
