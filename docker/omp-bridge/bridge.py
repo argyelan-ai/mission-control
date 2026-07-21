@@ -1639,7 +1639,20 @@ class _MsgDelivery:
     message is injected the model opens a turn to process it, so the next message
     must wait for THAT turn's terminal ``turn_end`` in the hook signal. We track
     the signal-file byte offset at injection time and hold the gate closed until
-    a terminal ``turn_end`` is appended beyond it."""
+    a terminal ``turn_end`` is appended beyond it.
+
+    While a message is being processed we HOLD the recycler's task lock
+    (omp-recycler.sh gates every Window-0 relaunch / bridge-respawn on it, see
+    ``task_active``): otherwise the recycler would read the idle gap as a dead
+    TUI and respawn Window 0 mid-turn, killing the model's response despite the
+    ack. The lock is released the moment the processing turn ends.
+
+    The awaiting offset is a byte position into the signal file, so it is
+    invalidated whenever a task dispatch truncates the signal to 0 (each
+    ``run_native_turn`` calls ``truncate_signal``). Two guards keep that from
+    dead-locking the gate: serve_loop calls :meth:`reset_awaiting` when it
+    commits to a dispatch, AND :meth:`gate_open` self-heals if it ever sees the
+    signal file shorter than the stored offset (it was truncated underneath us)."""
 
     def __init__(
         self, controller, *, signal_file: str, queue_dir: str, ack_dir: str,
@@ -1654,6 +1667,9 @@ class _MsgDelivery:
         # Byte offset of the signal file's EOF at the moment of the last
         # injection; None means "no message-processing turn is in flight".
         self._awaiting_offset: Optional[int] = None
+        # True only while WE hold the recycler task lock for a message turn, so
+        # we never remove a lock a real task dispatch is holding.
+        self._holds_lock: bool = False
 
     def _signal_size(self) -> int:
         try:
@@ -1681,19 +1697,62 @@ class _MsgDelivery:
                 return True
         return False
 
+    def _acquire_msg_lock(self) -> None:
+        """Hold the recycler task lock for the duration of a message turn."""
+        try:
+            with open(self.task_lock_path, "w", encoding="utf-8") as fh:
+                fh.write(str(int(time.time())))
+            self._holds_lock = True
+        except OSError as e:  # noqa: BLE001 — best-effort recycler gate
+            sys.stderr.write(f"[serve] msg task-lock set failed: {e}\n")
+
+    def _release_msg_lock(self) -> None:
+        """Release only a lock WE took (never one held by a task dispatch)."""
+        if not self._holds_lock:
+            return
+        try:
+            if os.path.exists(self.task_lock_path):
+                os.remove(self.task_lock_path)
+        except OSError:
+            pass
+        self._holds_lock = False
+
+    def reset_awaiting(self) -> None:
+        """Drop the message-in-flight window (serve_loop calls this when it
+        commits to a task dispatch — the dispatch truncates the signal and takes
+        over Window 0, so the awaited offset is moot and its lock must not linger
+        into the dispatch's own lock management)."""
+        self._awaiting_offset = None
+        self._release_msg_lock()
+
     def gate_open(self) -> bool:
-        # (1) no dispatch / task-run in flight (the recycler's task lock).
+        # (1) resolve a message-in-flight window FIRST so a completed (or
+        #     truncated-away) processing turn releases our lock before the
+        #     dispatch-in-flight check below can trip on it.
+        if self._awaiting_offset is not None:
+            if self._signal_size() < self._awaiting_offset:
+                # Signal truncated underneath us (a task dispatch) — the awaited
+                # turn is gone; stop waiting instead of dead-locking forever.
+                self.reset_awaiting()
+            elif self._terminal_turn_end_after(self._awaiting_offset):
+                self._awaiting_offset = None
+                self._release_msg_lock()
+            else:
+                return False  # model still processing our last message
+        # (2) no dispatch / task-run in flight (the recycler's task lock).
         if os.path.exists(self.task_lock_path):
             return False
-        # (2) a previously injected message's processing turn must have ended.
-        if self._awaiting_offset is not None:
-            if self._terminal_turn_end_after(self._awaiting_offset):
-                self._awaiting_offset = None
-            else:
-                return False
         return True
 
     def flush(self) -> None:
+        """Never raises — a queue/tmux hiccup on a real message must not crash
+        the poll loop (which would take the whole agent down)."""
+        try:
+            self._flush()
+        except Exception as e:  # noqa: BLE001 — swallow, log, keep polling
+            self.log(f"deliver_messages: flush error (swallowed): {type(e).__name__}: {e}")
+
+    def _flush(self) -> None:
         pending = msg_queue_files(self.queue_dir)
         if not pending:
             return
@@ -1713,10 +1772,13 @@ class _MsgDelivery:
             self._safe_remove(path)  # malformed name — never let it wedge the queue
             return
         offset_before = self._signal_size()
+        # Take the recycler lock BEFORE injecting so the model's processing turn
+        # is protected from a mid-turn respawn even if inject is slow.
+        self._acquire_msg_lock()
         if self.ctrl.inject_file(path):
             _record_ack(self.ack_dir, tid, seq)
             self._safe_remove(path)
-            # Hold the gate closed until the model's processing turn ends.
+            # Hold the gate closed (and the lock held) until the turn ends.
             self._awaiting_offset = offset_before
             remaining = len(pending) - 1
             self.log(
@@ -1724,6 +1786,8 @@ class _MsgDelivery:
                 f"ack bis seq {seq}; {remaining} bleiben gequeued."
             )
         else:
+            # Nothing was submitted → no processing turn → release the lock now.
+            self._release_msg_lock()
             self.log(
                 f"deliver_messages: Zustellung fuer seq {seq} (thread {tid}) "
                 f"FEHLGESCHLAGEN (Verify) — Flush gestoppt, bleibt gequeued, kein Ack."
@@ -1830,8 +1894,15 @@ def serve_loop(
 
         # comm_v2: persist any thread-messages crash-safe BEFORE dispatch (so a
         # crash mid-task can't lose them). No-op — and no dir created — when the
-        # payload has no `new_messages` (comm_v2=false → byte-identical).
-        queue_messages(payload, msg_queue_dir)
+        # payload has no `new_messages` (comm_v2=false → byte-identical). Wrapped
+        # so an os.makedirs/write hiccup on a real message can never crash the
+        # poll loop (which would take the whole agent down).
+        try:
+            queue_messages(payload, msg_queue_dir)
+        except Exception as e:  # noqa: BLE001 — log + keep polling
+            sys.stderr.write(
+                f"[serve] queue_messages error (swallowed): {type(e).__name__}: {e}\n"
+            )
 
         if task and task.get("id"):
             attempt_id = task.get("dispatch_attempt_id") or task["id"]
@@ -1843,6 +1914,10 @@ def serve_loop(
                 _sleep(poll_interval)
                 continue
             last_attempt_id = attempt_id
+            # A task is taking over Window 0 (it will truncate the turn signal):
+            # drop any pending message-in-flight window so its now-stale byte
+            # offset can't dead-lock the gate afterwards.
+            delivery.reset_awaiting()
 
             # Hydrate the task context the model's own `mc` calls read. Must
             # happen BEFORE the run (and its ack) so the very first `mc ack`

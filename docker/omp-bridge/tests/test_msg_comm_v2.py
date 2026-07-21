@@ -219,6 +219,125 @@ def test_flush_empty_queue_is_noop():
     print("PASS test_flush_empty_queue_is_noop")
 
 
+# ── Finding 1: signal truncate must not dead-lock the awaiting gate ──────────
+
+def test_awaiting_offset_self_heals_when_signal_truncated():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([True, True])
+        deliv = _delivery(d, tui)
+        # A non-empty signal so the first injection's offset is > 0.
+        with open(deliv.signal_file, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"kind": "turn_end", "stopReason": "stop"}) + "\n")
+        bridge.queue_messages(
+            {"new_messages": [_msg(1, "th"), _msg(2, "th")]}, deliv.queue_dir
+        )
+        deliv.flush()  # delivers seq 1, arms awaiting at offset > 0
+        assert len(tui.injected) == 1
+        assert deliv._awaiting_offset is not None and deliv._awaiting_offset > 0
+
+        # A task dispatch truncates the turn signal to 0 (run_native_turn does
+        # this). The stored offset now points past EOF — must NOT dead-lock.
+        open(deliv.signal_file, "w", encoding="utf-8").close()
+        deliv.flush()  # gate self-heals (size < offset) → seq 2 delivers
+        assert len(tui.injected) == 2, "truncate must not wedge the queue"
+        assert bridge.msg_queue_files(deliv.queue_dir) == []
+    print("PASS test_awaiting_offset_self_heals_when_signal_truncated")
+
+
+def test_reset_awaiting_clears_window_and_releases_lock():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([True])
+        deliv = _delivery(d, tui)
+        bridge.queue_messages({"new_messages": [_msg(1, "th")]}, deliv.queue_dir)
+        deliv.flush()  # arms awaiting + takes the recycler lock
+        assert deliv._awaiting_offset is not None
+        assert os.path.exists(deliv.task_lock_path)
+
+        deliv.reset_awaiting()  # serve_loop calls this when a task dispatches
+        assert deliv._awaiting_offset is None
+        assert not os.path.exists(deliv.task_lock_path), "lock must be released"
+    print("PASS test_reset_awaiting_clears_window_and_releases_lock")
+
+
+# ── Finding 2: recycler task lock held across the message-processing turn ────
+
+def test_lock_held_during_processing_and_released_on_turn_end():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([True])
+        deliv = _delivery(d, tui)
+        bridge.queue_messages({"new_messages": [_msg(1, "th")]}, deliv.queue_dir)
+        deliv.flush()
+        # Lock held while the model processes the injected message.
+        assert os.path.exists(deliv.task_lock_path)
+        assert deliv._holds_lock is True
+
+        # Model finishes its turn → gate_open detects the terminal turn_end and
+        # releases the recycler lock.
+        with open(deliv.signal_file, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"kind": "turn_end", "stopReason": "stop"}) + "\n")
+        assert deliv.gate_open() is True
+        assert not os.path.exists(deliv.task_lock_path)
+        assert deliv._holds_lock is False
+    print("PASS test_lock_held_during_processing_and_released_on_turn_end")
+
+
+def test_no_lock_left_when_inject_fails():
+    with tempfile.TemporaryDirectory() as d:
+        tui = _StubTui([False])
+        deliv = _delivery(d, tui)
+        bridge.queue_messages({"new_messages": [_msg(1, "th")]}, deliv.queue_dir)
+        deliv.flush()
+        # Nothing submitted → no processing turn → lock must not linger.
+        assert not os.path.exists(deliv.task_lock_path)
+        assert deliv._holds_lock is False
+    print("PASS test_no_lock_left_when_inject_fails")
+
+
+# ── Finding 3: a message-path exception must never crash the poll loop ───────
+
+class _RaisingTui:
+    def inject_file(self, path, **kw):
+        raise RuntimeError("tmux exploded")
+
+
+def test_flush_swallows_exceptions():
+    with tempfile.TemporaryDirectory() as d:
+        deliv = _delivery(d, _RaisingTui())
+        bridge.queue_messages({"new_messages": [_msg(1, "th")]}, deliv.queue_dir)
+        deliv.flush()  # must not raise
+        # Message stays queued (never acked), loop can retry later.
+        assert bridge.msg_queue_files(deliv.queue_dir) == ["00000001__th.msg"]
+        assert not os.path.exists(os.path.join(deliv.ack_dir, "th"))
+    print("PASS test_flush_swallows_exceptions")
+
+
+def test_serve_loop_survives_message_queue_error():
+    task = {"id": "task-1", "board_id": "b1", "dispatch_attempt_id": "att-1",
+            "prompt": "Do the thing."}
+    with tempfile.TemporaryDirectory() as d:
+        # queue dir whose parent is a FILE → os.makedirs raises NotADirectoryError.
+        blocker = os.path.join(d, "afile")
+        open(blocker, "w").close()
+        bad_queue = os.path.join(blocker, "queue")
+        lc = _RecordingLifecycle()
+        it = iter([{"state": "new_task", "task": task, "new_messages": [_msg(1, "th")]}])
+        # Must not raise despite the unwritable queue dir on a real message.
+        bridge.serve_loop(
+            poll_interval=0, max_iterations=1,
+            _poll_fn=lambda: next(it, {"state": "idle"}),
+            _lifecycle_factory=lambda t: lc,
+            _run_factory=lambda t, cwd: _finish_outcome,
+            _sleep=lambda _s: None,
+            _context_env_path=os.path.join(d, "ctx.env"),
+            _msg_queue_dir=bad_queue, _msg_ack_dir=os.path.join(d, "ack"),
+            _task_lock_path=os.path.join(d, "task.lock"),
+        )
+        # The task still resolved normally — the queue error was swallowed.
+        assert ("ack", "task-1") in lc.calls
+        assert any(c[0] == "finish" for c in lc.calls)
+    print("PASS test_serve_loop_survives_message_queue_error")
+
+
 # ── serve_loop comm_v2=false parity ─────────────────────────────────────────
 
 def _finish_outcome():
