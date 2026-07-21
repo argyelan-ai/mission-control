@@ -8,11 +8,11 @@
 h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
   letter-spacing:-0.02em; }
 .table { margin-top:70px; width:1450px; font-family:'JetBrains Mono',monospace; }
-.row { display:grid; grid-template-columns: 430px 180px 180px 180px 320px;
+.row { display:grid; grid-template-columns: minmax(430px, max-content) 180px 180px 180px 320px;
   padding:26px 28px; border-bottom:1px solid var(--line); align-items:baseline; }
 .row.head { color:var(--muted); font-size:18px; letter-spacing:.08em;
   text-transform:uppercase; border-bottom:1px solid #232838; }
-.row .name { font-size:27px; color:var(--text); }
+.row .name { font-size:27px; color:var(--text); overflow-wrap:break-word; }
 .row .val { font-size:25px; color:var(--text2); }
 .cta { position:absolute; right:120px; bottom:96px; text-align:right; }
 .cta .follow { font-family:'Clash Display',sans-serif; font-weight:500; font-size:40px;
