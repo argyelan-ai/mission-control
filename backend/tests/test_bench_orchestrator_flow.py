@@ -893,6 +893,88 @@ async def test_compose_challenge_parses_sidecar_response(session, monkeypatch):
     assert result == "/shared-deliverables/bench-x/grid.mp4"
 
 
+@pytest.mark.asyncio
+async def test_compose_challenge_sends_duration_s_from_challenge(session, monkeypatch):
+    """duration_s in the /compose payload scales the sidecar's branded-
+    compose ffmpeg timeout (media.compose_branded_timeout_s) — must reflect
+    the challenge's operator-chosen record_duration_s, not the legacy
+    default, when set."""
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/grid.mp4", "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side", record_duration_s=45)
+    ch.id = uuid.uuid4()
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    await orchestrator.compose_challenge(session, ch, entries)
+    assert captured["duration_s"] == 45
+
+
+@pytest.mark.asyncio
+async def test_compose_challenge_duration_s_falls_back_to_default(session, monkeypatch):
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"output_path": "/sd/grid.mp4", "bytes": 1, "inputs": 2}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="side_by_side", record_duration_s=None)
+    ch.id = uuid.uuid4()
+    entries = [
+        BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                   status="rendered", video_path="/sd/a.mp4"),
+        BenchEntry(challenge_id=ch.id, model_label="B", source_kind="spark",
+                   status="rendered", video_path="/sd/b.mp4"),
+    ]
+    await orchestrator.compose_challenge(session, ch, entries)
+    assert captured["duration_s"] == orchestrator.RECORD_DURATION_S
+
+
 # ── record_entry duration_s threading (Bench #18) ───────────────────────────
 
 

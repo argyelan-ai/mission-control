@@ -51,6 +51,7 @@ from media import (
     build_transcode_poster_cmd,
     build_transcode_video_cmd,
     clamp_poster_at_s,
+    compose_branded_timeout_s,
     fill_bench_template,
     load_deterministic_shim,
     render_outro_rows_html,
@@ -924,15 +925,21 @@ def _require_shared_path(raw: str, what: str) -> Path:
     return resolved
 
 
-def _run_ffmpeg(cmd: list[str]) -> None:
-    """Runs ffmpeg with timeout + captured stderr. 502 on failure — never hangs."""
+def _run_ffmpeg(cmd: list[str], timeout: float = FFMPEG_TIMEOUT_S) -> None:
+    """Runs ffmpeg with timeout + captured stderr. 502 on failure — never hangs.
+
+    timeout defaults to FFMPEG_TIMEOUT_S (all non-branded-compose callers:
+    plain grid compose, transcode) — the branded /compose path passes a
+    duration-scaled timeout instead (see compose_branded_timeout_s), since a
+    60s Bench #18 recording overlays a much longer clip than the flat 300s
+    budget assumes."""
     logger.info("ffmpeg: %s", " ".join(cmd))
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=FFMPEG_TIMEOUT_S
+            cmd, capture_output=True, text=True, timeout=timeout
         )
     except subprocess.TimeoutExpired:
-        raise HTTPException(502, f"ffmpeg timeout nach {FFMPEG_TIMEOUT_S}s")
+        raise HTTPException(502, f"ffmpeg timeout nach {timeout}s")
     except FileNotFoundError:
         raise HTTPException(502, "ffmpeg binary nicht gefunden — Image ohne ffmpeg gebaut?")
     if proc.returncode != 0:
@@ -1283,8 +1290,13 @@ async def compose(req: ComposeRequest):
             cmd = build_branded_compose_cmd(
                 req.inputs, str(frame_png), str(outro_png), str(out_path)
             )
-            await asyncio.to_thread(_run_ffmpeg, cmd)
-        logger.info("compose (branded): %d inputs -> %s", len(req.inputs), out_path)
+            # Bench #18: req.duration_s (source recording length, default 10
+            # for pre-#18 callers) scales the timeout — a 60s recording
+            # overlaid into the branded frame takes much longer to encode
+            # than the flat FFMPEG_TIMEOUT_S=300 budget assumes.
+            timeout = compose_branded_timeout_s(req.duration_s, floor_s=FFMPEG_TIMEOUT_S)
+            await asyncio.to_thread(_run_ffmpeg, cmd, timeout)
+        logger.info("compose (branded): %d inputs -> %s (timeout %ds)", len(req.inputs), out_path, timeout)
     else:
         cmd = build_compose_cmd(
             req.inputs, req.labels, str(out_path), speed_labels=req.speed_labels
