@@ -60,6 +60,7 @@ function makeChallenge(over: Partial<BenchChallenge> = {}): BenchChallenge {
     status: "review",
     series_label: null,
     series_no: null,
+    record_duration_s: null,
     composed_video_path: null,
     content_pipeline_id: null,
     error: null,
