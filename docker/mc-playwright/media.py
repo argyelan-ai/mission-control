@@ -52,7 +52,9 @@ class RecordRequest(BaseModel):
     screenshot.png to output_dir."""
     html_path: Optional[str] = None
     url: Optional[str] = None
-    duration_s: int = Field(default=10, ge=1, le=60)
+    # 5..60 (Bench #18 configurable video length) — the timeout budget
+    # (RECORD_CAPTURE_TIMEOUT_S) already covers the max at 30fps.
+    duration_s: int = Field(default=10, ge=5, le=60)
     viewport: str = "desktop"
     output_dir: str
 

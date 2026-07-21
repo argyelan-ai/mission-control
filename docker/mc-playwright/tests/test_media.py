@@ -80,7 +80,14 @@ def test_record_request_duration_bounds():
     with pytest.raises(ValidationError):
         RecordRequest(url="http://a", duration_s=0, output_dir="/shared-deliverables/x")
     with pytest.raises(ValidationError):
+        RecordRequest(url="http://a", duration_s=4, output_dir="/shared-deliverables/x")
+    with pytest.raises(ValidationError):
         RecordRequest(url="http://a", duration_s=61, output_dir="/shared-deliverables/x")
+    # Bench #18: configurable video length, 5..60 bound.
+    req = RecordRequest(url="http://a", duration_s=5, output_dir="/shared-deliverables/x")
+    assert req.duration_s == 5
+    req = RecordRequest(url="http://a", duration_s=60, output_dir="/shared-deliverables/x")
+    assert req.duration_s == 60
 
 
 def test_viewports_have_presets():

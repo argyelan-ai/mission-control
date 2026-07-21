@@ -527,15 +527,20 @@ async def on_task_done(session: AsyncSession, task) -> None:
 # ── Render + Compose ─────────────────────────────────────────────────────
 
 
-async def record_entry(entry: BenchEntry) -> dict:
-    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure."""
+async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
+    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure.
+
+    Uses the challenge's operator-chosen record_duration_s (Bench #18) when
+    set, else the legacy RECORD_DURATION_S default — same fallback the
+    NewChallengeDialog documents (None -> 10s)."""
     out_dir = str(challenge_dir(entry.challenge_id) / _safe_label(entry.model_label))
+    duration_s = challenge.record_duration_s or RECORD_DURATION_S
     async with httpx.AsyncClient(timeout=RECORD_TIMEOUT_S) as cli:
         resp = await cli.post(
             f"{PLAYWRIGHT_BASE}/record",
             json={
                 "html_path": entry.artifact_path,
-                "duration_s": RECORD_DURATION_S,
+                "duration_s": duration_s,
                 "viewport": RECORD_VIEWPORT,
                 "output_dir": out_dir,
             },
@@ -745,7 +750,7 @@ async def _render_and_compose(
     rendered: list[BenchEntry] = []
     for entry in generated:
         try:
-            result = await record_entry(entry)
+            result = await record_entry(entry, challenge)
             entry.video_path = result.get("video_path")
             entry.screenshot_path = result.get("screenshot_path")
             entry.status = "rendered"
@@ -1122,7 +1127,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
                 await session.commit()
 
                 try:
-                    result = await record_entry(entry)
+                    result = await record_entry(entry, challenge)
                     entry.video_path = result.get("video_path")
                     entry.screenshot_path = result.get("screenshot_path")
                     entry.status = "rendered"

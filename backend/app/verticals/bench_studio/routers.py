@@ -89,6 +89,10 @@ class BenchChallengeCreate(BaseModel):
     mode: Literal["single", "side_by_side"] = "side_by_side"
     models: list[BenchModelSpec] = Field(min_length=1, max_length=6)
     series_label: str | None = Field(default=None, max_length=80)
+    # Video length in seconds. None -> legacy RECORD_DURATION_S fallback
+    # (orchestrator.py). 5..60 mirrors the mc-playwright /record bound
+    # (RecordRequest.duration_s) plus the timeout budget headroom noted there.
+    record_duration_s: int | None = Field(default=None, ge=5, le=60)
 
 
 class BenchDraftCreate(BaseModel):
@@ -173,6 +177,7 @@ async def create_challenge(
         mode=body.mode,
         series_label=body.series_label,
         series_no=series_no,
+        record_duration_s=body.record_duration_s,
     )
     session.add(challenge)
     await session.flush()

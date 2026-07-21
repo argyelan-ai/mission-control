@@ -34,7 +34,7 @@ async def _seed(session, *, mode="side_by_side", entry_specs=None):
 
 
 def _record_ok(monkeypatch):
-    async def fake_record(entry):
+    async def fake_record(entry, challenge):
         return {
             "video_path": f"/shared-deliverables/bench-x/{entry.model_label}/clip.mp4",
             "screenshot_path": f"/shared-deliverables/bench-x/{entry.model_label}/shot.png",
@@ -105,7 +105,7 @@ async def test_partial_failure_composes_branded_solo_from_survivor(session, monk
         ],
     )
 
-    async def flaky_record(entry):
+    async def flaky_record(entry, challenge):
         if entry.model_label == "B":
             raise RuntimeError("ffmpeg exploded")
         return {"video_path": "/sd/a.mp4", "screenshot_path": "/sd/a.png"}
@@ -891,6 +891,86 @@ async def test_compose_challenge_parses_sidecar_response(session, monkeypatch):
     ]
     result = await orchestrator.compose_challenge(session, ch, entries)
     assert result == "/shared-deliverables/bench-x/grid.mp4"
+
+
+# ── record_entry duration_s threading (Bench #18) ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_record_entry_uses_challenge_record_duration_s(session, monkeypatch):
+    """Operator-chosen record_duration_s (NewChallengeDialog) rides along in
+    the /record payload instead of the legacy RECORD_DURATION_S default."""
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"video_path": "/sd/a.mp4", "screenshot_path": "/sd/a.png"}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            assert url.endswith("/record")
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="single", record_duration_s=45)
+    ch.id = uuid.uuid4()
+    entry = BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                       status="generated", artifact_path="/sd/a/index.html")
+
+    await orchestrator.record_entry(entry, ch)
+    assert captured["duration_s"] == 45
+
+
+@pytest.mark.asyncio
+async def test_record_entry_falls_back_to_default_duration_when_unset(session, monkeypatch):
+    """record_duration_s=None (legacy challenges, no dialog value chosen) ->
+    orchestrator.RECORD_DURATION_S (10s)."""
+    captured: dict = {}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"video_path": "/sd/a.mp4", "screenshot_path": "/sd/a.png"}
+
+    class FakeClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def post(self, url, json):
+            captured.update(json)
+            return FakeResp()
+
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", FakeClient)
+
+    ch = BenchChallenge(title="T", prompt_text="p", mode="single", record_duration_s=None)
+    ch.id = uuid.uuid4()
+    entry = BenchEntry(challenge_id=ch.id, model_label="A", source_kind="spark",
+                       status="generated", artifact_path="/sd/a/index.html")
+
+    await orchestrator.record_entry(entry, ch)
+    assert captured["duration_s"] == orchestrator.RECORD_DURATION_S
 
 
 # ── branding payload (video-branding, 2026-07-12) ───────────────────────────
