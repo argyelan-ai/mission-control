@@ -27,6 +27,7 @@ export function NewChallengeDialog({
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [mode, setMode] = useState<"single" | "side_by_side">("side_by_side");
   const [seriesLabel, setSeriesLabel] = useState("");
+  const [recordDurationS, setRecordDurationS] = useState(20);
   const [models, setModels] = useState<BenchModelSpec[]>([{ ...EMPTY_MODEL }]);
   // Row indices where the label was edited by hand — autofill must not overwrite those.
   const [labelTouched, setLabelTouched] = useState<Set<number>>(new Set());
@@ -64,6 +65,7 @@ export function NewChallengeDialog({
           display_tag: m.display_tag?.trim() || null,
         })),
         series_label: seriesLabel.trim() || null,
+        record_duration_s: recordDurationS,
       }),
     onSuccess: () => {
       notify.success("Challenge gestartet");
@@ -80,6 +82,7 @@ export function NewChallengeDialog({
     setTemplateId(null);
     setMode("side_by_side");
     setSeriesLabel("");
+    setRecordDurationS(20);
     setModels([{ ...EMPTY_MODEL }]);
     setLabelTouched(new Set());
   }
@@ -209,7 +212,7 @@ export function NewChallengeDialog({
           </span>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-end">
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as "single" | "side_by_side")}
@@ -227,6 +230,21 @@ export function NewChallengeDialog({
             className="rounded-lg p-2.5 text-sm outline-none flex-1"
             style={inputStyle}
           />
+          <div className="flex flex-col gap-1">
+            <label htmlFor="bench-record-duration" className="text-xs" style={{ color: C.textMuted }}>
+              Video-Länge (s)
+            </label>
+            <input
+              id="bench-record-duration"
+              type="number"
+              min={5}
+              max={60}
+              value={recordDurationS}
+              onChange={(e) => setRecordDurationS(Number(e.target.value))}
+              className="rounded-lg p-2.5 text-sm outline-none w-24"
+              style={inputStyle}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">

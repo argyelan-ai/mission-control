@@ -86,7 +86,7 @@ describe("NewChallengeDialog — template picker", () => {
     vi.mocked(benchApi.challenges.create).mockResolvedValue({
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: "Animate 100 bouncing balls", mode: "side_by_side",
-      status: "generating", series_label: null, series_no: null,
+      status: "generating", series_label: null, series_no: null, record_duration_s: null,
       composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
@@ -121,7 +121,7 @@ describe("NewChallengeDialog — template picker", () => {
     vi.mocked(benchApi.challenges.create).mockResolvedValue({
       id: "ch-new", title: "Test", prompt_template_id: null,
       prompt_text: "Custom text", mode: "side_by_side",
-      status: "generating", series_label: null, series_no: null,
+      status: "generating", series_label: null, series_no: null, record_duration_s: null,
       composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
@@ -227,7 +227,7 @@ describe("NewChallengeDialog — template picker", () => {
     vi.mocked(benchApi.challenges.create).mockResolvedValue({
       id: "ch-new", title: "Test", prompt_template_id: "tpl-1",
       prompt_text: editedText, mode: "side_by_side",
-      status: "generating", series_label: null, series_no: null,
+      status: "generating", series_label: null, series_no: null, record_duration_s: null,
       composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
@@ -274,6 +274,49 @@ describe("NewChallengeDialog — template picker", () => {
           prompt_template_id: "tpl-1",
           prompt_text: editedText,
         })
+      );
+    });
+  });
+});
+
+describe("NewChallengeDialog — record_duration_s (Bench #18 video length)", () => {
+  it("defaults the video length field to 20s and submits it", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    expect(durationInput.value).toBe("20");
+
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Duration Test");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(z\. B\./i), "Qwen");
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ record_duration_s: 20 })
+      );
+    });
+  });
+
+  it("sends a custom video length value", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const durationInput = screen.getByLabelText(/video-länge/i) as HTMLInputElement;
+    await userEvent.clear(durationInput);
+    await userEvent.type(durationInput, "45");
+
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Duration Test 2");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await userEvent.type(screen.getByPlaceholderText(/Label \(z\. B\./i), "Qwen");
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({ record_duration_s: 45 })
       );
     });
   });
