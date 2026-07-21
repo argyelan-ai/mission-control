@@ -1488,7 +1488,7 @@ _GROK_REAL_LINE = (
 _GROK_REAL_SUMMARY = {
     "info": {
         "id": "019f4dd6-6505-7510-b05c-b6dfc47a2c2d",
-        "cwd": "/private/tmp/claude-502/-Users-Henry-Workspace/c254deb0-476b-4efa-8162-6576f0efbedb/scratchpad",
+        "cwd": "/private/tmp/claude-502/-Users-op-Workspace/c254deb0-476b-4efa-8162-6576f0efbedb/scratchpad",
     },
     "session_summary": "",
     "created_at": "2026-07-10T21:02:04.137856Z",
@@ -1499,7 +1499,7 @@ _GROK_REAL_SUMMARY = {
     "next_trace_turn": 1,
     "chat_format_version": 1,
     "request_id": "8566b412-eec9-4167-8f2c-2bd751ed97f0",
-    "grok_home": "/Users/Henry/.grok",
+    "grok_home": "/Users/op/.grok",
     "last_active_at": "2026-07-10T21:02:09.260043Z",
     "agent_name": "grok-build-plan",
     "sandbox_profile": "off",
@@ -1578,7 +1578,7 @@ class TestGrokSessionIndex:
         entry = index["019f4dd6-6505-7510-b05c-b6dfc47a2c2d"]
         assert entry["model"] == "grok-4.5"
         assert entry["cwd"] == (
-            "/private/tmp/claude-502/-Users-Henry-Workspace/"
+            "/private/tmp/claude-502/-Users-op-Workspace/"
             "c254deb0-476b-4efa-8162-6576f0efbedb/scratchpad"
         )
 
@@ -1592,7 +1592,7 @@ class TestGrokTaskIndex:
     def test_real_prompt_history_task_id_extracted(self, tmp_path):
         from app.services.token_harvester import _build_grok_task_index
 
-        cwd_dir = tmp_path / "sessions" / "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok"
+        cwd_dir = tmp_path / "sessions" / "%2FUsers%2Fop%2F.mc%2Fworkspaces%2Fgrok"
         cwd_dir.mkdir(parents=True)
         (cwd_dir / "prompt_history.jsonl").write_text(_GROK_REAL_PROMPT_HISTORY_LINE + "\n")
 
@@ -1623,12 +1623,12 @@ class TestGrokHarvestIntegration:
         grok_log.write_text(_GROK_REAL_LINE + "\n")
 
         sessions_base = tmp_path / "sessions"
-        cwd_dir_name = "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok"
+        cwd_dir_name = "%2FUsers%2Fop%2F.mc%2Fworkspaces%2Fgrok"
         sess_dir = sessions_base / cwd_dir_name / "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
         sess_dir.mkdir(parents=True)
         summary = dict(_GROK_REAL_SUMMARY)
         summary["info"] = dict(summary["info"])
-        summary["info"]["cwd"] = "/Users/Henry/.mc/workspaces/grok"
+        summary["info"]["cwd"] = "/Users/op/.mc/workspaces/grok"
         (sess_dir / "summary.json").write_text(json.dumps(summary))
 
         if with_task_id:
@@ -1679,7 +1679,7 @@ class TestGrokHarvestIntegration:
         grok_log, sessions_base = self._write_grok_fixtures(tmp_path, with_task_id=False)
         fallback_task_id = uuid.uuid4()
         task_workspace_map = {
-            _normalize_workspace_path("/Users/Henry/.mc/workspaces/grok"): [{
+            _normalize_workspace_path("/Users/op/.mc/workspaces/grok"): [{
                 "task_id": fallback_task_id,
                 "branch": "task/x",
                 "created_at": datetime(2020, 1, 1, tzinfo=timezone.utc),
@@ -2543,7 +2543,7 @@ class TestPerSourceIsolation:
         grok_log = tmp_path / "unified.jsonl"
         grok_log.write_text(_GROK_REAL_LINE + "\n")
         sessions_base = tmp_path / "sessions"
-        cwd_dir = sessions_base / "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok" / \
+        cwd_dir = sessions_base / "%2FUsers%2Fop%2F.mc%2Fworkspaces%2Fgrok" / \
             "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
         cwd_dir.mkdir(parents=True)
         (cwd_dir / "summary.json").write_text(json.dumps(_GROK_REAL_SUMMARY))
