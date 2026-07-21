@@ -16,6 +16,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -220,6 +222,46 @@ def test_paste_and_submit_uses_load_buffer_then_end_marker_then_enter(bridge, tm
     marker = calls[2]
     assert "-H" in marker and "1b" in marker and "7e" in marker
     assert calls[3][-1] == "Enter"
+
+
+def test_paste_and_submit_serializes_concurrent_callers(bridge, tmp_path, monkeypatch):
+    """MAJOR review fix: the watchdog thread (nudge on stall) and the poll-loop
+    thread (dispatch / message flush) can both decide to paste at ~the same
+    moment — exactly DURING a stall the pane is quiet and no dispatch is in
+    flight, which is precisely when the watchdog fires a nudge. A shared
+    _paste_lock around the whole tmux keystroke sequence must prevent two
+    concurrent callers from ever being inside that sequence at once (which
+    would interleave keystrokes into the same pane). Deliberately does NOT
+    monkeypatch bridge.time.sleep — the real internal 0.3s/0.2s delays give a
+    genuine concurrency window for an unlocked implementation to fail this."""
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    state = {"inside": 0, "violations": 0}
+    state_lock = threading.Lock()
+
+    def fake_tmux(args, **kwargs):
+        with state_lock:
+            state["inside"] += 1
+            if state["inside"] > 1:
+                state["violations"] += 1
+        time.sleep(0.02)  # widen the race window for an unlocked implementation
+        with state_lock:
+            state["inside"] -= 1
+        m = MagicMock(); m.returncode = 0; m.stdout = ""; m.stderr = ""
+        return m
+
+    monkeypatch.setattr(bridge, "_tmux", fake_tmux)
+
+    threads = [threading.Thread(target=bridge.paste_and_submit, args=(f"msg-{i}",)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["violations"] == 0
+
+
+def test_paste_lock_is_a_shared_module_level_lock(bridge):
+    assert isinstance(bridge._paste_lock, type(threading.Lock()))
 
 
 def test_is_session_running_reads_has_session(bridge, monkeypatch):
@@ -761,9 +803,10 @@ def test_flush_msg_queue_gate_closing_mid_flush_stops_remaining(bridge, monkeypa
 
     monkeypatch.setattr(bridge, "msg_gate_open", fake_gate)
     monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Anchor followed by a bare prompt line → "submitted" per _anchor_was_submitted.
     monkeypatch.setattr(
         bridge, "capture_pane",
-        lambda: "[thread th-1 · seq 1 · von user · typ text]",
+        lambda: "[thread th-1 · seq 1 · von user · typ text]\n❯",
     )
     monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
 
@@ -775,18 +818,56 @@ def test_flush_msg_queue_gate_closing_mid_flush_stops_remaining(bridge, monkeypa
     assert remaining == ["00000002__th-1.msg"]
 
 
+def test_flush_msg_queue_swallowed_enter_stuck_in_composer_no_ack(bridge, monkeypatch):
+    """MAJOR review fix: a swallowed Enter leaves the footer anchor visible but
+    still sitting on the composer's trailing (unsubmitted) line — the OLD naive
+    `anchor in pane` check would have wrongly acked this. _anchor_was_submitted
+    requires something to render AFTER the anchor (proof it scrolled into the
+    transcript), so this must NOT ack."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Anchor is the LAST non-blank line — still un-submitted in the composer.
+    monkeypatch.setattr(
+        bridge, "capture_pane",
+        lambda: "...\n[thread th-1 · seq 1 · von user · typ text]",
+    )
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert not (bridge.MSG_ACK_DIR / "th-1").exists()
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 1  # still queued
+
+
+def test_anchor_was_submitted_decision_table(bridge):
+    f = bridge._anchor_was_submitted
+    anchor = "[thread th-1 · seq 1 ·"
+    # Not present at all.
+    assert f("nothing useful here", anchor) is False
+    # Present but IS the trailing line (still un-sent in the composer).
+    assert f(f"...\n{anchor} von user · typ text]", anchor) is False
+    # Present and something renders below it (scrolled into transcript).
+    assert f(f"{anchor} von user · typ text]\n❯", anchor) is True
+    # Blank pane.
+    assert f("", anchor) is False
+
+
 def test_deliver_messages_noop_when_field_absent(bridge, monkeypatch):
     """comm_v2=false byte-identical behavior: no `new_messages` key ⇒ no queue dir
     is even created, no gate check happens."""
     called = {"gate": False}
-    monkeypatch.setattr(bridge, "msg_gate_open", lambda: called.__setitem__("gate", True) or True)
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: called.__setitem__("gate", True) or True,
+    )
     bridge.deliver_messages({"state": "idle", "new_comments": []})
     assert called["gate"] is False
     assert not bridge.MSG_QUEUE_DIR.exists()
 
 
 def test_deliver_messages_queues_and_flushes_when_gate_open(bridge, monkeypatch):
-    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
     flushed = {"n": 0}
     monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
     bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
@@ -795,7 +876,7 @@ def test_deliver_messages_queues_and_flushes_when_gate_open(bridge, monkeypatch)
 
 
 def test_deliver_messages_queues_only_when_gate_closed(bridge, monkeypatch):
-    monkeypatch.setattr(bridge, "msg_gate_open", lambda: False)
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: False)
     flushed = {"n": 0}
     monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
     bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
@@ -807,9 +888,56 @@ def test_deliver_messages_empty_list_is_noop_for_gate(bridge, monkeypatch):
     """An empty `new_messages: []` (field present, nothing new) with an
     already-empty queue must not touch the gate — nothing to flush."""
     called = {"gate": False}
-    monkeypatch.setattr(bridge, "msg_gate_open", lambda: called.__setitem__("gate", True) or True)
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: called.__setitem__("gate", True) or True,
+    )
     bridge.deliver_messages({"state": "idle", "new_messages": []})
     assert called["gate"] is False
+
+
+def test_deliver_messages_passes_dispatch_in_flight_through_to_gate(bridge, monkeypatch):
+    """MINOR review fix: the SAME tick's just-completed dispatch must be able to
+    close the gate even though the module-global _dispatch_in_flight flag is
+    already back to False by the time deliver_messages() runs (mirrors
+    hermes-bridge's dispatch_happened_this_tick)."""
+    seen = {}
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: seen.setdefault("dispatch_in_flight", kw.get("dispatch_in_flight")) or False,
+    )
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]}, dispatch_in_flight=True)
+    assert seen["dispatch_in_flight"] is True
+
+
+# ── msg_gate_open: active-task + explicit dispatch_in_flight parameter ──────────
+
+
+def test_msg_gate_closed_when_task_active(bridge, monkeypatch):
+    """MAJOR review fix: pane-quiet alone is NOT a turn boundary — a silent
+    tool-call/thinking pause INSIDE an active task also holds the pane still
+    for >= MSG_QUIET_SECONDS. The gate must stay closed for the ENTIRE active
+    task, not just re-open on pane stability."""
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same")
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 1)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1000.0)
+    bridge._active_task = {"id": "t1"}
+    assert bridge.msg_gate_open() is False
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 2000.0)  # plenty quiet
+    assert bridge.msg_gate_open() is False  # still closed — task still active
+    bridge._active_task = None
+    # The active-task check short-circuited BEFORE the pane-quiet tracker ever
+    # ran, so this is its first real observation — resets the clock.
+    assert bridge.msg_gate_open() is False
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 2001.5)  # quiet window elapsed
+    assert bridge.msg_gate_open() is True  # opens once the task genuinely ends
+
+
+def test_msg_gate_open_explicit_dispatch_in_flight_param_closes_gate(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "❯ ")
+    assert bridge.msg_gate_open(dispatch_in_flight=True) is False
 
 
 # ── /clear-on-done bugfix ────────────────────────────────────────────────────────
