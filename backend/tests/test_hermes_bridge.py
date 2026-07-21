@@ -575,3 +575,464 @@ def test_poll_loop_no_reset_on_same_task_redelivery(bridge, monkeypatch, tmp_pat
     order: list[str] = []
     _poll_loop_one_task(bridge, monkeypatch, tmp_path, "task-a", order)
     assert order == ["send"]
+
+
+# ────────────────────────────────────────────────────────────────────────
+# W2 bridge parity — dedup BUGFIX: (task_id, attempt_id) key, not task_id
+# alone. A same-task_id redispatch with a NEW dispatch_attempt_id (e.g. the
+# review_rejection flow poll.sh explicitly redelivers) used to be silently
+# swallowed because the in-memory cache only cleared on idle/cancelled/stopped.
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _poll_loop_two_payloads(bridge, monkeypatch, tmp_path, payloads):
+    """Run dispatch_poll_loop, feeding each payload in `payloads` in order,
+    then breaking. Returns the list of _send_to_tmux call args (prompts)."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: None)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+
+    sent: list[str] = []
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda prompt: sent.append(prompt))
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self._body
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        idx = calls["n"]
+        calls["n"] += 1
+        if idx >= len(payloads):
+            raise SystemExit("break")
+        return _FakeResp(json.dumps(payloads[idx]).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+    return sent
+
+
+def test_dedup_allows_redispatch_same_task_new_attempt_id(bridge, monkeypatch, tmp_path):
+    """Bug fix: review_rejection redispatch (same task_id, NEW attempt_id)
+    must fire even though the in-memory task_id-only cache was never cleared
+    (task never passed through idle/cancelled/stopped in between)."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    payloads = [
+        {"state": "new_task", "task": {"id": "task-a", "board_id": "b", "title": "t",
+                                        "prompt": "p1", "dispatch_attempt_id": "attempt-1"}},
+        {"state": "new_task", "task": {"id": "task-a", "board_id": "b", "title": "t",
+                                        "prompt": "p2 (revision)", "dispatch_attempt_id": "attempt-2"}},
+    ]
+    sent = _poll_loop_two_payloads(bridge, monkeypatch, tmp_path, payloads)
+    assert len(sent) == 2, f"expected both attempts dispatched, got {len(sent)}: {sent}"
+    assert bridge._last_dispatched_attempt_id == "attempt-2"
+
+
+def test_dedup_blocks_redundant_poll_same_task_same_attempt(bridge, monkeypatch, tmp_path):
+    """Same (task_id, attempt_id) redelivered across two poll ticks before ack
+    (e.g. still un-acked) must NOT re-paste a second time."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    payloads = [
+        {"state": "new_task", "task": {"id": "task-a", "board_id": "b", "title": "t",
+                                        "prompt": "p1", "dispatch_attempt_id": "attempt-1"}},
+        {"state": "new_task", "task": {"id": "task-a", "board_id": "b", "title": "t",
+                                        "prompt": "p1", "dispatch_attempt_id": "attempt-1"}},
+    ]
+    sent = _poll_loop_two_payloads(bridge, monkeypatch, tmp_path, payloads)
+    assert len(sent) == 1, f"expected exactly one dispatch, got {len(sent)}: {sent}"
+
+
+def test_dedup_clears_attempt_id_on_idle(bridge, monkeypatch, tmp_path):
+    """idle/cancelled/stopped must clear BOTH the task_id and attempt_id
+    in-memory cache (not just task_id) so a later same-id task can redispatch."""
+    monkeypatch.setattr(bridge, "LAST_TASK_FILE", tmp_path / "last-task-id")
+    bridge._last_dispatched_task_id = "task-a"
+    bridge._last_dispatched_attempt_id = "attempt-1"
+    payloads = [
+        {"state": "idle", "task": None},
+    ]
+    _poll_loop_two_payloads(bridge, monkeypatch, tmp_path, payloads)
+    assert bridge._last_dispatched_task_id is None
+    assert bridge._last_dispatched_attempt_id is None
+
+
+# ────────────────────────────────────────────────────────────────────────
+# W2 bridge parity — comm_v2 messaging path (Interaction Model 2.0 twin of
+# docker/shared/poll.sh's build_acked_seq_param/queue_or_deliver/
+# msg_gate_open/flush_msg_queue/_record_ack/deliver_messages).
+# ────────────────────────────────────────────────────────────────────────
+
+
+def _state_dirs(bridge, monkeypatch, tmp_path):
+    queue_dir = tmp_path / "msg-queue"
+    ack_dir = tmp_path / "msg-acked"
+    monkeypatch.setattr(bridge, "MSG_QUEUE_DIR", queue_dir)
+    monkeypatch.setattr(bridge, "MSG_ACK_DIR", ack_dir)
+    return queue_dir, ack_dir
+
+
+def test_build_acked_seq_param_empty_when_no_ack_dir(bridge, monkeypatch, tmp_path):
+    _state_dirs(bridge, monkeypatch, tmp_path)
+    assert bridge.build_acked_seq_param() == ""
+
+
+def test_build_acked_seq_param_urlencodes_json(bridge, monkeypatch, tmp_path):
+    _, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
+    ack_dir.mkdir(parents=True)
+    (ack_dir / "thread-1").write_text("5\n")
+    (ack_dir / "thread-2").write_text("12\n")
+    import json as _json
+    import urllib.parse as _up
+
+    encoded = bridge.build_acked_seq_param()
+    assert encoded != ""
+    decoded = _json.loads(_up.unquote(encoded))
+    assert decoded == {"thread-1": 5, "thread-2": 12}
+
+
+def test_queue_or_deliver_writes_seq_named_files(bridge, monkeypatch, tmp_path):
+    queue_dir, _ = _state_dirs(bridge, monkeypatch, tmp_path)
+    payload = {
+        "new_messages": [
+            {"id": "m1", "thread_id": "tid-1", "seq": 3, "sender": "mark",
+             "message_type": "chat", "body": "Hallo Hermes"},
+        ]
+    }
+    n = bridge.queue_or_deliver(payload)
+    assert n == 1
+    files = list(queue_dir.glob("*.msg"))
+    assert len(files) == 1
+    assert files[0].name == "00000003__tid-1.msg"
+    content = files[0].read_text()
+    assert "Hallo Hermes" in content
+    assert "[thread tid-1 · seq 3 · von mark · typ chat]" in content
+
+
+def test_queue_or_deliver_empty_new_messages_is_noop(bridge, monkeypatch, tmp_path):
+    queue_dir, _ = _state_dirs(bridge, monkeypatch, tmp_path)
+    assert bridge.queue_or_deliver({"new_messages": []}) == 0
+    assert bridge.queue_or_deliver({}) == 0
+    assert not queue_dir.exists()
+
+
+def test_queue_or_deliver_is_idempotent_on_redelivery(bridge, monkeypatch, tmp_path):
+    queue_dir, _ = _state_dirs(bridge, monkeypatch, tmp_path)
+    payload = {"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "v1"},
+    ]}
+    bridge.queue_or_deliver(payload)
+    bridge.queue_or_deliver(payload)  # redelivery — same seq/thread → same file
+    files = list(queue_dir.glob("*.msg"))
+    assert len(files) == 1
+
+
+def test_msg_queue_files_sorted_by_seq(bridge, monkeypatch, tmp_path):
+    queue_dir, _ = _state_dirs(bridge, monkeypatch, tmp_path)
+    queue_dir.mkdir(parents=True)
+    (queue_dir / "00000010__tid-1.msg").write_text("x")
+    (queue_dir / "00000002__tid-1.msg").write_text("x")
+    (queue_dir / "00000001__tid-2.msg").write_text("x")
+    assert bridge.msg_queue_files() == [
+        "00000001__tid-2.msg", "00000002__tid-1.msg", "00000010__tid-1.msg",
+    ]
+
+
+def test_record_ack_writes_high_water_mark(bridge, monkeypatch, tmp_path):
+    _, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
+    bridge._record_ack("tid-1", 5)
+    assert (ack_dir / "tid-1").read_text().strip() == "5"
+    bridge._record_ack("tid-1", 3)  # regression must not overwrite
+    assert (ack_dir / "tid-1").read_text().strip() == "5"
+    bridge._record_ack("tid-1", 9)
+    assert (ack_dir / "tid-1").read_text().strip() == "9"
+
+
+def test_msg_gate_open_false_when_dispatch_in_flight(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    assert bridge.msg_gate_open(dispatch_in_flight=True) is False
+
+
+def test_msg_gate_open_false_when_tmux_not_running(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    assert bridge.msg_gate_open() is False
+
+
+def test_msg_gate_open_requires_pane_quiet_for_threshold(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 5.0)
+    bridge._msg_pane_state["pane"] = None
+    bridge._msg_pane_state["last_change_ts"] = 0.0
+
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same pane")
+    # First observation of "same pane" — clock resets to 0, gate closed.
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 100.0)
+    assert bridge.msg_gate_open() is False
+    # 3s later, still under threshold.
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 103.0)
+    assert bridge.msg_gate_open() is False
+    # 6s later (>= 5s threshold since last change) — gate opens.
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 106.0)
+    assert bridge.msg_gate_open() is True
+
+
+def test_flush_msg_queue_delivers_verifies_and_acks(bridge, monkeypatch, tmp_path):
+    queue_dir, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
+    bridge.queue_or_deliver({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "hi"},
+    ]})
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
+    sent: list[str] = []
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda p: sent.append(p))
+    # Verify greps the (mocked) pane for the footer anchor after the send.
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "\n".join(sent))
+
+    bridge.flush_msg_queue()
+
+    assert len(sent) == 1
+    assert (ack_dir / "tid-1").read_text().strip() == "1"
+    assert not list(queue_dir.glob("*.msg")), "queue file must be removed after ack"
+
+
+def test_flush_msg_queue_stops_and_does_not_ack_on_verify_failure(bridge, monkeypatch, tmp_path):
+    queue_dir, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
+    bridge.queue_or_deliver({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "hi"},
+    ]})
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda p: None)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "")  # anchor never appears
+    monkeypatch.setattr(bridge, "_verify_msg_delivered", lambda tid, seq, timeout=2.0: False)
+
+    bridge.flush_msg_queue()
+
+    assert not ack_dir.exists() or not list(ack_dir.iterdir())
+    assert len(list(queue_dir.glob("*.msg"))) == 1, "message must stay queued, no ack"
+
+
+def test_flush_msg_queue_stops_when_gate_closes_mid_flush(bridge, monkeypatch, tmp_path):
+    queue_dir, ack_dir = _state_dirs(bridge, monkeypatch, tmp_path)
+    bridge.queue_or_deliver({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "a"},
+        {"id": "m2", "thread_id": "tid-1", "seq": 2, "sender": "mark",
+         "message_type": "chat", "body": "b"},
+    ]})
+    # Gate open for the first file only.
+    gate_calls = {"n": 0}
+    def fake_gate(**kw):
+        gate_calls["n"] += 1
+        return gate_calls["n"] == 1
+    monkeypatch.setattr(bridge, "msg_gate_open", fake_gate)
+    monkeypatch.setattr(bridge, "_send_to_tmux", lambda p: None)
+    monkeypatch.setattr(bridge, "_verify_msg_delivered", lambda tid, seq, timeout=2.0: True)
+
+    bridge.flush_msg_queue()
+
+    assert (ack_dir / "tid-1").read_text().strip() == "1"
+    remaining = list(queue_dir.glob("*.msg"))
+    assert len(remaining) == 1
+    assert remaining[0].name == "00000002__tid-1.msg"
+
+
+def test_deliver_messages_noop_when_queue_empty(bridge, monkeypatch, tmp_path):
+    _state_dirs(bridge, monkeypatch, tmp_path)
+    flushed = []
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.append(True))
+    bridge.deliver_messages({"new_messages": []})
+    assert flushed == []
+
+
+def test_deliver_messages_flushes_when_gate_open(bridge, monkeypatch, tmp_path):
+    _state_dirs(bridge, monkeypatch, tmp_path)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
+    flushed = []
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.append(True))
+    bridge.deliver_messages({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "hi"},
+    ]})
+    assert flushed == [True]
+
+
+def test_deliver_messages_skips_flush_when_gate_closed(bridge, monkeypatch, tmp_path):
+    _state_dirs(bridge, monkeypatch, tmp_path)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: False)
+    flushed = []
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.append(True))
+    bridge.deliver_messages({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "hi"},
+    ]})
+    assert flushed == []
+
+
+def test_deliver_messages_skips_flush_when_tmux_not_running(bridge, monkeypatch, tmp_path):
+    _state_dirs(bridge, monkeypatch, tmp_path)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    flushed = []
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.append(True))
+    bridge.deliver_messages({"new_messages": [
+        {"id": "m1", "thread_id": "tid-1", "seq": 1, "sender": "mark",
+         "message_type": "chat", "body": "hi"},
+    ]})
+    assert flushed == []
+
+
+def test_dispatch_loop_skips_new_messages_key_absent(bridge, monkeypatch, tmp_path):
+    """comm_v2=false parity: when the backend response has NO `new_messages`
+    key at all, deliver_messages must never be called (byte-identical to
+    pre-W2 behavior for non-pilot agents)."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+
+    called = []
+    monkeypatch.setattr(bridge, "deliver_messages", lambda *a, **kw: called.append(True))
+
+    payload = {"state": "idle", "task": None}  # no "new_messages" key
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self._body
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise SystemExit("break")
+        return _FakeResp(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+
+    assert called == [], "deliver_messages must not be called when new_messages key is absent"
+
+
+def test_dispatch_loop_calls_deliver_messages_when_key_present(bridge, monkeypatch, tmp_path):
+    """comm_v2=true (pilot agent): key present (even empty list) → consumed."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+
+    called = []
+    monkeypatch.setattr(bridge, "deliver_messages", lambda payload, **kw: called.append(kw))
+
+    payload = {"state": "idle", "task": None, "new_messages": []}
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self._body
+
+    calls = {"n": 0}
+
+    def fake_urlopen(req, timeout=10):
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise SystemExit("break")
+        return _FakeResp(json.dumps(payload).encode())
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+
+    assert len(called) == 1
+    assert called[0].get("dispatch_in_flight") is False
+
+
+def test_poll_url_appends_acked_seq_only_when_ack_store_nonempty(bridge, monkeypatch, tmp_path):
+    """Byte-identical parity guard: no acked_seq param appended when nothing's
+    been acked yet (comm_v2=false / fresh comm_v2 agent alike)."""
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(bridge, "MSG_ACK_DIR", tmp_path / "msg-acked")
+
+    urls: list[str] = []
+
+    class _FakeResp:
+        def __init__(self, body):
+            self._body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self._body
+
+    def fake_urlopen(req, timeout=10):
+        urls.append(req.full_url)
+        raise SystemExit("break")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+
+    assert urls == ["http://test/api/v1/agent/me/poll"], urls
+
+
+def test_poll_url_includes_acked_seq_when_ack_store_populated(bridge, monkeypatch, tmp_path):
+    fake_env_file = tmp_path / "agent.env"
+    fake_env_file.write_text("MC_BASE_URL=http://test\nMC_AGENT_TOKEN=abc\n")
+    monkeypatch.setattr(bridge, "ENV_FILE", fake_env_file)
+    monkeypatch.setattr(bridge, "DISPATCH_POLL_INTERVAL", 0)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_: None)
+    ack_dir = tmp_path / "msg-acked"
+    ack_dir.mkdir()
+    (ack_dir / "tid-1").write_text("7\n")
+    monkeypatch.setattr(bridge, "MSG_ACK_DIR", ack_dir)
+
+    urls: list[str] = []
+
+    def fake_urlopen(req, timeout=10):
+        urls.append(req.full_url)
+        raise SystemExit("break")
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    with pytest.raises(SystemExit):
+        bridge.dispatch_poll_loop()
+
+    assert len(urls) == 1
+    assert urls[0].startswith("http://test/api/v1/agent/me/poll?acked_seq=")
+    import json as _json
+    import urllib.parse as _up
+    qs = urls[0].split("?acked_seq=", 1)[1]
+    assert _json.loads(_up.unquote(qs)) == {"tid-1": 7}
