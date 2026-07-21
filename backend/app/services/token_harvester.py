@@ -26,6 +26,7 @@ Offset resume: harvest_state stores processed_lines → only reads new lines.
 """
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 import logging
@@ -701,7 +702,7 @@ async def run_harvest(
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
          "backfilled_task_id": L, "grok_skipped_no_summary": G,
-         "hermes_sessions_scanned": H}
+         "hermes_sessions_scanned": H, "source_errors": E}
     """
     from app.config import settings as app_settings
 
@@ -760,103 +761,123 @@ async def run_harvest(
         "backfilled_task_id": 0,
         "grok_skipped_no_summary": 0,
         "hermes_sessions_scanned": 0,
+        "source_errors": 0,
     }
 
-    # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl
+    # Per-source isolation (review fix, 21.07.): each of the three sources
+    # below runs in its own try/except AND commits its own work immediately
+    # afterward. Without the per-source commit, one source raising midway
+    # could leave the AsyncSession needing a rollback that would also discard
+    # the OTHER sources' already-processed-but-uncommitted events — a single
+    # final commit made every source's success depend on every other source
+    # not blowing up.
+
+    # ── Claude Code + omp scan: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl
     #    AND ~/.mc/agents/{slug}/omp-sessions/**/*.jsonl (ADR-045 omp harness,
-    #    e.g. Sparky — no host mount existed for this before this fix, so the
-    #    glob was silently finding zero files for omp agents) ──────────────
-    for base_str in agent_base_paths:
-        base = Path(base_str)
-        if not base.exists():
-            continue
-        for pattern in (
-            "*/claude-config/projects/**/*.jsonl",
-            "*/omp-sessions/**/*.jsonl",
-        ):
-            for jsonl_path in sorted(base.glob(pattern)):
-                # Slug from the path segment directly under base
-                try:
-                    rel = jsonl_path.relative_to(base)
-                    slug = rel.parts[0]
-                except (ValueError, IndexError):
-                    slug = "unknown"
+    #    e.g. Sparky) + ~/.claude/projects/**/*.jsonl (boss-host) ───────────
+    try:
+        for base_str in agent_base_paths:
+            base = Path(base_str)
+            if not base.exists():
+                continue
+            for pattern in (
+                "*/claude-config/projects/**/*.jsonl",
+                "*/omp-sessions/**/*.jsonl",
+            ):
+                for jsonl_path in sorted(base.glob(pattern)):
+                    # Slug from the path segment directly under base
+                    try:
+                        rel = jsonl_path.relative_to(base)
+                        slug = rel.parts[0]
+                    except (ValueError, IndexError):
+                        slug = "unknown"
 
-                agent_id = agent_slug_map.get(slug)
-                harness = _harness_from_slug(slug)
+                    agent_id = agent_slug_map.get(slug)
+                    harness = _harness_from_slug(slug)
 
+                    await _process_jsonl_file(
+                        session=session,
+                        path=str(jsonl_path),
+                        agent_id=agent_id,
+                        harness=harness,
+                        is_boss_path=False,
+                        all_prices=all_prices,
+                        state_map=state_map,
+                        stats=stats,
+                        task_workspace_map=task_workspace_map,
+                        cwd_translate_slug=slug,
+                    )
+
+        for base_str in boss_base_paths:
+            base = Path(base_str)
+            if not base.exists():
+                continue
+            for jsonl_path in sorted(base.glob("**/*.jsonl")):
                 await _process_jsonl_file(
                     session=session,
                     path=str(jsonl_path),
-                    agent_id=agent_id,
-                    harness=harness,
-                    is_boss_path=False,
+                    agent_id=boss_agent_id,  # only applies to MC-attributed lines
+                    harness="host",
+                    is_boss_path=True,
                     all_prices=all_prices,
                     state_map=state_map,
                     stats=stats,
                     task_workspace_map=task_workspace_map,
-                    cwd_translate_slug=slug,
+                    # boss_agent_id gets reloaded later if needed
                 )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: claude/omp source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
 
-    # ── Boss paths: ~/.claude/projects/**/*.jsonl ───────────────────────────
-    for base_str in boss_base_paths:
-        base = Path(base_str)
-        if not base.exists():
-            continue
-        for jsonl_path in sorted(base.glob("**/*.jsonl")):
-            await _process_jsonl_file(
+    # ── Grok source: ~/.grok/logs/unified.jsonl ─────────────────────────────
+    try:
+        if Path(grok_log_path).exists():
+            await _process_grok_file(
                 session=session,
-                path=str(jsonl_path),
-                agent_id=boss_agent_id,  # only applies to MC-attributed lines
-                harness="host",
-                is_boss_path=True,
+                path=grok_log_path,
+                sessions_base=grok_sessions_path,
+                agent_id=grok_agent_id,
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
                 task_workspace_map=task_workspace_map,
-                # boss_agent_id gets reloaded later if needed
             )
-
-    # ── Grok source: ~/.grok/logs/unified.jsonl ─────────────────────────────
-    if Path(grok_log_path).exists():
-        await _process_grok_file(
-            session=session,
-            path=grok_log_path,
-            sessions_base=grok_sessions_path,
-            agent_id=grok_agent_id,
-            all_prices=all_prices,
-            state_map=state_map,
-            stats=stats,
-            task_workspace_map=task_workspace_map,
-        )
-
-    # ── Hermes source: ~/.hermes/state.db (sqlite) ──────────────────────────
-    if Path(hermes_state_db_path).exists():
-        await _harvest_hermes(
-            session=session,
-            state_db_path=hermes_state_db_path,
-            agent_id=hermes_agent_id,
-            all_prices=all_prices,
-            stats=stats,
-            task_workspace_map=task_workspace_map,
-        )
-
-    # Commit at the end
-    try:
         await session.commit()
     except Exception as e:
-        logger.error("run_harvest: commit error: %s", e)
+        logger.error("run_harvest: grok source failed: %s", e)
         await session.rollback()
+        stats["source_errors"] += 1
+
+    # ── Hermes source: ~/.hermes/state.db (sqlite) ──────────────────────────
+    try:
+        if Path(hermes_state_db_path).exists():
+            await _harvest_hermes(
+                session=session,
+                state_db_path=hermes_state_db_path,
+                agent_id=hermes_agent_id,
+                all_prices=all_prices,
+                stats=stats,
+                state_map=state_map,
+                task_workspace_map=task_workspace_map,
+            )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: hermes source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
 
     logger.info(
         "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d "
-        "grok_skipped_no_summary=%d hermes_sessions_scanned=%d",
+        "grok_skipped_no_summary=%d hermes_sessions_scanned=%d source_errors=%d",
         stats["files_scanned"],
         stats["new_events"],
         stats["skipped_private"],
         stats["backfilled_task_id"],
         stats["grok_skipped_no_summary"],
         stats["hermes_sessions_scanned"],
+        stats["source_errors"],
     )
     return stats
 
@@ -1083,10 +1104,26 @@ async def _process_grok_file(
         return
 
     processed_lines = state.processed_lines if state else 0
-    records = harvest_grok_file(path, processed_lines)
+
+    # Truncation guard: unified.jsonl is append-only in normal operation, but
+    # a log-rotation or a Grok Build CLI reset could shrink/recreate it. If
+    # the stored offset is now past the file's actual line count, reading
+    # from that offset would silently yield 0 records forever — reset to 0.
+    # (Also blocking I/O — offloaded like the read itself, below.)
+    current_total_lines = await asyncio.to_thread(_count_lines, path)
+    if processed_lines > current_total_lines:
+        logger.warning(
+            "_process_grok_file: %s shrank (offset %d > %d lines) — "
+            "resetting offset to 0 (truncated/recreated file)",
+            path, processed_lines, current_total_lines,
+        )
+        processed_lines = 0
+
+    # Blocking file read offloaded to a thread — unified.jsonl only grows,
+    # but the watchdog's event loop must never stall on synchronous file I/O.
+    records = await asyncio.to_thread(harvest_grok_file, path, processed_lines)
     if not records:
-        total_lines = _count_lines(path)
-        await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
+        await _update_harvest_state(session, state_map, path, current_mtime, current_total_lines)
         return
 
     # Batch dedup (same pattern as _process_jsonl_file)
@@ -1160,30 +1197,111 @@ async def _process_grok_file(
 
     stats["new_events"] += new_events_count
 
-    total_lines = _count_lines(path)
-    await _update_harvest_state(session, state_map, path, current_mtime, total_lines)
+    # Reuse the line count taken before the read (no second blocking pass —
+    # the truncation guard above already needed it).
+    await _update_harvest_state(session, state_map, path, current_mtime, current_total_lines)
+
+
+# Hermes source: below this point the state.db is throttled the same way a
+# large, expensive re-scan generally should be (review fix, 21.07.).
+_HERMES_THROTTLE_SECONDS = 900  # min. gap between two full state.db copies
 
 
 def _copy_hermes_db(state_db_path: str) -> tuple[str, str]:
-    """Copies state.db (+ -wal/-shm if present + readable) to a fresh temp
-    dir and returns (tmp_dir, copied_db_path). NEVER open the live file —
-    Hermes writes to it continuously and a live open risks a lock/corrupt
-    read. Missing/stale WAL is tolerated (db-only fallback, e.g. after a
-    docker-compose individual-file mount recreates a stale -wal/-shm)."""
+    """Copies ONLY state.db to a fresh temp dir and returns
+    (tmp_dir, copied_db_path). NEVER open the live file — Hermes writes to it
+    continuously.
+
+    Deliberately does NOT copy -wal/-shm (see docker-compose.yml comment —
+    those files are never mounted at all after the 21.07. review fix: Docker
+    creates a DIRECTORY on the host for a missing bind-mount source, and
+    Hermes deletes -wal/-shm itself on a clean shutdown, so a backend
+    recreate at the wrong moment would corrupt Hermes' own DB on the host).
+    Tradeoff (German note matches the compose comment): events still sitting
+    in Hermes' WAL (not yet checkpointed into state.db) lag behind by
+    however long it takes Hermes to checkpoint — acceptable for cost
+    analytics, not attempted to be avoided here.
+
+    If the copy itself fails, the temp dir is removed before re-raising —
+    otherwise a permission error etc. would leak a tmp dir per failed attempt
+    (the caller never gets a tmp_dir path back to clean up).
+    """
     tmp_dir = tempfile.mkdtemp(prefix="mc_hermes_harvest_")
-    dst_db = os.path.join(tmp_dir, "state.db")
-    shutil.copy2(state_db_path, dst_db)
-    for suffix in ("-wal", "-shm"):
-        src = state_db_path + suffix
-        if os.path.exists(src):
-            try:
-                shutil.copy2(src, os.path.join(tmp_dir, "state.db" + suffix))
-            except OSError as e:
-                logger.warning(
-                    "_copy_hermes_db: could not copy %s (falling back to db-only): %s",
-                    src, e,
-                )
-    return tmp_dir, dst_db
+    try:
+        dst_db = os.path.join(tmp_dir, "state.db")
+        shutil.copy2(state_db_path, dst_db)
+        return tmp_dir, dst_db
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _read_hermes_sessions_sync(
+    state_db_path: str, cutoff_ts: float
+) -> list[dict[str, Any]] | None:
+    """Blocking I/O: copy state.db, query finished sessions (+ each one's
+    first user message) from the copy, clean up. Called via
+    asyncio.to_thread — never run directly on the event loop, state.db can
+    be hundreds of MB.
+
+    Returns None (NOT an empty list — that means "genuinely no sessions in
+    the window") when the copy is corrupt/torn (e.g. Hermes mid-WAL-checkpoint
+    while we copied). The caller must not persist harvest_state on a None
+    result, so the next cycle retries against a (hopefully consistent) copy
+    instead of the failure being mistaken for "nothing new" and the mtime
+    check silently skipping forever.
+    """
+    tmp_dir, copied_db = _copy_hermes_db(state_db_path)
+    try:
+        try:
+            conn = sqlite3.connect(f"file:{copied_db}?immutable=1", uri=True)
+        except sqlite3.Error as e:
+            logger.warning("_read_hermes_sessions_sync: could not open copy: %s", e)
+            return None
+        try:
+            conn.row_factory = sqlite3.Row
+            session_rows = conn.execute(
+                "SELECT id, model, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens, reasoning_tokens, billing_provider, cwd, "
+                "git_branch, ended_at FROM sessions "
+                "WHERE ended_at IS NOT NULL AND ended_at > ?",
+                (cutoff_ts,),
+            ).fetchall()
+
+            results: list[dict[str, Any]] = []
+            for row in session_rows:
+                first_user_msg = conn.execute(
+                    "SELECT content FROM messages WHERE session_id = ? AND role = 'user' "
+                    "ORDER BY timestamp ASC LIMIT 1",
+                    (row["id"],),
+                ).fetchone()
+                results.append({
+                    "id": row["id"],
+                    "model": row["model"] or "",
+                    "input_tokens": row["input_tokens"] or 0,
+                    "output_tokens": row["output_tokens"] or 0,
+                    "cache_read_tokens": row["cache_read_tokens"] or 0,
+                    "cache_write_tokens": row["cache_write_tokens"] or 0,
+                    "reasoning_tokens": row["reasoning_tokens"] or 0,
+                    "billing_provider": row["billing_provider"],
+                    "cwd": row["cwd"],
+                    "git_branch": row["git_branch"],
+                    "ended_at": row["ended_at"],
+                    "first_user_content": first_user_msg["content"] if first_user_msg else None,
+                })
+            return results
+        except sqlite3.DatabaseError as e:
+            # Torn copy — Hermes was mid-WAL-checkpoint while we copied the
+            # main file. Expected to be rare and transient; skip this cycle.
+            logger.warning(
+                "_read_hermes_sessions_sync: corrupt/torn copy of %s, "
+                "skipping this cycle: %s", state_db_path, e,
+            )
+            return None
+        finally:
+            conn.close()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def _harvest_hermes(
@@ -1192,106 +1310,125 @@ async def _harvest_hermes(
     agent_id: Any | None,
     all_prices: list[ModelPrice],
     stats: dict[str, int],
+    state_map: dict[str, ModelUsageHarvestState],
     task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
     *,
     cutoff_days: int = 30,
+    throttle_seconds: int = _HERMES_THROTTLE_SECONDS,
 ) -> None:
     """Reads Hermes' sqlite session ledger and inserts one ModelUsageEvent
-    per finished session. No file-offset state (the DB mutates continuously,
-    unlike an append-only JSONL) — dedup is purely message_uuid-based, so a
-    re-run over the same window inserts 0 new rows."""
+    per finished session. No file-offset state in the JSONL sense (the DB
+    mutates continuously) — dedup is purely message_uuid-based, so a re-run
+    over the same window inserts 0 new rows. Change-detection + a 900s
+    throttle guard the 284 MB-and-growing full-file copy this source needs
+    per read: mtime-unchanged skips entirely (nothing could have changed),
+    and even on a changed mtime we cap how often the expensive copy runs.
+
+    The model_usage_harvest_state row keyed by state_db_path repurposes its
+    processed_lines int column to store this source's last-run unix
+    timestamp (not a line count — there's no dedicated column and adding one
+    means a migration; this comment is the only thing marking the reuse)."""
+    try:
+        current_mtime = os.path.getmtime(state_db_path)
+    except OSError:
+        return
+
+    state = state_map.get(state_db_path)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if state:
+        if state.mtime == current_mtime:
+            return  # nothing written to state.db since the last read
+        last_run_ts = state.processed_lines or 0
+        if now_ts - last_run_ts < throttle_seconds:
+            return  # changed, but we copied+read this recently — wait it out
+
     task_workspace_map = task_workspace_map or {}
     cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).timestamp()
 
-    tmp_dir, copied_db = _copy_hermes_db(state_db_path)
-    try:
-        conn = sqlite3.connect(f"file:{copied_db}?mode=ro", uri=True)
-        try:
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT id, model, input_tokens, output_tokens, cache_read_tokens, "
-                "cache_write_tokens, cwd, git_branch, ended_at FROM sessions "
-                "WHERE ended_at IS NOT NULL AND started_at > ?",
-                (cutoff_ts,),
-            ).fetchall()
+    rows = await asyncio.to_thread(_read_hermes_sessions_sync, state_db_path, cutoff_ts)
+    if rows is None:
+        # Torn/corrupt copy — deliberately do NOT persist state here so the
+        # next cycle retries without waiting out the mtime/throttle gate.
+        return
 
-            stats["hermes_sessions_scanned"] += len(rows)
-            if not rows:
-                return
+    stats["hermes_sessions_scanned"] += len(rows)
+    if not rows:
+        await _update_harvest_state(session, state_map, state_db_path, current_mtime, int(now_ts))
+        return
 
-            candidate_uuids = [f"hermes:{row['id']}" for row in rows]
-            existing_result = await session.exec(
-                select(ModelUsageEvent.message_uuid).where(
-                    ModelUsageEvent.message_uuid.in_(candidate_uuids)
-                )
+    candidate_uuids = [f"hermes:{row['id']}" for row in rows]
+    existing_result = await session.exec(
+        select(ModelUsageEvent.message_uuid).where(
+            ModelUsageEvent.message_uuid.in_(candidate_uuids)
+        )
+    )
+    existing = {row for row in existing_result.all()}
+
+    new_events_count = 0
+    for row in rows:
+        message_uuid = f"hermes:{row['id']}"
+        if message_uuid in existing:
+            continue
+
+        model = row["model"]
+        ts = datetime.fromtimestamp(row["ended_at"], tz=timezone.utc)
+
+        task_id = (
+            _extract_task_id(row["first_user_content"])
+            if row["first_user_content"]
+            else None
+        )
+        if task_id is None:
+            norm_cwd = _normalize_workspace_path(row["cwd"] or "")
+            candidates = task_workspace_map.get(norm_cwd)
+            if candidates:
+                task_id = _resolve_task_id(candidates, row["git_branch"], ts)
+
+        # Billing convention: reasoning_tokens is a distinct sqlite column
+        # here (unlike Grok, where it's already folded into completion_tokens)
+        # but still billed as output.
+        output_tokens = row["output_tokens"] + row["reasoning_tokens"]
+
+        price_info = match_price(model, ts, all_prices) if model else None
+        cost_usd: float | None = None
+        if price_info is not None:
+            cost_usd = _compute_cost_usd(
+                price_info,
+                row["input_tokens"],
+                output_tokens,
+                row["cache_read_tokens"],
+                row["cache_write_tokens"],
             )
-            existing = {row for row in existing_result.all()}
 
-            new_events_count = 0
-            for row in rows:
-                message_uuid = f"hermes:{row['id']}"
-                if message_uuid in existing:
-                    continue
+        # sessions.billing_provider is Hermes' own authoritative provider
+        # label when set — only fall back to the model-name heuristic
+        # without it.
+        provider = row["billing_provider"] or (_provider_from_model(model) if model else None)
 
-                model = row["model"] or ""
-                ts = datetime.fromtimestamp(row["ended_at"], tz=timezone.utc)
+        event = ModelUsageEvent(
+            id=uuid.uuid4(),
+            agent_id=agent_id,
+            task_id=task_id,
+            harness="hermes",
+            model=model,
+            provider=provider,
+            session_id=row["id"],
+            message_uuid=message_uuid,
+            input_tokens=row["input_tokens"],
+            output_tokens=output_tokens,
+            cache_read_tokens=row["cache_read_tokens"],
+            cache_write_tokens=row["cache_write_tokens"],
+            cost_usd=cost_usd,
+            ts=ts,
+            source_file=state_db_path,
+        )
+        try:
+            async with session.begin_nested():
+                session.add(event)
+            new_events_count += 1
+        except IntegrityError:
+            logger.debug("harvest(hermes): duplicate uuid %s — skipped", message_uuid)
 
-                first_user_msg = conn.execute(
-                    "SELECT content FROM messages WHERE session_id = ? AND role = 'user' "
-                    "ORDER BY timestamp ASC LIMIT 1",
-                    (row["id"],),
-                ).fetchone()
-                task_id = (
-                    _extract_task_id(first_user_msg["content"])
-                    if first_user_msg and first_user_msg["content"]
-                    else None
-                )
+    stats["new_events"] += new_events_count
 
-                if task_id is None:
-                    norm_cwd = _normalize_workspace_path(row["cwd"] or "")
-                    candidates = task_workspace_map.get(norm_cwd)
-                    if candidates:
-                        task_id = _resolve_task_id(candidates, row["git_branch"], ts)
-
-                price_info = match_price(model, ts, all_prices) if model else None
-                cost_usd: float | None = None
-                if price_info is not None:
-                    cost_usd = _compute_cost_usd(
-                        price_info,
-                        row["input_tokens"] or 0,
-                        row["output_tokens"] or 0,
-                        row["cache_read_tokens"] or 0,
-                        row["cache_write_tokens"] or 0,
-                    )
-
-                event = ModelUsageEvent(
-                    id=uuid.uuid4(),
-                    agent_id=agent_id,
-                    task_id=task_id,
-                    harness="hermes",
-                    model=model,
-                    provider=_provider_from_model(model) if model else None,
-                    session_id=row["id"],
-                    message_uuid=message_uuid,
-                    input_tokens=row["input_tokens"] or 0,
-                    output_tokens=row["output_tokens"] or 0,
-                    cache_read_tokens=row["cache_read_tokens"] or 0,
-                    cache_write_tokens=row["cache_write_tokens"] or 0,
-                    cost_usd=cost_usd,
-                    ts=ts,
-                    source_file=state_db_path,
-                )
-                try:
-                    async with session.begin_nested():
-                        session.add(event)
-                    new_events_count += 1
-                except IntegrityError:
-                    logger.debug(
-                        "harvest(hermes): duplicate uuid %s — skipped", message_uuid
-                    )
-
-            stats["new_events"] += new_events_count
-        finally:
-            conn.close()
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+    await _update_harvest_state(session, state_map, state_db_path, current_mtime, int(now_ts))

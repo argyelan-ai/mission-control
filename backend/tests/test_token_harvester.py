@@ -14,6 +14,7 @@ Offset resume: file grows, second run reads only new lines.
 import json
 import os
 import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1783,6 +1784,40 @@ class TestGrokHarvestIntegration:
         )
         assert len(result.all()) == 1
 
+    async def test_truncated_file_resets_offset_instead_of_hanging(
+        self, tmp_path, async_db_session
+    ):
+        """Review fix (21.07.): a stored offset past the file's actual line
+        count (log rotation / Grok Build CLI reset) must reset to 0 instead
+        of silently reading nothing forever."""
+        from app.services.token_harvester import run_harvest
+        from app.models.model_usage import ModelUsageHarvestState
+
+        grok_log, sessions_base = self._write_grok_fixtures(tmp_path)  # 1 real line
+
+        # Seed a stale harvest_state claiming 99 lines were already
+        # processed — now far past the file's single actual line. mtime is
+        # deliberately wrong too, so the mtime-unchanged guard doesn't short
+        # -circuit before the truncation check ever runs.
+        stale_state = ModelUsageHarvestState(
+            file_path=str(grok_log), mtime=0.0, processed_lines=99,
+        )
+        async_db_session.add(stale_state)
+        await async_db_session.commit()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+        # Without the guard, processed_lines=99 > 1 line would make
+        # harvest_grok_file skip everything — the reset makes this 1, not 0.
+        assert stats["new_events"] == 1
+
 
 # ── Hermes source ────────────────────────────────────────────────────────
 
@@ -2040,16 +2075,21 @@ class TestHermesHarvestIntegration:
         )
         assert len(result.all()) == 1
 
-    async def test_wal_missing_fallback_db_only(self, tmp_path, async_db_session):
-        """No -wal/-shm sidecar files exist (or aren't readable) → harvester
-        still works off the plain .db copy (docker-compose individual-file
-        mounts can leave a stale/missing -wal after a WAL-checkpoint recreate)."""
+    async def test_wal_and_shm_never_touched_copy_only_semantics(self, tmp_path, async_db_session):
+        """Review fix (21.07.): -wal/-shm are no longer mounted or copied at
+        all (Docker creates a DIRECTORY on the host for a missing bind
+        source, and Hermes deletes -wal/-shm itself on clean shutdown — a
+        backend recreate at the wrong moment would corrupt Hermes' own DB).
+        The harvester now reads ONLY the checkpointed state.db, whether or
+        not -wal/-shm happen to exist next to it on disk."""
         from app.services.token_harvester import run_harvest
 
         db_path = tmp_path / "state.db"
         _make_hermes_db(db_path)
-        # Deliberately do NOT create state.db-wal / state.db-shm.
-        assert not (tmp_path / "state.db-wal").exists()
+        # Even if -wal/-shm DO exist on disk (as they normally would next to
+        # a live Hermes DB), the harvester must never touch them.
+        (tmp_path / "state.db-wal").write_bytes(b"not a real wal file")
+        (tmp_path / "state.db-shm").write_bytes(b"not a real shm file")
 
         now = datetime.now(timezone.utc).timestamp()
         conn = sqlite3.connect(str(db_path))
@@ -2110,3 +2150,420 @@ class TestHermesHarvestIntegration:
             select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:priced-sess")
         )).one()
         assert event.cost_usd == 0.0  # matched (local model, $0), not None (unmatched)
+
+    async def test_reasoning_tokens_included_in_output_tokens(self, tmp_path, async_db_session):
+        """Billing convention (review fix, 21.07.): reasoning_tokens is a
+        distinct sqlite column here (unlike Grok, where it's already folded
+        into completion_tokens) but is still billed as output."""
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, "
+            "input_tokens, output_tokens, reasoning_tokens) "
+            "VALUES ('reason-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 100, 50, 20)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:reason-sess")
+        )).one()
+        assert event.output_tokens == 70  # 50 + 20, not 50
+
+    async def test_billing_provider_column_preferred_over_heuristic(self, tmp_path, async_db_session):
+        """sessions.billing_provider is Hermes' own authoritative label —
+        must win over the model-name heuristic when non-null."""
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, billing_provider) "
+            # A model that the heuristic would call "lmstudio" (has a "/") —
+            # billing_provider should still win.
+            "VALUES ('provider-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 'openrouter')",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:provider-sess")
+        )).one()
+        assert event.provider == "openrouter"
+
+    async def test_billing_provider_null_falls_back_to_heuristic(self, tmp_path, async_db_session):
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at) "
+            "VALUES ('no-provider-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "hermes:no-provider-sess")
+        )).one()
+        assert event.provider == "lmstudio"  # heuristic: "/" in model name
+
+    async def test_cutoff_filters_on_ended_at_not_started_at(self, tmp_path, async_db_session):
+        """Review fix (21.07.): a session started 60 days ago but ended
+        recently must be INCLUDED (started_at-based filtering would have
+        wrongly excluded it); a session started recently but... the cutoff
+        is always about when the session actually finished."""
+        from app.services.token_harvester import run_harvest
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        old_start = now - 60 * 86400  # 60 days ago — outside a started_at-based window
+        recent_end = now - 10
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('long-running-sess', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 10)",
+            (old_start, recent_end),
+        )
+        conn.commit()
+        conn.close()
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(tmp_path / "nonexistent_unified.jsonl"),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+        assert stats["hermes_sessions_scanned"] == 1
+        assert stats["new_events"] == 1
+
+
+class TestHermesMtimeSkipAndThrottle:
+    """Review fix (21.07.): the Hermes source copies+reads the whole
+    state.db on every read — an unconditional per-tick copy would churn
+    hundreds of MB/day. mtime-unchanged skips entirely; even a changed
+    mtime is throttled to at most one re-read per throttle window."""
+
+    async def test_mtime_unchanged_skips_scan_entirely(self, tmp_path, async_db_session):
+        from app.services.token_harvester import _harvest_hermes
+        from app.models.model_usage import ModelUsageHarvestState
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('mtime-sess', 'cli', 'm', ?, ?, 10)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        current_mtime = os.path.getmtime(db_path)
+        # Pre-seed state as if this exact file version was already harvested.
+        state_map = {
+            str(db_path): ModelUsageHarvestState(
+                file_path=str(db_path), mtime=current_mtime, processed_lines=0,
+            ),
+        }
+        stats = {"new_events": 0, "hermes_sessions_scanned": 0}
+
+        await _harvest_hermes(async_db_session, str(db_path), None, [], stats, state_map)
+
+        assert stats["hermes_sessions_scanned"] == 0  # never even opened the copy
+
+    async def test_changed_mtime_within_throttle_window_still_skips(
+        self, tmp_path, async_db_session
+    ):
+        from app.services.token_harvester import _harvest_hermes
+        from app.models.model_usage import ModelUsageHarvestState
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('throttled-sess', 'cli', 'm', ?, ?, 10)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        current_mtime = os.path.getmtime(db_path)
+        # Stored mtime deliberately differs (simulating Hermes having written
+        # again since the last successful harvest) — but processed_lines
+        # (repurposed as the last-run unix ts) says "just now".
+        state_map = {
+            str(db_path): ModelUsageHarvestState(
+                file_path=str(db_path), mtime=current_mtime - 1, processed_lines=int(now),
+            ),
+        }
+        stats = {"new_events": 0, "hermes_sessions_scanned": 0}
+
+        await _harvest_hermes(
+            async_db_session, str(db_path), None, [], stats, state_map,
+            throttle_seconds=900,
+        )
+
+        assert stats["hermes_sessions_scanned"] == 0  # throttled despite mtime differing
+
+    async def test_throttle_window_elapsed_allows_scan(self, tmp_path, async_db_session):
+        from app.services.token_harvester import _harvest_hermes
+        from app.models.model_usage import ModelUsageHarvestState
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('unthrottled-sess', 'cli', 'm', ?, ?, 10)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        current_mtime = os.path.getmtime(db_path)
+        state_map = {
+            str(db_path): ModelUsageHarvestState(
+                file_path=str(db_path), mtime=current_mtime - 1, processed_lines=int(now) - 1000,
+            ),
+        }
+        stats = {"new_events": 0, "hermes_sessions_scanned": 0}
+
+        await _harvest_hermes(
+            async_db_session, str(db_path), None, [], stats, state_map,
+            throttle_seconds=900,
+        )
+
+        assert stats["hermes_sessions_scanned"] == 1  # 1000s > 900s throttle window
+
+
+class TestHermesImmutableCopyOpen:
+    """Review fix (21.07.): open the COPY with sqlite3 URI ?immutable=1 —
+    direct unit tests of the sync reader, no event loop needed."""
+
+    def test_reads_finished_sessions_from_a_healthy_copy(self, tmp_path):
+        from app.services.token_harvester import _read_hermes_sessions_sync
+
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('immut-sess', 'cli', 'm', ?, ?, 7)",
+            (now - 5, now),
+        )
+        conn.commit()
+        conn.close()
+
+        rows = _read_hermes_sessions_sync(str(db_path), now - 86400)
+        assert rows is not None
+        assert len(rows) == 1
+        assert rows[0]["id"] == "immut-sess"
+        assert rows[0]["input_tokens"] == 7
+
+    def test_corrupt_copy_returns_none_not_raises(self, tmp_path):
+        """Torn copy ('database disk image is malformed') → None, not an
+        exception — the caller (run_harvest's per-source try/except) is a
+        second line of defense, but this is the expected/anticipated path,
+        handled locally and quietly."""
+        from app.services.token_harvester import _read_hermes_sessions_sync
+
+        bad_db = tmp_path / "state.db"
+        bad_db.write_text("this is not a valid sqlite file at all")
+
+        rows = _read_hermes_sessions_sync(str(bad_db), 0.0)
+        assert rows is None
+
+    def test_tmp_dir_cleaned_up_even_on_corrupt_copy(self, tmp_path):
+        """No leaked temp dirs regardless of whether the copy is readable."""
+        import glob
+
+        from app.services.token_harvester import _read_hermes_sessions_sync
+
+        bad_db = tmp_path / "state.db"
+        bad_db.write_text("not sqlite")
+
+        before = set(glob.glob(tempfile.gettempdir() + "/mc_hermes_harvest_*"))
+        _read_hermes_sessions_sync(str(bad_db), 0.0)
+        after = set(glob.glob(tempfile.gettempdir() + "/mc_hermes_harvest_*"))
+        assert after - before == set()
+
+
+class TestCopyHermesDbTmpDirLeak:
+    """Review fix (21.07.): a failed copy must not leak its temp dir."""
+
+    def test_failed_copy_cleans_up_tmp_dir(self, tmp_path):
+        import glob
+
+        from app.services.token_harvester import _copy_hermes_db
+
+        missing_src = tmp_path / "does-not-exist.db"
+        before = set(glob.glob(tempfile.gettempdir() + "/mc_hermes_harvest_*"))
+        with pytest.raises(OSError):
+            _copy_hermes_db(str(missing_src))
+        after = set(glob.glob(tempfile.gettempdir() + "/mc_hermes_harvest_*"))
+        assert after - before == set()
+
+
+@pytest.mark.asyncio
+class TestPerSourceIsolation:
+    """Review fix (21.07.): claude/omp, grok, and hermes each run in their
+    own try/except + commit their own work immediately — one source raising
+    must not discard the other sources' already-processed events."""
+
+    async def test_grok_source_failure_does_not_lose_other_sources_events(
+        self, tmp_path, async_db_session, monkeypatch
+    ):
+        import app.services.token_harvester as th
+        from app.services.token_harvester import run_harvest
+
+        # Claude/omp fixture
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        (rex_dir / "s.jsonl").write_text(
+            _make_line(uuid_="isolation-claude-001") + "\n"
+        )
+
+        # Hermes fixture
+        db_path = tmp_path / "state.db"
+        _make_hermes_db(db_path)
+        now = datetime.now(timezone.utc).timestamp()
+        conn = sqlite3.connect(str(db_path))
+        conn.execute(
+            "INSERT INTO sessions (id, source, model, started_at, ended_at, input_tokens) "
+            "VALUES ('isolation-hermes-001', 'cli', 'Qwen/Qwen3.6-27B-FP8', ?, ?, 10)",
+            (now - 10, now),
+        )
+        conn.commit()
+        conn.close()
+
+        # Force the grok source to blow up mid-run.
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("simulated grok source failure")
+
+        monkeypatch.setattr(th, "_process_grok_file", _boom)
+
+        grok_log = tmp_path / "unified.jsonl"
+        grok_log.write_text("")  # must exist so run_harvest even tries the source
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(tmp_path / "nonexistent_sessions"),
+            hermes_state_db_path=str(db_path),
+        )
+
+        assert stats["source_errors"] == 1
+
+        claude_event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "isolation-claude-001")
+        )).one()
+        assert claude_event is not None
+
+        hermes_event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(
+                ModelUsageEvent.message_uuid == "hermes:isolation-hermes-001"
+            )
+        )).one()
+        assert hermes_event is not None
+
+    async def test_claude_omp_source_failure_does_not_block_grok_and_hermes(
+        self, tmp_path, async_db_session, monkeypatch
+    ):
+        """The failing source doesn't even have to be first — a failure in
+        the FIRST guarded block must not prevent the LATER ones from running
+        and committing at all."""
+        import app.services.token_harvester as th
+        from app.services.token_harvester import run_harvest
+
+        async def _boom(*args, **kwargs):
+            raise RuntimeError("simulated claude/omp source failure")
+
+        monkeypatch.setattr(th, "_process_jsonl_file", _boom)
+
+        agents_dir = tmp_path / "agents"
+        rex_dir = agents_dir / "rex" / "claude-config" / "projects" / "p"
+        rex_dir.mkdir(parents=True)
+        (rex_dir / "s.jsonl").write_text(_make_line(uuid_="wont-be-inserted") + "\n")
+
+        grok_log = tmp_path / "unified.jsonl"
+        grok_log.write_text(_GROK_REAL_LINE + "\n")
+        sessions_base = tmp_path / "sessions"
+        cwd_dir = sessions_base / "%2FUsers%2FHenry%2F.mc%2Fworkspaces%2Fgrok" / \
+            "019f4dd6-6505-7510-b05c-b6dfc47a2c2d"
+        cwd_dir.mkdir(parents=True)
+        (cwd_dir / "summary.json").write_text(json.dumps(_GROK_REAL_SUMMARY))
+
+        stats = await run_harvest(
+            async_db_session,
+            agent_base_paths=[str(agents_dir)],
+            boss_base_paths=[],
+            agent_slug_map={},
+            grok_log_path=str(grok_log),
+            grok_sessions_path=str(sessions_base),
+            hermes_state_db_path=str(tmp_path / "nonexistent_state.db"),
+        )
+
+        assert stats["source_errors"] == 1
+        grok_event = (await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.harness == "grok")
+        )).one()
+        assert grok_event is not None
+        result = await async_db_session.exec(
+            select(ModelUsageEvent).where(ModelUsageEvent.message_uuid == "wont-be-inserted")
+        )
+        assert result.all() == []  # the failing source's event never made it in

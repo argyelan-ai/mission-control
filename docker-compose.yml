@@ -215,13 +215,20 @@ services:
       # Join). Beides read-only, Grok Build CLI schreibt hier auf dem Host.
       - ${HOME}/.grok/logs:${HOME}/.grok/logs:ro
       - ${HOME}/.grok/sessions:${HOME}/.grok/sessions:ro
-      # Token-Harvester Hermes-Quelle (Bench #18 PR1): NUR state.db (+ -wal/-shm,
-      # falls vorhanden) — NIEMALS das ganze ~/.hermes/-Verzeichnis mounten, das
-      # enthaelt Secrets (.env, auth.json). Der Harvester kopiert die Dateien vor
-      # dem Oeffnen in ein Tempverzeichnis (nie live lesen/sperren).
+      # Token-Harvester Hermes-Quelle (Bench #18 PR1): NUR state.db — NIEMALS
+      # das ganze ~/.hermes/-Verzeichnis mounten (enthaelt Secrets: .env,
+      # auth.json). Der Harvester kopiert die Datei vor dem Oeffnen in ein
+      # Tempverzeichnis (nie live lesen/sperren).
+      # ⚠️ -wal/-shm werden BEWUSST NICHT gemountet (Review-Fix, 21.07.):
+      # Docker legt fuer eine fehlende Bind-Mount-Quelle eine DIRECTORY auf dem
+      # Host an (verifiziert), und Hermes raeumt state.db-wal/-shm bei einem
+      # sauberen Shutdown selbst weg. Ein Backend-Recreate im falschen Moment
+      # wuerde also ~/.hermes/state.db-wal als Verzeichnis auf dem Host anlegen
+      # und Hermes' eigene SQLite-DB beim naechsten Start kaputt machen. Der
+      # Harvester liest deshalb NUR die gecheckpointete Haupt-Datei (state.db)
+      # — Tradeoff: Events aus dem noch ungecheckpointeten WAL fehlen bis zum
+      # naechsten SQLite-Checkpoint (Minuten), fuer Kosten-Analytics kein Problem.
       - ${HOME}/.hermes/state.db:${HOME}/.hermes/state.db:ro
-      - ${HOME}/.hermes/state.db-wal:${HOME}/.hermes/state.db-wal:ro
-      - ${HOME}/.hermes/state.db-shm:${HOME}/.hermes/state.db-shm:ro
       # Templates als Live-Mount — Aenderungen an *.j2 werden vom
       # template_renderer.py (FileSystemLoader mit auto_reload) sofort
       # aufgenommen. Kein Backend-Rebuild mehr bei Template-Aenderungen.
