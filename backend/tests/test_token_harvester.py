@@ -540,6 +540,61 @@ class TestHarvestFile:
         assert len(records) == 1
         assert records[0]["uuid"] == "uuid-good"
 
+    # Real omp session header line (verified against a live sparky file,
+    # 2026-07-16): cwd lives ONLY here — message lines carry none.
+    _OMP_SESSION_HEADER = (
+        '{"type":"session","version":3,"id":"019f69c1-b98c-7000-8977-c82d7c797c8e",'
+        '"timestamp":"2026-07-16T07:08:51.469Z",'
+        '"cwd":"/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"}'
+    )
+
+    def test_omp_session_header_cwd_fills_message_records(self, tmp_path):
+        """omp-JSONL carries cwd ONLY on the first type:"session" header line.
+        Root-cause regression guard (Bench #18): without the header fallback
+        every omp record has cwd="" and can never be attributed to a task."""
+        from app.services.token_harvester import harvest_file
+
+        jsonl = tmp_path / "2026-07-16T07-08-51-469Z_019f69c1.jsonl"
+        jsonl.write_text(
+            self._OMP_SESSION_HEADER + "\n" + _make_omp_line(short_id="idA") + "\n"
+        )
+
+        records = harvest_file(str(jsonl), processed_lines=0)
+        assert len(records) == 1
+        assert records[0]["cwd"] == (
+            "/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"
+        )
+
+    def test_omp_session_header_cwd_survives_offset_resume(self, tmp_path):
+        """Offset resume skips line 0 — the header cwd must still be applied
+        to records read past the offset."""
+        from app.services.token_harvester import harvest_file
+
+        jsonl = tmp_path / "2026-07-16T07-08-51-469Z_019f69c1.jsonl"
+        jsonl.write_text(
+            self._OMP_SESSION_HEADER + "\n"
+            + _make_omp_line(short_id="idA") + "\n"
+            + _make_omp_line(short_id="idB", response_id="respB") + "\n"
+        )
+
+        records = harvest_file(str(jsonl), processed_lines=2)
+        assert len(records) == 1
+        assert records[0]["cwd"] == (
+            "/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"
+        )
+
+    def test_claude_per_line_cwd_wins_over_header(self, tmp_path):
+        """Claude-format lines carry their own cwd — the header fallback must
+        never overwrite a non-empty per-line cwd."""
+        from app.services.token_harvester import harvest_file
+
+        jsonl = tmp_path / "session.jsonl"
+        jsonl.write_text(_make_line(uuid_="uuid-1", cwd="/home/agent") + "\n")
+
+        records = harvest_file(str(jsonl), processed_lines=0)
+        assert len(records) == 1
+        assert records[0]["cwd"] == "/home/agent"
+
 
 # ── Boss attribution (cwd/gitBranch heuristic) ────────────────────────────
 
