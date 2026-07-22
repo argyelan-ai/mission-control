@@ -740,6 +740,47 @@ def test_msg_gate_closed_when_session_not_running(bridge, monkeypatch):
     assert bridge.msg_gate_open() is False
 
 
+def test_normalize_volatile_neutralizes_real_hermes_status_line(bridge):
+    """Same finding as hermes-bridge (twin fix, live-confirmed there
+    2026-07-21): a ticking timer/token-counter/spinner status line must
+    normalize to an identical string across captures that differ only in
+    those volatile values."""
+    cap1 = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    cap2 = "⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 45s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._normalize_volatile(cap1) == bridge._normalize_volatile(cap2)
+
+
+def test_msg_gate_pane_quiet_keeps_advancing_through_ticking_status_line(bridge, monkeypatch):
+    """Regression: without normalization, a ticking status line never reads
+    "unchanged" and the quiet clock never advances past 0, so the gate never
+    opens — messages hang forever."""
+    lines = [
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.2K/262.1K │ … │ 5h │ ⏲ 18m 57s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 56s │ ✓ 2h 10m │ ⚠ YOLO",
+    ]
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane=lines[0]) is False
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane=lines[1]) is False
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    assert bridge._msg_gate_pane_quiet(now=111.0, pane=lines[2]) is True
+
+
+def test_msg_gate_pane_quiet_still_resets_on_genuine_new_content(bridge, monkeypatch):
+    """Real new content must still reset the quiet clock — normalization must
+    only neutralize the volatile status-line noise, not actual progress."""
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    status = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane=f"transcript line A\n{status}") is False
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane=f"transcript line A\n{status}") is False
+    # New transcript content appears — genuine progress, clock resets.
+    assert bridge._msg_gate_pane_quiet(
+        now=106.0, pane=f"transcript line A\ntranscript line B\n{status}"
+    ) is False
+    assert bridge._msg_gate_pane_quiet(
+        now=117.0, pane=f"transcript line A\ntranscript line B\n{status}"
+    ) is True
+
+
 def test_msg_gate_pane_quiet_requires_stability_window(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
     # First observation of a pane always resets the clock → not quiet yet.

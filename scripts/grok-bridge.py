@@ -44,6 +44,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import signal
@@ -140,6 +141,42 @@ _nudges_sent: int = 0
 _msg_gate_lock = threading.Lock()
 _msg_gate_last_pane: str = ""
 _msg_gate_last_change_ts: float = 0.0
+
+# Review fix (2026-07-21, twin of hermes-bridge.py's identical fix, live-
+# confirmed there on the Qwen status line): a TUI can render VOLATILE status
+# text (ticking timer, token/context counter, spinner frame) that changes
+# every second even while genuinely idle between tasks. Compared raw, the
+# pane never reads "unchanged" and the message gate never opens — messages
+# hang forever, not just delayed. grok's idle pane currently looks static,
+# but normalizing here costs nothing and closes the same class of bug if the
+# TUI ever grows a ticking status line. Extendable via
+# MSG_QUIET_VOLATILE_PATTERNS (newline-separated extra regexes).
+_VOLATILE_PATTERN_SOURCES = [
+    r"\d+h(?:\s*\d+m)?",                # 5h, 5h 30m
+    r"\d+m\s*\d+s",                     # 18m 58s
+    r"\d+(?:\.\d+)?K/\d+(?:\.\d+)?K",   # 31.1K/262.1K (token/context counter)
+    r"\d+%",                            # 42% (progress display)
+    r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]",                    # braille spinner frames
+    r"[✻✽·✢]",                          # asterisk-rotation spinner frames
+    r"[⏲⏳]",                            # timer/hourglass icons
+]
+_extra_volatile = os.environ.get("MSG_QUIET_VOLATILE_PATTERNS", "")
+if _extra_volatile.strip():
+    _VOLATILE_PATTERN_SOURCES.extend(
+        p for p in _extra_volatile.splitlines() if p.strip()
+    )
+_VOLATILE_RE = re.compile("|".join(f"(?:{p})" for p in _VOLATILE_PATTERN_SOURCES))
+
+
+def _normalize_volatile(pane: str) -> str:
+    """Replace volatile substrings (timers, token counters, spinner frames,
+    percentages) with a fixed placeholder so a status line that only ticks
+    those values compares equal to itself across polls. Genuine new content
+    elsewhere in the line/pane still differs and still resets the clock. Only
+    feeds the message-gate quiet clock (_msg_gate_pane_quiet) — the separate
+    no-progress watchdog clock (_last_pane/_last_progress_ts, _watchdog_tick)
+    is untouched, so a stuck task still nudges on real inactivity."""
+    return _VOLATILE_RE.sub("•", pane)
 # True while dispatch_task()/reset_tui_session() is actively driving the TUI —
 # the message gate must stay closed so a queued message is never pasted mid-turn.
 _dispatch_in_flight: bool = False
@@ -442,8 +479,13 @@ def msg_queue_files() -> list[Path]:
 def _msg_gate_pane_quiet(now: float, pane: str) -> bool:
     """Advance the pane-quiet clock; True once the pane has been unchanged for
     >= MSG_QUIET_SECONDS. Pure w.r.t. tmux (caller supplies now/pane) — same
-    shape as _watchdog_tick so it is unit-testable without a real TUI."""
+    shape as _watchdog_tick so it is unit-testable without a real TUI.
+
+    `pane` is normalized (volatile substrings stripped) BEFORE the compare —
+    see _normalize_volatile.
+    """
     global _msg_gate_last_pane, _msg_gate_last_change_ts
+    pane = _normalize_volatile(pane)
     with _msg_gate_lock:
         if pane != _msg_gate_last_pane:
             _msg_gate_last_pane = pane

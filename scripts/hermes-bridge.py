@@ -18,6 +18,7 @@ import http.server
 import json
 import logging
 import os
+import re
 import shutil
 import signal
 import subprocess as _sp
@@ -64,6 +65,44 @@ MSG_ACK_DIR = WORKSPACE / "logs" / "msg-acked"
 # pattern here rather than falling back to the weaker dispatch-only gate the
 # spec allows when no pane is capturable).
 _msg_pane_state: dict = {"pane": None, "last_change_ts": 0.0}
+
+# Review fix (2026-07-21, live-confirmed): the TUI can render VOLATILE status
+# text (a ticking timer, token/context counter, spinner frame) that changes
+# every second even while the agent is genuinely idle between tasks. Compared
+# raw, that made the pane look "changed" on every poll — the quiet clock
+# never reached MSG_QUIET_SECONDS, the gate never opened, and comm_v2
+# messages hung forever (not just delayed past the 600s reminder — the
+# reminder paste ALSO requires the gate open). Concrete trigger: hermes'
+# Qwen3.6-27B-FP8 status line, e.g.
+#   "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+# Fix: strip known-volatile SUBSTRINGS (not whole lines — a line staying
+# structurally identical while only its timer ticks must still compare equal,
+# but genuine new content in that same line must still be seen) before the
+# quiet-clock comparison. Extendable via MSG_QUIET_VOLATILE_PATTERNS (newline-
+# separated extra regexes, appended to the defaults below).
+_VOLATILE_PATTERN_SOURCES = [
+    r"\d+h(?:\s*\d+m)?",                # 5h, 5h 30m
+    r"\d+m\s*\d+s",                     # 18m 58s
+    r"\d+(?:\.\d+)?K/\d+(?:\.\d+)?K",   # 31.1K/262.1K (token/context counter)
+    r"\d+%",                            # 42% (progress display)
+    r"[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]",                    # braille spinner frames
+    r"[✻✽·✢]",                          # asterisk-rotation spinner frames
+    r"[⏲⏳]",                            # timer/hourglass icons
+]
+_extra_volatile = os.environ.get("MSG_QUIET_VOLATILE_PATTERNS", "")
+if _extra_volatile.strip():
+    _VOLATILE_PATTERN_SOURCES.extend(
+        p for p in _extra_volatile.splitlines() if p.strip()
+    )
+_VOLATILE_RE = re.compile("|".join(f"(?:{p})" for p in _VOLATILE_PATTERN_SOURCES))
+
+
+def _normalize_volatile(pane: str) -> str:
+    """Replace volatile substrings (timers, token counters, spinner frames,
+    percentages) with a fixed placeholder so a status line that only ticks
+    those values compares equal to itself across polls. Genuine new content
+    elsewhere in the line/pane still differs and still resets the clock."""
+    return _VOLATILE_RE.sub("•", pane)
 
 # Session-reset on GENUINE task switch (ADR-068 addendum, twin of grok-bridge).
 # Dispatch semantics (dispatch.py:8-18) promise a fresh context per NEW task —
@@ -413,7 +452,13 @@ def _pane_quiet_seconds(now: float, pane: str) -> float:
 
     Pure w.r.t. tmux (caller supplies now/pane) — mirrors grok-bridge's
     _watchdog_tick pane-diff idea, reused here to drive the message gate.
+
+    `pane` is normalized (volatile substrings stripped) BEFORE the compare —
+    see _normalize_volatile. This only affects the message-gate quiet clock,
+    NOT any watchdog/no-progress pane-diff (there isn't one in this module —
+    hermes has no separate watchdog pane tracker to disturb).
     """
+    pane = _normalize_volatile(pane)
     if pane != _msg_pane_state["pane"]:
         _msg_pane_state["pane"] = pane
         _msg_pane_state["last_change_ts"] = now
