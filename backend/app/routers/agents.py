@@ -3168,17 +3168,45 @@ async def agent_inbox_ack(
     """Advance the agent's ack cursor for one thread (Nudge+Pull, W2.1).
 
     Idempotent and never backwards: `last_acked_seq` only moves forward. Pull
-    semantics — the GET was the delivery — so there is NO cap at
+    semantics — the GET was the delivery — so there is no cap at
     `last_delivered_seq`; `last_delivered_seq` is dragged up to at least the new
-    ack so the two-stage invariant (`delivered >= acked`) holds. Non-comm_v2
-    agents get 404, mirroring the poll flag gate.
+    ack so the two-stage invariant (`delivered >= acked`) holds.
+
+    Guarded on two fronts:
+    - Scope: `thread_id` must be one of the agent's active-task threads (same
+      set the inbox pull serves). An unknown/foreign thread returns 404 and
+      creates NO cursor — otherwise any agent could pre-poison arbitrary
+      (agent, thread) cursors and bloat the table.
+    - Cap at reality: the ack is capped at the thread's highest existing
+      `Message.seq` (0 for an empty thread). Without it, `seq=999` on a
+      one-message thread would set the cursor to 999 and permanently skip
+      messages 2..999 that arrive later.
+    Non-comm_v2 agents get 404, mirroring the poll flag gate.
     """
+    from sqlalchemy import func
+    from app.models.thread import Message
+
     if not getattr(agent, "comm_v2", False):
         raise HTTPException(status_code=404, detail="comm_v2 messaging not enabled for this agent")
 
+    scoped_thread_ids = {
+        thread.id for thread, _ in await _message_threads_for_agent(agent, session)
+    }
+    if payload.thread_id not in scoped_thread_ids:
+        raise HTTPException(status_code=404, detail="thread not in agent's active scope")
+
+    max_seq = (
+        await session.exec(
+            select(func.coalesce(func.max(Message.seq), 0)).where(
+                Message.thread_id == payload.thread_id
+            )
+        )
+    ).one()
+    capped = min(payload.seq, max_seq)
+
     cursor = await _get_or_create_thread_cursor(session, agent.id, payload.thread_id)
-    if payload.seq > cursor.last_acked_seq:
-        cursor.last_acked_seq = payload.seq
+    if capped > cursor.last_acked_seq:
+        cursor.last_acked_seq = capped
     if cursor.last_delivered_seq < cursor.last_acked_seq:
         cursor.last_delivered_seq = cursor.last_acked_seq
     session.add(cursor)

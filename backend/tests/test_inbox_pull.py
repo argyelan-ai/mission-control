@@ -237,3 +237,65 @@ async def test_ack_404_without_comm_v2(client: AsyncClient, async_session):
     board, agent, token, task, thread = await _board_agent_task(async_session, comm_v2=False)
     resp = await _ack(client, token, thread.id, 1)
     assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_ack_capped_at_thread_max_seq(client: AsyncClient, async_session):
+    """Finding 3a: an ack above the thread's highest real seq is capped — it
+    must NOT set the cursor past messages that don't exist yet (which would
+    permanently skip them)."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    m1 = await post_message(async_session, thread_id=thread.id, sender_type="user",
+                            message_type="message", body="one")
+
+    resp = await _ack(client, token, thread.id, 999)
+    assert resp.status_code == 200
+    assert resp.json()["last_acked_seq"] == m1.seq  # capped at 1, not 999
+
+    # A later message (seq 2) is still delivered — not skipped.
+    m2 = await post_message(async_session, thread_id=thread.id, sender_type="user",
+                            message_type="message", body="two")
+    ids = [m["id"] for m in (await _inbox(client, token)).json()["messages"]]
+    assert str(m2.id) in ids
+
+
+@pytest.mark.asyncio
+async def test_ack_foreign_thread_404_and_no_cursor(client: AsyncClient, async_session):
+    """Finding 3b: acking a thread outside the agent's active scope returns 404
+    and creates NO cursor row (no pre-poisoning / table bloat)."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    bogus = uuid.uuid4()
+
+    resp = await _ack(client, token, bogus, 5)
+    assert resp.status_code == 404
+
+    cursors = (
+        await async_session.exec(
+            select(AgentThreadCursor).where(
+                AgentThreadCursor.agent_id == agent.id,
+                AgentThreadCursor.thread_id == bogus,
+            )
+        )
+    ).all()
+    assert cursors == [], "no cursor may be created for a foreign thread"
+
+
+@pytest.mark.asyncio
+async def test_ack_other_agents_thread_404(client: AsyncClient, async_session):
+    """A real thread that belongs to a DIFFERENT agent is still out of scope —
+    404, no cursor created for the caller."""
+    _, _, _, _, other_thread = await _board_agent_task(async_session)
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+
+    resp = await _ack(client, token, other_thread.id, 3)
+    assert resp.status_code == 404
+
+    cursors = (
+        await async_session.exec(
+            select(AgentThreadCursor).where(
+                AgentThreadCursor.agent_id == agent.id,
+                AgentThreadCursor.thread_id == other_thread.id,
+            )
+        )
+    ).all()
+    assert cursors == []

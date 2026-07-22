@@ -109,12 +109,19 @@ MSG_DELIVERY_MODE="${MSG_DELIVERY_MODE:-paste}"
 # Backend liefert dieselben seqs weiter), nach denen ein bereits genudgetes seq
 # erneut angestupst wird. 0 waere Dauer-Spam — Default 10 Min.
 NUDGE_REMIND_SECONDS="${NUDGE_REMIND_SECONDS:-600}"
-# High-Water-State fuer den nudge-Modus: eine Zeile "<max_seq> <epoch>". Ersetzt
-# die queue/ack-Dateien (im nudge-Modus ist der Server-Cursor die Wahrheit).
+# High-Water-State fuer den nudge-Modus: eine Zeile PRO THREAD
+# "<thread_id> <last_nudged_seq> <epoch>". Per-Thread (nicht global), weil seq
+# nur INNERHALB eines Threads eindeutig ist — sonst wuerde ein neuer Thread mit
+# niedrigem seq hinter einem alten Thread mit hohem seq versteckt. Ersetzt die
+# queue/ack-Dateien (im nudge-Modus ist der Server-Cursor die Wahrheit).
 NUDGE_STATE_FILE="${NUDGE_STATE_FILE:-/home/agent/.msg-nudge-state}"
-# Fixer, einzeiliger Weckruf — konstant, damit die bestehende paste-verify
-# Fingerprint-Mechanik zuverlaessig greift.
-NUDGE_TEXT="📬 Neue Nachrichten — lies sie jetzt mit: mc inbox"
+# Der Weckruf traegt ein EINDEUTIGES Token (hoechstes seq + epoch), damit die
+# paste-verify Fingerprint-Mechanik jeden Nudge als neuen Text erkennt. Ein
+# konstanter Text wuerde false-passen: der Fingerprint des ERSTEN Nudges bleibt
+# im 2000-Zeilen-Scrollback und liesse jeden spaeteren Verify durchgehen (kein
+# Retry bei real durchgefallenem Paste). Das 📬-Praefix bleibt stabil fuer den
+# SOUL-Trigger. Format: "📬 Neue Nachrichten (bis seq <max>, <epoch>) — lies sie
+# jetzt mit: mc inbox" — gebaut in deliver_messages_nudge().
 
 # W2.1 Turn-Signal (Phase A): Datei an die die Claude-Code-Hooks
 # UserPromptSubmit/Stop je eine `<epoch> submit|stop` Zeile appenden.
@@ -892,67 +899,102 @@ flush_msg_queue() {
     return 0
 }
 
-# _nudge_max_seq RESPONSE_JSON — hoechstes seq ueber alle new_messages, oder
-# leer wenn keine pending sind. Basis fuer den nudge-Dedup (nur bei hoeherem seq
-# neu stupsen).
-_nudge_max_seq() {
+# _nudge_thread_seqs RESPONSE_JSON — druckt "<thread_id> <max_seq>" je Thread
+# (hoechstes seq PRO Thread) aus new_messages. Leer wenn nichts pending. Basis
+# fuer den per-Thread-Dedup (seq ist nur innerhalb eines Threads eindeutig).
+_nudge_thread_seqs() {
     echo "$1" | python3 -c "
 import json, sys
 try:
     data = json.load(sys.stdin)
     msgs = data.get('new_messages') or []
-    print(max((int(m['seq']) for m in msgs), default=''))
+    per = {}
+    for m in msgs:
+        tid = str(m['thread_id']); s = int(m['seq'])
+        if s > per.get(tid, 0):
+            per[tid] = s
+    for tid, s in per.items():
+        print(tid, s)
 except Exception:
-    print('')
+    pass
 " 2>/dev/null
 }
 
+# _nudge_state_get THREAD — druckt "<last_nudged_seq> <epoch>" fuer THREAD aus
+# dem State-File, oder "0 0" wenn der Thread noch nie genudget wurde.
+_nudge_state_get() {
+    local tid="$1" line
+    if [ -f "$NUDGE_STATE_FILE" ]; then
+        line=$(grep "^${tid} " "$NUDGE_STATE_FILE" 2>/dev/null | head -1)
+        if [ -n "$line" ]; then
+            echo "${line#* }"   # thread_id abschneiden → "<seq> <epoch>"
+            return 0
+        fi
+    fi
+    echo "0 0"
+}
+
 # deliver_messages_nudge RESPONSE_JSON — nudge-Modus: statt Volltext nur einen
-# fixen Weckruf an der Turn-Grenze pasten. Dedup ueber NUDGE_STATE_FILE
-# ("<max_seq> <epoch>"): re-nudge nur bei NEUER hoeherer seq ODER nach
-# NUDGE_REMIND_SECONDS ohne Cursor-Fortschritt (Backend liefert dieselben seqs
-# weiter solange der Agent nicht via `mc inbox` geackt hat). Leere new_messages =
-# Agent hat alles geholt+geackt → State loeschen, damit die naechste Nachricht
-# garantiert neu nudged.
+# Weckruf an der Turn-Grenze pasten. PER-THREAD-Dedup ueber NUDGE_STATE_FILE
+# (Zeile je Thread): stupsen sobald IRGENDEIN Thread ein seq ueber seinem
+# letzten genudgten Stand hat ODER nach NUDGE_REMIND_SECONDS ohne Fortschritt
+# (Backend liefert dieselben seqs weiter solange der Agent nicht via `mc inbox`
+# geackt hat). Leere new_messages = alles geholt+geackt → State loeschen.
 deliver_messages_nudge() {
     local response_json="$1"
-    local max_seq
-    max_seq=$(_nudge_max_seq "$response_json")
-    if [ -z "$max_seq" ]; then
+    local seqs
+    seqs=$(_nudge_thread_seqs "$response_json")
+    if [ -z "$seqs" ]; then
         rm -f "$NUDGE_STATE_FILE" 2>/dev/null || true
         return 0
     fi
 
-    local last_seq=0 last_ts=0 now
-    if [ -f "$NUDGE_STATE_FILE" ]; then
-        read -r last_seq last_ts < "$NUDGE_STATE_FILE" 2>/dev/null || true
-        [ -n "$last_seq" ] || last_seq=0
-        [ -n "$last_ts" ] || last_ts=0
-    fi
-    now=$(date +%s)
-
-    local do_nudge=0
-    if [ "$max_seq" -gt "$last_seq" ]; then
-        do_nudge=1   # neue, hoehere seq → sofort stupsen
-    elif [ $(( now - last_ts )) -ge "$NUDGE_REMIND_SECONDS" ]; then
-        do_nudge=1   # Remind: noch nicht geackt nach NUDGE_REMIND_SECONDS
-    fi
+    local now; now=$(date +%s)
+    local do_nudge=0 global_max=0
+    local tid mseq rest sseq sts
+    # Entscheidung + globales Max (nur fuer das eindeutige Token) — heredoc statt
+    # Pipe, damit die Zuweisungen in bash 3.2 im Funktions-Scope bleiben.
+    while read -r tid mseq; do
+        [ -n "$tid" ] || continue
+        [ "$mseq" -gt "$global_max" ] && global_max="$mseq"
+        rest=$(_nudge_state_get "$tid")
+        sseq="${rest%% *}"; sts="${rest##* }"
+        [ -n "$sseq" ] || sseq=0
+        [ -n "$sts" ] || sts=0
+        if [ "$mseq" -gt "$sseq" ]; then
+            do_nudge=1   # neue, hoehere seq in DIESEM Thread → sofort stupsen
+        elif [ $(( now - sts )) -ge "$NUDGE_REMIND_SECONDS" ]; then
+            do_nudge=1   # Remind: dieser Thread noch nicht geackt
+        fi
+    done <<EOF
+$seqs
+EOF
     [ "$do_nudge" -eq 1 ] || return 0
 
     # Nur an einer echten Turn-Grenze stupsen (gleiches Gate wie der paste-Modus).
     if ! msg_gate_open; then
-        log "deliver_messages_nudge: Gate zu (claude arbeitet / Prompt nicht clean) — Nudge aufgeschoben (max_seq=$max_seq)."
+        log "deliver_messages_nudge: Gate zu (claude arbeitet / Prompt nicht clean) — Nudge aufgeschoben (bis seq=$global_max)."
         return 0
     fi
 
     local nf
     nf="${NUDGE_TMP_FILE:-/tmp/mc-nudge.txt}"
-    printf '%s\n' "$NUDGE_TEXT" > "$nf"
+    # Eindeutiges Token (global_max + epoch) — siehe Kommentar bei NUDGE_STATE_FILE.
+    printf '📬 Neue Nachrichten (bis seq %s, %s) — lies sie jetzt mit: mc inbox\n' \
+        "$global_max" "$now" > "$nf"
     if paste_and_submit "$nf"; then
-        printf '%s %s\n' "$max_seq" "$now" > "$NUDGE_STATE_FILE"
-        log "Nudge gepastet (max_seq=$max_seq) — Agent holt Inhalt via 'mc inbox'."
+        # Ein Nudge deckt ALLE pending Threads ab (der Agent liest via `mc inbox`
+        # alles) — darum den High-Water fuer jeden aktuell pending Thread setzen.
+        : > "$NUDGE_STATE_FILE"
+        while read -r tid mseq; do
+            [ -n "$tid" ] || continue
+            printf '%s %s %s\n' "$tid" "$mseq" "$now" >> "$NUDGE_STATE_FILE"
+        done <<EOF
+$seqs
+EOF
+        log "Nudge gepastet (bis seq $global_max) — Agent holt Inhalt via 'mc inbox'."
     else
-        log "WARNING: Nudge-Paste fehlgeschlagen (max_seq=$max_seq) — Retry beim naechsten Poll (State unveraendert)."
+        log "WARNING: Nudge-Paste fehlgeschlagen (bis seq $global_max) — Retry beim naechsten Poll (State unveraendert)."
     fi
 }
 
