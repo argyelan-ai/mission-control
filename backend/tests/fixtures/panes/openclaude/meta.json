@@ -1,0 +1,20 @@
+{
+  "cli_name": "openclaude",
+  "cli_version": "0.7.0 (OpenClaude)",
+  "container": "mc-agent-shakespeare",
+  "container_image": "mc-agent-base:latest",
+  "recorded_at": "2026-07-22T19:09:55Z",
+  "states": [
+    "crashed",
+    "idle"
+  ],
+  "true_runtime": "openclaude",
+  "expected_ui": "openclaude",
+  "synthetic_states": [
+    "crashed"
+  ],
+  "not_recorded": [
+    "working"
+  ],
+  "not_recorded_reason": "openclaude working turn not exercised \u2014 fleet guardrail limits live turns to FreeCode/claude only"
+}
