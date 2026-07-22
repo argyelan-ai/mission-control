@@ -7,6 +7,12 @@ Data sources:
     e.g. Sparky on Qwen/Spark. Distinct schema — type=="message", see
     parse_transcript_line)
   - ~/.claude/projects/**/*.jsonl (boss-host + operator's private sessions → boss attribution heuristic!)
+  - ~/.grok/logs/unified.jsonl (Grok Build CLI, ADR-066 host harness — append-only
+    structured log, only "shell.turn.inference_done" lines carry usage; joined
+    against ~/.grok/sessions/<urlenc-cwd>/<sid>/summary.json for model/cwd and
+    .../prompt_history.jsonl for task_id, see _harvest_grok)
+  - ~/.hermes/state.db (Hermes host harness — sqlite session ledger, never
+    opened live; copied to a temp dir first, see _harvest_hermes)
 
 Dedup key: top-level `uuid` (UNIQUE) for Claude Code lines. message.id has
 1042+ collisions — NEVER dedupe on that! omp lines carry no top-level uuid at
@@ -20,10 +26,15 @@ Offset resume: harvest_state stores processed_lines → only reads new lines.
 """
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import json
 import logging
 import os
+import re
+import shutil
+import sqlite3
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -35,6 +46,10 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.model_usage import ModelPrice, ModelUsageEvent, ModelUsageHarvestState
+
+# Extracts the MC dispatch task_id out of a "[MC DISPATCH] task_id=<uuid> ..."
+# prompt (Grok prompt_history.jsonl, Hermes first user message).
+_TASK_ID_RE = re.compile(r"task_id=([0-9a-f-]{36})")
 
 # Grace window added to a task's completed_at when checking whether an
 # event's ts falls "inside" the task's active lifetime (agents keep writing
@@ -252,6 +267,156 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     return records
 
 
+# ── Grok Build CLI source (ADR-066 host harness, Bench #18 PR1) ────────────
+
+
+def parse_grok_line(line: str) -> dict[str, Any] | None:
+    """Parses one line of ~/.grok/logs/unified.jsonl.
+
+    Only ``msg == "shell.turn.inference_done"`` lines carry usage — the vast
+    majority of unified.jsonl lines are unrelated structured-log noise and
+    are filtered out here (same idea as parse_transcript_line's type dispatch).
+
+    Real sample (verified against the live file, 2026-07-10)::
+
+        {"ts":"2026-07-10T21:02:09.251Z","src":"shell","pid":41213,"lvl":"info",
+         "sid":"019f4dd6-6505-7510-b05c-b6dfc47a2c2d","msg":"shell.turn.inference_done",
+         "ctx":{"loop_index":1,"model_elapsed_ms":1493,"prompt_tokens":18609,
+                "cached_prompt_tokens":6016,"completion_tokens":35,
+                "reasoning_tokens":27,"tokens_per_sec":48.2}}
+
+    Token math (OpenAI convention — cached_prompt_tokens is a SUBSET of
+    prompt_tokens, reasoning_tokens is a SUBSET of completion_tokens):
+        input_tokens = prompt_tokens - cached_prompt_tokens (floor 0)
+        cache_read_tokens = cached_prompt_tokens
+        cache_write_tokens = 0 (Grok/xAI has no cache-write billing concept)
+        output_tokens = completion_tokens
+
+    No model/cwd/task_id here — those need the sid→summary.json /
+    sid→prompt_history.jsonl join, done once per harvest run by the caller.
+    """
+    try:
+        d = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return None
+
+    if d.get("msg") != "shell.turn.inference_done":
+        return None
+
+    sid = d.get("sid")
+    ts = d.get("ts")
+    ctx = d.get("ctx")
+    if not sid or not ts or not ctx:
+        return None
+
+    loop_index = ctx.get("loop_index")
+    if loop_index is None:
+        return None
+
+    prompt_tokens = ctx.get("prompt_tokens", 0) or 0
+    cached_prompt_tokens = ctx.get("cached_prompt_tokens", 0) or 0
+    completion_tokens = ctx.get("completion_tokens", 0) or 0
+
+    return {
+        "uuid": f"grok:{sid}:{ts}:{loop_index}",
+        "sid": sid,
+        "timestamp": ts,
+        "input_tokens": max(prompt_tokens - cached_prompt_tokens, 0),
+        "output_tokens": completion_tokens,
+        "cache_read_tokens": cached_prompt_tokens,
+        "cache_write_tokens": 0,
+    }
+
+
+def harvest_grok_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
+    """Reads unified.jsonl from `processed_lines` onward (offset resume,
+    same convention as harvest_file — reuses model_usage_harvest_state)."""
+    records: list[dict[str, Any]] = []
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i < processed_lines:
+                    continue
+                line = line.strip()
+                if not line:
+                    continue
+                rec = parse_grok_line(line)
+                if rec is not None:
+                    records.append(rec)
+    except OSError as e:
+        logger.warning("harvest_grok_file(%s): OS error: %s", path, e)
+    return records
+
+
+def _build_grok_session_index(sessions_base: str) -> dict[str, dict[str, Any]]:
+    """{sid: {"model": ..., "cwd": ...}} from every summary.json under
+    sessions_base (``~/.grok/sessions/<urlenc-cwd>/<sid>/summary.json``).
+    Built once per harvest run — cheap (globs, small JSON files) compared to
+    re-globbing per event."""
+    index: dict[str, dict[str, Any]] = {}
+    base = Path(sessions_base)
+    if not base.exists():
+        return index
+    for summary_path in base.glob("*/*/summary.json"):
+        try:
+            data = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        info = data.get("info") or {}
+        sid = info.get("id") or summary_path.parent.name
+        model = data.get("current_model_id")
+        cwd = info.get("cwd")
+        if not sid or not model:
+            continue
+        index[sid] = {"model": model, "cwd": cwd or ""}
+    return index
+
+
+def _extract_task_id(text_: str) -> uuid.UUID | None:
+    """Extracts a ``task_id=<uuid>`` reference from dispatch-message text
+    (Grok prompt_history.jsonl prompts, Hermes first user message). Returns
+    None (never guesses) if the regex doesn't match or the match isn't a
+    parseable UUID."""
+    m = _TASK_ID_RE.search(text_ or "")
+    if not m:
+        return None
+    try:
+        return uuid.UUID(m.group(1))
+    except ValueError:
+        return None
+
+
+def _build_grok_task_index(sessions_base: str) -> dict[str, uuid.UUID]:
+    """{sid: task_id} from every prompt_history.jsonl under sessions_base
+    (one file per cwd-dir, shared by all sessions in that cwd — lines are
+    ``{"session_id": ..., "prompt": "[MC DISPATCH] task_id=<uuid> ..."}``)."""
+    index: dict[str, uuid.UUID] = {}
+    base = Path(sessions_base)
+    if not base.exists():
+        return index
+    for history_path in base.glob("*/prompt_history.jsonl"):
+        try:
+            with open(history_path, "r", encoding="utf-8", errors="replace") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+                    sid = d.get("session_id")
+                    prompt = d.get("prompt") or ""
+                    if not sid or sid in index:
+                        continue
+                    task_id = _extract_task_id(prompt)
+                    if task_id is not None:
+                        index[sid] = task_id
+        except OSError:
+            continue
+    return index
+
+
 def match_price(
     model: str,
     ts: datetime,
@@ -388,6 +553,28 @@ def _slugify_agent_name(name: str) -> str:
     return name.lower().replace(" ", "-")
 
 
+def _translate_agent_cwd(cwd: str, slug: str) -> str:
+    """Rewrites a container-side cwd (``/workspace/...``) to the host path
+    the DB actually stores on ``tasks.workspace_path``.
+
+    cli-bridge agents write JSONL transcripts with the cwd they see inside
+    their own container (``/workspace`` — the mount target of their
+    ``~/.mc/workspaces/<slug>`` bind mount, see docker-compose.agents.yml).
+    ``_resolve_task_for_rec`` compares against host paths, so without this
+    rewrite every cli-bridge/sparky event's cwd match fails and task_id stays
+    NULL forever. Inverse of ``dispatch._container_workspace_path``.
+
+    Non-``/workspace`` cwds (boss-host lines, or anything already host-side)
+    pass through unchanged. Anchored on the path boundary — ``/workspacefoo``
+    is NOT ``/workspace`` (a naive ``startswith`` would wrongly match it).
+    """
+    m = re.match(r"^/workspace(/.*)?$", cwd)
+    if not m:
+        return cwd
+    suffix = m.group(1) or ""
+    return str(_host_home() / ".mc" / "workspaces" / slug) + suffix
+
+
 async def _build_agent_slug_map(session: AsyncSession) -> dict[str, Any]:
     """{slug: agent_id} from the agents table — default attribution."""
     from app.models import Agent
@@ -493,6 +680,9 @@ async def run_harvest(
     boss_base_paths: list[str] | None = None,
     agent_slug_map: dict[str, Any] | None = None,
     task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
+    grok_log_path: str | None = None,
+    grok_sessions_path: str | None = None,
+    hermes_state_db_path: str | None = None,
 ) -> dict[str, int]:
     """Scans all JSONL files, parses assistant lines, and inserts events.
 
@@ -504,10 +694,15 @@ async def run_harvest(
     - task_workspace_map: {normalized workspace_path: [candidate task dicts]}
                           for task attribution (optional, built from DB if
                           omitted — see _build_task_workspace_map)
+    - grok_log_path / grok_sessions_path: Grok Build CLI sources (default:
+      settings.grok_harvest_path / settings.grok_sessions_path, expanduser)
+    - hermes_state_db_path: Hermes sqlite ledger (default:
+      settings.hermes_state_db_path, expanduser)
 
     Returns:
         {"files_scanned": N, "new_events": M, "skipped_private": K,
-         "backfilled_task_id": L}
+         "backfilled_task_id": L, "grok_skipped_no_summary": G,
+         "hermes_sessions_scanned": H, "source_errors": E}
     """
     from app.config import settings as app_settings
 
@@ -521,6 +716,19 @@ async def run_harvest(
     if boss_base_paths is None:
         boss_base_paths = [str(_host_home() / ".claude/projects")]
 
+    if grok_log_path is None:
+        grok_log_path = _expand_harvest_path(
+            getattr(app_settings, "grok_harvest_path", "~/.grok/logs/unified.jsonl")
+        )
+    if grok_sessions_path is None:
+        grok_sessions_path = _expand_harvest_path(
+            getattr(app_settings, "grok_sessions_path", "~/.grok/sessions")
+        )
+    if hermes_state_db_path is None:
+        hermes_state_db_path = _expand_harvest_path(
+            getattr(app_settings, "hermes_state_db_path", "~/.hermes/state.db")
+        )
+
     if agent_slug_map is None:
         # Default: attribution from the agents table (slug = name-based)
         agent_slug_map = await _build_agent_slug_map(session)
@@ -533,6 +741,8 @@ async def run_harvest(
         (aid for slug, aid in agent_slug_map.items() if slug.startswith("boss")),
         None,
     )
+    grok_agent_id = agent_slug_map.get("grok")
+    hermes_agent_id = agent_slug_map.get("hermes")
 
     # Load prices once (for cost calculation)
     prices_result = await session.exec(select(ModelPrice))
@@ -549,75 +759,125 @@ async def run_harvest(
         "new_events": 0,
         "skipped_private": 0,
         "backfilled_task_id": 0,
+        "grok_skipped_no_summary": 0,
+        "hermes_sessions_scanned": 0,
+        "source_errors": 0,
     }
 
-    # ── Agent paths: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl
+    # Per-source isolation (review fix, 21.07.): each of the three sources
+    # below runs in its own try/except AND commits its own work immediately
+    # afterward. Without the per-source commit, one source raising midway
+    # could leave the AsyncSession needing a rollback that would also discard
+    # the OTHER sources' already-processed-but-uncommitted events — a single
+    # final commit made every source's success depend on every other source
+    # not blowing up.
+
+    # ── Claude Code + omp scan: ~/.mc/agents/{slug}/claude-config/projects/**/*.jsonl
     #    AND ~/.mc/agents/{slug}/omp-sessions/**/*.jsonl (ADR-045 omp harness,
-    #    e.g. Sparky — no host mount existed for this before this fix, so the
-    #    glob was silently finding zero files for omp agents) ──────────────
-    for base_str in agent_base_paths:
-        base = Path(base_str)
-        if not base.exists():
-            continue
-        for pattern in (
-            "*/claude-config/projects/**/*.jsonl",
-            "*/omp-sessions/**/*.jsonl",
-        ):
-            for jsonl_path in sorted(base.glob(pattern)):
-                # Slug from the path segment directly under base
-                try:
-                    rel = jsonl_path.relative_to(base)
-                    slug = rel.parts[0]
-                except (ValueError, IndexError):
-                    slug = "unknown"
+    #    e.g. Sparky) + ~/.claude/projects/**/*.jsonl (boss-host) ───────────
+    try:
+        for base_str in agent_base_paths:
+            base = Path(base_str)
+            if not base.exists():
+                continue
+            for pattern in (
+                "*/claude-config/projects/**/*.jsonl",
+                "*/omp-sessions/**/*.jsonl",
+            ):
+                for jsonl_path in sorted(base.glob(pattern)):
+                    # Slug from the path segment directly under base
+                    try:
+                        rel = jsonl_path.relative_to(base)
+                        slug = rel.parts[0]
+                    except (ValueError, IndexError):
+                        slug = "unknown"
 
-                agent_id = agent_slug_map.get(slug)
-                harness = _harness_from_slug(slug)
+                    agent_id = agent_slug_map.get(slug)
+                    harness = _harness_from_slug(slug)
 
+                    await _process_jsonl_file(
+                        session=session,
+                        path=str(jsonl_path),
+                        agent_id=agent_id,
+                        harness=harness,
+                        is_boss_path=False,
+                        all_prices=all_prices,
+                        state_map=state_map,
+                        stats=stats,
+                        task_workspace_map=task_workspace_map,
+                        cwd_translate_slug=slug,
+                    )
+
+        for base_str in boss_base_paths:
+            base = Path(base_str)
+            if not base.exists():
+                continue
+            for jsonl_path in sorted(base.glob("**/*.jsonl")):
                 await _process_jsonl_file(
                     session=session,
                     path=str(jsonl_path),
-                    agent_id=agent_id,
-                    harness=harness,
-                    is_boss_path=False,
+                    agent_id=boss_agent_id,  # only applies to MC-attributed lines
+                    harness="host",
+                    is_boss_path=True,
                     all_prices=all_prices,
                     state_map=state_map,
                     stats=stats,
                     task_workspace_map=task_workspace_map,
+                    # boss_agent_id gets reloaded later if needed
                 )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: claude/omp source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
 
-    # ── Boss paths: ~/.claude/projects/**/*.jsonl ───────────────────────────
-    for base_str in boss_base_paths:
-        base = Path(base_str)
-        if not base.exists():
-            continue
-        for jsonl_path in sorted(base.glob("**/*.jsonl")):
-            await _process_jsonl_file(
+    # ── Grok source: ~/.grok/logs/unified.jsonl ─────────────────────────────
+    try:
+        if Path(grok_log_path).exists():
+            await _process_grok_file(
                 session=session,
-                path=str(jsonl_path),
-                agent_id=boss_agent_id,  # only applies to MC-attributed lines
-                harness="host",
-                is_boss_path=True,
+                path=grok_log_path,
+                sessions_base=grok_sessions_path,
+                agent_id=grok_agent_id,
                 all_prices=all_prices,
                 state_map=state_map,
                 stats=stats,
                 task_workspace_map=task_workspace_map,
-                # boss_agent_id gets reloaded later if needed
             )
-
-    # Commit at the end
-    try:
         await session.commit()
     except Exception as e:
-        logger.error("run_harvest: commit error: %s", e)
+        logger.error("run_harvest: grok source failed: %s", e)
         await session.rollback()
+        stats["source_errors"] += 1
+
+    # ── Hermes source: ~/.hermes/state.db (sqlite) ──────────────────────────
+    try:
+        if Path(hermes_state_db_path).exists():
+            await _harvest_hermes(
+                session=session,
+                state_db_path=hermes_state_db_path,
+                agent_id=hermes_agent_id,
+                all_prices=all_prices,
+                stats=stats,
+                state_map=state_map,
+                task_workspace_map=task_workspace_map,
+            )
+        await session.commit()
+    except Exception as e:
+        logger.error("run_harvest: hermes source failed: %s", e)
+        await session.rollback()
+        stats["source_errors"] += 1
 
     logger.info(
-        "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d",
+        "run_harvest: files=%d new=%d skipped_private=%d backfilled_task_id=%d "
+        "grok_skipped_no_summary=%d hermes_sessions_scanned=%d source_errors=%d",
         stats["files_scanned"],
         stats["new_events"],
         stats["skipped_private"],
         stats["backfilled_task_id"],
+        stats["grok_skipped_no_summary"],
+        stats["hermes_sessions_scanned"],
+        stats["source_errors"],
     )
     return stats
 
@@ -632,8 +892,14 @@ async def _process_jsonl_file(
     state_map: dict[str, ModelUsageHarvestState],
     stats: dict[str, int],
     task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
+    cwd_translate_slug: str | None = None,
 ) -> None:
-    """Processes a single JSONL file (offset resume, batch insert)."""
+    """Processes a single JSONL file (offset resume, batch insert).
+
+    cwd_translate_slug: agent slug for container→host cwd rewrite (agent
+    paths only — is_boss_path lines already carry a host-native cwd and
+    never get translated).
+    """
     stats["files_scanned"] += 1
 
     try:
@@ -650,6 +916,9 @@ async def _process_jsonl_file(
 
     # Read lines (from offset)
     records = harvest_file(path, processed_lines)
+    if cwd_translate_slug and not is_boss_path:
+        for rec in records:
+            rec["cwd"] = _translate_agent_cwd(rec.get("cwd", ""), cwd_translate_slug)
     if not records:
         # File changed but no new valid lines → update state
         total_lines = _count_lines(path)
@@ -808,3 +1077,358 @@ def _count_lines(path: str) -> int:
             return sum(1 for _ in f)
     except OSError:
         return 0
+
+
+async def _process_grok_file(
+    session: AsyncSession,
+    path: str,
+    sessions_base: str,
+    agent_id: Any | None,
+    all_prices: list[ModelPrice],
+    state_map: dict[str, ModelUsageHarvestState],
+    stats: dict[str, int],
+    task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
+) -> None:
+    """Processes ~/.grok/logs/unified.jsonl (offset resume, same mechanics
+    as _process_jsonl_file — reuses model_usage_harvest_state keyed by this
+    file's absolute path)."""
+    stats["files_scanned"] += 1
+
+    try:
+        current_mtime = os.path.getmtime(path)
+    except OSError:
+        return
+
+    state = state_map.get(path)
+    if state and state.mtime == current_mtime:
+        return
+
+    processed_lines = state.processed_lines if state else 0
+
+    # Truncation guard: unified.jsonl is append-only in normal operation, but
+    # a log-rotation or a Grok Build CLI reset could shrink/recreate it. If
+    # the stored offset is now past the file's actual line count, reading
+    # from that offset would silently yield 0 records forever — reset to 0.
+    # (Also blocking I/O — offloaded like the read itself, below.)
+    current_total_lines = await asyncio.to_thread(_count_lines, path)
+    if processed_lines > current_total_lines:
+        logger.warning(
+            "_process_grok_file: %s shrank (offset %d > %d lines) — "
+            "resetting offset to 0 (truncated/recreated file)",
+            path, processed_lines, current_total_lines,
+        )
+        processed_lines = 0
+
+    # Blocking file read offloaded to a thread — unified.jsonl only grows,
+    # but the watchdog's event loop must never stall on synchronous file I/O.
+    records = await asyncio.to_thread(harvest_grok_file, path, processed_lines)
+    if not records:
+        await _update_harvest_state(session, state_map, path, current_mtime, current_total_lines)
+        return
+
+    # Batch dedup (same pattern as _process_jsonl_file)
+    candidate_uuids = [r["uuid"] for r in records]
+    existing_result = await session.exec(
+        select(ModelUsageEvent.message_uuid).where(
+            ModelUsageEvent.message_uuid.in_(candidate_uuids)
+        )
+    )
+    existing_uuids: set[str] = {row for row in existing_result.all()}
+    new_records = [r for r in records if r["uuid"] not in existing_uuids]
+
+    session_index = _build_grok_session_index(sessions_base)
+    task_index = _build_grok_task_index(sessions_base)
+    task_workspace_map = task_workspace_map or {}
+
+    new_events_count = 0
+    for rec in new_records:
+        sess_info = session_index.get(rec["sid"])
+        if sess_info is None:
+            # No summary.json for this sid → no model, cannot attribute cost.
+            # Never guess a model — skip, but count it (visible in stats).
+            stats["grok_skipped_no_summary"] += 1
+            continue
+
+        model = sess_info["model"]
+        cwd = sess_info.get("cwd") or ""
+        ts = _parse_ts(rec["timestamp"])
+
+        task_id = task_index.get(rec["sid"])
+        if task_id is None:
+            norm_cwd = _normalize_workspace_path(cwd)
+            candidates = task_workspace_map.get(norm_cwd)
+            if candidates:
+                task_id = _resolve_task_id(candidates, None, ts)
+
+        price_info = match_price(model, ts, all_prices)
+        cost_usd: float | None = None
+        if price_info is not None:
+            cost_usd = _compute_cost_usd(
+                price_info,
+                rec["input_tokens"],
+                rec["output_tokens"],
+                rec["cache_read_tokens"],
+                rec["cache_write_tokens"],
+            )
+
+        event = ModelUsageEvent(
+            id=uuid.uuid4(),
+            agent_id=agent_id,
+            task_id=task_id,
+            harness="grok",
+            model=model,
+            provider="xai",
+            session_id=rec["sid"],
+            message_uuid=rec["uuid"],
+            input_tokens=rec["input_tokens"],
+            output_tokens=rec["output_tokens"],
+            cache_read_tokens=rec["cache_read_tokens"],
+            cache_write_tokens=rec["cache_write_tokens"],
+            cost_usd=cost_usd,
+            ts=ts,
+            source_file=path,
+        )
+        try:
+            async with session.begin_nested():
+                session.add(event)
+            new_events_count += 1
+        except IntegrityError:
+            logger.debug("harvest(grok): duplicate uuid %s — skipped", rec["uuid"])
+
+    stats["new_events"] += new_events_count
+
+    # Reuse the line count taken before the read (no second blocking pass —
+    # the truncation guard above already needed it).
+    await _update_harvest_state(session, state_map, path, current_mtime, current_total_lines)
+
+
+# Hermes source: below this point the state.db is throttled the same way a
+# large, expensive re-scan generally should be (review fix, 21.07.).
+_HERMES_THROTTLE_SECONDS = 900  # min. gap between two full state.db copies
+
+
+def _copy_hermes_db(state_db_path: str) -> tuple[str, str]:
+    """Copies ONLY state.db to a fresh temp dir and returns
+    (tmp_dir, copied_db_path). NEVER open the live file — Hermes writes to it
+    continuously.
+
+    Deliberately does NOT copy -wal/-shm (see docker-compose.yml comment —
+    those files are never mounted at all after the 21.07. review fix: Docker
+    creates a DIRECTORY on the host for a missing bind-mount source, and
+    Hermes deletes -wal/-shm itself on a clean shutdown, so a backend
+    recreate at the wrong moment would corrupt Hermes' own DB on the host).
+    Tradeoff (German note matches the compose comment): events still sitting
+    in Hermes' WAL (not yet checkpointed into state.db) lag behind by
+    however long it takes Hermes to checkpoint — acceptable for cost
+    analytics, not attempted to be avoided here.
+
+    If the copy itself fails, the temp dir is removed before re-raising —
+    otherwise a permission error etc. would leak a tmp dir per failed attempt
+    (the caller never gets a tmp_dir path back to clean up).
+    """
+    tmp_dir = tempfile.mkdtemp(prefix="mc_hermes_harvest_")
+    try:
+        dst_db = os.path.join(tmp_dir, "state.db")
+        shutil.copy2(state_db_path, dst_db)
+        return tmp_dir, dst_db
+    except Exception:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        raise
+
+
+def _read_hermes_sessions_sync(
+    state_db_path: str, cutoff_ts: float
+) -> list[dict[str, Any]] | None:
+    """Blocking I/O: copy state.db, query finished sessions (+ each one's
+    first user message) from the copy, clean up. Called via
+    asyncio.to_thread — never run directly on the event loop, state.db can
+    be hundreds of MB.
+
+    Returns None (NOT an empty list — that means "genuinely no sessions in
+    the window") when the copy is corrupt/torn (e.g. Hermes mid-WAL-checkpoint
+    while we copied). The caller must not persist harvest_state on a None
+    result, so the next cycle retries against a (hopefully consistent) copy
+    instead of the failure being mistaken for "nothing new" and the mtime
+    check silently skipping forever.
+    """
+    tmp_dir, copied_db = _copy_hermes_db(state_db_path)
+    try:
+        try:
+            conn = sqlite3.connect(f"file:{copied_db}?immutable=1", uri=True)
+        except sqlite3.Error as e:
+            logger.warning("_read_hermes_sessions_sync: could not open copy: %s", e)
+            return None
+        try:
+            conn.row_factory = sqlite3.Row
+            session_rows = conn.execute(
+                "SELECT id, model, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens, reasoning_tokens, billing_provider, cwd, "
+                "git_branch, ended_at FROM sessions "
+                "WHERE ended_at IS NOT NULL AND ended_at > ?",
+                (cutoff_ts,),
+            ).fetchall()
+
+            results: list[dict[str, Any]] = []
+            for row in session_rows:
+                first_user_msg = conn.execute(
+                    "SELECT content FROM messages WHERE session_id = ? AND role = 'user' "
+                    "ORDER BY timestamp ASC LIMIT 1",
+                    (row["id"],),
+                ).fetchone()
+                results.append({
+                    "id": row["id"],
+                    "model": row["model"] or "",
+                    "input_tokens": row["input_tokens"] or 0,
+                    "output_tokens": row["output_tokens"] or 0,
+                    "cache_read_tokens": row["cache_read_tokens"] or 0,
+                    "cache_write_tokens": row["cache_write_tokens"] or 0,
+                    "reasoning_tokens": row["reasoning_tokens"] or 0,
+                    "billing_provider": row["billing_provider"],
+                    "cwd": row["cwd"],
+                    "git_branch": row["git_branch"],
+                    "ended_at": row["ended_at"],
+                    "first_user_content": first_user_msg["content"] if first_user_msg else None,
+                })
+            return results
+        except sqlite3.DatabaseError as e:
+            # Torn copy — Hermes was mid-WAL-checkpoint while we copied the
+            # main file. Expected to be rare and transient; skip this cycle.
+            logger.warning(
+                "_read_hermes_sessions_sync: corrupt/torn copy of %s, "
+                "skipping this cycle: %s", state_db_path, e,
+            )
+            return None
+        finally:
+            conn.close()
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+
+
+async def _harvest_hermes(
+    session: AsyncSession,
+    state_db_path: str,
+    agent_id: Any | None,
+    all_prices: list[ModelPrice],
+    stats: dict[str, int],
+    state_map: dict[str, ModelUsageHarvestState],
+    task_workspace_map: dict[str, list[dict[str, Any]]] | None = None,
+    *,
+    cutoff_days: int = 30,
+    throttle_seconds: int = _HERMES_THROTTLE_SECONDS,
+) -> None:
+    """Reads Hermes' sqlite session ledger and inserts one ModelUsageEvent
+    per finished session. No file-offset state in the JSONL sense (the DB
+    mutates continuously) — dedup is purely message_uuid-based, so a re-run
+    over the same window inserts 0 new rows. Change-detection + a 900s
+    throttle guard the 284 MB-and-growing full-file copy this source needs
+    per read: mtime-unchanged skips entirely (nothing could have changed),
+    and even on a changed mtime we cap how often the expensive copy runs.
+
+    The model_usage_harvest_state row keyed by state_db_path repurposes its
+    processed_lines int column to store this source's last-run unix
+    timestamp (not a line count — there's no dedicated column and adding one
+    means a migration; this comment is the only thing marking the reuse)."""
+    try:
+        current_mtime = os.path.getmtime(state_db_path)
+    except OSError:
+        return
+
+    state = state_map.get(state_db_path)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if state:
+        if state.mtime == current_mtime:
+            return  # nothing written to state.db since the last read
+        last_run_ts = state.processed_lines or 0
+        if now_ts - last_run_ts < throttle_seconds:
+            return  # changed, but we copied+read this recently — wait it out
+
+    task_workspace_map = task_workspace_map or {}
+    cutoff_ts = (datetime.now(timezone.utc) - timedelta(days=cutoff_days)).timestamp()
+
+    rows = await asyncio.to_thread(_read_hermes_sessions_sync, state_db_path, cutoff_ts)
+    if rows is None:
+        # Torn/corrupt copy — deliberately do NOT persist state here so the
+        # next cycle retries without waiting out the mtime/throttle gate.
+        return
+
+    stats["hermes_sessions_scanned"] += len(rows)
+    if not rows:
+        await _update_harvest_state(session, state_map, state_db_path, current_mtime, int(now_ts))
+        return
+
+    candidate_uuids = [f"hermes:{row['id']}" for row in rows]
+    existing_result = await session.exec(
+        select(ModelUsageEvent.message_uuid).where(
+            ModelUsageEvent.message_uuid.in_(candidate_uuids)
+        )
+    )
+    existing = {row for row in existing_result.all()}
+
+    new_events_count = 0
+    for row in rows:
+        message_uuid = f"hermes:{row['id']}"
+        if message_uuid in existing:
+            continue
+
+        model = row["model"]
+        ts = datetime.fromtimestamp(row["ended_at"], tz=timezone.utc)
+
+        task_id = (
+            _extract_task_id(row["first_user_content"])
+            if row["first_user_content"]
+            else None
+        )
+        if task_id is None:
+            norm_cwd = _normalize_workspace_path(row["cwd"] or "")
+            candidates = task_workspace_map.get(norm_cwd)
+            if candidates:
+                task_id = _resolve_task_id(candidates, row["git_branch"], ts)
+
+        # Billing convention: reasoning_tokens is a distinct sqlite column
+        # here (unlike Grok, where it's already folded into completion_tokens)
+        # but still billed as output.
+        output_tokens = row["output_tokens"] + row["reasoning_tokens"]
+
+        price_info = match_price(model, ts, all_prices) if model else None
+        cost_usd: float | None = None
+        if price_info is not None:
+            cost_usd = _compute_cost_usd(
+                price_info,
+                row["input_tokens"],
+                output_tokens,
+                row["cache_read_tokens"],
+                row["cache_write_tokens"],
+            )
+
+        # sessions.billing_provider is Hermes' own authoritative provider
+        # label when set — only fall back to the model-name heuristic
+        # without it.
+        provider = row["billing_provider"] or (_provider_from_model(model) if model else None)
+
+        event = ModelUsageEvent(
+            id=uuid.uuid4(),
+            agent_id=agent_id,
+            task_id=task_id,
+            harness="hermes",
+            model=model,
+            provider=provider,
+            session_id=row["id"],
+            message_uuid=message_uuid,
+            input_tokens=row["input_tokens"],
+            output_tokens=output_tokens,
+            cache_read_tokens=row["cache_read_tokens"],
+            cache_write_tokens=row["cache_write_tokens"],
+            cost_usd=cost_usd,
+            ts=ts,
+            source_file=state_db_path,
+        )
+        try:
+            async with session.begin_nested():
+                session.add(event)
+            new_events_count += 1
+        except IntegrityError:
+            logger.debug("harvest(hermes): duplicate uuid %s — skipped", message_uuid)
+
+    stats["new_events"] += new_events_count
+
+    await _update_harvest_state(session, state_map, state_db_path, current_mtime, int(now_ts))

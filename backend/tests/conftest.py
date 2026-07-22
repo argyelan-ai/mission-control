@@ -35,6 +35,16 @@ import app.config
 # during Phase 29 verification 160 fixture notes ended up in the operator's real vault.
 _TEST_VAULT_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-vault-"))
 
+# Same incident class as the vault pollution above, pre-empted this time:
+# token_harvester's Grok/Hermes sources (Bench #18 PR1) default to
+# ~/.grok/... / ~/.hermes/... via HOME_HOST. On a dev machine that actually
+# runs Grok/Hermes (like this one) those paths are real and non-empty — a
+# test calling run_harvest() without overriding them would silently harvest
+# the operator's real session history. Point both at a tmp dir that never
+# has anything in it; tests that DO want to exercise these sources pass
+# explicit grok_log_path=/grok_sessions_path=/hermes_state_db_path= paths.
+_TEST_HARVEST_ROOT = Path(tempfile.mkdtemp(prefix="mc-test-harvest-"))
+
 app.config.settings = app.config.Settings(
     database_url="postgresql+asyncpg://test:test@localhost:5432/test",
     redis_url="redis://fake",
@@ -52,6 +62,9 @@ app.config.settings = app.config.Settings(
     vault_path=_TEST_VAULT_ROOT,
     lifecycle_watchdog_enabled=True,  # ADR-046: on by default; the check is only ever
                                       # invoked when a test calls _check_stuck_in_progress directly.
+    grok_harvest_path=str(_TEST_HARVEST_ROOT / "unified.jsonl"),
+    grok_sessions_path=str(_TEST_HARVEST_ROOT / "grok-sessions"),
+    hermes_state_db_path=str(_TEST_HARVEST_ROOT / "state.db"),
 )
 
 # Now import app modules
