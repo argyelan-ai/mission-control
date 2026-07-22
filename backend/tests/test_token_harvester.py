@@ -540,12 +540,16 @@ class TestHarvestFile:
         assert len(records) == 1
         assert records[0]["uuid"] == "uuid-good"
 
-    # Real omp session header line (verified against a live sparky file,
-    # 2026-07-16): cwd lives ONLY here — message lines carry none.
-    _OMP_SESSION_HEADER = (
+    # Real omp file preamble (copied from a live sparky file, 2026-07-16):
+    # line 0 is a `title` line, line 1 `model_change`, the session header with
+    # the cwd sits on line 2 — its position is NOT fixed at 0.
+    _OMP_PREAMBLE = (
+        '{"type":"title","v":1,"title":"","updatedAt":"2026-07-16T07:08:51.469Z","pad":"  "}\n'
+        '{"type":"model_change","id":"1e6aa13b","parentId":null,'
+        '"timestamp":"2026-07-16T07:08:51.658Z","model":"mc-openai/Qwen/Qwen3.6-35B-A3B-FP8"}\n'
         '{"type":"session","version":3,"id":"019f69c1-b98c-7000-8977-c82d7c797c8e",'
         '"timestamp":"2026-07-16T07:08:51.469Z",'
-        '"cwd":"/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"}'
+        '"cwd":"/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"}\n'
     )
 
     def test_omp_session_header_cwd_fills_message_records(self, tmp_path):
@@ -556,7 +560,7 @@ class TestHarvestFile:
 
         jsonl = tmp_path / "2026-07-16T07-08-51-469Z_019f69c1.jsonl"
         jsonl.write_text(
-            self._OMP_SESSION_HEADER + "\n" + _make_omp_line(short_id="idA") + "\n"
+            self._OMP_PREAMBLE + _make_omp_line(short_id="idA") + "\n"
         )
 
         records = harvest_file(str(jsonl), processed_lines=0)
@@ -572,12 +576,12 @@ class TestHarvestFile:
 
         jsonl = tmp_path / "2026-07-16T07-08-51-469Z_019f69c1.jsonl"
         jsonl.write_text(
-            self._OMP_SESSION_HEADER + "\n"
+            self._OMP_PREAMBLE
             + _make_omp_line(short_id="idA") + "\n"
             + _make_omp_line(short_id="idB", response_id="respB") + "\n"
         )
 
-        records = harvest_file(str(jsonl), processed_lines=2)
+        records = harvest_file(str(jsonl), processed_lines=4)
         assert len(records) == 1
         assert records[0]["cwd"] == (
             "/workspace/bench-borealis-qwen-grok-dgx-spark-qwen-3-5-6cd990"

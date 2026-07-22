@@ -251,9 +251,11 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
     """
     records: list[dict[str, Any]] = []
     session_id = _derive_omp_session_id(path)
-    # omp-JSONL traegt das cwd NUR auf der ersten `type:"session"`-Headerzeile —
+    # omp-JSONL traegt das cwd NUR auf der `type:"session"`-Headerzeile —
     # message-Zeilen haben keins. Ohne diesen Fallback bleibt jedes omp-Event
     # cwd-los und damit fuer die Task-Attribution unsichtbar (Bench #18).
+    # Die Header-Position ist NICHT fix (real: `title`-Zeile zuerst, session
+    # meist Zeile 2) → jede Zeile per Substring-Guard pruefen.
     header_cwd = ""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
@@ -263,7 +265,7 @@ def harvest_file(path: str, processed_lines: int = 0) -> list[dict[str, Any]]:
                     continue
                 # Headerzeile immer auswerten — auch beim Offset-Resume, wo
                 # i < processed_lines sie sonst ungelesen ueberspringen wuerde.
-                if i == 0 and '"session"' in line:
+                if not header_cwd and '"type":"session"' in line:
                     try:
                         head = json.loads(line)
                         if head.get("type") == "session":
