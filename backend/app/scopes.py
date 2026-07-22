@@ -51,7 +51,7 @@ class AgentRole(StrEnum):
     DEPLOYER = "deployer"
     WRITER = "writer"
     ORCHESTRATOR = "orchestrator"
-    RELAY = "relay"        # Henry — OpenClaw Gateway / Telegram relay runtime
+    RELAY = "relay"        # legacy relay agent — OpenClaw Gateway / Telegram (retired, ADR-039)
 
 
 # Role groups for dispatch logic
