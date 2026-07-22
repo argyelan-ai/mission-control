@@ -1949,7 +1949,7 @@ async def agent_request_spawn(
 ):
     """Boss creates a spawn approval. Operator approves → agent gets created.
 
-    Only Board Leads (Boss, Henry) may do this — scope AGENTS_MANAGE.
+    Only Board Leads may do this — scope AGENTS_MANAGE.
     The actual spawn happens in the resolve_approval() handler.
     """
     if not agent.is_board_lead:
@@ -2117,7 +2117,7 @@ async def agent_patch_plugins(
             detail="Ziel-Agent gehoert zu einem anderen Board",
         )
     # Board Leads may NOT set plugins on each other (privilege guard):
-    # Boss shouldn't be able to change Henry's plugin config and vice versa.
+    # One board lead shouldn't be able to change another lead's plugin config.
     if target.is_board_lead and target.id != agent.id:
         raise HTTPException(
             status_code=403,

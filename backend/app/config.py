@@ -172,7 +172,7 @@ class Settings(BaseSettings):
 
     # Structured Intake (Phase 2)
     # False = only the existing text box, new intake fields are ignored
-    # True = Quick Mode + Structured Mode active, planning brief for Henry
+    # True = Quick Mode + Structured Mode active, planning brief for the board lead
     structured_intake_enabled: bool = False
 
     # App

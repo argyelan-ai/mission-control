@@ -566,7 +566,7 @@ async def _seed_github_token() -> None:
 
 
 async def _seed_playbook_assets() -> None:
-    """Seed core skill packs for Henry/Playbooks (idempotent)."""
+    """Seed core skill packs for the legacy lead agent / Playbooks (idempotent)."""
     try:
         from sqlmodel.ext.asyncio.session import AsyncSession
         from app.services.playbook_seeder import seed_skill_packs

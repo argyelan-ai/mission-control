@@ -664,7 +664,7 @@ async def setup_agent_coordination(
     current_user = Depends(require_user),
 ):
     """
-    Set up agent coordination: Henry (Lead), Cody (Dev), Rex (Review).
+    Set up agent coordination: Lead, Dev and Review agents.
     Sets identities, roles, config files, and board assignments.
     """
     from app.models.board import Board
