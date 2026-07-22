@@ -91,6 +91,22 @@ MSG_QUEUE_DIR="${MSG_QUEUE_DIR:-/home/agent/.msg-queue}"
 # gelieferter Messages) und laeuft auch unter bash 3.2 (macOS-Testumgebung).
 MSG_ACK_DIR="${MSG_ACK_DIR:-/home/agent/.msg-acked}"
 
+# W2.1 Turn-Signal (Phase A): Datei an die die Claude-Code-Hooks
+# UserPromptSubmit/Stop je eine `<epoch> submit|stop` Zeile appenden.
+# detect_turn_state (lib/turn-state.sh) liest sie primaer; Scraping bleibt
+# Fallback. Bei jedem Session-Reset (/clear, neuer Task) via reset_turn_signal
+# geleert, damit ein alter Turn-State nicht in den neuen Task leakt.
+TURN_SIGNAL_FILE="${TURN_SIGNAL_FILE:-/home/agent/.turn-signal}"
+
+
+# reset_turn_signal — leert die Turn-Signal-Datei bei einem Session-Reset.
+# Verhindert dass ein `stop`/`submit` aus dem vorigen Task faelschlich den
+# neuen Turn-State faerbt (detect_turn_state faellt bei leerer Datei auf das
+# byte-identische Scraping zurueck, bis der naechste Hook feuert). Fehlen der
+# Datei ist ok — die Hooks legen sie beim naechsten Submit neu an.
+reset_turn_signal() {
+    : > "$TURN_SIGNAL_FILE" 2>/dev/null || true
+}
 
 log() {
     echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [$SESSION_NAME] $*"
@@ -490,6 +506,7 @@ except Exception:
                 tmux send-keys -t "${SESSION_NAME}:0" "/clear"
                 tmux_submit "${SESSION_NAME}:0"
                 sleep 2
+                reset_turn_signal   # W2.1: alten Turn-State nicht in neuen Task leaken
                 log "Task $task_id: context cleared (new task, previous: ${LAST_DISPATCHED_TASK_ID:-none}, prev_status=${prev_status:-unknown})"
             fi
         fi
@@ -547,6 +564,7 @@ cancel_task() {
     fi
     log "Task $task_id extern auf 'failed' gesetzt — sende ESC an claude"
     tmux send-keys -t "${SESSION_NAME}:0" Escape
+    reset_turn_signal   # W2.1: ESC bricht Turn ab, Stop-Hook feuert nicht — lone submit sonst bis Staleness
     LAST_CANCELLED_TASK_ID="$task_id"
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -570,6 +588,7 @@ stop_task_session() {
     sleep 0.5
     tmux send-keys -t "${SESSION_NAME}:0" "/clear" 2>/dev/null || true
     tmux_submit "${SESSION_NAME}:0" 2>/dev/null || true
+    reset_turn_signal   # W2.1: Turn-Signal beim Operator-Stop leeren
     : > /tmp/mc-context.env
     tmux set-environment -t "$SESSION_NAME" TASK_ID "" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" BOARD_ID "" 2>/dev/null || true
@@ -650,6 +669,7 @@ except Exception as e:
 
     # Claude aus dem crashed/stalled state befreien
     tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    reset_turn_signal   # W2.1: ESC-Abbruch feuert kein Stop-Hook — lone submit sonst bis Staleness
 
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -885,6 +905,11 @@ run_poll_loop() {
 
 # Stale lock von vorherigem poll.sh-Run entfernen (z.B. nach SIGKILL wo trap nicht lief).
 rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
+# W2.1: Turn-Signal beim poll.sh-Startup leeren. Ein `stop` aus einem frueheren
+# Container-Leben hat KEINE Staleness-Grenze und wuerde sonst nach docker
+# restart/respawn als frisches idle gelesen. Die Entrypoints truncaten die
+# Datei zusaetzlich beim Boot (Belt-and-Suspenders).
+reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
 trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT
