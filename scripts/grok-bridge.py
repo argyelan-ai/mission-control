@@ -439,13 +439,36 @@ def build_message_footer(thread_id: str, seq: int, sender: str, message_type: st
     return f"[thread {thread_id} · seq {seq} · von {sender} · typ {message_type}]"
 
 
+def _msg_prefix(seq: int, thread_id: str) -> str:
+    """Unique first-line prefix for a queued message's paste body.
+
+    Live finding (2026-07-22, second measurement round): grok's TUI REDRAWS
+    its transcript per turn instead of appending — the earlier count-increase
+    verify (module note below) compares the turn-event count before/after a
+    paste, but a redrawn transcript can show the SAME count both times (old
+    turn's events cleared, new turn's events rendered) — count never
+    increases, so that signal alone under-detects on this TUI. Also: grok
+    shows a submitted multi-line paste as ONE truncated transcript line
+    ending in `…`, and the "# Neue Nachricht" Markdown header is stripped —
+    only the BODY's opening survives. Prepending this prefix to the body's
+    FIRST line (not as a separate header line, which gets stripped) means it
+    is exactly what a truncated echo keeps — grok-local formatting only, the
+    backend's `new_messages` wire format / footer contract is untouched.
+    Unique per (thread_id, seq) — the primary verify signal below therefore
+    only needs bare PRESENCE (outside the composer box), no stale-false-pass
+    is possible the way it was with the turn-event count."""
+    return f"[msg {seq} · {thread_id[:8]}]"
+
+
 def build_message_file_body(m: dict) -> str:
-    """Paste-ready text for one queued message, matching poll.sh's format."""
+    """Paste-ready text for one queued message, matching poll.sh's format
+    plus the grok-local unique-prefix-on-body (see _msg_prefix)."""
     tid = str(m.get("thread_id") or "")
     seq = int(m.get("seq") or 0)
     body = str(m.get("body") or "")
     footer = build_message_footer(tid, seq, str(m.get("sender") or "?"), str(m.get("message_type") or "?"))
-    return "\n".join(["# Neue Nachricht (Interaction 2.0)", "", body, "", footer])
+    prefixed_body = f"{_msg_prefix(seq, tid)} {body}"
+    return "\n".join(["# Neue Nachricht (Interaction 2.0)", "", prefixed_body, "", footer])
 
 
 def queue_new_messages(messages: list) -> int:
@@ -567,9 +590,9 @@ def _anchor_was_submitted(pane: str, anchor: str) -> bool:
 # LAST line of what we pasted) never appears in the pane AT ALL. That means
 # _anchor_was_submitted always returns False for a genuinely delivered
 # message — the exact 18-redelivery pattern the claude-CLI collapse bug (#126)
-# hit, just via a different rendering quirk. Fixed the same way #126 was:
-# a rendering-agnostic COUNT-INCREASE signal instead of anchor presence. Real
-# pane observed after a successful submit+reply:
+# hit, just via a different rendering quirk. First fix attempt: a rendering-
+# agnostic COUNT-INCREASE signal instead of anchor presence. Real pane
+# observed after a successful submit+reply:
 #   MARKER-GROK-9313: Zweiter Zustelltest. Bitte kurz bestaetigen. …
 #   ◆ user_prompt_submit  [hooks: 1]
 #   ◆ Thought for 0.1s
@@ -578,6 +601,19 @@ def _anchor_was_submitted(pane: str, anchor: str) -> bool:
 #   ╭──────────…──────╮
 #   │ ❯                │
 #   ╰──────…── Grok 4.5 (high) · always-approve ─╯
+#
+# Live finding round 2 (2026-07-22, 23:15): the count-increase signal STILL
+# under-detected — grok's TUI REDRAWS its transcript per turn instead of
+# appending. Before a paste: 1x hook-fire + 1x "Turn completed" from the
+# PREVIOUS turn = 2. After paste+submit: previous turn's lines cleared away,
+# new turn's lines rendered = 2 again. The count never grows even though the
+# message genuinely delivered. Fixed with a THIRD, now-primary signal: a
+# unique prefix (`_msg_prefix`) prepended to the body's first line survives
+# both the truncated-echo collapse (it's the very first thing shown) and the
+# per-turn redraw (uniqueness makes bare presence sufficient — no stale-line
+# false-pass is possible the way it was for the turn-event count). See
+# _prefix_was_submitted. The count-increase and anchor paths stay as
+# additional OR fallbacks for any future grok rendering behavior.
 _TURN_EVENT_RE = re.compile(r"◆\s*user_prompt_submit|Turn completed in")
 
 
@@ -609,23 +645,52 @@ def _composer_has_leftover_text(pane: str) -> bool:
     return False
 
 
-def _verify_msg_delivered(tid: str, seq: int, *, events_before: int, timeout: float = 2.0) -> bool:
+def _prefix_was_submitted(pane: str, prefix: str) -> bool:
+    """True iff the unique `_msg_prefix` appears on a NON-composer line — i.e.
+    it has scrolled into the transcript, not sitting unsubmitted inside the
+    composer box. Redraw-safe (no before/after baseline needed — see the
+    module note above) and truncation-safe (the prefix is the very first
+    thing pasted, so a single collapsed `…` echo line still shows it).
+
+    `prefix` is unique per (thread_id, seq), so bare presence is sufficient
+    proof — unlike the old footer anchor (shared literal `[thread`/`seq`
+    shape across every message) a stale prefix from an EARLIER message can
+    never collide with THIS message's prefix. The only thing still worth
+    excluding is a swallowed-Enter case where the prefix is sitting un-sent
+    inside the composer box — those lines start with the box border char
+    (`│`/`|`, see the live pane in the module note: `│ ❯ ... │`)."""
+    for line in pane.splitlines():
+        if prefix not in line:
+            continue
+        if line.strip().startswith(("│", "|")):
+            continue  # still inside the composer box — unsubmitted
+        return True
+    return False
+
+
+def _verify_msg_delivered(tid: str, seq: int, *, events_before: int, timeout: float = 5.0) -> bool:
     """Poll capture_pane() up to `timeout`s for a submit signal — a single
-    immediate capture can catch the TUI mid-redraw right after Enter. Two
-    independent signals, either one confirms delivery (OR — see module note
-    above and _anchor_was_submitted's docstring for why neither alone is
-    reliable across grok's rendering quirks):
-      1. PRIMARY: the turn-event count grew past `events_before` (snapshotted
-         BEFORE the paste) AND the composer shows no leftover text — the
-         collapsed-echo-safe signal, since it never depends on the footer
-         anchor actually being visible.
-      2. FALLBACK: the footer anchor scrolled out of the composer's trailing
+    immediate capture can catch the TUI mid-redraw right after Enter (grok
+    can take >2s to render its echo, hence the 5s default). Three
+    independent signals, any one confirms delivery (OR — see the module note
+    above for why no single signal alone is reliable across grok's rendering
+    quirks):
+      1. PRIMARY: the unique `_msg_prefix` appears outside the composer box
+         (_prefix_was_submitted) — survives both the truncated-echo collapse
+         and the per-turn transcript redraw.
+      2. FALLBACK: the turn-event count grew past `events_before`
+         (snapshotted BEFORE the paste) AND the composer shows no leftover
+         text.
+      3. FALLBACK: the footer anchor scrolled out of the composer's trailing
          line (_anchor_was_submitted) — kept for a future grok build that
          renders full (uncollapsed) transcript lines again."""
     deadline = time.monotonic() + timeout
+    prefix = _msg_prefix(seq, tid)
     anchor = f"[thread {tid} · seq {seq} ·"
     while True:
         pane = capture_pane()
+        if _prefix_was_submitted(pane, prefix):
+            return True
         if _count_turn_events(pane) > events_before and not _composer_has_leftover_text(pane):
             return True
         if _anchor_was_submitted(pane, anchor):
@@ -637,12 +702,13 @@ def _verify_msg_delivered(tid: str, seq: int, *, events_before: int, timeout: fl
 
 def flush_msg_queue() -> None:
     """Paste all queued messages in seq order. Each paste is verified via
-    _verify_msg_delivered (turn-event count increase + empty composer, OR the
-    anchor having scrolled out of the composer) — only a verified paste acks
-    (High-Water in MSG_ACK_DIR) and deletes the queue file. The first
-    verify-fail (or gate closing mid-flush) stops the flush; the rest stays
-    queued, unacked — at-least-once, the backend redelivers seq >
-    last_acked_seq on the next poll."""
+    _verify_msg_delivered (unique prefix outside the composer box, OR
+    turn-event count increase + empty composer, OR the anchor having
+    scrolled out of the composer) — only a verified paste acks (High-Water
+    in MSG_ACK_DIR) and deletes the queue file. The first verify-fail (or
+    gate closing mid-flush) stops the flush; the rest stays queued, unacked
+    — at-least-once, the backend redelivers seq > last_acked_seq on the
+    next poll."""
     global _dispatch_in_flight
     for path in msg_queue_files():
         if not msg_gate_open():
@@ -670,9 +736,9 @@ def flush_msg_queue() -> None:
             log.info("flush_msg_queue: Message seq %s (thread %s) zugestellt, ack bis seq %s", seq, tid, seq)
         else:
             log.warning(
-                "flush_msg_queue: Verify fuer seq %s (thread %s) FEHLGESCHLAGEN (weder Event-Count "
-                "gewachsen+Composer leer, noch Anker aus dem Composer gescrollt) — Flush gestoppt, "
-                "Rest bleibt gequeued, kein Ack.", seq, tid,
+                "flush_msg_queue: Verify fuer seq %s (thread %s) FEHLGESCHLAGEN (weder Prefix ausserhalb "
+                "des Composers, noch Event-Count gewachsen+Composer leer, noch Anker aus dem Composer "
+                "gescrollt) — Flush gestoppt, Rest bleibt gequeued, kein Ack.", seq, tid,
             )
             return
 
