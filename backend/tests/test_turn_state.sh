@@ -79,4 +79,79 @@ export TMUX_STUB_PANE_FILE="$pane_spin"
 out=$(detect_turn_state testsession)
 [ "$out" = "working" ] || fail "case6: live spinner with ellipsis must be working, got '$out'"
 
-echo "PASS: all 6 detect_turn_state cases"
+# ══════════════════════════════════════════════════════════════════════════
+# W2.1 Turn-Signal (Phase A) — hook-based signal file + scraping fallback.
+# detect_turn_state reads TURN_SIGNAL_FILE first (mode auto|hooks|scrape).
+# ══════════════════════════════════════════════════════════════════════════
+
+now=$(date +%s)
+
+# ── Case 7: signal `stop` ⇒ idle (no scraping needed) ─────────────────────
+# Pane content is deliberately a WORKING spinner: if the signal is honoured,
+# idle wins; if it were ignored, scraping would return working.
+sig=$(mktemp)
+printf '%s submit\n%s stop\n' "$((now - 5))" "$now" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_work"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "idle" ] || fail "case7: signal stop must be idle (beats working pane), got '$out'"
+
+# ── Case 8: fresh `submit` ⇒ working (no scraping needed) ─────────────────
+# Pane content is an IDLE prompt: fresh submit must still classify working.
+printf '%s submit\n' "$now" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_plain"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case8: fresh submit must be working (beats idle pane), got '$out'"
+
+# ── Case 9: STALE `submit` ⇒ fall back to scraping ────────────────────────
+# Submit older than TURN_SIGNAL_STALE_SECONDS (Interrupt/API-error case where
+# Stop never fired). auto must ignore the stale submit and scrape the pane,
+# which here shows an idle bypass-permissions statusline ⇒ idle.
+printf '%s submit\n' "$((now - 1000))" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_plain"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_STALE_SECONDS=900 TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "idle" ] || fail "case9: stale submit must fall back to scraping (idle pane), got '$out'"
+
+# ── Case 10: signal file MISSING ⇒ byte-identical old scraping behaviour ───
+# The live fleet has no signal file until hooks first fire. auto with a
+# non-existent file must behave exactly like the pre-signal scraper.
+missing="$TMUX_STUB_DIR/does-not-exist-$$"
+export TMUX_STUB_PANE_FILE="$pane_work"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$missing" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case10a: missing signal must scrape working pane, got '$out'"
+export TMUX_STUB_PANE_FILE="$pane_crash"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$missing" detect_turn_state testsession)
+[ "$out" = "crashed" ] || fail "case10b: missing signal must scrape crashed pane, got '$out'"
+
+# ── Case 11: scrape MODE ignores a decisive signal ────────────────────────
+# A `stop` signal (would say idle) must be ignored in scrape mode; the
+# working pane wins.
+printf '%s stop\n' "$now" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_work"
+out=$(TURN_SIGNAL_MODE=scrape TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case11: scrape mode must ignore stop signal, got '$out'"
+
+# ── Case 12: hooks MODE — pure signal, no scraping fallback ────────────────
+# Stale submit still counts as working (no staleness in hooks-only mode);
+# a missing file yields unknown (nothing to report, no scrape).
+printf '%s submit\n' "$((now - 100000))" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_plain"   # idle pane — must be ignored
+out=$(TURN_SIGNAL_MODE=hooks TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case12a: hooks mode stale submit must be working, got '$out'"
+out=$(TURN_SIGNAL_MODE=hooks TURN_SIGNAL_FILE="$missing" detect_turn_state testsession)
+[ "$out" = "unknown" ] || fail "case12b: hooks mode missing file must be unknown, got '$out'"
+
+# ── Case 13: runaway signal file is truncated to its last line ────────────
+# A >1 MB file must be collapsed to a single line (tail -1) on read, and the
+# classification must still reflect that last line.
+big=$(mktemp)
+# ~1.7 MB of submit lines (no pipe → no SIGPIPE under `set -o pipefail`).
+python3 -c "open('$big','w').write('0000000000 submit\n'*100000)"
+printf '%s stop\n' "$now" >> "$big"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$big" detect_turn_state testsession)
+[ "$out" = "idle" ] || fail "case13a: truncate path must classify last line (stop=idle), got '$out'"
+bytes=$(wc -c < "$big" | tr -d ' ')
+[ "$bytes" -lt 1000 ] || fail "case13b: signal file must be truncated (<1000 bytes), got $bytes"
+
+rm -f "$sig" "$big"
+
+echo "PASS: all 13 detect_turn_state cases"
