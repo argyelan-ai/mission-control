@@ -52,8 +52,11 @@ RECORD_VIEWPORT = "desktop"
 RECORD_TIMEOUT_S = 900.0
 # Compose now overlays/encodes 3840x2160 branded frames + 2K plain-grid
 # inputs (2026-07-15 resolution bump) — slower than the old 1920x1080/2K
-# path, bump the client-side timeout to match.
-COMPOSE_TIMEOUT_S = 600.0
+# path. Bumped again for Bench #18 (configurable up to 60s recordings): the
+# sidecar's own branded-compose ffmpeg timeout scales up to 1100s
+# (media.compose_branded_timeout_s) for a 60s input, so the client-side
+# HTTP timeout must cover that plus request/response overhead.
+COMPOSE_TIMEOUT_S = 1200.0
 SPARK_TIMEOUT_S = 300.0
 SPARK_MAX_TOKENS = 16384
 
@@ -527,15 +530,24 @@ async def on_task_done(session: AsyncSession, task) -> None:
 # ── Render + Compose ─────────────────────────────────────────────────────
 
 
-async def record_entry(entry: BenchEntry) -> dict:
-    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure."""
+async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
+    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure.
+
+    Uses the challenge's operator-chosen record_duration_s (Bench #18) when
+    set, else the legacy RECORD_DURATION_S default — same fallback the
+    NewChallengeDialog documents (None -> 10s)."""
     out_dir = str(challenge_dir(entry.challenge_id) / _safe_label(entry.model_label))
+    duration_s = (
+        challenge.record_duration_s
+        if challenge.record_duration_s is not None
+        else RECORD_DURATION_S
+    )
     async with httpx.AsyncClient(timeout=RECORD_TIMEOUT_S) as cli:
         resp = await cli.post(
             f"{PLAYWRIGHT_BASE}/record",
             json={
                 "html_path": entry.artifact_path,
-                "duration_s": RECORD_DURATION_S,
+                "duration_s": duration_s,
                 "viewport": RECORD_VIEWPORT,
                 "output_dir": out_dir,
             },
@@ -708,11 +720,20 @@ async def compose_challenge(
     if output_name is None:
         output_name = _versioned_output_name()
     ordered = sorted(rendered, key=lambda e: e.model_label)
+    duration_s = (
+        challenge.record_duration_s
+        if challenge.record_duration_s is not None
+        else RECORD_DURATION_S
+    )
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
         "labels": [e.model_label for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
+        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
+        # (media.compose_branded_timeout_s) — a no-op for the plain grid
+        # path, which doesn't read this field.
+        "duration_s": duration_s,
     }
     if speed_labels:
         payload["speed_labels"] = [format_speed_label(e.metrics or {}) for e in ordered]
@@ -745,7 +766,7 @@ async def _render_and_compose(
     rendered: list[BenchEntry] = []
     for entry in generated:
         try:
-            result = await record_entry(entry)
+            result = await record_entry(entry, challenge)
             entry.video_path = result.get("video_path")
             entry.screenshot_path = result.get("screenshot_path")
             entry.status = "rendered"
@@ -1122,7 +1143,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
                 await session.commit()
 
                 try:
-                    result = await record_entry(entry)
+                    result = await record_entry(entry, challenge)
                     entry.video_path = result.get("video_path")
                     entry.screenshot_path = result.get("screenshot_path")
                     entry.status = "rendered"

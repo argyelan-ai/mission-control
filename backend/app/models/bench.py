@@ -37,6 +37,9 @@ class BenchChallenge(SQLModel, table=True):
     # Frozen copy — the template stays editable later without falsifying history.
     prompt_text: str = Field(sa_column=Column(Text, nullable=False))
     mode: str = Field(default="side_by_side")  # single | side_by_side
+    # Video length in seconds (5..60), validated at the router — NULL falls
+    # back to orchestrator.RECORD_DURATION_S (legacy 10s behaviour).
+    record_duration_s: int | None = None
     # generating -> rendering -> composing -> review -> drafted -> published | failed
     status: str = Field(default="generating", index=True)
     series_label: str | None = None

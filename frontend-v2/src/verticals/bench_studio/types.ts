@@ -58,6 +58,8 @@ export interface BenchChallenge {
   status: BenchChallengeStatus;
   series_label: string | null;
   series_no: number | null;
+  // Video length in seconds; null = legacy 10s default (orchestrator.py).
+  record_duration_s: number | null;
   composed_video_path: string | null;
   content_pipeline_id: string | null;
   error: string | null;
@@ -86,6 +88,8 @@ export interface BenchChallengeCreate {
   mode: "single" | "side_by_side";
   models: BenchModelSpec[];
   series_label?: string | null;
+  // Video length in seconds (5..60); omitted/null = legacy 10s default.
+  record_duration_s?: number | null;
 }
 
 export interface PromptTemplate {

@@ -30,6 +30,7 @@ const CHALLENGE: BenchChallenge = {
   status: "rendering",
   series_label: "Spark Bench",
   series_no: 7,
+  record_duration_s: null,
   composed_video_path: null,
   content_pipeline_id: null,
   error: null,

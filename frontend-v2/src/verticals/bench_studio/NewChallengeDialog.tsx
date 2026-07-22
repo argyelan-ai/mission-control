@@ -12,6 +12,20 @@ import type { BenchModelSpec, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
 
+const RECORD_DURATION_MIN = 5;
+const RECORD_DURATION_MAX = 60;
+const RECORD_DURATION_DEFAULT = 20;
+
+// Empty/non-numeric input (e.g. the field cleared mid-edit) falls back to
+// the default rather than left in an invalid state — the backend's 5..60
+// bound (422 outside it) should never be reachable from this field.
+function clampRecordDuration(raw: string): number {
+  if (raw.trim() === "") return RECORD_DURATION_DEFAULT;
+  const n = Number(raw);
+  if (Number.isNaN(n)) return RECORD_DURATION_DEFAULT;
+  return Math.min(RECORD_DURATION_MAX, Math.max(RECORD_DURATION_MIN, Math.round(n)));
+}
+
 export function NewChallengeDialog({
   open,
   onClose,
@@ -27,6 +41,14 @@ export function NewChallengeDialog({
   const [templateId, setTemplateId] = useState<string | null>(null);
   const [mode, setMode] = useState<"single" | "side_by_side">("side_by_side");
   const [seriesLabel, setSeriesLabel] = useState("");
+  // Raw typed string, not the clamped number — clamping the displayed value
+  // on every keystroke corrupts multi-digit entry (typing "45" digit by
+  // digit would clamp the intermediate "4" to 5, then append the next "5"
+  // onto THAT, landing on 55). recordDurationS below is the clamped value
+  // actually used for the payload/valid-check; the input re-normalizes to
+  // it on blur.
+  const [recordDurationRaw, setRecordDurationRaw] = useState(String(RECORD_DURATION_DEFAULT));
+  const recordDurationS = clampRecordDuration(recordDurationRaw);
   const [models, setModels] = useState<BenchModelSpec[]>([{ ...EMPTY_MODEL }]);
   // Row indices where the label was edited by hand — autofill must not overwrite those.
   const [labelTouched, setLabelTouched] = useState<Set<number>>(new Set());
@@ -64,6 +86,7 @@ export function NewChallengeDialog({
           display_tag: m.display_tag?.trim() || null,
         })),
         series_label: seriesLabel.trim() || null,
+        record_duration_s: recordDurationS,
       }),
     onSuccess: () => {
       notify.success("Challenge gestartet");
@@ -80,6 +103,7 @@ export function NewChallengeDialog({
     setTemplateId(null);
     setMode("side_by_side");
     setSeriesLabel("");
+    setRecordDurationRaw(String(RECORD_DURATION_DEFAULT));
     setModels([{ ...EMPTY_MODEL }]);
     setLabelTouched(new Set());
   }
@@ -150,7 +174,12 @@ export function NewChallengeDialog({
       (m) =>
         m.label.trim().length > 0 &&
         (m.source_kind === "spark" || (m.source_kind === "agent" && m.agent_id))
-    );
+    ) &&
+    // Belt-and-suspenders: onChange already clamps to 5..60, but guarding
+    // the submit too means an out-of-range value disables the button
+    // instead of surfacing as a generic 422 from the backend.
+    recordDurationS >= RECORD_DURATION_MIN &&
+    recordDurationS <= RECORD_DURATION_MAX;
 
   const inputStyle = {
     backgroundColor: C.bgDeep,
@@ -209,7 +238,7 @@ export function NewChallengeDialog({
           </span>
         )}
 
-        <div className="flex gap-3">
+        <div className="flex gap-3 items-end">
           <select
             value={mode}
             onChange={(e) => setMode(e.target.value as "single" | "side_by_side")}
@@ -227,6 +256,23 @@ export function NewChallengeDialog({
             className="rounded-lg p-2.5 text-sm outline-none flex-1"
             style={inputStyle}
           />
+          <div className="flex flex-col gap-1">
+            <label htmlFor="bench-record-duration" className="text-xs" style={{ color: C.textMuted }}>
+              Video-Länge (s)
+            </label>
+            <input
+              id="bench-record-duration"
+              type="number"
+              min={RECORD_DURATION_MIN}
+              max={RECORD_DURATION_MAX}
+              step={1}
+              value={recordDurationRaw}
+              onChange={(e) => setRecordDurationRaw(e.target.value)}
+              onBlur={() => setRecordDurationRaw(String(clampRecordDuration(recordDurationRaw)))}
+              className="rounded-lg p-2.5 text-sm outline-none w-24"
+              style={inputStyle}
+            />
+          </div>
         </div>
 
         <div className="flex flex-col gap-2">

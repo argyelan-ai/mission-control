@@ -68,6 +68,36 @@ async def test_create_challenge_persists_display_tag(auth_client):
 
 
 @pytest.mark.asyncio
+async def test_create_challenge_defaults_record_duration_to_null(auth_client):
+    """No record_duration_s in the request -> NULL, legacy 10s fallback
+    (orchestrator.RECORD_DURATION_S) applies at record time."""
+    resp = await auth_client.post("/api/v1/bench/challenges", json=_create_body())
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["record_duration_s"] is None
+
+
+@pytest.mark.asyncio
+async def test_create_challenge_persists_record_duration(auth_client):
+    resp = await auth_client.post(
+        "/api/v1/bench/challenges", json=_create_body(record_duration_s=45)
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["record_duration_s"] == 45
+
+
+@pytest.mark.asyncio
+async def test_create_challenge_record_duration_out_of_bounds_422(auth_client):
+    resp = await auth_client.post(
+        "/api/v1/bench/challenges", json=_create_body(record_duration_s=4)
+    )
+    assert resp.status_code == 422
+    resp = await auth_client.post(
+        "/api/v1/bench/challenges", json=_create_body(record_duration_s=61)
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_requires_prompt(auth_client):
     resp = await auth_client.post(
         "/api/v1/bench/challenges", json=_create_body(prompt_text=None)
