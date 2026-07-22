@@ -2577,6 +2577,41 @@ def _serialize_message(message) -> dict:
     }
 
 
+async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agent):
+    """Scope + cursor resolution shared by the poll delivery path
+    (`_collect_new_messages`) and the inbox pull endpoint (`GET /me/inbox`).
+
+    Returns ``[(thread, cursor)]`` for the agent's active-task threads. Cursors
+    are created on first sight — fast-forwarded past history for done/failed
+    tasks (Befund C, live pilot 2026-07-20) — and added to the session, but NOT
+    committed here: the caller runs a single commit after applying its own
+    cursor advances, matching the existing one-commit-per-poll semantics.
+    """
+    resolved = []
+    for thread, thread_task in await _message_threads_for_agent(agent, session):
+        cursor = await _get_or_create_thread_cursor(
+            session, agent.id, thread.id,
+            fast_forward=thread_task.status in ("done", "failed"),
+        )
+        resolved.append((thread, cursor))
+    return resolved
+
+
+async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
+    """The redelivery window for one thread: messages with ``seq`` greater than
+    the cursor's ``last_acked_seq``, in ascending seq order. Shared by poll
+    delivery and inbox pull; own-message filtering is applied by the caller.
+    """
+    from app.models.thread import Message
+
+    res = await session.exec(
+        select(Message)
+        .where(Message.thread_id == thread.id, Message.seq > cursor.last_acked_seq)
+        .order_by(Message.seq.asc())  # type: ignore[union-attr]
+    )
+    return list(res.all())
+
+
 async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict[str, int]) -> list[dict]:
     """Two-stage cursor delivery (at-least-once) for the agent's task threads.
 
@@ -2587,15 +2622,9 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     forever) but are filtered out of the delivered payload — otherwise every
     poll would echo the agent's own posts back into a redelivery loop.
     """
-    from app.models.thread import Message
-
     out: list[dict] = []
     changed = False
-    for thread, thread_task in await _message_threads_for_agent(agent, session):
-        cursor = await _get_or_create_thread_cursor(
-            session, agent.id, thread.id,
-            fast_forward=thread_task.status in ("done", "failed"),
-        )
+    for thread, cursor in await _resolve_agent_threads_with_cursors(session, agent):
         if cursor in session.new:
             # Frisch angelegte Cursor muessen persistiert werden, auch wenn
             # dieser Poll nichts liefert — sonst rollt die Session den
@@ -2613,13 +2642,7 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
                 cursor.last_acked_seq = new_ack
                 changed = True
 
-        start = cursor.last_acked_seq  # redeliver everything not yet acked
-        msgs_res = await session.exec(
-            select(Message)
-            .where(Message.thread_id == thread.id, Message.seq > start)
-            .order_by(Message.seq.asc())  # type: ignore[union-attr]
-        )
-        msgs = list(msgs_res.all())
+        msgs = await _unacked_thread_messages(session, thread, cursor)
         if not msgs:
             continue
 
@@ -3081,6 +3104,118 @@ async def agent_active_task_recovery(
             "slug": getattr(active, "slug", None),
             "dispatch_attempt_id": active.dispatch_attempt_id,
         },
+    }
+
+
+@router.get("/agent/me/inbox")
+async def agent_inbox(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Nudge+Pull delivery (W2.1): the agent fetches its own unread thread
+    messages instead of poll.sh pasting them. The API call IS the delivery —
+    `mc inbox` prints the messages and then acks the highest seq per thread via
+    POST /me/inbox/ack.
+
+    Returns every not-yet-acked, non-own message (`seq > last_acked_seq`) on the
+    agent's active-task threads — the same scope/cursor/filter core the poll
+    delivery path uses (`_resolve_agent_threads_with_cursors` +
+    `_unacked_thread_messages`). Cursors are created (fast-forwarded for
+    finished tasks) but no delivered/acked advance happens here; that is the
+    explicit job of the ack endpoint.
+
+    Response: ``{"messages": [...], "threads": {thread_id: max_seq}}`` where
+    max_seq is the highest unacked seq per thread (what `mc inbox` acks back).
+    Non-comm_v2 agents get an empty payload, mirroring the poll flag gate.
+    """
+    if not getattr(agent, "comm_v2", False):
+        return {"messages": [], "threads": {}}
+
+    out: list[dict] = []
+    threads_meta: dict[str, int] = {}
+    changed = False
+    for thread, cursor in await _resolve_agent_threads_with_cursors(session, agent):
+        if cursor in session.new:
+            # Persist a first-sight (fast-forwarded) cursor even if this pull
+            # delivers nothing — otherwise the next pull fast-forwards again.
+            changed = True
+        msgs = await _unacked_thread_messages(session, thread, cursor)
+        non_own = [m for m in msgs if not _is_own_message(m, agent)]
+        if not non_own:
+            continue
+        out.extend(_serialize_message(m) for m in non_own)
+        # Ack target is the highest unacked seq in the thread (including the
+        # agent's own posts that sit between deliverables) so a single ack
+        # advances the cursor cleanly past everything the agent has now seen.
+        threads_meta[str(thread.id)] = max(m.seq for m in msgs)
+
+    if changed:
+        await session.commit()
+    return {"messages": out, "threads": threads_meta}
+
+
+class _InboxAck(BaseModel):
+    thread_id: uuid.UUID
+    seq: int
+
+
+@router.post("/agent/me/inbox/ack")
+async def agent_inbox_ack(
+    payload: _InboxAck,
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Advance the agent's ack cursor for one thread (Nudge+Pull, W2.1).
+
+    Idempotent and never backwards: `last_acked_seq` only moves forward. Pull
+    semantics — the GET was the delivery — so there is no cap at
+    `last_delivered_seq`; `last_delivered_seq` is dragged up to at least the new
+    ack so the two-stage invariant (`delivered >= acked`) holds.
+
+    Guarded on two fronts:
+    - Scope: `thread_id` must be one of the agent's active-task threads (same
+      set the inbox pull serves). An unknown/foreign thread returns 404 and
+      creates NO cursor — otherwise any agent could pre-poison arbitrary
+      (agent, thread) cursors and bloat the table.
+    - Cap at reality: the ack is capped at the thread's highest existing
+      `Message.seq` (0 for an empty thread). Without it, `seq=999` on a
+      one-message thread would set the cursor to 999 and permanently skip
+      messages 2..999 that arrive later.
+    Non-comm_v2 agents get 404, mirroring the poll flag gate.
+    """
+    from sqlalchemy import func
+    from app.models.thread import Message
+
+    if not getattr(agent, "comm_v2", False):
+        raise HTTPException(status_code=404, detail="comm_v2 messaging not enabled for this agent")
+
+    scoped_thread_ids = {
+        thread.id for thread, _ in await _message_threads_for_agent(agent, session)
+    }
+    if payload.thread_id not in scoped_thread_ids:
+        raise HTTPException(status_code=404, detail="thread not in agent's active scope")
+
+    max_seq = (
+        await session.exec(
+            select(func.coalesce(func.max(Message.seq), 0)).where(
+                Message.thread_id == payload.thread_id
+            )
+        )
+    ).one()
+    capped = min(payload.seq, max_seq)
+
+    cursor = await _get_or_create_thread_cursor(session, agent.id, payload.thread_id)
+    if capped > cursor.last_acked_seq:
+        cursor.last_acked_seq = capped
+    if cursor.last_delivered_seq < cursor.last_acked_seq:
+        cursor.last_delivered_seq = cursor.last_acked_seq
+    session.add(cursor)
+    await session.commit()
+    await session.refresh(cursor)
+    return {
+        "thread_id": str(payload.thread_id),
+        "last_acked_seq": cursor.last_acked_seq,
+        "last_delivered_seq": cursor.last_delivered_seq,
     }
 
 

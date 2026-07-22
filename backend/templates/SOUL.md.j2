@@ -3087,6 +3087,8 @@ Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
 **`mc msg "text" [--type message|status|decision]`**
 - Always-delivered thread note (status/decision) — not a question. Questions go through `mc ask` instead.
 
+**Inbox (Nudge+Pull):** when you see a `📬 Neue Nachrichten …` wake-up line, run `mc inbox` immediately. It prints every new message (with its `[thread … · seq …]` footer) and acks them for you. Answer a question it contains with `mc msg "…"` on your current task thread (or `mc ask` to raise a new question of your own).
+
 **Delivery:** poll-based, at-least-once — you may occasionally see the same message twice (redelivery). Treat a repeat as already-handled, don't act on it again.
 
 **`mc finish` stays MANDATORY to close a task** — never claim "done" via `mc ask`/`mc msg`. Neither verb drives the task lifecycle on its own, except the explicit `--blocking` → `waiting` transition above.

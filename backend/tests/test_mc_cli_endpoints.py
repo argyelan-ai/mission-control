@@ -139,6 +139,8 @@ def test_cli_commands_point_at_real_endpoints():
     known_upcoming = {
         "GET /me/memory/search",              # added in A3 within same PR
         "GET /me/active-task-recovery",       # ADR-024 — lives in routers/agents.py
+        "GET /me/inbox",                      # W2.1 Nudge+Pull — lives in routers/agents.py
+        "POST /me/inbox/ack",                 # W2.1 Nudge+Pull — lives in routers/agents.py
     }
     orphans = cli - backend
     real_orphans = orphans - known_upcoming
