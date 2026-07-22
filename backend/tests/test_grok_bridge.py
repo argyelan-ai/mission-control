@@ -894,6 +894,116 @@ def test_anchor_was_submitted_decision_table(bridge):
     assert f("", anchor) is False
 
 
+# ── Live finding 2026-07-22: collapsed-echo verify (count-increase, twin of #126) ─
+#
+# The grok TUI renders a submitted multi-line paste as ONE truncated transcript
+# line ending in `…` — the footer anchor (the LAST line of what we pasted) never
+# appears in the pane at all, so the anchor-only verify above always fails for a
+# genuinely delivered message (infinite redelivery, same shape as the claude-CLI
+# collapse bug #126). _verify_msg_delivered now ALSO accepts a rendering-agnostic
+# turn-event COUNT INCREASE (never mere presence — stale events linger in
+# scrollback) combined with an empty composer, as an OR alternative to the anchor.
+
+_LIVE_COLLAPSED_ECHO_PANE = (
+    "MARKER-GROK-9313: Zweiter Zustelltest. Bitte kurz bestaetigen. …\n"
+    "◆ user_prompt_submit  [hooks: 1]\n"
+    "◆ Thought for 0.1s\n"
+    "Bestätigt: MARKER-GROK-9313 erhalten.                              10:44 PM\n"
+    "Turn completed in 3.6s.\n"
+    "╭──────────…──────╮\n"
+    "│ ❯                │\n"
+    "╰──────…── Grok 4.5 (high) · always-approve ─╯"
+)
+
+
+def test_count_turn_events_counts_hook_and_completion_lines(bridge):
+    # 1x "◆ user_prompt_submit" hook-fire + 1x "Turn completed in" = 2.
+    # "◆ Thought for 0.1s" does not match either pattern.
+    assert bridge._count_turn_events(_LIVE_COLLAPSED_ECHO_PANE) == 2
+
+
+def test_count_turn_events_zero_on_idle_pane(bridge):
+    assert bridge._count_turn_events("╭───╮\n│ ❯  │\n╰───╯") == 0
+
+
+def test_composer_has_leftover_text_false_on_live_idle_composer(bridge):
+    assert bridge._composer_has_leftover_text(_LIVE_COLLAPSED_ECHO_PANE) is False
+
+
+def test_composer_has_leftover_text_detects_unsent_text(bridge):
+    assert bridge._composer_has_leftover_text("│ ❯ pending text │") is True
+
+
+def test_composer_has_leftover_text_false_when_no_composer_row(bridge):
+    assert bridge._composer_has_leftover_text("no composer row here at all") is False
+
+
+def test_verify_msg_delivered_collapsed_echo_count_increase_confirms(bridge, monkeypatch):
+    """The exact live scenario: anchor NEVER appears (collapsed echo), but the
+    turn-event count grew past the pre-paste baseline and the composer is
+    empty — must confirm delivery."""
+    monkeypatch.setattr(bridge, "capture_pane", lambda: _LIVE_COLLAPSED_ECHO_PANE)
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=0, timeout=1.0)
+    assert delivered is True
+
+
+def test_verify_msg_delivered_stale_events_no_increase_no_ack(bridge, monkeypatch):
+    """A pane that ALREADY had turn events before the paste (stale scrollback
+    from an earlier turn) must not confirm delivery just because events are
+    PRESENT — only a genuine INCREASE over the pre-paste baseline counts."""
+    stale_pane = (
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 1.0s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+    events_before = bridge._count_turn_events(stale_pane)  # baseline == post-paste count
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_verify_msg_delivered_composer_leftover_blocks_count_signal(bridge, monkeypatch):
+    """Event count grew, but the composer still shows leftover (unsent) text —
+    the count-increase signal must NOT confirm delivery on its own; with no
+    anchor present either, this must not ack."""
+    pane = (
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 1.0s.\n"
+        "╭───────────────────╮\n"
+        "│ ❯ still typing here │\n"
+        "╰───────────────────╯"
+    )
+    monkeypatch.setattr(bridge, "capture_pane", lambda: pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=0, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_flush_msg_queue_collapsed_echo_acks_via_event_count(bridge, monkeypatch):
+    """End-to-end (flush_msg_queue level) live-bug regression: the footer
+    anchor never appears (collapsed echo), so ONLY the count-increase signal
+    can confirm delivery — before this fix this scenario redelivered forever
+    (18-redelivery pattern from the live 2026-07-22 measurement run)."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="Zweiter Zustelltest.")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    idle_baseline_pane = "╭───╮\n│ ❯  │\n╰───╯"  # events_before snapshot: 0 events
+    panes = iter([idle_baseline_pane, _LIVE_COLLAPSED_ECHO_PANE])
+    monkeypatch.setattr(bridge, "capture_pane", lambda: next(panes, _LIVE_COLLAPSED_ECHO_PANE))
+
+    bridge.flush_msg_queue()
+
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+
+
 def test_deliver_messages_noop_when_field_absent(bridge, monkeypatch):
     """comm_v2=false byte-identical behavior: no `new_messages` key ⇒ no queue dir
     is even created, no gate check happens."""

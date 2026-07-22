@@ -561,14 +561,74 @@ def _anchor_was_submitted(pane: str, anchor: str) -> bool:
     return anchor not in lines[-1]
 
 
-def _verify_msg_delivered(tid: str, seq: int, *, timeout: float = 2.0) -> bool:
-    """Poll capture_pane() up to `timeout`s for the footer anchor to scroll
-    out of the composer's trailing line (see _anchor_was_submitted) — a single
-    immediate capture can catch the TUI mid-redraw right after Enter."""
-    anchor = f"[thread {tid} · seq {seq} ·"
+# Live finding (2026-07-22): grok collapses a submitted multi-line paste into
+# a SINGLE truncated transcript line ending in `…` — the Markdown header is
+# stripped and only the body's opening is shown; the footer anchor line (the
+# LAST line of what we pasted) never appears in the pane AT ALL. That means
+# _anchor_was_submitted always returns False for a genuinely delivered
+# message — the exact 18-redelivery pattern the claude-CLI collapse bug (#126)
+# hit, just via a different rendering quirk. Fixed the same way #126 was:
+# a rendering-agnostic COUNT-INCREASE signal instead of anchor presence. Real
+# pane observed after a successful submit+reply:
+#   MARKER-GROK-9313: Zweiter Zustelltest. Bitte kurz bestaetigen. …
+#   ◆ user_prompt_submit  [hooks: 1]
+#   ◆ Thought for 0.1s
+#   Bestätigt: MARKER-GROK-9313 erhalten.                              10:44 PM
+#   Turn completed in 3.6s.
+#   ╭──────────…──────╮
+#   │ ❯                │
+#   ╰──────…── Grok 4.5 (high) · always-approve ─╯
+_TURN_EVENT_RE = re.compile(r"◆\s*user_prompt_submit|Turn completed in")
+
+
+def _count_turn_events(pane: str) -> int:
+    """Count grok TUI turn-boundary event lines (`◆ user_prompt_submit` hook
+    fire, `Turn completed in ...`) in a pane capture. A COUNT, never mere
+    presence, is required by the caller — stale events from earlier turns
+    stay in the tmux scrollback, so presence alone proves nothing."""
+    return len(_TURN_EVENT_RE.findall(pane))
+
+
+def _composer_has_leftover_text(pane: str) -> bool:
+    """True if the composer's input row (`│ <glyph> ... │`) still shows text
+    after the prompt glyph — i.e. a paste is still sitting there un-submitted
+    (e.g. a genuinely swallowed Enter). Scans from the bottom so the LAST
+    matching row wins — scrollback may hold a stale composer rendering from
+    an earlier redraw. Returns False (can't positively confirm leftover text)
+    when no composer row is found at all — never guess "leftover" from an
+    absent capture."""
+    for line in reversed(pane.splitlines()):
+        stripped = line.strip()
+        if READY_GLYPH not in stripped:
+            continue
+        if "│" not in stripped and "|" not in stripped:
+            continue
+        after = stripped.split(READY_GLYPH, 1)[1]
+        after = after.strip(" │|")
+        return bool(after)
+    return False
+
+
+def _verify_msg_delivered(tid: str, seq: int, *, events_before: int, timeout: float = 2.0) -> bool:
+    """Poll capture_pane() up to `timeout`s for a submit signal — a single
+    immediate capture can catch the TUI mid-redraw right after Enter. Two
+    independent signals, either one confirms delivery (OR — see module note
+    above and _anchor_was_submitted's docstring for why neither alone is
+    reliable across grok's rendering quirks):
+      1. PRIMARY: the turn-event count grew past `events_before` (snapshotted
+         BEFORE the paste) AND the composer shows no leftover text — the
+         collapsed-echo-safe signal, since it never depends on the footer
+         anchor actually being visible.
+      2. FALLBACK: the footer anchor scrolled out of the composer's trailing
+         line (_anchor_was_submitted) — kept for a future grok build that
+         renders full (uncollapsed) transcript lines again."""
     deadline = time.monotonic() + timeout
+    anchor = f"[thread {tid} · seq {seq} ·"
     while True:
-        if _anchor_was_submitted(capture_pane(), anchor):
+        pane = capture_pane()
+        if _count_turn_events(pane) > events_before and not _composer_has_leftover_text(pane):
+            return True
+        if _anchor_was_submitted(pane, anchor):
             return True
         if time.monotonic() >= deadline:
             return False
@@ -577,11 +637,12 @@ def _verify_msg_delivered(tid: str, seq: int, *, timeout: float = 2.0) -> bool:
 
 def flush_msg_queue() -> None:
     """Paste all queued messages in seq order. Each paste is verified via
-    _verify_msg_delivered (anchor scrolled out of the composer, not just
-    visible) — only a verified paste acks (High-Water in MSG_ACK_DIR) and
-    deletes the queue file. The first verify-fail (or gate closing mid-flush)
-    stops the flush; the rest stays queued, unacked — at-least-once, the
-    backend redelivers seq > last_acked_seq on the next poll."""
+    _verify_msg_delivered (turn-event count increase + empty composer, OR the
+    anchor having scrolled out of the composer) — only a verified paste acks
+    (High-Water in MSG_ACK_DIR) and deletes the queue file. The first
+    verify-fail (or gate closing mid-flush) stops the flush; the rest stays
+    queued, unacked — at-least-once, the backend redelivers seq >
+    last_acked_seq on the next poll."""
     global _dispatch_in_flight
     for path in msg_queue_files():
         if not msg_gate_open():
@@ -593,11 +654,14 @@ def flush_msg_queue() -> None:
             log.warning("flush_msg_queue: kann Dateiname nicht parsen, ueberspringe: %s", path.name)
             continue
         body = path.read_text(encoding="utf-8")
+        # Snapshot BEFORE the paste — the verify needs a baseline to detect
+        # an INCREASE, not just presence, of turn-boundary events.
+        events_before = _count_turn_events(capture_pane())
         _dispatch_in_flight = True
         try:
             paste_and_submit(body)
             time.sleep(0.5)  # let the TUI render the submitted text into scrollback
-            delivered = _verify_msg_delivered(tid, seq)
+            delivered = _verify_msg_delivered(tid, seq, events_before=events_before)
         finally:
             _dispatch_in_flight = False
         if delivered:
@@ -606,9 +670,9 @@ def flush_msg_queue() -> None:
             log.info("flush_msg_queue: Message seq %s (thread %s) zugestellt, ack bis seq %s", seq, tid, seq)
         else:
             log.warning(
-                "flush_msg_queue: Verify fuer seq %s (thread %s) FEHLGESCHLAGEN (Anker nicht "
-                "aus dem Composer gescrollt) — Flush gestoppt, Rest bleibt gequeued, kein Ack.",
-                seq, tid,
+                "flush_msg_queue: Verify fuer seq %s (thread %s) FEHLGESCHLAGEN (weder Event-Count "
+                "gewachsen+Composer leer, noch Anker aus dem Composer gescrollt) — Flush gestoppt, "
+                "Rest bleibt gequeued, kein Ack.", seq, tid,
             )
             return
 
