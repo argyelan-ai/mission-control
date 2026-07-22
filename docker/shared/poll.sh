@@ -91,6 +91,31 @@ MSG_QUEUE_DIR="${MSG_QUEUE_DIR:-/home/agent/.msg-queue}"
 # gelieferter Messages) und laeuft auch unter bash 3.2 (macOS-Testumgebung).
 MSG_ACK_DIR="${MSG_ACK_DIR:-/home/agent/.msg-acked}"
 
+# W2.1 Nudge+Pull delivery mode. Two modes:
+#   paste (DEFAULT) — heutiges Verhalten, byte-identisch: new_messages werden
+#                     als Volltext an der Turn-Grenze gepastet (queue/ack Dateien).
+#   nudge          — poll.sh pastet nur EINEN fixen Weckruf ("📬 …"); den Inhalt
+#                     holt der Agent selbst via `mc inbox`, das Ack passiert beim
+#                     API-Call (POST /me/inbox/ack), nicht per Bildschirm-Heuristik.
+#
+# Pro-Agent setzen: die Env-Var in den `environment:`-Block des Agent-Service in
+# docker/docker-compose.agents.yml eintragen (generator-managed via
+# compose_renderer — oder via docker/.env.agents), z.B.:
+#     environment:
+#       - MSG_DELIVERY_MODE=nudge
+# poll.sh liest sie direkt aus der Container-Umgebung (wie MC_API_URL/AGENT_NAME).
+MSG_DELIVERY_MODE="${MSG_DELIVERY_MODE:-paste}"
+# Sekunden ohne Cursor-Fortschritt (Agent hat noch nicht via `mc inbox` geackt,
+# Backend liefert dieselben seqs weiter), nach denen ein bereits genudgetes seq
+# erneut angestupst wird. 0 waere Dauer-Spam — Default 10 Min.
+NUDGE_REMIND_SECONDS="${NUDGE_REMIND_SECONDS:-600}"
+# High-Water-State fuer den nudge-Modus: eine Zeile "<max_seq> <epoch>". Ersetzt
+# die queue/ack-Dateien (im nudge-Modus ist der Server-Cursor die Wahrheit).
+NUDGE_STATE_FILE="${NUDGE_STATE_FILE:-/home/agent/.msg-nudge-state}"
+# Fixer, einzeiliger Weckruf — konstant, damit die bestehende paste-verify
+# Fingerprint-Mechanik zuverlaessig greift.
+NUDGE_TEXT="📬 Neue Nachrichten — lies sie jetzt mit: mc inbox"
+
 # W2.1 Turn-Signal (Phase A): Datei an die die Claude-Code-Hooks
 # UserPromptSubmit/Stop je eine `<epoch> submit|stop` Zeile appenden.
 # detect_turn_state (lib/turn-state.sh) liest sie primaer; Scraping bleibt
@@ -323,6 +348,9 @@ except Exception as e:
 # gepastetes seq) als urlencoded JSON {thread_id: seq} fuer den acked_seq
 # Query-Parameter. Leer wenn nichts gepastet wurde (kein Parameter angehaengt).
 build_acked_seq_param() {
+    # Im nudge-Modus gibt es keine lokalen Ack-Dateien — das Ack passiert
+    # server-seitig via `mc inbox` (POST /me/inbox/ack). Kein acked_seq-Param.
+    [ "$MSG_DELIVERY_MODE" = "nudge" ] && return 0
     [ -d "$MSG_ACK_DIR" ] || return 0
     local json="{" first=1 tid seq f
     for f in "$MSG_ACK_DIR"/*; do
@@ -864,10 +892,79 @@ flush_msg_queue() {
     return 0
 }
 
+# _nudge_max_seq RESPONSE_JSON — hoechstes seq ueber alle new_messages, oder
+# leer wenn keine pending sind. Basis fuer den nudge-Dedup (nur bei hoeherem seq
+# neu stupsen).
+_nudge_max_seq() {
+    echo "$1" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    msgs = data.get('new_messages') or []
+    print(max((int(m['seq']) for m in msgs), default=''))
+except Exception:
+    print('')
+" 2>/dev/null
+}
+
+# deliver_messages_nudge RESPONSE_JSON — nudge-Modus: statt Volltext nur einen
+# fixen Weckruf an der Turn-Grenze pasten. Dedup ueber NUDGE_STATE_FILE
+# ("<max_seq> <epoch>"): re-nudge nur bei NEUER hoeherer seq ODER nach
+# NUDGE_REMIND_SECONDS ohne Cursor-Fortschritt (Backend liefert dieselben seqs
+# weiter solange der Agent nicht via `mc inbox` geackt hat). Leere new_messages =
+# Agent hat alles geholt+geackt → State loeschen, damit die naechste Nachricht
+# garantiert neu nudged.
+deliver_messages_nudge() {
+    local response_json="$1"
+    local max_seq
+    max_seq=$(_nudge_max_seq "$response_json")
+    if [ -z "$max_seq" ]; then
+        rm -f "$NUDGE_STATE_FILE" 2>/dev/null || true
+        return 0
+    fi
+
+    local last_seq=0 last_ts=0 now
+    if [ -f "$NUDGE_STATE_FILE" ]; then
+        read -r last_seq last_ts < "$NUDGE_STATE_FILE" 2>/dev/null || true
+        [ -n "$last_seq" ] || last_seq=0
+        [ -n "$last_ts" ] || last_ts=0
+    fi
+    now=$(date +%s)
+
+    local do_nudge=0
+    if [ "$max_seq" -gt "$last_seq" ]; then
+        do_nudge=1   # neue, hoehere seq → sofort stupsen
+    elif [ $(( now - last_ts )) -ge "$NUDGE_REMIND_SECONDS" ]; then
+        do_nudge=1   # Remind: noch nicht geackt nach NUDGE_REMIND_SECONDS
+    fi
+    [ "$do_nudge" -eq 1 ] || return 0
+
+    # Nur an einer echten Turn-Grenze stupsen (gleiches Gate wie der paste-Modus).
+    if ! msg_gate_open; then
+        log "deliver_messages_nudge: Gate zu (claude arbeitet / Prompt nicht clean) — Nudge aufgeschoben (max_seq=$max_seq)."
+        return 0
+    fi
+
+    local nf
+    nf="${NUDGE_TMP_FILE:-/tmp/mc-nudge.txt}"
+    printf '%s\n' "$NUDGE_TEXT" > "$nf"
+    if paste_and_submit "$nf"; then
+        printf '%s %s\n' "$max_seq" "$now" > "$NUDGE_STATE_FILE"
+        log "Nudge gepastet (max_seq=$max_seq) — Agent holt Inhalt via 'mc inbox'."
+    else
+        log "WARNING: Nudge-Paste fehlgeschlagen (max_seq=$max_seq) — Retry beim naechsten Poll (State unveraendert)."
+    fi
+}
+
 # deliver_messages RESPONSE_JSON — Einstieg aus dem Poll-Loop (comm_v2-Pfad).
-# Persistiert neue Messages und flusht die Queue nur an der Turn-Grenze.
+# paste-Modus (Default): persistiert neue Messages und flusht die Queue nur an
+# der Turn-Grenze. nudge-Modus: nur Weckruf, Inhalt via `mc inbox`.
 deliver_messages() {
     local response_json="$1"
+    if [ "$MSG_DELIVERY_MODE" = "nudge" ]; then
+        deliver_messages_nudge "$response_json"
+        return 0
+    fi
     queue_or_deliver "$response_json"
     # Nichts zu tun wenn die Queue leer ist.
     local pending

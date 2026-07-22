@@ -944,6 +944,48 @@ def _add_msg_args(p):
     )
 
 
+def _cmd_inbox(args, client, cfg):
+    """mc inbox — Nudge+Pull: neue Thread-Nachrichten abholen + acken (W2.1).
+
+    Pull-Zustellung: der API-Abruf IST die Zustellung. poll.sh pastet im
+    nudge-Modus nur noch einen Weckruf (📬); der Agent holt den Inhalt hiermit
+    selbst. Druckt jede Nachricht im selben Format das poll.sh frueher gepastet
+    hat (inkl. `[thread … · seq …]`-Footer) und ackt danach pro Thread das
+    hoechste gelieferte seq — erst der POST /me/inbox/ack konsumiert die
+    Nachricht server-seitig (kein Bildschirm-Heuristik-Ack mehr).
+    """
+    resp = client.request("GET", "/api/v1/agent/me/inbox") or {}
+    messages = resp.get("messages") or []
+    threads = resp.get("threads") or {}
+    if not messages:
+        print("Keine neuen Nachrichten.")
+        return 0
+
+    blocks = []
+    for m in messages:
+        footer = (
+            f"[thread {m.get('thread_id')} · seq {m.get('seq')} · "
+            f"von {m.get('sender', '?')} · typ {m.get('message_type', '?')}]"
+        )
+        blocks.append(
+            f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
+        )
+    print("\n\n---\n\n".join(blocks))
+
+    # Ack pro Thread das hoechste gelieferte seq (Pull = Zustellung). Fehlschlag
+    # bei einem Thread darf die uebrigen nicht blockieren — idempotent, der
+    # naechste `mc inbox` liefert Nicht-geacktes ohnehin erneut.
+    for tid, max_seq in threads.items():
+        try:
+            client.request(
+                "POST", "/api/v1/agent/me/inbox/ack",
+                body={"thread_id": tid, "seq": max_seq},
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort ack, report + continue
+            print(f"mc inbox: ack fuer thread {tid} fehlgeschlagen: {e}", file=sys.stderr)
+    return 0
+
+
 def _add_ask_args(p):
     p.add_argument("question")
     p.add_argument(
@@ -2248,6 +2290,14 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
         handler=_cmd_msg,
         add_args=_add_msg_args,
+    ),
+    "inbox": CommandSpec(
+        name="inbox",
+        help="Neue Thread-Nachrichten abholen + pro Thread acken (Nudge+Pull, auf 📬-Weckruf)",
+        endpoints=("GET /me/inbox", "POST /me/inbox/ack"),
+        scope="chat:write",  # backend require_agent (comm_v2-gated), keine spezielle Scope
+        handler=_cmd_inbox,
+        add_args=lambda p: None,
     ),
     "help": CommandSpec(
         name="help",
