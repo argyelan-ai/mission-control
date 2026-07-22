@@ -814,6 +814,52 @@ def test_verify_msg_delivered_returns_true_once_anchor_scrolls_into_transcript(b
     assert bridge._verify_msg_delivered("tid-1", 1, timeout=2.0) is True
 
 
+def test_normalize_volatile_neutralizes_real_hermes_status_line(bridge):
+    """Live-confirmed trigger (2026-07-21): hermes' Qwen status line ticks its
+    timer/token-counter/spinner every second. Two captures of that line that
+    differ ONLY in those volatile values must normalize to the identical
+    string, or the pane-quiet gate never sees "unchanged" and never opens."""
+    cap1 = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    cap2 = "⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 45s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._normalize_volatile(cap1) == bridge._normalize_volatile(cap2)
+
+
+def test_pane_quiet_seconds_keeps_advancing_through_ticking_status_line(bridge, monkeypatch):
+    """Regression for the hung-forever bug: feed _pane_quiet_seconds a status
+    line whose timer/token-counter changes every observation. Without
+    normalization the pane never reads "unchanged" and the quiet clock resets
+    on every call, forever holding it at 0."""
+    bridge._msg_pane_state["pane"] = None
+    bridge._msg_pane_state["last_change_ts"] = 0.0
+
+    lines = [
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.2K/262.1K │ … │ 5h │ ⏲ 18m 57s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 56s │ ✓ 2h 10m │ ⚠ YOLO",
+    ]
+    # First observation always resets the clock.
+    assert bridge._pane_quiet_seconds(100.0, lines[0]) == 0.0
+    # Later observations, despite the ticking timer/token-counter, must see
+    # the SAME normalized pane and keep advancing the quiet clock.
+    assert bridge._pane_quiet_seconds(105.0, lines[1]) == 5.0
+    assert bridge._pane_quiet_seconds(111.0, lines[2]) == 11.0
+
+
+def test_pane_quiet_seconds_still_resets_on_genuine_new_content(bridge, monkeypatch):
+    """Real new content (a fresh transcript line, new composer text) must
+    still reset the quiet clock — normalization must not blind the gate to
+    actual progress, only to the volatile status-line noise."""
+    bridge._msg_pane_state["pane"] = None
+    bridge._msg_pane_state["last_change_ts"] = 0.0
+
+    status = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._pane_quiet_seconds(100.0, f"transcript line A\n{status}") == 0.0
+    assert bridge._pane_quiet_seconds(105.0, f"transcript line A\n{status}") == 5.0
+    # New transcript content appears — genuine progress, clock must reset.
+    assert bridge._pane_quiet_seconds(106.0, f"transcript line A\ntranscript line B\n{status}") == 0.0
+    assert bridge._pane_quiet_seconds(108.0, f"transcript line A\ntranscript line B\n{status}") == 2.0
+
+
 def test_msg_gate_open_false_when_dispatch_in_flight(bridge, monkeypatch):
     monkeypatch.setattr(bridge, "is_session_running", lambda: True)
     assert bridge.msg_gate_open(dispatch_in_flight=True) is False
