@@ -323,7 +323,15 @@ async def update_agent_skills(
                     current_model = data.get("model", current_model)
                 except Exception:
                     pass
-            written = sync_agent_plugins_to_disk(agent_slug, current_prompt, current_model, body.cli_plugins)
+            # W2.1 turn-signal hooks only for the claude harness; openclaude
+            # must not receive the unknown `hooks` key.
+            from app.models.runtime import Runtime
+            from app.services.harness_compat import runtime_protocol
+            _rt = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+            written = sync_agent_plugins_to_disk(
+                agent_slug, current_prompt, current_model, body.cli_plugins,
+                turn_signal_hooks=(runtime_protocol(_rt) == "anthropic"),
+            )
             cli_synced = all(written.values())
 
             # Restart worker/container so new plugin files take effect

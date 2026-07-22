@@ -564,6 +564,7 @@ cancel_task() {
     fi
     log "Task $task_id extern auf 'failed' gesetzt — sende ESC an claude"
     tmux send-keys -t "${SESSION_NAME}:0" Escape
+    reset_turn_signal   # W2.1: ESC bricht Turn ab, Stop-Hook feuert nicht — lone submit sonst bis Staleness
     LAST_CANCELLED_TASK_ID="$task_id"
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -668,6 +669,7 @@ except Exception as e:
 
     # Claude aus dem crashed/stalled state befreien
     tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    reset_turn_signal   # W2.1: ESC-Abbruch feuert kein Stop-Hook — lone submit sonst bis Staleness
 
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -903,6 +905,11 @@ run_poll_loop() {
 
 # Stale lock von vorherigem poll.sh-Run entfernen (z.B. nach SIGKILL wo trap nicht lief).
 rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
+# W2.1: Turn-Signal beim poll.sh-Startup leeren. Ein `stop` aus einem frueheren
+# Container-Leben hat KEINE Staleness-Grenze und wuerde sonst nach docker
+# restart/respawn als frisches idle gelesen. Die Entrypoints truncaten die
+# Datei zusaetzlich beim Boot (Belt-and-Suspenders).
+reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
 trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT

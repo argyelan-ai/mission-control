@@ -73,6 +73,19 @@ _turn_signal_probe() {
     echo "$kind $age"
 }
 
+# _pane_is_crashed SESSION — 0 (true) wenn das Pane einen echten Turn-Crash-
+# Marker zeigt (API/Network-Error der den Turn abbricht). Wird aus dem Turn-
+# Signal-Schnellpfad gerufen: ein frischer `submit` faerbt working, aber ein
+# Crash mitten im Turn feuert KEIN Stop-Hook — daher bleibt die Crash-Erkennung
+# scrape-autoritativ. Muster bewusst identisch zum Crashed-Check im Scrape-Pfad
+# von detect_turn_state (eine Aenderung dort hier mitziehen).
+_pane_is_crashed() {
+    local session="$1" cap
+    cap=$(tmux capture-pane -t "${session}:0" -p -S -50 2>/dev/null || echo "")
+    [ -n "$cap" ] || return 1
+    echo "$cap" | grep -qE 'API Error: fetch failed|API Error: Connection error|API Error: 5[0-9]{2}'
+}
+
 # Gibt einen von: working | crashed | idle | unknown
 detect_turn_state() {
     local session="${1:?session name required}"
@@ -95,13 +108,26 @@ detect_turn_state() {
                 echo "idle"
                 return
             elif [ "$kind" = "submit" ]; then
-                # Staleness-Schutz: Stop feuert nicht bei Interrupt (Esc) / API-
-                # Fehler. Ein `submit` das aelter als STALE_SECONDS ist, ist
-                # verdaechtig — im auto-Modus auf Scraping zurueckfallen (dort
-                # werden crashed/idle korrekt erkannt). Im hooks-Modus gibt es
-                # keinen Fallback, also bleibt submit=working.
+                if [ "$sig_mode" = "hooks" ]; then
+                    # hooks-only (Test-Modus): reines Signal, kein Crash-Scrape.
+                    echo "working"
+                    return
+                fi
+                # auto: ein `submit` heisst claude ist IN einem Turn — aber ein
+                # API/Network-Crash mitten im Turn feuert KEIN Stop-Hook. Der
+                # Crash-Marker muss daher scrape-autoritativ bleiben: billiges
+                # crashed-Scraping laufen lassen, crashed gewinnt ueber working.
+                # Sonst versteckt sich ein Crash bis zur Staleness-Grenze (~900s)
+                # hinter dem frischen submit statt in ~15s als Blocker zu feuern.
+                if _pane_is_crashed "$session"; then
+                    echo "crashed"
+                    return
+                fi
+                # Staleness-Schutz: Stop feuert nicht bei Interrupt (Esc). Ein
+                # `submit` aelter als STALE_SECONDS ist verdaechtig → auf volles
+                # Scraping zurueckfallen (idle/crashed werden dort erkannt).
                 local stale="${TURN_SIGNAL_STALE_SECONDS:-900}"
-                if [ "$sig_mode" = "hooks" ] || [ "$age" -lt "$stale" ]; then
+                if [ "$age" -lt "$stale" ]; then
                     echo "working"
                     return
                 fi

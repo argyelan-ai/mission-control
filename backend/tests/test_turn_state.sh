@@ -152,6 +152,31 @@ out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$big" detect_turn_state testsessio
 bytes=$(wc -c < "$big" | tr -d ' ')
 [ "$bytes" -lt 1000 ] || fail "case13b: signal file must be truncated (<1000 bytes), got $bytes"
 
+# ── Case 14: fresh `submit` but pane shows a crash ⇒ crashed (scrape wins) ─
+# A crash mid-turn fires no Stop hook, so the signal still says submit. In auto
+# mode the crashed scrape is authoritative and must beat working — else the
+# blocker only fires after the 900s staleness instead of ~15s.
+printf '%s submit\n' "$now" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_crash"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "crashed" ] || fail "case14: fresh submit + crashed pane must be crashed, got '$out'"
+
+# ── Case 15: fresh `submit`, healthy working pane ⇒ working ────────────────
+# The crash scrape must NOT false-positive on a normal working pane.
+printf '%s submit\n' "$now" > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_work"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case15: fresh submit + healthy pane must be working, got '$out'"
+
+# ── Case 16: EMPTY signal file ⇒ scrape (post startup/session reset) ───────
+# reset_turn_signal (poll.sh) + the entrypoint boot-clear truncate the file to
+# empty. An empty file must behave like a missing one: fall back to scraping,
+# so a pre-restart `stop` (no staleness bound) never leaks as fresh idle.
+: > "$sig"
+export TMUX_STUB_PANE_FILE="$pane_work"
+out=$(TURN_SIGNAL_MODE=auto TURN_SIGNAL_FILE="$sig" detect_turn_state testsession)
+[ "$out" = "working" ] || fail "case16: empty signal file must fall back to scraping, got '$out'"
+
 rm -f "$sig" "$big"
 
-echo "PASS: all 13 detect_turn_state cases"
+echo "PASS: all 16 detect_turn_state cases"
