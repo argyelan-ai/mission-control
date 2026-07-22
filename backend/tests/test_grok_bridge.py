@@ -1004,6 +1004,124 @@ def test_flush_msg_queue_collapsed_echo_acks_via_event_count(bridge, monkeypatch
     assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
 
 
+# ── Live finding round 2 (2026-07-22, 23:15): unique-prefix verify (redraw-safe) ─
+#
+# grok's TUI REDRAWS its transcript per turn instead of appending — the
+# count-increase signal from round 1 can see the SAME event count before and
+# after a paste (old turn's events cleared, new turn's rendered), so it never
+# detects an increase and the flush redelivers forever. Fix: prepend a unique
+# `[msg <seq> · <thread-8>]` prefix to the body's first line (survives both
+# the truncated-echo collapse and the per-turn redraw — see _msg_prefix).
+
+
+def test_msg_prefix_shape(bridge):
+    assert bridge._msg_prefix(1, "thread-1-uuid") == "[msg 1 · thread-1]"
+    assert bridge._msg_prefix(42, "abcdefgh-ijkl-mnop") == "[msg 42 · abcdefgh]"
+
+
+def test_build_message_file_body_prefixes_the_body_first_line(bridge):
+    body = bridge.build_message_file_body(_msg(seq=3, tid="th-abc12345", body="Hallo Grok"))
+    lines = body.splitlines()
+    # "# Neue Nachricht ..." header is UNCHANGED (still first) — the prefix is
+    # on the BODY line specifically, since grok strips the Markdown header on
+    # its truncated echo (see module note) but keeps the body's opening.
+    assert lines[0] == "# Neue Nachricht (Interaction 2.0)"
+    body_line = next(ln for ln in lines if ln.startswith("[msg 3 ·"))
+    assert body_line == "[msg 3 · th-abc12] Hallo Grok"
+
+
+def test_prefix_was_submitted_present_outside_composer(bridge):
+    prefix = "[msg 1 · th-1]"
+    assert bridge._prefix_was_submitted(f"...\n{prefix} Hallo Grok …\n◆ Thought for 0.1s", prefix) is True
+
+
+def test_prefix_was_submitted_only_in_composer_box_no_ack(bridge):
+    """Swallowed-Enter case: the prefix is sitting un-sent INSIDE the composer
+    box — those lines start with the box border char (│/|) — must not count."""
+    prefix = "[msg 1 · th-1]"
+    pane = f"╭──────────╮\n│ ❯ {prefix} Hallo │\n╰──────────╯"
+    assert bridge._prefix_was_submitted(pane, prefix) is False
+
+
+def test_prefix_was_submitted_absent_no_ack(bridge):
+    prefix = "[msg 1 · th-1]"
+    assert bridge._prefix_was_submitted("nothing useful here", prefix) is False
+
+
+def test_prefix_was_submitted_survives_truncated_echo_with_ellipsis(bridge):
+    """The exact live rendering quirk: a submitted multi-line paste collapses
+    to ONE transcript line ending in `…` — the prefix (first thing pasted)
+    must still be found."""
+    prefix = "[msg 1 · th-1]"
+    pane = f"{prefix} Zweiter Zustelltest. Bitte kurz best…\n◆ user_prompt_submit  [hooks: 1]"
+    assert bridge._prefix_was_submitted(pane, prefix) is True
+
+
+def test_verify_msg_delivered_redraw_scenario_prefix_confirms_despite_constant_count(bridge, monkeypatch):
+    """The exact round-2 live bug: turn-event count is IDENTICAL before and
+    after the paste (redraw, not append) — the count-increase signal alone
+    would never fire. The unique prefix, present in the (redrawn) transcript,
+    must still confirm delivery."""
+    stale_and_redrawn_pane = (
+        "[msg 1 · th-1] Zweiter Zustelltest. …\n"
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 2.1s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    # events_before == events in the post-paste pane too (redraw, no increase).
+    events_before = bridge._count_turn_events(stale_and_redrawn_pane)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_and_redrawn_pane)
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=1.0)
+
+    assert delivered is True
+
+
+def test_verify_msg_delivered_prefix_nowhere_no_ack(bridge, monkeypatch):
+    """Neither the prefix, nor a grown event count, nor the anchor — must not ack."""
+    stale_pane = "◆ user_prompt_submit  [hooks: 1]\nTurn completed in 1.0s.\n╭───╮\n│ ❯  │\n╰───╯"
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+    events_before = bridge._count_turn_events(stale_pane)  # no increase either
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_verify_msg_delivered_default_timeout_is_five_seconds(bridge):
+    import inspect
+    sig = inspect.signature(bridge._verify_msg_delivered)
+    assert sig.parameters["timeout"].default == 5.0
+
+
+def test_flush_msg_queue_redraw_scenario_acks_via_prefix(bridge, monkeypatch):
+    """End-to-end (flush_msg_queue level) round-2 live-bug regression: the
+    turn-event count is constant across the paste (TUI redraws, doesn't
+    append) — only the unique-prefix signal can confirm delivery here."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="Zweiter Zustelltest.")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    # SAME event count before and after — a redraw, not an append. Only the
+    # unique prefix (present after the paste) distinguishes delivered-vs-not.
+    prefix_pane = (
+        "[msg 1 · th-1] Zweiter Zustelltest. …\n"
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 2.1s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    baseline_pane = "◆ user_prompt_submit  [hooks: 1]\nTurn completed in 5.0s.\n╭───╮\n│ ❯  │\n╰───╯"
+    panes = iter([baseline_pane, prefix_pane])
+    monkeypatch.setattr(bridge, "capture_pane", lambda: next(panes, prefix_pane))
+
+    bridge.flush_msg_queue()
+
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+
+
 def test_deliver_messages_noop_when_field_absent(bridge, monkeypatch):
     """comm_v2=false byte-identical behavior: no `new_messages` key ⇒ no queue dir
     is even created, no gate check happens."""
