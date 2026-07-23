@@ -2090,11 +2090,8 @@ def serve_loop(
         # (comm_v2=false → byte-identical). Wrapped so a hiccup on a real
         # message can never crash the poll loop (which would take the whole
         # agent down).
-        if MSG_DELIVERY_MODE == "nudge":
-            new_messages = (payload or {}).get("new_messages") if isinstance(payload, dict) else None
-            if new_messages is not None:
-                delivery.nudge(new_messages)
-        else:
+        new_messages = (payload or {}).get("new_messages") if isinstance(payload, dict) else None
+        if MSG_DELIVERY_MODE != "nudge":
             try:
                 queue_messages(payload, msg_queue_dir)
             except Exception as e:  # noqa: BLE001 — log + keep polling
@@ -2102,13 +2099,28 @@ def serve_loop(
                     f"[serve] queue_messages error (swallowed): {type(e).__name__}: {e}\n"
                 )
 
+        def _deliver_at_boundary() -> None:
+            # Review fix (2026-07-23): the nudge must fire at the SAME points
+            # where paste-mode flushes — post-dispatch / idle turn boundary —
+            # never BEFORE the dispatch branch. A payload carrying new_task
+            # AND new_messages would otherwise nudge first, mark the state
+            # file as nudged, and then have run_native_turn relaunch Window 0
+            # and kill the nudge turn before the agent could run `mc inbox`
+            # (no re-nudge until NUDGE_REMIND_SECONDS). Also keeps stale
+            # paste-mode queue files from ever being flushed in nudge mode.
+            if MSG_DELIVERY_MODE == "nudge":
+                if new_messages is not None:
+                    delivery.nudge(new_messages)
+            else:
+                delivery.flush()
+
         if task and task.get("id"):
             attempt_id = task.get("dispatch_attempt_id") or task["id"]
             if attempt_id == last_attempt_id:
                 # Dedup: same dispatch already handled — this is an idle turn
-                # boundary, so flush queued thread-messages, then sleep. Do NOT
-                # re-run the task.
-                delivery.flush()
+                # boundary, so deliver thread-messages (nudge or flush), then
+                # sleep. Do NOT re-run the task.
+                _deliver_at_boundary()
                 _sleep(poll_interval)
                 continue
             last_attempt_id = attempt_id
@@ -2191,10 +2203,11 @@ def serve_loop(
             finally:
                 _set_task_lock(False)
 
-        # comm_v2: post-dispatch OR no-task idle turn boundary — flush at most
-        # one queued thread-message (gate re-checked inside). No-op when the
-        # queue is empty (comm_v2=false → byte-identical).
-        delivery.flush()
+        # comm_v2: post-dispatch OR no-task idle turn boundary — deliver at
+        # most one queued thread-message (paste) or a single nudge (gate
+        # re-checked inside). No-op when there is nothing pending
+        # (comm_v2=false → byte-identical).
+        _deliver_at_boundary()
         _sleep(poll_interval)
 
     return 0

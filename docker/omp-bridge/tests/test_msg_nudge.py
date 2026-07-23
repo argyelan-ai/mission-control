@@ -373,6 +373,57 @@ def test_serve_loop_commv2_off_touches_no_nudge_state():
     print("PASS test_serve_loop_commv2_off_touches_no_nudge_state")
 
 
+
+# ── review fix 2026-07-23: nudge fires at the boundary, never pre-dispatch ────
+
+def test_serve_loop_nudges_after_dispatch_not_before():
+    """A payload carrying new_task AND new_messages must run the task FIRST
+    and nudge only at the post-dispatch boundary — a pre-dispatch nudge gets
+    its turn killed by run_native_turn's relaunch while the state file
+    already says "nudged" (no re-nudge until the remind window)."""
+    task = {"id": "task-1", "board_id": "b1", "dispatch_attempt_id": "att-1",
+            "prompt": "Do the thing."}
+    order = []
+    orig_mode = bridge.MSG_DELIVERY_MODE
+    orig_nudge = bridge._MsgDelivery.nudge
+    with tempfile.TemporaryDirectory() as d:
+        bridge.MSG_DELIVERY_MODE = "nudge"
+
+        def spy_nudge(self, messages):
+            order.append("nudge")
+            return orig_nudge(self, messages)
+
+        def run_factory(t, cwd):
+            def run():
+                order.append("run")
+                return _finish_outcome()
+            return run
+
+        bridge._MsgDelivery.nudge = spy_nudge
+        try:
+            it = iter([{"state": "new_task", "task": task,
+                        "new_messages": [_msg(1, "th")]}])
+            bridge.serve_loop(
+                poll_interval=0, max_iterations=1,
+                _poll_fn=lambda: next(it, {"state": "idle"}),
+                _lifecycle_factory=lambda t: _RecordingLifecycle(),
+                _run_factory=run_factory,
+                _sleep=lambda _s: None,
+                _context_env_path=os.path.join(d, "ctx.env"),
+                _msg_queue_dir=os.path.join(d, "queue"),
+                _msg_ack_dir=os.path.join(d, "ack"),
+                _task_lock_path=os.path.join(d, "task.lock"),
+                _nudge_state_file=os.path.join(d, "nudge-state"),
+                _nudge_msg_file=os.path.join(d, "nudge.msg"),
+            )
+        finally:
+            bridge._MsgDelivery.nudge = orig_nudge
+            bridge.MSG_DELIVERY_MODE = orig_mode
+    assert "run" in order and "nudge" in order, order
+    assert order.index("run") < order.index("nudge"), order
+    print("PASS test_serve_loop_nudges_after_dispatch_not_before")
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0
