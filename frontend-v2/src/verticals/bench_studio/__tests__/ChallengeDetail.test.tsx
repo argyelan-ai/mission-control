@@ -190,6 +190,31 @@ function makeEntry(over: Partial<BenchEntry> = {}): BenchEntry {
   };
 }
 
+describe("ChallengeDetail — vanilla badge (Bench #21)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("shows a Vanilla chip on spark entries, not on agent entries", async () => {
+    vi.mocked(benchApi.challenges.get).mockResolvedValue(
+      makeChallenge({
+        entries: [
+          makeEntry({ id: "e-1", model_label: "Qwen 3.6", source_kind: "spark" }),
+          makeEntry({
+            id: "e-2", model_label: "Rex", source_kind: "agent",
+            agent_id: "agent-1", video_path: "/sd/b.mp4",
+          }),
+        ],
+      })
+    );
+
+    renderDetail();
+    await screen.findByText("Qwen 3.6");
+
+    expect(screen.getAllByText(/vanilla/i)).toHaveLength(1);
+  });
+});
+
 describe("ChallengeDetail — edit + recompose", () => {
   beforeEach(() => {
     vi.clearAllMocks();

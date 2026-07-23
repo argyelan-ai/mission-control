@@ -6,9 +6,15 @@ import type {
   BenchChallengeCreate,
   BenchEntry,
   PromptTemplate,
+  SparkModelsStatus,
 } from "./types";
 
 export const benchApi = {
+  /** Bench #21: live Spark model list for the vanilla row's select in
+   *  NewChallengeDialog — always resolves (reachable: false on error). */
+  sparkModels: {
+    get: () => request<SparkModelsStatus>("/api/v1/bench/spark-models"),
+  },
   challenges: {
     list: (includeArchived = false) =>
       request<BenchChallenge[]>(
