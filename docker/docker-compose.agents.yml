@@ -300,6 +300,7 @@ services:
       # Vault mount — rw for Sparky (M.2 pilot). Other agents get :ro in M.3.
       - ${HOME}/.mc/vault:/vault:rw
       - ${HOME}/.mc/references:${HOME}/.mc/references:ro
+      - ${HOME}/.mc/agents/sparky/omp-sessions:/home/agent/.omp/profiles/mc-agent/agent/sessions
     env_file:
       - docker/.env.shared
       - docker/.env.agents
