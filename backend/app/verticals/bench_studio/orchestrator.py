@@ -223,7 +223,11 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
     data = resp.json()
     content = data["choices"][0]["message"]["content"] or ""
 
-    metrics: dict = {"duration_ms": duration_ms}
+    # The actually-served model per the response body wins over the
+    # requested name — the resolver can be stale by the time the request
+    # lands (recipe swap mid-flight). Falls back to the requested model
+    # since some backends echo it verbatim or omit the field.
+    metrics: dict = {"duration_ms": duration_ms, "model": data.get("model") or model}
     usage = data.get("usage") or {}
     if usage:
         tokens_out = usage.get("completion_tokens")
@@ -231,6 +235,11 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
         metrics["tokens_out"] = tokens_out
         if tokens_out and duration_ms:
             metrics["tok_per_s"] = round(tokens_out / (duration_ms / 1000), 1)
+        # OpenAI-compatible cached-prompt-tokens extension (vLLM prefix
+        # caching) — Task 5: billed separately from "fresh" input tokens.
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+        if cached:
+            metrics["cache_read_tokens"] = cached
     return content, metrics
 
 
@@ -275,6 +284,80 @@ async def resolve_spark_model_or_422() -> str:
     return status["active"]
 
 
+async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, metrics: dict) -> None:
+    """Task 5: writes one ModelUsageEvent per spark (vanilla) generation —
+    the direct-API path has no fleet Task, so it never reaches
+    model_usage_events through the normal harvester (token_harvester.py)
+    the way agent entries do (their rows piggyback on the transcript-derived
+    harvest). This is the sole feed for vanilla entries.
+
+    task_id is deliberately left NULL: ModelUsageEvent.task_id is a hard FK
+    to tasks.id, and spark entries are never dispatched as a Task (unlike
+    dispatch_agent_entry) — writing entry.id/challenge_id there would
+    violate the constraint in Postgres (SQLite tests wouldn't catch it).
+    The outro's token display for spark entries instead reads
+    entry.metrics directly (_build_branding_payload) — it doesn't need this
+    row at all; this table exists for cost dashboards / budget warnings
+    (cost_collector) to see vanilla usage too.
+
+    message_uuid gets a fresh random discriminator every call by design: a
+    rerender/regenerate is a genuinely new API call (new tokens spent), so
+    it must land as a new row, never dedup onto the previous attempt.
+
+    Best-effort — must never fail the bench run; every error is caught and
+    logged. Deliberately does NOT call session.rollback() on failure: this
+    session is shared with the caller (generate_spark_entry) and a full
+    rollback() expires every object it's tracking (entry, challenge) —
+    forcing an implicit re-load on next attribute access, which blows up
+    with sqlalchemy's MissingGreenlet outside an awaited context. Only the
+    scoped SAVEPOINT (begin_nested) around the actual insert is rolled back
+    on failure, same pattern as token_harvester's per-row inserts.
+    """
+    tokens_in = metrics.get("tokens_in")
+    tokens_out = metrics.get("tokens_out")
+    if tokens_in is None and tokens_out is None:
+        return  # vLLM response had no usage block — nothing to record
+    try:
+        from app.models.model_usage import ModelPrice, ModelUsageEvent
+        from app.services.token_harvester import _compute_cost_usd, match_price
+
+        model = metrics.get("model") or entry.spark_model or "unknown"
+        cache_read_tokens = int(metrics.get("cache_read_tokens") or 0)
+        input_tokens = max(int(tokens_in or 0) - cache_read_tokens, 0)
+        output_tokens = int(tokens_out or 0)
+        ts = datetime.now(timezone.utc)
+
+        prices = (await session.exec(select(ModelPrice))).all()
+        price_info = match_price(model, ts, prices)
+        cost_usd = (
+            _compute_cost_usd(price_info, input_tokens, output_tokens, cache_read_tokens, 0)
+            if price_info is not None
+            else None
+        )
+
+        event = ModelUsageEvent(
+            agent_id=None,
+            task_id=None,
+            harness="vanilla",
+            model=model,
+            provider="vllm",
+            session_id=f"bench-{entry.challenge_id}",
+            message_uuid=f"vanilla:{entry.challenge_id}:{entry.id}:{uuid.uuid4().hex[:8]}",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=0,
+            cost_usd=cost_usd,
+            ts=ts,
+            source_file=f"bench-entry:{entry.id}",
+        )
+        async with session.begin_nested():
+            session.add(event)
+        await session.commit()
+    except Exception:  # noqa: BLE001 — usage tracking must never fail the bench run
+        logger.warning("bench entry %s: spark usage event write failed", entry.id, exc_info=True)
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:
@@ -287,6 +370,10 @@ async def generate_spark_entry(
     await session.commit()
     try:
         content, metrics = await _spark_generate(prompt, entry.spark_model)
+        # Tokens were spent the moment the API call returned, independent of
+        # whether the HTML below turns out to be valid — record usage now,
+        # not after the extract_html/write-to-disk steps that can still fail.
+        await _record_spark_usage_event(session, entry, metrics)
         html = extract_html(content)
         if not html:
             raise ValueError("model returned no HTML content")
@@ -721,8 +808,19 @@ async def _build_branding_payload(
         if entry.source_kind != "spark" and entry.task_id is not None:
             cost_usd = await task_cost_usd(session, entry.task_id)
 
+        # Token usage: spark entries have no fleet Task (task_id is always
+        # NULL for them, see _record_spark_usage_event), so they can never
+        # be attributed via task_token_usage/model_usage_events — read the
+        # tokens_in/out _spark_generate already captured into entry.metrics
+        # directly instead (Task 5). Agent entries keep the existing
+        # task-attributed sum.
         token_usage = None
-        if entry.task_id is not None:
+        if entry.source_kind == "spark":
+            tokens_in = (entry.metrics or {}).get("tokens_in")
+            tokens_out = (entry.metrics or {}).get("tokens_out")
+            if tokens_in is not None and tokens_out is not None:
+                token_usage = (int(tokens_in), int(tokens_out))
+        elif entry.task_id is not None:
             token_usage = await task_token_usage(session, entry.task_id)
 
         outro_rows.append({
