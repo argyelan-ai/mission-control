@@ -417,3 +417,67 @@ async def test_build_branding_payload_reads_tokens_from_entry_metrics_for_spark(
     payload = await orchestrator._build_branding_payload(session, ch, [entry])
 
     assert payload["outro_rows"][0]["tokens"] == "200 → 50"
+
+
+# ── _spark_generate thinking guard ────────────────────────────────────────
+
+
+class _FakeThinkResp:
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {
+            "choices": [{"message": {"content": "<html></html>"}}],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20},
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model,expects_guard",
+    [("Qwen/Qwen3.6-35B-A3B-FP8", True), ("poolside/Laguna-S-2.1-NVFP4", False)],
+)
+async def test_spark_generate_thinking_guard_is_model_aware(
+    monkeypatch, model, expects_guard
+):
+    """Qwen gets enable_thinking=False (content=null guard); other models must
+    NOT send chat_template_kwargs so the serving-side default governs and
+    reasoning models (Laguna) keep their think phase."""
+    captured = {}
+
+    class _FakeClient:
+        def __init__(self, timeout=None):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def post(self, url, json=None):
+            captured["json"] = json
+            return _FakeThinkResp()
+
+    class _FakeSpark:
+        llm_url = "http://spark:8000/v1"
+        timeout = 1.0
+
+        def __init__(self, timeout=None):
+            pass
+
+        async def _resolve_llm_model(self):
+            return model
+
+    monkeypatch.setattr("app.services.spark_client.SparkClient", _FakeSpark)
+    monkeypatch.setattr(orchestrator.httpx, "AsyncClient", _FakeClient)
+
+    content, metrics = await orchestrator._spark_generate("p", None)
+    payload = captured["json"]
+    assert content == "<html></html>"
+    assert payload["max_tokens"] == orchestrator.SPARK_MAX_TOKENS
+    if expects_guard:
+        assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    else:
+        assert "chat_template_kwargs" not in payload
