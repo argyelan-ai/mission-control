@@ -57,7 +57,9 @@ RECORD_TIMEOUT_S = 900.0
 # (media.compose_branded_timeout_s) for a 60s input, so the client-side
 # HTTP timeout must cover that plus request/response overhead.
 COMPOSE_TIMEOUT_S = 1200.0
-SPARK_TIMEOUT_S = 300.0
+# Reasoning models (Laguna) spend minutes thinking before the HTML comes out
+# (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
+SPARK_TIMEOUT_S = 900.0
 SPARK_MAX_TOKENS = 16384
 
 GENERATION_SYSTEM_PROMPT = (
@@ -202,22 +204,23 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
     spark = SparkClient(timeout=SPARK_TIMEOUT_S)
     model = model_override or await spark._resolve_llm_model()
     started = time.monotonic()
+    payload: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": SPARK_MAX_TOKENS,
+        "temperature": 0.7,
+    }
+    # Qwen3 thinking mode returns content=null; disable it there (same guard
+    # as SparkClient.complete). Other models (Laguna/poolside) need thinking
+    # for benchmark-grade output — omit the kwarg so the serving default
+    # governs and the reasoning parser strips the think block from content.
+    if "qwen" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-        resp = await cli.post(
-            f"{spark.llm_url}/chat/completions",
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": SPARK_MAX_TOKENS,
-                "temperature": 0.7,
-                # Qwen3 thinking mode returns content=null; disable it
-                # (same guard as SparkClient.complete).
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-        )
+        resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
         resp.raise_for_status()
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
