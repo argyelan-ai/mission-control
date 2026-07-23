@@ -113,6 +113,65 @@ async def test_create_challenge_agent_without_id_400(auth_client):
     assert resp.status_code == 400
 
 
+# ── Bench #21: vanilla (direct-API) spark model resolution ────────────────
+
+
+@pytest.mark.asyncio
+async def test_spark_models_endpoint_passthrough(auth_client, monkeypatch):
+    monkeypatch.setattr(
+        orchestrator, "spark_models_status",
+        AsyncMock(return_value={"reachable": True, "models": ["a", "b"], "active": "a"}),
+    )
+    resp = await auth_client.get("/api/v1/bench/spark-models")
+    assert resp.status_code == 200
+    assert resp.json() == {"reachable": True, "models": ["a", "b"], "active": "a"}
+
+
+@pytest.mark.asyncio
+async def test_create_challenge_spark_auto_resolves_and_freezes_model(auth_client, monkeypatch):
+    """Empty spark_model ("Aktives Modell (auto)") -> resolved live and
+    frozen into the entry; a whitespace-only label is filled with the
+    resolved model name too."""
+    monkeypatch.setattr(
+        orchestrator, "resolve_spark_model_or_422",
+        AsyncMock(return_value="deepseek-live"),
+    )
+    body = _create_body()
+    body["models"] = [{"label": " ", "source_kind": "spark", "spark_model": None}]
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 201, resp.text
+    entry = resp.json()["entries"][0]
+    assert entry["spark_model"] == "deepseek-live"
+    assert entry["model_label"] == "deepseek-live"
+
+
+@pytest.mark.asyncio
+async def test_create_challenge_spark_explicit_model_skips_resolution(auth_client, monkeypatch):
+    resolve_mock = AsyncMock(return_value="should-not-be-called")
+    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", resolve_mock)
+    body = _create_body()
+    body["models"] = [{"label": "DeepSeek", "source_kind": "spark", "spark_model": "deepseek-x"}]
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 201, resp.text
+    entry = resp.json()["entries"][0]
+    assert entry["spark_model"] == "deepseek-x"
+    resolve_mock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_create_challenge_spark_unreachable_422(auth_client, monkeypatch):
+    from fastapi import HTTPException
+
+    monkeypatch.setattr(
+        orchestrator, "resolve_spark_model_or_422",
+        AsyncMock(side_effect=HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")),
+    )
+    body = _create_body()
+    body["models"] = [{"label": "DeepSeek", "source_kind": "spark", "spark_model": None}]
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 422
+
+
 @pytest.mark.asyncio
 async def test_create_challenge_from_template_freezes_copy(auth_client, session):
     from app.models.prompt_template import PromptTemplate

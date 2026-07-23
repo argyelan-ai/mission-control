@@ -135,6 +135,14 @@ async def _entries_for(session: AsyncSession, challenge_id: uuid.UUID) -> list[B
 # ── Endpoints ─────────────────────────────────────────────────────────────
 
 
+@router.get("/spark-models")
+async def list_spark_models(current_user=Depends(require_user)):
+    """Bench #21: live model list for the vanilla (direct-API) row in the
+    New-Challenge dialog. Always 200 — an unreachable Spark is a state the
+    dialog renders (offline warning + free-text fallback), not an error."""
+    return await orchestrator.spark_models_status()
+
+
 @router.post("/challenges", status_code=status.HTTP_201_CREATED)
 async def create_challenge(
     body: BenchChallengeCreate,
@@ -158,6 +166,14 @@ async def create_challenge(
     for spec in body.models:
         if spec.source_kind == "agent" and spec.agent_id is None:
             raise HTTPException(400, f"model {spec.label!r}: agent_id required")
+        # Bench #21 vanilla "auto" option: empty spark_model -> freeze the
+        # live active model now, so the entry/outro never end up pointing at
+        # nothing regardless of later model switches on the box (422 if
+        # Spark can't be reached to resolve it).
+        if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
+            spec.spark_model = await orchestrator.resolve_spark_model_or_422()
+            if not spec.label.strip():
+                spec.label = spec.spark_model
 
     series_no = None
     if body.series_label:

@@ -5,6 +5,9 @@ import type { BenchChallenge } from "../types";
 
 vi.mock("@/verticals/bench_studio/api", () => ({
   benchApi: {
+    sparkModels: {
+      get: vi.fn().mockResolvedValue({ reachable: true, models: [], active: null }),
+    },
     challenges: {
       list: vi.fn(),
       get: vi.fn(),

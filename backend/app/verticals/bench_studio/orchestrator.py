@@ -234,6 +234,47 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
     return content, metrics
 
 
+SPARK_MODELS_PROBE_TIMEOUT_S = 3.0  # Bench #21: the dialog must never hang on an unreachable box.
+
+
+async def spark_models_status() -> dict:
+    """Live probe of the Spark vLLM server for the bench dialog's vanilla
+    model picker (Bench #21) — GET /v1/models with a short timeout so the
+    dialog never hangs. Reuses SparkClient for URL + active-model
+    resolution (same source of truth _spark_generate uses).
+
+    Never raises: an unreachable Spark is a normal, expected state here
+    (operator might be mid-benchmark on something else), not a router 500.
+    """
+    from app.services.spark_client import SparkClient
+
+    spark = SparkClient(timeout=SPARK_MODELS_PROBE_TIMEOUT_S)
+    try:
+        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
+            resp = await cli.get(f"{spark.llm_url}/models")
+            resp.raise_for_status()
+            models = sorted({m["id"] for m in resp.json().get("data", [])})
+    except (httpx.HTTPError, KeyError, ValueError):
+        return {"reachable": False, "models": [], "active": None}
+    active = await spark._resolve_llm_model()
+    return {"reachable": True, "models": models, "active": active or None}
+
+
+async def resolve_spark_model_or_422() -> str:
+    """Resolves the live active Spark model for a create-time spec with an
+    empty/None spark_model (routers.create_challenge, Bench #21 vanilla
+    "auto" option) — freezes it into the entry so the outro/label never end
+    up empty regardless of later model switches on the box.
+
+    Raises HTTPException(422) when Spark can't be reached right now and
+    there is nothing to freeze.
+    """
+    status = await spark_models_status()
+    if not status["reachable"] or not status["active"]:
+        raise HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")
+    return status["active"]
+
+
 async def generate_spark_entry(
     session: AsyncSession, entry: BenchEntry, prompt: str
 ) -> None:

@@ -6,6 +6,9 @@ import type { PromptTemplate } from "../types";
 
 vi.mock("@/verticals/bench_studio/api", () => ({
   benchApi: {
+    sparkModels: {
+      get: vi.fn().mockResolvedValue({ reachable: true, models: [], active: null }),
+    },
     challenges: {
       list: vi.fn(),
       get: vi.fn(),
@@ -231,6 +234,9 @@ describe("NewChallengeDialog — template picker", () => {
       composed_video_path: null, content_pipeline_id: null, error: null, archived_at: null,
       created_at: "", updated_at: "", entries: [],
     });
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: true, models: ["deepseek-v4"], active: "deepseek-v4",
+    });
 
     renderDialog();
 
@@ -254,10 +260,12 @@ describe("NewChallengeDialog — template picker", () => {
     // Fill mandatory fields
     await userEvent.type(screen.getByPlaceholderText(/titel/i), "My Test");
 
-    // Fill first model (label + spark model)
-    const [labelInput, sparkInput] = screen.getAllByPlaceholderText(/Label \(z\. B\.|vLLM-Modell/);
+    // Fill first model — spark model via the select (Bench #21: fed by
+    // benchApi.sparkModels.get).
+    const labelInput = screen.getByPlaceholderText(/Label \(z\. B\./);
     await userEvent.type(labelInput, "DeepSeek");
-    await userEvent.type(sparkInput, "deepseek-v4");
+    const sparkSelect = await screen.findByRole("combobox", { name: /vLLM-Modell 1/i });
+    await userEvent.selectOptions(sparkSelect, "deepseek-v4");
 
     // Now submit button should be enabled
     const submitBtn = screen.getByRole("button", { name: /Challenge starten/i });
@@ -394,15 +402,35 @@ describe("NewChallengeDialog — label autofill", () => {
     vi.mocked(api.agents.list).mockResolvedValue([sparkyAgent] as never);
   });
 
-  it("typing a spark model mirrors it into the label while untouched", async () => {
+  it("selecting a spark model mirrors it into the label while untouched", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: true, models: ["deepseek-v4"], active: "deepseek-v4",
+    });
     renderDialog();
     await screen.findByRole("option", { name: /bouncing balls/i });
 
-    const sparkInput = screen.getByPlaceholderText(/vLLM-Modell/);
-    await userEvent.type(sparkInput, "deepseek-v4");
+    const sparkSelect = await screen.findByRole("combobox", { name: /vLLM-Modell 1/i });
+    await userEvent.selectOptions(sparkSelect, "deepseek-v4");
 
     const labelInput = screen.getByRole("textbox", { name: /label 1/i });
     expect((labelInput as HTMLInputElement).value).toBe("deepseek-v4");
+  });
+
+  it("choosing 'Aktives Modell (auto)' mirrors the endpoint's active model into the label", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: true, models: ["deepseek-v4", "qwen3.6"], active: "qwen3.6",
+    });
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const sparkSelect = await screen.findByRole("combobox", { name: /vLLM-Modell 1/i });
+    // Pick a concrete model first, then switch back to auto — the label
+    // must follow (not get stuck on the previous selection).
+    await userEvent.selectOptions(sparkSelect, "deepseek-v4");
+    await userEvent.selectOptions(sparkSelect, "");
+
+    const labelInput = screen.getByRole("textbox", { name: /label 1/i });
+    expect((labelInput as HTMLInputElement).value).toBe("qwen3.6");
   });
 
   it("selecting an agent fills the label with the agent's model", async () => {
@@ -428,5 +456,71 @@ describe("NewChallengeDialog — label autofill", () => {
     await userEvent.selectOptions(await screen.findByRole("combobox", { name: /agent 1/i }), "agent-1");
 
     expect((labelInput as HTMLInputElement).value).toBe("Mein Label");
+  });
+});
+
+describe("NewChallengeDialog — vanilla (direct-API) spark row (Bench #21)", () => {
+  it("labels the source option 'Direkt-API (vanilla)' instead of 'Spark'", async () => {
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+    expect(screen.getByRole("option", { name: /direkt-api \(vanilla\)/i })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /^spark$/i })).toBeNull();
+  });
+
+  it("shows a select fed by benchApi.sparkModels.get with an auto option first", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: true, models: ["deepseek-v4", "qwen3.6"], active: "qwen3.6",
+    });
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    const sparkSelect = await screen.findByRole("combobox", { name: /vLLM-Modell 1/i });
+    const options = Array.from(sparkSelect.querySelectorAll("option")).map((o) => o.textContent);
+    expect(options[0]).toMatch(/aktives modell \(auto\)/i);
+    expect(options).toContain("deepseek-v4");
+    expect(options).toContain("qwen3.6");
+  });
+
+  it("choosing the auto option submits an empty spark_model (backend resolves at create)", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: true, models: ["qwen3.6"], active: "qwen3.6",
+    });
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    // Auto is the default selection ("") — just fill the mandatory fields
+    // (label autofills to the endpoint's active model) and submit.
+    await userEvent.type(screen.getByPlaceholderText(/titel/i), "Auto Test");
+    await userEvent.type(screen.getByPlaceholderText(/prompt/i), "Some prompt");
+    await screen.findByRole("combobox", { name: /vLLM-Modell 1/i }); // wait for the select (label autofill)
+
+    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/i }));
+
+    await waitFor(() => {
+      expect(benchApi.challenges.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Untouched "auto" row keeps spark_model falsy ("") — the backend
+          // treats any falsy/whitespace spark_model as "resolve live"
+          // (routers.create_challenge), same as an explicit null.
+          models: [expect.objectContaining({ spark_model: "", label: "qwen3.6" })],
+        })
+      );
+    });
+  });
+
+  it("renders a free-text fallback with an offline warning when Spark is unreachable", async () => {
+    vi.mocked(benchApi.sparkModels.get).mockResolvedValueOnce({
+      reachable: false, models: [], active: null,
+    });
+    renderDialog();
+    await screen.findByRole("option", { name: /bouncing balls/i });
+
+    await screen.findByText(/spark offline/i);
+    const fallbackInput = screen.getByPlaceholderText(/vLLM-Modell \(leer = aktiv\)/);
+    expect(fallbackInput.tagName).toBe("INPUT");
+    expect(screen.queryByRole("combobox", { name: /vLLM-Modell 1/i })).toBeNull();
+
+    await userEvent.type(fallbackInput, "manual-model");
+    expect((fallbackInput as HTMLInputElement).value).toBe("manual-model");
   });
 });

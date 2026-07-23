@@ -59,6 +59,14 @@ export function NewChallengeDialog({
     enabled: open,
   });
 
+  // Bench #21: live model list for the vanilla (direct-API) row's select.
+  const { data: sparkModels } = useQuery({
+    queryKey: ["bench-spark-models"],
+    queryFn: benchApi.sparkModels.get,
+    enabled: open,
+    staleTime: 30_000,
+  });
+
   const { data: templates } = useQuery({
     queryKey: ["prompt-templates-for-bench"],
     queryFn: benchApi.promptTemplates.list,
@@ -73,6 +81,23 @@ export function NewChallengeDialog({
       setTemplateId(prefillTemplate.id);
     }
   }, [prefillTemplate, open]);
+
+  // Bench #21: the "Aktives Modell (auto)" rows don't get a user onChange
+  // event when the live model resolves — sync their label the moment it
+  // arrives, so the field isn't left empty (and thus the submit button
+  // disabled) purely because of query timing.
+  useEffect(() => {
+    if (!sparkModels?.active) return;
+    setModels((prev) =>
+      prev.map((m, i) => {
+        if (m.source_kind !== "spark" || (m.spark_model ?? "").trim() || labelTouched.has(i)) {
+          return m;
+        }
+        return { ...m, label: sparkModels.active! };
+      })
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelTouched read at fire-time only, mirrors setModelWithAutofill
+  }, [sparkModels?.active]);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -134,7 +159,11 @@ export function NewChallengeDialog({
         const next = { ...m, ...patch };
         if (!labelTouched.has(i)) {
           if (next.source_kind === "spark") {
-            next.label = (next.spark_model ?? "").trim();
+            // "Aktives Modell (auto)" (spark_model "") -> mirror the
+            // endpoint's live active model into the label so it's never
+            // empty at submit time (backend re-resolves at create anyway,
+            // this is just so the field isn't blank in the UI).
+            next.label = (next.spark_model ?? "").trim() || (sparkModels?.active ?? "");
           } else if (next.agent_id) {
             const agent = (agents ?? []).find((a) => a.id === next.agent_id);
             next.label = (agent?.model ?? agent?.name ?? "").trim();
@@ -305,17 +334,43 @@ export function NewChallengeDialog({
                 style={inputStyle}
                 aria-label={`Quelle ${i + 1}`}
               >
-                <option value="spark">Spark</option>
+                <option value="spark">Direkt-API (vanilla)</option>
                 <option value="agent">Agent</option>
               </select>
               {m.source_kind === "spark" ? (
-                <input
-                  value={m.spark_model ?? ""}
-                  onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
-                  placeholder="vLLM-Modell (leer = aktiv)"
-                  className="rounded-lg p-2 text-sm outline-none flex-1"
-                  style={inputStyle}
-                />
+                sparkModels && !sparkModels.reachable ? (
+                  // Spark unreachable — free-text fallback (same as before
+                  // Bench #21) plus an inline warning; the model is
+                  // resolved at start time on the backend.
+                  <div className="flex flex-col gap-1 flex-1">
+                    <input
+                      value={m.spark_model ?? ""}
+                      onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
+                      placeholder="vLLM-Modell (leer = aktiv)"
+                      aria-label={`vLLM-Modell ${i + 1}`}
+                      className="rounded-lg p-2 text-sm outline-none"
+                      style={inputStyle}
+                    />
+                    <span className="text-[11px]" style={{ color: C.warning }}>
+                      Spark offline — Modell wird beim Start aufgelöst
+                    </span>
+                  </div>
+                ) : (
+                  <select
+                    value={m.spark_model ?? ""}
+                    onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
+                    className="rounded-lg p-2 text-sm outline-none flex-1"
+                    style={inputStyle}
+                    aria-label={`vLLM-Modell ${i + 1}`}
+                  >
+                    <option value="">Aktives Modell (auto)</option>
+                    {(sparkModels?.models ?? []).map((model) => (
+                      <option key={model} value={model}>
+                        {model}
+                      </option>
+                    ))}
+                  </select>
+                )
               ) : (
                 <select
                   value={m.agent_id ?? ""}

@@ -5,6 +5,7 @@ Vertical test: skipped entirely when the vertical directory is stripped.
 import uuid
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 pytest.importorskip("app.verticals.bench_studio")
@@ -134,3 +135,76 @@ async def test_generate_spark_entry_empty_html_fails(session, tmp_path, monkeypa
 
     assert entry.status == "failed"
     assert "no HTML" in entry.error
+
+
+# ── spark_models_status / resolve_spark_model_or_422 (Bench #21 vanilla) ──
+
+
+class _FakeModelsResponse:
+    def __init__(self, models: list[str]):
+        self.status_code = 200
+        self._models = models
+
+    def raise_for_status(self):
+        pass
+
+    def json(self):
+        return {"data": [{"id": m} for m in self._models]}
+
+
+def _patch_models_probe(monkeypatch, *, reachable: bool, models=None, active=None):
+    """Patches the two things spark_models_status touches: the raw GET
+    /v1/models probe (via httpx.AsyncClient, module-global — restored by
+    monkeypatch after the test) and SparkClient._resolve_llm_model (DB-backed,
+    out of scope for this unit test)."""
+    from app.services.spark_client import SparkClient
+
+    class _FakeAsyncClient:
+        def __init__(self, *a, **kw):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url, **kw):
+            if not reachable:
+                raise httpx.ConnectError("no route to host", request=httpx.Request("GET", url))
+            return _FakeModelsResponse(models or [])
+
+    monkeypatch.setattr(httpx, "AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(SparkClient, "_resolve_llm_model", AsyncMock(return_value=active))
+
+
+@pytest.mark.asyncio
+async def test_spark_models_status_reachable(monkeypatch):
+    _patch_models_probe(monkeypatch, reachable=True, models=["a", "b"], active="a")
+    assert await orchestrator.spark_models_status() == {
+        "reachable": True, "models": ["a", "b"], "active": "a",
+    }
+
+
+@pytest.mark.asyncio
+async def test_spark_models_status_unreachable(monkeypatch):
+    _patch_models_probe(monkeypatch, reachable=False)
+    assert await orchestrator.spark_models_status() == {
+        "reachable": False, "models": [], "active": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_resolve_spark_model_or_422_happy_path(monkeypatch):
+    _patch_models_probe(monkeypatch, reachable=True, models=["a"], active="a")
+    assert await orchestrator.resolve_spark_model_or_422() == "a"
+
+
+@pytest.mark.asyncio
+async def test_resolve_spark_model_or_422_unreachable_raises_422(monkeypatch):
+    from fastapi import HTTPException
+
+    _patch_models_probe(monkeypatch, reachable=False)
+    with pytest.raises(HTTPException) as exc_info:
+        await orchestrator.resolve_spark_model_or_422()
+    assert exc_info.value.status_code == 422

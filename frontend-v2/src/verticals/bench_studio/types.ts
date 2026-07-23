@@ -92,6 +92,13 @@ export interface BenchChallengeCreate {
   record_duration_s?: number | null;
 }
 
+// Bench #21: live Spark vLLM model list for the vanilla (direct-API) row.
+export interface SparkModelsStatus {
+  reachable: boolean;
+  models: string[];
+  active: string | null;
+}
+
 export interface PromptTemplate {
   id: string;
   title: string;
