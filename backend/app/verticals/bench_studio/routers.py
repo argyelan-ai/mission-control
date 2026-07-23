@@ -163,15 +163,21 @@ async def create_challenge(
     if not prompt_text or not prompt_text.strip():
         raise HTTPException(400, "prompt_text or prompt_template_id required")
 
+    # Bench #21 vanilla "auto" option: empty spark_model -> freeze the live
+    # active model now, so the entry/outro never end up pointing at nothing
+    # regardless of later model switches on the box (422 if Spark can't be
+    # reached to resolve it). Resolved at most ONCE per request — a
+    # multi-model side_by_side challenge with several auto specs must not
+    # fire N sequential probes against the same box for the same answer
+    # (review finding).
+    resolved_spark_model: str | None = None
     for spec in body.models:
         if spec.source_kind == "agent" and spec.agent_id is None:
             raise HTTPException(400, f"model {spec.label!r}: agent_id required")
-        # Bench #21 vanilla "auto" option: empty spark_model -> freeze the
-        # live active model now, so the entry/outro never end up pointing at
-        # nothing regardless of later model switches on the box (422 if
-        # Spark can't be reached to resolve it).
         if spec.source_kind == "spark" and not (spec.spark_model or "").strip():
-            spec.spark_model = await orchestrator.resolve_spark_model_or_422()
+            if resolved_spark_model is None:
+                resolved_spark_model = await orchestrator.resolve_spark_model_or_422()
+            spec.spark_model = resolved_spark_model
             if not spec.label.strip():
                 spec.label = spec.spark_model
 

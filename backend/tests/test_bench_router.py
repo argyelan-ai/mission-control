@@ -159,6 +159,27 @@ async def test_create_challenge_spark_explicit_model_skips_resolution(auth_clien
 
 
 @pytest.mark.asyncio
+async def test_create_challenge_multiple_auto_spark_specs_resolve_only_once(auth_client, monkeypatch):
+    """Review finding: N auto specs in one request must not fire N
+    sequential probes against Spark for the same answer."""
+    resolve_mock = AsyncMock(return_value="deepseek-live")
+    monkeypatch.setattr(orchestrator, "resolve_spark_model_or_422", resolve_mock)
+    body = _create_body()
+    body["models"] = [
+        {"label": "A", "source_kind": "spark", "spark_model": None},
+        {"label": "B", "source_kind": "spark", "spark_model": None},
+        {"label": "C", "source_kind": "spark", "spark_model": "already-set"},
+    ]
+    resp = await auth_client.post("/api/v1/bench/challenges", json=body)
+    assert resp.status_code == 201, resp.text
+    entries = {e["model_label"]: e["spark_model"] for e in resp.json()["entries"]}
+    assert entries["A"] == "deepseek-live"
+    assert entries["B"] == "deepseek-live"
+    assert entries["C"] == "already-set"
+    resolve_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_create_challenge_spark_unreachable_422(auth_client, monkeypatch):
     from fastapi import HTTPException
 

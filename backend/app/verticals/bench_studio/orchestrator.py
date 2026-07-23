@@ -244,17 +244,18 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
 
 
 SPARK_MODELS_PROBE_TIMEOUT_S = 3.0  # Bench #21: the dialog must never hang on an unreachable box.
+# Covers the /v1/models GET (bounded by SPARK_MODELS_PROBE_TIMEOUT_S itself)
+# PLUS the _resolve_llm_model() leg after it, which can fall through to its
+# own live re-probe (runtime_model_resolver._probe_live_spark_model) on a
+# DEFAULT — unbounded-by-us — httpx timeout. Wrapping the whole body is the
+# only way to guarantee this function itself never outlives ~4s (review
+# finding, Bench #21).
+_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S = 4.0
 
 
-async def spark_models_status() -> dict:
-    """Live probe of the Spark vLLM server for the bench dialog's vanilla
-    model picker (Bench #21) — GET /v1/models with a short timeout so the
-    dialog never hangs. Reuses SparkClient for URL + active-model
-    resolution (same source of truth _spark_generate uses).
-
-    Never raises: an unreachable Spark is a normal, expected state here
-    (operator might be mid-benchmark on something else), not a router 500.
-    """
+async def _probe_spark_models() -> dict:
+    """The actual probe body — see spark_models_status for the timeout
+    wrapper and docstring."""
     from app.services.spark_client import SparkClient
 
     spark = SparkClient(timeout=SPARK_MODELS_PROBE_TIMEOUT_S)
@@ -267,6 +268,23 @@ async def spark_models_status() -> dict:
         return {"reachable": False, "models": [], "active": None}
     active = await spark._resolve_llm_model()
     return {"reachable": True, "models": models, "active": active or None}
+
+
+async def spark_models_status() -> dict:
+    """Live probe of the Spark vLLM server for the bench dialog's vanilla
+    model picker (Bench #21) — GET /v1/models with a short timeout so the
+    dialog never hangs. Reuses SparkClient for URL + active-model
+    resolution (same source of truth _spark_generate uses).
+
+    Never raises: an unreachable Spark is a normal, expected state here
+    (operator might be mid-benchmark on something else), not a router 500 —
+    a timeout on the whole body (see _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
+    is treated exactly like an unreachable box.
+    """
+    try:
+        return await asyncio.wait_for(_probe_spark_models(), timeout=_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
+    except (TimeoutError, asyncio.TimeoutError):
+        return {"reachable": False, "models": [], "active": None}
 
 
 async def resolve_spark_model_or_422() -> str:

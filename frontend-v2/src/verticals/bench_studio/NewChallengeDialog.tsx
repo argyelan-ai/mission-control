@@ -12,6 +12,25 @@ import type { BenchModelSpec, PromptTemplate } from "./types";
 
 const EMPTY_MODEL: BenchModelSpec = { label: "", source_kind: "spark", spark_model: "", display_tag: "" };
 
+/** request() throws `Error("API <status>: <raw body>")` — pull the backend's
+ *  `detail` string back out (e.g. the 422 "Spark nicht erreichbar…") so the
+ *  toast shows the real reason instead of a generic one. Mirrors
+ *  ChallengeDetail.tsx's apiErrorDetail. */
+function apiErrorDetail(err: unknown, fallback: string): string {
+  if (err instanceof Error) {
+    const match = err.message.match(/^API \d+: ([\s\S]*)$/);
+    if (match) {
+      try {
+        const body = JSON.parse(match[1]);
+        if (typeof body?.detail === "string" && body.detail) return body.detail;
+      } catch {
+        // body wasn't JSON — fall through to fallback
+      }
+    }
+  }
+  return fallback;
+}
+
 const RECORD_DURATION_MIN = 5;
 const RECORD_DURATION_MAX = 60;
 const RECORD_DURATION_DEFAULT = 20;
@@ -60,12 +79,17 @@ export function NewChallengeDialog({
   });
 
   // Bench #21: live model list for the vanilla (direct-API) row's select.
-  const { data: sparkModels } = useQuery({
+  const { data: sparkModels, isError: sparkModelsErrored } = useQuery({
     queryKey: ["bench-spark-models"],
     queryFn: benchApi.sparkModels.get,
     enabled: open,
     staleTime: 30_000,
   });
+  // Treat a query ERROR the same as an explicit reachable:false — otherwise
+  // a network/5xx failure leaves sparkModels undefined and the dialog falls
+  // through to the reachable-select branch with an empty model list and no
+  // warning (review finding NIT 1).
+  const sparkOffline = sparkModelsErrored || sparkModels?.reachable === false;
 
   const { data: templates } = useQuery({
     queryKey: ["prompt-templates-for-bench"],
@@ -81,23 +105,6 @@ export function NewChallengeDialog({
       setTemplateId(prefillTemplate.id);
     }
   }, [prefillTemplate, open]);
-
-  // Bench #21: the "Aktives Modell (auto)" rows don't get a user onChange
-  // event when the live model resolves — sync their label the moment it
-  // arrives, so the field isn't left empty (and thus the submit button
-  // disabled) purely because of query timing.
-  useEffect(() => {
-    if (!sparkModels?.active) return;
-    setModels((prev) =>
-      prev.map((m, i) => {
-        if (m.source_kind !== "spark" || (m.spark_model ?? "").trim() || labelTouched.has(i)) {
-          return m;
-        }
-        return { ...m, label: sparkModels.active! };
-      })
-    );
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- labelTouched read at fire-time only, mirrors setModelWithAutofill
-  }, [sparkModels?.active]);
 
   const mutation = useMutation({
     mutationFn: () =>
@@ -119,7 +126,7 @@ export function NewChallengeDialog({
       reset();
       onClose();
     },
-    onError: () => notify.error("Challenge konnte nicht gestartet werden"),
+    onError: (err) => notify.error(apiErrorDetail(err, "Challenge konnte nicht gestartet werden")),
   });
 
   function reset() {
@@ -159,11 +166,15 @@ export function NewChallengeDialog({
         const next = { ...m, ...patch };
         if (!labelTouched.has(i)) {
           if (next.source_kind === "spark") {
-            // "Aktives Modell (auto)" (spark_model "") -> mirror the
-            // endpoint's live active model into the label so it's never
-            // empty at submit time (backend re-resolves at create anyway,
-            // this is just so the field isn't blank in the UI).
-            next.label = (next.spark_model ?? "").trim() || (sparkModels?.active ?? "");
+            // Mirrors an EXPLICITLY selected model only. The "Aktives
+            // Modell (auto)" case (spark_model "") deliberately does NOT
+            // fill the label here — the resolved model is only shown as a
+            // placeholder (see the label input below); writing it into the
+            // actual value would go stale the moment the box's active
+            // model changes between dialog-open and create (review finding
+            // MINOR 1). The backend fills the label from the model it
+            // actually resolves at create time when left blank.
+            next.label = (next.spark_model ?? "").trim();
           } else if (next.agent_id) {
             const agent = (agents ?? []).find((a) => a.id === next.agent_id);
             next.label = (agent?.model ?? agent?.name ?? "").trim();
@@ -195,15 +206,33 @@ export function NewChallengeDialog({
     return (agent?.harness ?? agent?.name ?? "AGENT").toUpperCase();
   }
 
+  // A spark row still on "Aktives Modell (auto)" (spark_model empty/null) —
+  // the backend resolves + freezes the live model for these at create time.
+  function isAutoSparkRow(m: BenchModelSpec): boolean {
+    return m.source_kind === "spark" && !(m.spark_model ?? "").trim();
+  }
+
+  // Review finding MINOR 1 / NIT 2: an untouched auto row is valid with an
+  // empty label (the backend fills it in) — UNLESS Spark is confirmed
+  // offline, in which case create() would 422 immediately regardless of the
+  // label, so submit stays blocked until the operator either types a model
+  // (free-text fallback) or Spark comes back.
+  function isModelRowValid(m: BenchModelSpec, i: number): boolean {
+    if (m.source_kind === "agent") {
+      return m.label.trim().length > 0 && Boolean(m.agent_id);
+    }
+    if (isAutoSparkRow(m)) {
+      if (sparkOffline) return false;
+      return !labelTouched.has(i) || m.label.trim().length > 0;
+    }
+    return m.label.trim().length > 0;
+  }
+
   const valid =
     title.trim().length > 0 &&
     (templateId !== null || promptText.trim().length > 0) &&
     models.length > 0 &&
-    models.every(
-      (m) =>
-        m.label.trim().length > 0 &&
-        (m.source_kind === "spark" || (m.source_kind === "agent" && m.agent_id))
-    ) &&
+    models.every((m, i) => isModelRowValid(m, i)) &&
     // Belt-and-suspenders: onChange already clamps to 5..60, but guarding
     // the submit too means an out-of-range value disables the button
     // instead of surfacing as a generic 422 from the backend.
@@ -316,7 +345,14 @@ export function NewChallengeDialog({
                   markLabelTouched(i, e.target.value);
                   setModel(i, { label: e.target.value });
                 }}
-                placeholder="Label (z. B. DeepSeek)"
+                placeholder={
+                  // Untouched auto row: preview the model the backend will
+                  // resolve at create time — as a placeholder only, never
+                  // written into the submitted value (MINOR 1).
+                  isAutoSparkRow(m) && !sparkOffline && sparkModels?.active
+                    ? `Label (auto: ${sparkModels.active})`
+                    : "Label (z. B. DeepSeek)"
+                }
                 aria-label={`Label ${i + 1}`}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
@@ -338,10 +374,12 @@ export function NewChallengeDialog({
                 <option value="agent">Agent</option>
               </select>
               {m.source_kind === "spark" ? (
-                sparkModels && !sparkModels.reachable ? (
-                  // Spark unreachable — free-text fallback (same as before
-                  // Bench #21) plus an inline warning; the model is
-                  // resolved at start time on the backend.
+                sparkOffline ? (
+                  // Spark unreachable (or the status probe itself failed,
+                  // NIT 1) — free-text fallback plus an inline warning; a
+                  // blank model here would 422 at create (backend can't
+                  // resolve "auto" either), so `valid` blocks submit until
+                  // the operator types a model manually.
                   <div className="flex flex-col gap-1 flex-1">
                     <input
                       value={m.spark_model ?? ""}
@@ -352,7 +390,7 @@ export function NewChallengeDialog({
                       style={inputStyle}
                     />
                     <span className="text-[11px]" style={{ color: C.warning }}>
-                      Spark offline — Modell wird beim Start aufgelöst
+                      Spark offline — Modell manuell eintragen oder später starten
                     </span>
                   </div>
                 ) : (

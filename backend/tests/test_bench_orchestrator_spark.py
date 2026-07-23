@@ -196,6 +196,25 @@ async def test_spark_models_status_unreachable(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_spark_models_status_bounds_the_whole_probe(monkeypatch):
+    """Review finding: _resolve_llm_model can fall through to its own
+    unbounded live re-probe — a slow/hanging leg anywhere in the body must
+    still resolve to "unreachable" within _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S,
+    not hang the dialog indefinitely."""
+    import asyncio
+
+    async def _hangs_forever():
+        await asyncio.sleep(3600)
+        return {"reachable": True, "models": ["a"], "active": "a"}
+
+    monkeypatch.setattr(orchestrator, "_probe_spark_models", _hangs_forever)
+    monkeypatch.setattr(orchestrator, "_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S", 0.05)
+
+    result = await orchestrator.spark_models_status()
+    assert result == {"reachable": False, "models": [], "active": None}
+
+
+@pytest.mark.asyncio
 async def test_resolve_spark_model_or_422_happy_path(monkeypatch):
     _patch_models_probe(monkeypatch, reachable=True, models=["a"], active="a")
     assert await orchestrator.resolve_spark_model_or_422() == "a"
