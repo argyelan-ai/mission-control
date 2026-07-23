@@ -60,6 +60,16 @@ _last_dispatched_attempt_id: str | None = None
 MSG_QUIET_SECONDS = float(os.environ.get("HERMES_MSG_QUIET_SECONDS", "10"))
 MSG_QUEUE_DIR = WORKSPACE / "logs" / "msg-queue"
 MSG_ACK_DIR = WORKSPACE / "logs" / "msg-acked"
+
+# W2.1 nudge+pull (ADR-071, port of poll.sh's deliver_messages_nudge /
+# grok-bridge.py): in nudge mode the bridge pastes only a short 📬 wake-up
+# line at the turn gate; the agent pulls content itself via `mc inbox` and
+# the SERVER-side ack from that call advances the cursor — the bridge never
+# acks locally. Default stays "paste" (byte-identical behavior) until the
+# per-agent live gate has passed.
+MSG_DELIVERY_MODE = (os.environ.get("MSG_DELIVERY_MODE", "paste").strip() or "paste")
+NUDGE_REMIND_SECONDS = float(os.environ.get("NUDGE_REMIND_SECONDS", "600"))
+NUDGE_STATE_FILE = WORKSPACE / "logs" / "msg-nudge-state"
 # Pane-diff state for the quiet-heuristic gate (hermes HAS a tmux pane, unlike
 # a hypothetical headless bridge — so we reuse the grok-bridge pane-quiet
 # pattern here rather than falling back to the weaker dispatch-only gate the
@@ -606,10 +616,165 @@ def flush_msg_queue() -> None:
             return
 
 
+# ── nudge+pull delivery (MSG_DELIVERY_MODE=nudge) ───────────────────────────────
+
+
+def _nudge_thread_seqs(messages: list) -> dict[str, int]:
+    """Per-thread max seq from a new_messages payload (seq is only unique
+    WITHIN a thread — a global max would dedup across threads incorrectly,
+    the exact poll.sh Phase-B review MAJOR)."""
+    per: dict[str, int] = {}
+    for m in messages or []:
+        try:
+            tid = str(m["thread_id"])
+            seq = int(m["seq"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seq > per.get(tid, 0):
+            per[tid] = seq
+    return per
+
+
+def _nudge_state_read() -> dict[str, tuple[int, float]]:
+    """NUDGE_STATE_FILE → {thread_id: (last_nudged_seq, epoch)}. Malformed
+    lines are skipped (a corrupt state file must degrade to re-nudging, never
+    to crashing the poll loop)."""
+    state: dict[str, tuple[int, float]] = {}
+    try:
+        text = NUDGE_STATE_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return state
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            state[parts[0]] = (int(parts[1]), float(parts[2]))
+        except ValueError:
+            continue
+    return state
+
+
+def _nudge_state_write(seqs: dict[str, int], now: float) -> None:
+    """Overwrite NUDGE_STATE_FILE with the high-water for every currently
+    pending thread — one nudge covers ALL of them (the agent reads everything
+    via `mc inbox`)."""
+    NUDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NUDGE_STATE_FILE.write_text(
+        "".join(f"{tid} {seq} {int(now)}\n" for tid, seq in seqs.items()),
+        encoding="utf-8",
+    )
+
+
+def build_nudge_text(global_max: int, epoch: int) -> str:
+    """Single-line wake-up, wording identical to poll.sh/grok-bridge. The
+    `(bis seq N, EPOCH)` token doubles as the unique verify signal."""
+    return (
+        f"📬 Neue Nachrichten (bis seq {global_max}, {epoch}) — "
+        f"lies sie jetzt mit: mc inbox"
+    )
+
+
+def _nudge_token_visible(pane: str, token: str) -> bool:
+    """True iff the unique nudge token has scrolled into the submitted
+    transcript. hermes has no composer-box border pattern like grok's `│` —
+    reuse _anchor_was_submitted's scroll-off-the-trailing-line check, the
+    same discrimination this bridge already relies on for the paste-mode
+    verify, since the token is unique per nudge (seq+epoch) and its bare
+    presence off the input line is sufficient proof of a genuine submit."""
+    return _anchor_was_submitted(pane, token)
+
+
+def _clear_stale_queue_files() -> None:
+    """Paste-mode leftovers are dead weight in nudge mode — their bodies are
+    never pasted, and the server keeps redelivering anything unacked until the
+    agent pulls it via `mc inbox`. Deleting them loses nothing."""
+    stale = msg_queue_files()
+    if stale:
+        for fname in stale:
+            (MSG_QUEUE_DIR / fname).unlink(missing_ok=True)
+        log.info(
+            "nudge: %d stale paste-mode queue file(s) entfernt (Inhalt kommt via mc inbox).",
+            len(stale),
+        )
+
+
+def deliver_messages_nudge(messages: list, *, dispatch_in_flight: bool = False) -> None:
+    """Nudge-mode delivery (port of grok-bridge.py's deliver_messages_nudge,
+    itself a port of poll.sh): decide per thread whether a wake-up is due
+    (new higher seq → immediately; no progress after NUDGE_REMIND_SECONDS →
+    remind), paste ONE short line at the turn gate, verify via the unique
+    seq+epoch token, then record the nudged high-water for every pending
+    thread. NEVER acks — the server-side cursor only advances through the
+    agent's own `mc inbox` call, and the backend redelivers `new_messages`
+    until then (at-least-once)."""
+    _clear_stale_queue_files()
+    seqs = _nudge_thread_seqs(messages)
+    if not seqs:
+        # Everything fetched+acked by the agent — reset so the next message
+        # nudges immediately again.
+        NUDGE_STATE_FILE.unlink(missing_ok=True)
+        return
+
+    now = time.time()
+    state = _nudge_state_read()
+    do_nudge = False
+    for tid, mseq in seqs.items():
+        last_seq, last_ts = state.get(tid, (0, 0.0))
+        if mseq > last_seq:
+            do_nudge = True   # new, higher seq in THIS thread → wake up now
+        elif (now - last_ts) >= NUDGE_REMIND_SECONDS:
+            do_nudge = True   # remind: still unacked after the grace window
+    if not do_nudge:
+        return
+
+    global_max = max(seqs.values())
+    if not msg_gate_open(dispatch_in_flight=dispatch_in_flight):
+        log.info(
+            "deliver_messages_nudge: Gate zu (Pane nicht ruhig / Dispatch in flight / "
+            "Task aktiv) — Nudge aufgeschoben (bis seq=%s).", global_max,
+        )
+        return
+
+    epoch = int(now)
+    text = build_nudge_text(global_max, epoch)
+    token = f"(bis seq {global_max}, {epoch})"
+    _send_to_tmux(text)
+    time.sleep(0.5)
+    deadline = time.monotonic() + 5.0
+    delivered = False
+    while True:
+        if _nudge_token_visible(capture_pane(), token):
+            delivered = True
+            break
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.2)
+
+    if delivered:
+        _nudge_state_write(seqs, now)
+        log.info(
+            "Nudge gepastet (bis seq %s) — Agent holt Inhalt via 'mc inbox'.", global_max
+        )
+    else:
+        log.warning(
+            "Nudge-Verify fehlgeschlagen (bis seq %s) — Retry beim naechsten Poll "
+            "(State unveraendert).", global_max,
+        )
+
+
 def deliver_messages(payload: dict, *, dispatch_in_flight: bool = False) -> None:
     """Twin of poll.sh:deliver_messages — entry point from the poll loop
-    (comm_v2 path). Queues new messages, then flushes only at the turn gate.
+    (comm_v2 path). nudge mode: short wake-up only, content via `mc inbox`
+    (see deliver_messages_nudge). paste mode (default): queues new messages,
+    then flushes only at the turn gate.
     """
+    if MSG_DELIVERY_MODE == "nudge":
+        messages = payload.get("new_messages")
+        if messages is None:
+            return
+        deliver_messages_nudge(messages, dispatch_in_flight=dispatch_in_flight)
+        return
     queue_or_deliver(payload)
     pending = msg_queue_files()
     if not pending:
