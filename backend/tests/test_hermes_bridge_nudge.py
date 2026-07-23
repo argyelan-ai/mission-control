@@ -93,7 +93,7 @@ def test_first_messages_nudge_immediately_and_write_state(bridge, monkeypatch):
     pastes = _wire_paste(monkeypatch, bridge)
     bridge.deliver_messages({"new_messages": _msgs(("a", 2), ("b", 5))})
     assert len(pastes) == 1
-    assert "mc inbox" in pastes[0] and "bis seq 5" in pastes[0]
+    assert "mc_inbox" in pastes[0] and "bis seq 5" in pastes[0]
     state = bridge._nudge_state_read()
     assert state["a"][0] == 2 and state["b"][0] == 5
     # NEVER acks locally in nudge mode.
@@ -173,8 +173,8 @@ def test_token_still_in_input_line_is_not_delivery(bridge):
     is whether the token has scrolled OFF the trailing non-blank line (see
     _anchor_was_submitted). Still sitting un-sent, it IS the last line."""
     token = "(bis seq 2, 1234)"
-    pane_stuck = f"transcript\n📬 Neue Nachrichten {token} — lies sie jetzt mit: mc inbox"
-    pane_submitted = f"📬 Neue Nachrichten {token} — lies sie jetzt mit: mc inbox\n> "
+    pane_stuck = f"transcript\n📬 Neue Nachrichten {token} — lies sie jetzt mit dem Tool mc_inbox"
+    pane_submitted = f"📬 Neue Nachrichten {token} — lies sie jetzt mit dem Tool mc_inbox\n> "
     assert bridge._nudge_token_visible(pane_stuck, token) is False
     assert bridge._nudge_token_visible(pane_submitted, token) is True
 

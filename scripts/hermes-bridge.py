@@ -667,11 +667,14 @@ def _nudge_state_write(seqs: dict[str, int], now: float) -> None:
 
 
 def build_nudge_text(global_max: int, epoch: int) -> str:
-    """Single-line wake-up, wording identical to poll.sh/grok-bridge. The
-    `(bis seq N, EPOCH)` token doubles as the unique verify signal."""
+    """Single-line wake-up. The `(bis seq N, EPOCH)` token doubles as the
+    unique verify signal (same contract as poll.sh/grok-bridge). Instruction
+    tail differs from the shell bridges: Hermes reaches MC exclusively through
+    the mc-mcp tools (no `mc` CLI in its PATH) — live Messlauf 2026-07-23
+    showed it correctly ignoring the shell wording and finding no tool."""
     return (
         f"📬 Neue Nachrichten (bis seq {global_max}, {epoch}) — "
-        f"lies sie jetzt mit: mc inbox"
+        f"lies sie jetzt mit dem Tool mc_inbox"
     )
 
 

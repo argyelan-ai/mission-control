@@ -299,3 +299,62 @@ async def test_ack_other_agents_thread_404(client: AsyncClient, async_session):
         )
     ).all()
     assert cursors == []
+
+
+# ── Cursor-Persistenz vs. Autoflush (Messlauf-Fund 2026-07-23) ────────────
+
+async def _second_done_task_with_cursor(async_session: AsyncSession, board, agent):
+    """A second done task whose thread already has a fully-acked cursor —
+    resolving it AFTER a freshly created cursor triggers the autoflush that
+    used to empty ``session.new`` before the persist check."""
+    now = dt.datetime.now(tz=dt.timezone.utc)
+    task = Task(
+        board_id=board.id,
+        assigned_agent_id=agent.id,
+        title="Old done task",
+        status="done",
+        dispatched_at=now,
+        ack_at=now,
+    )
+    async_session.add(task)
+    await async_session.commit()
+    await async_session.refresh(task)
+    thread = await ensure_task_thread(async_session, task)
+    async_session.add(AgentThreadCursor(
+        agent_id=agent.id, thread_id=thread.id,
+        last_delivered_seq=0, last_acked_seq=0,
+    ))
+    await async_session.commit()
+    return task, thread
+
+
+@pytest.mark.asyncio
+async def test_inbox_first_sight_cursor_survives_autoflush(client: AsyncClient, async_session):
+    """Regression (Sparky-Messlauf 2026-07-23): a first-sight fast-forward
+    cursor must be committed even when a later SELECT in the same request
+    autoflushes it out of ``session.new`` and nothing else changes — otherwise
+    every subsequent pull re-fast-forwards over messages that arrived in
+    between, swallowing them forever."""
+    board, agent, token, task, thread = await _board_agent_task(async_session, status="done")
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="hist")
+    await async_session.commit()
+    # Second done-task thread WITH existing acked cursor, resolved after the
+    # new one — its cursor SELECT autoflushes the pending first-sight cursor.
+    await _second_done_task_with_cursor(async_session, board, agent)
+
+    body = (await _inbox(client, token)).json()
+    assert body["messages"] == []  # done task → history fast-forwarded
+
+    # The first-sight cursor must have been persisted despite delivering
+    # nothing (this is what rolled back before the fix) …
+    cur = await _cursor(async_session, agent, thread)
+    assert (cur.last_delivered_seq, cur.last_acked_seq) == (1, 1)
+
+    # … so a message arriving AFTER first sight is delivered, not swallowed
+    # by a repeated fast-forward.
+    late = await post_message(async_session, thread_id=thread.id, sender_type="user",
+                              message_type="message", body="after first sight")
+    await async_session.commit()
+    body2 = (await _inbox(client, token)).json()
+    assert [m["id"] for m in body2["messages"]] == [str(late.id)]
