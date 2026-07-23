@@ -2557,7 +2557,8 @@ async def _get_or_create_thread_cursor(
             last_acked_seq=start_seq,
         )
         session.add(cursor)
-    return cursor
+        return cursor, True
+    return cursor, False
 
 
 def _is_own_message(message, agent: Agent) -> bool:
@@ -2581,20 +2582,30 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
     """Scope + cursor resolution shared by the poll delivery path
     (`_collect_new_messages`) and the inbox pull endpoint (`GET /me/inbox`).
 
-    Returns ``[(thread, cursor)]`` for the agent's active-task threads. Cursors
-    are created on first sight — fast-forwarded past history for done/failed
-    tasks (Befund C, live pilot 2026-07-20) — and added to the session, but NOT
-    committed here: the caller runs a single commit after applying its own
-    cursor advances, matching the existing one-commit-per-poll semantics.
+    Returns ``([(thread, cursor)], created_any)`` for the agent's active-task
+    threads. Cursors are created on first sight — fast-forwarded past history
+    for done/failed tasks (Befund C, live pilot 2026-07-20) — and added to the
+    session, but NOT committed here: the caller runs a single commit after
+    applying its own cursor advances, matching the existing one-commit-per-poll
+    semantics.
+
+    ``created_any`` is the explicit persist signal: the callers previously
+    checked ``cursor in session.new``, but any later SELECT in the same request
+    autoflushes pending cursors out of ``session.new`` before that check runs —
+    the creation was then silently rolled back at session close, and every
+    subsequent poll re-fast-forwarded over messages that arrived in between
+    (live Messlauf finding 2026-07-23, Sparky nudge).
     """
     resolved = []
+    created_any = False
     for thread, thread_task in await _message_threads_for_agent(agent, session):
-        cursor = await _get_or_create_thread_cursor(
+        cursor, created = await _get_or_create_thread_cursor(
             session, agent.id, thread.id,
             fast_forward=thread_task.status in ("done", "failed"),
         )
+        created_any = created_any or created
         resolved.append((thread, cursor))
-    return resolved
+    return resolved, created_any
 
 
 async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
@@ -2623,14 +2634,13 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
     poll would echo the agent's own posts back into a redelivery loop.
     """
     out: list[dict] = []
-    changed = False
-    for thread, cursor in await _resolve_agent_threads_with_cursors(session, agent):
-        if cursor in session.new:
-            # Frisch angelegte Cursor muessen persistiert werden, auch wenn
-            # dieser Poll nichts liefert — sonst rollt die Session den
-            # fast-forward zurueck und der naechste Poll fast-forwardet
-            # ERNEUT ueber inzwischen eingetroffene Messages hinweg.
-            changed = True
+    # Frisch angelegte Cursor muessen persistiert werden, auch wenn dieser
+    # Poll nichts liefert — sonst rollt die Session den fast-forward zurueck
+    # und der naechste Poll fast-forwardet ERNEUT ueber inzwischen
+    # eingetroffene Messages hinweg. (Explizites created-Signal statt
+    # `cursor in session.new`: Autoflush leert session.new vor dem Check.)
+    resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
+    for thread, cursor in resolved:
         tid = str(thread.id)
         if tid in acked:
             # Cap the ack at what was actually delivered — an agent can never
@@ -3133,12 +3143,12 @@ async def agent_inbox(
 
     out: list[dict] = []
     threads_meta: dict[str, int] = {}
-    changed = False
-    for thread, cursor in await _resolve_agent_threads_with_cursors(session, agent):
-        if cursor in session.new:
-            # Persist a first-sight (fast-forwarded) cursor even if this pull
-            # delivers nothing — otherwise the next pull fast-forwards again.
-            changed = True
+    # Persist first-sight (fast-forwarded) cursors even if this pull delivers
+    # nothing — otherwise the next pull fast-forwards again. Explicit created
+    # signal instead of `cursor in session.new` (autoflush empties session.new
+    # before the check — see _resolve_agent_threads_with_cursors).
+    resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
+    for thread, cursor in resolved:
         msgs = await _unacked_thread_messages(session, thread, cursor)
         non_own = [m for m in msgs if not _is_own_message(m, agent)]
         if not non_own:
@@ -3204,7 +3214,9 @@ async def agent_inbox_ack(
     ).one()
     capped = min(payload.seq, max_seq)
 
-    cursor = await _get_or_create_thread_cursor(session, agent.id, payload.thread_id)
+    cursor, _created = await _get_or_create_thread_cursor(
+        session, agent.id, payload.thread_id
+    )
     if capped > cursor.last_acked_seq:
         cursor.last_acked_seq = capped
     if cursor.last_delivered_seq < cursor.last_acked_seq:

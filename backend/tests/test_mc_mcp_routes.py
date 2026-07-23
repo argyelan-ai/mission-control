@@ -111,6 +111,41 @@ def test_mc_patch_task_no_op_returns_message(mc_mcp_module):
 # ── mc_register_deliverable (Plan 26-04 / HERM-11 F4) ────────────────────
 
 
+def test_mc_inbox_pulls_and_acks_per_thread(mc_mcp_module):
+    """mc_inbox mirrors `mc inbox` (W2.1): GET /agent/me/inbox, print every
+    message with the [thread … · seq …] footer, then ack each thread's max
+    seq via POST /agent/me/inbox/ack."""
+    calls = []
+
+    def fake_api_agent(method, path, **kwargs):
+        calls.append((method, path, kwargs.get("json")))
+        if method == "GET":
+            return {
+                "messages": [{
+                    "thread_id": "t1", "seq": 3, "sender": "user",
+                    "message_type": "message", "body": "MARKER-XYZ",
+                }],
+                "threads": {"t1": 3},
+            }
+        return {"thread_id": "t1", "last_acked_seq": 3, "last_delivered_seq": 3}
+
+    with patch.object(mc_mcp_module, "_api_agent", side_effect=fake_api_agent):
+        result = _unwrap(mc_mcp_module.mc_inbox)()
+
+    assert "MARKER-XYZ" in result
+    assert "[thread t1 · seq 3" in result
+    assert ("GET", "/agent/me/inbox", None) in calls
+    assert ("POST", "/agent/me/inbox/ack", {"thread_id": "t1", "seq": 3}) in calls
+
+
+def test_mc_inbox_empty_and_no_token(mc_mcp_module):
+    with patch.object(mc_mcp_module, "_api_agent",
+                      return_value={"messages": [], "threads": {}}):
+        assert _unwrap(mc_mcp_module.mc_inbox)() == "Keine neuen Nachrichten."
+    with patch.object(mc_mcp_module, "_api_agent", return_value=None):
+        assert "kein Agent-Token" in _unwrap(mc_mcp_module.mc_inbox)()
+
+
 def test_mc_register_deliverable_hits_board_scoped_path_for_document(mc_mcp_module):
     """Document deliverable POSTs to admin board-scoped route with content payload."""
     fake_task_id = "11111111-2222-3333-4444-555555555555"

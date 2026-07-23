@@ -339,3 +339,53 @@ async def test_active_task_thread_keeps_zeroed_cursor(client: AsyncClient, async
     resp = await _poll(client, token)
     delivered = [m["id"] for m in resp.json()["new_messages"]]
     assert delivered == [str(msg.id)], "aktiver Thread muss ab seq 1 liefern"
+
+
+# ── Cursor-Persistenz vs. Autoflush (Messlauf-Fund 2026-07-23) ────────────
+
+@pytest.mark.asyncio
+async def test_poll_first_sight_cursor_survives_autoflush(client: AsyncClient, async_session):
+    """Regression (Sparky-Messlauf 2026-07-23): the poll delivery path must
+    commit a first-sight fast-forward cursor even when a later SELECT in the
+    same request autoflushes it out of ``session.new`` and no delivery advances
+    a cursor — otherwise the creation rolls back and every poll re-fast-forwards
+    over messages that arrived in between."""
+    board, agent, raw_token, task, thread = await _board_agent_task(async_session)
+    task.status = "done"
+    async_session.add(task)
+    await async_session.commit()
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="hist")
+    await async_session.commit()
+
+    # Second done task whose thread already has a fully-acked cursor — resolved
+    # after the fresh one, its cursor SELECT autoflushes the pending insert.
+    now = dt.datetime.now(tz=dt.timezone.utc)
+    task2 = Task(board_id=board.id, assigned_agent_id=agent.id, title="Old done",
+                 status="done", dispatched_at=now, ack_at=now)
+    async_session.add(task2)
+    await async_session.commit()
+    await async_session.refresh(task2)
+    thread2 = await ensure_task_thread(async_session, task2)
+    async_session.add(AgentThreadCursor(
+        agent_id=agent.id, thread_id=thread2.id,
+        last_delivered_seq=0, last_acked_seq=0,
+    ))
+    await async_session.commit()
+
+    body = (await _poll(client, raw_token)).json()
+    assert body.get("new_messages") == []  # done → fast-forwarded, nothing delivered
+
+    cur = (await async_session.exec(
+        select(AgentThreadCursor).where(
+            AgentThreadCursor.agent_id == agent.id,
+            AgentThreadCursor.thread_id == thread.id,
+        )
+    )).one()
+    assert (cur.last_delivered_seq, cur.last_acked_seq) == (1, 1)
+
+    late = await post_message(async_session, thread_id=thread.id, sender_type="user",
+                              message_type="message", body="after first sight")
+    await async_session.commit()
+    body2 = (await _poll(client, raw_token)).json()
+    assert [m["id"] for m in body2["new_messages"]] == [str(late.id)]
