@@ -120,6 +120,15 @@ MSG_QUIET_SECONDS = float(os.environ.get("GROK_MSG_QUIET_SECONDS", "10"))
 MSG_QUEUE_DIR = CONFIG_DIR / "msg-queue"
 MSG_ACK_DIR = CONFIG_DIR / "msg-acked"
 
+# W2.1 nudge+pull (ADR-071, port of poll.sh's deliver_messages_nudge): in
+# nudge mode the bridge pastes only a short 📬 wake-up line at the turn gate;
+# the agent pulls content itself via `mc inbox` and the SERVER-side ack from
+# that call advances the cursor — the bridge never acks locally. Default stays
+# "paste" (byte-identical behavior) until the per-agent live gate has passed.
+MSG_DELIVERY_MODE = (os.environ.get("MSG_DELIVERY_MODE", "paste").strip() or "paste")
+NUDGE_REMIND_SECONDS = float(os.environ.get("NUDGE_REMIND_SECONDS", "600"))
+NUDGE_STATE_FILE = CONFIG_DIR / "msg-nudge-state"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("grok-bridge")
 
@@ -302,8 +311,16 @@ def _grok_launch_shell_cmd() -> str:
     """
     # tmux runs the window command through `sh -c` itself — return the compound
     # line directly instead of double-wrapping (nested quoting would break).
+    # MC_API_URL: the mc CLI reads MC_API_URL (not agent.env's MC_BASE_URL) and
+    # would silently fall back to its localhost default — correct on this host,
+    # but only by accident. Export it explicitly (agent.env wins if it ever
+    # carries the key) so the agent's own `mc inbox` calls are deterministic.
     grok = " ".join(shlex.quote(c) for c in _grok_launch_cmd())
-    return f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; exec {grok}"
+    return (
+        f"set -a; . {shlex.quote(str(ENV_FILE))}; set +a; "
+        f': "${{MC_API_URL:=http://localhost:8000}}"; export MC_API_URL; '
+        f"exec {grok}"
+    )
 
 
 def wait_for_agent_healthy(timeout: float = READY_TIMEOUT) -> bool:
@@ -743,13 +760,174 @@ def flush_msg_queue() -> None:
             return
 
 
+# ── nudge+pull delivery (MSG_DELIVERY_MODE=nudge) ───────────────────────────────
+
+
+def _nudge_thread_seqs(messages: list) -> dict[str, int]:
+    """Per-thread max seq from a new_messages payload (seq is only unique
+    WITHIN a thread — a global max would dedup across threads incorrectly,
+    the exact poll.sh Phase-B review MAJOR)."""
+    per: dict[str, int] = {}
+    for m in messages or []:
+        try:
+            tid = str(m["thread_id"])
+            seq = int(m["seq"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seq > per.get(tid, 0):
+            per[tid] = seq
+    return per
+
+
+def _nudge_state_read() -> dict[str, tuple[int, float]]:
+    """NUDGE_STATE_FILE → {thread_id: (last_nudged_seq, epoch)}. Malformed
+    lines are skipped (a corrupt state file must degrade to re-nudging, never
+    to crashing the poll loop)."""
+    state: dict[str, tuple[int, float]] = {}
+    try:
+        text = NUDGE_STATE_FILE.read_text(encoding="utf-8")
+    except OSError:
+        return state
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            state[parts[0]] = (int(parts[1]), float(parts[2]))
+        except ValueError:
+            continue
+    return state
+
+
+def _nudge_state_write(seqs: dict[str, int], now: float) -> None:
+    """Overwrite NUDGE_STATE_FILE with the high-water for every currently
+    pending thread — one nudge covers ALL of them (the agent reads everything
+    via `mc inbox`)."""
+    NUDGE_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    NUDGE_STATE_FILE.write_text(
+        "".join(f"{tid} {seq} {int(now)}\n" for tid, seq in seqs.items()),
+        encoding="utf-8",
+    )
+
+
+def build_nudge_text(global_max: int, epoch: int) -> str:
+    """Single-line wake-up, identical wording to poll.sh. The `(bis seq N,
+    EPOCH)` token doubles as the unique verify signal and sits within the
+    first ~40 chars so grok's truncated single-line echo still shows it."""
+    return (
+        f"📬 Neue Nachrichten (bis seq {global_max}, {epoch}) — "
+        f"lies sie jetzt mit: mc inbox"
+    )
+
+
+def _nudge_token_visible(pane: str, token: str) -> bool:
+    """True iff the unique nudge token appears on a NON-composer line — same
+    submitted-vs-still-in-composer discrimination as _prefix_was_submitted
+    (the token is unique per paste via the epoch, so bare presence outside
+    the composer box is sufficient proof)."""
+    for line in pane.splitlines():
+        if token not in line:
+            continue
+        if line.strip().startswith(("│", "|")):
+            continue
+        return True
+    return False
+
+
+def _clear_stale_queue_files() -> None:
+    """Paste-mode leftovers are dead weight in nudge mode — their bodies are
+    never pasted, and the server keeps redelivering anything unacked until the
+    agent pulls it via `mc inbox`. Deleting them loses nothing."""
+    stale = msg_queue_files()
+    if stale:
+        for path in stale:
+            path.unlink(missing_ok=True)
+        log.info(
+            "nudge: %d stale paste-mode queue file(s) entfernt (Inhalt kommt via mc inbox).",
+            len(stale),
+        )
+
+
+def deliver_messages_nudge(messages: list, *, dispatch_in_flight: bool = False) -> None:
+    """Nudge-mode delivery (port of poll.sh's deliver_messages_nudge): decide
+    per thread whether a wake-up is due (new higher seq → immediately; no
+    progress after NUDGE_REMIND_SECONDS → remind), paste ONE short line at
+    the turn gate, verify via the unique seq+epoch token, then record the
+    nudged high-water for every pending thread. NEVER acks — the server-side
+    cursor only advances through the agent's own `mc inbox` call, and the
+    backend redelivers `new_messages` until then (at-least-once)."""
+    global _dispatch_in_flight
+    _clear_stale_queue_files()
+    seqs = _nudge_thread_seqs(messages)
+    if not seqs:
+        # Everything fetched+acked by the agent — reset so the next message
+        # nudges immediately again.
+        NUDGE_STATE_FILE.unlink(missing_ok=True)
+        return
+
+    now = time.time()
+    state = _nudge_state_read()
+    do_nudge = False
+    for tid, mseq in seqs.items():
+        last_seq, last_ts = state.get(tid, (0, 0.0))
+        if mseq > last_seq:
+            do_nudge = True   # new, higher seq in THIS thread → wake up now
+        elif (now - last_ts) >= NUDGE_REMIND_SECONDS:
+            do_nudge = True   # remind: still unacked after the grace window
+    if not do_nudge:
+        return
+
+    global_max = max(seqs.values())
+    if not msg_gate_open(dispatch_in_flight=dispatch_in_flight):
+        log.info(
+            "deliver_messages_nudge: Gate zu (Pane nicht ruhig / Dispatch in flight / "
+            "Task aktiv) — Nudge aufgeschoben (bis seq=%s).", global_max,
+        )
+        return
+
+    epoch = int(now)
+    text = build_nudge_text(global_max, epoch)
+    token = f"(bis seq {global_max}, {epoch})"
+    _dispatch_in_flight = True
+    try:
+        paste_and_submit(text)
+        time.sleep(0.5)
+        deadline = time.monotonic() + 5.0
+        delivered = False
+        while True:
+            if _nudge_token_visible(capture_pane(), token):
+                delivered = True
+                break
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.2)
+    finally:
+        _dispatch_in_flight = False
+
+    if delivered:
+        _nudge_state_write(seqs, now)
+        log.info(
+            "Nudge gepastet (bis seq %s) — Agent holt Inhalt via 'mc inbox'.", global_max
+        )
+    else:
+        log.warning(
+            "Nudge-Verify fehlgeschlagen (bis seq %s) — Retry beim naechsten Poll "
+            "(State unveraendert).", global_max,
+        )
+
+
 def deliver_messages(payload: dict, *, dispatch_in_flight: bool = False) -> None:
     """Entry point from the poll loop (comm_v2 path only — payload must carry
-    `new_messages`, which the backend only sets for comm_v2 agents). Persists
-    new messages to the queue, then flushes only if the turn-gate is open.
+    `new_messages`, which the backend only sets for comm_v2 agents). nudge
+    mode: short wake-up only, content via `mc inbox` (see
+    deliver_messages_nudge). paste mode (default): persists new messages to
+    the queue, then flushes only if the turn-gate is open.
     `dispatch_in_flight` — see msg_gate_open's docstring."""
     messages = payload.get("new_messages")
     if messages is None:
+        return
+    if MSG_DELIVERY_MODE == "nudge":
+        deliver_messages_nudge(messages, dispatch_in_flight=dispatch_in_flight)
         return
     n = queue_new_messages(messages)
     if n:

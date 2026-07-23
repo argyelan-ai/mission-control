@@ -543,7 +543,11 @@ def test_launch_shell_cmd_sources_agent_env_in_window_shell(bridge):
     line = bridge._grok_launch_shell_cmd()
     assert line.startswith("set -a; . ")
     assert str(bridge.ENV_FILE) in line
-    assert "; set +a; exec " in line
+    # agent.env sourcing must close BEFORE the exec; the MC_API_URL default
+    # export (W2.1 nudge+pull) sits between the two.
+    assert "; set +a; " in line
+    assert "; exec " in line
+    assert line.index("set +a") < line.index("exec ")
     assert not line.startswith("sh -c")  # tmux already runs the line via sh -c
 
 
