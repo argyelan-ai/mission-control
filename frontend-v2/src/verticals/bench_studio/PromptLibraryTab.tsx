@@ -7,6 +7,7 @@ import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { benchApi } from "@/verticals/bench_studio/api";
 import type { BenchChallenge, PromptTemplate } from "./types";
 
@@ -20,6 +21,7 @@ export function PromptLibraryTab({
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [editorOpen, setEditorOpen] = useState(false);
   const [editing, setEditing] = useState<PromptTemplate | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<PromptTemplate | null>(null);
 
   const { data: templates } = useQuery({
     queryKey: ["prompt-templates"],
@@ -97,7 +99,7 @@ export function PromptLibraryTab({
               key={tag}
               aria-label={tag}
               onClick={() => setActiveTag(activeTag === tag ? null : tag)}
-              className="inline-flex items-center rounded-full px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] leading-none whitespace-nowrap"
+              className="inline-flex items-center rounded-sm font-mono px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.06em] leading-none whitespace-nowrap"
               style={{
                 color: activeTag === tag ? C.accent : C.textMuted,
                 border: `1px solid ${activeTag === tag ? C.borderAccent : C.borderSubtle}`,
@@ -152,10 +154,7 @@ export function PromptLibraryTab({
                   <Pencil size={13} />
                 </button>
                 <button
-                  onClick={() => {
-                    if (!window.confirm(`Template "${tpl.title}" wirklich löschen?`)) return;
-                    removeMutation.mutate(tpl.id);
-                  }}
+                  onClick={() => setDeleteTarget(tpl)}
                   aria-label="Löschen"
                   style={{ color: C.textMuted }}
                 >
@@ -186,6 +185,20 @@ export function PromptLibraryTab({
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
         editing={editing}
+      />
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        kicker="Template löschen"
+        title={deleteTarget?.title ?? ""}
+        body={<>Template „{deleteTarget?.title}" wirklich löschen?</>}
+        confirmLabel="Löschen"
+        cancelLabel="Abbrechen"
+        loading={removeMutation.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          removeMutation.mutate(deleteTarget.id, { onSuccess: () => setDeleteTarget(null) });
+        }}
+        onCancel={() => setDeleteTarget(null)}
       />
     </div>
   );

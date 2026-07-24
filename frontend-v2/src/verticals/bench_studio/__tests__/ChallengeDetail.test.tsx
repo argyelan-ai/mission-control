@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { BenchChallenge } from "../types";
@@ -751,15 +751,27 @@ describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
         ],
       })
     );
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
 
     renderDetail();
     const btn = await screen.findByRole("button", { name: "Unpublish" });
     await userEvent.click(btn);
 
-    expect(confirmSpy).toHaveBeenCalledWith("Wirklich vom Katalog entfernen?");
+    // B2 dialog shows the backend-provided confirm copy; no request yet
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText("Wirklich vom Katalog entfernen?")).toBeTruthy();
     expect(request).not.toHaveBeenCalled();
-    confirmSpy.mockRestore();
+
+    // Cancel keeps the action unfired
+    await userEvent.click(within(dialog).getByRole("button", { name: "Abbrechen" }));
+    expect(request).not.toHaveBeenCalled();
+
+    // Re-open and confirm → fires
+    await userEvent.click(btn);
+    const dialog2 = await screen.findByRole("dialog");
+    await userEvent.click(within(dialog2).getByRole("button", { name: "Unpublish" }));
+    await waitFor(() =>
+      expect(request).toHaveBeenCalledWith("/api/v1/catalog/ch-1/unpublish", { method: "POST" })
+    );
   });
 
   it("shows a spinner and disables the button while busy=true", async () => {
