@@ -47,10 +47,12 @@ async def _effective_harness(session: AsyncSession, agent: Agent) -> str | None:
 
 
 async def _agents_affected(session: AsyncSession, tool: str) -> list[dict]:
-    """cli-bridge agents whose effective harness matches this tool. Host
-    agents (Boss/Hermes/Jarvis) never run these images and are excluded."""
+    """Agents whose effective harness matches this tool. Image tools match
+    cli-bridge agents (host agents never run those images); HOST tools
+    (grok) match host agents instead — their binary lives on the Mac."""
+    runtime_kind = "host" if TOOLS.get(tool, {}).get("host") else "cli-bridge"
     result = await session.exec(
-        select(Agent).where(Agent.agent_runtime == "cli-bridge")
+        select(Agent).where(Agent.agent_runtime == runtime_kind)
     )
     affected = []
     for agent in result.all():
@@ -99,7 +101,8 @@ async def _enriched_tools(session: AsyncSession, redis, cache: dict) -> list[dic
         tools.append(
             {
                 "tool": tool,
-                "image": config["image"],
+                "image": config.get("image"),
+                "host": bool(config.get("host")),
                 "installed": entry.get("installed"),
                 "target": entry.get("target"),
                 "latest": entry.get("latest"),

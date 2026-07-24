@@ -1679,8 +1679,12 @@ export interface CliToolAgentRef {
 }
 
 export interface CliToolStatus {
-  tool: string; // "openclaude" | "claude" | "omp"
-  image: string;
+  tool: string; // "openclaude" | "claude" | "omp" | "kimi" | "grok"
+  // null für Host-Tools (grok) — die haben kein Docker-Image.
+  image: string | null;
+  // true = Host-CLI (brew auf dem Mac) statt Docker-Image; Update-Lauf hat
+  // keine Recreate-Phase.
+  host?: boolean;
   installed: string | null;
   target: string | null;
   latest: string | null;

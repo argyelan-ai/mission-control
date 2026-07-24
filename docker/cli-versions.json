@@ -12,5 +12,8 @@
   "kimi": {
     "version": "0.29.1",
     "sha256": "c2bdbced6becf516e270cea11a3ee7b54c789cbdfe15bd70797f05bd5f943ef0"
+  },
+  "grok": {
+    "version": "0.2.93"
   }
 }

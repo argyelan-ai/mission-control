@@ -70,6 +70,8 @@ TOOL_HARNESS: dict[str, str] = {
     "openclaude": "openclaude",
     "claude": "claude",
     "omp": "omp",
+    "kimi": "kimi",
+    # grok is a HOST tool — no image/recreate phase, see _run_host_update.
 }
 
 _BRIDGE_UNREACHABLE = "Host-Bridge nicht erreichbar — läuft cli-bridge.py?"
@@ -261,10 +263,51 @@ async def _run_update(
         # bumping the manifest so a bridge failure leaves the manifest clean.
         if tool == "omp" and not sha256:
             sha256 = await _fetch_omp_sha256(to_version)
+        # kimi ships an official per-platform checksum in its release
+        # manifest — the update-check cache carries no sha, so a cache hit
+        # must re-fetch it upstream (no TOFU download needed).
+        if tool == "kimi" and not sha256:
+            sha256 = (await fetch_latest("kimi")).get("sha256")
+            if not sha256:
+                raise UpdateError(
+                    "kimi sha256 konnte nicht aus dem Release-Manifest gelesen werden."
+                )
 
         old_entry = bump_manifest(tool, to_version, sha256=sha256)
         manifest_bumped = True
         await _write_progress(redis, "manifest", tool, from_version, to_version)
+
+        # ── Host-Tool-Pfad (z.B. grok): brew upgrade statt Image-Build ──
+        # Kein Docker-Image, kein Recreate — die Bridge führt
+        # `brew upgrade --cask <cask>` auf dem Mac aus; laufende TUI-Sessions
+        # behalten das alte Binary bis zum nächsten Session-Respawn.
+        if TOOLS[tool].get("host"):
+            await _write_progress(redis, "build", tool, from_version, to_version)
+            resp = await _bridge_post(
+                "/host-cli/update", {"tool": tool}, timeout=30.0
+            )
+            if resp.status_code == 409:
+                raise UpdateError("Ein Host-CLI-Update läuft bereits (Bridge meldet 409).")
+            if resp.status_code != 200:
+                raise UpdateError(
+                    f"Bridge lehnte das Host-Update ab: {_error_detail(resp)}"
+                )
+            await _poll_host_update(redis, tool, from_version, to_version, token=token)
+            rollback_enabled = False  # brew hat das Binary bereits getauscht
+            await _write_progress(redis, "done", tool, from_version, to_version)
+            await emit_event(
+                session,
+                "cli.updated",
+                f"{tool}: aktualisiert auf {to_version} (Host, brew)",
+                severity="info",
+                detail={
+                    "tool": tool,
+                    "from_version": from_version,
+                    "to_version": to_version,
+                    "host": True,
+                },
+            )
+            return
 
         # ── Phase: build ─────────────────────────────────────────────────
         await _write_progress(redis, "build", tool, from_version, to_version)
@@ -373,6 +416,42 @@ async def _poll_build(
             raise UpdateError(f"Image-Build fehlgeschlagen (returncode={rc}).")
         if now >= deadline:
             raise UpdateError(f"Image-Build Timeout nach {BUILD_TIMEOUT}s.")
+        await asyncio.sleep(POLL_INTERVAL)
+
+
+async def _poll_host_update(
+    redis,
+    tool: str,
+    from_version: str | None,
+    to_version: str | None,
+    *,
+    token: str | None = None,
+) -> None:
+    """Poll the bridge host-update status until success — mirrors ``_poll_build``
+    (log_tail into progress, lock renewal), against ``/host-cli/update/status``."""
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    deadline = start + BUILD_TIMEOUT
+    last_renew = start
+    while True:
+        resp = await _bridge_get("/host-cli/update/status")
+        data = resp.json() if resp.status_code == 200 else {}
+        state = data.get("state")
+        await _write_progress(
+            redis, "build", tool, from_version, to_version,
+            log_tail=data.get("log_tail"),
+        )
+        now = loop.time()
+        if now - last_renew >= _LOCK_RENEW_EVERY:
+            await _renew_lock(redis, token)
+            last_renew = now
+        if state == "success":
+            return
+        if state == "failed":
+            rc = data.get("returncode")
+            raise UpdateError(f"Host-CLI-Update fehlgeschlagen (returncode={rc}).")
+        if now >= deadline:
+            raise UpdateError(f"Host-CLI-Update Timeout nach {BUILD_TIMEOUT}s.")
         await asyncio.sleep(POLL_INTERVAL)
 
 
