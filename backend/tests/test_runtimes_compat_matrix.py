@@ -24,16 +24,17 @@ async def test_compat_matrix_route(async_session, auth_client):
     resp = await auth_client.get("/api/v1/runtimes/compat-matrix")
     assert resp.status_code == 200
     data = resp.json()
-    assert {h["key"] for h in data["harnesses"]} == {"claude", "openclaude", "omp"}
+    assert {h["key"] for h in data["harnesses"]} == {"claude", "openclaude", "omp", "kimi"}
     row = next(r for r in data["runtimes"] if r["slug"] == "cloud-a")
     assert row["protocol"] == "openai"
     assert set(row["compatible_harnesses"]) == {"openclaude", "omp"}
     assert "claude" in row["reasons"]
+    assert "kimi" in row["reasons"]  # kimi ist protocol-fixed — openai-Runtime inkompatibel
 
     anthropic_row = next(r for r in data["runtimes"] if r["slug"] == "anthropic-a")
     assert anthropic_row["protocol"] == "anthropic"
     assert anthropic_row["compatible_harnesses"] == ["claude"]
-    assert set(anthropic_row["reasons"]) == {"openclaude", "omp"}
+    assert set(anthropic_row["reasons"]) == {"openclaude", "omp", "kimi"}
 
 
 @pytest.mark.asyncio
