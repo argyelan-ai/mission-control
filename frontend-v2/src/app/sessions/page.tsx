@@ -32,7 +32,6 @@ function agentIsRunning(a: AgentWithState): boolean {
 }
 import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
-import { StructuredSessionView } from "@/components/session/StructuredSessionView";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
@@ -232,12 +231,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
   const termRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [term, setTerm] = useState<XTerm | null>(null);
-  const [viewMode, setViewMode] = useState<"terminal" | "structured">("terminal");
   const [termView, setTermView] = useState<TermViewMode>("fit");
-
-  useEffect(() => {
-    setViewMode("terminal");
-  }, [agent.id]);
 
   useEffect(() => {
     if (!termRef.current) return;
@@ -319,33 +313,11 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
             </button>
           ))}
         </div>
-        <div
-          className="flex items-center rounded-md overflow-hidden shrink-0"
-          style={{ border: "1px solid rgba(255,255,255,0.08)" }}
-        >
-          {(["terminal", "structured"] as const).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewMode(mode)}
-              className="px-2.5 py-1.5 md:py-1 text-[9px] font-medium uppercase tracking-wide transition-colors cursor-pointer whitespace-nowrap"
-              style={{
-                background: viewMode === mode ? C.accentSubtle : "transparent",
-                color: viewMode === mode ? C.accent : C.textMuted,
-                borderRight: mode === "terminal" ? "1px solid rgba(255,255,255,0.06)" : undefined,
-              }}
-            >
-              {mode === "terminal" ? "Terminal" : "Structured"}
-            </button>
-          ))}
-        </div>
         </div>
       </div>
       {/* Body */}
       <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-        <div
-          className="flex-1 min-h-0 relative"
-          style={{ display: viewMode === "terminal" ? "flex" : "none" }}
-        >
+        <div className="flex-1 min-h-0 relative flex">
           <div ref={outerRef} className="absolute inset-0 overflow-auto">
             <div
               style={{
@@ -361,9 +333,6 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
             </div>
           </div>
         </div>
-        {viewMode === "structured" && (
-          <StructuredSessionView selected={{ agent_id: agent.id, agent_name: agent.name, agent_slug: agent.name, session: agent.name, task_id: agent.id, elapsed_seconds: 0, permanent: true, shell: false }} />
-        )}
       </div>
     </div>
   );
