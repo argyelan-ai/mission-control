@@ -1597,6 +1597,27 @@ async def agent_update_task(
                 task.title[:40],
             )
 
+        # ── skip_review auto-correct: review → done ────────────────
+        # Automation tasks (e.g. scheduler jobs with skip_review=True) must
+        # not enter the review gate at all. skip_review's done-gate in
+        # work_context.py only PERMITS a direct done — it never stops a
+        # developer-role agent from routing completion through `review`,
+        # which then hands the task to a reviewer / the Board Lead (Boss).
+        # That defeated the flag's purpose (live bug 2026-07-18: "X-Trends"
+        # scheduled job, assigned to Grok, kept landing at Boss). Rewrite the
+        # review transition to done so the whole done-path runs naturally.
+        # human_review_required stays a HARD GATE — skip_review must never
+        # route around Mark (mirrors work_context.py's done-gate ordering).
+        elif (updates["status"] == "review"
+                and getattr(task, "skip_review", False)
+                and not getattr(task, "human_review_required", None)
+                and not agent.is_board_lead):
+            updates["status"] = "done"
+            logger.info(
+                "skip_review auto-correct: review → done fuer '%s' (Automation, kein Reviewer)",
+                task.title[:40],
+            )
+
         await _enforce_board_rules_agent(session, board_id, task, updates["status"], agent)
 
         # ── Blocker-approval guard (PRE-COMMIT) ─────────────────

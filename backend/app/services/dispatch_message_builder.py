@@ -856,6 +856,22 @@ The requesting agent automatically resumes with your result.
             "Full lifecycle (finish/failed/help/question) — see SOUL.md.",
         )
 
+    # ── skip_review automation hint (worker only) ───────────────────────
+    # Ebene 2 of the 2026-07-18 skip_review fix: the backend already rewrites
+    # a review transition to done for skip_review tasks (agent_task_status.py
+    # + agent_comments.py), but telling the worker up front avoids a wasted
+    # review round-trip and a fleeting handoff to the Board Lead. Gated on
+    # not human_review_required — those tasks DO go to review (Mark's gate).
+    if (getattr(task, "skip_review", False)
+            and not getattr(task, "human_review_required", None)
+            and not agent.is_board_lead):
+        _add(
+            "skip_review_hint",
+            "\n**Automation task — no review needed.** When finished, close it "
+            "directly with `mc done` (status: done). Do NOT use `mc review` — "
+            "there is no reviewer for this task.",
+        )
+
     # ── Recovery-Kontext (mandatory — without it, the agent re-starts from scratch
     #    after session loss, duplicating work) ──
     if recovery_context:
