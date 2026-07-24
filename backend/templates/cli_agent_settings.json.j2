@@ -3,5 +3,30 @@
   "model": "{{ model }}",
   "enabledPlugins": {{ enabled_plugins | tojson(indent=4) }},
   {% if extra_marketplaces %}"extraKnownMarketplaces": {{ extra_marketplaces | tojson(indent=4) }},
+  {% endif %}{% if turn_signal_hooks %}{#
+    W2.1 Turn-Signal (Phase A): native Claude-Code-Hooks appenden bei jedem
+    Prompt-Submit bzw. Turn-Ende eine Zeile `<epoch> submit` / `<epoch> stop`
+    an /home/agent/.turn-signal. poll.sh/lib/turn-state.sh liest diese Datei
+    statt des fragilen Pane-Scrapings (Scraping bleibt Fallback). Der Block
+    wird NUR fuer die claude-Harness gerendert (turn_signal_hooks=True, gesetzt
+    aus runtime_protocol == "anthropic"); openclaude bekommt ihn gar nicht —
+    dessen Toleranz gegen einen unbekannten `hooks`-Key ist unbelegt.
+    `\\n` in printf: JSON-escaped, damit die Shell ein echtes Newline schreibt.
+  #}"hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "printf '%s submit\\n' $(date +%s) >> /home/agent/.turn-signal", "timeout": 5 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "printf '%s stop\\n' $(date +%s) >> /home/agent/.turn-signal", "timeout": 5 }
+        ]
+      }
+    ]
+  },
   {% endif %}"skipDangerousModePermissionPrompt": true
 }

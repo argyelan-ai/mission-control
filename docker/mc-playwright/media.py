@@ -52,7 +52,9 @@ class RecordRequest(BaseModel):
     screenshot.png to output_dir."""
     html_path: Optional[str] = None
     url: Optional[str] = None
-    duration_s: int = Field(default=10, ge=1, le=60)
+    # 5..60 (Bench #18 configurable video length) — the timeout budget
+    # (RECORD_CAPTURE_TIMEOUT_S) already covers the max at 30fps.
+    duration_s: int = Field(default=10, ge=5, le=60)
     viewport: str = "desktop"
     output_dir: str
 
@@ -126,6 +128,11 @@ class ComposeRequest(BaseModel):
     speed_labels: Optional[List[str]] = None  # e.g. ["42 s", "87 tok/s"] — appended to labels
     output_path: str
     branding: Optional[BrandingSpec] = None
+    # Source recording length in seconds (Bench #18 configurable video
+    # length) — default 10 matches the pre-#18 fixed record duration.
+    # Used only to scale the branded-compose ffmpeg timeout (see /compose);
+    # the actual encode duration is dictated by the input files, not this.
+    duration_s: int = Field(default=10, ge=5, le=60)
 
     @model_validator(mode="after")
     def _check(self) -> "ComposeRequest":
@@ -382,6 +389,26 @@ SLOT_SINGLE_XY = (128, 580)
 SLOT_BG_COLOR = "0x090B10"  # matches .slot background in shared.css
 OUTRO_DURATION_S = 2.0
 FRAME_SIZE = "3840x2160"
+
+
+def compose_branded_timeout_s(
+    duration_s: float,
+    outro_duration_s: float = OUTRO_DURATION_S,
+    *,
+    floor_s: float = 300.0,
+    cap_s: float = 1100.0,
+) -> float:
+    """ffmpeg timeout for the branded /compose path, scaled to the source
+    recording length (Bench #18 configurable video length, 5..60s).
+
+    The flat FFMPEG_TIMEOUT_S=300 (service.py) was tuned for the pre-#18
+    fixed 10s recording — a 60s recording overlaid + re-encoded into the
+    3840x2160 branded frame takes proportionally longer. 15x the combined
+    main+outro duration is a generous multiple of the ~2-3x realtime encode
+    cost observed at 10s; `floor_s` keeps short recordings on the original
+    budget, `cap_s` bounds the worst case so a stuck ffmpeg process can't
+    hang the request indefinitely."""
+    return min(cap_s, max(floor_s, 15 * (duration_s + outro_duration_s)))
 
 
 def fill_bench_template(template_text: str, tokens: dict) -> str:

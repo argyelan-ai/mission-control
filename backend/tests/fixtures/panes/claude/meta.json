@@ -1,0 +1,17 @@
+{
+  "cli_name": "claude",
+  "cli_version": "2.1.217 (Claude Code)",
+  "container": "mc-agent-freecode",
+  "container_image": "mc-claude-agent:latest",
+  "recorded_at": "2026-07-22T19:09:54Z",
+  "states": [
+    "crashed",
+    "idle",
+    "working"
+  ],
+  "true_runtime": "claude",
+  "expected_ui": "openclaude",
+  "synthetic_states": [
+    "crashed"
+  ]
+}

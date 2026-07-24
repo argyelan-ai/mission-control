@@ -52,9 +52,14 @@ RECORD_VIEWPORT = "desktop"
 RECORD_TIMEOUT_S = 900.0
 # Compose now overlays/encodes 3840x2160 branded frames + 2K plain-grid
 # inputs (2026-07-15 resolution bump) — slower than the old 1920x1080/2K
-# path, bump the client-side timeout to match.
-COMPOSE_TIMEOUT_S = 600.0
-SPARK_TIMEOUT_S = 300.0
+# path. Bumped again for Bench #18 (configurable up to 60s recordings): the
+# sidecar's own branded-compose ffmpeg timeout scales up to 1100s
+# (media.compose_branded_timeout_s) for a 60s input, so the client-side
+# HTTP timeout must cover that plus request/response overhead.
+COMPOSE_TIMEOUT_S = 1200.0
+# Reasoning models (Laguna) spend minutes thinking before the HTML comes out
+# (~10k tokens at ~25 tok/s) — 300s cut those runs off mid-generation.
+SPARK_TIMEOUT_S = 900.0
 SPARK_MAX_TOKENS = 16384
 
 GENERATION_SYSTEM_PROMPT = (
@@ -199,28 +204,33 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
     spark = SparkClient(timeout=SPARK_TIMEOUT_S)
     model = model_override or await spark._resolve_llm_model()
     started = time.monotonic()
+    payload: dict = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens": SPARK_MAX_TOKENS,
+        "temperature": 0.7,
+    }
+    # Qwen3 thinking mode returns content=null; disable it there (same guard
+    # as SparkClient.complete). Other models (Laguna/poolside) need thinking
+    # for benchmark-grade output — omit the kwarg so the serving default
+    # governs and the reasoning parser strips the think block from content.
+    if "qwen" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     async with httpx.AsyncClient(timeout=spark.timeout) as cli:
-        resp = await cli.post(
-            f"{spark.llm_url}/chat/completions",
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": GENERATION_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": SPARK_MAX_TOKENS,
-                "temperature": 0.7,
-                # Qwen3 thinking mode returns content=null; disable it
-                # (same guard as SparkClient.complete).
-                "chat_template_kwargs": {"enable_thinking": False},
-            },
-        )
+        resp = await cli.post(f"{spark.llm_url}/chat/completions", json=payload)
         resp.raise_for_status()
     duration_ms = int((time.monotonic() - started) * 1000)
     data = resp.json()
     content = data["choices"][0]["message"]["content"] or ""
 
-    metrics: dict = {"duration_ms": duration_ms}
+    # The actually-served model per the response body wins over the
+    # requested name — the resolver can be stale by the time the request
+    # lands (recipe swap mid-flight). Falls back to the requested model
+    # since some backends echo it verbatim or omit the field.
+    metrics: dict = {"duration_ms": duration_ms, "model": data.get("model") or model}
     usage = data.get("usage") or {}
     if usage:
         tokens_out = usage.get("completion_tokens")
@@ -228,7 +238,145 @@ async def _spark_generate(prompt: str, model_override: str | None) -> tuple[str,
         metrics["tokens_out"] = tokens_out
         if tokens_out and duration_ms:
             metrics["tok_per_s"] = round(tokens_out / (duration_ms / 1000), 1)
+        # OpenAI-compatible cached-prompt-tokens extension (vLLM prefix
+        # caching) — Task 5: billed separately from "fresh" input tokens.
+        cached = (usage.get("prompt_tokens_details") or {}).get("cached_tokens")
+        if cached:
+            metrics["cache_read_tokens"] = cached
     return content, metrics
+
+
+SPARK_MODELS_PROBE_TIMEOUT_S = 3.0  # Bench #21: the dialog must never hang on an unreachable box.
+# Covers the /v1/models GET (bounded by SPARK_MODELS_PROBE_TIMEOUT_S itself)
+# PLUS the _resolve_llm_model() leg after it, which can fall through to its
+# own live re-probe (runtime_model_resolver._probe_live_spark_model) on a
+# DEFAULT — unbounded-by-us — httpx timeout. Wrapping the whole body is the
+# only way to guarantee this function itself never outlives ~4s (review
+# finding, Bench #21).
+_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S = 4.0
+
+
+async def _probe_spark_models() -> dict:
+    """The actual probe body — see spark_models_status for the timeout
+    wrapper and docstring."""
+    from app.services.spark_client import SparkClient
+
+    spark = SparkClient(timeout=SPARK_MODELS_PROBE_TIMEOUT_S)
+    try:
+        async with httpx.AsyncClient(timeout=spark.timeout) as cli:
+            resp = await cli.get(f"{spark.llm_url}/models")
+            resp.raise_for_status()
+            models = sorted({m["id"] for m in resp.json().get("data", [])})
+    except (httpx.HTTPError, KeyError, ValueError):
+        return {"reachable": False, "models": [], "active": None}
+    active = await spark._resolve_llm_model()
+    return {"reachable": True, "models": models, "active": active or None}
+
+
+async def spark_models_status() -> dict:
+    """Live probe of the Spark vLLM server for the bench dialog's vanilla
+    model picker (Bench #21) — GET /v1/models with a short timeout so the
+    dialog never hangs. Reuses SparkClient for URL + active-model
+    resolution (same source of truth _spark_generate uses).
+
+    Never raises: an unreachable Spark is a normal, expected state here
+    (operator might be mid-benchmark on something else), not a router 500 —
+    a timeout on the whole body (see _SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
+    is treated exactly like an unreachable box.
+    """
+    try:
+        return await asyncio.wait_for(_probe_spark_models(), timeout=_SPARK_MODELS_STATUS_TOTAL_TIMEOUT_S)
+    except (TimeoutError, asyncio.TimeoutError):
+        return {"reachable": False, "models": [], "active": None}
+
+
+async def resolve_spark_model_or_422() -> str:
+    """Resolves the live active Spark model for a create-time spec with an
+    empty/None spark_model (routers.create_challenge, Bench #21 vanilla
+    "auto" option) — freezes it into the entry so the outro/label never end
+    up empty regardless of later model switches on the box.
+
+    Raises HTTPException(422) when Spark can't be reached right now and
+    there is nothing to freeze.
+    """
+    status = await spark_models_status()
+    if not status["reachable"] or not status["active"]:
+        raise HTTPException(422, "Spark nicht erreichbar — Modell nicht auflösbar")
+    return status["active"]
+
+
+async def _record_spark_usage_event(session: AsyncSession, entry: BenchEntry, metrics: dict) -> None:
+    """Task 5: writes one ModelUsageEvent per spark (vanilla) generation —
+    the direct-API path has no fleet Task, so it never reaches
+    model_usage_events through the normal harvester (token_harvester.py)
+    the way agent entries do (their rows piggyback on the transcript-derived
+    harvest). This is the sole feed for vanilla entries.
+
+    task_id is deliberately left NULL: ModelUsageEvent.task_id is a hard FK
+    to tasks.id, and spark entries are never dispatched as a Task (unlike
+    dispatch_agent_entry) — writing entry.id/challenge_id there would
+    violate the constraint in Postgres (SQLite tests wouldn't catch it).
+    The outro's token display for spark entries instead reads
+    entry.metrics directly (_build_branding_payload) — it doesn't need this
+    row at all; this table exists for cost dashboards / budget warnings
+    (cost_collector) to see vanilla usage too.
+
+    message_uuid gets a fresh random discriminator every call by design: a
+    rerender/regenerate is a genuinely new API call (new tokens spent), so
+    it must land as a new row, never dedup onto the previous attempt.
+
+    Best-effort — must never fail the bench run; every error is caught and
+    logged. Deliberately does NOT call session.rollback() on failure: this
+    session is shared with the caller (generate_spark_entry) and a full
+    rollback() expires every object it's tracking (entry, challenge) —
+    forcing an implicit re-load on next attribute access, which blows up
+    with sqlalchemy's MissingGreenlet outside an awaited context. Only the
+    scoped SAVEPOINT (begin_nested) around the actual insert is rolled back
+    on failure, same pattern as token_harvester's per-row inserts.
+    """
+    tokens_in = metrics.get("tokens_in")
+    tokens_out = metrics.get("tokens_out")
+    if tokens_in is None and tokens_out is None:
+        return  # vLLM response had no usage block — nothing to record
+    try:
+        from app.models.model_usage import ModelPrice, ModelUsageEvent
+        from app.services.token_harvester import _compute_cost_usd, match_price
+
+        model = metrics.get("model") or entry.spark_model or "unknown"
+        cache_read_tokens = int(metrics.get("cache_read_tokens") or 0)
+        input_tokens = max(int(tokens_in or 0) - cache_read_tokens, 0)
+        output_tokens = int(tokens_out or 0)
+        ts = datetime.now(timezone.utc)
+
+        prices = (await session.exec(select(ModelPrice))).all()
+        price_info = match_price(model, ts, prices)
+        cost_usd = (
+            _compute_cost_usd(price_info, input_tokens, output_tokens, cache_read_tokens, 0)
+            if price_info is not None
+            else None
+        )
+
+        event = ModelUsageEvent(
+            agent_id=None,
+            task_id=None,
+            harness="vanilla",
+            model=model,
+            provider="vllm",
+            session_id=f"bench-{entry.challenge_id}",
+            message_uuid=f"vanilla:{entry.challenge_id}:{entry.id}:{uuid.uuid4().hex[:8]}",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            cache_write_tokens=0,
+            cost_usd=cost_usd,
+            ts=ts,
+            source_file=f"bench-entry:{entry.id}",
+        )
+        async with session.begin_nested():
+            session.add(event)
+        await session.commit()
+    except Exception:  # noqa: BLE001 — usage tracking must never fail the bench run
+        logger.warning("bench entry %s: spark usage event write failed", entry.id, exc_info=True)
 
 
 async def generate_spark_entry(
@@ -243,6 +391,10 @@ async def generate_spark_entry(
     await session.commit()
     try:
         content, metrics = await _spark_generate(prompt, entry.spark_model)
+        # Tokens were spent the moment the API call returned, independent of
+        # whether the HTML below turns out to be valid — record usage now,
+        # not after the extract_html/write-to-disk steps that can still fail.
+        await _record_spark_usage_event(session, entry, metrics)
         html = extract_html(content)
         if not html:
             raise ValueError("model returned no HTML content")
@@ -527,15 +679,24 @@ async def on_task_done(session: AsyncSession, task) -> None:
 # ── Render + Compose ─────────────────────────────────────────────────────
 
 
-async def record_entry(entry: BenchEntry) -> dict:
-    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure."""
+async def record_entry(entry: BenchEntry, challenge: BenchChallenge) -> dict:
+    """POST /record on mc-playwright (PR 1) for one entry. Raises on failure.
+
+    Uses the challenge's operator-chosen record_duration_s (Bench #18) when
+    set, else the legacy RECORD_DURATION_S default — same fallback the
+    NewChallengeDialog documents (None -> 10s)."""
     out_dir = str(challenge_dir(entry.challenge_id) / _safe_label(entry.model_label))
+    duration_s = (
+        challenge.record_duration_s
+        if challenge.record_duration_s is not None
+        else RECORD_DURATION_S
+    )
     async with httpx.AsyncClient(timeout=RECORD_TIMEOUT_S) as cli:
         resp = await cli.post(
             f"{PLAYWRIGHT_BASE}/record",
             json={
                 "html_path": entry.artifact_path,
-                "duration_s": RECORD_DURATION_S,
+                "duration_s": duration_s,
                 "viewport": RECORD_VIEWPORT,
                 "output_dir": out_dir,
             },
@@ -668,8 +829,19 @@ async def _build_branding_payload(
         if entry.source_kind != "spark" and entry.task_id is not None:
             cost_usd = await task_cost_usd(session, entry.task_id)
 
+        # Token usage: spark entries have no fleet Task (task_id is always
+        # NULL for them, see _record_spark_usage_event), so they can never
+        # be attributed via task_token_usage/model_usage_events — read the
+        # tokens_in/out _spark_generate already captured into entry.metrics
+        # directly instead (Task 5). Agent entries keep the existing
+        # task-attributed sum.
         token_usage = None
-        if entry.task_id is not None:
+        if entry.source_kind == "spark":
+            tokens_in = (entry.metrics or {}).get("tokens_in")
+            tokens_out = (entry.metrics or {}).get("tokens_out")
+            if tokens_in is not None and tokens_out is not None:
+                token_usage = (int(tokens_in), int(tokens_out))
+        elif entry.task_id is not None:
             token_usage = await task_token_usage(session, entry.task_id)
 
         outro_rows.append({
@@ -708,11 +880,20 @@ async def compose_challenge(
     if output_name is None:
         output_name = _versioned_output_name()
     ordered = sorted(rendered, key=lambda e: e.model_label)
+    duration_s = (
+        challenge.record_duration_s
+        if challenge.record_duration_s is not None
+        else RECORD_DURATION_S
+    )
     payload: dict = {
         "inputs": [e.video_path for e in ordered],
         "labels": [e.model_label for e in ordered],
         "layout": "grid",
         "output_path": str(challenge_dir(challenge.id) / output_name),
+        # Bench #18: scales the sidecar's branded-compose ffmpeg timeout
+        # (media.compose_branded_timeout_s) — a no-op for the plain grid
+        # path, which doesn't read this field.
+        "duration_s": duration_s,
     }
     if speed_labels:
         payload["speed_labels"] = [format_speed_label(e.metrics or {}) for e in ordered]
@@ -745,7 +926,7 @@ async def _render_and_compose(
     rendered: list[BenchEntry] = []
     for entry in generated:
         try:
-            result = await record_entry(entry)
+            result = await record_entry(entry, challenge)
             entry.video_path = result.get("video_path")
             entry.screenshot_path = result.get("screenshot_path")
             entry.status = "rendered"
@@ -1122,7 +1303,7 @@ async def rerender_entry(entry_id: uuid.UUID, challenge_id: uuid.UUID) -> None:
                 await session.commit()
 
                 try:
-                    result = await record_entry(entry)
+                    result = await record_entry(entry, challenge)
                     entry.video_path = result.get("video_path")
                     entry.screenshot_path = result.get("screenshot_path")
                     entry.status = "rendered"

@@ -7,8 +7,18 @@
 # Returns one of: cancelled, working, new_task, idle
 
 set -euo pipefail
-: "${MC_API_URL:?MC_API_URL is not set — container misconfigured}"
-: "${MC_TOKEN:?MC_TOKEN is not set — container misconfigured}"
+
+# Test-Hook: wird poll.sh gesourcet (Unit-Tests der bash-Funktionen), nur
+# Funktionen definieren — keine Env-Requires, kein Poll-Loop. Tests setzen
+# POLL_SH_SOURCE_ONLY=1 und ueberschreiben tmux/lib-Helfer nach dem source.
+POLL_SH_SOURCE_ONLY="${POLL_SH_SOURCE_ONLY:-0}"
+# Lib-Verzeichnis — im Container /home/agent/lib, in Tests via ENV umgelenkt.
+POLL_LIB_DIR="${POLL_LIB_DIR:-/home/agent/lib}"
+
+if [ "$POLL_SH_SOURCE_ONLY" != "1" ]; then
+    : "${MC_API_URL:?MC_API_URL is not set — container misconfigured}"
+    : "${MC_TOKEN:?MC_TOKEN is not set — container misconfigured}"
+fi
 
 SESSION_NAME="${AGENT_NAME:-agent}"
 POLL_INTERVAL="${POLL_INTERVAL:-5}"
@@ -17,11 +27,11 @@ LAST_HEARTBEAT=0
 
 # Turn-State Tracking (siehe docker/mc-agent-base/lib/turn-state.sh)
 # shellcheck source=lib/turn-state.sh
-source /home/agent/lib/turn-state.sh
+source "$POLL_LIB_DIR/turn-state.sh"
 # UI-Runtime-Detection (siehe docker/mc-agent-base/lib/ui-detect.sh) —
 # Bug 14: openclaude bricht bei bracketed-paste-end-marker, claude-cli braucht ihn.
 # shellcheck source=lib/ui-detect.sh
-source /home/agent/lib/ui-detect.sh
+source "$POLL_LIB_DIR/ui-detect.sh"
 # Cached runtime-UI of tmux Window 0. Set by wait_for_clean_prompt() on every
 # successful detect, used by paste_and_submit() to decide whether to send the
 # `\e[201~` end-marker. Empty until first detection — paste_and_submit treats
@@ -65,6 +75,70 @@ LAST_BLOCKED_TASK_ID=""
 # Stale-Lock-Schutz: recycler prueft ob poll.sh noch laeuft (pgrep).
 TASK_LOCK_FILE="/home/agent/.task-active.lock"
 
+# Interaction Model 2.0 (comm_v2) — Turn-Grenzen-Gate fuer Thread-Messages.
+# new_messages aus /me/poll (Task 4) werden NICHT sofort gepastet: waehrend
+# claude arbeitet (turn_state=working) oder der Prompt nicht clean ist, landen
+# sie in einer Queue (eine Datei pro Message, seq-benannt) und werden erst an
+# der naechsten Turn-Grenze (idle + clean prompt) in seq-Reihenfolge geflusht.
+# Erst ein tatsaechlich GEPASTETES (nicht nur empfangenes) seq wird via
+# acked_seq im naechsten Poll bestaetigt — Pasten ist die Konsumierung, auf die
+# die at-least-once-Semantik des Backends wartet.
+MSG_QUEUE_DIR="${MSG_QUEUE_DIR:-/home/agent/.msg-queue}"
+# Hoechstes bereits GEPASTETES seq pro Thread — als acked_seq an /me/poll
+# gehaengt. Eine Datei pro Thread (Name = thread_id, Inhalt = seq). High-Water-
+# Mark, bleibt bestehen (Backend capped + nimmt max → idempotent). Als Dateien
+# statt bash-Assoc-Array: ueberlebt einen poll.sh-Restart (kein Re-Paste bereits
+# gelieferter Messages) und laeuft auch unter bash 3.2 (macOS-Testumgebung).
+MSG_ACK_DIR="${MSG_ACK_DIR:-/home/agent/.msg-acked}"
+
+# W2.1 Nudge+Pull delivery mode. Two modes:
+#   paste (DEFAULT) — heutiges Verhalten, byte-identisch: new_messages werden
+#                     als Volltext an der Turn-Grenze gepastet (queue/ack Dateien).
+#   nudge          — poll.sh pastet nur EINEN fixen Weckruf ("📬 …"); den Inhalt
+#                     holt der Agent selbst via `mc inbox`, das Ack passiert beim
+#                     API-Call (POST /me/inbox/ack), nicht per Bildschirm-Heuristik.
+#
+# Pro-Agent setzen: die Env-Var in den `environment:`-Block des Agent-Service in
+# docker/docker-compose.agents.yml eintragen (generator-managed via
+# compose_renderer — oder via docker/.env.agents), z.B.:
+#     environment:
+#       - MSG_DELIVERY_MODE=nudge
+# poll.sh liest sie direkt aus der Container-Umgebung (wie MC_API_URL/AGENT_NAME).
+MSG_DELIVERY_MODE="${MSG_DELIVERY_MODE:-paste}"
+# Sekunden ohne Cursor-Fortschritt (Agent hat noch nicht via `mc inbox` geackt,
+# Backend liefert dieselben seqs weiter), nach denen ein bereits genudgetes seq
+# erneut angestupst wird. 0 waere Dauer-Spam — Default 10 Min.
+NUDGE_REMIND_SECONDS="${NUDGE_REMIND_SECONDS:-600}"
+# High-Water-State fuer den nudge-Modus: eine Zeile PRO THREAD
+# "<thread_id> <last_nudged_seq> <epoch>". Per-Thread (nicht global), weil seq
+# nur INNERHALB eines Threads eindeutig ist — sonst wuerde ein neuer Thread mit
+# niedrigem seq hinter einem alten Thread mit hohem seq versteckt. Ersetzt die
+# queue/ack-Dateien (im nudge-Modus ist der Server-Cursor die Wahrheit).
+NUDGE_STATE_FILE="${NUDGE_STATE_FILE:-/home/agent/.msg-nudge-state}"
+# Der Weckruf traegt ein EINDEUTIGES Token (hoechstes seq + epoch), damit die
+# paste-verify Fingerprint-Mechanik jeden Nudge als neuen Text erkennt. Ein
+# konstanter Text wuerde false-passen: der Fingerprint des ERSTEN Nudges bleibt
+# im 2000-Zeilen-Scrollback und liesse jeden spaeteren Verify durchgehen (kein
+# Retry bei real durchgefallenem Paste). Das 📬-Praefix bleibt stabil fuer den
+# SOUL-Trigger. Format: "📬 Neue Nachrichten (bis seq <max>, <epoch>) — lies sie
+# jetzt mit: mc inbox" — gebaut in deliver_messages_nudge().
+
+# W2.1 Turn-Signal (Phase A): Datei an die die Claude-Code-Hooks
+# UserPromptSubmit/Stop je eine `<epoch> submit|stop` Zeile appenden.
+# detect_turn_state (lib/turn-state.sh) liest sie primaer; Scraping bleibt
+# Fallback. Bei jedem Session-Reset (/clear, neuer Task) via reset_turn_signal
+# geleert, damit ein alter Turn-State nicht in den neuen Task leakt.
+TURN_SIGNAL_FILE="${TURN_SIGNAL_FILE:-/home/agent/.turn-signal}"
+
+
+# reset_turn_signal — leert die Turn-Signal-Datei bei einem Session-Reset.
+# Verhindert dass ein `stop`/`submit` aus dem vorigen Task faelschlich den
+# neuen Turn-State faerbt (detect_turn_state faellt bei leerer Datei auf das
+# byte-identische Scraping zurueck, bis der naechste Hook feuert). Fehlen der
+# Datei ist ok — die Hooks legen sie beim naechsten Submit neu an.
+reset_turn_signal() {
+    : > "$TURN_SIGNAL_FILE" 2>/dev/null || true
+}
 
 log() {
     echo "[$(date '+%Y-%m-%dT%H:%M:%S')] [$SESSION_NAME] $*"
@@ -159,11 +233,24 @@ PASTE_MAX_ATTEMPTS="${PASTE_MAX_ATTEMPTS:-2}"
 
 # verify_paste_landed wird aus lib/paste-verify.sh geladen (sourceable fuer Tests).
 # shellcheck source=lib/paste-verify.sh
-source /home/agent/lib/paste-verify.sh
+source "$POLL_LIB_DIR/paste-verify.sh"
 
 paste_and_submit() {
+    # Optionaler erster Parameter --no-fail-open: statt nach READY_TIMEOUT_SEC
+    # trotzdem zu pasten (fail-open), wird mit Return-Code 2 abgebrochen. Nutzt
+    # das Turn-Grenzen-Gate (flush_msg_queue): kein clean prompt ⇒ nicht pasten,
+    # Message bleibt gequeued und wird beim naechsten Idle erneut versucht.
+    local no_fail_open=false
+    if [ "${1:-}" = "--no-fail-open" ]; then
+        no_fail_open=true
+        shift
+    fi
     local file="$1"
     if ! wait_for_clean_prompt; then
+        if $no_fail_open; then
+            log "paste_and_submit --no-fail-open: kein clean-prompt nach ${READY_TIMEOUT_SEC}s — NICHT gepastet (Turn-Grenzen-Gate). Message bleibt gequeued."
+            return 2
+        fi
         log "WARNING: paste_and_submit ohne clean-prompt nach ${READY_TIMEOUT_SEC}s — paste trotzdem (fail-open). Pending keystrokes im pty-Buffer koennen mit pasten."
         # Bug 14: letzte Chance auf UI-Detection vor dem paste, damit wir den
         # End-Marker korrekt routen koennen auch wenn wait_for_clean_prompt
@@ -177,6 +264,13 @@ paste_and_submit() {
     fi
     local attempt=1
     while [ "$attempt" -le "$PASTE_MAX_ATTEMPTS" ]; do
+        # Pre-paste snapshot fuer den Collapse-Marker-Pfad in
+        # verify_paste_landed (claude-cli >=2.x rendert mehrzeilige Pastes
+        # als "[Pasted text #N +M lines]" — Fingerprint kann nie matchen).
+        # Verify akzeptiert nur einen ZUWACHS der Marker-Anzahl im
+        # Tail-Fenster, darum pro Versuch frisch snapshotten.
+        PASTE_PRE_COLLAPSE_COUNT=$(tmux capture-pane -t "${SESSION_NAME}:0" -p -S "-${PASTE_COLLAPSE_TAIL_LINES:-40}" 2>/dev/null | grep -cF '[Pasted text' 2>/dev/null || true)
+        [ -n "$PASTE_PRE_COLLAPSE_COUNT" ] || PASTE_PRE_COLLAPSE_COUNT=0
         tmux load-buffer "$file"
         tmux paste-buffer -t "${SESSION_NAME}:0"
         sleep 0.3
@@ -257,10 +351,39 @@ except Exception as e:
 " 2>/dev/null || true
 }
 
+# build_acked_seq_param — serialisiert ACKED_SEQ (thread_id → hoechstes
+# gepastetes seq) als urlencoded JSON {thread_id: seq} fuer den acked_seq
+# Query-Parameter. Leer wenn nichts gepastet wurde (kein Parameter angehaengt).
+build_acked_seq_param() {
+    # Im nudge-Modus gibt es keine lokalen Ack-Dateien — das Ack passiert
+    # server-seitig via `mc inbox` (POST /me/inbox/ack). Kein acked_seq-Param.
+    [ "$MSG_DELIVERY_MODE" = "nudge" ] && return 0
+    [ -d "$MSG_ACK_DIR" ] || return 0
+    local json="{" first=1 tid seq f
+    for f in "$MSG_ACK_DIR"/*; do
+        [ -f "$f" ] || continue
+        tid=$(basename "$f")
+        seq=$(cat "$f" 2>/dev/null || echo "")
+        [ -n "$seq" ] || continue
+        [ "$first" -eq 1 ] || json+=","
+        json+="\"${tid}\":${seq}"
+        first=0
+    done
+    [ "$first" -eq 1 ] && return 0   # keine Ack-Dateien → kein Parameter
+    json+="}"
+    ACKED_JSON="$json" python3 -c "import os,urllib.parse; print(urllib.parse.quote(os.environ['ACKED_JSON']))"
+}
+
 poll() {
+    local qs=""
+    local enc
+    enc=$(build_acked_seq_param)
+    if [ -n "$enc" ]; then
+        qs="?acked_seq=$enc"
+    fi
     curl -sf \
         -H "Authorization: Bearer $MC_TOKEN" \
-        "$MC_API_URL/api/v1/agent/me/poll" \
+        "$MC_API_URL/api/v1/agent/me/poll$qs" \
         --max-time 10 \
         2>/dev/null || echo '{"state":"error"}'
 }
@@ -418,6 +541,7 @@ except Exception:
                 tmux send-keys -t "${SESSION_NAME}:0" "/clear"
                 tmux_submit "${SESSION_NAME}:0"
                 sleep 2
+                reset_turn_signal   # W2.1: alten Turn-State nicht in neuen Task leaken
                 log "Task $task_id: context cleared (new task, previous: ${LAST_DISPATCHED_TASK_ID:-none}, prev_status=${prev_status:-unknown})"
             fi
         fi
@@ -475,6 +599,7 @@ cancel_task() {
     fi
     log "Task $task_id extern auf 'failed' gesetzt — sende ESC an claude"
     tmux send-keys -t "${SESSION_NAME}:0" Escape
+    reset_turn_signal   # W2.1: ESC bricht Turn ab, Stop-Hook feuert nicht — lone submit sonst bis Staleness
     LAST_CANCELLED_TASK_ID="$task_id"
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -498,6 +623,7 @@ stop_task_session() {
     sleep 0.5
     tmux send-keys -t "${SESSION_NAME}:0" "/clear" 2>/dev/null || true
     tmux_submit "${SESSION_NAME}:0" 2>/dev/null || true
+    reset_turn_signal   # W2.1: Turn-Signal beim Operator-Stop leeren
     : > /tmp/mc-context.env
     tmux set-environment -t "$SESSION_NAME" TASK_ID "" 2>/dev/null || true
     tmux set-environment -t "$SESSION_NAME" BOARD_ID "" 2>/dev/null || true
@@ -578,6 +704,7 @@ except Exception as e:
 
     # Claude aus dem crashed/stalled state befreien
     tmux send-keys -t "${SESSION_NAME}:0" Escape 2>/dev/null || true
+    reset_turn_signal   # W2.1: ESC-Abbruch feuert kein Stop-Hook — lone submit sonst bis Staleness
 
     CURRENT_TASK_ID=""
     CURRENT_BOARD_ID=""
@@ -665,8 +792,263 @@ with open('/tmp/new_comments_prompt.txt', 'w') as f:
     fi
 }
 
+# ── Interaction Model 2.0: Turn-Grenzen-Gate fuer Thread-Messages ──────────
+# Nur aktiv fuer comm_v2-Pilot-Agenten (Backend liefert dann `new_messages`).
+# Der Alt-Pfad deliver_comments/`new_comments` bleibt unangetastet.
+
+# _record_ack THREAD SEQ — merkt sich das hoechste tatsaechlich gepastete seq
+# pro Thread (High-Water-Mark fuer den naechsten acked_seq). Eine Datei je Thread.
+_record_ack() {
+    local tid="$1" seq="$2"
+    mkdir -p "$MSG_ACK_DIR"
+    local f="$MSG_ACK_DIR/$tid"
+    local cur=0
+    [ -f "$f" ] && cur=$(cat "$f" 2>/dev/null || echo 0)
+    [ -n "$cur" ] || cur=0
+    if [ "$seq" -gt "$cur" ]; then
+        echo "$seq" > "$f"
+    fi
+}
+
+# msg_gate_open — 0 (offen) nur an einer echten Turn-Grenze: claude arbeitet
+# NICHT (turn_state=idle) UND der Prompt zeigt eine saubere Input-Box.
+# working/crashed/unknown ⇒ 1 (geschlossen, Message bleibt gequeued).
+msg_gate_open() {
+    local ts
+    ts=$(detect_turn_state "$SESSION_NAME" 2>/dev/null || echo "unknown")
+    if [ "$ts" != "idle" ]; then
+        return 1
+    fi
+    wait_for_clean_prompt
+}
+
+# queue_or_deliver RESPONSE_JSON — schreibt jede empfangene new_messages-Message
+# als eigene, seq-benannte Datei in MSG_QUEUE_DIR (persistiert VOR jedem Paste,
+# damit bei Absturz nichts verloren geht und der Ack korrekt erst nach Paste
+# gesetzt wird). Idempotent: Redelivery ueberschreibt dieselbe Datei.
+queue_or_deliver() {
+    local response_json="$1"
+    mkdir -p "$MSG_QUEUE_DIR"
+    MC_POLL_RESPONSE="$response_json" MSG_QUEUE_DIR="$MSG_QUEUE_DIR" python3 -c "
+import json, os
+data = json.loads(os.environ['MC_POLL_RESPONSE'])
+qdir = os.environ['MSG_QUEUE_DIR']
+msgs = data.get('new_messages') or []
+n = 0
+for m in msgs:
+    seq = int(m['seq'])
+    tid = str(m['thread_id'])
+    # Dateiname <seq>__<thread_id>.msg — sort -n ordnet nach fuehrendem seq;
+    # thread_id (UUID, keine Unterstriche) verhindert Kollision gleicher seq
+    # ueber verschiedene Threads.
+    fname = f'{seq}__{tid}.msg'
+    lines = [
+        '# Neue Nachricht (Interaction 2.0)',
+        '',
+    ]
+    body = m.get('body') or ''
+    lines.append(body)
+    lines += ['', f\"[thread {tid} · seq {seq} · von {m.get('sender','?')} · typ {m.get('message_type','?')}]\"]
+    with open(os.path.join(qdir, fname), 'w') as f:
+        f.write('\n'.join(lines))
+    n += 1
+print(n)
+" >/dev/null 2>&1 || { log "queue_or_deliver: python parse failed — skipping"; return; }
+}
+
+# flush_msg_queue — pastet alle gequeueten Messages in seq-Reihenfolge (sort -n).
+# Voraussetzung: das Gate ist offen (Aufrufer prueft). Nutzt paste_and_submit
+# --no-fail-open: geht claude mitten im Flush wieder in einen Turn (kein clean
+# prompt mehr), bricht der Paste mit Code 2 ab — Rest bleibt gequeued, KEIN Ack.
+# Erst ein erfolgreicher Paste setzt den Ack (High-Water) und loescht die Datei.
+# msg_queue_files — gibt die Basenamen aller gequeueten Messages aus, numerisch
+# nach fuehrendem seq sortiert (sort -n). Glob + nullglob statt `ls` (SC2012).
+msg_queue_files() {
+    local f files
+    shopt -s nullglob
+    files=( "$MSG_QUEUE_DIR"/*.msg )
+    shopt -u nullglob
+    for f in "${files[@]}"; do
+        printf '%s\n' "${f##*/}"
+    done | sort -n
+}
+
+flush_msg_queue() {
+    [ -d "$MSG_QUEUE_DIR" ] || return 0
+    local f seq tid rest path
+    while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        path="$MSG_QUEUE_DIR/$f"
+        [ -f "$path" ] || continue
+        seq="${f%%__*}"
+        rest="${f#*__}"
+        tid="${rest%.msg}"
+        local rc=0
+        paste_and_submit --no-fail-open "$path" || rc=$?
+        if [ "$rc" -eq 0 ]; then
+            _record_ack "$tid" "$seq"
+            rm -f "$path"
+        elif [ "$rc" -eq 2 ]; then
+            log "flush_msg_queue: Paste fuer seq $seq (thread $tid) nicht moeglich (Gate zu) — Flush gestoppt, Rest bleibt gequeued."
+            return 1
+        else
+            log "flush_msg_queue: Paste fuer seq $seq (thread $tid) FEHLGESCHLAGEN (Verify) — Flush gestoppt, Rest bleibt gequeued, kein Ack."
+            return 1
+        fi
+    done < <(msg_queue_files)
+    return 0
+}
+
+# _nudge_thread_seqs RESPONSE_JSON — druckt "<thread_id> <max_seq>" je Thread
+# (hoechstes seq PRO Thread) aus new_messages. Leer wenn nichts pending. Basis
+# fuer den per-Thread-Dedup (seq ist nur innerhalb eines Threads eindeutig).
+_nudge_thread_seqs() {
+    echo "$1" | python3 -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    msgs = data.get('new_messages') or []
+    per = {}
+    for m in msgs:
+        tid = str(m['thread_id']); s = int(m['seq'])
+        if s > per.get(tid, 0):
+            per[tid] = s
+    for tid, s in per.items():
+        print(tid, s)
+except Exception:
+    pass
+" 2>/dev/null
+}
+
+# _nudge_state_get THREAD — druckt "<last_nudged_seq> <epoch>" fuer THREAD aus
+# dem State-File, oder "0 0" wenn der Thread noch nie genudget wurde.
+_nudge_state_get() {
+    local tid="$1" line
+    if [ -f "$NUDGE_STATE_FILE" ]; then
+        line=$(grep "^${tid} " "$NUDGE_STATE_FILE" 2>/dev/null | head -1)
+        if [ -n "$line" ]; then
+            echo "${line#* }"   # thread_id abschneiden → "<seq> <epoch>"
+            return 0
+        fi
+    fi
+    echo "0 0"
+}
+
+# deliver_messages_nudge RESPONSE_JSON — nudge-Modus: statt Volltext nur einen
+# Weckruf an der Turn-Grenze pasten. PER-THREAD-Dedup ueber NUDGE_STATE_FILE
+# (Zeile je Thread): stupsen sobald IRGENDEIN Thread ein seq ueber seinem
+# letzten genudgten Stand hat ODER nach NUDGE_REMIND_SECONDS ohne Fortschritt
+# (Backend liefert dieselben seqs weiter solange der Agent nicht via `mc inbox`
+# geackt hat). Leere new_messages = alles geholt+geackt → State loeschen.
+deliver_messages_nudge() {
+    local response_json="$1"
+    local seqs
+    seqs=$(_nudge_thread_seqs "$response_json")
+    if [ -z "$seqs" ]; then
+        rm -f "$NUDGE_STATE_FILE" 2>/dev/null || true
+        return 0
+    fi
+
+    local now; now=$(date +%s)
+    local do_nudge=0 global_max=0
+    local tid mseq rest sseq sts
+    # Entscheidung + globales Max (nur fuer das eindeutige Token) — heredoc statt
+    # Pipe, damit die Zuweisungen in bash 3.2 im Funktions-Scope bleiben.
+    while read -r tid mseq; do
+        [ -n "$tid" ] || continue
+        [ "$mseq" -gt "$global_max" ] && global_max="$mseq"
+        rest=$(_nudge_state_get "$tid")
+        sseq="${rest%% *}"; sts="${rest##* }"
+        [ -n "$sseq" ] || sseq=0
+        [ -n "$sts" ] || sts=0
+        if [ "$mseq" -gt "$sseq" ]; then
+            do_nudge=1   # neue, hoehere seq in DIESEM Thread → sofort stupsen
+        elif [ $(( now - sts )) -ge "$NUDGE_REMIND_SECONDS" ]; then
+            do_nudge=1   # Remind: dieser Thread noch nicht geackt
+        fi
+    done <<EOF
+$seqs
+EOF
+    [ "$do_nudge" -eq 1 ] || return 0
+
+    # Nur an einer echten Turn-Grenze stupsen (gleiches Gate wie der paste-Modus).
+    if ! msg_gate_open; then
+        log "deliver_messages_nudge: Gate zu (claude arbeitet / Prompt nicht clean) — Nudge aufgeschoben (bis seq=$global_max)."
+        return 0
+    fi
+
+    local nf
+    nf="${NUDGE_TMP_FILE:-/tmp/mc-nudge.txt}"
+    # Eindeutiges Token (global_max + epoch) — siehe Kommentar bei NUDGE_STATE_FILE.
+    printf '📬 Neue Nachrichten (bis seq %s, %s) — lies sie jetzt mit: mc inbox\n' \
+        "$global_max" "$now" > "$nf"
+    if paste_and_submit "$nf"; then
+        # Ein Nudge deckt ALLE pending Threads ab (der Agent liest via `mc inbox`
+        # alles) — darum den High-Water fuer jeden aktuell pending Thread setzen.
+        : > "$NUDGE_STATE_FILE"
+        while read -r tid mseq; do
+            [ -n "$tid" ] || continue
+            printf '%s %s %s\n' "$tid" "$mseq" "$now" >> "$NUDGE_STATE_FILE"
+        done <<EOF
+$seqs
+EOF
+        log "Nudge gepastet (bis seq $global_max) — Agent holt Inhalt via 'mc inbox'."
+    else
+        log "WARNING: Nudge-Paste fehlgeschlagen (bis seq $global_max) — Retry beim naechsten Poll (State unveraendert)."
+    fi
+}
+
+# deliver_messages RESPONSE_JSON — Einstieg aus dem Poll-Loop (comm_v2-Pfad).
+# paste-Modus (Default): persistiert neue Messages und flusht die Queue nur an
+# der Turn-Grenze. nudge-Modus: nur Weckruf, Inhalt via `mc inbox`.
+deliver_messages() {
+    local response_json="$1"
+    if [ "$MSG_DELIVERY_MODE" = "nudge" ]; then
+        deliver_messages_nudge "$response_json"
+        return 0
+    fi
+    queue_or_deliver "$response_json"
+    # Nichts zu tun wenn die Queue leer ist.
+    local pending
+    pending=$(msg_queue_files | grep -c . || true)
+    if [ "$pending" -eq 0 ]; then
+        return 0
+    fi
+    if msg_gate_open; then
+        flush_msg_queue || true
+    else
+        log "deliver_messages: Gate zu (claude arbeitet / Prompt nicht clean) — $pending Message(s) bleiben gequeued, kein Ack."
+    fi
+}
+
+# response_has_new_messages RESPONSE_JSON — 0 wenn der Key `new_messages`
+# in der Poll-Response vorhanden ist (nur comm_v2-Pilot-Agenten). Auch bei
+# leerer Liste true: erlaubt Flush einer frueher gequeueten, noch nicht
+# gepasteten Message sobald der Agent idle wird.
+response_has_new_messages() {
+    echo "$1" | python3 -c "
+import json, sys
+try:
+    sys.exit(0 if 'new_messages' in json.load(sys.stdin) else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+# run_poll_loop — der eigentliche Laufzeit-Teil (Trap, Startup-Log, Poll-Loop).
+# In eine Funktion gekapselt, damit poll.sh fuer Unit-Tests gesourcet werden
+# kann (POLL_SH_SOURCE_ONLY=1) ohne den Loop zu starten — der Aufruf unten ist
+# gegated. Alle bisherigen globalen Variablen bleiben global (unqualifizierte
+# Zuweisungen in einer bash-Funktion schreiben in den globalen Scope).
+run_poll_loop() {
+
 # Stale lock von vorherigem poll.sh-Run entfernen (z.B. nach SIGKILL wo trap nicht lief).
 rm -f "$TASK_LOCK_FILE" 2>/dev/null || true
+# W2.1: Turn-Signal beim poll.sh-Startup leeren. Ein `stop` aus einem frueheren
+# Container-Leben hat KEINE Staleness-Grenze und wuerde sonst nach docker
+# restart/respawn als frisches idle gelesen. Die Entrypoints truncaten die
+# Datei zusaetzlich beim Boot (Belt-and-Suspenders).
+reset_turn_signal
 # Lockfile bei sauberem Exit raeumen. SIGKILL kann trap nicht abfangen —
 # recycler.sh prueft deshalb zusaetzlich ob poll.sh noch laeuft (pgrep).
 trap 'rm -f "$TASK_LOCK_FILE"' EXIT TERM INT
@@ -867,7 +1249,19 @@ print(json.load(sys.stdin).get('task_id', '?'))" 2>/dev/null || echo "?")
     # Kommentar des Operators an). Nur error/cancelled/stopped ueberspringen.
     if [ "$STATE" != "error" ] && [ "$STATE" != "cancelled" ] && [ "$STATE" != "stopped" ]; then
         deliver_comments "$RESPONSE"
+        # comm_v2-Pilot: liefert `new_messages` via Turn-Grenzen-Gate. Nur wenn
+        # das Backend den Key sendet (Nicht-Pilot-Agenten unveraendert). Auch bei
+        # leerer Liste rufen — flusht eine frueher gequeuete Message sobald idle.
+        if response_has_new_messages "$RESPONSE"; then
+            deliver_messages "$RESPONSE"
+        fi
     fi
 
     sleep "$POLL_INTERVAL"
 done
+}
+
+# Nur beim echten Ausfuehren den Loop starten; beim Sourcen (Tests) nicht.
+if [ "$POLL_SH_SOURCE_ONLY" != "1" ]; then
+    run_poll_loop
+fi

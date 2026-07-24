@@ -5,6 +5,9 @@ import type { BenchChallenge } from "../types";
 
 vi.mock("@/verticals/bench_studio/api", () => ({
   benchApi: {
+    sparkModels: {
+      get: vi.fn().mockResolvedValue({ reachable: true, models: [], active: null }),
+    },
     challenges: {
       list: vi.fn(),
       get: vi.fn(),
@@ -30,6 +33,7 @@ const CHALLENGE: BenchChallenge = {
   status: "rendering",
   series_label: "Spark Bench",
   series_no: 7,
+  record_duration_s: null,
   composed_video_path: null,
   content_pipeline_id: null,
   error: null,

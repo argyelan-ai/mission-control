@@ -317,3 +317,65 @@ async def test_heartbeat_clears_stale_current_task_id_path_b(client: AsyncClient
         from app.models.agent import Agent
         fresh = await s.get(Agent, agent.id)
     assert fresh.current_task_id is None  # Stale pointer cleared
+
+
+# ── Interaction 2.0 (Task 12): waiting-hold survives heartbeats ───────────
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_preserves_waiting_hold(client: AsyncClient):
+    """Live pilot finding 2026-07-20: a blocking ask parks the task `waiting`
+    while /me/poll's session-hold is keyed off agent.current_task_id. The
+    heartbeat's else-branch (Bug 18 self-heal) treated `waiting` as "no
+    active task" and cleared the pointer — poll.sh saw state=idle, reset the
+    session, and the blocking answer went through parked re-dispatch instead
+    of live injection. A waiting task pointed at by current_task_id must
+    survive the heartbeat."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_active_task(s, task_status="waiting")
+        from app.models.agent import Agent
+        a = await s.get(Agent, agent.id)
+        a.current_task_id = task.id
+        s.add(a)
+        await s.commit()
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "idle"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.agent import Agent
+        fresh = await s.get(Agent, agent.id)
+    assert fresh.current_task_id == task.id, (
+        "waiting-Hold: current_task_id darf vom Heartbeat nicht geloescht "
+        "werden solange der Task waiting ist (blocking ask, Task 12)"
+    )
+    assert fresh.status == "idle"  # Status folgt weiter dem Payload
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_does_not_resurrect_parked_waiting_task(client: AsyncClient):
+    """Counterpart: once _maybe_park_waiting_task released the session
+    (current_task_id=None), the heartbeat must NOT re-point the agent at the
+    still-waiting task — the park is deliberate (agent freed for inbox
+    work). Preserve-only, never resurrect."""
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        agent, task, token = await _agent_with_active_task(s, task_status="waiting")
+        # Helper leaves current_task_id=None — exactly the parked state.
+
+    resp = await client.post(
+        "/api/v1/agent/me/heartbeat",
+        json={"status": "idle"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200
+
+    async with AsyncSession(test_engine, expire_on_commit=False) as s:
+        from app.models.agent import Agent
+        fresh = await s.get(Agent, agent.id)
+    assert fresh.current_task_id is None, (
+        "geparkter waiting-Task darf vom Heartbeat nicht wiederbelebt werden"
+    )

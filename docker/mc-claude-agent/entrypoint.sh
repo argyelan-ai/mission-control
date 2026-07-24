@@ -186,6 +186,13 @@ set -g history-limit 50000
 set -g default-terminal "xterm-256color"
 TMUX_CONF
 
+# W2.1 Turn-Signal (Phase A): frische Signal-Datei beim Boot. Ein `stop` aus
+# einem frueheren Container-Leben hat keine Staleness-Grenze und wuerde sonst
+# nach docker restart/respawn als frisches idle gelesen. poll.sh leert die
+# Datei zusaetzlich beim Startup + jedem Session-Reset (Belt-and-Suspenders).
+# Muster analog omp-bridge/entrypoint.sh (`: > "$OMP_TURN_SIGNAL_FILE"`).
+: > /home/agent/.turn-signal
+
 # Hilfsfunktion: tmux-Session mit beiden Windows starten
 # Backoff-Strategie (ADR-023 ultrareview): exponentiell statt flat 5s — sonst
 # baut sich bei persistenten Auth-Failures (OAuth ausgelaufen, Token verdreht)

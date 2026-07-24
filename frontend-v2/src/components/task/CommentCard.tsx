@@ -60,6 +60,7 @@ const STATUS_PILL_COLORS: Record<string, { bg: string; text: string }> = {
   review: { bg: `${C.warning}26`, text: C.warning },
   inbox: { bg: `${C.textSecondary}26`, text: C.textSecondary },
   user_test: { bg: C.accentSubtle, text: C.accent },
+  waiting: { bg: LANE.waiting + "26", text: LANE.waiting },
   aborted: { bg: `${C.textMuted}26`, text: C.textMuted },
 };
 
@@ -107,7 +108,7 @@ function resolveAuthor(
 /** Rendert Status-Transitionen wie "blocked -> done" als farbige Pills */
 function renderContentWithStatusPills(text: string): React.ReactNode[] {
   const transitionPattern =
-    /\b(inbox|in_progress|review|user_test|done|blocked|failed|aborted)\s*(?:->|-->|→)\s*(inbox|in_progress|review|user_test|done|blocked|failed|aborted)\b/g;
+    /\b(inbox|in_progress|review|user_test|waiting|done|blocked|failed|aborted)\s*(?:->|-->|→)\s*(inbox|in_progress|review|user_test|waiting|done|blocked|failed|aborted)\b/g;
 
   const parts: React.ReactNode[] = [];
   let lastIndex = 0;

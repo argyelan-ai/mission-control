@@ -8,11 +8,21 @@
 h1 { font-family:'Clash Display',sans-serif; font-weight:600; font-size:96px;
   letter-spacing:-0.02em; }
 .table { margin-top:70px; width:1450px; font-family:'JetBrains Mono',monospace; }
-.row { display:grid; grid-template-columns: 430px 180px 180px 180px 320px;
+/* Fixed tracks (not minmax/max-content) — per-row grids in a repeated
+   {{ROWS}} block have no shared sizing context, so a max-content track
+   would size independently per row and misalign columns between rows.
+   530px = the full slack in the 1450px table (1450 - 56px padding -
+   860px of other 4 fixed columns, minus a few px safety). */
+.row { display:grid; grid-template-columns: 530px 180px 180px 180px 320px;
   padding:26px 28px; border-bottom:1px solid var(--line); align-items:baseline; }
 .row.head { color:var(--muted); font-size:18px; letter-spacing:.08em;
   text-transform:uppercase; border-bottom:1px solid #232838; }
-.row .name { font-size:27px; color:var(--text); }
+/* overflow-wrap:anywhere (not break-word) — break-word only wraps at the
+   soft-wrap opportunities of the *max-content* size, i.e. never actually
+   forces a break inside an unbroken run; anywhere affects min-content and
+   genuinely allows a long unspaced label (e.g. a HF-style model path) to
+   wrap onto a second line instead of overflowing the 530px column. */
+.row .name { font-size:27px; color:var(--text); overflow-wrap:anywhere; }
 .row .val { font-size:25px; color:var(--text2); }
 .cta { position:absolute; right:120px; bottom:96px; text-align:right; }
 .cta .follow { font-family:'Clash Display',sans-serif; font-weight:500; font-size:40px;

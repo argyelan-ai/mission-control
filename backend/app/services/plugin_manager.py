@@ -123,10 +123,18 @@ def render_agent_settings(
     system_prompt: str,
     model: str,
     cli_plugins: list[str] | None,
+    *,
+    turn_signal_hooks: bool = True,
 ) -> str:
     """Renders settings.json for a CLI-bridge agent.
 
     cli_plugins: None = all available plugins, [] = none, ["x"] = only these.
+
+    turn_signal_hooks: render the W2.1 UserPromptSubmit/Stop hooks block. Only
+    the claude harness (runtime_protocol == "anthropic") understands them, so
+    callers pass False for openclaude agents — its tolerance to an unknown
+    top-level `hooks` key is unproven, so we eliminate the key rather than
+    rely on it. Default True (claude is the fleet majority).
     """
     available = {p.key for p in list_available_plugins()}
 
@@ -160,6 +168,7 @@ def render_agent_settings(
         model=model,
         enabled_plugins=enabled_plugins,
         extra_marketplaces=needed_marketplaces,
+        turn_signal_hooks=turn_signal_hooks,
     )
 
 
@@ -189,8 +198,14 @@ def sync_agent_plugins_to_disk(
     system_prompt: str,
     model: str,
     cli_plugins: list[str] | None,
+    *,
+    turn_signal_hooks: bool = True,
 ) -> dict[str, bool]:
-    """Writes settings.json + installed_plugins.json for an agent to disk."""
+    """Writes settings.json + installed_plugins.json for an agent to disk.
+
+    turn_signal_hooks: forwarded to render_agent_settings — False for
+    openclaude agents so no `hooks` key is emitted (see render_agent_settings).
+    """
     agent_dir = _agents_dir() / agent_slug
     written = {}
 
@@ -203,7 +218,10 @@ def sync_agent_plugins_to_disk(
     settings_file = agent_dir / "settings.json"
     mirror_file = agent_dir / "claude-config" / "settings.json"
     try:
-        content = render_agent_settings(agent_slug, system_prompt, model, cli_plugins)
+        content = render_agent_settings(
+            agent_slug, system_prompt, model, cli_plugins,
+            turn_signal_hooks=turn_signal_hooks,
+        )
         settings_file.write_text(content)
         if mirror_file.is_symlink():
             mirror_file.unlink()

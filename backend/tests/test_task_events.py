@@ -14,12 +14,12 @@ from tests.conftest import test_engine
 
 
 def test_task_status_enum_values():
-    """All 8 status values are defined."""
+    """All 9 status values are defined (Task 6: + waiting)."""
     from app.task_status import TaskStatus
 
-    assert len(TaskStatus) == 8
+    assert len(TaskStatus) == 9
     assert set(TaskStatus) == {
-        "inbox", "in_progress", "review", "user_test",
+        "inbox", "in_progress", "review", "user_test", "waiting",
         "done", "blocked", "failed", "aborted",
     }
 

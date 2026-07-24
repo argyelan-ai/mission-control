@@ -140,4 +140,17 @@ export TMUX_STUB_PANE_FILE="$openclaude_busy"
 out=$(detect_pane_ui "test:0") || fail "case7: detect_pane_ui exit non-zero for busy openclaude"
 [ "$out" = "openclaude" ] || fail "case7: expected 'openclaude' for busy pane, got '$out'"
 
-echo "PASS: all 7 detect_pane_ui cases"
+# ── Case 8 (live pilot 2026-07-20): PANE_UI_OVERRIDE wins ─────────────────
+# claude-cli 2.1.x has no box glyphs and looks exactly like openclaude —
+# the image bakes PANE_UI_OVERRIDE, which must short-circuit the heuristic.
+export TMUX_STUB_PANE_FILE="$openclaude_busy"   # pane that LOOKS openclaude
+out=$(PANE_UI_OVERRIDE=claude detect_pane_ui "test:0") \
+    || fail "case8: override call must return 0"
+[ "$out" = "claude" ] || fail "case8: PANE_UI_OVERRIDE=claude must win, got '$out'"
+
+# ── Case 9: override empty → heuristic unchanged ──────────────────────────
+out=$(PANE_UI_OVERRIDE= detect_pane_ui "test:0") \
+    || fail "case9: empty override must fall through to heuristic"
+[ "$out" = "openclaude" ] || fail "case9: empty override must use heuristic, got '$out'"
+
+echo "PASS: all 9 detect_pane_ui cases"

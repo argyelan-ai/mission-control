@@ -89,6 +89,19 @@ class Task(SQLModel, table=True):
     # planner_mode field removed in migration 0071 (2026-04-11, Phase D).
     # Boss plans itself via openclaude subagents, no planner intermediate.
 
+    # Interaction Model 2.0 — the thread carrying this task's conversation.
+    # use_alter=True: breaks the tasks<->threads FK cycle (Thread.task_id
+    # also points back at tasks.id) for SQLAlchemy's DDL creation ordering,
+    # same technique as triggered_by_deliverable_id below.
+    thread_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid(as_uuid=True),
+            ForeignKey("threads.id", use_alter=True, name="fk_tasks_thread_id"),
+            nullable=True,
+        ),
+    )
+
     # Content Pipeline Link
     pipeline_id: uuid.UUID | None = Field(
         default=None,

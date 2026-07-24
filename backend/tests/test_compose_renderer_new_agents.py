@@ -155,6 +155,38 @@ async def test_existing_services_preserved_when_new_agent_appended(
     assert "AGENT_SLUG=sparky" in rendered
 
 
+# ── Test 1b: MSG_DELIVERY_MODE injected into existing services ───────────────
+
+
+@pytest.mark.asyncio
+async def test_msg_delivery_mode_injected_into_existing_services(
+    async_session, compose_path
+):
+    """Existing service blocks (rendered from the static file, not rebuilt)
+    must get the fleet-default MSG_DELIVERY_MODE injected into their
+    environment block — once per service, idempotent across re-renders, and
+    an explicit pre-existing override must be preserved."""
+    rendered = await render_compose_agents(async_session, compose_path=compose_path)
+    assert (
+        rendered.count("- MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}") == 2
+    ), "both fixture services (rex, sparky) must get exactly one entry"
+
+    # Idempotent: re-rendering the rendered output adds nothing.
+    compose_path.write_text(rendered, encoding="utf-8")
+    rerendered = await render_compose_agents(async_session, compose_path=compose_path)
+    assert rerendered.count("- MSG_DELIVERY_MODE=") == 2
+
+    # A deliberate per-service override survives.
+    overridden = rendered.replace(
+        "      - AGENT_SLUG=rex\n",
+        "      - AGENT_SLUG=rex\n      - MSG_DELIVERY_MODE=paste\n",
+        1,
+    ).replace("      - MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}", "", 1)
+    compose_path.write_text(overridden, encoding="utf-8")
+    rerendered = await render_compose_agents(async_session, compose_path=compose_path)
+    assert "- MSG_DELIVERY_MODE=paste" in rerendered
+
+
 # ── Test 2: New agent block appended ─────────────────────────────────────────
 
 
@@ -198,6 +230,8 @@ async def test_new_agent_block_appended(async_session, compose_path):
     assert "MC_API_URL=${MC_API_URL:-http://backend:8000}" in rendered
     assert "AGENT_VAULT_PATH=/vault/agents/estrich-vision" in rendered
     assert "AGENT_VAULT_INBOX=/vault/_inbox" in rendered
+    # Fleet default nudge+pull (W2.1) with host-level override knob.
+    assert "MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}" in rendered
 
     # Standard volumes.
     assert "${HOME}/.mc/agents/estrich-vision/claude-config:/home/agent/.claude" in rendered

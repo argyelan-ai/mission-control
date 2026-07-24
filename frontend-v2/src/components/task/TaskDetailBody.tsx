@@ -50,6 +50,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   in_progress: "In Progress",
   review: "Review",
   user_test: "User Test",
+  waiting: "Waiting",
   done: "Done",
   blocked: "Blocked",
   failed: "Failed",
@@ -59,6 +60,7 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 const STATUS_ORDER: TaskStatus[] = [
   "inbox",
   "in_progress",
+  "waiting",
   "review",
   "user_test",
   "done",

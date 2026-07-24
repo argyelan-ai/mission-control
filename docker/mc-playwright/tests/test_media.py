@@ -35,6 +35,7 @@ from media import (
     build_transcode_poster_cmd,
     build_transcode_video_cmd,
     clamp_poster_at_s,
+    compose_branded_timeout_s,
     escape_drawtext,
     fill_bench_template,
     load_deterministic_shim,
@@ -80,7 +81,14 @@ def test_record_request_duration_bounds():
     with pytest.raises(ValidationError):
         RecordRequest(url="http://a", duration_s=0, output_dir="/shared-deliverables/x")
     with pytest.raises(ValidationError):
+        RecordRequest(url="http://a", duration_s=4, output_dir="/shared-deliverables/x")
+    with pytest.raises(ValidationError):
         RecordRequest(url="http://a", duration_s=61, output_dir="/shared-deliverables/x")
+    # Bench #18: configurable video length, 5..60 bound.
+    req = RecordRequest(url="http://a", duration_s=5, output_dir="/shared-deliverables/x")
+    assert req.duration_s == 5
+    req = RecordRequest(url="http://a", duration_s=60, output_dir="/shared-deliverables/x")
+    assert req.duration_s == 60
 
 
 def test_viewports_have_presets():
@@ -124,6 +132,49 @@ def test_compose_request_max_four_inputs():
             labels=[str(i) for i in range(5)],
             output_path="/g.mp4",
         )
+
+
+def test_compose_request_duration_s_defaults_to_10_for_backwards_compat():
+    """Callers that predate Bench #18 (or never set it) don't send
+    duration_s at all — must fall back to the old fixed 10s so the timeout
+    scaling (compose_branded_timeout_s) behaves exactly as before."""
+    req = ComposeRequest(
+        inputs=["/a.mp4", "/b.mp4"], labels=["A", "B"], output_path="/g.mp4"
+    )
+    assert req.duration_s == 10
+
+
+def test_compose_request_duration_s_bounds():
+    with pytest.raises(ValidationError):
+        ComposeRequest(
+            inputs=["/a.mp4"], labels=["A"], output_path="/g.mp4", duration_s=4
+        )
+    with pytest.raises(ValidationError):
+        ComposeRequest(
+            inputs=["/a.mp4"], labels=["A"], output_path="/g.mp4", duration_s=61
+        )
+
+
+# ── compose_branded_timeout_s (Bench #18 timeout scaling) ────────────────────
+
+
+def test_compose_branded_timeout_s_floor_matches_old_flat_timeout():
+    """A 10s recording (the pre-#18 fixed duration) must not regress the
+    existing 300s ffmpeg timeout budget."""
+    assert compose_branded_timeout_s(10, floor_s=300) == 300
+
+
+def test_compose_branded_timeout_s_scales_up_for_longer_recordings():
+    # 15 * (60 + 2) = 930, between the 300 floor and the 1100 cap.
+    assert compose_branded_timeout_s(60, floor_s=300) == 930
+
+
+def test_compose_branded_timeout_s_caps_at_1100():
+    assert compose_branded_timeout_s(200, floor_s=300, cap_s=1100) == 1100
+
+
+def test_compose_branded_timeout_s_never_below_floor():
+    assert compose_branded_timeout_s(1, floor_s=300) == 300
 
 
 # ── escape_drawtext ───────────────────────────────────────────────────────────

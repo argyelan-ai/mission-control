@@ -15,6 +15,7 @@ def generate_tools_md(
     is_board_lead: bool = False,
     scopes: list[str] | None = None,
     runtime: str = "docker",
+    comm_v2: bool = False,
 ) -> str:
     """Generates a pre-filled TOOLS.md for a newly created agent.
 
@@ -24,6 +25,11 @@ def generate_tools_md(
     runtime: "docker" (cli-bridge, default) or "host" (Boss). Affects
     only the vault section, because host agents access the filesystem
     ~/.mc/vault directly instead of the container mount /vault.
+
+    comm_v2: Interaction Model 2.0 pilot flag (Task 11's `agents.comm_v2`
+    column). Gates the `mc ask`/`mc msg` reference section — pure
+    function, so callers thread the agent's actual flag through
+    (default False keeps non-pilot output byte-identical).
     """
     from app.scopes import Scope
 
@@ -1283,6 +1289,39 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/clarification" \\
 The `options` field is optional. Use it if you have suggested answers.
 You get the operator's answer as a message and then continue."""
 
+    # ── Messaging v2 (Pilot) — comm_v2-gated, Task 11/12 ────────────────────
+    # No board_id needed — both endpoints resolve the current task via
+    # agent.current_task_id (same pattern as `mc finish`/`mc ack`).
+    comm_v2_section = ""
+    if comm_v2 and _has(Scope.CHAT_WRITE):
+        comm_v2_section = """## Messaging v2 (Pilot) — mc ask / mc msg
+
+You're in the comm_v2 pilot. Two verbs, thread-native, no board_id needed:
+
+```bash
+# Question, non-blocking (default) — post it, keep working on independent parts.
+# The answer arrives injected into your context at your next turn boundary.
+mc ask "Postgres or SQLite for this migration?" --options postgres,sqlite
+
+# Question, blocking — task -> waiting, your session stays alive (paused),
+# the answer resumes you (same session, no re-dispatch).
+mc ask "Deploy now or wait for review?" --blocking --priority high
+
+# Plain thread note — status/decision, not a question (mc ask rejects
+# message_type=question redirection the other way: use mc ask for that).
+mc msg "Migrated 3/5 tables, continuing." --type status
+```
+
+`--to boss|mark|agent` (default boss), `--priority low|medium|high|critical`
+(default medium), `--default <answer>` and `--deadline <ISO>` are optional.
+`mc msg --type` accepts `message|status|decision`.
+
+Delivery is poll-based and at-least-once — you may see the same message
+twice; treat a repeat as already-handled, don't act on it again.
+`mc finish` stays MANDATORY to close a task — asking/messaging never
+closes or advances the task on its own (except the explicit
+`--blocking` -> `waiting` transition above)."""
+
     # ── Browser reference (for all agents) ───────────────────────────────
     browser_section = """
 ---
@@ -1555,7 +1594,7 @@ Rules:
     quick_ref = "\n\n".join(flow_blocks)
 
     # ── Assemble ───────────────────────────────────────────────────────────
-    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, install_request_section, credentials_section, deploy_section] if s]
+    sections = [s for s in [knowledge_section, vault_section, vault_remember_section, memory_section, heartbeat_section, help_request_section, comm_v2_section, install_request_section, credentials_section, deploy_section] if s]
     main_body = "\n\n".join(sections)
 
     return f"""# {emoji} {name} — Mission Control Tools

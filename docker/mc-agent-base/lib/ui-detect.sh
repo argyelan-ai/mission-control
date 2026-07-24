@@ -19,6 +19,19 @@
 # they win when both are visible (e.g. inside claude-cli's input prompt).
 detect_pane_ui() {
     local target="$1"
+    # Live pilot finding 2026-07-20: claude-cli 2.1.x dropped the box glyphs
+    # (no more ╭─/╰─) and renders `❯` + horizontal lines — visually the same
+    # as openclaude, so the pane heuristic below misdetects claude as
+    # openclaude and paste_and_submit skips the bracketed-paste end-marker
+    # claude NEEDS (the submit-Enter degrades to a bare newline, the paste
+    # sits unsubmitted in the input). The image knows its runtime with
+    # certainty: PANE_UI_OVERRIDE (ENV baked into mc-claude-agent /
+    # mc-agent-base, overridable via compose) wins over the heuristic.
+    # The heuristic stays as fallback for host agents without the ENV.
+    if [ -n "${PANE_UI_OVERRIDE:-}" ]; then
+        echo "$PANE_UI_OVERRIDE"
+        return 0
+    fi
     local pane
     pane=$(tmux capture-pane -t "$target" -p 2>/dev/null || echo "")
     if [ -z "$pane" ]; then

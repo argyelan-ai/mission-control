@@ -16,6 +16,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+import threading
+import time
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -220,6 +222,46 @@ def test_paste_and_submit_uses_load_buffer_then_end_marker_then_enter(bridge, tm
     marker = calls[2]
     assert "-H" in marker and "1b" in marker and "7e" in marker
     assert calls[3][-1] == "Enter"
+
+
+def test_paste_and_submit_serializes_concurrent_callers(bridge, tmp_path, monkeypatch):
+    """MAJOR review fix: the watchdog thread (nudge on stall) and the poll-loop
+    thread (dispatch / message flush) can both decide to paste at ~the same
+    moment — exactly DURING a stall the pane is quiet and no dispatch is in
+    flight, which is precisely when the watchdog fires a nudge. A shared
+    _paste_lock around the whole tmux keystroke sequence must prevent two
+    concurrent callers from ever being inside that sequence at once (which
+    would interleave keystrokes into the same pane). Deliberately does NOT
+    monkeypatch bridge.time.sleep — the real internal 0.3s/0.2s delays give a
+    genuine concurrency window for an unlocked implementation to fail this."""
+    monkeypatch.setattr(bridge, "LOG_DIR", tmp_path)
+    state = {"inside": 0, "violations": 0}
+    state_lock = threading.Lock()
+
+    def fake_tmux(args, **kwargs):
+        with state_lock:
+            state["inside"] += 1
+            if state["inside"] > 1:
+                state["violations"] += 1
+        time.sleep(0.02)  # widen the race window for an unlocked implementation
+        with state_lock:
+            state["inside"] -= 1
+        m = MagicMock(); m.returncode = 0; m.stdout = ""; m.stderr = ""
+        return m
+
+    monkeypatch.setattr(bridge, "_tmux", fake_tmux)
+
+    threads = [threading.Thread(target=bridge.paste_and_submit, args=(f"msg-{i}",)) for i in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert state["violations"] == 0
+
+
+def test_paste_lock_is_a_shared_module_level_lock(bridge):
+    assert isinstance(bridge._paste_lock, type(threading.Lock()))
 
 
 def test_is_session_running_reads_has_session(bridge, monkeypatch):
@@ -501,7 +543,11 @@ def test_launch_shell_cmd_sources_agent_env_in_window_shell(bridge):
     line = bridge._grok_launch_shell_cmd()
     assert line.startswith("set -a; . ")
     assert str(bridge.ENV_FILE) in line
-    assert "; set +a; exec " in line
+    # agent.env sourcing must close BEFORE the exec; the MC_API_URL default
+    # export (W2.1 nudge+pull) sits between the two.
+    assert "; set +a; " in line
+    assert "; exec " in line
+    assert line.index("set +a") < line.index("exec ")
     assert not line.startswith("sh -c")  # tmux already runs the line via sh -c
 
 
@@ -608,3 +654,640 @@ def test_reset_command_default_is_new(bridge):
     """grok TUI: /new starts a fresh session (verified live 2026-07-12 — instant,
     no worktree picker because the grok workspace is not a git repo)."""
     assert bridge.RESET_COMMAND == "/new"
+
+
+# ── W2 bridge parity: comm_v2 message queue + turn-gate + flush ─────────────────
+#
+# Mirrors docker/shared/poll.sh's Interaction-Model-2.0 section: acked_seq poll
+# param, crash-safe queue-before-paste, a pane-quiet turn-gate (grok has no
+# native turn-state signal), verified flush (footer-anchor search), at-least-
+# once ack semantics, and the /clear-on-done bugfix.
+
+
+@pytest.fixture(autouse=True)
+def _isolate_msg_state(bridge, tmp_path, monkeypatch):
+    """Every comm_v2 test gets its own queue/ack/reset-marker dirs — without
+    this, tests would read/write the real ~/.mc/agents/grok state."""
+    monkeypatch.setattr(bridge, "MSG_QUEUE_DIR", tmp_path / "msg-queue")
+    monkeypatch.setattr(bridge, "MSG_ACK_DIR", tmp_path / "msg-acked")
+    monkeypatch.setattr(bridge, "LAST_RESET_TASK_ID_FILE", tmp_path / "last-reset-task-id")
+    bridge._last_reset_task_id = None
+    bridge._dispatch_in_flight = False
+    bridge._msg_gate_last_pane = ""
+    bridge._msg_gate_last_change_ts = 0.0
+    return bridge
+
+
+def _msg(seq=1, tid="thread-1", body="hi", sender="user", mtype="text"):
+    return {"id": f"m{seq}", "thread_id": tid, "seq": seq, "sender": sender,
+            "message_type": mtype, "body": body, "question_meta": None}
+
+
+def test_build_acked_seq_param_empty_when_no_acks(bridge):
+    assert bridge.build_acked_seq_param() == ""
+
+
+def test_build_acked_seq_param_urlencoded_json(bridge):
+    bridge._record_ack("thread-1", 3)
+    bridge._record_ack("thread-2", 7)
+    enc = bridge.build_acked_seq_param()
+    assert enc != ""
+    import urllib.parse
+    decoded = json.loads(urllib.parse.unquote(enc))
+    assert decoded == {"thread-1": 3, "thread-2": 7}
+
+
+def test_record_ack_is_high_water_mark(bridge):
+    bridge._record_ack("t1", 5)
+    bridge._record_ack("t1", 3)  # lower seq must not regress the mark
+    assert (bridge.MSG_ACK_DIR / "t1").read_text().strip() == "5"
+    bridge._record_ack("t1", 9)
+    assert (bridge.MSG_ACK_DIR / "t1").read_text().strip() == "9"
+
+
+def test_queue_new_messages_writes_seq_named_files_with_footer(bridge):
+    n = bridge.queue_new_messages([_msg(seq=2, tid="th-a"), _msg(seq=10, tid="th-b")])
+    assert n == 2
+    files = sorted(p.name for p in bridge.MSG_QUEUE_DIR.glob("*.msg"))
+    assert files == ["00000002__th-a.msg", "00000010__th-b.msg"]
+    content = (bridge.MSG_QUEUE_DIR / "00000002__th-a.msg").read_text()
+    assert "[thread th-a · seq 2 · von user · typ text]" in content
+    assert "hi" in content
+
+
+def test_queue_new_messages_idempotent_redelivery(bridge):
+    bridge.queue_new_messages([_msg(seq=1, tid="t1", body="first")])
+    bridge.queue_new_messages([_msg(seq=1, tid="t1", body="first")])  # redelivery
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 1
+
+
+def test_queue_new_messages_skips_malformed_entries(bridge):
+    n = bridge.queue_new_messages([{"body": "no seq or thread_id"}, _msg(seq=1)])
+    assert n == 1
+
+
+def test_msg_queue_files_sorted_by_seq(bridge):
+    bridge.queue_new_messages([_msg(seq=10, tid="a"), _msg(seq=2, tid="b"), _msg(seq=1, tid="c")])
+    names = [p.name for p in bridge.msg_queue_files()]
+    assert names == ["00000001__c.msg", "00000002__b.msg", "00000010__a.msg"]
+
+
+def test_msg_gate_closed_when_dispatch_in_flight(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same")
+    bridge._dispatch_in_flight = True
+    assert bridge.msg_gate_open() is False
+
+
+def test_msg_gate_closed_when_session_not_running(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    assert bridge.msg_gate_open() is False
+
+
+def test_normalize_volatile_neutralizes_real_hermes_status_line(bridge):
+    """Same finding as hermes-bridge (twin fix, live-confirmed there
+    2026-07-21): a ticking timer/token-counter/spinner status line must
+    normalize to an identical string across captures that differ only in
+    those volatile values."""
+    cap1 = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    cap2 = "⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 45s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._normalize_volatile(cap1) == bridge._normalize_volatile(cap2)
+
+
+def test_msg_gate_pane_quiet_keeps_advancing_through_ticking_status_line(bridge, monkeypatch):
+    """Regression: without normalization, a ticking status line never reads
+    "unchanged" and the quiet clock never advances past 0, so the gate never
+    opens — messages hang forever."""
+    lines = [
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.2K/262.1K │ … │ 5h │ ⏲ 18m 57s │ ✓ 2h 10m │ ⚠ YOLO",
+        "transcript\n⚕ Qwen3.6-27B-FP8 │ 31.4K/262.1K │ … │ 5h │ ⏲ 18m 56s │ ✓ 2h 10m │ ⚠ YOLO",
+    ]
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane=lines[0]) is False
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane=lines[1]) is False
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    assert bridge._msg_gate_pane_quiet(now=111.0, pane=lines[2]) is True
+
+
+def test_msg_gate_pane_quiet_still_resets_on_genuine_new_content(bridge, monkeypatch):
+    """Real new content must still reset the quiet clock — normalization must
+    only neutralize the volatile status-line noise, not actual progress."""
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    status = "⚕ Qwen3.6-27B-FP8 │ 31.1K/262.1K │ … │ 5h │ ⏲ 18m 58s │ ✓ 2h 10m │ ⚠ YOLO"
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane=f"transcript line A\n{status}") is False
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane=f"transcript line A\n{status}") is False
+    # New transcript content appears — genuine progress, clock resets.
+    assert bridge._msg_gate_pane_quiet(
+        now=106.0, pane=f"transcript line A\ntranscript line B\n{status}"
+    ) is False
+    assert bridge._msg_gate_pane_quiet(
+        now=117.0, pane=f"transcript line A\ntranscript line B\n{status}"
+    ) is True
+
+
+def test_msg_gate_pane_quiet_requires_stability_window(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 10)
+    # First observation of a pane always resets the clock → not quiet yet.
+    assert bridge._msg_gate_pane_quiet(now=100.0, pane="X") is False
+    # Same pane, not enough time elapsed.
+    assert bridge._msg_gate_pane_quiet(now=105.0, pane="X") is False
+    # Same pane, quiet window elapsed → open.
+    assert bridge._msg_gate_pane_quiet(now=111.0, pane="X") is True
+    # Pane changes → clock resets.
+    assert bridge._msg_gate_pane_quiet(now=112.0, pane="Y") is False
+
+
+def test_msg_gate_open_end_to_end(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "❯ ")
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 1)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1000.0)
+    assert bridge.msg_gate_open() is False  # first sight
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1002.0)
+    assert bridge.msg_gate_open() is True  # stable past the window
+
+
+def test_flush_msg_queue_verified_paste_acks_and_removes_file(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="hello")])
+    pasted = []
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: pasted.append(text))
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "...\n[thread th-1 · seq 1 · von user · typ text]\n❯")
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert len(pasted) == 1 and "hello" in pasted[0]
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+    assert bridge._dispatch_in_flight is False  # flag cleared after flush
+
+
+def test_flush_msg_queue_verify_fail_stops_flush_no_ack(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1"), _msg(seq=2, tid="th-1")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Pane never shows the footer anchor — verify fails.
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "nothing useful here")
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert not (bridge.MSG_ACK_DIR / "th-1").exists()
+    # Both files remain queued (at-least-once — nothing acked, nothing deleted).
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 2
+
+
+def test_flush_msg_queue_gate_closing_mid_flush_stops_remaining(bridge, monkeypatch):
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1"), _msg(seq=2, tid="th-1")])
+    gate_calls = {"n": 0}
+
+    def fake_gate():
+        gate_calls["n"] += 1
+        return gate_calls["n"] == 1  # open for the first file only
+
+    monkeypatch.setattr(bridge, "msg_gate_open", fake_gate)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Anchor followed by a bare prompt line → "submitted" per _anchor_was_submitted.
+    monkeypatch.setattr(
+        bridge, "capture_pane",
+        lambda: "[thread th-1 · seq 1 · von user · typ text]\n❯",
+    )
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    # seq 1 delivered + acked; seq 2 stayed queued because the gate closed.
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    remaining = [p.name for p in bridge.MSG_QUEUE_DIR.glob("*.msg")]
+    assert remaining == ["00000002__th-1.msg"]
+
+
+def test_flush_msg_queue_swallowed_enter_stuck_in_composer_no_ack(bridge, monkeypatch):
+    """MAJOR review fix: a swallowed Enter leaves the footer anchor visible but
+    still sitting on the composer's trailing (unsubmitted) line — the OLD naive
+    `anchor in pane` check would have wrongly acked this. _anchor_was_submitted
+    requires something to render AFTER the anchor (proof it scrolled into the
+    transcript), so this must NOT ack."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    # Anchor is the LAST non-blank line — still un-submitted in the composer.
+    monkeypatch.setattr(
+        bridge, "capture_pane",
+        lambda: "...\n[thread th-1 · seq 1 · von user · typ text]",
+    )
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    bridge.flush_msg_queue()
+
+    assert not (bridge.MSG_ACK_DIR / "th-1").exists()
+    assert len(list(bridge.MSG_QUEUE_DIR.glob("*.msg"))) == 1  # still queued
+
+
+def test_anchor_was_submitted_decision_table(bridge):
+    f = bridge._anchor_was_submitted
+    anchor = "[thread th-1 · seq 1 ·"
+    # Not present at all.
+    assert f("nothing useful here", anchor) is False
+    # Present but IS the trailing line (still un-sent in the composer).
+    assert f(f"...\n{anchor} von user · typ text]", anchor) is False
+    # Present and something renders below it (scrolled into transcript).
+    assert f(f"{anchor} von user · typ text]\n❯", anchor) is True
+    # Blank pane.
+    assert f("", anchor) is False
+
+
+# ── Live finding 2026-07-22: collapsed-echo verify (count-increase, twin of #126) ─
+#
+# The grok TUI renders a submitted multi-line paste as ONE truncated transcript
+# line ending in `…` — the footer anchor (the LAST line of what we pasted) never
+# appears in the pane at all, so the anchor-only verify above always fails for a
+# genuinely delivered message (infinite redelivery, same shape as the claude-CLI
+# collapse bug #126). _verify_msg_delivered now ALSO accepts a rendering-agnostic
+# turn-event COUNT INCREASE (never mere presence — stale events linger in
+# scrollback) combined with an empty composer, as an OR alternative to the anchor.
+
+_LIVE_COLLAPSED_ECHO_PANE = (
+    "MARKER-GROK-9313: Zweiter Zustelltest. Bitte kurz bestaetigen. …\n"
+    "◆ user_prompt_submit  [hooks: 1]\n"
+    "◆ Thought for 0.1s\n"
+    "Bestätigt: MARKER-GROK-9313 erhalten.                              10:44 PM\n"
+    "Turn completed in 3.6s.\n"
+    "╭──────────…──────╮\n"
+    "│ ❯                │\n"
+    "╰──────…── Grok 4.5 (high) · always-approve ─╯"
+)
+
+
+def test_count_turn_events_counts_hook_and_completion_lines(bridge):
+    # 1x "◆ user_prompt_submit" hook-fire + 1x "Turn completed in" = 2.
+    # "◆ Thought for 0.1s" does not match either pattern.
+    assert bridge._count_turn_events(_LIVE_COLLAPSED_ECHO_PANE) == 2
+
+
+def test_count_turn_events_zero_on_idle_pane(bridge):
+    assert bridge._count_turn_events("╭───╮\n│ ❯  │\n╰───╯") == 0
+
+
+def test_composer_has_leftover_text_false_on_live_idle_composer(bridge):
+    assert bridge._composer_has_leftover_text(_LIVE_COLLAPSED_ECHO_PANE) is False
+
+
+def test_composer_has_leftover_text_detects_unsent_text(bridge):
+    assert bridge._composer_has_leftover_text("│ ❯ pending text │") is True
+
+
+def test_composer_has_leftover_text_false_when_no_composer_row(bridge):
+    assert bridge._composer_has_leftover_text("no composer row here at all") is False
+
+
+def test_verify_msg_delivered_collapsed_echo_count_increase_confirms(bridge, monkeypatch):
+    """The exact live scenario: anchor NEVER appears (collapsed echo), but the
+    turn-event count grew past the pre-paste baseline and the composer is
+    empty — must confirm delivery."""
+    monkeypatch.setattr(bridge, "capture_pane", lambda: _LIVE_COLLAPSED_ECHO_PANE)
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=0, timeout=1.0)
+    assert delivered is True
+
+
+def test_verify_msg_delivered_stale_events_no_increase_no_ack(bridge, monkeypatch):
+    """A pane that ALREADY had turn events before the paste (stale scrollback
+    from an earlier turn) must not confirm delivery just because events are
+    PRESENT — only a genuine INCREASE over the pre-paste baseline counts."""
+    stale_pane = (
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 1.0s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+    events_before = bridge._count_turn_events(stale_pane)  # baseline == post-paste count
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_verify_msg_delivered_composer_leftover_blocks_count_signal(bridge, monkeypatch):
+    """Event count grew, but the composer still shows leftover (unsent) text —
+    the count-increase signal must NOT confirm delivery on its own; with no
+    anchor present either, this must not ack."""
+    pane = (
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 1.0s.\n"
+        "╭───────────────────╮\n"
+        "│ ❯ still typing here │\n"
+        "╰───────────────────╯"
+    )
+    monkeypatch.setattr(bridge, "capture_pane", lambda: pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=0, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_flush_msg_queue_collapsed_echo_acks_via_event_count(bridge, monkeypatch):
+    """End-to-end (flush_msg_queue level) live-bug regression: the footer
+    anchor never appears (collapsed echo), so ONLY the count-increase signal
+    can confirm delivery — before this fix this scenario redelivered forever
+    (18-redelivery pattern from the live 2026-07-22 measurement run)."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="Zweiter Zustelltest.")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    idle_baseline_pane = "╭───╮\n│ ❯  │\n╰───╯"  # events_before snapshot: 0 events
+    panes = iter([idle_baseline_pane, _LIVE_COLLAPSED_ECHO_PANE])
+    monkeypatch.setattr(bridge, "capture_pane", lambda: next(panes, _LIVE_COLLAPSED_ECHO_PANE))
+
+    bridge.flush_msg_queue()
+
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+
+
+# ── Live finding round 2 (2026-07-22, 23:15): unique-prefix verify (redraw-safe) ─
+#
+# grok's TUI REDRAWS its transcript per turn instead of appending — the
+# count-increase signal from round 1 can see the SAME event count before and
+# after a paste (old turn's events cleared, new turn's rendered), so it never
+# detects an increase and the flush redelivers forever. Fix: prepend a unique
+# `[msg <seq> · <thread-8>]` prefix to the body's first line (survives both
+# the truncated-echo collapse and the per-turn redraw — see _msg_prefix).
+
+
+def test_msg_prefix_shape(bridge):
+    assert bridge._msg_prefix(1, "thread-1-uuid") == "[msg 1 · thread-1]"
+    assert bridge._msg_prefix(42, "abcdefgh-ijkl-mnop") == "[msg 42 · abcdefgh]"
+
+
+def test_build_message_file_body_prefixes_the_body_first_line(bridge):
+    body = bridge.build_message_file_body(_msg(seq=3, tid="th-abc12345", body="Hallo Grok"))
+    lines = body.splitlines()
+    # "# Neue Nachricht ..." header is UNCHANGED (still first) — the prefix is
+    # on the BODY line specifically, since grok strips the Markdown header on
+    # its truncated echo (see module note) but keeps the body's opening.
+    assert lines[0] == "# Neue Nachricht (Interaction 2.0)"
+    body_line = next(ln for ln in lines if ln.startswith("[msg 3 ·"))
+    assert body_line == "[msg 3 · th-abc12] Hallo Grok"
+
+
+def test_prefix_was_submitted_present_outside_composer(bridge):
+    prefix = "[msg 1 · th-1]"
+    assert bridge._prefix_was_submitted(f"...\n{prefix} Hallo Grok …\n◆ Thought for 0.1s", prefix) is True
+
+
+def test_prefix_was_submitted_only_in_composer_box_no_ack(bridge):
+    """Swallowed-Enter case: the prefix is sitting un-sent INSIDE the composer
+    box — those lines start with the box border char (│/|) — must not count."""
+    prefix = "[msg 1 · th-1]"
+    pane = f"╭──────────╮\n│ ❯ {prefix} Hallo │\n╰──────────╯"
+    assert bridge._prefix_was_submitted(pane, prefix) is False
+
+
+def test_prefix_was_submitted_absent_no_ack(bridge):
+    prefix = "[msg 1 · th-1]"
+    assert bridge._prefix_was_submitted("nothing useful here", prefix) is False
+
+
+def test_prefix_was_submitted_survives_truncated_echo_with_ellipsis(bridge):
+    """The exact live rendering quirk: a submitted multi-line paste collapses
+    to ONE transcript line ending in `…` — the prefix (first thing pasted)
+    must still be found."""
+    prefix = "[msg 1 · th-1]"
+    pane = f"{prefix} Zweiter Zustelltest. Bitte kurz best…\n◆ user_prompt_submit  [hooks: 1]"
+    assert bridge._prefix_was_submitted(pane, prefix) is True
+
+
+def test_verify_msg_delivered_redraw_scenario_prefix_confirms_despite_constant_count(bridge, monkeypatch):
+    """The exact round-2 live bug: turn-event count is IDENTICAL before and
+    after the paste (redraw, not append) — the count-increase signal alone
+    would never fire. The unique prefix, present in the (redrawn) transcript,
+    must still confirm delivery."""
+    stale_and_redrawn_pane = (
+        "[msg 1 · th-1] Zweiter Zustelltest. …\n"
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 2.1s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    # events_before == events in the post-paste pane too (redraw, no increase).
+    events_before = bridge._count_turn_events(stale_and_redrawn_pane)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_and_redrawn_pane)
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=1.0)
+
+    assert delivered is True
+
+
+def test_verify_msg_delivered_prefix_nowhere_no_ack(bridge, monkeypatch):
+    """Neither the prefix, nor a grown event count, nor the anchor — must not ack."""
+    stale_pane = "◆ user_prompt_submit  [hooks: 1]\nTurn completed in 1.0s.\n╭───╮\n│ ❯  │\n╰───╯"
+    monkeypatch.setattr(bridge, "capture_pane", lambda: stale_pane)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+    events_before = bridge._count_turn_events(stale_pane)  # no increase either
+
+    delivered = bridge._verify_msg_delivered("th-1", 1, events_before=events_before, timeout=0.05)
+
+    assert delivered is False
+
+
+def test_verify_msg_delivered_default_timeout_is_five_seconds(bridge):
+    import inspect
+    sig = inspect.signature(bridge._verify_msg_delivered)
+    assert sig.parameters["timeout"].default == 5.0
+
+
+def test_flush_msg_queue_redraw_scenario_acks_via_prefix(bridge, monkeypatch):
+    """End-to-end (flush_msg_queue level) round-2 live-bug regression: the
+    turn-event count is constant across the paste (TUI redraws, doesn't
+    append) — only the unique-prefix signal can confirm delivery here."""
+    bridge.queue_new_messages([_msg(seq=1, tid="th-1", body="Zweiter Zustelltest.")])
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda: True)
+    monkeypatch.setattr(bridge, "paste_and_submit", lambda text: None)
+    monkeypatch.setattr(bridge.time, "sleep", lambda *_a, **_k: None)
+
+    # SAME event count before and after — a redraw, not an append. Only the
+    # unique prefix (present after the paste) distinguishes delivered-vs-not.
+    prefix_pane = (
+        "[msg 1 · th-1] Zweiter Zustelltest. …\n"
+        "◆ user_prompt_submit  [hooks: 1]\n"
+        "Turn completed in 2.1s.\n"
+        "╭───╮\n│ ❯  │\n╰───╯"
+    )
+    baseline_pane = "◆ user_prompt_submit  [hooks: 1]\nTurn completed in 5.0s.\n╭───╮\n│ ❯  │\n╰───╯"
+    panes = iter([baseline_pane, prefix_pane])
+    monkeypatch.setattr(bridge, "capture_pane", lambda: next(panes, prefix_pane))
+
+    bridge.flush_msg_queue()
+
+    assert (bridge.MSG_ACK_DIR / "th-1").read_text().strip() == "1"
+    assert list(bridge.MSG_QUEUE_DIR.glob("*.msg")) == []
+
+
+def test_deliver_messages_noop_when_field_absent(bridge, monkeypatch):
+    """comm_v2=false byte-identical behavior: no `new_messages` key ⇒ no queue dir
+    is even created, no gate check happens."""
+    called = {"gate": False}
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: called.__setitem__("gate", True) or True,
+    )
+    bridge.deliver_messages({"state": "idle", "new_comments": []})
+    assert called["gate"] is False
+    assert not bridge.MSG_QUEUE_DIR.exists()
+
+
+def test_deliver_messages_queues_and_flushes_when_gate_open(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: True)
+    flushed = {"n": 0}
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
+    assert flushed["n"] == 1
+    assert len(bridge.msg_queue_files()) == 1  # flush is mocked, file stays
+
+
+def test_deliver_messages_queues_only_when_gate_closed(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "msg_gate_open", lambda **kw: False)
+    flushed = {"n": 0}
+    monkeypatch.setattr(bridge, "flush_msg_queue", lambda: flushed.__setitem__("n", flushed["n"] + 1))
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]})
+    assert flushed["n"] == 0
+    assert len(bridge.msg_queue_files()) == 1
+
+
+def test_deliver_messages_empty_list_is_noop_for_gate(bridge, monkeypatch):
+    """An empty `new_messages: []` (field present, nothing new) with an
+    already-empty queue must not touch the gate — nothing to flush."""
+    called = {"gate": False}
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: called.__setitem__("gate", True) or True,
+    )
+    bridge.deliver_messages({"state": "idle", "new_messages": []})
+    assert called["gate"] is False
+
+
+def test_deliver_messages_passes_dispatch_in_flight_through_to_gate(bridge, monkeypatch):
+    """MINOR review fix: the SAME tick's just-completed dispatch must be able to
+    close the gate even though the module-global _dispatch_in_flight flag is
+    already back to False by the time deliver_messages() runs (mirrors
+    hermes-bridge's dispatch_happened_this_tick)."""
+    seen = {}
+    monkeypatch.setattr(
+        bridge, "msg_gate_open",
+        lambda **kw: seen.setdefault("dispatch_in_flight", kw.get("dispatch_in_flight")) or False,
+    )
+    bridge.deliver_messages({"state": "idle", "new_messages": [_msg(seq=1)]}, dispatch_in_flight=True)
+    assert seen["dispatch_in_flight"] is True
+
+
+# ── msg_gate_open: active-task + explicit dispatch_in_flight parameter ──────────
+
+
+def test_msg_gate_closed_when_task_active(bridge, monkeypatch):
+    """MAJOR review fix: pane-quiet alone is NOT a turn boundary — a silent
+    tool-call/thinking pause INSIDE an active task also holds the pane still
+    for >= MSG_QUIET_SECONDS. The gate must stay closed for the ENTIRE active
+    task, not just re-open on pane stability."""
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "same")
+    monkeypatch.setattr(bridge, "MSG_QUIET_SECONDS", 1)
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 1000.0)
+    bridge._active_task = {"id": "t1"}
+    assert bridge.msg_gate_open() is False
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 2000.0)  # plenty quiet
+    assert bridge.msg_gate_open() is False  # still closed — task still active
+    bridge._active_task = None
+    # The active-task check short-circuited BEFORE the pane-quiet tracker ever
+    # ran, so this is its first real observation — resets the clock.
+    assert bridge.msg_gate_open() is False
+    monkeypatch.setattr(bridge.time, "monotonic", lambda: 2001.5)  # quiet window elapsed
+    assert bridge.msg_gate_open() is True  # opens once the task genuinely ends
+
+
+def test_msg_gate_open_explicit_dispatch_in_flight_param_closes_gate(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "capture_pane", lambda: "❯ ")
+    assert bridge.msg_gate_open(dispatch_in_flight=True) is False
+
+
+# ── /clear-on-done bugfix ────────────────────────────────────────────────────────
+
+
+def test_maybe_reset_on_done_fires_once_per_finished_task(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    # Same finished task id again (e.g. repeated idle polls) → no re-fire.
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    # A DIFFERENT finished task → fires again.
+    bridge.maybe_reset_on_done("task-b")
+    assert resets == [1, 1]
+
+
+def test_maybe_reset_on_done_noop_when_no_finished_task(bridge, monkeypatch):
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done(None)
+    assert resets == []
+
+
+def test_maybe_reset_on_done_noop_when_session_not_running(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: False)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == []
+
+
+def test_maybe_reset_on_done_idempotency_survives_restart_via_disk(bridge, monkeypatch):
+    """The in-memory marker resets on bridge restart; the disk file must not,
+    so a stale bridge process restart doesn't re-fire /new for an already-
+    reset finished task."""
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    resets = []
+    monkeypatch.setattr(bridge, "reset_tui_session", lambda: resets.append(1))
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]
+    assert bridge.LAST_RESET_TASK_ID_FILE.read_text().strip() == "task-a"
+
+    # Simulate a bridge restart: in-memory marker forgotten, disk persists.
+    bridge._last_reset_task_id = None
+    bridge.maybe_reset_on_done("task-a")
+    assert resets == [1]  # still no re-fire — disk marker caught it
+
+
+def test_dispatch_task_sets_and_clears_dispatch_in_flight(bridge, monkeypatch):
+    monkeypatch.setattr(bridge, "is_session_running", lambda: True)
+    monkeypatch.setattr(bridge, "deliver_task_context", lambda task: None)
+    seen_in_flight = {}
+
+    def fake_paste(text):
+        seen_in_flight["during_paste"] = bridge._dispatch_in_flight
+
+    monkeypatch.setattr(bridge, "paste_and_submit", fake_paste)
+
+    bridge.dispatch_task({"id": "t1", "title": "x", "prompt": "y"}, {})
+    assert seen_in_flight["during_paste"] is True
+    assert bridge._dispatch_in_flight is False  # cleared after dispatch
+
+
+def test_reset_tui_session_sets_dispatch_in_flight_during_reset(bridge, monkeypatch):
+    calls = _tmux_recorder(monkeypatch, bridge, running=True, pane="❯")
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+    seen = {}
+
+    def fake_wait(*a, **k):
+        seen["during_reset"] = bridge._dispatch_in_flight
+        return True
+
+    monkeypatch.setattr(bridge, "wait_for_agent_healthy", fake_wait)
+    bridge.reset_tui_session()
+    assert seen["during_reset"] is True
+    assert bridge._dispatch_in_flight is False

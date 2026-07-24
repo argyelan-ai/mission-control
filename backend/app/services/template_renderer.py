@@ -183,6 +183,11 @@ def build_agent_context(
         # "en"). Templates are English; SOUL.md.j2 adds an explicit
         # respond-in-<language> instruction when this is not "en".
         "language": (getattr(agent, "language", "en") or "en").lower(),
+        # Interaction Model 2.0 — pilot opt-in (agents.comm_v2, Migration
+        # 0160). Gates the "Messaging v2 (Pilot)" SOUL.md block below —
+        # flattened here rather than passing the full agent object, same
+        # convention as every other per-agent field in this context dict.
+        "comm_v2": bool(getattr(agent, "comm_v2", False)),
         # Operator identity + GitHub owner — from settings/env, never hardcode
         # (repo is public). OPERATOR_NAME / TELEGRAM_CHAT_ID / GITHUB_OWNER in .env.
         "operator_name": settings.operator_name,

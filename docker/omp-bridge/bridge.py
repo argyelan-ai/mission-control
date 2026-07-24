@@ -984,6 +984,7 @@ import os
 import re as _re
 import shlex
 import subprocess
+import urllib.parse
 
 # The task-active lock the forked recycler (omp-recycler.sh) gates on: while it
 # is present an idle omp gap is NEVER read as a crash / idle-kill candidate.
@@ -1500,6 +1501,489 @@ def write_task_context_env(task: dict, path: str = MC_CONTEXT_ENV_PATH) -> bool:
         return False
 
 
+# ── Interaction Model 2.0: thread-message consumption (comm_v2) ─────────────
+# Python port of the docker/shared/poll.sh message path for the native omp TUI.
+# The backend only sends `new_messages` (and only understands `?acked_seq=`) for
+# agents with agent.comm_v2=true — so for every other agent this key is ABSENT,
+# no queue/ack file is ever written, no acked_seq param is appended, and the
+# poll URL + delivery behaviour stay byte-identical to the pre-comm_v2 bridge.
+#
+# Contract (mirrors poll.sh build_acked_seq_param / _record_ack /
+# queue_or_deliver / flush_msg_queue / deliver_messages):
+#   1. Queue every incoming message crash-safe as <seq>__<thread_id>.msg BEFORE
+#      any delivery, so a crash never drops a message and the ack is only ever
+#      set for something actually delivered.
+#   2. Flush ONLY at a turn boundary with no dispatch/inject in flight.
+#   3. Per message: deliver (native inject) → verify (composer submit) → on
+#      success write the per-thread ack high-water + delete the queue file. A
+#      failed verify stops the flush with NO ack (at-least-once; the backend
+#      redelivers seq > last_acked_seq).
+#   4. Ack = only what was truly delivered. Never ack at queue time.
+
+MSG_QUEUE_DIR = os.environ.get("OMP_MSG_QUEUE_DIR", "/home/agent/.msg-queue")
+MSG_ACK_DIR = os.environ.get("OMP_MSG_ACK_DIR", "/home/agent/.msg-acked")
+
+# W2.1 nudge+pull (ADR-071, port of poll.sh's deliver_messages_nudge / see
+# scripts/grok-bridge.py for the reference impl): in nudge mode the bridge
+# injects only a short 📬 wake-up line at the turn gate; the agent pulls the
+# actual content itself via `mc inbox`, and the SERVER-side ack from that call
+# advances the cursor — the bridge itself never acks locally in this mode.
+# Default stays "paste" (byte-identical behaviour) until the per-agent live
+# gate has passed. NOTE: the omp container is fed MSG_DELIVERY_MODE=nudge by
+# the compose renderer as of PR #148 — this path goes live the moment
+# comm_v2 is flipped on for the agent, so it must be correct from day one.
+MSG_DELIVERY_MODE = (os.environ.get("MSG_DELIVERY_MODE", "paste").strip() or "paste")
+NUDGE_REMIND_SECONDS = float(os.environ.get("NUDGE_REMIND_SECONDS", "600"))
+MSG_NUDGE_STATE_FILE = os.environ.get("OMP_MSG_NUDGE_STATE_FILE", "/home/agent/.msg-nudge-state")
+MSG_NUDGE_MSG_FILE = os.environ.get("OMP_MSG_NUDGE_MSG_FILE", "/home/agent/.msg-nudge.msg")
+
+
+def build_acked_seq_param(ack_dir: str = MSG_ACK_DIR) -> str:
+    """URL-encoded JSON ``{thread_id: high_water_seq}`` for the poll's
+    ``?acked_seq=``. Returns "" when nothing has been delivered yet (no ack
+    files) — the caller then appends no query param, so the poll URL is
+    byte-identical to the pre-comm_v2 one. Mirrors poll.sh build_acked_seq_param.
+    """
+    if not os.path.isdir(ack_dir):
+        return ""
+    try:
+        names = os.listdir(ack_dir)
+    except OSError:
+        return ""
+    acked: dict[str, int] = {}
+    for tid in names:
+        f = os.path.join(ack_dir, tid)
+        if not os.path.isfile(f):
+            continue
+        try:
+            with open(f, encoding="utf-8") as fh:
+                acked[tid] = int(fh.read().strip())
+        except (OSError, ValueError):
+            continue
+    if not acked:
+        return ""
+    return urllib.parse.quote(
+        json.dumps(acked, separators=(",", ":"), sort_keys=True)
+    )
+
+
+def _record_ack(ack_dir: str, tid: str, seq: int) -> None:
+    """Advance the per-thread high-water ack (one file per thread). Only ever
+    advances, never regresses (mirrors poll.sh _record_ack)."""
+    os.makedirs(ack_dir, exist_ok=True)
+    f = os.path.join(ack_dir, tid)
+    cur = 0
+    try:
+        with open(f, encoding="utf-8") as fh:
+            cur = int(fh.read().strip() or 0)
+    except (OSError, ValueError):
+        cur = 0
+    if seq > cur:
+        with open(f, "w", encoding="utf-8") as fh:
+            fh.write(str(seq))
+
+
+def _format_message(m: dict) -> str:
+    """Delivery text for one thread-message — same shape as poll.sh
+    queue_or_deliver: a header, the raw body, and the ``[thread … seq …]``
+    footer anchor the verify/reply flow keys on."""
+    tid = str(m.get("thread_id"))
+    seq = int(m["seq"])
+    body = m.get("body") or ""
+    return "\n".join([
+        "# Neue Nachricht (Interaction 2.0)",
+        "",
+        body,
+        "",
+        f"[thread {tid} · seq {seq} · von {m.get('sender', '?')} "
+        f"· typ {m.get('message_type', '?')}]",
+    ])
+
+
+def queue_messages(payload: Optional[dict], queue_dir: str = MSG_QUEUE_DIR) -> int:
+    """Persist each ``new_messages`` entry as ``<seq08d>__<thread_id>.msg`` BEFORE
+    any delivery (crash-safe). Idempotent: a redelivered message overwrites the
+    same file with identical content. Returns the number written.
+
+    The seq is zero-padded to 8 digits so a plain lexical filename sort equals
+    poll.sh's ``sort -n`` numeric order (thread_id is a UUID with no ``_`` so the
+    ``__`` split is unambiguous). No-op — and no directory created — when the
+    payload carries no ``new_messages`` (the comm_v2=false case)."""
+    if not payload or not isinstance(payload, dict):
+        return 0
+    msgs = payload.get("new_messages") or []
+    if not msgs:
+        return 0
+    os.makedirs(queue_dir, exist_ok=True)
+    n = 0
+    for m in msgs:
+        try:
+            seq = int(m["seq"])
+            tid = str(m["thread_id"])
+        except (KeyError, ValueError, TypeError):
+            continue
+        fname = f"{seq:08d}__{tid}.msg"
+        try:
+            with open(os.path.join(queue_dir, fname), "w", encoding="utf-8") as fh:
+                fh.write(_format_message(m))
+            n += 1
+        except OSError as e:  # noqa: BLE001 — one bad write must not abort the rest
+            sys.stderr.write(f"[serve] queue_messages write failed: {e}\n")
+    return n
+
+
+def msg_queue_files(queue_dir: str = MSG_QUEUE_DIR) -> list[str]:
+    """Queued message basenames, seq-ascending (zero-padded prefix → lexical ==
+    numeric)."""
+    try:
+        names = [n for n in os.listdir(queue_dir) if n.endswith(".msg")]
+    except OSError:
+        return []
+    return sorted(names)
+
+
+# ── nudge+pull delivery (MSG_DELIVERY_MODE=nudge) ────────────────────────────
+# Python port of scripts/grok-bridge.py's deliver_messages_nudge for the native
+# omp TUI: same per-thread high-water dedup statefile, same immediate-on-
+# higher-seq / remind-after-NUDGE_REMIND_SECONDS semantics, same "never ack
+# locally" contract. The one omp-specific difference: omp's inject_file already
+# has its own verified composer-submit + retry loop (see NativeTuiController.
+# inject_file below), so its bool return IS the verify — no extra pane-token
+# scraping is layered on top here.
+
+
+def _nudge_thread_seqs(messages: list) -> dict[str, int]:
+    """Per-thread max seq from a new_messages payload (seq is only unique
+    WITHIN a thread — a global max would dedup across threads incorrectly)."""
+    per: dict[str, int] = {}
+    for m in messages or []:
+        try:
+            tid = str(m["thread_id"])
+            seq = int(m["seq"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if seq > per.get(tid, 0):
+            per[tid] = seq
+    return per
+
+
+def _nudge_state_read(path: str) -> dict[str, tuple[int, float]]:
+    """NUDGE_STATE_FILE → {thread_id: (last_nudged_seq, epoch)}. Malformed
+    lines are skipped (a corrupt state file must degrade to re-nudging, never
+    to crashing the poll loop)."""
+    state: dict[str, tuple[int, float]] = {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError:
+        return state
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) != 3:
+            continue
+        try:
+            state[parts[0]] = (int(parts[1]), float(parts[2]))
+        except ValueError:
+            continue
+    return state
+
+
+def _nudge_state_write(path: str, seqs: dict[str, int], now: float) -> None:
+    """Overwrite the state file with the high-water for every currently
+    pending thread — one nudge covers ALL of them (the agent reads everything
+    via `mc inbox`)."""
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("".join(f"{tid} {seq} {int(now)}\n" for tid, seq in seqs.items()))
+
+
+def build_nudge_text(global_max: int, epoch: int) -> str:
+    """Single-line wake-up, identical wording to poll.sh / grok-bridge.py."""
+    return (
+        f"📬 Neue Nachrichten (bis seq {global_max}, {epoch}) — "
+        f"lies sie jetzt mit: mc inbox"
+    )
+
+
+def _clear_stale_queue_files(queue_dir: str, log: Callable[[str], None]) -> None:
+    """Paste-mode leftovers are dead weight in nudge mode — their bodies are
+    never injected, and the server keeps redelivering anything unacked until
+    the agent pulls it via `mc inbox`. Deleting them loses nothing."""
+    stale = msg_queue_files(queue_dir)
+    if not stale:
+        return
+    for name in stale:
+        try:
+            os.remove(os.path.join(queue_dir, name))
+        except OSError:
+            pass
+    log(
+        f"nudge: {len(stale)} stale paste-mode queue file(s) entfernt "
+        f"(Inhalt kommt via mc inbox)."
+    )
+
+
+class _MsgDelivery:
+    """comm_v2 thread-message consumer for the native omp TUI.
+
+    Flushes ONE queued message per idle turn boundary through the SAME
+    ``inject_file`` + composer-submit verify the task path uses, and writes the
+    per-thread ack high-water only after a verified submit. One-at-a-time is
+    deliberate: unlike poll.sh (which re-checks a clean-prompt gate per paste),
+    the native TUI has no cheap re-checkable idle gate mid-flush — after a
+    message is injected the model opens a turn to process it, so the next message
+    must wait for THAT turn's terminal ``turn_end`` in the hook signal. We track
+    the signal-file byte offset at injection time and hold the gate closed until
+    a terminal ``turn_end`` is appended beyond it.
+
+    While a message is being processed we HOLD the recycler's task lock
+    (omp-recycler.sh gates every Window-0 relaunch / bridge-respawn on it, see
+    ``task_active``): otherwise the recycler would read the idle gap as a dead
+    TUI and respawn Window 0 mid-turn, killing the model's response despite the
+    ack. The lock is released the moment the processing turn ends.
+
+    The awaiting offset is a byte position into the signal file, so it is
+    invalidated whenever a task dispatch truncates the signal to 0 (each
+    ``run_native_turn`` calls ``truncate_signal``). Two guards keep that from
+    dead-locking the gate: serve_loop calls :meth:`reset_awaiting` when it
+    commits to a dispatch, AND :meth:`gate_open` self-heals if it ever sees the
+    signal file shorter than the stored offset (it was truncated underneath us)."""
+
+    def __init__(
+        self, controller, *, signal_file: str, queue_dir: str, ack_dir: str,
+        task_lock_path: str, nudge_state_file: Optional[str] = None,
+        nudge_msg_file: Optional[str] = None,
+        remind_seconds: float = NUDGE_REMIND_SECONDS,
+        log: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self.ctrl = controller
+        self.signal_file = signal_file
+        self.queue_dir = queue_dir
+        self.ack_dir = ack_dir
+        self.task_lock_path = task_lock_path
+        self.nudge_state_file = nudge_state_file or MSG_NUDGE_STATE_FILE
+        self.nudge_msg_file = nudge_msg_file or MSG_NUDGE_MSG_FILE
+        self.remind_seconds = remind_seconds
+        self.log = log or (lambda m: sys.stderr.write("[serve] " + m + "\n"))
+        # Byte offset of the signal file's EOF at the moment of the last
+        # injection; None means "no message-processing turn is in flight".
+        self._awaiting_offset: Optional[int] = None
+        # True only while WE hold the recycler task lock for a message turn, so
+        # we never remove a lock a real task dispatch is holding.
+        self._holds_lock: bool = False
+
+    def _signal_size(self) -> int:
+        try:
+            return os.path.getsize(self.signal_file)
+        except OSError:
+            return 0
+
+    def _terminal_turn_end_after(self, offset: int) -> bool:
+        try:
+            with open(self.signal_file, "rb") as fh:
+                fh.seek(offset)
+                data = fh.read()
+        except OSError:
+            return False
+        for raw in data.split(b"\n"):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if (isinstance(obj, dict) and obj.get("kind") == "turn_end"
+                    and obj.get("stopReason") in ("stop", "error", "aborted")):
+                return True
+        return False
+
+    def _acquire_msg_lock(self) -> None:
+        """Hold the recycler task lock for the duration of a message turn."""
+        try:
+            with open(self.task_lock_path, "w", encoding="utf-8") as fh:
+                fh.write(str(int(time.time())))
+            self._holds_lock = True
+        except OSError as e:  # noqa: BLE001 — best-effort recycler gate
+            sys.stderr.write(f"[serve] msg task-lock set failed: {e}\n")
+
+    def _release_msg_lock(self) -> None:
+        """Release only a lock WE took (never one held by a task dispatch)."""
+        if not self._holds_lock:
+            return
+        try:
+            if os.path.exists(self.task_lock_path):
+                os.remove(self.task_lock_path)
+        except OSError:
+            pass
+        self._holds_lock = False
+
+    def reset_awaiting(self) -> None:
+        """Drop the message-in-flight window (serve_loop calls this when it
+        commits to a task dispatch — the dispatch truncates the signal and takes
+        over Window 0, so the awaited offset is moot and its lock must not linger
+        into the dispatch's own lock management)."""
+        self._awaiting_offset = None
+        self._release_msg_lock()
+
+    def gate_open(self) -> bool:
+        # (1) resolve a message-in-flight window FIRST so a completed (or
+        #     truncated-away) processing turn releases our lock before the
+        #     dispatch-in-flight check below can trip on it.
+        if self._awaiting_offset is not None:
+            if self._signal_size() < self._awaiting_offset:
+                # Signal truncated underneath us (a task dispatch) — the awaited
+                # turn is gone; stop waiting instead of dead-locking forever.
+                self.reset_awaiting()
+            elif self._terminal_turn_end_after(self._awaiting_offset):
+                self._awaiting_offset = None
+                self._release_msg_lock()
+            else:
+                return False  # model still processing our last message
+        # (2) no dispatch / task-run in flight (the recycler's task lock).
+        if os.path.exists(self.task_lock_path):
+            return False
+        return True
+
+    def flush(self) -> None:
+        """Never raises — a queue/tmux hiccup on a real message must not crash
+        the poll loop (which would take the whole agent down)."""
+        try:
+            self._flush()
+        except Exception as e:  # noqa: BLE001 — swallow, log, keep polling
+            self.log(f"deliver_messages: flush error (swallowed): {type(e).__name__}: {e}")
+
+    def _flush(self) -> None:
+        pending = msg_queue_files(self.queue_dir)
+        if not pending:
+            return
+        if not self.gate_open():
+            self.log(
+                f"deliver_messages: Gate zu (omp arbeitet / Dispatch in flight) — "
+                f"{len(pending)} Message(s) bleiben gequeued, kein Ack."
+            )
+            return
+        fname = pending[0]
+        path = os.path.join(self.queue_dir, fname)
+        seq_str, _, rest = fname.partition("__")
+        tid = rest[:-4] if rest.endswith(".msg") else rest
+        try:
+            seq = int(seq_str)
+        except ValueError:
+            self._safe_remove(path)  # malformed name — never let it wedge the queue
+            return
+        offset_before = self._signal_size()
+        # Take the recycler lock BEFORE injecting so the model's processing turn
+        # is protected from a mid-turn respawn even if inject is slow.
+        self._acquire_msg_lock()
+        if self.ctrl.inject_file(path):
+            _record_ack(self.ack_dir, tid, seq)
+            self._safe_remove(path)
+            # Hold the gate closed (and the lock held) until the turn ends.
+            self._awaiting_offset = offset_before
+            remaining = len(pending) - 1
+            self.log(
+                f"deliver_messages: 1 Message zugestellt (thread {tid}, seq {seq}), "
+                f"ack bis seq {seq}; {remaining} bleiben gequeued."
+            )
+        else:
+            # Nothing was submitted → no processing turn → release the lock now.
+            self._release_msg_lock()
+            self.log(
+                f"deliver_messages: Zustellung fuer seq {seq} (thread {tid}) "
+                f"FEHLGESCHLAGEN (Verify) — Flush gestoppt, bleibt gequeued, kein Ack."
+            )
+
+    def _safe_remove(self, path: str) -> None:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+    def nudge(self, messages: list) -> None:
+        """Never raises — a queue/tmux hiccup on a real message must not
+        crash the poll loop (which would take the whole agent down)."""
+        try:
+            self._nudge(messages)
+        except Exception as e:  # noqa: BLE001 — swallow, log, keep polling
+            self.log(f"nudge: error (swallowed): {type(e).__name__}: {e}")
+
+    def _nudge(self, messages: list) -> None:
+        """Nudge-mode delivery (port of poll.sh's / grok-bridge.py's
+        deliver_messages_nudge): decide per thread whether a wake-up is due
+        (new higher seq → immediately; no progress after remind_seconds →
+        remind), inject ONE short line at the turn gate via the same
+        inject_file() the task path uses, then record the nudged high-water
+        for every pending thread. NEVER acks — the server-side cursor only
+        advances through the agent's own `mc inbox` call, and the backend
+        redelivers `new_messages` until then (at-least-once)."""
+        _clear_stale_queue_files(self.queue_dir, self.log)
+        seqs = _nudge_thread_seqs(messages)
+        if not seqs:
+            # Everything fetched+acked by the agent — reset so the next
+            # message nudges immediately again.
+            try:
+                os.remove(self.nudge_state_file)
+            except OSError:
+                pass
+            return
+
+        now = time.time()
+        state = _nudge_state_read(self.nudge_state_file)
+        do_nudge = False
+        for tid, mseq in seqs.items():
+            last_seq, last_ts = state.get(tid, (0, 0.0))
+            if mseq > last_seq:
+                do_nudge = True  # new, higher seq in THIS thread → wake up now
+            elif (now - last_ts) >= self.remind_seconds:
+                do_nudge = True  # remind: still unacked after the grace window
+        if not do_nudge:
+            return
+
+        global_max = max(seqs.values())
+        if not self.gate_open():
+            self.log(
+                f"nudge: Gate zu (omp arbeitet / Dispatch in flight) — "
+                f"Nudge aufgeschoben (bis seq={global_max})."
+            )
+            return
+
+        epoch = int(now)
+        text = build_nudge_text(global_max, epoch)
+        try:
+            parent = os.path.dirname(self.nudge_msg_file)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            with open(self.nudge_msg_file, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        except OSError as e:
+            self.log(f"nudge: Schreiben der Nudge-Datei fehlgeschlagen (swallowed): {e}")
+            return
+
+        offset_before = self._signal_size()
+        self._acquire_msg_lock()
+        if self.ctrl.inject_file(self.nudge_msg_file):
+            _nudge_state_write(self.nudge_state_file, seqs, now)
+            # Hold the gate closed (and the lock held) until the turn ends —
+            # same as a normal queued message: the agent's mc inbox call opens
+            # a real processing turn.
+            self._awaiting_offset = offset_before
+            self.log(
+                f"nudge: injiziert (bis seq {global_max}) — "
+                f"Agent holt Inhalt via 'mc inbox'."
+            )
+        else:
+            # Nothing was submitted → no processing turn → release the lock
+            # now, and leave the state file untouched so the next poll retries.
+            self._release_msg_lock()
+            self.log(
+                f"nudge: Zustellung fehlgeschlagen (Verify, bis seq {global_max}) — "
+                f"Retry beim naechsten Poll (State unveraendert)."
+            )
+
+
 def serve_loop(
     *,
     poll_interval: float = 5.0,
@@ -1510,6 +1994,11 @@ def serve_loop(
     _continue_factory: Optional[Callable[[dict, str], Callable[[str], RunOutcome]]] = None,
     _sleep: Callable[[float], None] = time.sleep,
     _context_env_path: str = MC_CONTEXT_ENV_PATH,
+    _msg_queue_dir: Optional[str] = None,
+    _msg_ack_dir: Optional[str] = None,
+    _task_lock_path: Optional[str] = None,
+    _nudge_state_file: Optional[str] = None,
+    _nudge_msg_file: Optional[str] = None,
 ) -> int:
     """Persistent poll→native-TUI→lifecycle driver (ADR-049, supersedes the
     ADR-045 headless one-shot serve path).
@@ -1546,12 +2035,25 @@ def serve_loop(
     idle_timeout = float(os.environ.get("OMP_TURN_IDLE_TIMEOUT", "300"))
     isolation = os.environ.get("OMP_ISOLATION", "relaunch")  # relaunch | slash
 
+    # comm_v2 thread-message state dirs (env-overridable, per-container).
+    msg_queue_dir = _msg_queue_dir or MSG_QUEUE_DIR
+    msg_ack_dir = _msg_ack_dir or MSG_ACK_DIR
+    task_lock_path = _task_lock_path or os.environ.get("OMP_TASK_LOCK_FILE", TASK_LOCK_FILE)
+    nudge_state_file = _nudge_state_file or MSG_NUDGE_STATE_FILE
+    nudge_msg_file = _nudge_msg_file or MSG_NUDGE_MSG_FILE
+
     # One controller for the container's lifetime; run_native_turn relaunches +
     # truncates the signal per task, so state never bleeds between tasks.
     tui = NativeTuiController(session=session, signal_file=signal_file, window=tui_window,
                               launcher=launcher)
 
-    poll_fn = _poll_fn or _make_http_poll(api_url, token)
+    delivery = _MsgDelivery(
+        tui, signal_file=signal_file, queue_dir=msg_queue_dir,
+        ack_dir=msg_ack_dir, task_lock_path=task_lock_path,
+        nudge_state_file=nudge_state_file, nudge_msg_file=nudge_msg_file,
+    )
+
+    poll_fn = _poll_fn or _make_http_poll(api_url, token, ack_dir=msg_ack_dir)
     if _poll_fn is None:
         # Nur im echten Betrieb (Tests injizieren poll_fn und brauchen
         # keinen Netzwerk-Thread).
@@ -1579,12 +2081,53 @@ def serve_loop(
         if state in ("idle", "cancelled", "stopped"):
             last_attempt_id = None  # clear dedup so a re-opened task dispatches
 
+        # comm_v2 delivery: nudge mode short-circuits the queue entirely — it
+        # never persists message bodies, only per-thread high-water seqs (the
+        # content comes back to the agent via its own `mc inbox` call). paste
+        # mode (default) persists any thread-messages crash-safe BEFORE
+        # dispatch (so a crash mid-task can't lose them). Both are no-ops — no
+        # dir/state file created — when the payload has no `new_messages`
+        # (comm_v2=false → byte-identical). Wrapped so a hiccup on a real
+        # message can never crash the poll loop (which would take the whole
+        # agent down).
+        new_messages = (payload or {}).get("new_messages") if isinstance(payload, dict) else None
+        if MSG_DELIVERY_MODE != "nudge":
+            try:
+                queue_messages(payload, msg_queue_dir)
+            except Exception as e:  # noqa: BLE001 — log + keep polling
+                sys.stderr.write(
+                    f"[serve] queue_messages error (swallowed): {type(e).__name__}: {e}\n"
+                )
+
+        def _deliver_at_boundary() -> None:
+            # Review fix (2026-07-23): the nudge must fire at the SAME points
+            # where paste-mode flushes — post-dispatch / idle turn boundary —
+            # never BEFORE the dispatch branch. A payload carrying new_task
+            # AND new_messages would otherwise nudge first, mark the state
+            # file as nudged, and then have run_native_turn relaunch Window 0
+            # and kill the nudge turn before the agent could run `mc inbox`
+            # (no re-nudge until NUDGE_REMIND_SECONDS). Also keeps stale
+            # paste-mode queue files from ever being flushed in nudge mode.
+            if MSG_DELIVERY_MODE == "nudge":
+                if new_messages is not None:
+                    delivery.nudge(new_messages)
+            else:
+                delivery.flush()
+
         if task and task.get("id"):
             attempt_id = task.get("dispatch_attempt_id") or task["id"]
             if attempt_id == last_attempt_id:
+                # Dedup: same dispatch already handled — this is an idle turn
+                # boundary, so deliver thread-messages (nudge or flush), then
+                # sleep. Do NOT re-run the task.
+                _deliver_at_boundary()
                 _sleep(poll_interval)
                 continue
             last_attempt_id = attempt_id
+            # A task is taking over Window 0 (it will truncate the turn signal):
+            # drop any pending message-in-flight window so its now-stale byte
+            # offset can't dead-lock the gate afterwards.
+            delivery.reset_awaiting()
 
             # Hydrate the task context the model's own `mc` calls read. Must
             # happen BEFORE the run (and its ack) so the very first `mc ack`
@@ -1660,6 +2203,11 @@ def serve_loop(
             finally:
                 _set_task_lock(False)
 
+        # comm_v2: post-dispatch OR no-task idle turn boundary — deliver at
+        # most one queued thread-message (paste) or a single nudge (gate
+        # re-checked inside). No-op when there is nothing pending
+        # (comm_v2=false → byte-identical).
+        _deliver_at_boundary()
         _sleep(poll_interval)
 
     return 0
@@ -1684,14 +2232,22 @@ def _default_model_selector(openai_model: Optional[str]) -> str:
     return f"mc-openai/{m}"
 
 
-def _make_http_poll(api_url: str, token: str) -> Callable[[], Optional[dict]]:
+def _make_http_poll(
+    api_url: str, token: str, ack_dir: str = MSG_ACK_DIR,
+) -> Callable[[], Optional[dict]]:
     import urllib.request
 
     url = f"{api_url}/api/v1/agent/me/poll"
     headers = {"Authorization": f"Bearer {token}"}
 
     def _poll() -> Optional[dict]:
-        req = urllib.request.Request(url, headers=headers)
+        # comm_v2: report the per-thread delivered high-water so the backend
+        # only redelivers seq > last_acked_seq. Empty (no acks yet / comm_v2=off)
+        # → no query param → byte-identical URL. Recomputed every poll because
+        # the ack-store advances as messages are delivered.
+        enc = build_acked_seq_param(ack_dir)
+        full = f"{url}?acked_seq={enc}" if enc else url
+        req = urllib.request.Request(full, headers=headers)
         with urllib.request.urlopen(req, timeout=15) as resp:
             body = resp.read().decode("utf-8")
         return json.loads(body) if body.strip() else None

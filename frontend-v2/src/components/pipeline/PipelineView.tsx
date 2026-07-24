@@ -8,6 +8,7 @@ import {
   Play,
   ClipboardCheck,
   Smartphone,
+  MessageCircleQuestion,
   AlertTriangle,
   XCircle,
   Ban,
@@ -23,14 +24,15 @@ import { C, LANE } from "@/components/homepage/colors";
 // ── Lane Config (colors sourced from the single LANE vocabulary in colors.ts) ──
 
 const LANES = [
-  { key: "inbox",       label: "Inbox",       icon: Inbox          },
-  { key: "in_progress", label: "In Progress", icon: Play           },
-  { key: "review",      label: "Review",      icon: ClipboardCheck },
-  { key: "user_test",   label: "User Test",   icon: Smartphone     },
-  { key: "blocked",     label: "Blocked",     icon: AlertTriangle  },
-  { key: "failed",      label: "Failed",      icon: XCircle        },
-  { key: "aborted",     label: "Aborted",     icon: Ban            },
-  { key: "done",        label: "Done",        icon: CheckCircle2   },
+  { key: "inbox",       label: "Inbox",       icon: Inbox               },
+  { key: "in_progress", label: "In Progress", icon: Play                },
+  { key: "waiting",     label: "Waiting",     icon: MessageCircleQuestion },
+  { key: "review",      label: "Review",      icon: ClipboardCheck      },
+  { key: "user_test",   label: "User Test",   icon: Smartphone          },
+  { key: "blocked",     label: "Blocked",     icon: AlertTriangle       },
+  { key: "failed",      label: "Failed",      icon: XCircle             },
+  { key: "aborted",     label: "Aborted",     icon: Ban                 },
+  { key: "done",        label: "Done",        icon: CheckCircle2        },
 ] as const;
 
 type LaneKey = (typeof LANES)[number]["key"];
@@ -136,6 +138,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
     in_progress: pipeline.in_progress ?? [],
     review: pipeline.review ?? [],
     user_test: pipeline.user_test ?? [],
+    waiting: pipeline.waiting ?? [],
     blocked: pipeline.blocked ?? [],
     failed: pipeline.failed ?? [],
     aborted: pipeline.aborted ?? [],

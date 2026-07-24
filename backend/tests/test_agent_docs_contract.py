@@ -79,6 +79,41 @@ def test_rendered_tools_md_has_no_forbidden_pattern(is_board_lead):
     _check_no_forbidden_patterns(result, f"TOOLS.md (is_board_lead={is_board_lead})")
 
 
+# ── comm_v2 pilot gating (Task 12) ──────────────────────────────────────
+
+def test_comm_v2_agent_sees_messaging_v2_pilot_block():
+    """comm_v2=True agent: SOUL.md gets the pilot block, TOOLS.md gets `mc ask`."""
+    agent = _make_agent("developer")
+    agent.comm_v2 = True
+    ctx = build_agent_context(agent, agents_on_board=[])
+    soul = render_agent_file("SOUL.md.j2", ctx)
+    assert "Messaging v2 (Pilot)" in soul
+
+    tools_md = generate_tools_md(
+        name="TestAgent", emoji="🤖", raw_token="tok", board_id="board-uuid-123",
+        is_board_lead=False, comm_v2=True,
+    )
+    assert "mc ask" in tools_md
+
+
+def test_non_pilot_agent_never_sees_messaging_v2_pilot_block():
+    """comm_v2=False (default): neither doc mentions the pilot block or `mc ask` —
+    byte-level absence, not just a missing heading (Task 12 binding requirement 3b)."""
+    agent = _make_agent("developer")
+    assert agent.comm_v2 is False
+    ctx = build_agent_context(agent, agents_on_board=[])
+    soul = render_agent_file("SOUL.md.j2", ctx)
+    assert "Messaging v2 (Pilot)" not in soul
+    assert "mc ask" not in soul
+
+    tools_md = generate_tools_md(
+        name="TestAgent", emoji="🤖", raw_token="tok", board_id="board-uuid-123",
+        is_board_lead=False, comm_v2=False,
+    )
+    assert "Messaging v2 (Pilot)" not in tools_md
+    assert "mc ask" not in tools_md
+
+
 def test_all_l2_docs_have_no_forbidden_pattern():
     docs = generate_reference_docs({"operator_name": "Mark"})
     for topic, content in docs.items():

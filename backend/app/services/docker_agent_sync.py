@@ -368,6 +368,9 @@ async def sync_docker_agent_files(
                 agent.soul_md,
                 runtime.model_identifier,
                 agent.cli_plugins,
+                # W2.1 turn-signal hooks only for the claude harness; openclaude
+                # must not receive the unknown `hooks` key (is_anthropic above).
+                turn_signal_hooks=is_anthropic,
             )
             if written.get("settings.json"):
                 results["settings.json"] = (

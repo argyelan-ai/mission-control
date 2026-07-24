@@ -308,12 +308,23 @@ async def _allocate_port(session: AsyncSession) -> int | None:
     return None  # All 100 ports taken
 
 
-async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
+async def auto_dispatch_task(
+    task_id: uuid.UUID,
+    board_id: uuid.UUID,
+    extra_recovery_context: str | None = None,
+) -> None:
     """Background task: check board, load task, find best agent, assign.
 
     UNIFIED PUSH: all agents receive tasks via chat_send().
     3 fallback tiers: chat_send → chat_send_isolated → pending_dispatch queue.
     Watchdog redelivers pending tasks once the agent has a session.
+
+    extra_recovery_context: optional caller-supplied recovery text prepended
+    to build_recovery_context()'s output and injected VERBATIM into the
+    dispatch prompt's recovery block. Used by the waiting-resume path (Task 9)
+    to carry the bounded resume recap (open question + operator answer) into
+    the re-dispatched prompt — build_recovery_context truncates each comment to
+    a single line, so a comment alone would drop the answer.
     """
     from app.services.task_queue import enqueue_task
 
@@ -535,6 +546,12 @@ async def auto_dispatch_task(task_id: uuid.UUID, board_id: uuid.UUID) -> None:
                     # (e.g. after a blocker re-dispatch), include prior progress
                     # + operator response in the dispatch message.
                     _recovery_ctx = await build_recovery_context(session, task)
+                    if extra_recovery_context:
+                        # Prepend the caller-supplied recap (waiting-resume, Task 9)
+                        # so it lands verbatim in the prompt's recovery block.
+                        _recovery_ctx = "\n\n".join(
+                            p for p in (extra_recovery_context, _recovery_ctx) if p
+                        )
                     message = await _build_dispatch_message(
                         task, best_agent, session, recovery_context=_recovery_ctx,
                     )

@@ -352,6 +352,34 @@ def _ensure_omp_sessions_volume(body_lines: list[str], slug: str) -> list[str]:
     return body
 
 
+def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
+    """Ensure ``MSG_DELIVERY_MODE`` is present in the service's environment
+    block (fleet default nudge+pull, W2.1 / ADR-071).
+
+    Only poll.sh reads the variable — omp bridges ignore it, and agents
+    without comm_v2 never receive messages in the first place, so injecting
+    it into every agent service is safe. The compose substitution keeps a
+    host-wide override knob (``MSG_DELIVERY_MODE=paste``).
+
+    Idempotent: an existing MSG_DELIVERY_MODE entry (any value) is kept as-is
+    so a deliberate per-service override survives re-rendering.
+    """
+    body = list(body_lines)
+    if any(
+        line.strip().startswith("- MSG_DELIVERY_MODE=") for line in body
+    ):
+        return body
+    entry = "      - MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}"
+    env_range = _find_block_range(body, "environment")
+    if env_range is not None:
+        _, end = env_range
+        body.insert(end, entry)
+    else:
+        body.append("    environment:")
+        body.append(entry)
+    return body
+
+
 def _ensure_env_file_entry(body_lines: list[str]) -> list[str]:
     """Ensure ``docker/.env.agents`` appears in this service body's ``env_file``
     block.
@@ -527,6 +555,9 @@ def _rewrite_compose(
         # even when compose is called without --env-file docker/.env.agents.
         body_lines = _ensure_env_file_entry(body_lines)
 
+        # Fleet default nudge+pull (W2.1, ADR-071) for every agent service.
+        body_lines = _ensure_msg_delivery_mode(body_lines)
+
         out.extend(body_lines)
 
     rendered = "\n".join(out)
@@ -586,6 +617,12 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
         "      - MC_API_URL=${MC_API_URL:-http://backend:8000}",
         f"      - MC_TOKEN=${{MC_TOKEN_{envkey}}}",
         "      - AGENT_RECYCLER_ENABLED=${AGENT_RECYCLER_ENABLED:-true}",
+        # Fleet default is nudge+pull (W2.1, ADR-071): poll.sh pastes a short
+        # 📬 nudge and the agent pulls content via `mc inbox`. Only poll.sh
+        # reads this var — omp bridges ignore it, and agents without comm_v2
+        # never receive messages in the first place. Override host-wide via
+        # MSG_DELIVERY_MODE=paste in the compose environment.
+        "      - MSG_DELIVERY_MODE=${MSG_DELIVERY_MODE:-nudge}",
         f"      - AGENT_VAULT_PATH=/vault/agents/{slug}",
         "      - AGENT_VAULT_INBOX=/vault/_inbox",
         f"      - AGENT_SLUG={slug}",

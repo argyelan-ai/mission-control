@@ -664,7 +664,7 @@ async def setup_agent_coordination(
     current_user = Depends(require_user),
 ):
     """
-    Set up agent coordination: Henry (Lead), Cody (Dev), Rex (Review).
+    Set up agent coordination: Lead, Dev and Review agents.
     Sets identities, roles, config files, and board assignments.
     """
     from app.models.board import Board
@@ -740,6 +740,7 @@ async def setup_agent_coordination(
                     agent.name, agent.emoji or "🎯", existing_token, board_id_str,
                     is_board_lead=config["is_board_lead"], scopes=config.get("scopes", []),
                     runtime=getattr(agent, "agent_runtime", "docker") or "docker",
+                    comm_v2=getattr(agent, "comm_v2", False),
                 )
 
         agent.updated_at = utcnow()
@@ -1390,15 +1391,18 @@ def _generate_tools_md(
     is_board_lead: bool = False,
     scopes: list[str] | None = None,
     runtime: str = "docker",
+    comm_v2: bool = False,
 ) -> str:
     """Proxy — delegates to services/tools_md_builder.py.
 
     runtime: "host" (Boss) or "docker" (cli-bridge, default). Only
     determines the phrasing of the vault section (host path vs container mount).
+    comm_v2: Interaction Model 2.0 pilot flag — see generate_tools_md docstring.
     """
     from app.services.tools_md_builder import generate_tools_md
     return generate_tools_md(
-        name, emoji, raw_token, board_id, is_board_lead, scopes, runtime=runtime
+        name, emoji, raw_token, board_id, is_board_lead, scopes, runtime=runtime,
+        comm_v2=comm_v2,
     )
 
 
@@ -2469,10 +2473,208 @@ async def _upsert_cursor(
     await session.execute(stmt)
 
 
+# Task statuses whose task-thread messages are eligible for delivery — mirror
+# the comment path's active set so the message and comment views stay aligned.
+# `waiting` MUST be in this list (live pilot finding 2026-07-20): a task
+# parked on a blocking ask is the one state that exists BECAUSE a message
+# (the answer) is expected — without it, anything posted to the thread while
+# the task waits (status updates, "moment, noch was" operator notes, the
+# answer itself if the resume ever decouples from posting) is silently
+# withheld from the agent until the status flips.
+_MESSAGE_ACTIVE_STATUSES = ["in_progress", "inbox", "review", "blocked", "done", "user_test", "waiting"]
+
+
+async def _message_threads_for_agent(agent: Agent, session: AsyncSession) -> list:
+    """Threads whose new messages this agent should receive.
+
+    W1 (Interaction Model 2.0): only the per-task Thread(kind="task") of the
+    agent's active tasks. Side threads / DMs arrive in a later wave.
+    """
+    from app.models.thread import Thread
+
+    active_res = await session.exec(
+        select(Task).where(
+            Task.assigned_agent_id == agent.id,
+            Task.status.in_(_MESSAGE_ACTIVE_STATUSES),  # type: ignore[union-attr]
+        )
+    )
+    tasks_by_thread = {
+        t.thread_id: t for t in active_res.all() if t.thread_id is not None
+    }
+    if not tasks_by_thread:
+        return []
+    threads_res = await session.exec(
+        select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
+    )
+    # (thread, task) pairs — _collect_new_messages braucht den Task-Status
+    # fuer die Erst-Cursor-Initialisierung (fast-forward bei done/failed).
+    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
+
+
+async def _get_or_create_thread_cursor(
+    session: AsyncSession,
+    agent_id: uuid.UUID,
+    thread_id: uuid.UUID,
+    *,
+    fast_forward: bool = False,
+):
+    """Fetch the (agent, thread) cursor, creating one on first sight.
+
+    fast_forward=True initializes a NEWLY created cursor at the thread's
+    current max seq instead of 0 (live pilot finding 2026-07-20, Befund C):
+    on comm_v2 activation the agent's first poll created zeroed cursors for
+    EVERY backfilled thread in scope — 21 historic briefings were pasted
+    into the fresh session. Threads of finished tasks (done/failed) carry
+    no deliverable history; only messages arriving AFTER first sight are
+    relevant. Active-task threads keep the zeroed start — the seq-1
+    briefing redelivery is the at-least-once backup for a failed dispatch
+    paste. Existing cursors are never touched.
+    """
+    from sqlalchemy import func
+
+    from app.models.thread import AgentThreadCursor, Message
+
+    res = await session.exec(
+        select(AgentThreadCursor).where(
+            AgentThreadCursor.agent_id == agent_id,
+            AgentThreadCursor.thread_id == thread_id,
+        )
+    )
+    cursor = res.first()
+    if cursor is None:
+        start_seq = 0
+        if fast_forward:
+            max_res = await session.exec(
+                select(func.coalesce(func.max(Message.seq), 0)).where(
+                    Message.thread_id == thread_id
+                )
+            )
+            start_seq = max_res.one()
+        cursor = AgentThreadCursor(
+            agent_id=agent_id,
+            thread_id=thread_id,
+            last_delivered_seq=start_seq,
+            last_acked_seq=start_seq,
+        )
+        session.add(cursor)
+        return cursor, True
+    return cursor, False
+
+
+def _is_own_message(message, agent: Agent) -> bool:
+    """True if `message` was posted by this agent — never delivered back to it."""
+    return message.sender_type == "agent" and message.sender_id == agent.id
+
+
+def _serialize_message(message) -> dict:
+    return {
+        "id": str(message.id),
+        "thread_id": str(message.thread_id),
+        "seq": message.seq,
+        "sender": str(message.sender_id) if message.sender_id else message.sender_type,
+        "message_type": message.message_type,
+        "body": message.body,
+        "question_meta": message.question_meta,
+    }
+
+
+async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agent):
+    """Scope + cursor resolution shared by the poll delivery path
+    (`_collect_new_messages`) and the inbox pull endpoint (`GET /me/inbox`).
+
+    Returns ``([(thread, cursor)], created_any)`` for the agent's active-task
+    threads. Cursors are created on first sight — fast-forwarded past history
+    for done/failed tasks (Befund C, live pilot 2026-07-20) — and added to the
+    session, but NOT committed here: the caller runs a single commit after
+    applying its own cursor advances, matching the existing one-commit-per-poll
+    semantics.
+
+    ``created_any`` is the explicit persist signal: the callers previously
+    checked ``cursor in session.new``, but any later SELECT in the same request
+    autoflushes pending cursors out of ``session.new`` before that check runs —
+    the creation was then silently rolled back at session close, and every
+    subsequent poll re-fast-forwarded over messages that arrived in between
+    (live Messlauf finding 2026-07-23, Sparky nudge).
+    """
+    resolved = []
+    created_any = False
+    for thread, thread_task in await _message_threads_for_agent(agent, session):
+        cursor, created = await _get_or_create_thread_cursor(
+            session, agent.id, thread.id,
+            fast_forward=thread_task.status in ("done", "failed"),
+        )
+        created_any = created_any or created
+        resolved.append((thread, cursor))
+    return resolved, created_any
+
+
+async def _unacked_thread_messages(session: AsyncSession, thread, cursor):
+    """The redelivery window for one thread: messages with ``seq`` greater than
+    the cursor's ``last_acked_seq``, in ascending seq order. Shared by poll
+    delivery and inbox pull; own-message filtering is applied by the caller.
+    """
+    from app.models.thread import Message
+
+    res = await session.exec(
+        select(Message)
+        .where(Message.thread_id == thread.id, Message.seq > cursor.last_acked_seq)
+        .order_by(Message.seq.asc())  # type: ignore[union-attr]
+    )
+    return list(res.all())
+
+
+async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict[str, int]) -> list[dict]:
+    """Two-stage cursor delivery (at-least-once) for the agent's task threads.
+
+    Delivery advances `last_delivered_seq`; only a subsequent poll carrying
+    `acked_seq` advances `last_acked_seq`. The redelivery window is
+    `seq > last_acked_seq`, so a poll that never acks re-delivers on the next
+    call. The agent's OWN messages advance the cursor (so they aren't rescanned
+    forever) but are filtered out of the delivered payload — otherwise every
+    poll would echo the agent's own posts back into a redelivery loop.
+    """
+    out: list[dict] = []
+    # Frisch angelegte Cursor muessen persistiert werden, auch wenn dieser
+    # Poll nichts liefert — sonst rollt die Session den fast-forward zurueck
+    # und der naechste Poll fast-forwardet ERNEUT ueber inzwischen
+    # eingetroffene Messages hinweg. (Explizites created-Signal statt
+    # `cursor in session.new`: Autoflush leert session.new vor dem Check.)
+    resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
+    for thread, cursor in resolved:
+        tid = str(thread.id)
+        if tid in acked:
+            # Cap the ack at what was actually delivered — an agent can never
+            # ack past last_delivered_seq. Without the cap a stray/high ack
+            # (e.g. 999) would permanently skip messages that were never sent.
+            capped = min(int(acked[tid]), cursor.last_delivered_seq)
+            new_ack = max(cursor.last_acked_seq, capped)
+            if new_ack != cursor.last_acked_seq:
+                cursor.last_acked_seq = new_ack
+                changed = True
+
+        msgs = await _unacked_thread_messages(session, thread, cursor)
+        if not msgs:
+            continue
+
+        # Own messages count toward cursor advancement but are not delivered.
+        if msgs[-1].seq > cursor.last_delivered_seq:
+            cursor.last_delivered_seq = msgs[-1].seq
+            changed = True
+        out.extend(_serialize_message(m) for m in msgs if not _is_own_message(m, agent))
+
+    if changed:
+        await session.commit()
+    return out
+
+
 @router.get("/agent/me/poll")
 async def agent_poll(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
+    acked_seq: str | None = Query(
+        None,
+        description='JSON {thread_id: seq} acking the last delivered messages per thread (comm_v2).',
+    ),
 ):
     """Unified polling endpoint for Docker agents (replaces /me/next-task + /me/active-task-status).
 
@@ -2487,9 +2689,25 @@ async def agent_poll(
     them as separate messages into the tmux session.
     """
     import datetime as dt
+    import json as _json
     from app.services.dispatch import build_agent_task_prompt
 
     new_comments = await _collect_and_ack_new_comments(agent, session)
+
+    # comm_v2 pilot (Task 11 adds the flag): deliver Thread messages via the
+    # two-stage cursor alongside the untouched comment path. `_poll_extra` is
+    # spread into every return so non-pilot agents are byte-identical to before.
+    _poll_extra: dict = {"new_comments": new_comments}
+    if getattr(agent, "comm_v2", False):
+        acked: dict[str, int] = {}
+        if acked_seq:
+            try:
+                parsed = _json.loads(acked_seq)
+                if isinstance(parsed, dict):
+                    acked = {str(k): int(v) for k, v in parsed.items()}
+            except (ValueError, TypeError):
+                acked = {}  # malformed ack → treat as no ack (safe: redelivers)
+        _poll_extra["new_messages"] = await _collect_new_messages(session, agent, acked)
 
     # 1. Failed tasks first — the agent must get ESC before anything else happens
     failed_result = await session.exec(
@@ -2501,7 +2719,7 @@ async def agent_poll(
     )
     failed = failed_result.first()
     if failed is not None:
-        return {"state": "cancelled", "task_id": str(failed.id), "new_comments": new_comments}
+        return {"state": "cancelled", "task_id": str(failed.id), **_poll_extra}
 
     # 1b. Manually stopped tasks (run_control=stopped). Own state so that
     # poll.sh cleanly terminates the session (ESC + /clear + context reset)
@@ -2516,7 +2734,7 @@ async def agent_poll(
     )
     stopped = stopped_result.first()
     if stopped is not None:
-        return {"state": "stopped", "task_id": str(stopped.id), "new_comments": new_comments}
+        return {"state": "stopped", "task_id": str(stopped.id), **_poll_extra}
 
     # 2. Phase-approval tasks take priority over the "working" bail-out, because the
     # parent deliberately stays in_progress until the Board Lead processes the approval task.
@@ -2562,7 +2780,13 @@ async def agent_poll(
                 select(Task)
                 .where(Task.id == agent.current_task_id)
                 .where(Task.assigned_agent_id == agent.id)
-                .where(Task.status.in_(["in_progress", "blocked", "review"]))
+                # Task 12 (final-review A1): `waiting` (mc ask --blocking) is an
+                # ACTIVE/parked session — key it off current_task_id so poll
+                # holds the session. Deliberately NOT in the updated_at-desc
+                # fallback below: once _maybe_park_waiting_task clears
+                # current_task_id, this branch is skipped and the agent becomes
+                # claimable again (park releases → inbox-claim OK).
+                .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))
                 .limit(1)
             )
             active = _cur_result.first()
@@ -2615,8 +2839,14 @@ async def agent_poll(
                     active = None
 
         if active is not None:
-            if active.ack_at is not None:
-                return {"state": "working", "task_id": str(active.id), "new_comments": new_comments}
+            # Task 12 (final-review A1): a `waiting` task parks the session on
+            # an answer — the agent is alive but paused. Report `working` (hold)
+            # unconditionally so poll.sh leaves the session untouched: no
+            # lock-clear, no inbox-claim, no prompt re-injection into the paused
+            # session. (A waiting task always has ack_at set — it can only reach
+            # waiting from in_progress — but we don't rely on that here.)
+            if active.status == "waiting" or active.ack_at is not None:
+                return {"state": "working", "task_id": str(active.id), **_poll_extra}
             # Prompt was never delivered — fall through and deliver it.
             task = active
         else:
@@ -2654,11 +2884,11 @@ async def agent_poll(
                         "state": "idle",
                         "runtime_not_ready": True,
                         "detail": _rt_reason,
-                        "new_comments": new_comments,
+                        **_poll_extra,
                     }
 
     if task is None:
-        return {"state": "idle", "new_comments": new_comments}
+        return {"state": "idle", **_poll_extra}
 
     # 3. Claim the task. Two paths:
     #    - inbox: only set dispatched_at (if still None) — status stays
@@ -2781,7 +3011,7 @@ async def agent_poll(
             # 409 "Fehlender X-Dispatch-Attempt-Id" (ADR-023 ultrareview).
             "dispatch_attempt_id": task.dispatch_attempt_id,
         },
-        "new_comments": new_comments,
+        **_poll_extra,
     }
 
 
@@ -2884,6 +3114,120 @@ async def agent_active_task_recovery(
             "slug": getattr(active, "slug", None),
             "dispatch_attempt_id": active.dispatch_attempt_id,
         },
+    }
+
+
+@router.get("/agent/me/inbox")
+async def agent_inbox(
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Nudge+Pull delivery (W2.1): the agent fetches its own unread thread
+    messages instead of poll.sh pasting them. The API call IS the delivery —
+    `mc inbox` prints the messages and then acks the highest seq per thread via
+    POST /me/inbox/ack.
+
+    Returns every not-yet-acked, non-own message (`seq > last_acked_seq`) on the
+    agent's active-task threads — the same scope/cursor/filter core the poll
+    delivery path uses (`_resolve_agent_threads_with_cursors` +
+    `_unacked_thread_messages`). Cursors are created (fast-forwarded for
+    finished tasks) but no delivered/acked advance happens here; that is the
+    explicit job of the ack endpoint.
+
+    Response: ``{"messages": [...], "threads": {thread_id: max_seq}}`` where
+    max_seq is the highest unacked seq per thread (what `mc inbox` acks back).
+    Non-comm_v2 agents get an empty payload, mirroring the poll flag gate.
+    """
+    if not getattr(agent, "comm_v2", False):
+        return {"messages": [], "threads": {}}
+
+    out: list[dict] = []
+    threads_meta: dict[str, int] = {}
+    # Persist first-sight (fast-forwarded) cursors even if this pull delivers
+    # nothing — otherwise the next pull fast-forwards again. Explicit created
+    # signal instead of `cursor in session.new` (autoflush empties session.new
+    # before the check — see _resolve_agent_threads_with_cursors).
+    resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
+    for thread, cursor in resolved:
+        msgs = await _unacked_thread_messages(session, thread, cursor)
+        non_own = [m for m in msgs if not _is_own_message(m, agent)]
+        if not non_own:
+            continue
+        out.extend(_serialize_message(m) for m in non_own)
+        # Ack target is the highest unacked seq in the thread (including the
+        # agent's own posts that sit between deliverables) so a single ack
+        # advances the cursor cleanly past everything the agent has now seen.
+        threads_meta[str(thread.id)] = max(m.seq for m in msgs)
+
+    if changed:
+        await session.commit()
+    return {"messages": out, "threads": threads_meta}
+
+
+class _InboxAck(BaseModel):
+    thread_id: uuid.UUID
+    seq: int
+
+
+@router.post("/agent/me/inbox/ack")
+async def agent_inbox_ack(
+    payload: _InboxAck,
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Advance the agent's ack cursor for one thread (Nudge+Pull, W2.1).
+
+    Idempotent and never backwards: `last_acked_seq` only moves forward. Pull
+    semantics — the GET was the delivery — so there is no cap at
+    `last_delivered_seq`; `last_delivered_seq` is dragged up to at least the new
+    ack so the two-stage invariant (`delivered >= acked`) holds.
+
+    Guarded on two fronts:
+    - Scope: `thread_id` must be one of the agent's active-task threads (same
+      set the inbox pull serves). An unknown/foreign thread returns 404 and
+      creates NO cursor — otherwise any agent could pre-poison arbitrary
+      (agent, thread) cursors and bloat the table.
+    - Cap at reality: the ack is capped at the thread's highest existing
+      `Message.seq` (0 for an empty thread). Without it, `seq=999` on a
+      one-message thread would set the cursor to 999 and permanently skip
+      messages 2..999 that arrive later.
+    Non-comm_v2 agents get 404, mirroring the poll flag gate.
+    """
+    from sqlalchemy import func
+    from app.models.thread import Message
+
+    if not getattr(agent, "comm_v2", False):
+        raise HTTPException(status_code=404, detail="comm_v2 messaging not enabled for this agent")
+
+    scoped_thread_ids = {
+        thread.id for thread, _ in await _message_threads_for_agent(agent, session)
+    }
+    if payload.thread_id not in scoped_thread_ids:
+        raise HTTPException(status_code=404, detail="thread not in agent's active scope")
+
+    max_seq = (
+        await session.exec(
+            select(func.coalesce(func.max(Message.seq), 0)).where(
+                Message.thread_id == payload.thread_id
+            )
+        )
+    ).one()
+    capped = min(payload.seq, max_seq)
+
+    cursor, _created = await _get_or_create_thread_cursor(
+        session, agent.id, payload.thread_id
+    )
+    if capped > cursor.last_acked_seq:
+        cursor.last_acked_seq = capped
+    if cursor.last_delivered_seq < cursor.last_acked_seq:
+        cursor.last_delivered_seq = cursor.last_acked_seq
+    session.add(cursor)
+    await session.commit()
+    await session.refresh(cursor)
+    return {
+        "thread_id": str(payload.thread_id),
+        "last_acked_seq": cursor.last_acked_seq,
+        "last_delivered_seq": cursor.last_delivered_seq,
     }
 
 
@@ -3034,6 +3378,26 @@ async def agent_heartbeat(
         ).limit(1)
     )
     active_task = active_res.first()
+
+    # `waiting` preserves the hold (Interaction 2.0, Task 12): a blocking ask
+    # parks the session on an answer, and /me/poll's waiting-hold is keyed
+    # off agent.current_task_id. Without this branch the next heartbeat fell
+    # into the else-branch below and cleared current_task_id — poll.sh then
+    # saw state=idle, reset the session, and every blocking answer went
+    # through the parked re-dispatch path instead of live injection (live
+    # pilot finding 2026-07-20). Deliberately PRESERVE-only, keyed off the
+    # existing current_task_id pointer: after _maybe_park_waiting_task
+    # releases the session (clears the pointer), the heartbeat must not
+    # resurrect the hold — a parked waiting task stays parked.
+    if active_task is None and agent.current_task_id is not None:
+        _wait_res = await session.exec(
+            select(_Task).where(
+                _Task.id == agent.current_task_id,
+                _Task.assigned_agent_id == agent.id,
+                _Task.status == "waiting",
+            ).limit(1)
+        )
+        active_task = _wait_res.first()
 
     if active_task is not None:
         # current_task_id lock self-heal: derive from the DB independent of

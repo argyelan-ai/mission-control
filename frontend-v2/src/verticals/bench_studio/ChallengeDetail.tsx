@@ -463,12 +463,19 @@ export function ChallengeDetail({
             style={{ backgroundColor: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="text-sm font-medium" style={{ color: C.textPrimary }}>
+              <span className="text-sm font-medium truncate" style={{ color: C.textPrimary }}>
                 {entry.model_label}
               </span>
-              <Pill color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}>
-                {entry.status}
-              </Pill>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {entry.source_kind === "spark" && (
+                  <Pill color={C.textMuted} variant="outline">
+                    Vanilla
+                  </Pill>
+                )}
+                <Pill color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}>
+                  {entry.status}
+                </Pill>
+              </div>
             </div>
             {metricsLine(entry.metrics) && (
               <span className="text-xs font-mono" style={{ color: C.textMuted }}>
