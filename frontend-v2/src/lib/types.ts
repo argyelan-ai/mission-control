@@ -531,31 +531,35 @@ export interface TranscriptMessage {
 
 // Harness/Provider-Decoupling (ADR-056) — the CLI harness driving an agent's
 // session, independent of the LLM runtime/protocol behind it.
-export type Harness = "claude" | "openclaude" | "omp";
+export type Harness = "claude" | "openclaude" | "omp" | "kimi";
 
 export const HARNESS_LABELS: Record<Harness, string> = {
   claude: "Claude Code",
   openclaude: "OpenClaude",
   omp: "omp",
+  kimi: "Kimi Code",
 };
 
 // Host-only harnesses (HostHarnessAdapter registry): hermes (ADR-064), grok
-// (ADR-066). Kept separate from the cli-bridge `Harness` union + HARNESS_LABELS
-// because they never appear in the cli-bridge runtime-switch matrix — they are
-// pickable only in the agent wizard for the `host` runtime.
-export type HostHarness = "hermes" | "grok";
+// (ADR-066), kimi (2026-07-24, boss-host pattern — kimi is ALSO a cli-bridge
+// harness; here it appears as its host form). Kept separate from the
+// cli-bridge `Harness` union + HARNESS_LABELS because this list feeds only
+// the agent wizard's `host` runtime path.
+export type HostHarness = "hermes" | "grok" | "kimi";
 
 export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
   hermes: "Hermes",
   grok: "Grok Build",
+  kimi: "Kimi Code",
 };
 
 // Wire protocol each host harness speaks (mirrors backend HARNESS_PROTOCOLS) —
 // used by the wizard to filter compatible runtimes: hermes → OpenAI-protocol
-// providers, grok → its own fixed "grok" cloud runtime (grok-cloud).
+// providers, grok/kimi → their own fixed cloud runtimes (grok-cloud/kimi-cloud).
 export const HOST_HARNESS_PROTOCOL: Record<HostHarness, string> = {
   hermes: "openai",
   grok: "grok",
+  kimi: "kimi",
 };
 
 export interface Agent {

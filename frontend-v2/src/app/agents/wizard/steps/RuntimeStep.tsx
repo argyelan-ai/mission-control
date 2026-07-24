@@ -23,6 +23,7 @@ const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
 const HOST_HARNESSES: { key: HostHarness; label: string }[] = [
   { key: "hermes", label: HOST_HARNESS_LABELS.hermes },
   { key: "grok", label: HOST_HARNESS_LABELS.grok },
+  { key: "kimi", label: HOST_HARNESS_LABELS.kimi },
 ];
 
 export function RuntimeStep({ state, update }: WizardStepProps) {
@@ -156,6 +157,14 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
                 Grok Build spricht die xAI-Cloud über seine eigene OAuth-Session — nur
                 die <code className="font-mono">grok-cloud</code>-Runtime ist kompatibel.
+              </p>
+            )}
+            {isHost && state.harness === "kimi" && (
+              <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
+                Kimi Code spricht die Moonshot-Cloud über seine eigene OAuth-Datei-Session —
+                nur die <code className="font-mono">kimi-cloud</code>-Runtime ist kompatibel.
+                Nach dem Provisionieren einmalig <code className="font-mono">/login</code> im
+                Sessions-Terminal (Device-Code).
               </p>
             )}
           </div>
