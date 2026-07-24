@@ -1,0 +1,4 @@
+# Build-time materialized copies (scripts/build-agent-images.sh) — canonical
+# sources live in scripts/mc-cli/ and docker/shared/poll.sh.
+mc-cli/
+poll.sh

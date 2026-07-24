@@ -9,6 +9,7 @@
 #
 # detect_pane_ui SESSION_TARGET
 #   Captures the last 8 lines of the given pane and echoes one of:
+#     "kimi"       — kimi-code rendered (statusline `context: N% (x/1M)`)
 #     "claude"     — claude-cli rendered (box-glyphs `╭─` / `╰─`)
 #     "openclaude" — openclaude rendered (`❯ ` prompt or `bypass permissions`)
 #     ""           — could not determine
@@ -40,6 +41,14 @@ detect_pane_ui() {
     fi
     local tail8
     tail8=$(echo "$pane" | tail -8)
+    # kimi-code (2026-07): renders the SAME box-glyph composer claude-cli
+    # <=2.0 used (`╭─`/`╰─`), so the claude check below would swallow it.
+    # Kimi's statusline is unique though — it always ends the pane with
+    # `context: N% (x/1M)` (token budget vs. 1M window). Checked FIRST.
+    if echo "$tail8" | grep -qE 'context: [0-9]+% \([0-9.]+[kM]?/[0-9]+[MK]\)' 2>/dev/null; then
+        echo "kimi"
+        return 0
+    fi
     if echo "$tail8" | grep -qE '╭─|╰─' 2>/dev/null; then
         echo "claude"
         return 0

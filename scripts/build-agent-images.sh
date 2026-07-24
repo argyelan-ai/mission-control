@@ -42,15 +42,19 @@ print(data["openclaude"]["version"])
 print(data["claude"]["version"])
 print(data["omp"]["version"])
 print(data["omp"]["sha256"])
+print(data.get("kimi", {}).get("version", ""))
+print(data.get("kimi", {}).get("sha256", ""))
 ' "$VERSIONS_MANIFEST")"
 
-  local manifest_openclaude manifest_claude manifest_omp manifest_omp_sha256
-  { read -r manifest_openclaude; read -r manifest_claude; read -r manifest_omp; read -r manifest_omp_sha256; } <<<"$manifest_json"
+  local manifest_openclaude manifest_claude manifest_omp manifest_omp_sha256 manifest_kimi manifest_kimi_sha256
+  { read -r manifest_openclaude; read -r manifest_claude; read -r manifest_omp; read -r manifest_omp_sha256; read -r manifest_kimi; read -r manifest_kimi_sha256; } <<<"$manifest_json"
 
   OPENCLAUDE_VERSION="${OPENCLAUDE_VERSION:-$manifest_openclaude}"
   CLAUDE_VERSION="${CLAUDE_VERSION:-$manifest_claude}"
   OMP_VERSION="${OMP_VERSION:-$manifest_omp}"
   OMP_SHA256="${OMP_SHA256:-$manifest_omp_sha256}"
+  KIMI_VERSION="${KIMI_VERSION:-$manifest_kimi}"
+  KIMI_SHA256="${KIMI_SHA256:-$manifest_kimi_sha256}"
 }
 
 read_manifest
@@ -59,7 +63,7 @@ WHICH="both"
 DOCKER_ARGS=()
 for arg in "$@"; do
   case "$arg" in
-    claude|openclaude|omp|mc-omp-agent|both|all) WHICH="$arg" ;;
+    claude|openclaude|omp|mc-omp-agent|kimi|mc-kimi-agent|both|all) WHICH="$arg" ;;
     -*|--*) DOCKER_ARGS+=("$arg") ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
@@ -104,6 +108,21 @@ build_image() {
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
 }
 
+# kimi image: tmux+poll.sh harness like claude/openclaude, but WITHOUT the
+# recycler (claude-mem-specific) — poll.sh + mc-cli are materialised,
+# recycler-lib.sh is not needed by the kimi Dockerfile.
+build_image_kimi() {
+  local tag="$1" ctx="$2"
+  shift 2
+  local version_args=("$@")
+  echo "→ Syncing mc-cli into $ctx"
+  sync_cli_into "$ctx"
+  echo "→ Syncing shared poll.sh into $ctx"
+  sync_poll_into "$ctx"
+  echo "→ Building $tag from $ctx"
+  docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+}
+
 # omp image (ADR-045): a headless bridge, no poll.sh / recycler-lib.sh — it ships
 # its own bridge.py + omp-recycler.sh. Only the mc CLI is materialised, so the
 # `mc ack|finish|blocked` contract is byte-identical to the rest of the fleet.
@@ -127,6 +146,9 @@ case "$WHICH" in
   omp|mc-omp-agent)
     build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge" --build-arg "OMP_VERSION=$OMP_VERSION" --build-arg "OMP_SHA256=$OMP_SHA256"
     ;;
+  kimi|mc-kimi-agent)
+    build_image_kimi mc-kimi-agent:latest "$ROOT/docker/mc-kimi-agent" --build-arg "KIMI_VERSION=$KIMI_VERSION" --build-arg "KIMI_SHA256=$KIMI_SHA256"
+    ;;
   both)
     build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
     build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base" --build-arg "OPENCLAUDE_VERSION=$OPENCLAUDE_VERSION"
@@ -135,6 +157,7 @@ case "$WHICH" in
     build_image mc-claude-agent:latest "$ROOT/docker/mc-claude-agent" --build-arg "CLAUDE_VERSION=$CLAUDE_VERSION"
     build_image mc-agent-base:latest "$ROOT/docker/mc-agent-base" --build-arg "OPENCLAUDE_VERSION=$OPENCLAUDE_VERSION"
     build_image_omp mc-omp-agent:latest "$ROOT/docker/omp-bridge" --build-arg "OMP_VERSION=$OMP_VERSION" --build-arg "OMP_SHA256=$OMP_SHA256"
+    build_image_kimi mc-kimi-agent:latest "$ROOT/docker/mc-kimi-agent" --build-arg "KIMI_VERSION=$KIMI_VERSION" --build-arg "KIMI_SHA256=$KIMI_SHA256"
     ;;
 esac
 
