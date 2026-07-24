@@ -43,8 +43,13 @@ fi
 # 2026-07-12: hermes ran 5 days with a 4.4KB quote-mangled MC_AGENT_TOKEN —
 # mc comment/finish failed, tasks hung in review. In-loop sourcing also
 # refreshes a rotated token on every watchdog restart.
+# MC_API_URL: the mc CLI reads MC_API_URL (not agent.env's MC_BASE_URL) and
+# would silently fall back to its localhost default — correct on this host,
+# but only by accident. Export it explicitly (agent.env wins if it ever
+# carries the key) so agent-side `mc inbox` calls in nudge mode are
+# deterministic. Twin of grok-bridge's _grok_launch_shell_cmd export.
 "$TMUX_BIN" new-session -d -s "$SESSION" -x 220 -y 50 \
-  "while true; do set -a; . $ENV_FILE; set +a; $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
+  "while true; do set -a; . $ENV_FILE; set +a; : \"\${MC_API_URL:=http://localhost:8000}\"; export MC_API_URL; $HERMES_BIN --yolo; echo '[hermes] exited rc='\$'?, restarting in 5s'; sleep 5; done"
 
 # Web-terminal scroll: forward wheel events to the native Hermes TUI so mouse
 # scroll walks the OUTPUT, not Hermes' input history. Every cli-bridge agent

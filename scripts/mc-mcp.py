@@ -636,6 +636,54 @@ def mc_register_deliverable(
 
 
 @mcp.tool()
+def mc_inbox() -> str:
+    """Neue Thread-Nachrichten abholen und bestaetigen (Nudge+Pull, W2.1).
+
+    Wenn ein 📬-Weckruf ("Neue Nachrichten … lies sie jetzt") erscheint,
+    dieses Tool aufrufen: es liefert alle ungelesenen Nachrichten aus den
+    Task-Threads des Agenten und ackt sie danach server-seitig — erst der
+    Ack konsumiert die Nachricht (at-least-once, wie `mc inbox` im Shell-CLI).
+    """
+    resp = _api_agent("GET", "/agent/me/inbox")
+    if resp is None:
+        return "Fehler: kein Agent-Token verfuegbar (MC_AGENT_TOKEN fehlt)."
+    if "error" in resp:
+        return f"Fehler: {resp['error']}"
+
+    messages = resp.get("messages") or []
+    threads = resp.get("threads") or {}
+    if not messages:
+        return "Keine neuen Nachrichten."
+
+    blocks = []
+    for m in messages:
+        footer = (
+            f"[thread {m.get('thread_id')} · seq {m.get('seq')} · "
+            f"von {m.get('sender', '?')} · typ {m.get('message_type', '?')}]"
+        )
+        blocks.append(
+            f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
+        )
+
+    # Ack pro Thread das hoechste gelieferte seq (Pull = Zustellung).
+    # Fehlschlag bei einem Thread blockiert die uebrigen nicht — idempotent,
+    # der naechste Abruf liefert Nicht-geacktes ohnehin erneut.
+    ack_errors = []
+    for tid, max_seq in threads.items():
+        r = _api_agent(
+            "POST", "/agent/me/inbox/ack",
+            json={"thread_id": tid, "seq": max_seq},
+        )
+        if r is None or "error" in (r or {}):
+            ack_errors.append(f"ack fuer thread {tid} fehlgeschlagen: {(r or {}).get('error', 'kein Token')}")
+
+    result = "\n\n---\n\n".join(blocks)
+    if ack_errors:
+        result += "\n\n" + "\n".join(ack_errors)
+    return result
+
+
+@mcp.tool()
 def mc_complete_phase(project_id: str, phase_id: str) -> str:
     """Phase als abgeschlossen markieren.
 

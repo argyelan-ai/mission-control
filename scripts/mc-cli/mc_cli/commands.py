@@ -892,6 +892,113 @@ def _add_question_args(p):
     p.add_argument("--options", help="Komma-separierte Antwort-Optionen")
 
 
+def _cmd_ask(args, client, cfg):
+    """mc ask — thread-native question (Task 7, Interaction Model 2.0).
+
+    Non-blocking (default): postet die Frage auf den Task-Thread, Agent
+    arbeitet weiter. --blocking: zusaetzlich Status -> waiting (Session
+    bleibt am Leben, pausiert bis Antwort) — siehe `mc patch`/Task 6.
+    No board_id noetig: haengt am aktuellen Task des Agents.
+    """
+    options = [o.strip() for o in args.options.split(",")] if args.options else None
+    resp = client.request(
+        "POST",
+        "/api/v1/agent/tasks/current/ask",
+        body={
+            "question": args.question,
+            "blocking": args.blocking,
+            "to": args.to,
+            "priority": args.priority,
+            "options": options,
+            "default": args.default,
+            "deadline": args.deadline,
+        },
+    )
+    _emit(resp)
+    return 0
+
+
+def _cmd_msg(args, client, cfg):
+    """mc msg — plain non-question message on the current task thread (Task 8).
+
+    Posts status/decision/progress notes onto the task thread. Questions
+    carry awaiting-semantics and go through `mc ask` instead — this
+    endpoint deliberately rejects message_type="question".
+    No board_id noetig: haengt am aktuellen Task des Agents.
+    """
+    resp = client.request(
+        "POST",
+        "/api/v1/agent/tasks/current/messages",
+        body={"body": args.text, "message_type": args.type},
+    )
+    _emit(resp)
+    return 0
+
+
+def _add_msg_args(p):
+    p.add_argument("text")
+    p.add_argument(
+        "--type", dest="type", default="message",
+        choices=("message", "status", "decision"),
+        help="Nachrichtentyp (default: message). Fragen -> `mc ask` statt `mc msg`.",
+    )
+
+
+def _cmd_inbox(args, client, cfg):
+    """mc inbox — Nudge+Pull: neue Thread-Nachrichten abholen + acken (W2.1).
+
+    Pull-Zustellung: der API-Abruf IST die Zustellung. poll.sh pastet im
+    nudge-Modus nur noch einen Weckruf (📬); der Agent holt den Inhalt hiermit
+    selbst. Druckt jede Nachricht im selben Format das poll.sh frueher gepastet
+    hat (inkl. `[thread … · seq …]`-Footer) und ackt danach pro Thread das
+    hoechste gelieferte seq — erst der POST /me/inbox/ack konsumiert die
+    Nachricht server-seitig (kein Bildschirm-Heuristik-Ack mehr).
+    """
+    resp = client.request("GET", "/api/v1/agent/me/inbox") or {}
+    messages = resp.get("messages") or []
+    threads = resp.get("threads") or {}
+    if not messages:
+        print("Keine neuen Nachrichten.")
+        return 0
+
+    blocks = []
+    for m in messages:
+        footer = (
+            f"[thread {m.get('thread_id')} · seq {m.get('seq')} · "
+            f"von {m.get('sender', '?')} · typ {m.get('message_type', '?')}]"
+        )
+        blocks.append(
+            f"# Neue Nachricht (Interaction 2.0)\n\n{m.get('body') or ''}\n\n{footer}"
+        )
+    print("\n\n---\n\n".join(blocks))
+
+    # Ack pro Thread das hoechste gelieferte seq (Pull = Zustellung). Fehlschlag
+    # bei einem Thread darf die uebrigen nicht blockieren — idempotent, der
+    # naechste `mc inbox` liefert Nicht-geacktes ohnehin erneut.
+    for tid, max_seq in threads.items():
+        try:
+            client.request(
+                "POST", "/api/v1/agent/me/inbox/ack",
+                body={"thread_id": tid, "seq": max_seq},
+            )
+        except Exception as e:  # noqa: BLE001 — best-effort ack, report + continue
+            print(f"mc inbox: ack fuer thread {tid} fehlgeschlagen: {e}", file=sys.stderr)
+    return 0
+
+
+def _add_ask_args(p):
+    p.add_argument("question")
+    p.add_argument(
+        "--blocking", action="store_true",
+        help="Task-Status -> waiting (Session pausiert bis Antwort statt weiterzuarbeiten)",
+    )
+    p.add_argument("--to", choices=["boss", "mark", "agent"], default="boss")
+    p.add_argument("--priority", choices=["low", "medium", "high", "critical"], default="medium")
+    p.add_argument("--options", help="Komma-separierte Antwort-Optionen")
+    p.add_argument("--default", help="Default-Antwort falls keine Reaktion erfolgt")
+    p.add_argument("--deadline", help="ISO-Deadline (z.B. 2026-07-20T12:00:00Z)")
+
+
 def _cmd_help(args, client, cfg):
     board_id, _ = cfg.require_task_context()
     resp = client.request(
@@ -2167,6 +2274,30 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="tasks:help",  # backend require_scope(Scope.TASKS_HELP) — Aligned with agent_scoped.py:2179
         handler=_cmd_question,
         add_args=_add_question_args,
+    ),
+    "ask": CommandSpec(
+        name="ask",
+        help="Frage stellen — non-blocking (weiterarbeiten) oder --blocking (Status -> waiting)",
+        endpoints=("POST /tasks/current/ask",),
+        scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
+        handler=_cmd_ask,
+        add_args=_add_ask_args,
+    ),
+    "msg": CommandSpec(
+        name="msg",
+        help="Nachricht (message/status/decision) auf den Task-Thread posten — keine Fragen (siehe `mc ask`)",
+        endpoints=("POST /tasks/current/messages",),
+        scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
+        handler=_cmd_msg,
+        add_args=_add_msg_args,
+    ),
+    "inbox": CommandSpec(
+        name="inbox",
+        help="Neue Thread-Nachrichten abholen + pro Thread acken (Nudge+Pull, auf 📬-Weckruf)",
+        endpoints=("GET /me/inbox", "POST /me/inbox/ack"),
+        scope="chat:write",  # backend require_agent (comm_v2-gated), keine spezielle Scope
+        handler=_cmd_inbox,
+        add_args=lambda p: None,
     ),
     "help": CommandSpec(
         name="help",
