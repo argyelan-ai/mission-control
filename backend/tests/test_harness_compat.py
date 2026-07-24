@@ -61,4 +61,21 @@ def test_derive_harness_legacy():
     assert derive_harness(None) is None
 
 def test_harnesses_tuple():
-    assert HARNESSES == ("claude", "openclaude", "omp")
+    assert HARNESSES == ("claude", "openclaude", "omp", "kimi")
+
+
+def test_kimi_protocol_fixed():
+    """Kimi ist protocol-fixed wie grok: nur runtime_type 'kimi' passt."""
+    from app.services.harness_compat import is_compatible, runtime_protocol
+
+    kimi_rt = _rt(slug="kimi-cloud", runtime_type="kimi")
+    assert runtime_protocol(kimi_rt) == "kimi"
+    assert is_compatible("kimi", kimi_rt)
+    # Kein anderes Harness akzeptiert eine kimi-Runtime …
+    assert not is_compatible("claude", kimi_rt)
+    assert not is_compatible("openclaude", kimi_rt)
+    assert not is_compatible("omp", kimi_rt)
+    # … und kimi akzeptiert keine fremden Protokolle.
+    assert not is_compatible("kimi", _rt(runtime_type="lmstudio"))
+    assert not is_compatible("kimi", _rt(slug="anthropic-claude-opus", runtime_type="anthropic_oauth"))
+    assert derive_harness(_rt(runtime_type="kimi")) == "kimi"

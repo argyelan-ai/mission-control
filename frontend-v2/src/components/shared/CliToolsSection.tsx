@@ -40,6 +40,12 @@ const PHASE_STEPS: { key: CliUpdatePhase; label: string }[] = [
   { key: "build", label: "Build" },
   { key: "recreate", label: "Recreate" },
 ];
+// Host-Tools (grok): brew upgrade statt Image-Build, keine Recreate-Phase —
+// der Runner meldet die brew-Phase als "build".
+const HOST_PHASE_STEPS: { key: CliUpdatePhase; label: string }[] = [
+  { key: "manifest", label: "Manifest" },
+  { key: "build", label: "Brew" },
+];
 
 function isRunning(phase: CliUpdateProgress["phase"]): boolean {
   return RUNNING_PHASES.includes(phase as CliUpdatePhase);
@@ -127,8 +133,8 @@ function CliToolCard({
             </span>
           )}
         </div>
-        <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }} title={tool.image}>
-          {tool.image}
+        <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }} title={tool.image ?? "Host-CLI (brew)"}>
+          {tool.image ?? "Host-CLI · brew"}
         </div>
       </div>
 
@@ -163,13 +169,19 @@ function CliToolCard({
 
 // ── Phase step indicator ──────────────────────────────────────────────────────
 
-function PhaseTrack({ phase }: { phase: CliUpdateProgress["phase"] }) {
-  const activeIdx = PHASE_STEPS.findIndex((s) => s.key === phase);
+function PhaseTrack({
+  phase,
+  steps = PHASE_STEPS,
+}: {
+  phase: CliUpdateProgress["phase"];
+  steps?: { key: CliUpdatePhase; label: string }[];
+}) {
+  const activeIdx = steps.findIndex((s) => s.key === phase);
   // done/failed count all running phases as passed
   const terminal = phase === "done" || phase === "failed";
   return (
     <div className="flex items-center gap-1.5">
-      {PHASE_STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const isActive = i === activeIdx;
         const isPast = terminal || (activeIdx >= 0 && i < activeIdx);
         const color = phase === "failed"
@@ -190,7 +202,7 @@ function PhaseTrack({ phase }: { phase: CliUpdateProgress["phase"] }) {
               )}
               {step.label}
             </span>
-            {i < PHASE_STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <span style={{ color: C.textDim }}>·</span>
             )}
           </div>
@@ -272,7 +284,7 @@ function UpdateModal({
                 {tool.tool} aktualisieren
               </h2>
               <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }}>
-                {tool.image}
+                {tool.image ?? "Host-CLI · brew"}
               </div>
             </div>
             <button
@@ -317,8 +329,18 @@ function UpdateModal({
                   className="text-xs px-3 py-2 rounded-lg"
                   style={{ background: `${STATUS.warning}14`, border: `1px solid ${STATUS.warning}33`, color: C.textSecondary }}
                 >
-                  Hinweis: Die Manifest-Änderung (festgebackene Version) muss anschliessend
-                  committet werden, sonst fällt der Stand beim nächsten Rebuild zurück.
+                  {tool.host ? (
+                    <>
+                      Host-CLI: Update läuft als <span className="font-mono">brew upgrade</span> auf
+                      dem Mac. Laufende Sessions behalten das alte Binary bis zum nächsten
+                      Session-Neustart.
+                    </>
+                  ) : (
+                    <>
+                      Hinweis: Die Manifest-Änderung (festgebackene Version) muss anschliessend
+                      committet werden, sonst fällt der Stand beim nächsten Rebuild zurück.
+                    </>
+                  )}
                 </div>
 
                 <div className="flex items-center justify-end gap-2 pt-1">
@@ -359,7 +381,7 @@ function UpdateModal({
                     <span>Update fehlgeschlagen.</span>
                   </div>
                 ) : (
-                  <PhaseTrack phase={phase} />
+                  <PhaseTrack phase={phase} steps={tool.host ? HOST_PHASE_STEPS : PHASE_STEPS} />
                 )}
 
                 {/* Failure reason */}

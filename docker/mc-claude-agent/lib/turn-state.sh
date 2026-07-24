@@ -83,7 +83,7 @@ _pane_is_crashed() {
     local session="$1" cap
     cap=$(tmux capture-pane -t "${session}:0" -p -S -50 2>/dev/null || echo "")
     [ -n "$cap" ] || return 1
-    echo "$cap" | grep -qE 'API Error: fetch failed|API Error: Connection error|API Error: 5[0-9]{2}'
+    echo "$cap" | grep -qE 'API Error: fetch failed|API Error: Connection error|API Error: 5[0-9]{2}|Error: OAuth login expired|rejected OAuth credentials'
 }
 
 # Gibt einen von: working | crashed | idle | unknown
@@ -166,7 +166,12 @@ detect_turn_state() {
     # etc). Claude bekommt den Exit-Code als Tool-Output zurueck und
     # reagiert self-correcting; das ist KEIN Session-Crash. Vorher hat
     # poll.sh Agents mitten im Self-Correct-Flow ge-killed.
-    if echo "$capture" | grep -qE 'API Error: fetch failed|API Error: Connection error|API Error: 5[0-9]{2}'; then
+    # kimi-code Auth-Crash (Spike 2026-07-24): abgelaufene/rotierte OAuth-
+    # Credentials rendern `Error: OAuth login expired. Send /login to login.`
+    # bzw. `... rejected OAuth credentials`. Netzwerk-Abrisse rendern bei kimi
+    # dagegen GAR KEINEN Fehler (endloser stiller Retry-Spinner) — die faengt
+    # nicht dieses Muster, sondern die Stagnations-Watchdog.
+    if echo "$capture" | grep -qE 'API Error: fetch failed|API Error: Connection error|API Error: 5[0-9]{2}|Error: OAuth login expired|rejected OAuth credentials'; then
         echo "crashed"
         return
     fi
@@ -199,6 +204,25 @@ detect_turn_state() {
         return
     fi
 
+    # kimi-code working: waehrend eines Turns rendert kimi eine Spinner-Zeile
+    # mit Mondphasen-Emoji + Mitteldot (` 🌓 · Tip: …`). Die Zeile verschwindet
+    # am Turn-Ende vollstaendig (kein Vergangenheits-Artefakt im Transcript —
+    # Spike 2026-07-24). Alternation statt Bracket-Klasse: multibyte-sicher
+    # unabhaengig von der grep-Locale.
+    if echo "$recent" | grep -qE '(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘) ·'; then
+        echo "working"
+        return
+    fi
+
+    # kimi-code idle: die Statuszeile `context: N% (x/1M)` ist immer sichtbar
+    # (idle UND working) — idle ist sie OHNE die Mondphasen-Spinner-Zeile
+    # (working greift oben schon). Kein claude/openclaude-Pane rendert dieses
+    # Statuszeilen-Format, der Check ist kimi-eindeutig.
+    if echo "$capture" | tail -8 | grep -qE 'context: [0-9]+% \([0-9.]+[kM]?/[0-9]+[MK]\)'; then
+        echo "idle"
+        return
+    fi
+
     # claude-cli 2.1.x idle: die Inputbox traegt oft Ghost-Text
     # (Prompt-Suggestions / pending Wakeup-Anzeige) — `^❯ *$` matcht dann
     # nie. Wenn die Statuszeile OHNE "esc to interrupt" sichtbar ist, ist
@@ -223,7 +247,7 @@ detect_turn_state() {
 extract_turn_error() {
     local session="${1:?session name required}"
     tmux capture-pane -t "${session}:0" -p -S -100 2>/dev/null \
-        | grep -E 'API Error|Error: Exit code|fetch failed|Connection error' \
+        | grep -E 'API Error|Error: Exit code|fetch failed|Connection error|Error: OAuth login expired|rejected OAuth credentials' \
         | tail -1 \
         | cut -c1-200
 }

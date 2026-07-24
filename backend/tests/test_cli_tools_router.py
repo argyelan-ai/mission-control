@@ -102,7 +102,11 @@ async def test_list_returns_cached_versions_and_agents_affected(
     assert resp.status_code == 200
     data = resp.json()
     tools = {t["tool"]: t for t in data["tools"]}
-    assert set(tools) == {"openclaude", "claude", "omp"}
+    assert set(tools) == {"openclaude", "claude", "omp", "kimi", "grok"}
+    # grok ist ein Host-Tool: kein Image, host-Flag gesetzt.
+    assert tools["grok"]["host"] is True
+    assert tools["grok"]["image"] is None
+    assert tools["kimi"]["host"] is False
 
     claude = tools["claude"]
     assert claude["installed"] == "2.0.0"

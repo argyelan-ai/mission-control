@@ -52,6 +52,12 @@ GROK_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.grok-bridge.plist"
 # not a headless per-dispatch subprocess. Session name = slug convention.
 GROK_TMUX_SESSION = "grok"
 
+# Kimi Code CLI host harness (2026-07-24): boss-host pattern — tmux session
+# 'kimi-host' (Window 0 kimi-TUI, Window 1 shared poll.sh), driven by
+# docker/kimi-host/entrypoint.sh via launchd.
+KIMI_HOST_PLIST_PATH_REL = "Library/LaunchAgents/com.mc.kimi-host.plist"
+KIMI_HOST_TMUX_SESSION = "kimi-host"
+
 
 def _home_host() -> Path:
     """Resolve host-side HOME using HOME_HOST override (per project memory).
@@ -441,6 +447,125 @@ async def build_grok_agent_env(
         "MC_BASE_URL": settings.mc_base_url.rstrip("/"),
         "HOME": home,
         "PATH": f"{home}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    }
+
+
+async def build_kimi_agent_env(
+    runtime: Runtime,
+    mc_agent_token: str,
+    *,
+    session: AsyncSession,
+) -> dict[str, str]:
+    """Compose env vars for the kimi host agent.env file.
+
+    Like grok, kimi reads NO provider env: the Kimi Code CLI talks only to the
+    Moonshot managed endpoint over its own OAuth files (per-agent
+    KIMI_CODE_HOME, see docker/kimi-host/entrypoint.sh). Only the MC_*
+    control-plane vars for the shared poll.sh + mc CLI. MC_API_URL (not just
+    MC_BASE_URL) is deliberate: mc-cli and poll.sh read MC_API_URL — the
+    nudge+pull env contract (skill mc-cli-onboarding, lesson 23.07.).
+    `runtime`/`session` are accepted for adapter-Protocol symmetry.
+    """
+    home = str(_home_host())
+    api_url = settings.mc_base_url.rstrip("/")
+    return {
+        "MC_AGENT_TOKEN": mc_agent_token,
+        "MC_API_URL": api_url,
+        "MC_BASE_URL": api_url,
+        "AGENT_NAME": "kimi",
+        "HOME": home,
+        "PATH": f"{home}/.local/bin:{home}/.kimi-code/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+    }
+
+
+async def bootstrap_kimi_agent(
+    session: AsyncSession,
+    agent: Agent,
+    runtime: Runtime,
+) -> dict[str, Any]:
+    """Provision the kimi host-side worker (Kimi Code CLI, boss-host pattern).
+
+    Mirrors bootstrap_grok_agent:
+      1. Fresh MC_AGENT_TOKEN.
+      2. Env via build_kimi_agent_env (MC_* only — OAuth lives as files).
+      3. mkdir config (~/.mc/agents/kimi) + kimi-config (KIMI_CODE_HOME) +
+         workspace + logs.
+      4. agent.env (mode 600).
+      5. launchctl bootstrap ~/Library/LaunchAgents/com.mc.kimi-host.plist.
+      6. Board auto-assign, provision_status, vault token, event.
+
+    One-time manual step after first provision: `/login` (device-code flow)
+    in the Sessions terminal — kimi has no long-lived token, and the agent
+    keeps its OWN OAuth grant (copies die on refresh rotation).
+    """
+    _assert_singleton_slug(agent, "kimi")
+    home = _home_host()
+    config_dir = home / ".mc" / "agents" / "kimi"
+    kimi_config = config_dir / "kimi-config"
+    workspace = home / ".mc" / "workspaces" / "kimi"
+    env_path = config_dir / "agent.env"
+    logs_dir = config_dir / "logs"
+    plist_path = home / KIMI_HOST_PLIST_PATH_REL
+
+    raw_token, token_hash = generate_agent_token()
+    env = await build_kimi_agent_env(runtime, raw_token, session=session)
+
+    config_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+    (kimi_config / "credentials").mkdir(parents=True, exist_ok=True)
+    (kimi_config / "oauth").mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True, mode=0o755)
+    logs_dir.mkdir(parents=True, exist_ok=True, mode=0o755)
+
+    content = _format_env_file(env)
+    env_path.write_text(content)
+    os.chmod(env_path, 0o600)
+    logger.info("kimi bootstrap: wrote %s (mode 600, %d keys)", env_path, len(env))
+
+    plist_result = _run_launchctl_bootstrap(plist_path)
+
+    if agent.board_id is None:
+        default_board_id = await _default_host_agent_board_id(session)
+        if default_board_id:
+            agent.board_id = default_board_id
+            logger.info(
+                "bootstrap_kimi_agent: auto-assigned %s to MC Development board (%s)",
+                agent.name, default_board_id,
+            )
+        else:
+            logger.warning(
+                "bootstrap_kimi_agent: 'MC Development' board not found — %s remains board_id=None",
+                agent.name,
+            )
+
+    agent.agent_token_hash = token_hash
+    agent.workspace_path = str(workspace)
+    agent.provision_status = "provisioned"
+    agent.provisioned_at = utcnow()
+    agent.updated_at = utcnow()
+    session.add(agent)
+    await session.commit()
+    await session.refresh(agent)
+
+    from app.services.secrets_helper import upsert_agent_token_secret
+    await upsert_agent_token_secret(session, agent, raw_token)
+
+    await emit_event(
+        session,
+        "agent.kimi_provisioned",
+        f"{agent.name} (Kimi host worker) provisioniert — tmux session "
+        f"'{KIMI_HOST_TMUX_SESSION}'. Einmalig /login im Sessions-Terminal nötig.",
+        severity="info",
+        agent_id=agent.id,
+        board_id=agent.board_id,
+    )
+
+    return {
+        "token": raw_token,  # one-time visible
+        "env_path": str(env_path),
+        "plist_loaded": plist_result["loaded"],
+        "plist_already": plist_result["already"],
+        "tmux_session": KIMI_HOST_TMUX_SESSION,
+        "workspace_path": str(workspace),
     }
 
 

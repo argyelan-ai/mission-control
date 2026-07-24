@@ -129,6 +129,13 @@ async def build_runtime_env(
         # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
         # the claude binary talks to api.anthropic.com directly.
         return tokens
+    if harness == "kimi":
+        # Kimi Code is protocol-fixed (Moonshot managed endpoint): auth lives
+        # as OAuth credential FILES in the per-agent KIMI_CODE_HOME mount
+        # (~/.mc/agents/<slug>/kimi-config), never as env tokens — Kimi has no
+        # long-lived token and refresh rotation kills copied credentials.
+        # No OPENAI_*/KIMI_* env needed; the entrypoint renders config.toml.
+        return tokens
     if harness == "openclaude":
         if runtime.endpoint:
             tokens["OPENAI_BASE_URL"] = runtime.endpoint
