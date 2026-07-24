@@ -1,9 +1,15 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 
+/**
+ * StatusBar — P2 „PHOSPHOR+ CYAN" (ui-redesign-v3).
+ * Die Signatur-Instrumentenleiste: volle Cyan-Fläche, dunkler Text, htop-Stil.
+ * Gleiche Daten wie v3 (SYS · AGT · BRD · Clock · ⌘K) — nur neue Oberfläche.
+ */
 export default function StatusBar() {
   const { setCommandPaletteOpen, activeBoardId, boards } = useAppStore();
 
@@ -19,6 +25,14 @@ export default function StatusBar() {
     refetchInterval: 30_000,
   });
 
+  // Clock — instrument tick, updates every second
+  const [now, setNow] = useState<Date | null>(null);
+  useEffect(() => {
+    setNow(new Date());
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   // Gateway was retired (Phase 29 / ADR-039). Connection now reflects core deps.
   const dbOk = status?.components?.database?.status === "ok";
   const redisOk = status?.components?.redis?.status === "ok";
@@ -28,82 +42,78 @@ export default function StatusBar() {
 
   const activeBoard = boards.find((b) => b.id === activeBoardId);
 
+  // On-cyan inks: readable dark variants of status hues (reverse-video logic)
+  const ink = "var(--color-p2-inv)";
+  const okInk = "#0E3A1C";
+  const errInk = "#7A1A0E";
+
+  const sep = (
+    <span aria-hidden style={{ opacity: 0.45 }}>
+      |
+    </span>
+  );
+
   return (
     <div
       className="hidden md:flex items-center justify-between px-4 shrink-0"
       style={{
-        height: "28px",
-        backgroundColor: "rgba(255, 255, 255, 0.02)",
-        backdropFilter: "blur(12px)",
-        WebkitBackdropFilter: "blur(12px)",
-        borderTop: "1px solid var(--color-border-subtle)",
-        fontSize: "11px",
-        color: "var(--color-text-muted)",
+        height: "30px",
+        backgroundColor: "var(--color-p2-amb)",
+        color: ink,
+        fontFamily: "var(--font-p2-mono)",
+        fontWeight: 700,
+        fontSize: "10.5px",
+        letterSpacing: "0.05em",
       }}
     >
-      {/* Left: connection + agents + board */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-1.5">
+      {/* Left: telemetry datastream */}
+      <div className="flex items-center gap-2.5">
+        <span className="flex items-center gap-1.5">
           <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              backgroundColor: connected
-                ? "var(--color-online)"
-                : "var(--color-error)",
-              boxShadow: connected
-                ? "0 0 4px rgba(43, 154, 74, 0.45)"
-                : "0 0 4px rgba(194, 56, 56, 0.45)",
-            }}
+            className="w-1.5 h-1.5"
+            style={{ backgroundColor: connected ? okInk : errInk }}
           />
-          <span>{connected ? "Connected" : "Offline"}</span>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <span
-            className="w-1.5 h-1.5 rounded-full"
-            style={{
-              backgroundColor:
-                agentsOnline > 0
-                  ? "var(--color-online)"
-                  : "var(--color-text-muted)",
-            }}
-          />
-          <span>
-            {agentsOnline}/{agentsTotal} agents
-          </span>
-        </div>
-
+          <span>{connected ? "SYS OK" : "SYS OFFLINE"}</span>
+        </span>
+        {sep}
+        <span>
+          AGT {agentsOnline}/{agentsTotal}
+        </span>
         {activeBoard && (
-          <div
-            className="flex items-center gap-1.5"
-            style={{ color: "var(--color-text-secondary)" }}
-          >
-            <span style={{ fontSize: "10px" }}>|</span>
-            <span>{activeBoard.name}</span>
-          </div>
+          <>
+            {sep}
+            <span>BRD {activeBoard.name.toUpperCase()}</span>
+          </>
+        )}
+        {now && (
+          <>
+            {sep}
+            <span suppressHydrationWarning style={{ opacity: 0.65 }}>
+              {now.toLocaleTimeString("de-CH", { hour12: false })}
+            </span>
+          </>
         )}
       </div>
 
-      {/* Right: keyboard hint */}
-      <div className="flex items-center gap-3">
-        <button
-          onClick={() => setCommandPaletteOpen(true)}
-          className="flex items-center gap-1.5 cursor-pointer hover:opacity-70 transition-opacity"
-          style={{ color: "var(--color-text-muted)" }}
+      {/* Right: command palette */}
+      <button
+        onClick={() => setCommandPaletteOpen(true)}
+        className="flex items-center gap-1.5 cursor-pointer hover:opacity-70 transition-opacity uppercase"
+        style={{ color: ink, letterSpacing: "0.05em", fontWeight: 700 }}
+        aria-label="Open command palette"
+      >
+        <kbd
+          className="px-1.5 py-0.5"
+          style={{
+            border: "1px solid var(--color-p2-inv)",
+            fontFamily: "var(--font-p2-mono)",
+            fontSize: "10px",
+          }}
         >
-          <kbd
-            className="px-1.5 py-0.5 rounded font-mono"
-            style={{
-              backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid var(--color-border)",
-              fontSize: "10px",
-            }}
-          >
-            Cmd+K
-          </kbd>
-          <span>Command Palette</span>
-        </button>
-      </div>
+          ⌘K
+        </kbd>
+        <span>PALETTE</span>
+      </button>
     </div>
   );
 }

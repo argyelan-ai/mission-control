@@ -114,7 +114,7 @@ export function AgentActions({
   const deleteMutation = useMutation({
     mutationFn: () => api.agents.delete(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} gelöscht`);
+      notify.success(`${agent.name} deleted`);
       setConfirmDelete(false);
       invalidate();
       onDeleted?.();
@@ -139,11 +139,11 @@ export function AgentActions({
       ) : (
         <LifecycleButton
           icon={Archive}
-          label="Archivieren"
+          label="Archive"
           color={C.warning}
           onClick={() => archiveMutation.mutate()}
           loading={archiveMutation.isPending}
-          title="Agent archivieren — stoppt die Runtime, behält DB + Dateien"
+          title="Archive agent — stops the runtime, keeps DB + files"
         />
       )}
 
@@ -159,7 +159,7 @@ export function AgentActions({
             style={{ backgroundColor: `${C.error}26`, color: C.error }}
           >
             {deleteMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-            Ja, löschen
+            Yes, delete
           </button>
           <button
             onClick={() => setConfirmDelete(false)}
@@ -171,11 +171,11 @@ export function AgentActions({
       ) : (
         <LifecycleButton
           icon={Trash2}
-          label="Löschen"
+          label="Delete"
           color={C.error}
           onClick={() => isArchived && setConfirmDelete(true)}
           disabled={!isArchived}
-          title={isArchived ? "Agent endgültig löschen" : "Erst archivieren"}
+          title={isArchived ? "Delete agent permanently" : "Archive first"}
         />
       )}
     </div>

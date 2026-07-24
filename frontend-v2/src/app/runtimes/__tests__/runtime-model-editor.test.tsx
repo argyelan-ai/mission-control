@@ -76,7 +76,7 @@ describe("RuntimeCard model editor", () => {
     const input = screen.getByLabelText("Modell-Identifier");
     await user.clear(input);
     await user.type(input, "claude-opus-4-8");
-    await user.click(screen.getByLabelText("Speichern"));
+    await user.click(screen.getByLabelText("Save"));
 
     await waitFor(() =>
       expect(updateSpy).toHaveBeenCalledWith("anthropic-cloud", {
@@ -95,7 +95,7 @@ describe("RuntimeCard model editor", () => {
     const input = screen.getByLabelText("Modell-Identifier");
     await user.clear(input);
     await user.type(input, "something-else");
-    await user.click(screen.getByLabelText("Abbrechen"));
+    await user.click(screen.getByLabelText("Cancel"));
 
     expect(updateSpy).not.toHaveBeenCalled();
     // Back to display mode with the original value.

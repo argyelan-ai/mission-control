@@ -187,10 +187,11 @@ export default function FilesPage() {
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ color: C.textPrimary }}>
+            <div className="label-sys mb-2">Storage · Files</div>
+            <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
               Files
             </h1>
-            <p className="text-sm mt-1" style={{ color: C.textMuted }}>
+            <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
               Search deliverables, workspaces, vault, and more
             </p>
           </div>
@@ -368,7 +369,7 @@ function SearchResults({
   }
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
+    <div className="rounded-2xl overflow-hidden" style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}>
       <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.textSecondary }}>
           {results.length} results
@@ -383,7 +384,7 @@ function SearchResults({
               key={`${r.root}:${r.rel_path}:${i}`}
               onClick={() => onOpen(r)}
               className="flex items-center gap-3 px-4 py-2.5 w-full text-left transition-colors cursor-pointer"
-              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
             >
               <Icon size={15} style={{ color, flexShrink: 0 }} />

@@ -62,9 +62,9 @@ function Chip({
       type="button"
       className="shrink-0 font-mono text-[11px] px-2.5 py-1 rounded-md cursor-pointer transition-colors"
       style={{
-        background: active ? C.accentSubtle : "rgba(255,255,255,0.04)",
+        background: active ? C.accentSubtle : "var(--color-bg-elevated)",
         color: active ? C.accent : "var(--color-text-muted)",
-        border: active ? `1px solid ${C.borderAccent}` : "1px solid rgba(255,255,255,0.06)",
+        border: active ? `1px solid ${C.borderAccent}` : "1px solid var(--color-border)",
       }}
     >
       {active ? "● " : ""}
@@ -184,7 +184,7 @@ export function VaultFilterStrip({
           aria-controls="vault-filter-panel"
           className="shrink-0 inline-flex items-center gap-2 min-h-touch px-3 rounded-md cursor-pointer transition-colors"
           style={{
-            background: open || activeCount > 0 ? C.accentSubtle : "rgba(255,255,255,0.04)",
+            background: open || activeCount > 0 ? C.accentSubtle : "var(--color-bg-elevated)",
             color: open || activeCount > 0 ? C.accent : "var(--color-text-secondary)",
             border:
               open || activeCount > 0
@@ -242,7 +242,7 @@ export function VaultFilterStrip({
           >
             <div
               className="flex flex-col gap-2.5 pt-1 pb-4"
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+              style={{ borderBottom: "1px solid var(--color-border-subtle)" }}
             >
               {/* SCOPE row */}
               <div

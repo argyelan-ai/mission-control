@@ -28,7 +28,7 @@ import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, 
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { timeAgo } from "@/lib/utils";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
@@ -140,11 +140,11 @@ function StatusMenu({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute left-0 top-full mt-1 z-20 min-w-[150px] rounded-lg py-1"
+            className="absolute left-0 top-full mt-1 z-20 min-w-[150px] rounded-md py-1"
             style={{
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
             {STATUS_ORDER.map((s) => {
@@ -160,12 +160,12 @@ function StatusMenu({
                     onChange(s);
                   }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer disabled:cursor-default"
-                  style={{ color: active ? C.textDim : C.textSecondary, background: active ? "rgba(255,255,255,0.03)" : "transparent" }}
+                  style={{ color: active ? C.textDim : C.textSecondary, background: active ? C.bgElevated : "transparent" }}
                   onMouseEnter={(e) => {
                     if (!active) (e.currentTarget as HTMLElement).style.background = C.bgHover;
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = active ? "rgba(255,255,255,0.03)" : "transparent";
+                    (e.currentTarget as HTMLElement).style.background = active ? C.bgElevated : "transparent";
                   }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c }} />
@@ -207,7 +207,7 @@ function OverflowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="More actions"
-        className="w-[30px] h-[30px] rounded-lg flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
+        className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
         style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
       >
         <MoreHorizontal size={14} />
@@ -220,11 +220,11 @@ function OverflowMenu({
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute right-0 top-full mt-1 z-20 min-w-[180px] rounded-lg py-1"
+            className="absolute right-0 top-full mt-1 z-20 min-w-[180px] rounded-md py-1"
             style={{
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
             {!confirm ? (
@@ -236,7 +236,7 @@ function OverflowMenu({
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.bgHover)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
               >
-                <Trash2 size={12} style={{ color: "#D05F5F" }} />
+                <Trash2 size={12} style={{ color: STATUS_TEXT.error }} />
                 Delete task
               </button>
             ) : (
@@ -249,7 +249,7 @@ function OverflowMenu({
                     onClick={onDelete}
                     disabled={deleteLoading}
                     className="px-2 py-1 rounded text-[10px] font-semibold cursor-pointer"
-                    style={{ backgroundColor: `${C.error}26`, color: "#D05F5F" }}
+                    style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : "Delete task"}
                   </button>
@@ -345,7 +345,7 @@ function PropertyMenuCell({
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.03)]"
+        className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
       >
         <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
           {label}
@@ -567,6 +567,7 @@ export function TaskDetailBody({
     <>
       {/* ── Header ── */}
       <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
+        <div className="label-sys label-sys--dim mb-1.5">Task · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
           <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
             {task.title}
@@ -576,7 +577,7 @@ export function TaskDetailBody({
             <button
               onClick={onClose}
               aria-label="Close task details"
-              className="w-[30px] h-[30px] rounded-lg flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
+              className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
               <X size={15} />
@@ -844,8 +845,8 @@ export function TaskDetailBody({
           <TaskActions task={task} boardId={boardId} />
         </Section>
 
-        {/* Tabs */}
-        <div className="flex gap-0.5 px-4" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
+        {/* Tabs — v3: Mono-Labels, eckiger Cyan-Unterstrich für den aktiven Tab */}
+        <div className="flex gap-0.5 px-4 tab-strip" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
           {tabs.map((tab) => {
             const active = activeTab === tab.key;
             return (
@@ -854,9 +855,9 @@ export function TaskDetailBody({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setActiveTab(tab.key)}
-                className="px-2.5 py-2 text-[11.5px] cursor-pointer transition-colors -mb-px"
+                className="px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] cursor-pointer transition-colors -mb-px"
                 style={{
-                  color: active ? C.textPrimary : C.textMuted,
+                  color: active ? C.accent : C.textMuted,
                   fontWeight: active ? 500 : 400,
                   borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
                 }}

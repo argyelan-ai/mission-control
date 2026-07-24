@@ -62,12 +62,12 @@ export function ReviewStep({
             update({ createdAgentId: created.id, createdToken: provisioned.token });
           }
         } catch {
-          notify.error("Host-Dateien konnten nicht gerendert werden — später via Provision-Button.");
+          notify.error("Host files could not be rendered — retry later via the provision button.");
         }
       }
       await qc.refetchQueries({ queryKey: ["agents"] });
     } catch (e: unknown) {
-      notify.error(`Erstellen fehlgeschlagen: ${e instanceof Error ? e.message : "Fehler"}`);
+      notify.error(`Creation failed: ${e instanceof Error ? e.message : "error"}`);
     } finally {
       setCreating(false);
     }
@@ -88,7 +88,7 @@ export function ReviewStep({
     { label: "Harness", value: state.harness ?? "(abgeleitet)" },
     { label: "LLM Runtime", value: state.runtimeId || "Fallback" },
     { label: "Modell", value: state.model || "(Runtime-Default)" },
-    { label: "Scopes", value: `${state.scopes.length} ausgewählt` },
+    { label: "Scopes", value: `${state.scopes.length} selected` },
     { label: "Board Lead", value: state.isBoardLead ? "ja" : "nein" },
   ];
 
@@ -128,7 +128,7 @@ export function ReviewStep({
             style={wizardBtnPrimaryStyle}
           >
             {creating ? (
-              <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Erstelle…</span>
+              <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Creating…</span>
             ) : (
               "Agent erstellen"
             )}
@@ -165,7 +165,7 @@ export function ReviewStep({
         {state.agentRuntime === "host" && (
           <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
             Host-Agent: Dateien wurden nach ~/.mc/agents/&lt;slug&gt;/ gerendert. Auf dem
-            Mac via launchctl laden (siehe Activity-Event), dann wird der Heartbeat grün.
+            Load onto the Mac via launchctl (see activity event) — the heartbeat will turn green.
           </p>
         )}
       </div>

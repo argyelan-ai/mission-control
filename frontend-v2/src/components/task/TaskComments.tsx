@@ -58,7 +58,7 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
               onClick={() => setCommentFilter(f)}
               className="text-[10px] px-2 py-0.5 rounded-full capitalize transition-colors cursor-pointer"
               style={{
-                backgroundColor: commentFilter === f ? C.accent : "rgba(255, 255, 255, 0.03)",
+                backgroundColor: commentFilter === f ? C.accent : "var(--color-bg-surface)",
                 color: commentFilter === f ? C.textPrimary : C.textMuted,
                 border: `1px solid ${commentFilter === f ? C.borderAccent : C.border}`,
               }}
@@ -133,7 +133,7 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
               aria-label="Kommentar eingeben"
               className="flex-1 px-2.5 py-2 rounded-lg text-xs outline-none"
               style={{
-                backgroundColor: "rgba(255, 255, 255, 0.03)",
+                backgroundColor: "var(--color-bg-surface)",
                 color: C.textPrimary,
                 border: `1px solid ${C.border}`,
               }}

@@ -39,6 +39,7 @@ import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
 import Link from "next/link";
 import { Plug } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── State Configuration ───────────────────────────────────────────────────────
 
@@ -1024,7 +1025,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
           <span key={a.id} className="inline-flex items-center gap-1">
             <Link
               href={`/agents/${a.id}`}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[rgba(255,255,255,0.06)] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.textSecondary,
@@ -1032,7 +1033,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
               }}
               title={`${a.name} · ${a.agent_runtime}`}
             >
-              🤖 {a.name}
+              <EntityIcon value="🤖" size={13} className="inline-block align-[-2px] mr-1" />{a.name}
             </Link>
             {a.pending_runtime_sync && (
               <span
@@ -1047,7 +1048,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
         ))}
         <button
           onClick={() => setBindOpen(true)}
-          className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)]"
+          className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
           style={{
             color: C.accent,
             border: `1px dashed ${C.borderAccent}`,
@@ -1107,7 +1108,7 @@ function RuntimeModelEditor({
       queryClient.invalidateQueries({ queryKey: ["runtimes"] });
       queryClient.invalidateQueries({ queryKey: ["agents"] });
       onMessage?.(
-        `Modell auf „${data.model_identifier ?? "—"}" gesetzt — gebundene Agents werden beim nächsten Watcher-Tick neu gestartet.`
+        `Model set to "${data.model_identifier ?? "—"}" — bound agents will be restarted on the next watcher tick.`
       );
     },
     onError: () => onMessage?.("Modell-Update fehlgeschlagen."),
@@ -1164,8 +1165,8 @@ function RuntimeModelEditor({
         <button
           onClick={save}
           disabled={mutation.isPending}
-          title="Speichern"
-          aria-label="Speichern"
+          title="Save"
+          aria-label="Save"
           style={iconBtn(C.accent)}
         >
           {mutation.isPending ? (
@@ -1177,8 +1178,8 @@ function RuntimeModelEditor({
         <button
           onClick={cancel}
           disabled={mutation.isPending}
-          title="Abbrechen"
-          aria-label="Abbrechen"
+          title="Cancel"
+          aria-label="Cancel"
           style={iconBtn(C.textMuted)}
         >
           <X size={13} />
@@ -1315,8 +1316,8 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
           <div className="font-medium text-sm truncate flex items-center gap-1.5" style={{ color: C.textPrimary }}>
             <span className="truncate">{runtime.display_name}</span>
             {runtime.api_key_secret_id && (
-              <span title="API-Key hinterlegt" className="shrink-0 text-xs leading-none">
-                🔑
+              <span title="API-Key hinterlegt" className="shrink-0 leading-none">
+                <EntityIcon value="🔑" size={12} />
               </span>
             )}
           </div>
@@ -1619,7 +1620,7 @@ function KvResetScheduleToggle() {
             >
               {kvResetMutation.isPending ? (
                 <Loader2 size={11} className="animate-spin" />
-              ) : "⚡"}
+              ) : <EntityIcon value="⚡" size={11} />}
               Run now
             </button>
           </div>
@@ -1688,15 +1689,16 @@ export default function RuntimesPage() {
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
           <div>
+            <div className="label-sys mb-2">System · Runtimes</div>
             <h1
-              className="text-xl font-semibold"
+              className="display text-xl font-semibold"
               style={{ color: C.textPrimary }}
             >
               Runtimes
             </h1>
             <p
-              className="text-sm mt-0.5"
-              style={{ color: C.textMuted }}
+              className="text-[13px] mt-0.5"
+              style={{ color: C.textSecondary }}
             >
               AI model runtimes and their hosts
             </p>

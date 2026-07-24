@@ -72,8 +72,8 @@ export function AttachmentThumb({
       transition={{ delay: index * 0.04, duration: 0.2 }}
       className="group relative rounded-lg overflow-hidden"
       style={{
-        border: "1px solid rgba(255,255,255,0.06)",
-        background: "rgba(255,255,255,0.02)",
+        border: "1px solid var(--color-border)",
+        background: "var(--color-bg-surface)",
       }}
     >
       {isImage ? (
@@ -102,7 +102,7 @@ export function AttachmentThumb({
           target="_blank"
           rel="noreferrer noopener"
           className="flex flex-col items-center justify-center w-[80px] h-[80px] text-center p-1 text-[10px]"
-          style={{ color: "rgba(255,255,255,0.7)" }}
+          style={{ color: "var(--color-text-secondary)" }}
           title={`Open: ${attachment.original_name}`}
         >
           <FileText size={20} aria-hidden />
@@ -113,7 +113,7 @@ export function AttachmentThumb({
       )}
       <div
         className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] tabular-nums opacity-70 truncate"
-        style={{ background: "rgba(10,10,15,0.6)", color: "rgba(255,255,255,0.85)" }}
+        style={{ background: "rgba(10,10,15,0.6)", color: "var(--color-bg-hover)" }}
       >
         {Math.round(attachment.size_bytes / 1024)} KB
       </div>

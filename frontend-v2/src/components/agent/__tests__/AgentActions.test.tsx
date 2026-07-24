@@ -37,7 +37,7 @@ describe("AgentActions lifecycle", () => {
     wrap(<AgentActions agent={agent(null)} />);
     const del = screen.getByRole("button", { name: /löschen|delete/i }) as HTMLButtonElement;
     expect(del.disabled).toBe(true);
-    expect(del.title).toBe("Erst archivieren");
+    expect(del.title).toBe("Archive first");
     expect(screen.getByRole("button", { name: /archiv/i })).toBeTruthy();
     expect(screen.queryByRole("button", { name: /wiederherstel|restore/i })).toBeNull();
   });
@@ -50,18 +50,18 @@ describe("AgentActions lifecycle", () => {
     expect(screen.queryByRole("button", { name: /archiv/i })).toBeNull();
   });
 
-  it("Archivieren calls api.agents.archive", async () => {
+  it("Archive calls api.agents.archive", async () => {
     wrap(<AgentActions agent={agent(null)} />);
     fireEvent.click(screen.getByRole("button", { name: /archiv/i }));
     await waitFor(() => expect(archive).toHaveBeenCalledWith("a1"));
   });
 
-  it("Löschen (archived) requires confirm before deleting", async () => {
+  it("Delete (archived) requires confirm before deleting", async () => {
     wrap(<AgentActions agent={agent("2026-07-14T00:00:00Z")} />);
     fireEvent.click(screen.getByRole("button", { name: /löschen|delete/i }));
     // reveals inline confirm — nothing deleted yet
     expect(del).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: /ja, löschen/i }));
+    fireEvent.click(screen.getByRole("button", { name: /yes, delete/i }));
     await waitFor(() => expect(del).toHaveBeenCalledWith("a1"));
   });
 

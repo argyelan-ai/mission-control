@@ -90,7 +90,7 @@ const AUTONOMY_OPTIONS = [
   { value: "draft_only", label: "Nur Entwurf" },
   { value: "execute_low_risk", label: "Low-Risk selbst ausführen" },
   { value: "execute_with_approval_on_risk", label: "Risiko → Freigabe" },
-  { value: "manual_dispatch_required", label: "Manuelles Dispatch" },
+  { value: "manual_dispatch_required", label: "Manual dispatch" },
 ];
 
 // ── Templates (Quick-Start Chips) ────────────────────────────────────
@@ -752,7 +752,7 @@ export function TaskFormFields({
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>Phase</label>
                   <select id={`${fieldId}-phase`} aria-label="Phase" value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
-                    <option value="">Keine Phase (optional)</option>
+                    <option value="">No phase (optional)</option>
                     {phases.filter((p) => p.status === "active" || p.status === "pending").map((p) => (<option key={p.id} value={p.id}>{p.status === "active" ? "● " : "○ "}{p.title}</option>))}
                   </select>
                 </div>
@@ -761,7 +761,7 @@ export function TaskFormFields({
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>Basiert auf</label>
                   <select id={`${fieldId}-deliverable`} aria-label="Basiert auf Deliverable" value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
-                    <option value="">Kein Deliverable</option>
+                    <option value="">No deliverable</option>
                     {deliverables.map((d) => (<option key={d.id} value={d.id}>{d.title} ({d.deliverable_type})</option>))}
                   </select>
                 </div>
@@ -1297,7 +1297,7 @@ export function TaskFormFields({
                   color: value.phaseId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">Keine Phase (optional)</option>
+                <option value="">No phase (optional)</option>
                 {phases
                   .filter((p) => p.status === "active" || p.status === "pending")
                   .map((p) => (
@@ -1323,7 +1323,7 @@ export function TaskFormFields({
                   color: value.deliverableId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">Kein Deliverable</option>
+                <option value="">No deliverable</option>
                 {deliverables.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.title} ({d.deliverable_type})

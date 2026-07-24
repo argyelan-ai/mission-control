@@ -192,7 +192,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
         }}
       >
         <Plus size={12} />
-        Neuer Eintrag
+        New entry
       </button>
 
       <AnimatePresence>
@@ -222,7 +222,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
             />
 
             {/* Drag indicator — mobile bottom-sheet hint */}
-            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.2)" }} />
+            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
             <motion.div
               ref={dialogRef}
@@ -236,17 +236,17 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
               className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:max-w-[680px] sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
               style={{
                 background: C.elevated,
-                border: "1px solid rgba(255,255,255,0.08)",
+                border: "1px solid var(--color-border)",
                 boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
               }}
             >
               {/* Top edge highlight */}
-              <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+              <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                 <span id="create-vault-note-title" className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-                  Neuer Eintrag
+                  New entry
                 </span>
                 <button onClick={resetForm} className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
                   <X size={16} />
@@ -396,7 +396,7 @@ export function CreateVaultNoteModal({ enabled, onCreated }: CreateVaultNoteModa
                   className="text-[10px] font-mono px-3 py-2 rounded-md"
                   style={{
                     color: C.textMuted,
-                    background: "rgba(255,255,255,0.015)",
+                    background: "var(--color-bg-surface)",
                     border: `1px dashed ${C.border}`,
                   }}
                 >

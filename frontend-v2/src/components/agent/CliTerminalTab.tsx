@@ -138,7 +138,7 @@ function SessionList({
               className={[
                 "w-full text-left px-3 py-2 rounded-lg transition-colors text-[11px]",
                 isSelected
-                  ? "bg-[rgba(15,163,163,0.12)] border border-[rgba(15,163,163,0.30)]"
+                  ? "bg-[rgba(0,229,255,0.10)] border border-[rgba(0,229,255,0.30)]"
                   : "hover:bg-[rgba(255,255,255,0.03)] border border-transparent",
               ].join(" ")}
             >

@@ -26,12 +26,24 @@ import {
   AreaChart, Area, CartesianGrid,
 } from "recharts";
 
-// ── Chart helpers ─────────────────────────────────────────────────────────────
-const IN_chartAxis = C.textMuted;
-const IN_bg = "rgba(255,255,255,0.03)";
+// ── Chart helpers (v3 — Tokens only) ─────────────────────────────────────────
+const IN_bg = "var(--color-bg-surface)";
 const IN_borderSubtle = C.borderSubtle;
+const IN_hover = "var(--color-bg-elevated)";
 
-const CHART_COLORS = [C.accent, C.info, C.online, C.warning, C.error];
+// Tick-Labels: Mono 10px muted; Chart-Farben aus C.chart + C.accent
+const CHART_TICK = {
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+  fill: "var(--color-text-muted)",
+} as const;
+const LEGEND_STYLE = {
+  fontSize: 10,
+  fontFamily: "var(--font-mono)",
+  color: "var(--color-text-muted)",
+} as const;
+
+const CHART_COLORS = [C.chart.cpu, C.chart.ram, C.chart.disk];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmtK(n: number) {
@@ -50,33 +62,34 @@ function sessionLabel(key: string) {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 function KPICard({
-  label, value, sub, color, icon: Icon,
+  label, value, sub, color, valueColor, icon: Icon, hero,
 }: {
-  label: string; value: string; sub: string; color?: string; icon: LucideIcon;
+  label: string; value: string; sub: string; color?: string; valueColor?: string; icon: LucideIcon; hero?: boolean;
 }) {
   return (
     <div
-      className="rounded-2xl p-5"
-      style={{ background: IN_bg, border: `1px solid ${C.border}` }}
+      className={`rounded-md p-5${hero ? " corner-ticks" : ""}`}
+      style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}
     >
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <span className="label-sys">{label}</span>
         <Icon size={14} style={{ color: color || C.accent }} />
-        <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
-          {label}
-        </span>
       </div>
-      <div className="text-3xl font-bold tracking-tight" style={{ color: color || "var(--color-text-primary)" }}>
+      <div
+        className="display font-semibold"
+        style={{ fontSize: 30, color: valueColor || "var(--color-text-primary)" }}
+      >
         {value}
       </div>
-      <div className="text-xs mt-1.5" style={{ color: "var(--color-text-muted)" }}>{sub}</div>
+      <div className="font-mono text-[10px] mt-1.5" style={{ color: "var(--color-text-muted)" }}>{sub}</div>
     </div>
   );
 }
 
 const tooltipStyle = {
-  backgroundColor: C.bgBase,
+  backgroundColor: "var(--color-bg-elevated)",
   border: `1px solid ${C.border}`,
-  borderRadius: 8,
+  borderRadius: 4,
   fontSize: 12,
   color: "var(--color-text-primary)",
 };
@@ -142,6 +155,10 @@ export default function InsightsPage() {
     ([name, count]) => ({ name, value: count as number })
   );
 
+  // KPI totals
+  const tasksDone = insights?.agent_performance?.reduce((s, a) => s + a.done, 0) ?? 0;
+  const tasksFailed = insights?.agent_performance?.reduce((s, a) => s + a.failed, 0) ?? 0;
+
   // Cache hit rate: cache_read / (cache_read + input) %
   const cacheHitPct = (() => {
     if (!byModel || byModel.length === 0) return null;
@@ -168,10 +185,10 @@ export default function InsightsPage() {
 
   // Colors for the harness split from C tokens (NO new hex values)
   const HARNESS_COLORS: Record<string, string> = {
-    "cli-bridge": C.accent,
-    "host": C.info,
-    "sparky": C.online,
-    "backend-ollama": C.warning,
+    "cli-bridge": C.chart.cpu,
+    "host": C.chart.ram,
+    "sparky": C.chart.disk,
+    "backend-ollama": C.info,
   };
   function harnessColor(harness: string, idx: number): string {
     return HARNESS_COLORS[harness] ?? CHART_COLORS[idx % CHART_COLORS.length];
@@ -179,7 +196,7 @@ export default function InsightsPage() {
 
   const tabs = [
     { id: "overview", label: "Overview" },
-    { id: "cost", label: "💰 Cost" },
+    { id: "cost", label: "Cost" },
     { id: "performance", label: "Performance" },
     { id: "reports", label: "AI Reports" },
   ] as const;
@@ -187,64 +204,72 @@ export default function InsightsPage() {
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="flex items-end justify-between mb-6">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ color: "var(--color-text-primary)" }}>
+        {/* Header — v3: .label-sys Micro-Label, Clash Display Titel, Cyan-Messmarke */}
+        <div className="mb-6">
+          <div className="label-sys mb-2">Performance · Cost · Token Usage · AI Analysis</div>
+          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+            <h1
+              className="display text-2xl sm:text-[34px] font-semibold leading-[1.05]"
+              style={{ color: "var(--color-text-primary)" }}
+            >
               Insights
             </h1>
-            <p className="text-sm mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Performance · Cost · Token Usage · AI Analysis
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
-            {insights?.analyzed_at && (
-              <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                Analyzed {timeAgo(insights.analyzed_at)}
-              </span>
-            )}
-            <div className="relative">
-              <select
-                value={days}
-                onChange={(e) => setDays(Number(e.target.value))}
-                aria-label="Select time range"
-                className="appearance-none pl-3 pr-8 py-1.5 text-xs rounded-lg cursor-pointer"
-                style={{
-                  background: IN_bg,
-                  border: `1px solid ${C.border}`,
-                  color: "var(--color-text-secondary)",
-                }}
-              >
-                <option value={7}>7 days</option>
-                <option value={30}>30 days</option>
-                <option value={90}>90 days</option>
-              </select>
-              <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
+            <div className="flex items-center gap-3 shrink-0">
+              {insights?.analyzed_at && (
+                <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                  Analyzed {timeAgo(insights.analyzed_at)}
+                </span>
+              )}
+              <div className="relative">
+                <select
+                  value={days}
+                  onChange={(e) => setDays(Number(e.target.value))}
+                  aria-label="Select time range"
+                  className="appearance-none pl-3 pr-8 py-1.5 font-mono text-[11px] rounded-md cursor-pointer"
+                  style={{
+                    background: "var(--color-bg-surface)",
+                    border: `1px solid ${C.border}`,
+                    color: "var(--color-text-secondary)",
+                  }}
+                >
+                  <option value={7}>7 days</option>
+                  <option value={30}>30 days</option>
+                  <option value={90}>90 days</option>
+                </select>
+                <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
+              </div>
             </div>
+          </div>
+          {/* Messmarke: 1px-Linie mit Cyan-Segment — wie Homepage-Header */}
+          <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
+            <div
+              className="absolute left-0 -top-px h-[2px] w-16"
+              style={{ backgroundColor: C.accent }}
+            />
           </div>
         </div>
 
-        {/* Tabs — .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
+        {/* Tabs — eckig, Mono-Labels, aktiver Tab = 2px Cyan-Unterstrich.
+            .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
         <div className="flex gap-0 border-b mb-6 tab-strip" style={{ borderColor: IN_borderSubtle }}>
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className="px-4 py-2.5 text-sm font-medium transition-all cursor-pointer"
-              style={{
-                color: activeTab === tab.id ? "var(--color-text-primary)" : "var(--color-text-muted)",
-                borderBottom: `2px solid ${activeTab === tab.id ? C.accent : "transparent"}`,
-                marginBottom: -1,
-                background: "transparent",
-                border: "none",
-                borderBottomStyle: "solid",
-                borderBottomWidth: 2,
-                borderBottomColor: activeTab === tab.id ? C.accent : "transparent",
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {tabs.map((tab) => {
+            const active = activeTab === tab.id;
+            return (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className="px-4 py-2.5 font-mono text-[11px] uppercase tracking-[0.12em] transition-colors cursor-pointer"
+                style={{
+                  color: active ? "var(--color-text-primary)" : "var(--color-text-muted)",
+                  background: "transparent",
+                  borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
+                  marginBottom: -1,
+                }}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
         </div>
 
         {loading && !insights && !costs ? (
@@ -260,17 +285,19 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
                     label="Tasks completed"
-                    value={String(insights?.agent_performance?.reduce((s, a) => s + a.done, 0) ?? 0)}
+                    value={String(tasksDone)}
                     sub={`last ${days} days`}
                     icon={CheckCircle2}
                     color={C.online}
+                    hero
                   />
                   <KPICard
                     label="Failed"
-                    value={String(insights?.agent_performance?.reduce((s, a) => s + a.failed, 0) ?? 0)}
+                    value={String(tasksFailed)}
                     sub="total"
                     icon={XCircle}
                     color={C.error}
+                    valueColor={tasksFailed > 0 ? "var(--color-status-error-text)" : undefined}
                   />
                   <KPICard
                     label="Total cost"
@@ -283,25 +310,25 @@ export default function InsightsPage() {
                     label="Anomalies"
                     value={String(insights?.anomalies?.length ?? 0)}
                     icon={AlertTriangle}
-                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? "⚠ Warnings active" : "All normal"}
+                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? "Warnings active" : "All normal"}
                     color={insights?.anomalies?.length ? C.warning : C.online}
                   />
                 </div>
 
                 {/* Agent performance + cost side by side */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-4">
                       Agent Performance (Tasks)
                     </div>
                     {agentPerfData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={agentPerfData} barSize={20}>
-                          <XAxis dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} />
-                          <YAxis tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={30} />
-                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                          <Bar dataKey="done" name="Done" stackId="a" fill="rgba(0,204,136,0.6)" radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill="rgba(239,68,68,0.6)" radius={[4, 4, 0, 0]} />
+                          <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
+                          <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
+                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
+                          <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -309,17 +336,17 @@ export default function InsightsPage() {
                     )}
                   </div>
 
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-4">
                       Cost per agent (USD)
                     </div>
                     {agentCostData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={200}>
                         <BarChart data={agentCostData} barSize={24} layout="vertical">
-                          <XAxis type="number" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
-                          <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={60} />
+                          <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
+                          <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={60} />
                           <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Cost"]} />
-                          <Bar dataKey="cost" fill={`${C.accent}B3`} radius={[0, 4, 4, 0]} />
+                          <Bar dataKey="cost" fill={`${C.accent}B3`} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
@@ -330,24 +357,28 @@ export default function InsightsPage() {
 
                 {/* Anomalies */}
                 {(insights?.anomalies?.length ?? 0) > 0 && (
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-3" style={{ color: "var(--color-text-secondary)" }}>Anomalies</div>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-3">Anomalies</div>
                     <div className="space-y-2">
                       {insights!.anomalies.map((a: IntelligenceAnomaly, i: number) => (
                         <div
                           key={i}
-                          className="flex items-start gap-3 p-3 rounded-xl"
+                          className="flex items-start gap-3 p-3 rounded-md"
                           style={{
                             background: a.severity === "warning" ? `${C.warning}0F` : `${C.info}0F`,
                             border: `1px solid ${a.severity === "warning" ? `${C.warning}33` : `${C.info}26`}`,
                           }}
                         >
-                          <AlertTriangle size={14} style={{ color: a.severity === "warning" ? C.warning : C.info, marginTop: 1, flexShrink: 0 }} />
-                          <div>
-                            <div className="text-sm" style={{ color: "var(--color-text-body)" }}>{a.description}</div>
-                            {a.agent_name && (
-                              <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>{a.agent_name}</div>
-                            )}
+                          {/* Eckiges Status-Quadrat (8px) statt Icon-Kreis */}
+                          <span
+                            className="mt-1.5 h-2 w-2 shrink-0 rounded-sm"
+                            style={{ background: a.severity === "warning" ? C.warning : C.info }}
+                          />
+                          <div className="min-w-0">
+                            <div className="text-sm" style={{ color: "var(--color-text-secondary)" }}>{a.description}</div>
+                            <div className="font-mono text-[10px] mt-1" style={{ color: "var(--color-text-muted)" }}>
+                              {a.type}{a.agent_name ? ` · ${a.agent_name}` : ""}
+                            </div>
                           </div>
                         </div>
                       ))}
@@ -368,9 +399,9 @@ export default function InsightsPage() {
                 </div>
 
                 {/* Agent table */}
-                <div className="rounded-2xl overflow-hidden mb-4" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                <div className="rounded-md overflow-hidden mb-4" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                   <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
-                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>
+                    <span className="label-sys">
                       Cost per agent
                     </span>
                   </div>
@@ -383,7 +414,7 @@ export default function InsightsPage() {
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                           {["Agent", "Input Tokens", "Output Tokens", "Events", "Cost USD"].map((h) => (
-                            <th key={h} className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>
+                            <th key={h} className="label-sys px-5 py-2.5 text-left">
                               {h}
                             </th>
                           ))}
@@ -394,13 +425,13 @@ export default function InsightsPage() {
                           const pct = costs!.total_cost_usd > 0 ? (a.cost_usd / costs!.total_cost_usd) * 100 : 0;
                           return (
                             <tr key={a.agent_id} className="transition-colors" style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}
-                              onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                              onMouseEnter={(e) => (e.currentTarget.style.background = IN_hover)}
                               onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                             >
                               <td className="px-5 py-3 text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
                                 {a.agent_name}
-                                <div className="h-1 mt-1.5 rounded-full overflow-hidden" style={{ background: "rgba(255,255,255,0.06)", width: 80 }}>
-                                  <div className="h-full rounded-full" style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${C.accent}, ${C.accentHover})` }} />
+                                <div className="h-1 mt-1.5 rounded-sm overflow-hidden" style={{ background: "var(--color-bg-hover)", width: 80 }}>
+                                  <div className="h-full rounded-sm" style={{ width: `${pct}%`, background: C.accent }} />
                                 </div>
                               </td>
                               <td className="px-5 py-3 text-sm tabular-nums" style={{ color: "var(--color-text-body)" }}>{fmtK(a.tokens_in)}</td>
@@ -416,12 +447,12 @@ export default function InsightsPage() {
                 </div>
 
                 {/* Session table */}
-                <div className="rounded-2xl overflow-hidden" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                <div className="rounded-md overflow-hidden" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                   <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
-                    <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-secondary)" }}>
+                    <span className="label-sys">
                       Token usage per session
                     </span>
-                    <span className="ml-2 text-[10px]" style={{ color: "var(--color-text-muted)" }}>Top 100 by cost</span>
+                    <span className="ml-2 font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>Top 100 by cost</span>
                   </div>
                   {(costs?.sessions?.length ?? 0) === 0 ? (
                     <div className="px-5 py-10 text-center text-sm" style={{ color: "var(--color-text-muted)" }}>
@@ -432,18 +463,18 @@ export default function InsightsPage() {
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                           {["Session", "Agent", "Input", "Output", "Cost", "Last"].map((h) => (
-                            <th key={h} className="px-5 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>{h}</th>
+                            <th key={h} className="label-sys px-5 py-2.5 text-left">{h}</th>
                           ))}
                         </tr>
                       </thead>
                       <tbody>
                         {costs!.sessions!.map((s: CostSessionSummary, i: number) => (
                           <tr key={i} className="transition-colors" style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}
-                            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = IN_hover)}
                             onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
                           >
                             <td className="px-5 py-2.5">
-                              <code className="text-[11px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.06)", color: C.accent }}>
+                              <code className="text-[11px] px-1.5 py-0.5 rounded-sm" style={{ background: "var(--color-bg-elevated)", border: `1px solid ${IN_borderSubtle}`, color: C.accent }}>
                                 {sessionLabel(s.session_key)}
                               </code>
                             </td>
@@ -480,14 +511,11 @@ export default function InsightsPage() {
 
                 {/* ── Tokens & cost per model ── */}
                 <div
-                  className="rounded-2xl overflow-hidden mb-4"
+                  className="rounded-md overflow-hidden mb-4"
                   style={{ background: IN_bg, border: `1px solid ${C.border}` }}
                 >
                   <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
-                    <span
-                      className="text-xs font-semibold uppercase tracking-wider"
-                      style={{ color: "var(--color-text-secondary)" }}
-                    >
+                    <span className="label-sys">
                       Tokens &amp; cost per model
                     </span>
                   </div>
@@ -509,8 +537,7 @@ export default function InsightsPage() {
                             ].map((h) => (
                               <th
                                 key={h}
-                                className="px-4 py-2.5 text-left text-[11px] font-semibold uppercase tracking-wider"
-                                style={{ color: "var(--color-text-muted)" }}
+                                className="label-sys px-4 py-2.5 text-left"
                               >
                                 {h}
                               </th>
@@ -524,7 +551,7 @@ export default function InsightsPage() {
                               className="transition-colors"
                               style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}
                               onMouseEnter={(e) =>
-                                (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
+                                (e.currentTarget.style.background = IN_hover)
                               }
                               onMouseLeave={(e) =>
                                 (e.currentTarget.style.background = "transparent")
@@ -540,7 +567,7 @@ export default function InsightsPage() {
                                   {m.harness_list.map((h, idx) => (
                                     <span
                                       key={h}
-                                      className="text-[10px] px-1.5 py-0.5 rounded"
+                                      className="font-mono text-[10px] px-1.5 py-0.5 rounded-sm"
                                       style={{
                                         backgroundColor: `${harnessColor(h, idx)}1F`,
                                         color: harnessColor(h, idx),
@@ -597,12 +624,11 @@ export default function InsightsPage() {
 
                 {/* ── Cost per day (AreaChart) ── */}
                 <div
-                  className="rounded-2xl p-5 mb-4"
+                  className="rounded-md p-5 mb-4"
                   style={{ background: IN_bg, border: `1px solid ${C.border}` }}
                 >
                   <div
-                    className="text-xs font-semibold mb-4"
-                    style={{ color: "var(--color-text-secondary)" }}
+                    className="label-sys mb-4"
                   >
                     Cost per day (USD)
                   </div>
@@ -616,23 +642,23 @@ export default function InsightsPage() {
                       >
                         <defs>
                           <linearGradient id="costGradient" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor={C.accent} stopOpacity={0.3} />
+                            <stop offset="5%" stopColor={C.accent} stopOpacity={0.1} />
                             <stop offset="95%" stopColor={C.accent} stopOpacity={0} />
                           </linearGradient>
                         </defs>
                         <CartesianGrid
                           strokeDasharray="3 3"
-                          stroke="rgba(255,255,255,0.04)"
+                          stroke={C.borderSubtle}
                         />
                         <XAxis
                           dataKey="date"
-                          tick={{ fontSize: 10, fill: IN_chartAxis }}
+                          tick={CHART_TICK}
                           axisLine={false}
                           tickLine={false}
                           tickFormatter={(v: string) => v.slice(5)}
                         />
                         <YAxis
-                          tick={{ fontSize: 10, fill: IN_chartAxis }}
+                          tick={CHART_TICK}
                           axisLine={false}
                           tickLine={false}
                           width={45}
@@ -659,14 +685,11 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {/* Most expensive tasks */}
                   <div
-                    className="rounded-2xl overflow-hidden"
+                    className="rounded-md overflow-hidden"
                     style={{ background: IN_bg, border: `1px solid ${C.border}` }}
                   >
                     <div className="px-5 py-4 border-b" style={{ borderColor: IN_borderSubtle }}>
-                      <span
-                        className="text-xs font-semibold uppercase tracking-wider"
-                        style={{ color: "var(--color-text-secondary)" }}
-                      >
+                      <span className="label-sys">
                         Most expensive tasks (Top 10)
                       </span>
                     </div>
@@ -684,7 +707,7 @@ export default function InsightsPage() {
                             key={t.task_id}
                             className="px-5 py-2.5 flex items-center gap-3 transition-colors"
                             onMouseEnter={(e) =>
-                              (e.currentTarget.style.background = "rgba(255,255,255,0.02)")
+                              (e.currentTarget.style.background = IN_hover)
                             }
                             onMouseLeave={(e) =>
                               (e.currentTarget.style.background = "transparent")
@@ -722,12 +745,11 @@ export default function InsightsPage() {
 
                   {/* Harness split PieChart */}
                   <div
-                    className="rounded-2xl p-5"
+                    className="rounded-md p-5"
                     style={{ background: IN_bg, border: `1px solid ${C.border}` }}
                   >
                     <div
-                      className="text-xs font-semibold mb-4"
-                      style={{ color: "var(--color-text-secondary)" }}
+                      className="label-sys mb-4"
                     >
                       Harness split (by cost)
                     </div>
@@ -753,12 +775,7 @@ export default function InsightsPage() {
                             contentStyle={tooltipStyle}
                             formatter={(v: number) => [`$${v.toFixed(4)}`, "Cost"]}
                           />
-                          <Legend
-                            wrapperStyle={{
-                              fontSize: 11,
-                              color: "var(--color-text-secondary)",
-                            }}
-                          />
+                          <Legend wrapperStyle={LEGEND_STYLE} />
                         </PieChart>
                       </ResponsiveContainer>
                     )}
@@ -771,24 +788,24 @@ export default function InsightsPage() {
             {activeTab === "performance" && (
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Done vs. Failed</div>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-4">Done vs. Failed</div>
                     {agentPerfData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <BarChart data={agentPerfData}>
-                          <XAxis dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} />
-                          <YAxis tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={30} />
-                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: "rgba(255,255,255,0.03)" }} />
-                          <Legend wrapperStyle={{ fontSize: 11, color: C.textSecondary }} />
-                          <Bar dataKey="done" name="Done" stackId="a" fill="rgba(0,204,136,0.7)" />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill="rgba(239,68,68,0.7)" radius={[4, 4, 0, 0]} />
+                          <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
+                          <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
+                          <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
+                          <Legend wrapperStyle={LEGEND_STYLE} />
+                          <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : <EmptyChart message="No data" />}
                   </div>
 
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>Failure patterns</div>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-4">Failure patterns</div>
                     {failureData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <PieChart>
@@ -798,7 +815,7 @@ export default function InsightsPage() {
                             ))}
                           </Pie>
                           <Tooltip contentStyle={tooltipStyle} />
-                          <Legend wrapperStyle={{ fontSize: 11, color: C.textSecondary }} />
+                          <Legend wrapperStyle={LEGEND_STYLE} />
                         </PieChart>
                       </ResponsiveContainer>
                     ) : <EmptyChart message="No failure patterns" />}
@@ -807,8 +824,8 @@ export default function InsightsPage() {
 
                 {/* Avg task duration per agent */}
                 {insights?.task_durations?.per_agent && (
-                  <div className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="text-xs font-semibold mb-4" style={{ color: "var(--color-text-secondary)" }}>
+                  <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                    <div className="label-sys mb-4">
                       Ø Task duration per agent (minutes)
                     </div>
                     <ResponsiveContainer width="100%" height={200}>
@@ -816,10 +833,10 @@ export default function InsightsPage() {
                         data={Object.entries(insights.task_durations.per_agent).map(([name, mins]) => ({ name, mins: Math.round(Number(mins)) }))}
                         layout="vertical"
                       >
-                        <XAxis type="number" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} unit="min" />
-                        <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: IN_chartAxis }} axisLine={false} tickLine={false} width={60} />
+                        <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} unit="min" />
+                        <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={60} />
                         <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, "Ø duration"]} />
-                        <Bar dataKey="mins" fill={`${C.info}B3`} radius={[0, 4, 4, 0]} />
+                        <Bar dataKey="mins" fill={`${C.chart.ram}B3`} radius={[0, 2, 2, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -844,10 +861,10 @@ export default function InsightsPage() {
                 ) : (
                   <div className="space-y-4">
                     {reports!.map((r) => (
-                      <div key={r.id} className="rounded-2xl p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
+                      <div key={r.id} className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                         <div className="flex items-center gap-2 mb-3">
                           <Clock size={12} style={{ color: "var(--color-text-muted)" }} />
-                          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{timeAgo(r.created_at)}</span>
+                          <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>{timeAgo(r.created_at)}</span>
                           {r.title && (
                             <span className="text-sm font-semibold ml-2" style={{ color: "var(--color-text-primary)" }}>{r.title}</span>
                           )}

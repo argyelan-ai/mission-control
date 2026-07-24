@@ -11,7 +11,7 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
   return (
     <div
       className="flex items-center gap-3 px-4 py-3 rounded-xl"
-      style={{ border: `1px solid ${C.borderSubtle}`, background: "rgba(255,255,255,0.02)" }}
+      style={{ border: `1px solid ${C.borderSubtle}`, background: "var(--color-bg-surface)" }}
     >
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -85,7 +85,7 @@ function AddVllmModal({
   };
 
   const inputStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.03)",
+    background: "var(--color-bg-surface)",
     border: `1px solid ${C.borderSubtle}`,
     color: C.textPrimary,
   };

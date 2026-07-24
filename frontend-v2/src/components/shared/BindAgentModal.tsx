@@ -20,6 +20,7 @@ import type { Agent, Runtime } from "@/lib/types";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
 import { RuntimePill } from "@/components/shared/RuntimePill";
 import { C } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface Props {
   open: boolean;
@@ -54,7 +55,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
             onClick={onClose}
           >
             {/* Drag indicator — mobile only */}
-            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
+            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
             <motion.div
               initial={{ opacity: 0, y: 32 }}
@@ -65,13 +66,13 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
               onClick={(e) => e.stopPropagation()}
               style={{
                 backgroundColor: "var(--color-bg-elevated)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                border: "1px solid var(--color-border)",
                 boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
               }}
             >
                 <div
                   className="flex items-center justify-between p-5 border-b shrink-0"
-                  style={{ borderColor: "rgba(255,255,255,0.06)" }}
+                  style={{ borderColor: "var(--color-border)" }}
                 >
                   <div>
                     <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
@@ -83,7 +84,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                   </div>
                   <button
                     onClick={onClose}
-                    className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer"
+                    className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
                   >
                     <X size={14} style={{ color: "var(--color-text-muted)" }} />
                   </button>
@@ -109,14 +110,14 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                           <button
                             onClick={() => !alreadyBound && setPickedAgent(a)}
                             disabled={alreadyBound}
-                            className="w-full flex items-center justify-between gap-3 p-2.5 rounded-lg text-left transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                            className="w-full flex items-center justify-between gap-3 p-2.5 rounded-lg text-left transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
                             style={{
-                              backgroundColor: "rgba(255,255,255,0.02)",
-                              border: "1px solid rgba(255,255,255,0.06)",
+                              backgroundColor: "var(--color-bg-surface)",
+                              border: "1px solid var(--color-border)",
                             }}
                           >
                             <div className="flex items-center gap-2 min-w-0">
-                              <span className="text-base shrink-0">{a.emoji ?? "🤖"}</span>
+                              <EntityIcon value={a.emoji} size={16} />
                               <div className="min-w-0">
                                 <div
                                   className="text-[13px] font-medium truncate"
@@ -146,7 +147,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                 <div
                   className="px-5 py-3 border-t text-[10px] shrink-0"
                   style={{
-                    borderColor: "rgba(255,255,255,0.06)",
+                    borderColor: "var(--color-border)",
                     color: "var(--color-text-muted)",
                     paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
                   }}

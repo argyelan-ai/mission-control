@@ -159,9 +159,9 @@ export function JobsTable({
                   key={tag}
                   type="button"
                   onClick={() => toggleTag(tag)}
-                  className="rounded-full border px-2 py-0.5 text-[10px] font-medium transition"
+                  className="rounded-sm border px-2 py-0.5 text-[10px] font-medium transition"
                   style={{
-                    borderColor: active ? C.borderAccent : "rgba(255,255,255,0.08)",
+                    borderColor: active ? C.borderAccent : "var(--color-border)",
                     background: active ? C.accentSubtle : "transparent",
                     color: active ? C.accent : C.textSecondary,
                   }}

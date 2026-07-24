@@ -23,13 +23,14 @@ export default function BenchStudioPage() {
     <AppShell>
       <div className="flex flex-col gap-6">
         <div>
+          <div className="label-sys mb-2">Experiments · Bench</div>
           <h1
-            className="text-2xl font-bold tracking-tight"
+            className="display text-2xl font-semibold"
             style={{ color: C.textPrimary }}
           >
             Benchmark Studio
           </h1>
-          <p className="text-sm mt-1" style={{ color: C.textSecondary }}>
+          <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
             One-shot model duels — generate, render, compose, post.
           </p>
         </div>

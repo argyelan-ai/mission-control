@@ -44,11 +44,11 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         className="relative w-full max-w-md h-[80vh] rounded-2xl overflow-hidden flex flex-col"
         style={{
           background: C.bgElevated,
-          border: `1px solid rgba(255,255,255,0.08)`,
+          border: `1px solid var(--color-border)`,
           boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
         }}
       >
-        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
         <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
           <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>Activity History</span>
@@ -73,9 +73,9 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                   <div
                     key={event.id}
                     className="flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors"
-                    style={{ backgroundColor: "rgba(255,255,255,0.02)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)")}
+                    style={{ backgroundColor: "var(--color-bg-surface)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--color-bg-elevated)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "var(--color-bg-surface)")}
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0 mt-1.5"

@@ -102,7 +102,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
             rows={field.key === "lesson" ? 3 : 2}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none transition-colors"
             style={{
-              backgroundColor: "rgba(255, 255, 255, 0.03)",
+              backgroundColor: "var(--color-bg-surface)",
               color: C.textPrimary,
               border: `1px solid ${
                 field.key === "lesson"

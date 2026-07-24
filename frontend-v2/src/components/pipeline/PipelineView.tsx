@@ -153,12 +153,7 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
       <div className="flex flex-col gap-4">
         {/* Header */}
         <div className="flex items-center justify-between">
-          <h2
-            className="text-xs font-semibold uppercase tracking-[0.08em]"
-            style={{ color: C.textMuted }}
-          >
-            Pipeline
-          </h2>
+          <h2 className="label-sys">Pipeline</h2>
           <div className="flex items-center gap-3 text-xs" style={{ color: C.textMuted }}>
             {failed_count > 0 && (
               <span className="flex items-center gap-1">
@@ -187,13 +182,13 @@ export default function PipelineView({ boardId, agents }: PipelineViewProps) {
                   <div className="flex items-center gap-2 mb-2.5 px-0.5">
                     <Icon size={13} style={{ color: laneColor }} />
                     <span
-                      className="text-[11px] font-semibold uppercase tracking-[0.06em]"
+                      className="text-[11px] font-mono uppercase tracking-[0.06em] font-medium"
                       style={{ color: laneColor }}
                     >
                       {lane.label}
                     </span>
                     <span
-                      className="text-[11px] font-medium px-1.5 py-0.5 rounded-full"
+                      className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
                       style={{
                         color: laneColor,
                         backgroundColor: `${laneColor}1A`,

@@ -48,7 +48,7 @@ function SidebarEntry({
       {count !== undefined && (
         <span
           className="text-[10px] tabular-nums px-1.5 py-0.5 rounded-full shrink-0"
-          style={{ background: active ? "rgba(15,163,163,0.18)" : C.bgElevated, color: active ? C.accent : C.textMuted }}
+          style={{ background: active ? "rgba(0,229,255,0.14)" : C.bgElevated, color: active ? C.accent : C.textMuted }}
         >
           {count}
         </span>

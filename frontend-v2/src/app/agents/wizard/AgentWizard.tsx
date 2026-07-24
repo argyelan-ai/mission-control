@@ -59,7 +59,7 @@ export function AgentWizard({
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-label="Neuer Agent"
+        aria-label="New agent"
         initial={{ opacity: 0, scale: 0.97, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
@@ -92,7 +92,7 @@ export function AgentWizard({
                     <div
                       className="flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-medium shrink-0"
                       style={{
-                        backgroundColor: active || done ? C.accent : "rgba(255,255,255,0.06)",
+                        backgroundColor: active || done ? C.accent : "var(--color-bg-elevated)",
                         color: active || done ? "#fff" : "var(--color-text-muted)",
                       }}
                     >
@@ -112,7 +112,7 @@ export function AgentWizard({
                   {i < WIZARD_STEPS.length - 1 && (
                     <div
                       className="flex-1 h-px min-w-[8px]"
-                      style={{ backgroundColor: done ? C.accent : "rgba(255,255,255,0.08)" }}
+                      style={{ backgroundColor: done ? C.accent : "var(--color-bg-hover)" }}
                     />
                   )}
                 </div>
@@ -141,7 +141,7 @@ export function AgentWizard({
             disabled={state.step === 0}
             className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl cursor-pointer transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            <ChevronLeft size={15} /> Zurück
+            <ChevronLeft size={15} /> Back
           </button>
           {!isLastStep && (
             <button

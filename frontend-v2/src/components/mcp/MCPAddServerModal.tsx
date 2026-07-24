@@ -75,7 +75,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         onClick={onClose}
       >
         {/* Drag indicator — mobile only */}
-        <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
+        <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
         <motion.div
           key="mcp-add-panel"
@@ -90,20 +90,20 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           style={{
             maxWidth: "min(520px, 100%)",
             background: C.bgBase,
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: "1px solid var(--color-border)",
             boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
           }}
           onClick={(e) => e.stopPropagation()}
         >
         <div
           className="absolute inset-x-0 top-0 h-px pointer-events-none"
-          style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.1) 50%, transparent)" }}
+          style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover) 50%, transparent)" }}
         />
 
         {/* Header */}
         <div
           className="flex items-center gap-3 px-5 py-4 shrink-0"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}
+          style={{ borderBottom: "1px solid var(--color-border-subtle)" }}
         >
           <div
             className="w-8 h-8 rounded-xl flex items-center justify-center shrink-0"
@@ -156,8 +156,8 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               onChange={(e) => setTransport(e.target.value as typeof transport)}
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm"
               style={{
-                background: "rgba(255,255,255,0.03)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                background: "var(--color-bg-surface)",
+                border: "1px solid var(--color-border)",
                 color: "var(--color-text-primary)",
               }}
               aria-label="Transport"
@@ -178,7 +178,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                   onChange={(e) => setCommand(e.target.value)}
                   placeholder="e.g. uvx my-mcp-server"
                   className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
-                  style={{ border: "1px solid rgba(255,255,255,0.08)", color: "var(--color-text-primary)" }}
+                  style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   aria-label="Command"
                 />
               </label>
@@ -190,7 +190,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                   onChange={(e) => setArgs(e.target.value)}
                   placeholder="--port,8080,--verbose"
                   className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
-                  style={{ border: "1px solid rgba(255,255,255,0.08)", color: "var(--color-text-primary)" }}
+                  style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
                   aria-label="Args"
                 />
               </label>
@@ -228,7 +228,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               onChange={(e) => setDescription(e.target.value)}
               placeholder="Optional"
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
-              style={{ border: "1px solid rgba(255,255,255,0.08)", color: "var(--color-text-primary)" }}
+              style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
               aria-label="Description"
             />
           </label>
@@ -237,7 +237,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         {/* Footer */}
         <div
           className="flex justify-end gap-2 px-5 py-3 shrink-0"
-          style={{ borderTop: "1px solid rgba(255,255,255,0.05)", paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
+          style={{ borderTop: "1px solid var(--color-border-subtle)", paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)" }}
         >
           <button
             onClick={onClose}

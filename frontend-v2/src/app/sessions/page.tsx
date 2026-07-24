@@ -34,6 +34,7 @@ import AppShell from "@/components/layout/AppShell";
 import { notify } from "@/lib/notify";
 import { StructuredSessionView } from "@/components/session/StructuredSessionView";
 import { useTerminalRemountSignal } from "@/hooks/useTerminalRemountSignal";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── WebSocket Terminal Hook ───────────────────────────────────────────────────
 
@@ -220,7 +221,7 @@ function TerminalPanel({ agent }: { agent: AgentWithState }) {
     return (
       <div className="flex flex-col items-center justify-center flex-1 bg-[#0d0d0d] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
         <MonitorOff size={32} style={{ opacity: 0.3 }} />
-        <div>Session ist <span className="font-mono">{stateText}</span></div>
+        <div>Session is <span className="font-mono">{stateText}</span></div>
       </div>
     );
   }
@@ -402,7 +403,7 @@ function AgentList({
       <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
         <MonitorOff size={28} style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
         <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-          Keine Agents gefunden
+          No agents found
         </p>
       </div>
     );
@@ -436,7 +437,7 @@ function AgentList({
                 }}
                 title={stateLabel}
               />
-              <span style={{ fontSize: "14px", lineHeight: 1 }}>{agent.emoji ?? "🤖"}</span>
+              <EntityIcon value={agent.emoji} size={14} />
               <span
                 className="flex-1 truncate font-medium"
                 style={{ color: isSelected ? "var(--color-text-primary)" : "var(--color-text-secondary)" }}

@@ -23,16 +23,18 @@ import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Agent, Board } from "@/lib/types";
 import { HARNESS_LABELS, type Harness } from "@/lib/types";
+import { HarnessIcon, harnessLabel } from "@/components/shared/HarnessIcon";
 import { AgentWizard } from "./wizard/AgentWizard";
 import { AgentActions, extractDetail } from "@/components/agent/AgentActions";
 import type { WizardState } from "./wizard/types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Design Tokens (migrated from CINEMA inline map → lib/colors.ts) ────────
 const CINEMA = {
   modalBg: C.bgBase,
   border: C.border,
   borderSubtle: C.borderSubtle,
-  surfaceBg: "rgba(255,255,255,0.03)",
+  surfaceBg: "var(--color-border-subtle)",
   errorBg: `${C.error}1F`,
   warningBg: `${C.warning}14`,
   warningBorder: `${C.warning}33`,
@@ -52,7 +54,8 @@ const inputStyle = {
 const inputClass = "w-full px-3 py-2.5 text-sm rounded-xl bg-transparent outline-none transition-colors";
 const btnCancelClass = "px-4 py-2.5 text-sm rounded-xl cursor-pointer transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)]";
 const btnPrimaryStyle = {
-  background: `linear-gradient(135deg, ${C.accentHover}, ${C.accent})`,
+  background: C.accent,
+  color: C.onAccent,
 };
 const selectStyle = {
   ...inputStyle,
@@ -104,7 +107,7 @@ function AssignBoardModal({
           style={{ borderColor: CINEMA.borderSubtle }}
         >
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            {agent.emoji ?? "🤖"} {agent.name} — Assign board
+            <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name} — Assign board
           </h2>
           <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
             <X size={16} />
@@ -130,7 +133,7 @@ function AssignBoardModal({
             </button>
             <button
               onClick={handleAssign}
-              className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer transition-all"
+              className="px-5 py-2.5 text-sm rounded-sm font-semibold cursor-pointer transition-all hover:brightness-110"
               style={btnPrimaryStyle}
             >
               Assign
@@ -215,7 +218,7 @@ function TemplatesTab({
                       key={s}
                       className="text-[10px] px-1.5 py-0.5 rounded-full"
                       style={{
-                        backgroundColor: "rgba(255,255,255,0.05)",
+                        backgroundColor: "var(--color-bg-elevated)",
                         color: "var(--color-text-muted)",
                         border: `1px solid ${CINEMA.borderSubtle}`,
                       }}
@@ -285,7 +288,7 @@ function ContextBar({ pct }: { pct: number }) {
     <span className="flex items-center gap-1.5 shrink-0" title={`Context: ${pct}%`}>
       <span
         className="h-1 w-10 sm:w-14 rounded-full overflow-hidden"
-        style={{ backgroundColor: "rgba(255,255,255,0.06)" }}
+        style={{ backgroundColor: "var(--color-bg-elevated)" }}
       >
         <span
           className="block h-full rounded-full transition-[width] duration-500"
@@ -319,10 +322,10 @@ function AgentRosterRow({
   const dot = DOT_STATUS(agent.status);
 
   return (
-    <div className="relative flex items-center gap-2.5 sm:gap-3 px-3 sm:px-4 min-h-[56px] py-2 transition-colors hover:bg-[rgba(255,255,255,0.03)]">
+    <div className="relative flex items-center gap-2.5 sm:gap-3 px-3 sm:px-4 min-h-[56px] py-2 transition-colors hover:bg-[var(--color-bg-hover)]">
       <StatusDot status={dot} pulse={dot === "online" || dot === "busy"} />
-      <span className="text-lg leading-none shrink-0 w-6 text-center" aria-hidden>
-        {agent.emoji ?? "🤖"}
+      <span className="leading-none shrink-0 w-6 text-center" aria-hidden>
+        <EntityIcon value={agent.emoji} size={18} className="inline-block" />
       </span>
 
       {/* Name + role = row link (covers the row via ::after) */}
@@ -344,9 +347,19 @@ function AgentRosterRow({
           {agent.harness && (
             // "hermes" (ADR-060, host-only) has no HARNESS_LABELS entry — fall
             // back to the raw value instead of indexing out of bounds.
-            <Pill color={C.textMuted} size="sm">
-              {HARNESS_LABELS[agent.harness as Harness] ?? agent.harness}
-            </Pill>
+            // v3: SVG-Marke statt ausgeschriebenem CLI-Namen; Mobile ausgeblendet.
+            <span
+              className="max-sm:hidden inline-flex items-center justify-center w-6 h-6 rounded-sm shrink-0"
+              style={{
+                color: C.textMuted,
+                backgroundColor: `${C.textMuted}14`,
+                border: `1px solid ${C.textMuted}26`,
+              }}
+              title={harnessLabel(agent.harness)}
+              aria-label={harnessLabel(agent.harness)}
+            >
+              <HarnessIcon harness={agent.harness} size={12} />
+            </span>
           )}
           {showAllAgents && (
             <span
@@ -395,7 +408,7 @@ function AgentRosterRow({
       <button
         onClick={() => onMenu(agent)}
         aria-label={`Actions for ${agent.name}`}
-        className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+        className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
         style={{ color: C.textMuted }}
       >
         <MoreVertical size={15} />
@@ -429,7 +442,7 @@ function AgentActionsSheet({
   const dot = DOT_STATUS(agent.status);
 
   const itemCls =
-    "flex items-center gap-3 w-full px-4 py-3 min-h-touch text-[13px] text-left rounded-lg transition-colors cursor-pointer hover:bg-[rgba(255,255,255,0.05)]";
+    "flex items-center gap-3 w-full px-4 py-3 min-h-touch text-[13px] text-left rounded-lg transition-colors cursor-pointer hover:bg-[var(--color-bg-hover)]";
 
   return (
     <motion.div
@@ -459,13 +472,13 @@ function AgentActionsSheet({
       >
         {/* Drag indicator (mobile) */}
         <div className="sm:hidden flex justify-center pt-2.5 shrink-0">
-          <div className="w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
+          <div className="w-8 h-1 rounded-full" style={{ backgroundColor: "var(--color-bg-hover)" }} />
         </div>
 
         {/* Header */}
         <div className="px-4 pt-3 pb-3" style={{ borderBottom: `1px solid ${C.border}` }}>
           <div className="flex items-center gap-2.5">
-            <span className="text-xl leading-none" aria-hidden>{agent.emoji ?? "🤖"}</span>
+            <EntityIcon value={agent.emoji} size={20} />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold truncate" style={{ color: "var(--color-text-primary)" }}>
                 {agent.name}
@@ -522,7 +535,7 @@ function AgentActionsSheet({
             className={itemCls}
             style={{ color: C.warning }}
           >
-            <Archive size={15} /> Archivieren
+            <Archive size={15} /> Archive
           </button>
         </div>
       </motion.div>
@@ -624,10 +637,11 @@ export default function AgentsPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-primary)]">
+            <div className="label-sys mb-2">Fleet · Agents</div>
+            <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
               Agents
             </h1>
-            <p className="text-sm text-[var(--color-text-muted)] mt-1">
+            <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">
               {onlineCount}/{totalCount} online
             </p>
           </div>
@@ -635,11 +649,11 @@ export default function AgentsPage() {
           <div className="flex items-center gap-2">
             <button
               onClick={() => { setWizardInitial(undefined); setWizardOpen(true); }}
-              className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-xl font-medium text-white cursor-pointer transition-all"
+              className="flex items-center gap-2 px-3.5 py-2 text-sm rounded-sm font-semibold cursor-pointer transition-all hover:brightness-110"
               style={btnPrimaryStyle}
             >
               <Plus size={14} />
-              Neuer Agent
+              New agent
             </button>
           </div>
         </div>
@@ -696,7 +710,7 @@ export default function AgentsPage() {
                 onClick={() => setShowAllAgents(!showAllAgents)}
                 className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: showAllAgents ? C.accentSubtle : "rgba(255,255,255,0.04)",
+                  backgroundColor: showAllAgents ? C.accentSubtle : "var(--color-bg-elevated)",
                   color: showAllAgents ? C.accent : "var(--color-text-muted)",
                   border: `1px solid ${showAllAgents ? C.borderAccent : CINEMA.borderSubtle}`,
                 }}
@@ -777,8 +791,8 @@ export default function AgentsPage() {
                       className="flex items-center gap-3 px-3 sm:px-4 min-h-[52px] py-2 flex-wrap"
                       style={{ borderTop: i > 0 ? `1px solid ${C.borderSubtle}` : undefined }}
                     >
-                      <span className="text-base leading-none shrink-0 w-6 text-center opacity-70" aria-hidden>
-                        {agent.emoji ?? "🤖"}
+                      <span className="leading-none shrink-0 w-6 text-center opacity-70" aria-hidden>
+                        <EntityIcon value={agent.emoji} size={16} className="inline-block" />
                       </span>
                       <Link href={`/agents/${agent.id}`} className="min-w-0 flex-1">
                         <span className="text-[13px] font-medium truncate block" style={{ color: C.textSecondary }}>

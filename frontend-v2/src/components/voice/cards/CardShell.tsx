@@ -32,15 +32,15 @@ export function CardShell({
     <div
       className="relative flex items-start gap-2 px-2.5 py-2 rounded-lg overflow-hidden"
       style={{
-        background: "rgba(255,255,255,0.025)",
-        border: "1px solid rgba(255,255,255,0.05)",
+        background: "var(--color-bg-elevated)",
+        border: "1px solid var(--color-border-subtle)",
       }}
     >
       {/* left edge marker */}
       <div
         className="absolute left-0 top-2 bottom-2 w-px rounded-full"
         style={{
-          background: "linear-gradient(to bottom, rgba(15,163,163,0.7), rgba(15,163,163,0.15))",
+          background: "linear-gradient(to bottom, rgba(0,229,255,0.6), rgba(0,229,255,0.12))",
         }}
       />
 

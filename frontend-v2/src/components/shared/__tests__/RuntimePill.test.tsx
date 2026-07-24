@@ -63,7 +63,7 @@ describe("RuntimePill", () => {
     expect(screen.getByText("claude-opus-4-7")).toBeInTheDocument();
   });
 
-  it("renders hermes runtime with the distinct teal pill color", async () => {
+  it("renders hermes runtime with the distinct accent-hover pill color", async () => {
     vi.spyOn(api.runtimes, "list").mockResolvedValue({
       runtimes: [
         {
@@ -81,13 +81,13 @@ describe("RuntimePill", () => {
       <RuntimePill agent={mkAgent({ runtime_id: "rt-hermes" })} variant="default" />,
     );
     await waitFor(() => expect(screen.getByText("Hermes")).toBeInTheDocument());
-    // jsdom normalises hex → rgb(20, 196, 196) — C.accentHover
+    // jsdom normalises hex → rgb(107, 234, 255) — C.accentHover (v3 cyan)
     const dot = Array.from(container.querySelectorAll("span")).find(
       (el) =>
-        el.getAttribute("style")?.includes("20, 196, 196") ||
-        el.getAttribute("style")?.toLowerCase().includes("#14c4c4"),
+        el.getAttribute("style")?.includes("107, 234, 255") ||
+        el.getAttribute("style")?.toLowerCase().includes("#6beaff"),
     );
-    expect(dot, "expected a span with the hermes teal color #14C4C4").toBeDefined();
+    expect(dot, "expected a span with the hermes cyan color #6BEAFF").toBeDefined();
     expect(dot).toBeTruthy();
   });
 

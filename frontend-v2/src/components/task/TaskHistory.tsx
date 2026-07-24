@@ -56,7 +56,7 @@ export function TaskHistory({ events, isLoading }: TaskHistoryProps) {
           key={event.id}
           className="rounded-lg p-3"
           style={{
-            backgroundColor: "rgba(255, 255, 255, 0.02)",
+            backgroundColor: "var(--color-bg-surface)",
             border: `1px solid ${C.border}`,
           }}
         >

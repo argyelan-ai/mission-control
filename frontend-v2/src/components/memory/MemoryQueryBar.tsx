@@ -173,8 +173,8 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                         key={hit.memory_id}
                         className="px-3 py-2 rounded-lg border text-xs hover:bg-white/[0.03] transition-colors cursor-default"
                         style={{
-                          background: "rgba(255,255,255,0.02)",
-                          borderColor: "rgba(255,255,255,0.06)",
+                          background: "var(--color-bg-surface)",
+                          borderColor: "var(--color-border)",
                         }}
                       >
                         <div className="flex items-start justify-between gap-2 mb-1">
@@ -190,7 +190,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                             <span
                               className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                               style={{
-                                background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "rgba(255,255,255,0.05)",
+                                background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "var(--color-bg-elevated)",
                                 color: hit.score > 0.75 ? C.online : C.textSecondary,
                               }}
                             >

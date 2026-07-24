@@ -81,7 +81,7 @@ export function DeliverableCard({ deliverable: d, boardId, taskId }: Deliverable
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.18, ease: "easeOut" }}
       style={{
-        background: expanded ? C.accentSubtle : "rgba(255,255,255,0.02)",
+        background: expanded ? C.accentSubtle : "var(--color-bg-surface)",
         border: expanded ? `1px solid ${C.borderAccent}` : `1px solid ${C.border}`,
         borderRadius: 12,
         overflow: "hidden",

@@ -3,7 +3,6 @@
 import type { LucideIcon } from "lucide-react";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { GlassCard } from "./GlassCard";
 
 interface KPICardProps {
   label: string;
@@ -39,18 +38,22 @@ export function KPICard({
 }: KPICardProps) {
   const trendInfo = trend ? trendConfig[trend] : null;
   // Long string values ("tomorrow 07:00") blow out half the card on mobile —
-  // numbers stay 3xl, text scales down on mobile (desktop unchanged).
+  // numbers stay large, text scales down on mobile (desktop unchanged).
   const isLongText = typeof value === "string" && value.length > 6;
 
   return (
-    <GlassCard className={cn("p-5 max-sm:p-4", className)}>
+    <div
+      className={cn("rounded-md p-5 max-sm:p-4", className)}
+      style={{
+        background: "var(--color-bg-surface)",
+        border: "1px solid var(--color-border)",
+      }}
+    >
       <div className="flex items-start justify-between gap-3">
-        <span className="text-[13px] font-medium text-[var(--color-text-secondary)] tracking-wide">
-          {label}
-        </span>
+        <span className="label-sys">{label}</span>
         {Icon && (
           <Icon
-            size={16}
+            size={15}
             className="text-[var(--color-text-muted)] shrink-0"
           />
         )}
@@ -59,8 +62,10 @@ export function KPICard({
       <div className="mt-3 flex items-end gap-3">
         <span
           className={cn(
-            "font-semibold tracking-tight text-[var(--color-text-primary)] min-w-0 break-words",
-            isLongText ? "text-3xl max-sm:text-lg max-sm:leading-snug" : "text-3xl"
+            "display font-semibold text-[var(--color-text-primary)] min-w-0 break-words",
+            isLongText
+              ? "text-[30px] max-sm:text-lg max-sm:leading-snug"
+              : "text-[30px]"
           )}
         >
           {value}
@@ -68,14 +73,14 @@ export function KPICard({
 
         {trendInfo && trendValue && (
           <span
-            className="mb-1 flex items-center gap-1 text-xs font-medium"
+            className="mb-1 flex items-center gap-1 font-mono text-[10px]"
             style={{ color: trendInfo.color }}
           >
-            <trendInfo.Icon size={13} />
+            <trendInfo.Icon size={12} />
             {trendValue}
           </span>
         )}
       </div>
-    </GlassCard>
+    </div>
   );
 }

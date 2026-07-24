@@ -4,24 +4,40 @@ import { useState, useEffect } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { Menu, X, Check } from "lucide-react";
-import { NAV_ITEMS } from "./Sidebar";
-import { cn } from "@/lib/utils";
+import { NAV_GROUPS } from "./Sidebar";
+import { channelFor } from "./channel";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { useQuery } from "@tanstack/react-query";
 import type { Approval, Board } from "@/lib/types";
 import { VoiceButton } from "@/components/voice/VoiceWidget";
-import { C } from "@/lib/colors";
+import { P2 } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+
+// Wordmark (gleiche Logik wie Sidebar — env-getrieben)
+const _BRAND = process.env.NEXT_PUBLIC_BRAND || "Mission.Control";
+const _dot = _BRAND.lastIndexOf(".");
+const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
+const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
+
+// P2: Bottom-Tab-Bar — 4 Kernziele + Index. Text + Kanal-Nummer, keine Icons.
+const TAB_ITEMS = [
+  { href: "/", label: "HOME", num: "01" },
+  { href: "/tasks", label: "TASKS", num: "02" },
+  { href: "/agents", label: "AGTS", num: "03" },
+  { href: "/sessions", label: "SESS", num: "04" },
+] as const;
+
+const MONO = { fontFamily: "var(--font-p2-mono)" };
 
 export default function MobileNav() {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
+  const { ch } = channelFor(pathname);
 
   const { data: approvals } = useQuery<Approval[]>({
     queryKey: ["approvals-badge"],
@@ -58,35 +74,139 @@ export default function MobileNav() {
     setOpen(false);
   }
 
+  function isTabActive(href: string) {
+    return href === "/" ? pathname === "/" : pathname.startsWith(href);
+  }
+
+  // Ist das aktive Ziel nur über den Index erreichbar? → Index-Tab als aktiv markieren
+  const menuCoversCurrent = !TAB_ITEMS.some((t) => isTabActive(t.href));
+  const indexActive = open || menuCoversCurrent;
+
   return (
     <>
-      {/* Top bar — pt-island keeps content below Dynamic Island on iPhone 14 Pro+.
-          <header> = Banner-Landmark (a11y); opak statt backdrop-blur — blur auf
-          position:fixed erzeugt auf iOS Scroll-Jank (MOBILE-SPEC M8 + Flach-Regel). */}
+      {/* Top bar — Wordmark links, CH-Kennung + Voice rechts. pt-island hält
+          Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
       <header
         className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
         style={{
           paddingBottom: "0.5rem",
           minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
-          backgroundColor: "rgba(5, 5, 6, 0.97)",
-          borderBottom: "1px solid var(--color-border-subtle)",
+          backgroundColor: "rgba(8,7,5,0.92)",
+          borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >
-        {/* Hamburger — left, well below the island */}
-        <button
-          onClick={() => setOpen(!open)}
-          className="flex items-center justify-center w-11 h-11 rounded-lg cursor-pointer"
-          style={{ color: "var(--color-text-secondary)" }}
-          aria-label={open ? "Close menu" : "Open menu"}
+        <Link
+          href="/"
+          className="flex items-center h-11 cursor-pointer"
+          aria-label="Home"
+          style={{
+            color: "var(--color-p2-txt)",
+            fontFamily: "var(--font-p2-display)",
+            fontWeight: 700,
+            fontSize: "15px",
+            letterSpacing: "0.02em",
+          }}
         >
-          {open ? <X size={20} /> : <Menu size={20} />}
-        </button>
+          {BRAND_MAIN}
+          <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
+        </Link>
 
-        {/* Voice-Assistant — Pendant zum Hamburger links */}
-        <VoiceButton size={40} variant="header" />
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            style={{
+              ...MONO,
+              color: "var(--color-p2-amb)",
+              border: "1px solid var(--color-p2-amb-d)",
+              padding: "3px 7px",
+              fontSize: "10px",
+              fontWeight: 700,
+              letterSpacing: "0.08em",
+            }}
+          >
+            {ch}
+          </span>
+          <VoiceButton size={40} variant="header" />
+        </div>
       </header>
 
-      {/* Overlay + slide-out menu */}
+      {/* Bottom tab bar — Daumen-Zone, safe-area-aware. Aktiv = Reverse-Video. */}
+      <nav
+        aria-label="Hauptnavigation"
+        className="fixed bottom-0 left-0 right-0 z-40 md:hidden"
+        style={{
+          backgroundColor: "rgba(8,7,5,0.95)",
+          borderTop: "1px solid var(--color-p2-line)",
+          paddingBottom: "env(safe-area-inset-bottom)",
+        }}
+      >
+        <div className="grid grid-cols-5">
+          {TAB_ITEMS.map(({ href, label, num }) => {
+            const active = isTabActive(href);
+            return (
+              <Link
+                key={href}
+                href={href}
+                className="flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
+                style={{
+                  backgroundColor: active ? "var(--color-p2-amb)" : "transparent",
+                  color: active ? "var(--color-p2-inv)" : "var(--color-p2-dim)",
+                  ...MONO,
+                }}
+                aria-current={active ? "page" : undefined}
+              >
+                <span
+                  style={{
+                    fontStyle: "normal",
+                    fontSize: "8px",
+                    lineHeight: 1.4,
+                    color: active ? "var(--color-p2-inv)" : "var(--color-p2-faint)",
+                  }}
+                >
+                  {num}
+                </span>
+                <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
+                  {label}
+                </span>
+              </Link>
+            );
+          })}
+
+          {/* Index-Tab öffnet den Drawer */}
+          <button
+            onClick={() => setOpen(true)}
+            aria-label="Open menu"
+            className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
+            style={{
+              backgroundColor: indexActive ? "var(--color-p2-amb)" : "transparent",
+              color: indexActive ? "var(--color-p2-inv)" : "var(--color-p2-dim)",
+              ...MONO,
+            }}
+          >
+            <span
+              style={{
+                fontStyle: "normal",
+                fontSize: "8px",
+                lineHeight: 1.4,
+                color: indexActive ? "var(--color-p2-inv)" : "var(--color-p2-faint)",
+              }}
+            >
+              05
+            </span>
+            <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
+              ≡ INDEX
+            </span>
+            {hasPendingApprovals && (
+              <span
+                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+                style={{ backgroundColor: "var(--color-p2-err)" }}
+              />
+            )}
+          </button>
+        </div>
+      </nav>
+
+      {/* Overlay + slide-out index drawer */}
       <AnimatePresence>
         {open && (
           <>
@@ -97,7 +217,7 @@ export default function MobileNav() {
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
               className="fixed inset-0 z-40 md:hidden"
-              style={{ backgroundColor: "rgba(0, 0, 0, 0.6)" }}
+              style={{ backgroundColor: "rgba(5,4,3,0.75)" }}
               onClick={() => setOpen(false)}
             />
 
@@ -110,142 +230,176 @@ export default function MobileNav() {
               transition={{ duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
               className="fixed top-0 right-0 bottom-0 z-50 w-72 flex flex-col md:hidden pt-safe"
               style={{
-                backgroundColor: "rgba(5, 5, 6, 0.98)",
-                borderLeft: "1px solid var(--color-border-subtle)",
+                backgroundColor: "var(--color-p2-pan)",
+                borderLeft: "1px solid var(--color-p2-line)",
                 boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
               }}
             >
-              <nav className="flex-1 py-4 overflow-y-auto">
-                <ul className="space-y-1 px-3">
-                  {NAV_ITEMS.map(({ href, icon: Icon, label }) => {
-                    const isActive =
-                      href === "/"
-                        ? pathname === "/"
-                        : pathname.startsWith(href);
-                    const showBadge = href === "/inbox" && hasPendingApprovals;
+              {/* Drawer-Header: Wordmark + Close-Key */}
+              <div
+                className="flex items-center justify-between px-3 h-14 shrink-0"
+                style={{ borderBottom: "1px solid var(--color-p2-line2)" }}
+              >
+                <span
+                  style={{
+                    color: "var(--color-p2-txt)",
+                    fontFamily: "var(--font-p2-display)",
+                    fontWeight: 700,
+                    fontSize: "14px",
+                    letterSpacing: "0.02em",
+                  }}
+                >
+                  {BRAND_MAIN}
+                  <span style={{ color: P2.amb }}>{BRAND_ACCENT}</span>
+                </span>
+                <button
+                  onClick={() => setOpen(false)}
+                  className="flex items-center justify-center w-11 h-11 cursor-pointer"
+                  style={{
+                    color: "var(--color-p2-txt)",
+                    border: "1px solid var(--color-p2-line)",
+                    ...MONO,
+                    fontWeight: 700,
+                    fontSize: "13px",
+                  }}
+                  aria-label="Close menu"
+                >
+                  ✕
+                </button>
+              </div>
 
-                    return (
-                      <li key={href}>
-                        <Link
-                          href={href}
-                          className={cn(
-                            "relative flex items-center gap-3 px-3 py-3 rounded-lg text-sm transition-all min-h-[44px]",
-                            isActive
-                              ? "text-[var(--color-accent-light)]"
-                              : "text-[var(--color-text-secondary)]"
-                          )}
-                          style={{
-                            backgroundColor: isActive
-                              ? "var(--color-accent-subtle)"
-                              : "transparent",
-                          }}
-                        >
-                          {isActive && (
-                            <div
-                              className="absolute left-0 top-1/2 -translate-y-1/2 w-[2px] h-5 rounded-full"
-                              style={{
-                                backgroundColor: "var(--color-accent)",
-                              }}
-                            />
-                          )}
-                          <div className="relative shrink-0">
-                            <Icon size={18} />
-                            {showBadge && (
-                              <span
-                                className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
+              <nav className="flex-1 py-3 overflow-y-auto">
+                {NAV_GROUPS.map((group) => {
+                  const items = group.items;
+                  if (items.length === 0) return null;
+                  return (
+                    <div key={group.label} className="px-3">
+                      <div
+                        className="px-2 pt-3 pb-1 select-none"
+                        style={{
+                          fontFamily: "var(--font-p2-display)",
+                          fontWeight: 700,
+                          fontSize: "9px",
+                          letterSpacing: "0.2em",
+                          color: "var(--color-p2-faint)",
+                        }}
+                      >
+                        {group.label}
+                      </div>
+                      <ul>
+                        {items.map(({ href, label }) => {
+                          const isActive = isTabActive(href);
+                          const showBadge = href === "/inbox" && hasPendingApprovals;
+                          return (
+                            <li key={href}>
+                              <Link
+                                href={href}
+                                className="flex items-center gap-2 px-2 cursor-pointer"
                                 style={{
-                                  backgroundColor: "var(--color-error)",
+                                  minHeight: "44px",
+                                  ...MONO,
+                                  fontSize: "12.5px",
+                                  fontWeight: isActive ? 700 : 400,
+                                  backgroundColor: isActive ? "var(--color-p2-amb)" : "transparent",
+                                  color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-txt)",
                                 }}
-                              />
-                            )}
-                          </div>
-                          <span style={{ fontWeight: isActive ? 500 : 400 }}>
-                            {label}
-                          </span>
-                        </Link>
-                      </li>
-                    );
-                  })}
-                </ul>
+                              >
+                                <span className="flex-1">{label}</span>
+                                {showBadge && (
+                                  <span
+                                    className="w-2 h-2 rounded-full shrink-0"
+                                    style={{
+                                      backgroundColor: isActive
+                                        ? "var(--color-p2-inv)"
+                                        : "var(--color-p2-err)",
+                                    }}
+                                  />
+                                )}
+                              </Link>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  );
+                })}
               </nav>
 
               {/* Bottom section: board switcher → user info + logout */}
               <div
                 className="px-3 py-3"
                 style={{
-                  borderTop: "1px solid var(--color-border-subtle)",
+                  borderTop: "1px solid var(--color-p2-line2)",
+                  paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
                 }}
               >
-                {/* Board switcher — shown above user info */}
                 {boards.length > 0 && (
                   <div className="mb-1">
-                    {/* Section label */}
                     <div
-                      className="px-3 pb-1 text-xs font-medium uppercase tracking-widest"
-                      style={{ color: C.textDim, letterSpacing: "0.08em" }}
+                      className="px-2 pb-1"
+                      style={{
+                        fontFamily: "var(--font-p2-display)",
+                        fontWeight: 700,
+                        fontSize: "9px",
+                        letterSpacing: "0.2em",
+                        color: "var(--color-p2-faint)",
+                      }}
                     >
-                      Board
+                      BOARD
                     </div>
 
                     {hasMultipleBoards ? (
-                      // Board list — tappable rows
                       <ul>
                         {boards.map((board) => {
                           const isActive = board.id === activeBoardId || board.id === activeBoard?.id;
-                          const boardColor = board.color ?? C.accent;
                           return (
                             <li key={board.id}>
                               <button
                                 onClick={() => handleBoardSelect(board.id)}
-                                className="w-full flex items-center gap-2.5 px-3 text-sm rounded-lg transition-colors cursor-pointer text-left"
+                                className="w-full flex items-center gap-2.5 px-2 cursor-pointer text-left"
                                 style={{
                                   minHeight: "44px",
-                                  backgroundColor: isActive ? C.accentSubtle : "transparent",
-                                  color: isActive ? C.accent : "var(--color-text-secondary)",
-                                }}
-                                onMouseEnter={(e) => {
-                                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.backgroundColor = C.bgHover;
-                                }}
-                                onMouseLeave={(e) => {
-                                  if (!isActive) (e.currentTarget as HTMLButtonElement).style.backgroundColor = "transparent";
+                                  ...MONO,
+                                  fontSize: "12px",
+                                  fontWeight: isActive ? 700 : 400,
+                                  backgroundColor: isActive ? "var(--color-p2-amb)" : "transparent",
+                                  color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-txt)",
                                 }}
                               >
                                 {board.icon ? (
-                                  <span className="shrink-0 text-base leading-none w-5 text-center">{board.icon}</span>
+                                  <span className="shrink-0 leading-none w-5 text-center">
+                                    <EntityIcon value={board.icon} size={14} />
+                                  </span>
                                 ) : (
                                   <span
-                                    className="shrink-0 w-3 h-3 rounded-full"
-                                    style={{ backgroundColor: boardColor }}
+                                    className="shrink-0 w-2.5 h-2.5 rounded-full"
+                                    style={{
+                                      backgroundColor: isActive ? "var(--color-p2-inv)" : (board.color ?? P2.amb),
+                                    }}
                                   />
                                 )}
-                                <span className="flex-1 truncate" style={{ fontWeight: isActive ? 500 : 400 }}>
-                                  {board.name}
-                                </span>
-                                {isActive && (
-                                  <Check size={13} className="shrink-0" style={{ color: C.accent }} />
-                                )}
+                                <span className="flex-1 truncate">{board.name}</span>
+                                {isActive && <span className="shrink-0">✓</span>}
                               </button>
                             </li>
                           );
                         })}
                       </ul>
                     ) : (
-                      // Single board — static row, no interaction needed
-                      <div
-                        className="flex items-center gap-2.5 px-3"
-                        style={{ minHeight: "44px" }}
-                      >
+                      <div className="flex items-center gap-2.5 px-2" style={{ minHeight: "44px" }}>
                         {activeBoard?.icon ? (
-                          <span className="shrink-0 text-base leading-none w-5 text-center">{activeBoard.icon}</span>
+                          <span className="shrink-0 leading-none w-5 text-center">
+                            <EntityIcon value={activeBoard.icon} size={14} />
+                          </span>
                         ) : (
                           <span
-                            className="shrink-0 w-3 h-3 rounded-full"
-                            style={{ backgroundColor: activeBoard?.color ?? C.accent }}
+                            className="shrink-0 w-2.5 h-2.5 rounded-full"
+                            style={{ backgroundColor: activeBoard?.color ?? P2.amb }}
                           />
                         )}
                         <span
-                          className="flex-1 truncate text-sm font-medium"
-                          style={{ color: "var(--color-text-secondary)" }}
+                          className="flex-1 truncate"
+                          style={{ ...MONO, fontSize: "12px", color: "var(--color-p2-dim)" }}
                         >
                           {activeBoard?.name ?? "Board"}
                         </span>
@@ -257,19 +411,19 @@ export default function MobileNav() {
                 {/* User info + logout */}
                 <div
                   className="pt-2"
-                  style={{ borderTop: boards.length > 0 ? `1px solid ${C.borderSubtle}` : "none" }}
+                  style={{ borderTop: boards.length > 0 ? "1px solid var(--color-p2-line2)" : "none" }}
                 >
                   {currentUser && (
-                    <div className="px-3 pb-2">
+                    <div className="px-2 pb-2">
                       <div
-                        className="text-sm font-medium truncate"
-                        style={{ color: "var(--color-text-primary)" }}
+                        className="truncate"
+                        style={{ ...MONO, fontSize: "12px", fontWeight: 700, color: "var(--color-p2-txt)" }}
                       >
                         {currentUser.name}
                       </div>
                       <div
-                        className="text-xs truncate"
-                        style={{ color: "var(--color-text-muted)" }}
+                        className="truncate"
+                        style={{ ...MONO, fontSize: "10px", color: "var(--color-p2-dim)" }}
                       >
                         {currentUser.email}
                       </div>
@@ -277,11 +431,16 @@ export default function MobileNav() {
                   )}
                   <button
                     onClick={handleLogout}
-                    className="flex items-center gap-3 w-full px-3 py-2 text-sm rounded-lg cursor-pointer"
-                    style={{ color: "var(--color-text-muted)" }}
+                    className="flex items-center w-full px-2 cursor-pointer"
+                    style={{
+                      minHeight: "44px",
+                      ...MONO,
+                      fontSize: "12px",
+                      letterSpacing: "0.08em",
+                      color: "var(--color-p2-dim)",
+                    }}
                   >
-                    <LogOut size={16} />
-                    <span>Logout</span>
+                    LOGOUT →
                   </button>
                 </div>
               </div>

@@ -158,7 +158,7 @@ function SkeletonNote() {
           key={i}
           className="h-2.5 rounded"
           style={{
-            background: "rgba(255,255,255,0.05)",
+            background: "var(--color-bg-elevated)",
             width: `${w}%`,
           }}
         />
@@ -326,14 +326,14 @@ export function NoteSidePanel({
           style={{
             width: "380px",
             background: "rgba(10,10,10,0.98)",
-            borderLeft: "1px solid rgba(255,255,255,0.07)",
+            borderLeft: "1px solid var(--color-border)",
           }}
           aria-label="Note detail panel"
         >
           {/* ── Header ─────────────────────────────────────────────────────── */}
           <header
             className="shrink-0 px-5 py-4 flex flex-col gap-2"
-            style={{ borderBottom: "1px solid rgba(255,255,255,0.05)", paddingTop: "calc(env(safe-area-inset-top) + 1rem)" }}
+            style={{ borderBottom: "1px solid var(--color-border-subtle)", paddingTop: "calc(env(safe-area-inset-top) + 1rem)" }}
           >
             {/* Top row: breadcrumb + close button */}
             <div className="flex items-start justify-between gap-2">
@@ -488,7 +488,7 @@ export function NoteSidePanel({
               </span>
               {noteType && (
                 <>
-                  <span style={{ color: "rgba(255,255,255,0.15)", fontSize: "10px" }}>·</span>
+                  <span style={{ color: "var(--color-text-dim)", fontSize: "10px" }}>·</span>
                   <span
                     className="font-mono"
                     style={{ fontSize: "10px", color: "var(--color-text-muted)" }}
@@ -499,7 +499,7 @@ export function NoteSidePanel({
               )}
               {displayDate && (
                 <>
-                  <span style={{ color: "rgba(255,255,255,0.15)", fontSize: "10px" }}>·</span>
+                  <span style={{ color: "var(--color-text-dim)", fontSize: "10px" }}>·</span>
                   <span
                     className="font-mono uppercase tabular-nums"
                     style={{
@@ -580,7 +580,7 @@ export function NoteSidePanel({
                       className="font-mono rounded px-1.5 py-0.5"
                       style={{
                         fontSize: "10px",
-                        background: "rgba(255,255,255,0.05)",
+                        background: "var(--color-bg-elevated)",
                         color: "var(--color-text-muted)",
                       }}
                     >

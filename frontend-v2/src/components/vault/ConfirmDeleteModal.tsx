@@ -97,7 +97,7 @@ export function ConfirmDeleteModal({
             className="w-full max-w-md rounded-xl flex flex-col"
             style={{
               background: "rgba(15,15,15,0.98)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow: "0 24px 80px rgba(0,0,0,0.6), 0 1px 0 rgba(255,255,255,0.04) inset",
             }}
             onClick={(e) => e.stopPropagation()}
@@ -108,7 +108,7 @@ export function ConfirmDeleteModal({
             {/* Header */}
             <div
               className="flex items-start justify-between gap-3 px-5 pt-5 pb-3"
-              style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}
+              style={{ borderBottom: "1px solid var(--color-border-subtle)" }}
             >
               <div className="flex items-center gap-3 min-w-0">
                 <div
@@ -177,7 +177,7 @@ export function ConfirmDeleteModal({
                   className="font-mono"
                   style={{
                     fontSize: "11.5px",
-                    background: "rgba(255,255,255,0.05)",
+                    background: "var(--color-bg-elevated)",
                     padding: "1px 4px",
                     borderRadius: "3px",
                     color: "var(--color-text-muted)",
@@ -293,7 +293,7 @@ export function ConfirmDeleteModal({
             {/* Footer */}
             <div
               className="flex items-center justify-end gap-2 px-5 py-3"
-              style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+              style={{ borderTop: "1px solid var(--color-border-subtle)" }}
             >
               <button
                 type="button"
@@ -304,7 +304,7 @@ export function ConfirmDeleteModal({
                   fontSize: "10.5px",
                   letterSpacing: "0.14em",
                   background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.08)",
+                  border: "1px solid var(--color-border)",
                   color: "var(--color-text-secondary)",
                   cursor: deleteMutation.isPending ? "default" : "pointer",
                   opacity: deleteMutation.isPending ? 0.5 : 1,

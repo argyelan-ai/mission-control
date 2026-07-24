@@ -9,6 +9,7 @@ import Sidebar from "./Sidebar";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
 import MobileNav from "./MobileNav";
 import StatusBar from "./StatusBar";
+import TopBar from "./TopBar";
 import CommandPalette from "@/components/shared/CommandPalette";
 import ToastRenderer from "@/components/shared/ToastRenderer";
 import { VoiceProvider, VoiceOverlay } from "@/components/voice/VoiceWidget";
@@ -47,11 +48,11 @@ export default function AppShell({
     return (
       <div
         className="min-h-dvh flex items-center justify-center"
-        style={{ backgroundColor: "var(--color-bg-deep)" }}
+        style={{ backgroundColor: "var(--color-p2-bg)" }}
       >
         <div
           className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
-          style={{ borderColor: "var(--color-accent)", borderTopColor: "transparent" }}
+          style={{ borderColor: "var(--color-p2-amb)", borderTopColor: "transparent" }}
         />
       </div>
     );
@@ -61,7 +62,7 @@ export default function AppShell({
     <VoiceProvider>
     <div
       className="flex h-dvh overflow-hidden relative"
-      style={{ backgroundColor: "var(--color-bg-deep)" }}
+      style={{ backgroundColor: "var(--color-p2-bg)" }}
     >
       <AmbientBackground />
 
@@ -76,6 +77,8 @@ export default function AppShell({
 
       {/* Main content area */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden relative z-10">
+        {/* P2 desktop chrome: channel strip above the content column */}
+        <TopBar />
         {fullHeight ? (
           // Full-height mode: no page scroll, but KEEP main-content-pt,
           // horizontal padding, AND the max-w-[1600px] mx-auto wrap so
@@ -83,8 +86,7 @@ export default function AppShell({
           // (scrolling) layout. The wrap also gives flex-col + flex-1 so
           // the graph canvas can partition the remaining vertical space.
           <main
-            className="flex-1 overflow-hidden flex flex-col main-content-pt px-4 md:px-6 lg:px-8"
-            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+            className="flex-1 overflow-hidden flex flex-col main-content-pt main-content-pb px-4 md:px-6 lg:px-8"
           >
             <div className="mx-auto w-full max-w-[1600px] flex flex-col flex-1 min-h-0">
               {children}
@@ -92,8 +94,7 @@ export default function AppShell({
           </main>
         ) : (
           <main
-            className="flex-1 overflow-y-auto overflow-x-hidden main-content-pt px-4 md:px-6 lg:px-8"
-            style={{ paddingBottom: "max(env(safe-area-inset-bottom), 1rem)" }}
+            className="flex-1 overflow-y-auto overflow-x-hidden main-content-pt main-content-pb px-4 md:px-6 lg:px-8"
           >
             <div className="mx-auto w-full max-w-[1600px]">
               {children}

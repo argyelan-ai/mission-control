@@ -82,45 +82,45 @@ export function VaultNotesList({
             <div className="shrink-0 w-[92px] py-5 pl-3 pr-4 flex flex-col items-end gap-1.5">
               <div
                 className="h-7 w-9 rounded"
-                style={{ background: "rgba(255,255,255,0.07)" }}
+                style={{ background: "var(--color-bg-hover)" }}
               />
               <div
                 className="h-2.5 w-8 rounded"
-                style={{ background: "rgba(255,255,255,0.05)" }}
+                style={{ background: "var(--color-bg-elevated)" }}
               />
               <div
                 className="h-2 w-10 rounded"
-                style={{ background: "rgba(255,255,255,0.03)" }}
+                style={{ background: "var(--color-bg-surface)" }}
               />
             </div>
             {/* Rule */}
             <div
               className="shrink-0 w-px self-stretch"
-              style={{ background: "rgba(255,255,255,0.04)" }}
+              style={{ background: "var(--color-bg-elevated)" }}
             />
             {/* Content placeholder */}
             <div className="flex-1 py-5 px-5">
               <div className="flex items-center gap-2 mb-2.5">
                 <div
                   className="h-4 w-16 rounded-sm"
-                  style={{ background: "rgba(255,255,255,0.06)" }}
+                  style={{ background: "var(--color-bg-elevated)" }}
                 />
                 <div
                   className="h-2.5 w-14 rounded"
-                  style={{ background: "rgba(255,255,255,0.04)" }}
+                  style={{ background: "var(--color-bg-elevated)" }}
                 />
               </div>
               <div
                 className="h-4 w-3/5 rounded mb-2"
-                style={{ background: "rgba(255,255,255,0.08)" }}
+                style={{ background: "var(--color-bg-hover)" }}
               />
               <div
                 className="h-3 w-full rounded mb-1.5"
-                style={{ background: "rgba(255,255,255,0.04)" }}
+                style={{ background: "var(--color-bg-elevated)" }}
               />
               <div
                 className="h-3 w-4/5 rounded"
-                style={{ background: "rgba(255,255,255,0.04)" }}
+                style={{ background: "var(--color-bg-elevated)" }}
               />
             </div>
           </div>

@@ -75,16 +75,16 @@ export function AttachmentPreview({
     <div
       className="mt-6 rounded-lg overflow-hidden"
       style={{
-        border: "1px solid rgba(255,255,255,0.06)",
-        background: "rgba(255,255,255,0.02)",
+        border: "1px solid var(--color-border)",
+        background: "var(--color-bg-elevated)",
       }}
     >
       <div
         className="px-4 py-2 flex items-center justify-between text-xs"
         style={{
           background: "rgba(0,0,0,0.25)",
-          color: "rgba(255,255,255,0.7)",
-          borderBottom: "1px solid rgba(255,255,255,0.04)",
+          color: "var(--color-bg-hover)",
+          borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
         <span className="font-mono tabular-nums">{mime}</span>
@@ -105,7 +105,7 @@ export function AttachmentPreview({
       {!error && !objectUrl && (
         <div
           className="p-6 text-sm opacity-60 animate-pulse"
-          style={{ color: "rgba(255,255,255,0.6)" }}
+          style={{ color: "var(--color-text-secondary)" }}
         >
           Loading attachment…
         </div>
@@ -149,7 +149,7 @@ export function AttachmentPreview({
         mime !== "application/pdf" &&
         family !== "image" &&
         family !== "audio" && (
-          <div className="p-4 text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
+          <div className="p-4 text-sm" style={{ color: "var(--color-text-secondary)" }}>
             <a
               href={objectUrl}
               download
@@ -174,8 +174,8 @@ export function AttachmentPreview({
               type="button"
               onClick={() => setFullsizeOpen(false)}
               className="absolute top-6 right-6 p-2 rounded"
-              style={{ background: "rgba(255,255,255,0.1)" }}
-              aria-label="Schliessen"
+              style={{ background: "var(--color-bg-hover)" }}
+              aria-label="Close"
             >
               <X size={20} className="text-white" />
             </button>

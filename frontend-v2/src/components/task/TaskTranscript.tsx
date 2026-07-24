@@ -124,7 +124,7 @@ export function TaskTranscript({ taskId, isLive }: TaskTranscriptProps) {
       <div
         className="flex items-center gap-2 text-[10px] px-2.5 py-1.5 rounded-lg"
         style={{
-          backgroundColor: "rgba(255, 255, 255, 0.02)",
+          backgroundColor: "var(--color-bg-surface)",
           border: `1px solid ${C.border}`,
           color: C.textMuted,
         }}

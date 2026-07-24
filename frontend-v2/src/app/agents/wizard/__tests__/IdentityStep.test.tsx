@@ -23,6 +23,6 @@ describe("IdentityStep", () => {
 
   it("renders the SOUL preview panel heading", () => {
     wrap(<IdentityStep state={{ ...initialWizardState(null), name: "Nova" }} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    expect(screen.getByText(/Persona-Vorschau/)).toBeTruthy();
+    expect(screen.getByText(/Persona preview/)).toBeTruthy();
   });
 });

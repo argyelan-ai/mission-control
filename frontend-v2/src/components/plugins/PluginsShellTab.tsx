@@ -9,6 +9,7 @@ import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT, XTERM_THEME } from "@/lib/colors";
 import { TERM_MIN_CONTRAST, TERM_FONT_FAMILY } from "@/lib/terminalScale";
 import "@xterm/xterm/css/xterm.css";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 export function PluginsShellTab() {
   const termRef = useRef<HTMLDivElement>(null);
@@ -162,7 +163,7 @@ export function PluginsShellTab() {
         <div className="flex items-center gap-2">
           <Terminal size={14} style={{ color: connected ? C.online : "var(--color-text-muted)" }} />
           <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            🛠️ Installer
+            <EntityIcon value="🛠️" size={14} className="inline-block align-[-2px] mr-1" /> Installer
           </span>
           <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
             claude-sonnet-4.6 · MCP/Plugin/Skill-Setup
@@ -209,8 +210,8 @@ export function PluginsShellTab() {
         <div
           className="text-xs p-3 rounded-xl"
           style={{
-            backgroundColor: "rgba(255,255,255,0.02)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            backgroundColor: "var(--color-bg-surface)",
+            border: "1px solid var(--color-border)",
             color: "var(--color-text-muted)",
           }}
         >
@@ -232,7 +233,7 @@ export function PluginsShellTab() {
         className="rounded-xl overflow-hidden flex-1"
         style={{
           backgroundColor: XTERM_THEME.background,
-          border: "1px solid rgba(255,255,255,0.06)",
+          border: "1px solid var(--color-border)",
           height: "calc(100dvh - 240px)",
           minHeight: "300px",
         }}

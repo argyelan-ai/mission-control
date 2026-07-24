@@ -21,11 +21,12 @@ import { AgentLessonMatrix } from "@/components/memory/AgentLessonMatrix";
 import { AttachmentPanel } from "@/components/memory/AttachmentPanel";
 import { MergeResolutionPanel } from "@/components/memory/MergeResolutionPanel";
 import { C as _C, STATUS_TEXT } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Design tokens — local aliases mapping to lib/colors ──────────────────────
 const C = {
-  bg:          "rgba(255,255,255,0.03)",
-  bgHover:     "rgba(255,255,255,0.05)",
+  bg:          "var(--color-bg-surface)",
+  bgHover:     "var(--color-bg-hover)",
   border:      _C.border,
   borderSubtle:_C.borderSubtle,
   accent:      _C.accent,
@@ -105,7 +106,7 @@ function MarkdownContent({ content }: { content: string }) {
           const isBlock = className?.includes("language-");
           return isBlock ? (
             <code className="block px-4 py-3 rounded-lg text-xs font-mono mb-3 overflow-x-auto"
-              style={{ background: "rgba(255,255,255,0.05)", color: _C.accent, border: "1px solid rgba(255,255,255,0.08)" }}>
+              style={{ background: "var(--color-bg-elevated)", color: _C.accent, border: "1px solid var(--color-border)" }}>
               {children}
             </code>
           ) : (
@@ -121,7 +122,7 @@ function MarkdownContent({ content }: { content: string }) {
           </blockquote>
         ),
         strong: ({ children }) => <strong className="font-semibold" style={{ color: "var(--color-text-primary)" }}>{children}</strong>,
-        hr: () => <hr className="my-4" style={{ borderColor: "rgba(255,255,255,0.08)" }} />,
+        hr: () => <hr className="my-4" style={{ borderColor: "var(--color-border)" }} />,
         a: ({ href, children }) => (
           <a href={href} target="_blank" rel="noopener noreferrer" className="underline" style={{ color: C.accent }}>
             {children}
@@ -309,13 +310,13 @@ function MemoryModal({
         onClick={(e) => e.stopPropagation()}
       >
         {/* Top highlight */}
-        <div className="absolute inset-x-0 top-0 h-px pointer-events-none" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12) 50%, transparent)" }} />
+        <div className="absolute inset-x-0 top-0 h-px pointer-events-none" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover) 50%, transparent)" }} />
 
         {/* Header */}
         <div className="flex items-center gap-2.5 px-5 py-4 border-b shrink-0" style={{ borderColor: C.borderSubtle }}>
           {mode === "view" && <TypePill type={entry.memory_type} />}
           {mode === "view" && entry.is_pinned && (
-            <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>📌</span>
+            <EntityIcon value="📌" size={12} style={{ color: "var(--color-text-muted)" }} />
           )}
           <div className="flex-1" />
 
@@ -391,7 +392,7 @@ function MemoryModal({
             </div>
             <div
               className="text-sm rounded-xl p-4"
-              style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.borderSubtle}` }}
+              style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.borderSubtle}` }}
             >
               {entry.content
                 ? <MarkdownContent content={entry.content} />
@@ -408,7 +409,7 @@ function MemoryModal({
             {entry.tags?.length > 0 && (
               <div className="flex gap-1.5 flex-wrap mt-4">
                 {entry.tags.map((t) => (
-                  <span key={t} className="px-2 py-0.5 rounded-full text-[10px]" style={{ background: "rgba(255,255,255,0.06)", color: "var(--color-text-muted)" }}>{t}</span>
+                  <span key={t} className="px-2 py-0.5 rounded-full text-[10px]" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>{t}</span>
                 ))}
               </div>
             )}
@@ -453,7 +454,7 @@ function MemoryModal({
                 onChange={(e) => { setEditTitle(e.target.value); setDirty(true); }}
                 placeholder="Entry title..."
                 className="w-full px-4 py-2.5 rounded-xl text-sm font-medium outline-none transition-colors"
-                style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }}
+                style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }}
                 onFocus={(e) => (e.currentTarget.style.borderColor = _C.accent)}
                 onBlur={(e) => (e.currentTarget.style.borderColor = C.border)}
               />
@@ -463,14 +464,14 @@ function MemoryModal({
             <div className="flex-1">
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Content</label>
-                <div className="flex gap-0.5 p-0.5 rounded-lg" style={{ background: "rgba(255,255,255,0.05)" }}>
+                <div className="flex gap-0.5 p-0.5 rounded-lg" style={{ background: "var(--color-bg-elevated)" }}>
                   {(["write", "preview"] as const).map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setActiveWriteTab(tab)}
                       className="px-3 py-1 text-[11px] rounded-md cursor-pointer transition-colors"
                       style={{
-                        background: activeWriteTab === tab ? "rgba(255,255,255,0.08)" : "transparent",
+                        background: activeWriteTab === tab ? "var(--color-bg-hover)" : "transparent",
                         color: activeWriteTab === tab ? "var(--color-text-primary)" : "var(--color-text-muted)",
                       }}
                     >
@@ -487,7 +488,7 @@ function MemoryModal({
                   placeholder="Markdown supported..."
                   className="w-full px-4 py-3 rounded-xl text-sm outline-none resize-y transition-colors"
                   style={{
-                    background: "rgba(255,255,255,0.02)",
+                    background: "var(--color-bg-surface)",
                     border: `1px solid ${C.border}`,
                     color: "var(--color-text-body)",
                     fontFamily: "ui-monospace, monospace",
@@ -501,7 +502,7 @@ function MemoryModal({
                 <div
                   className="px-4 py-3 rounded-xl text-sm"
                   style={{
-                    background: "rgba(255,255,255,0.02)",
+                    background: "var(--color-bg-surface)",
                     border: `1px solid ${C.borderSubtle}`,
                     minHeight: 200,
                   }}
@@ -766,7 +767,7 @@ export default function LegacyMemoryPage() {
 // ── Memory List component ─────────────────────────────────────────────────────
 function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: BoardMemory) => void }) {
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid rgba(255,255,255,0.06)` }}>
+    <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid var(--color-border)` }}>
       {entries.map((entry, i) => {
         const cfg = TYPE_CONFIG[entry.memory_type] ?? TYPE_CONFIG.knowledge;
         return (
@@ -775,11 +776,11 @@ function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: B
             onClick={() => onOpen(entry)}
             className="flex items-center justify-between px-4 py-3 cursor-pointer transition-colors"
             style={{
-              borderBottom: i < entries.length - 1 ? `1px solid rgba(255,255,255,0.04)` : "none",
-              background: "rgba(255,255,255,0.02)",
+              borderBottom: i < entries.length - 1 ? `1px solid var(--color-border-subtle)` : "none",
+              background: "var(--color-bg-surface)",
             }}
-            onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-            onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-elevated)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
           >
             <div className="flex items-center gap-3 flex-1 min-w-0">
               <div className="w-2 h-2 rounded-full shrink-0" style={{ background: cfg.color }} />
@@ -794,7 +795,7 @@ function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: B
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <TypePill type={entry.memory_type} />
-              {entry.is_pinned && <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>📌</span>}
+              {entry.is_pinned && <EntityIcon value="📌" size={12} style={{ color: "var(--color-text-muted)" }} />}
               <ChevronRight size={14} style={{ color: "var(--color-text-muted)" }} />
             </div>
           </div>

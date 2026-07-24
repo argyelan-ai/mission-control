@@ -151,7 +151,7 @@ export function TrashView() {
       </div>
 
       {/* Grouped list */}
-      <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
+      <div className="rounded-2xl overflow-hidden" style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}>
         {groups.map(([deletedAt, groupEntries], gi) => (
           <div key={deletedAt}>
             <div
@@ -159,7 +159,7 @@ export function TrashView() {
               style={{
                 borderBottom: `1px solid ${C.borderSubtle}`,
                 borderTop: gi === 0 ? "none" : `1px solid ${C.borderSubtle}`,
-                background: "rgba(255,255,255,0.015)",
+                background: "var(--color-bg-surface)",
               }}
             >
               <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.textSecondary }}>
@@ -179,7 +179,7 @@ export function TrashView() {
                   key={entry.trash_id}
                   className="flex items-center gap-3 px-4 py-2.5 transition-colors"
                   style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: checked ? C.accentSubtle : "transparent" }}
-                  onMouseEnter={(e) => { if (!checked) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
+                  onMouseEnter={(e) => { if (!checked) e.currentTarget.style.background = "var(--color-bg-surface)"; }}
                   onMouseLeave={(e) => { if (!checked) e.currentTarget.style.background = "transparent"; }}
                 >
                   <input

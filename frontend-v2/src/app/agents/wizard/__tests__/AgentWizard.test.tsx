@@ -26,7 +26,7 @@ describe("AgentWizard shell", () => {
     wrap(
       <AgentWizard boards={[]} defaultBoardId={null} onClose={() => {}} onCreated={() => {}} />
     );
-    const back = screen.getByRole("button", { name: /Zurück/ }) as HTMLButtonElement;
+    const back = screen.getByRole("button", { name: /Back/ }) as HTMLButtonElement;
     expect(back.disabled).toBe(true);
   });
 

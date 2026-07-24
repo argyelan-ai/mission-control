@@ -57,7 +57,7 @@ function ReviewDecisionSection({
     <div
       className="rounded-lg p-3 space-y-2.5"
       style={{
-        backgroundColor: "rgba(255, 255, 255, 0.02)",
+        backgroundColor: "var(--color-bg-surface)",
         border: `1px solid ${C.border}`,
       }}
     >
@@ -108,7 +108,7 @@ function ReviewDecisionSection({
         aria-label="Review-Begruendung"
         className="w-full px-2.5 py-2 rounded-lg text-xs outline-none resize-none"
         style={{
-          backgroundColor: "rgba(255, 255, 255, 0.03)",
+          backgroundColor: "var(--color-bg-surface)",
           color: C.textPrimary,
           border: `1px solid ${C.border}`,
         }}
@@ -273,7 +273,7 @@ export function TaskActions({ task, boardId }: TaskActionsProps) {
           {stopRunMutation.isPending
             ? "Stopping..."
             : confirmingStop
-              ? "Wirklich stoppen? Erneut klicken"
+              ? "Really stop? Click again"
               : "Stop Run"}
         </button>
       )}

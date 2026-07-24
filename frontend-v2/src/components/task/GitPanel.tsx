@@ -151,7 +151,7 @@ export function GitPanel({
                       className="w-full flex items-start gap-3 px-1 py-2 text-left rounded-lg transition-colors cursor-pointer"
                       style={{ background: isActive ? C.accentSubtle : "transparent" }}
                       onMouseEnter={(e) => {
-                        if (!isActive) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.02)";
+                        if (!isActive) (e.currentTarget as HTMLElement).style.background = "var(--color-bg-surface)";
                       }}
                       onMouseLeave={(e) => {
                         if (!isActive) (e.currentTarget as HTMLElement).style.background = "transparent";

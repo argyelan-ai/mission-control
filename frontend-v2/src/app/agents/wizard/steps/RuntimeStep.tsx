@@ -8,11 +8,12 @@ import { HOST_HARNESS_LABELS, HOST_HARNESS_PROTOCOL } from "@/lib/types";
 import type { WizardAgentRuntime, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
 import { ModelInput, wizardLabelClass } from "../shared";
+import { HarnessIcon } from "@/components/shared/HarnessIcon";
 
 const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
   { key: "cli-bridge", label: "CLI Bridge (Docker)", hint: "Lokaler Container, auto-provisioniert" },
   { key: "host", label: "Host (launchd)", hint: "Natives Binary via launchd auf dem Mac" },
-  { key: "manual", label: "Manuell", hint: "Kein Auto-Provisioning" },
+  { key: "manual", label: "Manual", hint: "No auto-provisioning" },
 ];
 
 // Host-only harnesses (ADR-064/066). The compat-matrix API is cli-bridge-scoped
@@ -104,7 +105,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                 onClick={() => update({ agentRuntime: r.key })}
                 className="text-left rounded-xl p-3 cursor-pointer transition-all"
                 style={{
-                  backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                  backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                   border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                 }}
               >
@@ -141,21 +142,24 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     style={{
                       cursor: taken ? "not-allowed" : "pointer",
                       opacity: taken ? 0.4 : 1,
-                      backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                      backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                       border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                       color: active ? C.accent : "var(--color-text-primary)",
                     }}
                   >
-                    {h.label}
-                    {taken && " ✓"}
+                    <span className="inline-flex items-center justify-center gap-2">
+                      <HarnessIcon harness={h.key} size={13} />
+                      {h.label}
+                      {taken && " ✓"}
+                    </span>
                   </button>
                 );
               })}
             </div>
             {isHost && state.harness === "grok" && (
               <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                Grok Build spricht die xAI-Cloud über seine eigene OAuth-Session — nur
-                die <code className="font-mono">grok-cloud</code>-Runtime ist kompatibel.
+                Grok Build talks to the xAI cloud via its own OAuth session — only
+                the <code className="font-mono">grok-cloud</code> runtime is compatible.
               </p>
             )}
           </div>
@@ -171,7 +175,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                   onClick={() => update({ runtimeId: "" })}
                   className="text-left rounded-lg px-3 py-2.5 text-sm cursor-pointer transition-colors"
                   style={{
-                    backgroundColor: state.runtimeId === "" ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                    backgroundColor: state.runtimeId === "" ? C.accentSubtle : "var(--color-bg-surface)",
                     border: `1px solid ${state.runtimeId === "" ? C.borderAccent : C.borderSubtle}`,
                     color: "var(--color-text-secondary)",
                   }}
@@ -199,7 +203,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     onClick={() => update({ runtimeId: rt.id, model: rt.model_identifier ?? state.model })}
                     className="text-left rounded-lg px-3 py-2.5 text-sm cursor-pointer transition-colors disabled:opacity-35 disabled:cursor-not-allowed"
                     style={{
-                      backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                      backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                       border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                     }}
                   >
@@ -233,7 +237,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               <span className="font-medium" style={{ color: C.warning }}>
                 cli-bridge Helper nicht erreichbar.
               </span>{" "}
-              Agent wird erstellt, bleibt aber unprovisioniert, bis der Helper läuft:{" "}
+              The agent will be created but stays unprovisioned until the helper is running:{" "}
               <code className="font-mono">python3 scripts/cli-bridge.py</code>
             </div>
           )}

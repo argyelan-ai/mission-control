@@ -85,7 +85,7 @@ function PurgeConfirmModal({
             className="w-full max-w-md rounded-xl flex flex-col"
             style={{
               background: "rgba(15,15,15,0.98)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow: "0 24px 80px rgba(0,0,0,0.6)",
             }}
             onClick={(e) => e.stopPropagation()}
@@ -162,7 +162,7 @@ function PurgeConfirmModal({
 
             <div
               className="flex items-center justify-end gap-2 px-5 py-3"
-              style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+              style={{ borderTop: "1px solid var(--color-border-subtle)" }}
             >
               <button
                 onClick={onClose}
@@ -172,7 +172,7 @@ function PurgeConfirmModal({
                   fontSize: "10.5px",
                   letterSpacing: "0.14em",
                   background: "transparent",
-                  border: "1px solid rgba(255,255,255,0.08)",
+                  border: "1px solid var(--color-border)",
                   color: "var(--color-text-secondary)",
                   cursor: isPurging ? "default" : "pointer",
                   opacity: isPurging ? 0.5 : 1,
@@ -255,7 +255,7 @@ function TrashRow({
       className="flex relative"
       style={{
         background: "transparent",
-        borderBottom: "1px dashed rgba(255,255,255,0.04)",
+        borderBottom: "1px dashed var(--color-border-subtle)",
       }}
     >
       {/* Marginalia — date trashed */}
@@ -282,7 +282,7 @@ function TrashRow({
               className="font-mono tabular-nums mt-0.5"
               style={{
                 fontSize: "9.5px",
-                color: "rgba(255,255,255,0.22)",
+                color: "var(--color-text-dim)",
               }}
             >
               {trashedAt.year}
@@ -291,7 +291,7 @@ function TrashRow({
               className="font-mono tabular-nums mt-0.5"
               style={{
                 fontSize: "9px",
-                color: "rgba(255,255,255,0.18)",
+                color: "var(--color-text-dim)",
               }}
             >
               {trashedAt.time}
@@ -300,7 +300,7 @@ function TrashRow({
         ) : (
           <div
             className="font-mono mt-2"
-            style={{ fontSize: "22px", color: "rgba(255,255,255,0.14)" }}
+            style={{ fontSize: "22px", color: "var(--color-text-dim)" }}
           >
             ◌
           </div>
@@ -352,7 +352,7 @@ function TrashRow({
             className="font-mono"
             style={{
               fontSize: "10px",
-              color: "rgba(255,255,255,0.2)",
+              color: "var(--color-text-dim)",
               marginLeft: "auto",
             }}
           >
@@ -439,7 +439,7 @@ function TrashRow({
             color: restorable ? C.online : "rgba(255,255,255,0.18)",
             background: "transparent",
             border: "1px solid",
-            borderColor: restorable ? "rgba(52,211,153,0.25)" : "rgba(255,255,255,0.04)",
+            borderColor: restorable ? "rgba(52,211,153,0.25)" : "var(--color-border-subtle)",
             cursor: restorable && !isRestoring ? "pointer" : "default",
             opacity: isRestoring ? 0.5 : 1,
           }}
@@ -471,7 +471,7 @@ function TrashRow({
           style={{
             color: "var(--color-text-muted)",
             background: "transparent",
-            border: "1px solid rgba(255,255,255,0.04)",
+            border: "1px solid var(--color-border-subtle)",
             cursor: "pointer",
           }}
           onMouseEnter={(e) => {
@@ -486,7 +486,7 @@ function TrashRow({
               "var(--color-text-muted)";
             (e.currentTarget as HTMLButtonElement).style.background = "transparent";
             (e.currentTarget as HTMLButtonElement).style.borderColor =
-              "rgba(255,255,255,0.04)";
+              "var(--color-border-subtle)";
           }}
         >
           <Trash2 size={13} />
@@ -553,13 +553,13 @@ export function VaultTrashPage() {
           {Array.from({ length: 4 }).map((_, i) => (
             <div key={i} className="flex animate-pulse">
               <div className="shrink-0 w-[92px] py-5 pl-3 pr-4 flex flex-col items-end gap-1.5">
-                <div className="h-7 w-9 rounded" style={{ background: "rgba(255,255,255,0.05)" }} />
-                <div className="h-2.5 w-8 rounded" style={{ background: "rgba(255,255,255,0.04)" }} />
+                <div className="h-7 w-9 rounded" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-2.5 w-8 rounded" style={{ background: "var(--color-bg-elevated)" }} />
               </div>
-              <div className="shrink-0 w-px self-stretch" style={{ background: "rgba(255,255,255,0.04)" }} />
+              <div className="shrink-0 w-px self-stretch" style={{ background: "var(--color-bg-elevated)" }} />
               <div className="flex-1 py-5 px-5">
-                <div className="h-4 w-1/2 rounded mb-2" style={{ background: "rgba(255,255,255,0.06)" }} />
-                <div className="h-3 w-3/4 rounded" style={{ background: "rgba(255,255,255,0.04)" }} />
+                <div className="h-4 w-1/2 rounded mb-2" style={{ background: "var(--color-bg-elevated)" }} />
+                <div className="h-3 w-3/4 rounded" style={{ background: "var(--color-bg-elevated)" }} />
               </div>
             </div>
           ))}
@@ -580,11 +580,11 @@ export function VaultTrashPage() {
           <div
             className="w-14 h-14 rounded-full flex items-center justify-center mb-4"
             style={{
-              background: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.05)",
+              background: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border-subtle)",
             }}
           >
-            <ArchiveX size={20} style={{ color: "rgba(255,255,255,0.25)" }} />
+            <ArchiveX size={20} style={{ color: "var(--color-text-dim)" }} />
           </div>
           <div
             className="font-mono uppercase font-semibold mb-1"
@@ -617,7 +617,7 @@ export function VaultTrashPage() {
             className="sticky top-0 z-10 flex items-baseline gap-3 px-4 py-3"
             style={{ background: "var(--color-bg-base)" }}
           >
-            <span className="font-mono" style={{ fontSize: "10px", color: "rgba(255,255,255,0.35)" }}>
+            <span className="font-mono" style={{ fontSize: "10px", color: "var(--color-text-dim)" }}>
               ◆
             </span>
             <span
@@ -634,7 +634,7 @@ export function VaultTrashPage() {
               className="flex-1 h-px"
               style={{
                 background:
-                  "linear-gradient(to right, rgba(255,255,255,0.08), rgba(255,255,255,0.02) 50%, transparent)",
+                  "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
               }}
             />
           </div>

@@ -79,9 +79,12 @@ export default function OfficeView() {
       <div className="flex flex-col flex-1 overflow-hidden">
         {/* Header — title + zoom cluster (subtitle removed per operator's req) */}
         <header className="shrink-0 flex items-center justify-between gap-4 px-5 lg:px-7 pt-5 pb-4">
-          <h1 className="text-[26px] font-bold text-white tracking-tight leading-tight">
-            Org Chart
-          </h1>
+          <div>
+            <div className="label-sys mb-1.5">Fleet · Office</div>
+            <h1 className="display text-[26px] font-semibold tracking-tight leading-tight" style={{ color: C.textPrimary }}>
+              Org Chart
+            </h1>
+          </div>
           <ZoomCluster zoom={zoom} onIn={zoomIn} onOut={zoomOut} onReset={zoomReset} />
         </header>
 
@@ -141,7 +144,7 @@ function ZoomCluster({
 
   return (
     <div
-      className="flex items-center gap-px rounded-xl p-1 shrink-0"
+      className="flex items-center gap-px rounded-md p-1 shrink-0"
       style={{
         background: C.bgElevated,
         border: `1px solid ${C.border}`,
@@ -160,14 +163,14 @@ function ZoomCluster({
         type="button"
         onClick={onReset}
         title="Reset to 100% (⌘0)"
-        className="px-2.5 min-w-[52px] text-[11.5px] font-mono tabular-nums rounded-md transition-colors cursor-pointer"
+        className="px-2.5 min-w-[52px] text-[11.5px] font-mono tabular-nums rounded-sm transition-colors cursor-pointer"
         style={{
           color: zoom === ZOOM_DEFAULT ? C.textMuted : C.textSecondary,
           background: "transparent",
           border: "none",
           padding: "6px 10px",
         }}
-        onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)")}
+        onMouseEnter={(e) => ((e.currentTarget as HTMLButtonElement).style.background = "var(--color-bg-hover)")}
         onMouseLeave={(e) => ((e.currentTarget as HTMLButtonElement).style.background = "transparent")}
       >
         {pct}%
@@ -182,7 +185,7 @@ function ZoomCluster({
         <ZoomIn size={15} strokeWidth={2} />
       </ZoomButton>
 
-      <span className="w-px h-5 mx-0.5" style={{ background: "rgba(255,255,255,0.06)" }} />
+      <span className="w-px h-5 mx-0.5" style={{ background: "var(--color-border)" }} />
 
       <ZoomButton
         onClick={onReset}
@@ -214,11 +217,11 @@ function ZoomButton({
         height: 28,
         background: "transparent",
         border: "none",
-        color: disabled ? "rgba(255,255,255,0.18)" : "var(--color-text-secondary)",
+        color: disabled ? "var(--color-text-dim)" : "var(--color-text-secondary)",
         cursor: disabled ? "default" : "pointer",
       }}
       onMouseEnter={(e) => {
-        if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.06)";
+        if (!disabled) (e.currentTarget as HTMLButtonElement).style.background = "var(--color-bg-hover)";
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLButtonElement).style.background = "transparent";

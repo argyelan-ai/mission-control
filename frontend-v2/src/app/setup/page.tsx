@@ -29,7 +29,7 @@ const DEMO_TASKS: Array<[string, TaskStatus, Priority]> = [
 const inputClasses =
   "w-full bg-transparent border rounded-lg px-3 py-2.5 text-sm outline-none transition-all duration-200";
 const inputStyle = {
-  backgroundColor: "rgba(255, 255, 255, 0.03)",
+  backgroundColor: "var(--color-bg-surface)",
   borderColor: "var(--color-border)",
   color: "var(--color-text-primary)",
 } as const;
@@ -160,7 +160,7 @@ export default function SetupWizardPage() {
                 <div
                   className="w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-mono"
                   style={{
-                    background: s.done ? C.accent : step === s.n ? "rgba(15,163,163,0.15)" : "transparent",
+                    background: s.done ? C.accent : step === s.n ? "rgba(0,229,255,0.12)" : "transparent",
                     border: `1px solid ${s.done || step === s.n ? C.accent : C.border}`,
                     color: s.done ? "#04110F" : step === s.n ? C.accent : "var(--color-text-muted)",
                   }}
@@ -368,7 +368,7 @@ export default function SetupWizardPage() {
                 style={{
                   border: `1px solid ${seeded ? C.online : C.border}`,
                   color: seeded ? C.online : "var(--color-text-primary)",
-                  background: "rgba(255,255,255,0.02)",
+                  background: "var(--color-bg-surface)",
                 }}
               >
                 {seeding && <Loader2 className="animate-spin" size={14} />}
@@ -389,7 +389,7 @@ export default function SetupWizardPage() {
                 style={{
                   border: `1px solid ${C.border}`,
                   color: "var(--color-text-secondary)",
-                  background: "rgba(255,255,255,0.02)",
+                  background: "var(--color-bg-surface)",
                 }}
               >
                 Guide: provision your first agent <ExternalLink size={13} />

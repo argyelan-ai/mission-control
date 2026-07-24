@@ -87,7 +87,7 @@ function MediaItem({ path, thumbnail }: { path: string; thumbnail?: boolean }) {
   return (
     <div
       className="w-44 rounded-xl overflow-hidden"
-      style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+      style={{ border: "1px solid var(--color-border)" }}
     >
       {preview}
     </div>
@@ -144,8 +144,8 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
         <div
           className="mt-3 rounded-xl px-3.5 py-3"
           style={{
-            backgroundColor: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            backgroundColor: "var(--color-bg-surface)",
+            border: "1px solid var(--color-border)",
           }}
         >
           <p className="text-sm whitespace-pre-wrap leading-relaxed text-[var(--color-text-primary)]">
@@ -181,7 +181,7 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
         {/* Actions */}
         <div
           className="flex items-center gap-2 mt-3 pt-3 border-t"
-          style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           <button
             onClick={() => onResolve("approved")}

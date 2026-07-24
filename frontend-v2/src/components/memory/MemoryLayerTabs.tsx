@@ -26,7 +26,7 @@ export function MemoryLayerTabs({
 }) {
   // tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17)
   return (
-    <div className="flex gap-1.5 p-1 rounded-xl mb-5 tab-strip" style={{ background: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}>
+    <div className="flex gap-1.5 p-1 rounded-xl mb-5 tab-strip" style={{ background: "var(--color-bg-surface)", border: "1px solid var(--color-border)" }}>
       {LAYERS.map((layer) => {
         const cfg = LAYER_CONFIG[layer];
         const Icon = cfg.icon;

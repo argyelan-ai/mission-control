@@ -13,6 +13,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { Pill } from "@/components/shared/Pill";
 import type { Agent } from "@/lib/types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 type ViewMode = "grid" | "list";
 type StatusFilter = "all" | "online" | "busy" | "idle" | "offline" | "error";
@@ -66,7 +67,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
                 "text-[11px] px-2.5 py-1 rounded-full transition-all duration-150 cursor-pointer whitespace-nowrap",
                 statusFilter === opt.value
                   ? "bg-[var(--color-accent)] text-white"
-                  : "bg-[rgba(255,255,255,0.04)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+                  : "bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               )}
             >
               {opt.label}
@@ -167,10 +168,10 @@ function AgentListRow({ agent }: { agent: Agent }) {
 
   return (
     <Link href={`/agents/${agent.id}`}>
-      <GlassCard className="p-3 hover:border-[rgba(255,255,255,0.12)] transition-all duration-150 cursor-pointer">
+      <GlassCard className="p-3 hover:border-[var(--color-border)] transition-all duration-150 cursor-pointer">
         <div className="flex items-center gap-4">
           {/* Emoji + name */}
-          <span className="text-lg shrink-0">{agent.emoji ?? "🤖"}</span>
+          <EntityIcon value={agent.emoji} size={18} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">

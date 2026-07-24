@@ -89,7 +89,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
               className={`${wizardInputClass} cursor-pointer`}
               style={wizardSelectStyle}
             >
-              <option value="">Kein Board</option>
+              <option value="">No board</option>
               {boards.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
@@ -106,7 +106,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             className="cursor-pointer accent-[var(--color-accent)]"
           />
           <span className="text-[12px] text-[var(--color-text-secondary)]">
-            Board Lead (Orchestrator — erhält alle Rechte)
+            Board lead (orchestrator — gets all permissions)
           </span>
         </label>
       </div>
@@ -114,12 +114,12 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
       {/* Right: live SOUL preview */}
       <div>
         <label className={wizardLabelClass}>
-          Persona-Vorschau {isFetching && <span className="normal-case">· lädt…</span>}
+          Persona preview {isFetching && <span className="normal-case">· loading…</span>}
         </label>
         <div
           className="rounded-xl p-3 text-[11px] font-mono whitespace-pre-wrap leading-relaxed h-[280px] overflow-y-auto"
           style={{
-            backgroundColor: "rgba(255,255,255,0.02)",
+            backgroundColor: "var(--color-bg-surface)",
             border: `1px solid ${C.borderSubtle}`,
             color: "var(--color-text-secondary)",
           }}

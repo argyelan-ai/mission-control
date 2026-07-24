@@ -17,8 +17,30 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { C } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { EntityIcon } from "@/components/shared/EntityIcon";
+
+// ── v3 styles (Tokens only) ─────────────────────────────────────────────────
+// Items: 13px General Sans, ausgewählt = accent-subtle Fläche + 2px Cyan-Balken
+// links (inset shadow, eckig) + accent-light Text.
+const itemClass =
+  "flex items-center gap-3 px-3 py-2 rounded-sm text-[13px] cursor-pointer transition-colors " +
+  "data-[selected=true]:bg-[var(--color-accent-subtle)] data-[selected=true]:text-[var(--color-accent-light)] " +
+  "data-[selected=true]:shadow-[inset_2px_0_0_0_var(--color-accent)]";
+
+// Gruppen-Header im .label-sys-Stil (Mono 10px uppercase, weit getrackt, muted).
+const groupClass =
+  "[&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 " +
+  "[&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] " +
+  "[&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:uppercase " +
+  "[&_[cmdk-group-heading]]:tracking-[0.14em] [&_[cmdk-group-heading]]:text-[var(--color-text-muted)]";
+
+const kbdClass = "font-mono text-[10px] px-1.5 py-0.5 rounded-sm shrink-0";
+const kbdStyle = {
+  backgroundColor: "var(--color-bg-deep)",
+  color: "var(--color-text-muted)",
+  border: "1px solid var(--color-border)",
+} as const;
 
 export default function CommandPalette() {
   const router = useRouter();
@@ -68,7 +90,7 @@ export default function CommandPalette() {
             exit={{ opacity: 0 }}
             transition={{ duration: 0.15 }}
             className="fixed inset-0 z-50"
-            style={{ backgroundColor: "rgba(2, 2, 3, 0.7)" }}
+            style={{ backgroundColor: "rgba(2, 4, 8, 0.7)" }}
             onClick={close}
           />
 
@@ -78,13 +100,12 @@ export default function CommandPalette() {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: -10 }}
             transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-            className="fixed left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 rounded-xl overflow-hidden"
+            className="fixed left-1/2 z-50 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 rounded-md overflow-hidden corner-ticks"
             style={{
               top: "calc(env(safe-area-inset-top) + 1rem)",
               backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid var(--color-border-strong)",
-              boxShadow:
-                "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              border: "1px solid var(--color-border)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
             <Command
@@ -107,20 +128,13 @@ export default function CommandPalette() {
                 <Command.Input
                   autoFocus
                   placeholder="Search or command..."
-                  className="flex-1 py-3.5 bg-transparent text-sm outline-none"
+                  className="flex-1 py-3.5 bg-transparent font-mono text-[13px] outline-none"
                   style={{
                     color: "var(--color-text-primary)",
                     caretColor: "var(--color-accent)",
                   }}
                 />
-                <kbd
-                  className="text-[10px] px-1.5 py-0.5 rounded font-mono shrink-0"
-                  style={{
-                    backgroundColor: "rgba(255, 255, 255, 0.04)",
-                    color: "var(--color-text-muted)",
-                    border: "1px solid var(--color-border)",
-                  }}
-                >
+                <kbd className={kbdClass} style={kbdStyle}>
                   Esc
                 </kbd>
               </div>
@@ -138,10 +152,7 @@ export default function CommandPalette() {
                 </Command.Empty>
 
                 {/* Navigation */}
-                <Command.Group
-                  heading="Navigation"
-                  className="[&_[cmdk-group-heading]]:text-nav [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:px-2"
-                >
+                <Command.Group heading="Navigation" className={groupClass}>
                   {[
                     { icon: Home, label: "Home", href: "/" },
                     { icon: FolderKanban, label: "Tasks", href: "/tasks" },
@@ -157,13 +168,7 @@ export default function CommandPalette() {
                       key={href}
                       value={`go ${label}`}
                       onSelect={() => navigate(href)}
-                      className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer transition-colors"
-                      style={
-                        {
-                          "--item-bg": C.accentSubtle,
-                        } as React.CSSProperties
-                      }
-                      data-selected-bg="true"
+                      className={itemClass}
                     >
                       <Icon
                         size={15}
@@ -175,14 +180,11 @@ export default function CommandPalette() {
                 </Command.Group>
 
                 {/* Quick Actions */}
-                <Command.Group
-                  heading="Actions"
-                  className="[&_[cmdk-group-heading]]:text-nav [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:px-2"
-                >
+                <Command.Group heading="Actions" className={groupClass}>
                   <Command.Item
                     value="new task"
                     onSelect={() => navigate("/tasks")}
-                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer"
+                    className={itemClass}
                   >
                     <Plus
                       size={15}
@@ -190,8 +192,8 @@ export default function CommandPalette() {
                     />
                     New Task
                     <kbd
-                      className="ml-auto text-[10px] font-mono"
-                      style={{ color: "var(--color-text-muted)" }}
+                      className={`ml-auto ${kbdClass}`}
+                      style={kbdStyle}
                     >
                       Cmd+N
                     </kbd>
@@ -199,7 +201,7 @@ export default function CommandPalette() {
                   <Command.Item
                     value="approve all"
                     onSelect={approveAll}
-                    className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer"
+                    className={itemClass}
                   >
                     <CheckCheck
                       size={15}
@@ -207,8 +209,8 @@ export default function CommandPalette() {
                     />
                     Approve all approvals
                     <kbd
-                      className="ml-auto text-[10px] font-mono"
-                      style={{ color: "var(--color-text-muted)" }}
+                      className={`ml-auto ${kbdClass}`}
+                      style={kbdStyle}
                     >
                       Cmd+Shift+A
                     </kbd>
@@ -217,23 +219,20 @@ export default function CommandPalette() {
 
                 {/* Agents */}
                 {agents && agents.length > 0 && (
-                  <Command.Group
-                    heading="Agents"
-                    className="[&_[cmdk-group-heading]]:text-nav [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:px-2"
-                  >
+                  <Command.Group heading="Agents" className={groupClass}>
                     {agents.map((agent) => (
                       <Command.Item
                         key={agent.id}
                         value={`agent ${agent.name}`}
                         onSelect={() => navigate(`/agents/${agent.id}`)}
-                        className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm cursor-pointer"
+                        className={itemClass}
                       >
                         <span className="text-xs">
-                          {agent.emoji ?? ""}
+                          <EntityIcon value={agent.emoji} size={14} />
                         </span>
                         {agent.name}
                         <span
-                          className="ml-auto text-xs capitalize"
+                          className="ml-auto font-mono text-[10px] capitalize"
                           style={{ color: "var(--color-text-muted)" }}
                         >
                           {agent.status}

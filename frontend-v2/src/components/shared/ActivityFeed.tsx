@@ -5,6 +5,7 @@ import { timeAgo } from "@/lib/utils";
 import { StatusDot } from "./StatusDot";
 import { Pill } from "./Pill";
 import { C, LANE, STATUS } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface ActivityEvent {
   id: string;
@@ -119,7 +120,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
               <div className="mt-1 flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                 {event.agent_name && (
                   <span>
-                    {event.agent_emoji && `${event.agent_emoji} `}
+                    {event.agent_emoji && <EntityIcon value={event.agent_emoji} size={12} className="inline-block align-[-1px] mr-1" />}
                     {event.agent_name}
                   </span>
                 )}

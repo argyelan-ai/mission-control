@@ -114,11 +114,12 @@ export default function InboxPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-primary)]">
+          <div className="label-sys mb-2">Approvals · Inbox</div>
+          <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
             Inbox
           </h1>
           {totalCount > 0 && (
-            <p className="text-sm mt-1">
+            <p className="text-[13px] mt-1">
               <span
                 className="font-semibold"
                 style={{
@@ -127,7 +128,7 @@ export default function InboxPage() {
               >
                 {totalCount}
               </span>
-              <span className="text-[var(--color-text-muted)]"> pending</span>
+              <span className="text-[var(--color-text-secondary)]"> pending</span>
             </p>
           )}
         </div>

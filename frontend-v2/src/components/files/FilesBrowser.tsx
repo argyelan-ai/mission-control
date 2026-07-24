@@ -89,7 +89,7 @@ export function FilesBrowser({
   const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   return (
-    <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
+    <div className="rounded-2xl overflow-hidden" style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}>
       {/* Breadcrumb + header actions (view toggle lives here so the panel top
           stays flush with the sidebar — no extra row above the panel) */}
       <div
@@ -252,7 +252,7 @@ function FileRow({
       className="transition-colors cursor-pointer"
       style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: selected ? C.accentSubtle : "transparent" }}
       onClick={() => entry.is_directory ? onNavigate(entrySubpath) : onSelectFile(entrySubpath)}
-      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
+      onMouseEnter={(e) => { if (!selected) e.currentTarget.style.background = "var(--color-bg-surface)"; }}
       onMouseLeave={(e) => { if (!selected) e.currentTarget.style.background = "transparent"; }}
     >
       {/* Selection — the cell swallows clicks so toggling never opens/navigates. */}

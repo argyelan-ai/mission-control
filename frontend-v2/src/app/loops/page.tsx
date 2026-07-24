@@ -102,11 +102,12 @@ export default function LoopsPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>
-            <h1 className="text-xl font-semibold flex items-center gap-2" style={{ color: C.textPrimary }}>
+            <div className="label-sys mb-2">Operations · Loops</div>
+            <h1 className="display text-xl font-semibold flex items-center gap-2" style={{ color: C.textPrimary }}>
               <Repeat size={18} style={{ color: C.accent }} />
               Loops
             </h1>
-            <p className="text-sm mt-0.5" style={{ color: C.textMuted }}>
+            <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
               Outcome-driven task loops — set a goal, let a runner grind the backlog round by round.
             </p>
           </div>

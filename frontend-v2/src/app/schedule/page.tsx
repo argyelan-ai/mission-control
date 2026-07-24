@@ -24,8 +24,8 @@ type Tab = "overview" | "day" | "week" | "health";
 function chipColors(job: ScheduledJob, runningJobs: Set<string>) {
   if (!job.enabled)
     return {
-      bg: "rgba(255,255,255,0.03)",
-      border: "rgba(255,255,255,0.07)",
+      bg: "var(--color-bg-elevated)",
+      border: "var(--color-border)",
       text: C.textMuted,
     };
   if (runningJobs.has(job.id))
@@ -540,19 +540,21 @@ export default function SchedulePage() {
       <div className="flex flex-col h-full overflow-hidden">
         {/* Tab switcher header */}
         <div
-          className="flex items-center gap-3 px-6 py-3 border-b flex-shrink-0"
-          style={{ borderColor: C.border }}
+          className="flex items-center gap-3 px-6 py-3 flex-shrink-0"
         >
           <Clock
             size={16}
             style={{ color: C.accent }}
           />
-          <h1
-            className="text-sm font-semibold"
-            style={{ color: C.textPrimary }}
-          >
-            Schedule
-          </h1>
+          <div>
+            <div className="label-sys mb-1">Operations · Schedule</div>
+            <h1
+              className="display text-xl font-semibold"
+              style={{ color: C.textPrimary }}
+            >
+              Schedule
+            </h1>
+          </div>
           {/* tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
           <div
             className="ml-3 flex items-center rounded-lg p-0.5 gap-0.5 tab-strip"
@@ -586,6 +588,14 @@ export default function SchedulePage() {
               );
             })}
           </div>
+        </div>
+
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        <div className="relative h-px mx-6 flex-shrink-0" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16"
+            style={{ backgroundColor: C.accent }}
+          />
         </div>
 
         {/* Tab content */}

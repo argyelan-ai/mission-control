@@ -37,7 +37,7 @@ const AGENT_COLORS: Record<string, string> = {
   tester:     C.error,           // #C23838
   davinci:    "#EC4899",         // pink — external brand identity
   freecode:   C.accent,          // teal (was indigo #6366F1 — non-brand, mapped to accent)
-  jarvis:     C.accentHover,     // #14C4C4
+  jarvis:     C.accentHover,     // #6BEAFF
   system:     C.textMuted,       // #888888
 };
 
@@ -103,8 +103,8 @@ export function VaultTopicsView() {
             key={topic.cluster_id}
             className="rounded-xl p-5 transition-all hover:scale-[1.01]"
             style={{
-              background: "rgba(255,255,255,0.02)",
-              border: "1px solid rgba(255,255,255,0.06)",
+              background: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border)",
             }}
           >
             {/* Header */}

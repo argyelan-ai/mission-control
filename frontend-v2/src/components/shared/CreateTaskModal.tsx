@@ -316,7 +316,7 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
             />
 
             {/* Drag indicator — mobile only */}
-            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.2)" }} />
+            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
             <motion.div
               ref={dialogRef}
@@ -330,12 +330,12 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:max-w-[880px] sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
               style={{
                 background: C.elevated,
-                border: "1px solid rgba(255,255,255,0.08)",
-                boxShadow: `0 0 60px rgba(15,163,163,0.10), 0 25px 80px rgba(0,0,0,0.6)`,
+                border: "1px solid var(--color-border)",
+                boxShadow: `0 0 60px rgba(0,229,255,0.08), 0 25px 80px rgba(0,0,0,0.6)`,
               }}
             >
               {/* Top edge highlight */}
-              <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+              <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
               {/* Header */}
               <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>

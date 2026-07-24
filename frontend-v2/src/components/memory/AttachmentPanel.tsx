@@ -93,18 +93,18 @@ export function AttachmentPanel({ entry, editMode }: Props) {
     <section
       className="rounded-xl p-4 mt-5"
       style={{
-        background: "rgba(255,255,255,0.02)",
-        border: "1px solid rgba(255,255,255,0.05)",
+        background: "var(--color-bg-surface)",
+        border: "1px solid var(--color-border-subtle)",
       }}
     >
       <h3
         className="text-xs font-semibold uppercase tracking-wider mb-3"
-        style={{ color: "rgba(255,255,255,0.7)" }}
+        style={{ color: "var(--color-text-secondary)" }}
       >
         {attachments.length === 1 ? "1 attachment" : `${attachments.length} attachments`}
       </h3>
       {attachments.length === 0 && editMode && (
-        <p className="text-xs mb-3" style={{ color: "rgba(255,255,255,0.6)" }}>
+        <p className="text-xs mb-3" style={{ color: "var(--color-text-secondary)" }}>
           No attachments yet — images and PDFs can be uploaded (max. 10 MB per file,
           max. 5 files)
         </p>
@@ -125,8 +125,8 @@ export function AttachmentPanel({ entry, editMode }: Props) {
           <label
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg cursor-pointer text-xs"
             style={{
-              border: "1px dashed rgba(255,255,255,0.15)",
-              color: "rgba(255,255,255,0.8)",
+              border: "1px dashed var(--color-border)",
+              color: "var(--color-text-primary)",
             }}
           >
             <Upload size={14} aria-hidden />

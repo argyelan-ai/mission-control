@@ -17,7 +17,7 @@ const statusColors: Record<Status, string> = {
   online: C.online,    // #2B9A4A
   warning: C.warning,  // #B8870A
   error: C.error,      // #C23838
-  busy: C.accent,      // #0FA3A3 — was lila #8B5CF6
+  busy: C.accent,      // #00E5FF — was lila #8B5CF6
   idle: C.textDim,     // #6E6E6E — was #5A5E66
   offline: STATUS.offline, // #3A3A3A
 };

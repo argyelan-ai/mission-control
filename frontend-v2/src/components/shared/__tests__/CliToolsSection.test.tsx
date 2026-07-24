@@ -105,7 +105,7 @@ describe("CliToolsSection", () => {
     );
     renderSection();
 
-    const pill = await screen.findByTitle(/folgt nach Task-Ende/);
+    const pill = await screen.findByTitle(/after the task ends/);
     expect(pill).toHaveTextContent("Sparky");
     expect(pill).toHaveStyle({ opacity: "0.45" });
   });

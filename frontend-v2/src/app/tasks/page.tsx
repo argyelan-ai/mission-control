@@ -28,8 +28,9 @@ import AppShell from "@/components/layout/AppShell";
 import TaskListColumn from "@/components/tasks/TaskListColumn";
 import { TaskDetailBody } from "@/components/task/TaskDetailBody";
 import type { Task, TaskStatus, Agent, Project, Tag, ProjectPhase } from "@/lib/types";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT } from "@/lib/colors";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Tag Chip ───────────────────────────────────────────────────────────────
 
@@ -38,7 +39,7 @@ function TagChip({ tag, size = "sm" }: { tag: Tag; size?: "xs" | "sm" }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full font-medium",
+        "inline-flex items-center rounded-sm font-mono font-medium",
         size === "xs" ? "text-[9px] px-1.5 py-0" : "text-[10px] px-2 py-0.5"
       )}
       style={{
@@ -133,14 +134,14 @@ function TagManager({
   return (
     <div
       ref={ref}
-      className="absolute top-full left-0 mt-1 w-56 rounded-lg shadow-xl z-50 overflow-hidden"
+      className="absolute top-full left-0 mt-1 w-56 rounded-md shadow-xl z-50 overflow-hidden"
       role="dialog"
       aria-modal="true"
       aria-label="Manage tags"
       style={{
         backgroundColor: C.bgBase,
         border: `1px solid ${C.border}`,
-        boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+        boxShadow: "var(--shadow-elevated)",
       }}
     >
       {/* Existing tags */}
@@ -154,7 +155,7 @@ function TagManager({
           <button
             key={tag.id}
             onClick={() => handleToggle(tag.id)}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors cursor-pointer hover:bg-[rgba(255,255,255,0.05)]"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-xs transition-colors cursor-pointer hover:bg-[var(--color-bg-hover)]"
           >
             <span
               className="w-2.5 h-2.5 rounded-full shrink-0"
@@ -183,7 +184,7 @@ function TagManager({
             placeholder="New tag..."
             autoFocus
             aria-label="Create new tag"
-            className="flex-1 text-xs px-2 py-1 rounded outline-none min-w-0"
+            className="flex-1 text-xs px-2 py-1 rounded-sm outline-none min-w-0"
             style={{
               backgroundColor: C.bgSurface,
               color: C.textPrimary,
@@ -237,7 +238,7 @@ function TaskStatusDot({ status }: { status: TaskStatus }) {
 
   return (
     <span
-      className="w-4 h-4 rounded-full shrink-0 flex items-center justify-center"
+      className="w-4 h-4 rounded-sm shrink-0 flex items-center justify-center"
       style={{
         backgroundColor: isEmpty ? "transparent" : color,
         border: isEmpty ? `2px solid ${color}` : "none",
@@ -306,7 +307,7 @@ function TaskRow({
     <div className="relative">
       {/* Kein <button> als Container (nested-interactive): Titel-Button deckt
           per ::after die ganze Zeile ab, Aktionen liegen mit z-[1] darüber. */}
-      <div className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition-all hover:bg-[rgba(255,255,255,0.04)] group">
+      <div className="w-full flex items-center gap-3 px-3 py-2 rounded-md text-left transition-all bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)] group" style={{ border: `1px solid ${C.border}` }}>
         <TaskStatusDot status={task.status} />
         <button
           type="button"
@@ -319,7 +320,7 @@ function TaskRow({
           {/* Checklist-Progress Badge */}
           {task.checklist_total > 0 && (
             <span
-              className="ml-1.5 px-1.5 py-0.5 rounded text-xs font-mono shrink-0"
+              className="ml-1.5 px-1.5 py-0.5 rounded-sm text-xs font-mono shrink-0"
               style={{
                 background:
                   task.checklist_done === task.checklist_total
@@ -338,20 +339,20 @@ function TaskRow({
         <div className="relative z-[1] flex items-center gap-2 shrink-0 opacity-60 group-hover:opacity-100 transition-opacity">
           {task.priority !== "medium" && priorityColor(task.priority) && (
             <span
-              className="text-[10px] px-1 py-0.5 rounded uppercase font-semibold"
+              className="text-[10px] px-1 py-0.5 rounded-sm uppercase font-semibold"
               style={{ color: priorityColor(task.priority)! }}
             >
               {task.priority}
             </span>
           )}
           {agent && (
-            <span className="text-xs" title={agent.name}>
-              {agent.emoji || ""}
+            <span title={agent.name}>
+              <EntityIcon value={agent.emoji} size={13} />
             </span>
           )}
           {isStale && (
             <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded"
+              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
               title={`No activity for ${staleMins} minutes`}
               style={{
                 color: isCritical ? C.error : C.warning,
@@ -369,7 +370,7 @@ function TaskRow({
           <Link
             href={`/memory?task=${task.id}`}
             onClick={(e) => e.stopPropagation()}
-            className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
+            className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
             title="Vault: all notes + files for this task"
             style={{ color: C.textMuted }}
           >
@@ -379,7 +380,7 @@ function TaskRow({
             <button
               onClick={handleDispatch}
               disabled={dispatchMutation.isPending}
-              className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
+              className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
               title={isDone ? "Task already done — dispatch again?" : "Dispatch task"}
               style={{ color: isDone ? C.warning : C.accent }}
             >
@@ -392,11 +393,11 @@ function TaskRow({
       {/* Done warning */}
       {showDoneWarning && (
         <div
-          className="absolute right-2 top-full mt-1 z-10 p-3 rounded-lg text-xs"
+          className="absolute right-2 top-full mt-1 z-10 p-3 rounded-md text-xs"
           style={{
             backgroundColor: C.bgBase,
             border: `1px solid ${C.warning}40`,
-            boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+            boxShadow: "var(--shadow-elevated)",
           }}
         >
           <div className="flex items-center gap-1.5 mb-2 font-medium" style={{ color: C.warning }}>
@@ -466,7 +467,7 @@ function PhaseSection({
       {/* Phase header */}
       <button
         onClick={() => setCollapsed(!collapsed)}
-        className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors hover:bg-[rgba(255,255,255,0.04)] group cursor-pointer"
+        className="w-full flex items-center gap-2 px-3 py-2 rounded-md transition-colors hover:bg-[var(--color-bg-hover)] group cursor-pointer"
       >
         {collapsed ? (
           <ChevronRight size={14} style={{ color: C.textMuted }} />
@@ -485,7 +486,7 @@ function PhaseSection({
                 target="_blank"
                 rel="noopener noreferrer"
                 onClick={(e) => e.stopPropagation()}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono hover:opacity-80 transition-opacity"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-mono hover:opacity-80 transition-opacity"
                 style={{
                   background: C.accentSubtle,
                   color: C.accent,
@@ -498,7 +499,7 @@ function PhaseSection({
               </a>
             ) : (
               <span
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono"
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[10px] font-mono"
                 style={{
                   background: C.accentSubtle,
                   color: C.textMuted,
@@ -532,7 +533,7 @@ function PhaseSection({
             className="overflow-hidden"
           >
             <div
-              className="ml-6 border-l pl-2"
+              className="ml-6 border-l pl-2 space-y-1"
               style={{ borderColor: C.border }}
             >
               {subtasks.length === 0 && (
@@ -555,7 +556,7 @@ function PhaseSection({
                 <button
                   onClick={() => startPhaseMutation.mutate()}
                   disabled={startPhaseMutation.isPending}
-                  className="flex items-center gap-1.5 mx-3 my-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 mx-3 my-2 px-3 py-1.5 rounded-md text-xs font-mono font-medium transition-colors cursor-pointer"
                   style={{
                     backgroundColor: C.accentSubtle,
                     color: C.accentHover,
@@ -619,14 +620,11 @@ function RevisionSection({
   return (
     <div className="mt-6 border-t pt-4" style={{ borderColor: C.border }}>
       <div className="flex items-center justify-between mb-3">
-        <h3
-          className="text-sm font-medium flex items-center gap-2"
-          style={{ color: C.textMuted }}
-        >
+        <h3 className="label-sys flex items-center gap-2">
           Revisions
           {revisions.length > 0 && (
             <span
-              className="text-xs px-1.5 py-0.5 rounded"
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
               style={{ backgroundColor: C.bgElevated }}
             >
               {revisions.length}
@@ -645,7 +643,7 @@ function RevisionSection({
       {/* Create form */}
       {showForm && (
         <div
-          className="mb-4 p-3 rounded-lg space-y-2"
+          className="mb-4 p-3 rounded-md space-y-2"
           style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
         >
           <input
@@ -654,7 +652,7 @@ function RevisionSection({
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             aria-label="Revision title"
-            className="w-full bg-transparent rounded px-2 py-1.5 text-sm focus:outline-none"
+            className="w-full bg-transparent rounded-sm px-2 py-1.5 text-sm focus:outline-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
             autoFocus
           />
@@ -664,7 +662,7 @@ function RevisionSection({
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
             aria-label="Revision description"
-            className="w-full bg-transparent rounded px-2 py-1.5 text-sm focus:outline-none resize-none"
+            className="w-full bg-transparent rounded-sm px-2 py-1.5 text-sm focus:outline-none resize-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
           />
           <div className="flex gap-2 items-center">
@@ -672,7 +670,7 @@ function RevisionSection({
               value={priority}
               onChange={(e) => setPriority(e.target.value)}
               aria-label="Select priority"
-              className="rounded px-2 py-1 text-xs cursor-pointer"
+              className="rounded-sm px-2 py-1 text-xs cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
                 border: `1px solid ${C.border}`,
@@ -688,7 +686,7 @@ function RevisionSection({
               value={assignedAgent}
               onChange={(e) => setAssignedAgent(e.target.value)}
               aria-label="Assign agent"
-              className="rounded px-2 py-1 text-xs flex-1 cursor-pointer"
+              className="rounded-sm px-2 py-1 text-xs flex-1 cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
                 border: `1px solid ${C.border}`,
@@ -705,7 +703,7 @@ function RevisionSection({
             <button
               onClick={() => createRevision.mutate()}
               disabled={!title.trim() || createRevision.isPending}
-              className="px-3 py-1 text-xs font-medium rounded transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1 text-xs font-mono font-medium rounded-sm transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.accentHover,
@@ -729,7 +727,8 @@ function RevisionSection({
           return (
             <div
               key={rev.id}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg transition-colors group hover:bg-[rgba(255,255,255,0.04)]"
+              className="flex items-center gap-3 px-3 py-2 rounded-md transition-colors group bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
+              style={{ border: `1px solid ${C.border}` }}
             >
               <TaskStatusDot status={rev.status} />
               <span
@@ -739,8 +738,9 @@ function RevisionSection({
                 {rev.title}
               </span>
               {agent && (
-                <span className="text-xs" style={{ color: C.textMuted }}>
-                  {agent.emoji} {agent.name}
+                <span className="text-xs inline-flex items-center gap-1" style={{ color: C.textMuted }}>
+                  <EntityIcon value={agent.emoji} size={12} />
+                  {agent.name}
                 </span>
               )}
               <Pill color={STATUS_CONFIG[rev.status].color} size="sm">
@@ -815,9 +815,7 @@ function ProjectDetail({
             className="mx-auto mb-3 opacity-20"
             style={{ color: C.textMuted }}
           />
-          <div className="text-sm" style={{ color: C.textMuted }}>
-            Projekt auswaehlen
-          </div>
+          <div className="label-sys">Projekt auswaehlen</div>
         </div>
       </div>
     );
@@ -833,8 +831,8 @@ function ProjectDetail({
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 flex-wrap min-w-0 relative">
             <h2
-              className="text-lg font-semibold"
-              style={{ color: C.textPrimary, letterSpacing: "-0.02em" }}
+              className="display text-lg font-semibold"
+              style={{ color: C.textPrimary }}
             >
               {project.name}
             </h2>
@@ -844,12 +842,12 @@ function ProjectDetail({
                 href={project.github_repo_url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium shrink-0 hover:opacity-80 transition-opacity"
+                className="flex items-center gap-1 px-2 py-0.5 rounded-sm text-[10px] font-medium shrink-0 hover:opacity-80 transition-opacity"
                 style={{
                   background: C.bgSurface,
                   color: C.textMuted,
                   border: `1px solid ${C.borderSubtle}`,
-                  fontFamily: "var(--font-geist-mono), monospace",
+                  fontFamily: "var(--font-mono)",
                 }}
                 title={project.github_repo_url}
               >
@@ -868,7 +866,7 @@ function ProjectDetail({
             )}
             <button
               onClick={() => setShowTagManager(!showTagManager)}
-              className="w-5 h-5 rounded-full flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
+              className="w-5 h-5 rounded-sm flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
               style={{ color: C.textMuted }}
               title="Manage tags"
             >
@@ -883,7 +881,7 @@ function ProjectDetail({
             )}
           </div>
           <span
-            className="text-sm font-semibold shrink-0"
+            className="text-sm font-mono font-semibold shrink-0"
             style={{
               color: progress === 100 ? C.online : C.accent,
             }}
@@ -894,11 +892,11 @@ function ProjectDetail({
 
         {/* Progress bar */}
         <div
-          className="h-1.5 rounded-full overflow-hidden"
+          className="h-1.5 rounded-sm overflow-hidden"
           style={{ backgroundColor: C.bgElevated }}
         >
           <div
-            className="h-full rounded-full transition-all duration-500"
+            className="h-full rounded-sm transition-all duration-500"
             style={{
               width: `${progress}%`,
               backgroundColor: progress === 100 ? C.online : C.accent,
@@ -940,12 +938,9 @@ function ProjectDetail({
 
         {/* Standalone tasks */}
         {standaloneWithProject.length > 0 && (
-          <div>
+          <div className="space-y-1">
             {phases.length > 0 && (
-              <div
-                className="text-xs font-medium px-3 py-1 mb-1 mt-3"
-                style={{ color: C.textMuted }}
-              >
+              <div className="label-sys px-3 py-1 mb-1 mt-3">
                 Weitere Tasks
               </div>
             )}
@@ -1120,7 +1115,7 @@ function TasksPageContent() {
     <div className="flex md:-m-6 md:h-[calc(100dvh-theme(spacing.6)*2)]">
       {/* ── Task list (primary column) ── */}
       <div
-        className={`${mobileView === "list" ? "flex" : "hidden"} md:flex flex-1 md:flex-none md:w-[340px] md:border-r min-h-0`}
+        className={`${mobileView === "list" ? "flex" : "hidden"} md:flex flex-1 md:flex-none md:w-[340px] md:border-r min-h-0 min-w-0`}
         style={{ borderColor: C.border }}
       >
         <TaskListColumn
@@ -1146,7 +1141,7 @@ function TasksPageContent() {
           >
             <button
               onClick={handleCloseDetail}
-              className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
+              className="flex items-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-colors cursor-pointer min-h-[44px]"
               style={{
                 backgroundColor: C.bgSurface,
                 color: C.textSecondary,
@@ -1180,12 +1175,12 @@ function TasksPageContent() {
             >
               <button
                 onClick={handleCloseDetail}
-                className="text-[11px] px-2 py-1 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.05)]"
+                className="text-[11px] font-mono px-2 py-1 rounded-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
                 ← All tasks
               </button>
-              <span className="text-[11px]" style={{ color: C.textDim }}>
+              <span className="label-sys label-sys--dim">
                 Project view
               </span>
               <span className="ml-auto flex items-center gap-2">
@@ -1197,8 +1192,8 @@ function TasksPageContent() {
                     <button
                       onClick={() => deleteProjectMutation.mutate(projectView.id)}
                       disabled={deleteProjectMutation.isPending}
-                      className="px-2 py-1 rounded text-[11px] font-semibold cursor-pointer"
-                      style={{ backgroundColor: `${C.error}26`, color: "#D05F5F" }}
+                      className="px-2 py-1 rounded-sm text-[11px] font-semibold cursor-pointer"
+                      style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                     >
                       {deleteProjectMutation.isPending ? "…" : "Delete project"}
                     </button>
@@ -1215,7 +1210,7 @@ function TasksPageContent() {
                     onClick={() => setConfirmDeleteProject(true)}
                     aria-label="Delete project"
                     title="Delete project"
-                    className="p-1.5 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.05)]"
+                    className="p-1.5 rounded-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{ color: C.textMuted }}
                   >
                     <Trash2 size={13} />
@@ -1234,11 +1229,12 @@ function TasksPageContent() {
           </div>
         ) : (
           <div className="flex-1 hidden md:flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-sm" style={{ color: C.textMuted }}>
+            <div className="text-center px-10 py-12">
+              <div className="label-sys label-sys--dim mb-3">Task · Detail</div>
+              <div className="text-sm" style={{ color: C.textSecondary }}>
                 Select a task from the list
               </div>
-              <div className="text-xs mt-1" style={{ color: C.textDim }}>
+              <div className="text-[11px] font-mono mt-2" style={{ color: C.textDim }}>
                 Group by project to reach the phase view of a project
               </div>
             </div>

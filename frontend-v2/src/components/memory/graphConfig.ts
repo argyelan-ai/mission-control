@@ -11,7 +11,7 @@ import { C } from "@/lib/colors";
 // ── Accent alias — single source for selected/hover/highlight states ──────────
 // (Was purple #7C3AED; replaced with teal per Lila-Null-Regel)
 
-export const GRAPH_SELECTED = C.accent; // teal #0FA3A3
+export const GRAPH_SELECTED = C.accent; // cyan #00E5FF
 
 // ── Memory layer color schema — consistent tokens, defined once ───────────────
 // Consumers (MemoryLayerTabs, MemoryQueryBar, etc.) import from here.
@@ -28,11 +28,11 @@ export const LAYER_COLORS = {
 export const TYPE_COLORS: Record<VaultNoteType, string> = {
   lesson:       C.online,    // #2B9A4A — green
   knowledge:    C.info,      // #2E6FD8 — blue
-  reference:    C.accent,    // #0FA3A3 — teal (was violet)
+  reference:    C.accent,    // #00E5FF — cyan (was violet)
   journal:      C.warning,   // #B8870A — warm amber
   weekly_review:C.error,     // #C23838 — red
   note:         C.textMuted, // #888888 — grey (default / untyped)
-  deliverable:  C.accent,    // #0FA3A3 — teal (file attachment wrapper)
+  deliverable:  C.accent,    // #00E5FF — cyan (file attachment wrapper)
 };
 
 // ── Human-readable type labels (German) ──────────────────────────────────────

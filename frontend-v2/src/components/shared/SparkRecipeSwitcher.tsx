@@ -125,7 +125,7 @@ export function SparkRecipeSwitcher({
           gap: "4px",
           padding: "3px 8px",
           borderRadius: "6px",
-          background: open ? `${C.accent}26` : "rgba(255,255,255,0.04)",
+          background: open ? `${C.accent}26` : "var(--color-bg-hover)",
           border: `1px solid ${open ? `${C.accent}4D` : "var(--color-border-subtle)"}`,
           color: open ? C.accentHover : "var(--color-text-secondary)",
           fontSize: "11px",
@@ -232,7 +232,7 @@ export function SparkRecipeSwitcher({
                   onMouseEnter={(e) => {
                     if (!isActive && !isConfirm && !isDisabled) {
                       (e.currentTarget as HTMLDivElement).style.background =
-                        "rgba(255,255,255,0.04)";
+                        "var(--color-bg-elevated)";
                     }
                   }}
                   onMouseLeave={(e) => {
@@ -256,7 +256,7 @@ export function SparkRecipeSwitcher({
                       <span
                         className="text-[9px] font-mono px-1.5 py-0.5 rounded shrink-0"
                         style={{
-                          background: "rgba(255,255,255,0.05)",
+                          background: "var(--color-bg-elevated)",
                           color: "var(--color-text-muted)",
                         }}
                       >
@@ -269,7 +269,7 @@ export function SparkRecipeSwitcher({
                         background:
                           r.registry === "official"
                             ? `${C.accent}26`
-                            : "rgba(255,255,255,0.05)",
+                            : "var(--color-bg-hover)",
                         color:
                           r.registry === "official" ? C.accentHover : "var(--color-text-muted)",
                       }}

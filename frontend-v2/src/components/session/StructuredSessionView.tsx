@@ -180,7 +180,7 @@ export function StructuredSessionView({ selected }: { selected: CliGlobalSession
   if (events.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center">
-        <p className="text-[11px]" style={{ color: C.textMuted }}>Warte auf Agent-Output…</p>
+        <p className="text-[11px]" style={{ color: C.textMuted }}>Waiting for agent output…</p>
       </div>
     );
   }

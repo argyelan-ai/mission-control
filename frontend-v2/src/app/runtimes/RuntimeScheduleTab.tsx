@@ -94,7 +94,7 @@ function ScheduleEntry({
   const lr = schedule.last_run;
 
   const inputStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.06)",
+    background: "var(--color-bg-elevated)",
     border: `1px solid ${C.borderSubtle}`,
     color: C.textPrimary,
   };
@@ -164,7 +164,7 @@ function ScheduleEntry({
         <div className="px-3 pb-2">
           <div
             className="rounded-lg overflow-hidden text-xs"
-            style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.borderSubtle}` }}
+            style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.borderSubtle}` }}
           >
             {runs.length === 0 ? (
               <div className="px-3 py-2" style={{ color: C.textMuted }}>
@@ -203,7 +203,7 @@ function ScheduleEntry({
           <div
             className="rounded-lg p-3 flex flex-col gap-2.5"
             style={{
-              background: "rgba(255,255,255,0.03)",
+              background: "var(--color-bg-surface)",
               border: `1px solid ${C.borderSubtle}`,
             }}
           >
@@ -334,7 +334,7 @@ function AddScheduleForm({
   });
 
   const inputStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.06)",
+    background: "var(--color-bg-elevated)",
     border: `1px solid ${C.borderSubtle}`,
     color: C.textPrimary,
   };

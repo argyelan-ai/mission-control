@@ -328,14 +328,14 @@ function HostFormModal({
           onClick={(e) => e.stopPropagation()}
           style={{
             backgroundColor: "var(--color-bg-elevated)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: "1px solid var(--color-border)",
             boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
           }}
         >
           {/* Header */}
           <div
             className="flex items-center justify-between p-5 border-b shrink-0"
-            style={{ borderColor: "rgba(255,255,255,0.06)" }}
+            style={{ borderColor: "var(--color-border)" }}
           >
             <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
               {host ? `Edit host — ${host.display_name}` : "Add host"}
@@ -343,7 +343,7 @@ function HostFormModal({
             <button
               onClick={onClose}
               aria-label="Close"
-              className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer"
+              className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
             >
               <X size={14} style={{ color: C.textMuted }} />
             </button>
@@ -452,7 +452,7 @@ function HostFormModal({
           <div
             className="flex items-center justify-end gap-2 px-5 py-3 border-t shrink-0"
             style={{
-              borderColor: "rgba(255,255,255,0.06)",
+              borderColor: "var(--color-border)",
               paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
             }}
           >

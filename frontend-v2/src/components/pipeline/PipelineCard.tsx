@@ -4,6 +4,7 @@ import { CheckCircle, XCircle, Lock, Pause } from "lucide-react";
 import { SpotlightCard } from "@/components/shared/SpotlightCard";
 import type { PipelineTask } from "@/lib/types";
 import { C } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Priority helpers ──────────────────────────────────────────────────────────
 
@@ -138,7 +139,7 @@ export function PipelineCard({ task, laneKey, onClick }: PipelineCardProps) {
                 className="text-[10px] truncate"
                 style={{ color: C.textMuted, maxWidth: 80 }}
               >
-                {task.agent.emoji} {task.agent.name}
+                <EntityIcon value={task.agent.emoji} size={11} className="inline-block align-[-1px] mr-0.5" /> {task.agent.name}
               </span>
             )
           ) : (

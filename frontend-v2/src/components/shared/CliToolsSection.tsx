@@ -60,7 +60,7 @@ function AgentPills({ agents }: { agents: CliToolStatus["agents_affected"] }) {
       {agents.map((a) => (
         <span
           key={a.id}
-          title={a.busy ? "Agent beschäftigt — Update folgt nach Task-Ende" : a.name}
+          title={a.busy ? "Agent busy — update follows after the task ends" : a.name}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px]"
           style={{
             backgroundColor: C.accentSubtle,
@@ -261,7 +261,7 @@ function UpdateModal({
           onClick={(e) => e.stopPropagation()}
           style={{
             backgroundColor: C.bgElevated,
-            border: `1px solid rgba(255,255,255,0.08)`,
+            border: `1px solid var(--color-border)`,
             boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
           }}
         >
@@ -277,8 +277,8 @@ function UpdateModal({
             </div>
             <button
               onClick={onClose}
-              aria-label="Schliessen"
-              className="p-1 rounded-md cursor-pointer hover:bg-[rgba(255,255,255,0.06)]"
+              aria-label="Close"
+              className="p-1 rounded-md cursor-pointer hover:bg-[var(--color-bg-hover)]"
               style={{ color: C.textMuted }}
             >
               <X size={16} />
@@ -405,7 +405,7 @@ function UpdateModal({
                       background: isDone || isFailed ? C.borderSubtle : "transparent",
                     }}
                   >
-                    {isDone || isFailed ? "Schliessen" : "Im Hintergrund weiterlaufen"}
+                    {isDone || isFailed ? "Close" : "Keep running in background"}
                   </button>
                 </div>
               </div>

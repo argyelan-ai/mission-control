@@ -190,10 +190,11 @@ export default function ReposPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>
-            <h1 className="text-xl font-semibold" style={{ color: C.textPrimary }}>
+            <div className="label-sys mb-2">Code · Repos</div>
+            <h1 className="display text-xl font-semibold" style={{ color: C.textPrimary }}>
               Repos
             </h1>
-            <p className="text-sm mt-0.5" style={{ color: C.textMuted }}>
+            <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
               GitHub repos and their working rules for agents
             </p>
           </div>

@@ -222,7 +222,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                   {p.options && p.options.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 mt-1">
                       {p.options.map((opt, i) => (
-                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? `${C.accent}33` : "rgba(255,255,255,0.04)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? `${C.accent}66` : "rgba(255,255,255,0.08)"}` }}>
+                        <button key={i} onClick={() => setNote(opt)} className="text-[11px] px-2.5 py-1 rounded-lg cursor-pointer transition-all" style={{ backgroundColor: note === opt ? `${C.accent}33` : "var(--color-bg-elevated)", color: note === opt ? C.accent : "var(--color-text-secondary)", border: `1px solid ${note === opt ? `${C.accent}66` : "var(--color-border)"}` }}>
                           {opt}
                         </button>
                       ))}
@@ -245,7 +245,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                         target="_blank"
                         rel="noopener noreferrer"
                         className="block w-44 h-28 rounded-xl overflow-hidden transition-all hover:ring-2 hover:ring-[var(--color-accent)]/30"
-                        style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+                        style={{ border: "1px solid var(--color-border)" }}
                       >
                         <img src={src} alt={`Screenshot ${i + 1}`} className="w-full h-full object-cover" />
                       </a>
@@ -278,9 +278,9 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               rows={2}
               className="w-full px-3 py-2.5 rounded-xl text-[12px] outline-none resize-none"
               style={{
-                backgroundColor: "rgba(255,255,255,0.03)",
+                backgroundColor: "var(--color-bg-surface)",
                 color: "var(--color-text-primary)",
-                border: "1px solid rgba(255,255,255,0.06)",
+                border: "1px solid var(--color-border)",
               }}
             />
           </div>
@@ -289,7 +289,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
         {/* Actions */}
         <div
           className="flex items-center gap-2 mt-3 pt-3 border-t"
-          style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           <button
             onClick={() => onResolve("approved", note || undefined)}

@@ -100,7 +100,7 @@ function TypeChip({ type, selected, onToggle }: TypeChipProps) {
       }}
       onMouseLeave={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.0)";
+          (e.currentTarget as HTMLButtonElement).style.background = "var(--color-bg-surface)";
         }
       }}
       aria-pressed={selected}
@@ -130,19 +130,19 @@ function AgentChip({ agent, selected, onToggle }: AgentChipProps) {
       onClick={() => onToggle(agent)}
       className="flex items-center gap-1.5 w-full rounded px-2 py-1 text-left transition-colors"
       style={{
-        background: selected ? C.accentSubtle : "rgba(255,255,255,0.0)",
+        background: selected ? C.accentSubtle : "var(--color-bg-surface)",
         border: selected ? `1px solid ${C.borderAccent}` : "1px solid transparent",
         color: selected ? "var(--color-text-primary)" : "var(--color-text-secondary)",
         cursor: "pointer",
       }}
       onMouseEnter={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.04)";
+          (e.currentTarget as HTMLButtonElement).style.background = "var(--color-bg-elevated)";
         }
       }}
       onMouseLeave={(e) => {
         if (!selected) {
-          (e.currentTarget as HTMLButtonElement).style.background = "rgba(255,255,255,0.0)";
+          (e.currentTarget as HTMLButtonElement).style.background = "var(--color-bg-surface)";
         }
       }}
       aria-pressed={selected}
@@ -313,7 +313,7 @@ export function GraphFilterSidebar({
               background: "rgba(10,10,12,0.45)",
               backdropFilter: "blur(18px) saturate(140%)",
               WebkitBackdropFilter: "blur(18px) saturate(140%)",
-              borderRight: "1px solid rgba(255,255,255,0.06)",
+              borderRight: "1px solid var(--color-border)",
             }}
           >
             <div
@@ -342,8 +342,8 @@ export function GraphFilterSidebar({
                     placeholder="node label…"
                     className="w-full rounded px-2 py-1 pl-6 font-mono text-[11px] outline-none"
                     style={{
-                      background: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
+                      background: "var(--color-bg-elevated)",
+                      border: "1px solid var(--color-border)",
                       color: "var(--color-text-primary)",
                     }}
                     aria-label="Search node labels"
@@ -401,7 +401,7 @@ export function GraphFilterSidebar({
               </div>
 
               {/* Reset */}
-              <div className="mt-auto pt-2" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
+              <div className="mt-auto pt-2" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
                 <button
                   type="button"
                   onClick={handleReset}
@@ -438,7 +438,7 @@ export function GraphFilterSidebar({
           width: "20px",
           height: "20px",
           background: "rgba(26,26,26,0.95)",
-          border: "1px solid rgba(255,255,255,0.1)",
+          border: "1px solid var(--color-border)",
           color: "var(--color-text-secondary)",
           cursor: "pointer",
           boxShadow: "0 2px 8px rgba(0,0,0,0.4)",

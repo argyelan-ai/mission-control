@@ -80,30 +80,46 @@ function HomePage() {
       <div className="flex items-center justify-center h-full">
         <div className="text-center space-y-2">
           <div className="text-lg font-semibold" style={{ color: C.textPrimary }}>{greeting}, {displayName}</div>
-          <div className="text-sm" style={{ color: C.textMuted }}>Kein Board ausgewaehlt</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>No board selected</div>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col gap-5 max-w-6xl mx-auto">
-      {/* Header */}
+    <div className="flex flex-col gap-6 max-w-6xl mx-auto">
+      {/* Header — v3: Clash Display Headline, Mono-Metadaten, Cyan-Messmarke.
+          Mobile: kompakte einzeilige Variante (Datum in der Meta-Zeile). */}
       <motion.div custom={0} variants={sectionVariants} initial="hidden" animate="visible">
-        <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-          <h1 className="text-xl sm:text-2xl font-bold tracking-tight" style={{ color: C.textPrimary }}>{greeting}, {displayName}</h1>
+        <div className="label-sys mb-2 flex items-center justify-between gap-3">
+          <span>Console · Overview</span>
+          <span className="sm:hidden">{format(new Date(), "EEE, d. MMM")}</span>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <h1
+            className="display text-[22px] sm:text-[34px] font-semibold leading-[1.05] truncate"
+            style={{ color: C.textPrimary }}
+          >
+            {greeting}, {displayName}
+          </h1>
           <div className="flex items-center gap-3 shrink-0">
-            <span className="text-sm font-mono" style={{ color: C.textMuted }}>{format(new Date(), "EEE, d. MMM yyyy")}</span>
+            <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy")}</span>
             <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
           </div>
         </div>
-        <div className="mt-3 rounded-full" style={{ height: 2, background: `linear-gradient(90deg, ${C.accent}, ${C.accentSubtle}, transparent)` }} />
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Desktop; Mobile nur feine Linie */}
+        <div className="relative mt-3 sm:mt-4 h-px" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16 hidden sm:block"
+            style={{ backgroundColor: C.accent }}
+          />
+        </div>
       </motion.div>
 
       {/* Context warnings */}
       {alerts.length > 0 && (
         <motion.div custom={1} variants={sectionVariants} initial="hidden" animate="visible">
-          <div className="px-4 py-2.5 rounded-xl" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
+          <div className="px-4 py-2.5 rounded-md corner-ticks" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
             <div className="flex items-center gap-4 text-sm flex-wrap">
               <AlertTriangle size={14} style={{ color: C.warning }} className="shrink-0" />
               {alerts.map((alert, i) => (

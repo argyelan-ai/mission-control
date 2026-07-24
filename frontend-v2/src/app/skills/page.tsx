@@ -22,8 +22,8 @@ import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 const SK = {
-  bg: "rgba(255,255,255,0.03)",
-  bgHover: "rgba(255,255,255,0.045)",
+  bg: "var(--color-bg-surface)",
+  bgHover: "var(--color-bg-hover)",
 } as const;
 
 type LocalSkill = { name: string; key?: string; description?: string };
@@ -67,10 +67,10 @@ function MdContent({ content }: { content: string }) {
         const isBlock = className?.includes("language-");
         return isBlock ? (
           <code className="block px-4 py-3 rounded-xl text-xs font-mono mb-3 overflow-x-auto whitespace-pre"
-            style={{ background: "rgba(255,255,255,0.04)", color: C.accent, border: `1px solid ${C.border}` }}>{children}</code>
+            style={{ background: "var(--color-bg-deep)", color: C.accent, border: `1px solid ${C.border}` }}>{children}</code>
         ) : (
           <code className="px-1.5 py-0.5 rounded text-[11px] font-mono"
-            style={{ background: "rgba(255,255,255,0.08)", color: C.accent }}>{children}</code>
+            style={{ background: "var(--color-bg-elevated)", color: C.accent }}>{children}</code>
         );
       },
       pre: ({ children }) => <div className="mb-3">{children}</div>,
@@ -126,7 +126,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
         onClick={(e) => e.stopPropagation()}
       >
         <div className="absolute inset-x-0 top-0 h-px pointer-events-none"
-          style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.1) 50%, transparent)" }} />
+          style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover) 50%, transparent)" }} />
 
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
@@ -152,7 +152,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                 <button onClick={() => setMode("view")} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Cancel</button>
                 <button onClick={() => saveMutation.mutate(editContent)} disabled={saveMutation.isPending || !dirty}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
-                  style={{ background: dirty ? `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` : "rgba(255,255,255,0.05)",
+                  style={{ background: dirty ? `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` : "var(--color-bg-hover)",
                     color: dirty ? "white" : "var(--color-text-muted)", cursor: !dirty ? "default" : "pointer" }}>
                   {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> Saving...</> : <><Save size={11} /> Save</>}
                 </button>
@@ -184,7 +184,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                 {(["write", "preview"] as const).map((tab) => (
                   <button key={tab} onClick={() => setWriteTab(tab)}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
-                    style={{ background: writeTab === tab ? "rgba(255,255,255,0.07)" : "transparent",
+                    style={{ background: writeTab === tab ? "var(--color-bg-hover)" : "transparent",
                       color: writeTab === tab ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
                     {tab === "write" ? <><Pencil size={11} /> Write</> : <><Eye size={11} /> Preview</>}
                   </button>
@@ -382,8 +382,9 @@ export default function SkillsPage() {
         {/* ── Header ── */}
         <div className="flex items-start justify-between mb-6 gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight" style={{ color: "var(--color-text-primary)" }}>Skills</h1>
-            <p className="text-sm mt-1" style={{ color: "var(--color-text-muted)" }}>
+            <div className="label-sys mb-2">System · Skills</div>
+            <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>Skills</h1>
+            <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
               Skills, CLI plugins, and MCP servers — local from ~/.mc/
             </p>
           </div>
@@ -410,7 +411,7 @@ export default function SkillsPage() {
               onClick={() => { setActiveTab(id); setSearch(""); }}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-all whitespace-nowrap"
               style={{
-                background: activeTab === id ? "rgba(255,255,255,0.07)" : "transparent",
+                background: activeTab === id ? "var(--color-bg-hover)" : "transparent",
                 color: activeTab === id ? "var(--color-text-primary)" : "var(--color-text-muted)",
                 boxShadow: activeTab === id ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
               }}>
@@ -418,7 +419,7 @@ export default function SkillsPage() {
               {label}
               {count > 0 && (
                 <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
-                  style={{ background: activeTab === id ? C.accentSubtle : "rgba(255,255,255,0.05)",
+                  style={{ background: activeTab === id ? C.accentSubtle : "var(--color-bg-elevated)",
                     color: activeTab === id ? C.accent : "var(--color-text-muted)" }}>
                   {count}
                 </span>
@@ -482,7 +483,7 @@ export default function SkillsPage() {
         {activeTab === "plugins" && (
           <div className="space-y-8">
             <PluginMatrix />
-            <div className="h-px" style={{ background: "rgba(255,255,255,0.06)" }} />
+            <div className="h-px" style={{ background: "var(--color-bg-elevated)" }} />
             <SkillMatrix />
           </div>
         )}
