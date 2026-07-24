@@ -92,9 +92,46 @@ class GrokAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
+class KimiHostAdapter:
+    """Kimi Code CLI as a host harness (2026-07-24, boss-host pattern).
+
+    Kimi runs as a persistent tmux TUI (session "kimi-host", Window 0) with
+    the SHARED docker/shared/poll.sh (Window 1) driving dispatch/messages via
+    the TCK-pinned adapter libs — unlike grok/hermes there is no bespoke
+    bridge script; the container and host paths share one adapter surface.
+
+    Auth is OAuth FILES in the per-agent KIMI_CODE_HOME
+    (~/.mc/agents/kimi/kimi-config) — protocol-fixed "kimi" like grok's
+    "grok": build_agent_env renders only MC_* control-plane vars. The
+    runtime binding (kimi-cloud seed) is a display anchor.
+
+    NOTE: harness "kimi" exists in BOTH worlds (cli-bridge image AND host).
+    This registry is only consulted on the host provisioning path
+    (agent_runtime == "host"), so the dual use is safe — the cli-bridge path
+    never calls get_adapter().
+    """
+
+    harness = "kimi"
+    protocol = "kimi"
+    singleton_slug = "kimi"
+
+    async def build_agent_env(self, agent, runtime, token, *, session):
+        from app.services.agent_bootstrap import build_kimi_agent_env
+        return await build_kimi_agent_env(runtime, token, session=session)
+
+    async def bootstrap(self, session, agent, runtime):
+        from app.services.agent_bootstrap import bootstrap_kimi_agent
+        return await bootstrap_kimi_agent(session, agent, runtime)
+
+    async def reload(self, agent):
+        from app.routers.cli_terminal import _host_agent_lifecycle
+        return await _host_agent_lifecycle(agent, "restart")
+
+
 HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "hermes": HermesAdapter(),
     "grok": GrokAdapter(),
+    "kimi": KimiHostAdapter(),
 }
 
 

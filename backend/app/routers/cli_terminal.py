@@ -790,6 +790,13 @@ _HOST_AGENT_TMUX_TARGETS: dict[str, dict[str, str]] = {
         "session": "grok",
         "socket": _user_default_tmux_socket(),
     },
+    # Kimi: user-default tmux, session 'kimi-host' — persistent Kimi-TUI
+    # (boss-host pattern, docker/kimi-host/entrypoint.sh). Window 0 is the
+    # TUI the shared poll.sh pastes dispatches into.
+    "kimi": {
+        "session": "kimi-host",
+        "socket": _user_default_tmux_socket(),
+    },
 }
 
 
