@@ -56,14 +56,14 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
             <button
               key={f}
               onClick={() => setCommentFilter(f)}
-              className="text-[10px] px-2 py-0.5 rounded-full capitalize transition-colors cursor-pointer"
+              className="text-[10px] px-2 py-0.5 rounded-sm font-mono capitalize transition-colors cursor-pointer"
               style={{
                 backgroundColor: commentFilter === f ? C.accent : "var(--color-bg-surface)",
                 color: commentFilter === f ? C.textPrimary : C.textMuted,
                 border: `1px solid ${commentFilter === f ? C.borderAccent : C.border}`,
               }}
             >
-              {f === "all" ? `Alle (${comments.length})` : f}
+              {f === "all" ? `All (${comments.length})` : f}
             </button>
           ))}
         </div>
@@ -89,9 +89,9 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
               <button
                 key={t}
                 onClick={() => setNewCommentType(t)}
-                className="text-[10px] px-2 py-0.5 rounded capitalize transition-colors cursor-pointer"
+                className="text-[10px] px-2 py-0.5 rounded-sm font-mono capitalize transition-colors cursor-pointer"
                 style={{
-                  backgroundColor: isActive ? `${color}33` : "rgba(255, 255, 255, 0.03)",
+                  backgroundColor: isActive ? `${color}33` : "var(--color-bg-surface)",
                   color: isActive ? color : C.textMuted,
                   border: `1px solid ${isActive ? color : C.border}`,
                 }}
@@ -125,12 +125,12 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
               }}
               placeholder={
                 newCommentType === "blocker"
-                  ? "Blockierung beschreiben... (Enter)"
+                  ? "Describe the blocker... (Enter)"
                   : newCommentType === "feedback"
-                  ? "Feedback geben... (Enter)"
-                  : "Fortschritt kommentieren... (Enter)"
+                  ? "Give feedback... (Enter)"
+                  : "Comment on progress... (Enter)"
               }
-              aria-label="Kommentar eingeben"
+              aria-label="Add comment"
               className="flex-1 px-2.5 py-2 rounded-lg text-xs outline-none"
               style={{
                 backgroundColor: "var(--color-bg-surface)",

@@ -663,7 +663,107 @@ BUILD_LOG_FILE = HOME / ".mc" / "logs" / "agent-image-build.log"
 BUILD_SCRIPT = Path(__file__).parent / "build-agent-images.sh"
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-_HARNESS_ARG = {"openclaude": "openclaude", "claude": "claude", "omp": "omp"}
+_HARNESS_ARG = {"openclaude": "openclaude", "claude": "claude", "omp": "omp", "kimi": "kimi"}
+
+# --- Host-CLI Endpoints (Update-Sektion: Host-Tools wie grok) ---------------
+#
+# Host-Tools haben kein Docker-Image — Binary + Update laufen auf dem Mac:
+#   GET  /host-cli/<binary>/version  → `<binary> --version` (Allowlist!)
+#   POST /host-cli/update {tool}     → `brew upgrade --cask <cask>` im Thread
+#   GET  /host-cli/update/status     → state/log_tail wie /agent-images/build/status
+_HOST_CLI_TOOLS = {
+    # tool → (binary, brew cask)
+    "grok": ("grok", "grok-build"),
+}
+HOST_CLI_LOG_FILE = HOME / ".mc" / "logs" / "host-cli-update.log"
+_HOST_CLI_TIMEOUT_S = 900
+
+_host_cli_lock = threading.Lock()
+_host_cli_state = {
+    "state": "idle",  # idle|running|success|failed
+    "tool": None,
+    "returncode": None,
+    "thread": None,
+}
+
+
+def _host_cli_version(binary: str) -> Optional[str]:
+    """`<binary> --version` → erste Zeile, Versionsnummer extrahiert.
+    z.B. `grok 0.2.93 (f00f96316d4b) [stable]` → `0.2.93`."""
+    path = shutil.which(binary) or f"/opt/homebrew/bin/{binary}"
+    try:
+        proc = _sp.run([path, "--version"], capture_output=True, text=True, timeout=15)
+    except (OSError, _sp.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    first = (proc.stdout or proc.stderr).strip().splitlines()
+    if not first:
+        return None
+    m = re.search(r"\d+\.\d+[\w.-]*", first[0])
+    return m.group(0) if m else first[0]
+
+
+def _host_cli_log_tail(n=80) -> str:
+    if not HOST_CLI_LOG_FILE.exists():
+        return ""
+    lines = HOST_CLI_LOG_FILE.read_text(errors="replace").splitlines()
+    return "\n".join(lines[-n:])
+
+
+def _run_host_cli_update(tool: str, cask: str):
+    """Hintergrund-Thread: brew upgrade --cask <cask>. launchd-PATH hat kein
+    /opt/homebrew/bin — brew absolut aufrufen."""
+    brew = shutil.which("brew") or "/opt/homebrew/bin/brew"
+    env = os.environ.copy()
+    extra_paths = ("/usr/local/bin", "/opt/homebrew/bin")
+    path_parts = env.get("PATH", "").split(":")
+    env["PATH"] = ":".join(path_parts + [p for p in extra_paths if p not in path_parts])
+    log(f"Host-CLI update started: tool={tool} cask={cask}")
+    try:
+        with open(HOST_CLI_LOG_FILE, "w") as logf:
+            proc = _sp.run(
+                [brew, "upgrade", "--cask", cask],
+                env=env, stdout=logf, stderr=_sp.STDOUT,
+                timeout=_HOST_CLI_TIMEOUT_S,
+            )
+        returncode = proc.returncode
+        # `brew upgrade` auf bereits aktueller Version returned != 0 mit
+        # "not installed"/"already ..." — das Log klärt den Fall.
+    except _sp.TimeoutExpired:
+        log(f"ERROR host-cli update timed out after {_HOST_CLI_TIMEOUT_S}s (tool={tool})")
+        with open(HOST_CLI_LOG_FILE, "a") as logf:
+            logf.write(f"\n[bridge] ERROR update timed out after {_HOST_CLI_TIMEOUT_S}s\n")
+        returncode = -1
+    except Exception as e:
+        log(f"ERROR running host-cli update: {e}")
+        with open(HOST_CLI_LOG_FILE, "a") as logf:
+            logf.write(f"\n[bridge] ERROR launching update: {e}\n")
+        returncode = -1
+
+    with _host_cli_lock:
+        _host_cli_state["returncode"] = returncode
+        _host_cli_state["state"] = "success" if returncode == 0 else "failed"
+    log(f"Host-CLI update finished: tool={tool} returncode={returncode}")
+
+
+def _start_host_cli_update(tool: str) -> Optional[str]:
+    binary, cask = _HOST_CLI_TOOLS[tool]
+    with _host_cli_lock:
+        thread = _host_cli_state.get("thread")
+        if thread is not None and thread.is_alive():
+            return "update läuft bereits"
+        HOST_CLI_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        HOST_CLI_LOG_FILE.write_text("")
+        _host_cli_state["state"] = "running"
+        _host_cli_state["tool"] = tool
+        _host_cli_state["returncode"] = None
+        new_thread = threading.Thread(
+            target=_run_host_cli_update, args=(tool, cask), daemon=True,
+        )
+        _host_cli_state["thread"] = new_thread
+        new_thread.start()
+    return None
 
 # Versions-Strings fliessen in env-Overrides und (omp-sha256) in eine
 # GitHub-Download-URL — striktes Charset verhindert Pfad-Tricks (`../`)
@@ -845,6 +945,28 @@ class Handler(BaseHTTPRequestHandler):
                 "state": state, "tool": tool, "returncode": returncode,
                 "log_tail": _build_log_tail(),
             })
+
+        elif self.path == "/host-cli/update/status":
+            with _host_cli_lock:
+                state = _host_cli_state["state"]
+                tool = _host_cli_state["tool"]
+                returncode = _host_cli_state["returncode"]
+            self._json({
+                "state": state, "tool": tool, "returncode": returncode,
+                "log_tail": _host_cli_log_tail(),
+            })
+
+        elif self.path.startswith("/host-cli/") and self.path.endswith("/version"):
+            binary = self.path[len("/host-cli/"):-len("/version")]
+            allowed = {b for b, _ in _HOST_CLI_TOOLS.values()}
+            if binary not in allowed:
+                self._json({"error": f"unbekanntes host-cli binary: {binary}"}, status=400)
+                return
+            version = _host_cli_version(binary)
+            if version is None:
+                self._json({"error": f"{binary} --version fehlgeschlagen"}, status=502)
+                return
+            self._json({"binary": binary, "version": version})
 
         elif self.path == "/plugins":
             master = PLUGINS_DIR / "installed_plugins.json"
@@ -1035,6 +1157,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": "sha256 hat ungültiges Format"}, status=400)
                 return
             error = _start_agent_image_build(tool, version, sha256)
+            if error:
+                self._json({"error": error}, status=409)
+                return
+            self._json({"status": "started"})
+
+        elif self.path == "/host-cli/update":
+            try:
+                body = self._read_json()
+            except Exception as e:
+                self.send_error(400, str(e))
+                return
+            tool = body.get("tool", "")
+            if tool not in _HOST_CLI_TOOLS:
+                self._json({"error": f"unbekanntes host-cli tool: {tool}"}, status=400)
+                return
+            error = _start_host_cli_update(tool)
             if error:
                 self._json({"error": error}, status=409)
                 return

@@ -454,6 +454,51 @@ export interface TaskEvent {
   created_at: string;
 }
 
+// ── Task Thread (comm_v2, user-side read API) ──────────────────────────────
+// Shape: mc-ui-redesign/04-thread-read-api-shape.md. delivered_at/read_at and
+// delivery are optional — the backend omits what its models don't track.
+
+export type ThreadDirection = "user_to_agent" | "agent_to_user" | "system";
+export type ThreadDelivery = "queued" | "delivered" | "read" | "failed";
+
+export interface ThreadAuthor {
+  kind: "user" | "agent" | "system" | string;
+  /** null for user/system rows — the backend tracks no user identity on senders. */
+  id: string | null;
+  display: string;
+}
+
+export interface ThreadMessage {
+  seq: number;
+  id: string;
+  direction: ThreadDirection;
+  author: ThreadAuthor;
+  body: string;
+  body_format: string;
+  created_at: string;
+  delivery?: ThreadDelivery;
+  delivered_at?: string | null;
+  read_at?: string | null;
+  error?: string | null;
+}
+
+export interface ThreadRecipient {
+  kind: "agent" | "user" | "role" | string;
+  id: string;
+  display: string;
+  listening: boolean;
+  reason: "assignee" | "reviewer" | "watcher" | string;
+}
+
+export interface TaskThreadResponse {
+  task_id: string;
+  recipient: ThreadRecipient | null;
+  messages: ThreadMessage[];
+  has_more_before: boolean;
+  latest_seq: number;
+  my_read_seq: number;
+}
+
 // ── Task Flight Recorder (Timeline) ─────────────────────────────────────────
 
 export interface TaskTimelineEntry {
