@@ -198,6 +198,102 @@ async def _get_task_result(client, channel: Channel, query: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+#: Checklist-Status, die als "abgehakt" zaehlen. ``skipped`` gehoert dazu:
+#: ein bewusst uebersprungener Schritt ist erledigt, nicht offen (siehe
+#: `mc checklist skip --reason`).
+_CHECKLIST_CLOSED = frozenset({"done", "skipped"})
+
+
+def _item_is_done(item: dict) -> bool:
+    """Ist ein Checklist-Item abgeschlossen?
+
+    Der reale Endpoint liefert ``status``; ein boolesches ``done``/``checked``
+    wird zusaetzlich akzeptiert, damit ein Formwechsel das Tool nicht killt.
+    """
+    if item.get("done") is not None:
+        return bool(item.get("done"))
+    if item.get("checked") is not None:
+        return bool(item.get("checked"))
+    return str(item.get("status") or "").lower() in _CHECKLIST_CLOSED
+
+
+def _item_text(item: dict) -> str:
+    """Der Anzeigetext eines Checklist-Items (real: ``title``)."""
+    return str(item.get("title") or item.get("text") or item.get("label") or "")
+
+
+def _event_text(event: dict) -> str:
+    """Ein TaskEvent als vorlesbarer Einzeiler.
+
+    Reale Felder: from_status / to_status / changed_by / reason. Ein freies
+    ``message``/``event_type`` gewinnt, falls es je eins gibt.
+    """
+    free = event.get("message") or event.get("event_type")
+    if free:
+        return str(free)
+    frm, to = event.get("from_status"), event.get("to_status")
+    if to:
+        line = f"{frm} → {to}" if frm else str(to)
+        who = event.get("changed_by")
+        if who:
+            line += f" ({who})"
+        reason = event.get("reason")
+        if reason:
+            line += f": {reason}"
+        return line
+    return ""
+
+
+async def _task_progress(client, channel: Channel, query: str) -> dict:
+    """Wie weit ist ein laufender Task? Checkliste + letzte Ereignisse.
+
+    Checkliste und Events werden EINZELN abgesichert: faellt eine Quelle aus,
+    liefert das Tool trotzdem den Rest — ein fehlender Endpoint darf die
+    Antwort nicht komplett verschlucken.
+    """
+    logger.info("Tool: task_progress(q=%r)", query)
+    try:
+        task = await _resolve_task(client, query)
+        if task is None:
+            return {"ok": False, "reason": "nothing_found", "query": query}
+
+        checklist = None
+        try:
+            cl = await client.get_task_checklist(task["id"])
+            items = cl.get("items") or []
+            if items:
+                checklist = {
+                    "done": sum(1 for i in items if _item_is_done(i)),
+                    "total": len(items),
+                    "open_items": [
+                        _item_text(i)[:60] for i in items if not _item_is_done(i)
+                    ][:3],
+                }
+        except Exception:
+            logger.warning("checklist fetch failed", exc_info=True)
+
+        events: list[str] = []
+        try:
+            ev = await client.get_task_events(task["id"], limit=5)
+            events = [
+                text[:80]
+                for text in (_event_text(e) for e in (ev.get("events") or []))
+                if text
+            ]
+        except Exception:
+            logger.warning("events fetch failed", exc_info=True)
+
+        return {
+            "ok": True,
+            "task": task,
+            "checklist": checklist,
+            "recent_events": events,
+        }
+    except Exception as e:
+        logger.exception("task_progress failed")
+        return {"ok": False, "error": str(e)}
+
+
 #: Titel-Stichworte, unter denen die Briefing-Tasks im Board laufen. Der
 #: Scheduler legt sie taeglich neu an ("Morning Briefing - Tech & News Digest",
 #: "Morgenbriefing X-Trends") — beide Varianten sollen gefunden werden.
@@ -738,6 +834,21 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
             "required": ["query"],
         },
         handler=_get_task_result,
+    ),
+    ToolSpec(
+        name="task_progress",
+        description=(
+            "Zeigt, wie weit ein laufender Task ist (Checklisten-Fortschritt + "
+            "letzte Ereignisse). Nutze das bei 'wie weit ist Rex?', 'was macht "
+            "Sparky gerade?', 'ist X schon durch?'. query = Stichwort aus dem "
+            "Task-Titel oder Agent-Name."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"query": _STR},
+            "required": ["query"],
+        },
+        handler=_task_progress,
     ),
     ToolSpec(
         name="read_briefing",

@@ -219,6 +219,13 @@ class VoiceAssistant(Agent):
         )
 
     @function_tool
+    async def task_progress(self, query: str) -> dict:
+        """Fortschritt eines laufenden Tasks."""
+        return await jtools.dispatch(
+            "task_progress", mc_client, VOICE, {"query": query}
+        )
+
+    @function_tool
     async def read_briefing(self) -> dict:
         """Liest das echte Morgenbriefing-Dokument vor."""
         return await jtools.dispatch("read_briefing", mc_client, VOICE, {})

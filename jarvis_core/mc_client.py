@@ -629,6 +629,42 @@ async def get_deliverables(
     return {"ok": True, "deliverables": items}
 
 
+async def get_task_events(task_id: str, limit: int = 10) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/events — Status-Historie.
+
+    Verifiziert 25.07. (agent_task_status.py): der Endpoint antwortet mit einer
+    nackten Liste von ``TaskEvent``-Dumps, jeweils mit ``from_status``,
+    ``to_status``, ``changed_by``, ``reason``, ``created_at`` — neueste zuerst.
+    Der ``events``-Key wird defensiv trotzdem akzeptiert.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/events",
+        params={"limit": max(1, min(int(limit or 10), 100))},
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("events") or [])
+    return {"ok": True, "events": items}
+
+
+async def get_task_checklist(task_id: str) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/checklist — Fortschritt.
+
+    Verifiziert 25.07. (agent_scoped.py): nackte Liste von
+    ``TaskChecklistItem`` mit ``title`` und ``status``
+    (pending|in_progress|done|blocked|skipped), sortiert nach ``sort_order``.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/checklist"
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("items") or [])
+    return {"ok": True, "items": items}
+
+
 async def voice_graph_highlight(filter: dict[str, Any]) -> dict[str, Any]:
     """POST /api/v1/voice/graph-highlight — broadcasts filter command to frontend.
 

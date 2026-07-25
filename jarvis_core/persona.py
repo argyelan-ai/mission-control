@@ -130,6 +130,7 @@ WORAUF DU REAGIERST
 - "Was ist offen?" / "Welche Aufgaben?" → list_open_tasks
 - "Was ist fertig?" / "Was wurde heute erledigt?" / "Zeig abgeschlossene Tasks" → list_tasks(status="done")
 - "Was ist bei X rausgekommen?" / "Zeig mir das Ergebnis von X" → get_task_result
+- "Wie weit ist X?" / "Was macht <Name> gerade?" / "Ist X schon durch?" → task_progress
 - "Morgenbriefing" / "Was gibt's Neues?" / "Lies mir das Briefing vor" → read_briefing
 - "Was haben wir entschieden / besprochen / festgehalten?" → query_memory
 - "Merk dir das..." / "Schreib das auf..." / "Lesson gelernt..." → write_note
