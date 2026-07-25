@@ -29,6 +29,7 @@ import { ActivityFeed } from "@/components/shared/ActivityFeed";
 import { SkillBadges } from "@/components/agent/AgentCard";
 import { RuntimePill, RUNTIME_TYPE_COLOR } from "@/components/shared/RuntimePill";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type {
   Agent, AgentMetrics, ActivityEvent as ActivityEventType,
   OpenClawSkill, AgentSkillsResponse,
@@ -143,7 +144,7 @@ function SkillRow({
     : pendingChange === "remove"
     ? `${C.error}66`
     : skill.status === "ready"
-    ? "rgba(255,255,255,0.07)"
+    ? "var(--color-border)"
     : `${cfg.color}33`;
 
   const bgTint = pendingChange === "add"
@@ -177,12 +178,12 @@ function SkillRow({
               {skill.emoji && <EntityIcon value={skill.emoji} size={12} className="mr-1" />}
               {skill.name}
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
               {cfg.label}
             </span>
             {pendingChange && (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 font-medium"
+                className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 font-medium"
                 style={{
                   color: pendingChange === "add" ? C.online : C.error,
                   backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
@@ -192,7 +193,7 @@ function SkillRow({
               </span>
             )}
             {skill.source !== "bundled" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono" style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}>
                 {skill.source}
               </span>
             )}
@@ -270,7 +271,7 @@ function SkillRow({
             style={{
               backgroundColor: isActive
                 ? pendingChange === "remove" ? `${C.error}18` : `${C.accent}26`
-                : pendingChange === "add" ? `${C.online}18` : "rgba(255,255,255,0.04)",
+                : pendingChange === "add" ? `${C.online}18` : "var(--color-bg-elevated)",
               color: isActive
                 ? pendingChange === "remove" ? C.error : C.accent
                 : pendingChange === "add" ? C.online : "var(--color-text-muted)",
@@ -320,7 +321,7 @@ function HostSkillRow({ name, meta, badge, badgeColor }: {
       </div>
       {badge && (
         <span
-          className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+          className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
           style={{ color: badgeColor ?? C.online, backgroundColor: `${badgeColor ?? C.online}18` }}
         >
           {badge}
@@ -643,8 +644,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
 
   const selectedRuntime = runtimesData?.runtimes.find((r) => r.id === selected || r.slug === selected);
   const borderColor = isSwitchable && selectedRuntime
-    ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "rgba(255,255,255,0.06)"
-    : "rgba(255,255,255,0.06)";
+    ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "var(--color-border)"
+    : "var(--color-border)";
 
   if (!isSwitchable) {
     // Locked badge for host agents without a HostHarnessAdapter (Boss, Jarvis)
@@ -689,7 +690,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
         }}
       >
         <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-mono text-[var(--color-text-muted)]">RUNTIME</span>
               {selectedRuntime?.state === "ready" && (
@@ -889,7 +890,7 @@ function ConfigTab({
         }}
       >
         <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-mono text-[var(--color-text-muted)]">
                 API KEY (Provider)
@@ -1032,7 +1033,7 @@ function ConfigTab({
         {isReadonly && (
           <div className="flex items-center justify-between mt-1">
             <span className="text-xs text-[var(--color-text-muted)]">
-              Auto-generiert -- zeigt Operator-Kontext fuer diesen Agent
+              Auto-generated -- shows operator context for this agent
             </span>
             <button
               onClick={() => (syncConfigMutation as { mutate: () => void }).mutate()}
@@ -1055,6 +1056,7 @@ function ConfigTab({
 function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
   const qc = useQueryClient();
 
   const { data: config, isLoading } = useQuery({
@@ -1080,6 +1082,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
       notify.success("Memory cleared");
     },
+    onSettled: () => setConfirmClear(false),
   });
 
   if (isLoading) {
@@ -1120,22 +1123,23 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
           onChange={(e) => setEditContent(e.target.value)}
           className="flex-1 p-4 font-mono text-sm resize-none outline-none bg-transparent text-[var(--color-text-primary)]"
           style={{ minHeight: "400px" }}
-          placeholder={`# ${agentName} Memory\n\n## Gelerntes aus Tasks\n- ...\n\n## Bekannte Konventionen\n- ...`}
+          placeholder={`# ${agentName} Memory\n\n## Lessons from tasks\n- ...\n\n## Known conventions\n- ...`}
         />
       </GlassCard>
     );
   }
 
   return (
+    <>
     <GlassCard className="flex flex-col">
       <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
         <span className="text-sm font-medium text-[var(--color-text-primary)]">
-          Persoenliches Wissen
+          Personal knowledge
         </span>
         <div className="flex gap-2">
           {memory && (
             <button
-              onClick={() => { if (confirm("Really delete memory?")) clearMutation.mutate(); }}
+              onClick={() => setConfirmClear(true)}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: C.error, backgroundColor: `${C.error}14` }}
             >
@@ -1164,7 +1168,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               {agentName} hasn't saved any insights yet.
             </p>
             <p className="text-xs text-center max-w-xs text-[var(--color-text-muted)]">
-              Agents aktualisieren ihre Memory via{" "}
+              Agents update their memory via{" "}
               <code className="px-1 rounded" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                 PATCH /api/v1/agent/me/memory
               </code>
@@ -1180,6 +1184,16 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
         )}
       </div>
     </GlassCard>
+    <ConfirmDialog
+      open={confirmClear}
+      kicker="Memory"
+      title="Really delete memory?"
+      confirmLabel="Delete"
+      loading={clearMutation.isPending}
+      onConfirm={() => clearMutation.mutate()}
+      onCancel={() => setConfirmClear(false)}
+    />
+    </>
   );
 }
 
@@ -1221,6 +1235,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["agent-local-memory", agentId],
@@ -1238,6 +1253,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
       const msg = err instanceof Error ? err.message : "Delete failed";
       notify.error(msg);
     },
+    onSettled: () => setConfirmDeleteFile(null),
   });
 
   if (isLoading) {
@@ -1331,11 +1347,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 </span>
               </button>
               <button
-                onClick={() => {
-                  if (confirm(`Really delete "${file.name}"? This action cannot be undone.`)) {
-                    deleteMutation.mutate(file.name);
-                  }
-                }}
+                onClick={() => setConfirmDeleteFile(file.name)}
                 disabled={deleteMutation.isPending}
                 className="p-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                 style={{
@@ -1362,6 +1374,16 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
           </GlassCard>
         );
       })}
+      <ConfirmDialog
+        open={confirmDeleteFile !== null}
+        kicker="Local Memory"
+        title={`Really delete "${confirmDeleteFile}"?`}
+        body="This action cannot be undone."
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => { if (confirmDeleteFile) deleteMutation.mutate(confirmDeleteFile); }}
+        onCancel={() => setConfirmDeleteFile(null)}
+      />
     </div>
   );
 }
@@ -1443,7 +1465,7 @@ function OverviewTab({
           <span className="text-[11px] text-[var(--color-text-muted)]">Run State</span>
           <div className="mt-2">
             <span
-              className="text-xs font-medium px-2 py-0.5 rounded-full"
+              className="text-xs font-medium px-2 py-0.5 rounded-sm font-mono"
               style={{ color: rsColor, backgroundColor: `${rsColor}18` }}
             >
               {agent.run_state}
@@ -1688,6 +1710,7 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [confirmRecreate, setConfirmRecreate] = useState(false);
 
   // SSE updates
   const handleAgentEvent = useCallback(
@@ -1751,6 +1774,7 @@ export default function AgentDetailPage() {
       qc.invalidateQueries({ queryKey: ["agent-local-memory", id] });
     },
     onError: (e: Error) => notify.error(`Force recreate failed: ${e.message}`),
+    onSettled: () => setConfirmRecreate(false),
   });
 
   const provisionMutation = useMutation<unknown, Error>({
@@ -1903,7 +1927,7 @@ export default function AgentDetailPage() {
                     <span className="text-[10px] text-[var(--color-text-muted)]">Context</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-[rgba(255,255,255,0.06)] overflow-hidden">
+                  <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
                     <motion.div
                       className="h-full rounded-full"
                       style={{ backgroundColor: barColor }}
@@ -1962,16 +1986,7 @@ export default function AgentDetailPage() {
                   icon={RefreshCw}
                   label="Force-Recreate"
                   color={C.error}
-                  onClick={() => {
-                    const hasTask = !!agent.current_task_id;
-                    const baseMsg = `Fully recreate container ${agent.name}?\n\nThis pulls the current Docker image (~30-90s).\nThe running worker session will be terminated.`;
-                    const taskWarning = hasTask
-                      ? `\n\nWARNING: The agent is currently working on a task — the run will be aborted.\nClick OK to continue anyway (force=true).`
-                      : "";
-                    if (confirm(baseMsg + taskWarning)) {
-                      forceRecreateMutation.mutate({ force: hasTask });
-                    }
-                  }}
+                  onClick={() => setConfirmRecreate(true)}
                   loading={forceRecreateMutation.isPending}
                   title="Recreate container (pulls current image)"
                 />
@@ -2105,6 +2120,30 @@ export default function AgentDetailPage() {
             {activeTab === "local-memory" && <LocalMemoryTab agentId={id} agentName={agent.name} />}
           </motion.div>
         </AnimatePresence>
+
+        <ConfirmDialog
+          open={confirmRecreate}
+          kicker="Force-Recreate"
+          title={`Fully recreate container ${agent.name}?`}
+          body={
+            <>
+              <p>
+                This pulls the current Docker image (~30-90s). The running worker
+                session will be terminated.
+              </p>
+              {agent.current_task_id && (
+                <p className="font-medium" style={{ color: C.warning }}>
+                  Warning: the agent is currently working on a task — the run will
+                  be aborted. Confirm to continue anyway (force=true).
+                </p>
+              )}
+            </>
+          }
+          confirmLabel="Force-Recreate"
+          loading={forceRecreateMutation.isPending}
+          onConfirm={() => forceRecreateMutation.mutate({ force: !!agent.current_task_id })}
+          onCancel={() => setConfirmRecreate(false)}
+        />
       </div>
     </AppShell>
   );

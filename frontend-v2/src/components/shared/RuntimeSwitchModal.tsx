@@ -196,6 +196,17 @@ export function RuntimeSwitchModal({
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
 
+  // Esc closes (panel register rule 4) — blocked while a switch is in flight,
+  // same as the backdrop click below.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitting) onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, submitting, onClose]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -291,7 +302,7 @@ export function RuntimeSwitchModal({
                     }}
                   >
                     {agent.harness == null && (
-                      <option value="">Standard (aus Provider abgeleitet)</option>
+                      <option value="">Default (derived from provider)</option>
                     )}
                     {compatMatrix?.harnesses.map((h) => {
                       const incompatible = targetCompat ? !targetCompat.compatible_harnesses.includes(h.key) : false;
@@ -304,7 +315,7 @@ export function RuntimeSwitchModal({
                           title={incompatible ? reason : undefined}
                         >
                           {h.label}
-                          {incompatible ? " — nicht kompatibel" : ""}
+                          {incompatible ? " — incompatible" : ""}
                         </option>
                       );
                     })}
@@ -315,7 +326,7 @@ export function RuntimeSwitchModal({
                       style={{ color: STATUS_TEXT.error }}
                       data-testid="harness-incompatible-reason"
                     >
-                      {selectedHarnessIncompatibleReason ?? "Dieser Harness ist mit der Ziel-Runtime nicht kompatibel."}
+                      {selectedHarnessIncompatibleReason ?? "This harness is not compatible with the target runtime."}
                     </div>
                   )}
                 </div>

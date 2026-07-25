@@ -11,8 +11,8 @@ import { ModelInput, wizardLabelClass } from "../shared";
 import { HarnessIcon } from "@/components/shared/HarnessIcon";
 
 const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
-  { key: "cli-bridge", label: "CLI Bridge (Docker)", hint: "Lokaler Container, auto-provisioniert" },
-  { key: "host", label: "Host (launchd)", hint: "Natives Binary via launchd auf dem Mac" },
+  { key: "cli-bridge", label: "CLI Bridge (Docker)", hint: "Local container, auto-provisioned" },
+  { key: "host", label: "Host (launchd)", hint: "Native binary via launchd on the Mac" },
   { key: "manual", label: "Manual", hint: "No auto-provisioning" },
 ];
 
@@ -95,7 +95,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
     <div className="space-y-5">
       {/* 1. agent_runtime */}
       <div>
-        <label className={wizardLabelClass}>Runtime-Typ</label>
+        <label className={wizardLabelClass}>Runtime type</label>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           {RUNTIMES.map((r) => {
             const active = state.agentRuntime === r.key;
@@ -137,7 +137,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                     key={h.key}
                     onClick={() => !taken && pickHarness(h.key)}
                     disabled={taken}
-                    title={taken ? `Singleton – ein '${h.key}'-Host-Agent existiert bereits` : undefined}
+                    title={taken ? `Singleton – a '${h.key}' host agent already exists` : undefined}
                     className="flex-1 rounded-xl px-3 py-2.5 text-sm transition-all"
                     style={{
                       cursor: taken ? "not-allowed" : "pointer",
@@ -221,7 +221,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
 
           {/* 4. model override */}
           <div>
-            <label className={wizardLabelClass}>Modell (optional)</label>
+            <label className={wizardLabelClass}>Model (optional)</label>
             <ModelInput value={state.model} onChange={(v) => update({ model: v })} />
           </div>
 
@@ -235,7 +235,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               }}
             >
               <span className="font-medium" style={{ color: C.warning }}>
-                cli-bridge Helper nicht erreichbar.
+                cli-bridge helper not reachable.
               </span>{" "}
               The agent will be created but stays unprovisioned until the helper is running:{" "}
               <code className="font-mono">python3 scripts/cli-bridge.py</code>

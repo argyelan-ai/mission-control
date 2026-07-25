@@ -50,7 +50,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             type="text"
             value={state.name}
             onChange={(e) => update({ name: e.target.value })}
-            placeholder="z.B. Cody"
+            placeholder="e.g. Cody"
             className={wizardInputClass}
             style={wizardInputStyle}
             autoFocus
@@ -69,7 +69,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             />
           </div>
           <div>
-            <label className={wizardLabelClass}>Rolle</label>
+            <label className={wizardLabelClass}>Role</label>
             <input
               type="text"
               value={state.role}
@@ -124,7 +124,7 @@ export function IdentityStep({ state, update, boards }: WizardStepProps) {
             color: "var(--color-text-secondary)",
           }}
         >
-          {preview?.soul_md ?? "Name eingeben, um die generierte Persona zu sehen…"}
+          {preview?.soul_md ?? "Enter a name to see the generated persona…"}
         </div>
       </div>
     </div>

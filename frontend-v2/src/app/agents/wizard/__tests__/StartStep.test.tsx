@@ -25,7 +25,7 @@ describe("StartStep", () => {
     const update = vi.fn();
     const state = { ...initialWizardState(null), startMode: "template" as const };
     wrap(<StartStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    fireEvent.click(screen.getByText("Vorlage"));
+    fireEvent.click(screen.getByText("Template"));
     await waitFor(() => expect(screen.getByText("Planner")).toBeTruthy());
     fireEvent.click(screen.getByText("Planner"));
     expect(update).toHaveBeenCalledWith(
@@ -36,7 +36,7 @@ describe("StartStep", () => {
   it("custom mode is selected by default and sets startMode custom", () => {
     const update = vi.fn();
     wrap(<StartStep state={initialWizardState(null)} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    fireEvent.click(screen.getByText("Individuell"));
+    fireEvent.click(screen.getByText("Custom"));
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ startMode: "custom" }));
   });
 
@@ -57,7 +57,7 @@ describe("StartStep", () => {
       runtimeId: "rt1",
     };
     wrap(<StartStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    fireEvent.click(screen.getByText("Individuell"));
+    fireEvent.click(screen.getByText("Custom"));
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({
         startMode: "custom",

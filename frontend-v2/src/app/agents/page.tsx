@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -77,6 +77,16 @@ function AssignBoardModal({
 }) {
   const [boardId, setBoardId] = useState(agent.board_id ?? "");
   const qc = useQueryClient();
+
+  // Panel register rule 4: scroll-lock + Esc closes (backdrop click below).
+  useBodyScrollLock(true);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   async function handleAssign() {
     try {
@@ -163,7 +173,7 @@ function TemplatesTab({
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[...Array(4)].map((_, i) => (
           <GlassCard key={i} className="p-4 animate-pulse">
-            <div className="h-36 rounded-lg bg-[rgba(255,255,255,0.03)]" />
+            <div className="h-36 rounded-lg bg-[var(--color-bg-elevated)]" />
           </GlassCard>
         ))}
       </div>
@@ -216,7 +226,7 @@ function TemplatesTab({
                   {tmpl.skills!.slice(0, 5).map((s) => (
                     <span
                       key={s}
-                      className="text-[10px] px-1.5 py-0.5 rounded-full"
+                      className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono"
                       style={{
                         backgroundColor: "var(--color-bg-elevated)",
                         color: "var(--color-text-muted)",
@@ -363,7 +373,7 @@ function AgentRosterRow({
           )}
           {showAllAgents && (
             <span
-              className="text-[9px] px-1.5 py-0.5 rounded-full shrink-0 max-sm:hidden"
+              className="text-[9px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 max-sm:hidden"
               style={{
                 color: boardName ? C.textMuted : C.warning,
                 border: `1px solid ${boardName ? CINEMA.borderSubtle : `${C.warning}4D`}`,
@@ -437,6 +447,14 @@ function AgentActionsSheet({
   onClose: () => void;
 }) {
   useBodyScrollLock(true);
+  // Esc closes (panel register rule 4) — backdrop click is below.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
   const dot = DOT_STATUS(agent.status);
@@ -619,7 +637,7 @@ export default function AgentsPage() {
   const archiveMutation = useMutation({
     mutationFn: (agent: Agent) => api.agents.archive(agent.id),
     onSuccess: (_res, agent) => {
-      notify.success(`${agent.name} archiviert`);
+      notify.success(`${agent.name} archived`);
       qc.invalidateQueries({ queryKey: ["agents"] });
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -708,7 +726,7 @@ export default function AgentsPage() {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => setShowAllAgents(!showAllAgents)}
-                className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 rounded-xl transition-colors cursor-pointer"
+                className="flex items-center gap-1.5 text-[11px] px-3 py-1.5 max-sm:min-h-touch rounded-xl transition-colors cursor-pointer"
                 style={{
                   backgroundColor: showAllAgents ? C.accentSubtle : "var(--color-bg-elevated)",
                   color: showAllAgents ? C.accent : "var(--color-text-muted)",
@@ -778,7 +796,7 @@ export default function AgentsPage() {
                 <div className="flex items-center gap-2 mb-2 px-1">
                   <Archive size={13} style={{ color: C.textMuted }} />
                   <h2 className="text-[11px] font-medium uppercase tracking-[0.05em]" style={{ color: C.textMuted }}>
-                    Archiviert ({archivedAgents.length})
+                    Archived ({archivedAgents.length})
                   </h2>
                 </div>
                 <div
@@ -800,7 +818,7 @@ export default function AgentsPage() {
                         </span>
                         {agent.archived_at && (
                           <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
-                            archiviert {timeAgo(agent.archived_at)}
+                            archived {timeAgo(agent.archived_at)}
                           </span>
                         )}
                       </Link>

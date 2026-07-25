@@ -48,7 +48,7 @@ export function ReviewStep({
       const token = createdWithToken.token ?? null;
       setLocalResult({ id: created.id, token });
       update({ createdAgentId: created.id, createdToken: token });
-      notify.success(`Agent "${state.name}" erstellt`);
+      notify.success(`Agent "${state.name}" created`);
 
       // Host agents don't auto-provision on create — stage their files now.
       // Provisioning rotates the token, so the freshly returned one (if any)
@@ -83,13 +83,13 @@ export function ReviewStep({
 
   const rows: { label: string; value: string }[] = [
     { label: "Name", value: `${state.emoji || "🤖"} ${state.name}` },
-    { label: "Rolle", value: state.role || "—" },
+    { label: "Role", value: state.role || "—" },
     { label: "Runtime", value: state.agentRuntime },
-    { label: "Harness", value: state.harness ?? "(abgeleitet)" },
+    { label: "Harness", value: state.harness ?? "(derived)" },
     { label: "LLM Runtime", value: state.runtimeId || "Fallback" },
-    { label: "Modell", value: state.model || "(Runtime-Default)" },
+    { label: "Model", value: state.model || "(runtime default)" },
     { label: "Scopes", value: `${state.scopes.length} selected` },
-    { label: "Board Lead", value: state.isBoardLead ? "ja" : "nein" },
+    { label: "Board Lead", value: state.isBoardLead ? "yes" : "no" },
   ];
 
   if (!createdAgentId) {
@@ -113,10 +113,10 @@ export function ReviewStep({
             }}
           >
             <span className="font-medium" style={{ color: C.warning }}>
-              Grok Build CLI muss auf dem Host eingeloggt sein.
+              Grok Build CLI must be logged in on the host.
             </span>{" "}
-            Ohne gültige xAI-OAuth-Session (<code className="font-mono">~/.grok/auth.json</code>)
-            bleiben Dispatches liegen. Einmalig auf dem Mac:{" "}
+            Without a valid xAI OAuth session (<code className="font-mono">~/.grok/auth.json</code>)
+            dispatches will stall. One-time on the Mac:{" "}
             <code className="font-mono">grok login --device-auth</code>.
           </div>
         )}
@@ -130,7 +130,7 @@ export function ReviewStep({
             {creating ? (
               <span className="flex items-center gap-2"><Loader2 size={14} className="animate-spin" /> Creating…</span>
             ) : (
-              "Agent erstellen"
+              "Create agent"
             )}
           </button>
         </div>
@@ -142,15 +142,15 @@ export function ReviewStep({
     <div className="space-y-4">
       {createdToken && (
         <div>
-          <label className={wizardLabelClass}>Agent-Token (nur einmal sichtbar — jetzt sichern!)</label>
+          <label className={wizardLabelClass}>Agent token (shown only once — save it now!)</label>
           <TokenDisplay token={createdToken} />
         </div>
       )}
 
       <div>
-        <label className={wizardLabelClass}>Readiness-Check</label>
+        <label className={wizardLabelClass}>Readiness check</label>
         <div className="space-y-1.5">
-          {(readiness?.checks ?? [{ label: "warte auf Provisionierung…", ok: false, detail: "" }]).map((c) => (
+          {(readiness?.checks ?? [{ label: "waiting for provisioning…", ok: false, detail: "" }]).map((c) => (
             <div key={c.label} className="flex items-center gap-2 text-sm">
               {c.ok ? (
                 <CheckCircle2 size={15} className="text-[var(--color-online)]" />
@@ -164,7 +164,7 @@ export function ReviewStep({
         </div>
         {state.agentRuntime === "host" && (
           <p className="mt-2 text-[10px] text-[var(--color-text-muted)]">
-            Host-Agent: Dateien wurden nach ~/.mc/agents/&lt;slug&gt;/ gerendert. Auf dem
+            Host agent: files were rendered to ~/.mc/agents/&lt;slug&gt;/.
             Load onto the Mac via launchctl (see activity event) — the heartbeat will turn green.
           </p>
         )}
@@ -176,7 +176,7 @@ export function ReviewStep({
           className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
           style={wizardBtnPrimaryStyle}
         >
-          Fertig
+          Done
         </button>
       </div>
     </div>

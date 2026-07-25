@@ -106,7 +106,7 @@ export function TokenDisplay({ token }: { token: string }) {
       <button
         onClick={copy}
         className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
-        title="Token kopieren"
+        title="Copy token"
       >
         {copied ? <Check size={12} className="text-[var(--color-online)]" /> : <Copy size={12} />}
       </button>

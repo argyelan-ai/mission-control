@@ -96,7 +96,7 @@ export function AgentActions({
   const archiveMutation = useMutation({
     mutationFn: () => api.agents.archive(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} archiviert`);
+      notify.success(`${agent.name} archived`);
       invalidate();
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -105,7 +105,7 @@ export function AgentActions({
   const restoreMutation = useMutation({
     mutationFn: () => api.agents.restore(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} wiederhergestellt`);
+      notify.success(`${agent.name} restored`);
       invalidate();
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -130,11 +130,11 @@ export function AgentActions({
       {isArchived ? (
         <LifecycleButton
           icon={ArchiveRestore}
-          label="Wiederherstellen"
+          label="Restore"
           color={C.online}
           onClick={() => restoreMutation.mutate()}
           loading={restoreMutation.isPending}
-          title="Agent wiederherstellen — Runtime wird neu gestartet"
+          title="Restore agent — runtime is restarted"
         />
       ) : (
         <LifecycleButton
@@ -150,7 +150,7 @@ export function AgentActions({
       {confirmDelete && isArchived ? (
         <span className="flex items-center gap-2">
           <span className="text-[11px]" style={{ color: C.error }}>
-            Sicher?
+            Sure?
           </span>
           <button
             onClick={() => deleteMutation.mutate()}
@@ -165,7 +165,7 @@ export function AgentActions({
             onClick={() => setConfirmDelete(false)}
             className="text-[11px] px-2.5 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer text-[var(--color-text-muted)]"
           >
-            Abbrechen
+            Cancel
           </button>
         </span>
       ) : (

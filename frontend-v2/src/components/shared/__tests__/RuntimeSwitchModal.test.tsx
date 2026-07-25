@@ -452,7 +452,7 @@ describe("RuntimeSwitchModal", () => {
 
   describe("harness selector (ADR-056)", () => {
     // mkAgent() has no `harness` set → the select also renders the explicit
-    // "Standard (aus Provider abgeleitet)" placeholder option (review finding 2),
+    // "Default (derived from provider)" placeholder option (review finding 2),
     // on top of the 3 harnesses from the compat matrix.
     it("renders all 3 harness options from the compat matrix plus the standard placeholder", async () => {
       vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
@@ -488,7 +488,7 @@ describe("RuntimeSwitchModal", () => {
       );
       const select = await screen.findByLabelText(/harness/i);
       await waitFor(() => expect(within(select).getAllByRole("option")).toHaveLength(4));
-      const claudeOption = within(select).getByRole("option", { name: /claude code.*nicht kompatibel/i });
+      const claudeOption = within(select).getByRole("option", { name: /claude code.*incompatible/i });
       expect(claudeOption).toBeDisabled();
       expect(claudeOption).toHaveAttribute(
         "title",
@@ -566,7 +566,7 @@ describe("RuntimeSwitchModal", () => {
       const select = await screen.findByLabelText(/harness/i);
       await waitFor(() =>
         expect(
-          within(select).getByRole("option", { name: "Standard (aus Provider abgeleitet)" }),
+          within(select).getByRole("option", { name: "Default (derived from provider)" }),
         ).toBeInTheDocument(),
       );
       expect(select).toHaveValue("");

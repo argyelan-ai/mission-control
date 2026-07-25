@@ -50,7 +50,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
             onClick={() => update({ scopes: roleDefaults })}
             className="flex items-center gap-1 text-[11px] cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
           >
-            <RotateCcw size={11} /> Rollen-Default
+            <RotateCcw size={11} /> Role default
           </button>
         </div>
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
@@ -66,7 +66,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
                   backgroundColor: checked ? C.accentSubtle : "var(--color-bg-surface)",
                   border: `1px solid ${deviates ? C.warning + "66" : checked ? C.borderAccent : C.borderSubtle}`,
                 }}
-                title={deviates ? "Weicht vom Rollen-Default ab" : undefined}
+                title={deviates ? "Deviates from the role default" : undefined}
               >
                 <input
                   type="checkbox"
@@ -118,7 +118,7 @@ export function ScopesStep({ state, update }: WizardStepProps) {
             })}
           </div>
           <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-            Leer = alle installierten Plugins (Standard).
+            Empty = all installed plugins (default).
           </p>
         </div>
       )}

@@ -28,7 +28,7 @@ describe("ReviewStep", () => {
   it("creating an agent posts the assembled payload and shows the token", async () => {
     const state = { ...initialWizardState(null), name: "Nova", scopes: ["tasks:read"], harness: "openclaude" as const };
     wrap(<ReviewStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /Agent erstellen/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Create agent/ }));
     await waitFor(() => expect(createMock).toHaveBeenCalled());
     const payload = createMock.mock.calls[0][0];
     expect(payload.name).toBe("Nova");
@@ -48,7 +48,7 @@ describe("ReviewStep", () => {
   it("posts harness=grok for a grok host agent", async () => {
     const state = { ...initialWizardState(null), name: "Grok", agentRuntime: "host" as const, harness: "grok" as const, runtimeId: "grok-cloud" };
     wrap(<ReviewStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /Agent erstellen/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Create agent/ }));
     await waitFor(() => expect(createMock).toHaveBeenCalled());
     // createMock is module-shared across tests → assert THIS test's call, not calls[0].
     const payload = createMock.mock.lastCall![0];
@@ -61,7 +61,7 @@ describe("ReviewStep", () => {
     provisionMock.mockResolvedValueOnce({ status: "provisioning", token: "rotated" });
     const state = { ...initialWizardState(null), name: "Nova Host", agentRuntime: "host" as const, harness: "openclaude" as const };
     wrap(<ReviewStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} onCreated={() => {}} />);
-    fireEvent.click(screen.getByRole("button", { name: /Agent erstellen/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Create agent/ }));
     await waitFor(() => expect(provisionMock).toHaveBeenCalledWith("new-1"));
     await waitFor(() => expect(screen.getByText("rotated")).toBeTruthy());
     expect(screen.queryByText("tok-xyz")).toBeNull();

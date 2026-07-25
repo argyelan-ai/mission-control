@@ -10,9 +10,9 @@ import { initialWizardState } from "../types";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 const MODES: { key: StartMode; label: string; icon: typeof Sparkles; hint: string }[] = [
-  { key: "custom", label: "Individuell", icon: Sparkles, hint: "Von Grund auf konfigurieren" },
-  { key: "template", label: "Vorlage", icon: LayoutTemplate, hint: "Aus einem Rollen-Template" },
-  { key: "duplicate", label: "Duplizieren", icon: Copy, hint: "Bestehenden Agent kopieren" },
+  { key: "custom", label: "Custom", icon: Sparkles, hint: "Configure from scratch" },
+  { key: "template", label: "Template", icon: LayoutTemplate, hint: "From a role template" },
+  { key: "duplicate", label: "Duplicate", icon: Copy, hint: "Copy an existing agent" },
 ];
 
 // Prefillable fields only — board/step are shell-owned and must survive a mode switch.
@@ -51,7 +51,7 @@ export function StartStep({ state, update }: WizardStepProps) {
     update({
       startMode: "duplicate",
       sourceAgentId: src.id,
-      name: `${src.name} Kopie`,
+      name: `${src.name} Copy`,
       emoji: src.emoji ?? "",
       role: src.role ?? "",
       soulMd: src.soul_md,

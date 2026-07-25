@@ -17,7 +17,7 @@ describe("IdentityStep", () => {
   it("typing a name updates state", () => {
     const update = vi.fn();
     wrap(<IdentityStep state={initialWizardState(null)} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/z\.B\. Cody/), { target: { value: "Nova" } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Cody/), { target: { value: "Nova" } });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ name: "Nova" }));
   });
 
