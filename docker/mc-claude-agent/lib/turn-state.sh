@@ -224,7 +224,7 @@ detect_turn_state() {
     # oben schon). Einheiten klein UND gross zulassen: das Modell bestimmt das
     # Fenster (`1M` bei K3, `256k` bei K2.7 — Live-Fund 2026-07-25). Kein
     # claude/openclaude-Pane rendert dieses Format, der Check ist kimi-eindeutig.
-    if echo "$capture" | tail -8 | grep -qE 'context: [0-9]+% \([0-9.]+[kKmM]?/[0-9.]+[kKmM]?\)'; then
+    if echo "$capture" | tail -8 | grep -qE 'context: [0-9]+%( \([0-9.]+[kKmM]?/[0-9.]+[kKmM]?\))?'; then
         echo "idle"
         return
     fi

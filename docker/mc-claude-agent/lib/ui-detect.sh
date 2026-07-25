@@ -45,7 +45,7 @@ detect_pane_ui() {
     # <=2.0 used (`╭─`/`╰─`), so the claude check below would swallow it.
     # Kimi's statusline is unique though — it always ends the pane with
     # `context: N% (x/1M)` (token budget vs. 1M window). Checked FIRST.
-    if echo "$tail8" | grep -qE 'context: [0-9]+% \([0-9.]+[kKmM]?/[0-9.]+[kKmM]?\)' 2>/dev/null; then
+    if echo "$tail8" | grep -qE 'context: [0-9]+%( \([0-9.]+[kKmM]?/[0-9.]+[kKmM]?\))?' 2>/dev/null; then
         echo "kimi"
         return 0
     fi
