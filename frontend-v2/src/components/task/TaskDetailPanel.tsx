@@ -11,6 +11,7 @@
  * ~180-line duplication between the two variants is gone.
  */
 
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C } from "@/lib/colors";
@@ -35,6 +36,20 @@ export default function TaskDetailPanel({
   // iOS-safe scroll lock — only in modal variant (M4); panel variant is embedded in layout
   useBodyScrollLock(variant === "modal");
 
+  // Esc closes the modal variant. Portal menus (status/assignee dropdowns,
+  // rendered with role=menu/listbox) handle Escape themselves — don't close
+  // the panel out from under an open menu.
+  useEffect(() => {
+    if (variant === "panel") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (document.querySelector('[role="menu"], [role="listbox"]')) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [variant, onClose]);
+
   if (variant === "panel") {
     return (
       <motion.div
@@ -43,7 +58,7 @@ export default function TaskDetailPanel({
         animate={{ opacity: 1, x: 0 }}
         exit={{ opacity: 0, x: 24 }}
         transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="w-[420px] shrink-0 border-l flex flex-col overflow-hidden"
+        className="w-[420px] max-w-[calc(100vw-2rem)] shrink-0 border-l flex flex-col overflow-hidden"
         style={{ borderColor: C.border, backgroundColor: C.bgBase }}
       >
         <TaskDetailBody task={task} agents={agents} boardId={boardId} onClose={onClose} />

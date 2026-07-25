@@ -313,10 +313,11 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
             <div
               className="absolute inset-0"
               style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+              onClick={resetForm}
             />
 
             {/* Drag indicator — mobile only */}
-            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full" style={{ backgroundColor: "var(--color-bg-hover)" }} />
+            <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-sm" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
             <motion.div
               ref={dialogRef}
