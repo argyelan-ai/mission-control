@@ -84,7 +84,7 @@ function TypeChip({ type, selected, onToggle }: TypeChipProps) {
       style={{
         background: selected
           ? `rgba(${rgb},0.15)`
-          : "rgba(255,255,255,0.0)",
+          : "var(--color-bg-surface)",
         border: selected
           ? `1px solid rgba(${rgb},0.4)`
           : "1px solid transparent",
@@ -184,7 +184,7 @@ function ToggleRow({ label, enabled, onToggle }: ToggleRowProps) {
           height: "10px",
           border: enabled
             ? `1.5px solid ${C.accent}`
-            : "1.5px solid rgba(255,255,255,0.2)",
+            : "1.5px solid var(--color-border-strong)",
           background: enabled ? C.accent : "transparent",
         }}
       />
@@ -309,10 +309,8 @@ export function GraphFilterSidebar({
             transition={{ type: "spring", stiffness: 220, damping: 26 }}
             className="overflow-hidden shrink-0 h-full"
             style={{
-              // Glassier — was 0.92 opaque, now lets the panel halo through.
-              background: "rgba(10,10,12,0.45)",
-              backdropFilter: "blur(18px) saturate(140%)",
-              WebkitBackdropFilter: "blur(18px) saturate(140%)",
+              // v3: solid token surface, no glass/blur (B2 — blur only on modals).
+              background: "var(--color-bg-surface)",
               borderRight: "1px solid var(--color-border)",
             }}
           >
@@ -429,15 +427,14 @@ export function GraphFilterSidebar({
         )}
       </AnimatePresence>
 
-      {/* Collapse toggle button */}
+      {/* Collapse toggle button — 44px touch target on mobile (M-regeln),
+          compact 20px handle on desktop. */}
       <button
         type="button"
         onClick={() => setCollapsed((c) => !c)}
-        className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-full"
+        className="absolute -right-3 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center rounded-full w-11 h-11 sm:w-5 sm:h-5"
         style={{
-          width: "20px",
-          height: "20px",
-          background: "rgba(26,26,26,0.95)",
+          background: "var(--color-bg-elevated)",
           border: "1px solid var(--color-border)",
           color: "var(--color-text-secondary)",
           cursor: "pointer",

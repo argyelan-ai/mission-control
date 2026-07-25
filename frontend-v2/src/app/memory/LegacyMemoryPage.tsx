@@ -22,6 +22,7 @@ import { AttachmentPanel } from "@/components/memory/AttachmentPanel";
 import { MergeResolutionPanel } from "@/components/memory/MergeResolutionPanel";
 import { C as _C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Design tokens — local aliases mapping to lib/colors ──────────────────────
 const C = {
@@ -211,6 +212,7 @@ function MemoryModal({
   const [editType, setEditType] = useState<MemoryType>("knowledge");
   const [dirty, setDirty] = useState(false);
   const [showUnsaved, setShowUnsaved] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [saved, setSaved] = useState(false);
   const [activeWriteTab, setActiveWriteTab] = useState<"write" | "preview">("write");
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -231,13 +233,15 @@ function MemoryModal({
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // The delete ConfirmDialog handles its own Esc — don't close the modal.
+        if (confirmDelete) return;
         if (dirty) setShowUnsaved(true);
         else onClose();
       }
     };
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [dirty, onClose]);
+  }, [dirty, confirmDelete, onClose]);
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<BoardMemory> }) =>
@@ -269,6 +273,7 @@ function MemoryModal({
       qc.invalidateQueries({ queryKey: ["knowledge"] });
       onClose();
     },
+    onSettled: () => setConfirmDelete(false),
   });
 
   const pinMutation = useMutation({
@@ -291,6 +296,7 @@ function MemoryModal({
   if (!entry) return null;
 
   return (
+    <>
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={(e) => { if (e.target === backdropRef.current) tryClose(); }}>
       <div ref={backdropRef} className="absolute inset-0 bg-black/70" style={{ backdropFilter: "blur(8px)" }} onClick={tryClose} />
 
@@ -342,7 +348,7 @@ function MemoryModal({
                     <Pin size={13} />
                   </button>
                   <button
-                    onClick={() => { if (confirm(`Delete "${entry.title}"?`)) deleteMutation.mutate(entry.id); }}
+                    onClick={() => setConfirmDelete(true)}
                     className="p-1.5 rounded-lg cursor-pointer transition-colors"
                     style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: C.err }}
                   >
@@ -546,6 +552,16 @@ function MemoryModal({
         </AnimatePresence>
       </motion.div>
     </div>
+    <ConfirmDialog
+      open={confirmDelete}
+      kicker="Memory"
+      title={`Delete "${entry.title}"?`}
+      confirmLabel="Delete"
+      loading={deleteMutation.isPending}
+      onConfirm={() => deleteMutation.mutate(entry.id)}
+      onCancel={() => setConfirmDelete(false)}
+    />
+    </>
   );
 }
 

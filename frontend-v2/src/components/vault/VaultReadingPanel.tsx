@@ -91,7 +91,7 @@ function RelatedNotesSection({
                 {n.type}
               </span>
               <span
-                className="truncate"
+                className="truncate min-w-0"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {(typeof n.title === "string" && n.title.trim())
@@ -293,7 +293,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label="Cancel edit"
                   title="Cancel (Esc)"
-                  className="rounded p-1.5 transition-colors"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -318,7 +318,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label="Save edit"
                   title="Save (⌘S)"
-                  className="rounded p-1.5 transition-colors flex items-center gap-1.5"
+                  className="rounded p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
                     background: "rgba(52,211,153,0.08)",
@@ -343,7 +343,7 @@ function PanelContent({
                   onClick={startEdit}
                   aria-label="Edit note"
                   title="Edit"
-                  className="rounded p-1.5 transition-colors"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -369,7 +369,7 @@ function PanelContent({
                   type="button"
                   onClick={() => setConfirmOpen(true)}
                   aria-label="Delete note"
-                  className="rounded p-1.5 transition-colors"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",

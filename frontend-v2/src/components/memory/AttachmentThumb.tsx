@@ -16,6 +16,7 @@ import { FileText, Image as ImageIcon, X } from "lucide-react";
 
 import { api, getToken } from "@/lib/api";
 import type { BoardMemoryAttachment } from "@/lib/types";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface Props {
   attachment: BoardMemoryAttachment;
@@ -36,6 +37,7 @@ export function AttachmentThumb({
 }: Props) {
   const prefersReduce = useReducedMotion();
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const filename = attachment.path.split("/").pop() ?? "file";
   const isImage = attachment.mime_type.startsWith("image/");
 
@@ -66,6 +68,7 @@ export function AttachmentThumb({
   }, [entryId, filename, isImage]);
 
   return (
+    <>
     <motion.div
       initial={prefersReduce ? false : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
@@ -120,11 +123,7 @@ export function AttachmentThumb({
       {editMode && onDelete && (
         <button
           type="button"
-          onClick={() => {
-            if (window.confirm(`Delete attachment "${attachment.original_name}"?`)) {
-              onDelete(filename);
-            }
-          }}
+          onClick={() => setConfirmDelete(true)}
           className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity touch-visible"
           style={{ background: "rgba(239,68,68,0.8)" }}
           aria-label={`Delete attachment ${attachment.original_name}`}
@@ -133,5 +132,16 @@ export function AttachmentThumb({
         </button>
       )}
     </motion.div>
+    {editMode && onDelete && (
+      <ConfirmDialog
+        open={confirmDelete}
+        kicker="Attachment"
+        title={`Delete attachment "${attachment.original_name}"?`}
+        confirmLabel="Delete"
+        onConfirm={() => { setConfirmDelete(false); onDelete(filename); }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    )}
+    </>
   );
 }

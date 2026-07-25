@@ -30,7 +30,7 @@ const C = {
   error:       _C.error,
   textPrimary: _C.textPrimary,
   textMuted:   _C.textMuted,
-  inputBg:     "rgba(255,255,255,0.02)",
+  inputBg:     "var(--color-bg-surface)",
 };
 
 // Selectable note types. Order = frequency of the operator's use cases:

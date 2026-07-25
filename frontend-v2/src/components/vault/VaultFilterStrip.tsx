@@ -189,7 +189,7 @@ export function VaultFilterStrip({
             border:
               open || activeCount > 0
                 ? `1px solid ${C.borderAccent}`
-                : "1px solid rgba(255,255,255,0.06)",
+                : "1px solid var(--color-border)",
           }}
         >
           <SlidersHorizontal size={14} strokeWidth={2} />

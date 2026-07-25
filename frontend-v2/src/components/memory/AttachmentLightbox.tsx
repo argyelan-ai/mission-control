@@ -48,11 +48,11 @@ export function AttachmentLightbox({ open, src, filename, sizeKb, onClose }: Pro
             {filename} · {sizeKb} KB
           </div>
           <Dialog.Close
-            className="absolute top-6 right-6 p-2 rounded-full"
+            className="absolute top-6 right-6 p-3 rounded-full"
             style={{ background: "var(--color-bg-hover)" }}
             aria-label="Close"
           >
-            <X size={20} className="text-white" />
+            <X size={20} style={{ color: "var(--color-text-primary)" }} />
           </Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>

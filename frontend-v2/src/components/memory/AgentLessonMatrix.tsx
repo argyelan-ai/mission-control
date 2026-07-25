@@ -73,10 +73,11 @@ export function AgentLessonMatrix({
   }
 
   return (
-    <div className="flex gap-4 min-h-[400px]">
-      {/* Left: Agent list */}
+    <div className="flex flex-col sm:flex-row gap-4 min-h-[400px]">
+      {/* Left: Agent list — full-width stacked block on mobile (393px),
+          fixed 224px rail from sm up. */}
       <div
-        className="w-56 shrink-0 rounded-xl overflow-hidden"
+        className="w-full sm:w-56 shrink-0 rounded-xl overflow-hidden"
         style={{ border: "1px solid var(--color-border)" }}
       >
         <div className="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)", background: "var(--color-bg-surface)" }}>
@@ -152,7 +153,7 @@ export function AgentLessonMatrix({
                 >
                   <div className="flex items-center gap-2 mb-1.5">
                     <span
-                      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                      className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                       style={{ background: `${C.error}1F`, color: STATUS_TEXT.error }}
                     >
                       Lesson

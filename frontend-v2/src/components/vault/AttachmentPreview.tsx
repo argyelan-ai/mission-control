@@ -21,6 +21,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 
 import { api, getToken } from "@/lib/api";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface Props {
   deliverableId: string;
@@ -71,6 +72,23 @@ export function AttachmentPreview({
   const family = mime.split("/")[0];
   const sizeLabel = sizeBytes ? `${Math.round(sizeBytes / 1024)} KB` : null;
 
+  // Fullsize modal chrome (rule 4): iOS-safe scroll lock + Esc close.
+  // Esc is captured at the window so it does not also bubble into the
+  // VaultReadingPanel mobile sheet's own Esc handler (which would close the
+  // whole note underneath the lightbox).
+  useBodyScrollLock(fullsizeOpen);
+  useEffect(() => {
+    if (!fullsizeOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setFullsizeOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [fullsizeOpen]);
+
   return (
     <div
       className="mt-6 rounded-lg overflow-hidden"
@@ -83,7 +101,7 @@ export function AttachmentPreview({
         className="px-4 py-2 flex items-center justify-between text-xs"
         style={{
           background: "rgba(0,0,0,0.25)",
-          color: "var(--color-bg-hover)",
+          color: "var(--color-text-muted)",
           borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
@@ -173,11 +191,11 @@ export function AttachmentPreview({
             <button
               type="button"
               onClick={() => setFullsizeOpen(false)}
-              className="absolute top-6 right-6 p-2 rounded"
+              className="absolute top-6 right-6 p-3 rounded"
               style={{ background: "var(--color-bg-hover)" }}
               aria-label="Close"
             >
-              <X size={20} className="text-white" />
+              <X size={20} style={{ color: "var(--color-text-primary)" }} />
             </button>
             <motion.img
               src={objectUrl}

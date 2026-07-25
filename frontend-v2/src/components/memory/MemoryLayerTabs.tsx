@@ -58,9 +58,9 @@ export function MemoryLayerTabs({
               {cfg.label}
               {count != null && (
                 <span
-                  className="px-1.5 py-0.5 rounded-full text-[10px] font-semibold"
+                  className="px-1.5 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                   style={{
-                    background: isActive ? `${cfg.color}18` : "rgba(255,255,255,0.06)",
+                    background: isActive ? `${cfg.color}18` : "var(--color-bg-elevated)",
                     color: isActive ? cfg.color : "var(--color-text-muted)",
                   }}
                 >

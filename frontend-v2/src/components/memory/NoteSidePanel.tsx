@@ -100,7 +100,7 @@ function RelatedNotesMini({
                 {n.type}
               </span>
               <span
-                className="truncate"
+                className="truncate min-w-0"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {(typeof n.title === "string" && n.title.trim())
@@ -325,7 +325,7 @@ export function NoteSidePanel({
           className={`absolute right-0 top-0 bottom-0 z-20 flex flex-col overflow-hidden max-sm:!fixed max-sm:!inset-0 max-sm:!w-full ${className ?? ""}`}
           style={{
             width: "380px",
-            background: "rgba(10,10,10,0.98)",
+            background: "var(--color-bg-surface)",
             borderLeft: "1px solid var(--color-border)",
           }}
           aria-label="Note detail panel"
@@ -350,7 +350,7 @@ export function NoteSidePanel({
                       type="button"
                       onClick={cancelEdit}
                       disabled={saveMutation.isPending}
-                      className="rounded p-1 transition-colors"
+                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -367,7 +367,7 @@ export function NoteSidePanel({
                       type="button"
                       onClick={handleSave}
                       disabled={saveMutation.isPending}
-                      className="rounded p-1 transition-colors"
+                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: C.online,
                         background: "rgba(52,211,153,0.10)",
@@ -397,7 +397,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={startEdit}
-                      className="rounded p-1 transition-colors"
+                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -424,7 +424,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={() => setConfirmOpen(true)}
-                      className="rounded p-1 transition-colors"
+                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",
@@ -450,7 +450,7 @@ export function NoteSidePanel({
                     <button
                       type="button"
                       onClick={onClose}
-                      className="rounded p-1 transition-colors"
+                      className="rounded p-1 transition-colors max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
                       style={{
                         color: "var(--color-text-muted)",
                         background: "transparent",

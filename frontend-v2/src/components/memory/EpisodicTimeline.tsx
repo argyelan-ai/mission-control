@@ -115,7 +115,7 @@ export function EpisodicTimeline({
                   >
                     <div className="flex items-center gap-2 mb-1.5">
                       <span
-                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                        className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                         style={{ background: `${color}18`, color }}
                       >
                         {TYPE_LABELS[item.memory_type] ?? item.memory_type}
