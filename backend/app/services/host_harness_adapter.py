@@ -142,19 +142,25 @@ def get_adapter(harness: str | None) -> "HostHarnessAdapter | None":
 
 
 async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: AsyncSession) -> None:
-    """Rewrite only OPENAI_* in the host agent's agent.env from the runtime binding.
+    """Rewrite the provider model env in the host agent's agent.env from the runtime binding.
 
     Preserves MC_AGENT_TOKEN and any other existing keys (a model-drift sync must
     never regenerate the auth token). ADR-064.
+
+    Writes OPENAI_BASE_URL/OPENAI_MODEL for openai-protocol hosts (hermes) and
+    ANTHROPIC_MODEL for anthropic-protocol hosts (boss-host) — see
+    build_runtime_env, which is the single place that decides the shape.
     """
     from app.routers.internal import build_runtime_env
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
     from app.services.harness_compat import runtime_protocol
 
-    # Protocol-fixed host harnesses (grok → xAI cloud OAuth, ADR-066) have no
-    # OPENAI_* provider env to sync — build_runtime_env would wrongly derive
-    # OPENAI_BASE_URL/OPENAI_MODEL from the display-anchor runtime. Nothing to do.
-    if runtime_protocol(runtime) not in ("openai", None):
+    # grok (xAI cloud OAuth, ADR-066) and kimi (OAuth credential files) are
+    # protocol-fixed: their runtime binding is a display anchor only, so there
+    # is no provider model env to sync and build_runtime_env would wrongly
+    # derive one from that anchor. anthropic IS syncable — host claude reads
+    # ANTHROPIC_MODEL from agent.env (see build_runtime_env's claude branch).
+    if runtime_protocol(runtime) not in ("openai", "anthropic", None):
         return
 
     slug = agent.slug or "hermes"

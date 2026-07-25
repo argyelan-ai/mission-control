@@ -4,8 +4,10 @@
 # Startet das offizielle claude binary mit OAuth-Login (aus macOS Keychain
 # unter ~/.claude/) + SOUL.md als --append-system-prompt.
 #
-# Modell: claude-opus-4-7 (1M context). Direkter Anthropic-API-Call,
-# KEIN openclaude/LM-Studio-Detour wie im Container.
+# Modell: kommt aus agent.env (ANTHROPIC_MODEL, gesourced unten aus
+# runtime.model_identifier — siehe backend/app/routers/internal.py
+# build_runtime_env). Direkter Anthropic-API-Call, KEIN openclaude/
+# LM-Studio-Detour wie im Container.
 #
 # Wird von entrypoint.sh via tmux aufgerufen (Task B4).
 
@@ -56,9 +58,28 @@ unset OPENAI_BASE_URL
 unset OPENAI_API_KEY
 unset OPENAI_MODEL
 unset CLAUDE_CODE_USE_OPENAI
+# ANTHROPIC_MODEL absichtlich NICHT unset — das ist der einzige Modellkanal
+# fuer Host-Claude (kommt aus agent.env, oben gesourced) und darf hier nicht
+# verloren gehen.
 
-# Modell explizit auf Opus 4.8
-export ANTHROPIC_MODEL="claude-opus-4-8"
+if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+    # runtime.model_identifier ist die einzige Wahrheit: agent.env wurde oben
+    # gesourced (Z. 37-43) und hat ANTHROPIC_MODEL bereits gesetzt. Nichts tun.
+    echo "[start-claude] ANTHROPIC_MODEL=$ANTHROPIC_MODEL (aus agent.env)"
+else
+    # Struktureller Sonderfall: HOST_ADAPTERS (backend/app/services/
+    # host_harness_adapter.py) kennt hermes/grok/kimi, aber KEIN "claude" —
+    # und sync_host_agent_model laeuft nur fuer Agents MIT Adapter. Es gibt
+    # also keinen Schreiber, der agent.env fuer boss-host mit ANTHROPIC_MODEL
+    # befuellt. Per Wizard gestagte Host-Claude-Agents bekommen es dagegen
+    # schon (host_provisioning.stage_host_agent -> build_runtime_env);
+    # boss-host ist der Legacy-Vorgaenger dieses Mechanismus.
+    # keinen sync_host_agent_model-Aufrufer, der agent.env fuer boss-host
+    # schreibt. Ohne agent.env-Wert bleibt uns nur der veraltete Legacy-Pin,
+    # klar markiert, statt still auf einen unbekannten Zustand zu laufen.
+    echo "WARN: boss-host ist an keine Runtime gebunden (kein Host-Adapter fuer harness 'claude') — Modell bleibt auf Legacy-Fallback claude-opus-4-8 gepinnt" >&2  # model-catalog: allow
+    export ANTHROPIC_MODEL="claude-opus-4-8"  # Legacy-Fallback, NICHT die Wahrheit — model-catalog: allow
+fi
 
 # --dangerously-skip-permissions matcht aktuelles Container-Verhalten.
 # Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =

@@ -126,8 +126,21 @@ async def build_runtime_env(
     if harness == "claude":
         # Provider auth (CLAUDE_CODE_OAUTH_TOKEN) is resolved centrally in
         # resolve_provider_credentials (ADR-056) — no longer loaded here to
-        # avoid a double-fetch. Anthropic runtimes need no BASE_URL/MODEL env:
-        # the claude binary talks to api.anthropic.com directly.
+        # avoid a double-fetch. No BASE_URL: the claude binary talks to
+        # api.anthropic.com directly.
+        #
+        # ANTHROPIC_MODEL closes a contract hole. Containerised claude gets its
+        # model from settings.json (rendered from cli_agent_settings.json.j2
+        # with runtime.model_identifier), but HOST claude (boss-host) has no
+        # settings.json render — which is why docker/boss-host/start-claude.sh
+        # used to pin `claude-opus-4-8` by hand and could never follow a runtime
+        # switch. Emitting it here gives both worlds one channel fed by the same
+        # single source of truth, so the env value and settings.json can never
+        # disagree. Absent model_identifier stays absent: no pin means the CLI
+        # uses its account default, which follows new releases on its own —
+        # strictly safer than a stale pin.
+        if runtime.model_identifier:
+            tokens["ANTHROPIC_MODEL"] = runtime.model_identifier
         return tokens
     if harness == "kimi":
         # Kimi Code is protocol-fixed (Moonshot managed endpoint): auth lives

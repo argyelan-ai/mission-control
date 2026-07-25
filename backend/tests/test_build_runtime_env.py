@@ -15,15 +15,43 @@ from app.models.agent import Agent
 from app.models.runtime import Runtime
 
 
+def assert_no_provider_leak(env: dict) -> None:
+    """The invariant for every claude/anthropic branch result.
+
+    The claude branch may carry ANTHROPIC_MODEL (see
+    ``assert_anthropic_model_pin``), but must NEVER carry OPENAI_* shim keys
+    (that would point the claude binary at the wrong endpoint) and must never
+    carry the Anthropic OAuth token — auth is resolved centrally in
+    resolve_provider_credentials (ADR-056) so the bootstrap and .env paths
+    share one source and can't drift. See
+    tests/test_provider_credentials.py::test_anthropic_oauth.
+    """
+    leaked = [k for k in env if k.startswith("OPENAI_")]
+    assert not leaked, f"OPENAI_* key(s) leaked into the claude branch: {leaked}"
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_AUTH_TOKEN" not in env
+    assert "ANTHROPIC_BASE_URL" not in env
+
+
+def assert_anthropic_model_pin(env: dict, expected: str) -> None:
+    """ANTHROPIC_MODEL must be exactly runtime.model_identifier — no rewriting."""
+    assert env.get("ANTHROPIC_MODEL") == expected
+
+
 @pytest.mark.asyncio
 async def test_build_runtime_env_anthropic(async_session):
-    """Anthropic runtime → empty dict here (ADR-056).
+    """Anthropic runtime → ANTHROPIC_MODEL only, nothing else (ADR-056).
 
-    Provider auth (CLAUDE_CODE_OAUTH_TOKEN) moved ENTIRELY into
-    resolve_provider_credentials so the bootstrap + .env paths share one
-    source and can't drift. build_runtime_env no longer loads the OAuth
-    token; it returns empty for anthropic runtimes (no OPENAI_* keys, no
-    BASE_URL/MODEL). See tests/test_provider_credentials.py::test_anthropic_oauth.
+    Changed 2026-07-25 (model-sanitation): the claude branch used to return an
+    EMPTY dict. Containerised claude got its model from settings.json, but HOST
+    claude (boss-host) had no settings.json render and therefore had to pin its
+    model by hand in start-claude.sh — a pin that could never follow a runtime
+    switch. build_runtime_env now emits runtime.model_identifier as
+    ANTHROPIC_MODEL so both worlds read one source of truth.
+
+    The protection is unchanged and asserted explicitly: no OPENAI_* keys, no
+    Anthropic OAuth token / API key / base URL.
     """
     from app.routers.internal import build_runtime_env
 
@@ -38,6 +66,36 @@ async def test_build_runtime_env_anthropic(async_session):
 
     env = await build_runtime_env(rt, async_session)
 
+    assert_no_provider_leak(env)
+    assert_anthropic_model_pin(env, "claude-sonnet-4-6")
+    assert set(env) == {"ANTHROPIC_MODEL"}
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_anthropic_without_model_identifier_emits_no_pin(
+    async_session,
+):
+    """model_identifier=None → NO ANTHROPIC_MODEL key at all.
+
+    Deliberate: absent pin means the claude CLI uses its account default, which
+    follows new releases on its own. That is strictly safer than writing an
+    empty or stale value, and it is what makes "no pin" representable.
+    """
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="anthropic-claude-unpinned",
+        display_name="Claude (unpinned)",
+        runtime_type="cloud",
+        endpoint="https://api.anthropic.com",
+        model_identifier=None,
+        enabled=True,
+    )
+
+    env = await build_runtime_env(rt, async_session)
+
+    assert "ANTHROPIC_MODEL" not in env
+    assert_no_provider_leak(env)
     assert env == {}
 
 
@@ -153,9 +211,12 @@ async def test_build_runtime_env_agent_harness_openclaude_wins_over_anthropic_ru
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_agent_harness_claude_wins_over_openai_runtime(async_session):
-    """agent.harness="claude" bound to an openai-protocol runtime → env
-    follows the HARNESS (empty — Anthropic auth resolved elsewhere), NOT
-    OPENAI_BASE_URL/MODEL from the runtime."""
+    """agent.harness="claude" bound to an openai-protocol runtime → env follows
+    the HARNESS, i.e. the anthropic shape (ANTHROPIC_MODEL only, auth resolved
+    elsewhere) and explicitly NOT OPENAI_BASE_URL/OPENAI_MODEL from the runtime.
+
+    The model still comes from runtime.model_identifier — the harness decides
+    the KEY NAME, the runtime row decides the VALUE."""
     from app.routers.internal import build_runtime_env
 
     rt = Runtime(
@@ -170,7 +231,9 @@ async def test_build_runtime_env_agent_harness_claude_wins_over_openai_runtime(a
 
     env = await build_runtime_env(rt, async_session, agent=agent)
 
-    assert env == {}
+    assert_no_provider_leak(env)
+    assert_anthropic_model_pin(env, "qwen3-coder-next")
+    assert set(env) == {"ANTHROPIC_MODEL"}
 
 
 @pytest.mark.asyncio
@@ -200,7 +263,13 @@ async def test_build_runtime_env_agent_harness_omp_wins(async_session):
 async def test_build_runtime_env_null_harness_falls_back_to_runtime_type(async_session):
     """Regression guard: agent.harness=None (legacy row) → falls back to
     derive_harness(runtime), reproducing the exact pre-B3 behavior for every
-    existing branch (anthropic / openclaude / omp)."""
+    existing branch (anthropic / openclaude / omp).
+
+    "pre-B3 behavior" for the anthropic branch means "no OPENAI_* shim and no
+    auth token" — since 2026-07-25 that branch additionally carries
+    ANTHROPIC_MODEL from runtime.model_identifier (see
+    test_build_runtime_env_anthropic); the fallback path must produce the same
+    shape as the explicit-harness path."""
     from app.routers.internal import build_runtime_env
 
     anthropic_rt = Runtime(
@@ -229,7 +298,10 @@ async def test_build_runtime_env_null_harness_falls_back_to_runtime_type(async_s
     )
     agent = Agent(name="LegacyNullHarness", agent_runtime="cli-bridge", harness=None)
 
-    assert await build_runtime_env(anthropic_rt, async_session, agent=agent) == {}
+    env_anthropic = await build_runtime_env(anthropic_rt, async_session, agent=agent)
+    assert_no_provider_leak(env_anthropic)
+    assert_anthropic_model_pin(env_anthropic, "claude-sonnet-4-6")
+    assert set(env_anthropic) == {"ANTHROPIC_MODEL"}
 
     env_openai = await build_runtime_env(openai_rt, async_session, agent=agent)
     assert env_openai["OPENAI_BASE_URL"] == "http://192.0.2.10:1234/v1"

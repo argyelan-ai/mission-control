@@ -524,7 +524,7 @@ def _provider_from_model(model: str) -> str:
     m = model.lower()
     if "claude" in m:
         return "anthropic"
-    if ":" in m or "qwen2.5-coder" in m or "llama" in m or "mistral" in m:
+    if ":" in m or "qwen2.5-coder" in m or "llama" in m or "mistral" in m:  # model-catalog: allow (liest einen bereits bekannten Modellnamen, waehlt keinen aus)
         # Format "model:tag" = ollama
         return "ollama"
     if "/" in m:

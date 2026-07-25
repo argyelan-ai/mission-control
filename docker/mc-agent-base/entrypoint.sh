@@ -136,6 +136,18 @@ else
     export MC_AGENT_TOKEN="${MC_TOKEN:-}"
 fi
 
+# Fail-fast guard (ADR-054-Muster, exakt nach Vorbild
+# docker/omp-bridge/entrypoint.sh:136-139): dieses Image wird ausschliesslich
+# fuer harness openclaude verwendet, das OpenAI-kompatibel gegen
+# OPENAI_BASE_URL/OPENAI_MODEL routet. Ohne Bootstrap-Wert UND ohne
+# env-Fallback (Dockerfile backt seit der Sanierung KEIN Default-Modell mehr
+# ein) waere OPENAI_MODEL leer/unbekannt — lieber gar nicht starten als mit
+# dem falschen oder gar keinem Modell laufen.
+if [ -z "${OPENAI_MODEL:-}" ]; then
+    echo "[entrypoint] FATAL: OPENAI_MODEL not set (bootstrap failed and no env fallback) — refusing to boot with an unknown model" >&2
+    exit 1
+fi
+
 # Trust-Dialog pre-akzeptieren für /home/agent + /workspace.
 # Ohne das zeigt claude-code beim ersten Start einen interaktiven Trust-Prompt
 # der die Session blockiert. Gleicher Fix wie in mc-claude-agent/entrypoint.sh.

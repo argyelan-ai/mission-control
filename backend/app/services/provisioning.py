@@ -18,8 +18,11 @@ Phase 30: cleanup_sync_ghosts was deleted — its only consumer was the
 gateway startup sync (since removed), and post-Phase-30 gateway_agent_id
 no longer exists on the agent model.
 
-convert_model_to_oc_format is still exported with a TODO-Phase-31 note
-because routers/agents.py:1781 still imports it; plan 29-05 will clean this up.
+convert_model_to_oc_format is still exported with a TODO-Phase-31 note; plan
+29-05 will clean this up. Verified 2026-07-25 (model-sanitation): no callers
+remain anywhere in app/ (the docstring's claim that routers/agents.py:1781
+imports it is stale) — it's dead code with a hardcoded fallback default that
+never silently overrides a live runtime.
 """
 
 import logging
@@ -65,9 +68,14 @@ def convert_model_to_oc_format(model: str | None) -> str:
 
     TODO Phase 31: once the last gateway-specific model names in
     routers/agents.py are cleaned up, this function can be removed outright.
+
+    Dead code (verified 2026-07-25, model-sanitation): no callers remain in
+    app/ (see module docstring). The fallback below never executes against a
+    live runtime today; kept only until the Phase-31 cleanup removes the
+    function outright.
     """
     if not model:
-        return "ollama-cloud/minimax-m2.5"
+        return "ollama-cloud/minimax-m2.5"  # model-catalog: allow (dead code, no live callers — see module docstring)
     if ":" in model and "/" not in model:
         name, tag = model.rsplit(":", 1)
         if tag == "cloud":

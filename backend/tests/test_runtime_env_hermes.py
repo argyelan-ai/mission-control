@@ -72,12 +72,19 @@ async def test_build_runtime_env_hermes_no_anthropic_tokens(async_session):
 
 @pytest.mark.asyncio
 async def test_build_runtime_env_anthropic_regression(async_session):
-    """ADR-056: anthropic runtime → empty dict from build_runtime_env.
+    """ADR-056: anthropic runtime → ANTHROPIC_MODEL only, no auth, no OPENAI_*.
 
     CLAUDE_CODE_OAUTH_TOKEN moved into resolve_provider_credentials (single
     source shared with the .env render). build_runtime_env sets no OAuth and
     no OPENAI_* keys for anthropic runtimes. OAuth resolution is covered by
     tests/test_provider_credentials.py::test_anthropic_oauth.
+
+    Changed 2026-07-25 (model-sanitation): the branch no longer returns an
+    empty dict — it emits runtime.model_identifier as ANTHROPIC_MODEL, the
+    only model channel host-claude (boss-host) has. Container-claude gets the
+    same value via settings.json from the same runtime row, so the two cannot
+    diverge. The guard here is now stated explicitly instead of relying on
+    "== {}": no OPENAI_* key and no OAuth token may appear.
     """
     from app.routers.internal import build_runtime_env
 
@@ -92,7 +99,31 @@ async def test_build_runtime_env_anthropic_regression(async_session):
 
     env = await build_runtime_env(rt, async_session)
 
-    assert env == {}
+    assert not [k for k in env if k.startswith("OPENAI_")]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
+    assert env["ANTHROPIC_MODEL"] == "claude-sonnet-4-6"
+    assert set(env) == {"ANTHROPIC_MODEL"}
+
+
+@pytest.mark.asyncio
+async def test_build_runtime_env_anthropic_no_model_identifier_no_pin(async_session):
+    """No model_identifier → no ANTHROPIC_MODEL key (claude CLI account default)."""
+    from app.routers.internal import build_runtime_env
+
+    rt = Runtime(
+        slug="anthropic-claude-unpinned",
+        display_name="Claude (unpinned)",
+        runtime_type="cloud",
+        endpoint="https://api.anthropic.com",
+        model_identifier=None,
+        enabled=True,
+    )
+
+    env = await build_runtime_env(rt, async_session)
+
+    assert "ANTHROPIC_MODEL" not in env
+    assert not [k for k in env if k.startswith("OPENAI_")]
+    assert "CLAUDE_CODE_OAUTH_TOKEN" not in env
 
 
 @pytest.mark.asyncio
