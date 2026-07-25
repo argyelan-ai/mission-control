@@ -7,7 +7,7 @@
 > den v3-Zwischenstand.
 
 > **Für die nächste Session (nach Compaction).** Stand: 2026-07-18.
-> Branch: `feat/frontend-v3-redesign` im Repo `/Users/Henry/Workspace/Projects/mission-control`.
+> Branch: `feat/frontend-v3-redesign` im Repo `~/Workspace/Projects/mission-control`.
 > **Nichts ist committet** — der ganze Stand liegt im Working Tree des Branch.
 
 ---
@@ -35,7 +35,7 @@ Runde 4 (Harness-Marken): CLI-Namen („CLAUDE CODE", „GROK", „HERMES") in d
 
 ## 2. Screenshots & Zugang
 
-- Vorher/Nachher-Serien: `/Users/Henry/Workspace/.mc-verify-shots/` (`vorher/`, `nachher/`, `final-v31/`, `mobile/`).
+- Vorher/Nachher-Serien: `~/Workspace/.mc-verify-shots/` (`vorher/`, `nachher/`, `final-v31/`, `mobile/`).
 - Login für Previews: read-only Account `kimi@local` (Passwort NICHT in Dateien — beim Operator erfragen oder aus Session-Kontext). Login via Playwright: `input#email` + `input[type=password]` + `button[type=submit]` auf `/login`, Token landet in localStorage.
 - Screenshot-Skript-Pattern: siehe gelöschte temp-Skripte — Basis: Playwright, `127.0.0.1` statt `localhost` (s. Fallstricke), `waitUntil: 'domcontentloaded'` + 3.5s Wartezeit (networkidle hängt wegen SSE).
 
@@ -85,6 +85,6 @@ npm run build && npm run start -- -p 3100   # Prod-Check
 
 ## 7. Kontext-Notizen
 
-- Operator-Account für Live-UI: Mark (`argyelan12@gmail.com`); für Previews reicht `kimi@local` (viewer, read-only — nichts anklicken was mutiert).
+- Operator-Account für Live-UI: Mark (`Operator-Mail (beim Operator erfragen)`); für Previews reicht `kimi@local` (viewer, read-only — nichts anklicken was mutiert).
 - Secrets niemals in Dateien/Commits/Logs (Operator-Regel).
 - Subagent-Hinweis: Hintergrund-Agenten können an Provider-Quota-Limits sterben (403) — dann Arbeit selbst im Main-Loop weiterführen (beim Flächen-Sweep so gehandhabt).
