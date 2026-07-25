@@ -66,8 +66,8 @@ export function PurgeTrashDialog({
         <div
           className="flex items-start gap-2.5 rounded-xl px-3 py-2.5 text-xs"
           style={{
-            background: "rgba(194,56,56,0.12)",
-            border: `1px solid rgba(194,56,56,0.30)`,
+            background: `${C.error}1F`,
+            border: `1px solid ${C.error}4D`,
             color: STATUS_TEXT.error,
           }}
         >

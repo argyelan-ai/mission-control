@@ -63,22 +63,19 @@ export function SlideOverPanel({
             exit={{ opacity: 0, y: "100%" }}
             // On md+: slide from right instead
             className={cn(
-              "fixed z-50 flex flex-col overflow-hidden",
+              "fixed z-50 flex flex-col overflow-hidden w-full",
               // Mobile: full-screen from bottom
               "inset-x-0 bottom-0 rounded-t-md max-h-[94dvh]",
-              // Desktop: right side panel, full height
-              "md:inset-x-auto md:right-0 md:top-0 md:bottom-0 md:max-h-full md:rounded-none",
+              // Desktop: right side panel, full height, fixed width via --panel-w
+              "md:inset-x-auto md:right-0 md:top-0 md:bottom-0 md:max-h-full md:rounded-none md:w-[var(--panel-w)]",
               className
             )}
             style={{
-              width: "100%",
               "--panel-w": desktopWidth,
               backgroundColor: "var(--color-bg-elevated)",
               borderLeft: "1px solid var(--color-border)",
               boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
             } as React.CSSProperties}
-            // Set desktop width via inline style targeting
-            onAnimationStart={() => {}}
           >
             {/* Cyan-Kante oben — Signatur-Markierung */}
             <div className="md:hidden h-[2px] w-full shrink-0" style={{ backgroundColor: "var(--color-accent)" }} />

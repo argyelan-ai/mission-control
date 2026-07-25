@@ -102,7 +102,7 @@ function DeleteRepoDialog({
           onClick={() => { setErrorMsg(null); deleteMutation.mutate(); }}
           disabled={deleteMutation.isPending}
           className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-semibold transition-opacity cursor-pointer disabled:opacity-70 disabled:cursor-not-allowed"
-          style={{ background: C.error, color: "#FFFFFF" }}
+          style={{ background: C.error, color: C.textPrimary }}
         >
           {deleteMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
           Delete
@@ -182,7 +182,7 @@ function LinkProjectPicker({ repo, onClose }: { repo: Repo; onClose: () => void 
             key={p.id}
             onClick={() => linkMutation.mutate(p.id)}
             disabled={linkMutation.isPending}
-            className="flex items-center justify-between w-full px-3 py-2 text-left cursor-pointer transition-colors hover:bg-white/5 disabled:opacity-50"
+            className="flex items-center justify-between w-full px-3 py-2 text-left cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-50"
           >
             <span className="text-xs truncate" style={{ color: C.textPrimary }}>{p.name}</span>
             <span className="text-[10px] shrink-0 ml-2" style={{ color: C.textMuted }}>

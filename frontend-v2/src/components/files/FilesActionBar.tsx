@@ -23,9 +23,10 @@ function basename(sub: string): string {
 
 /**
  * Floating action bar shown while files are selected. Sits above the page
- * (z-40) but below the preview panel / modals (z-50). Downloads run
- * sequentially so the browser doesn't drop concurrent saves; delete opens a
- * confirm dialog and is gated on the root being writable.
+ * (z-40) but below the preview panel / modals (z-50). On mobile it floats
+ * above the bottom tab bar (52px + safe-area inset) instead of covering it.
+ * Downloads run sequentially so the browser doesn't drop concurrent saves;
+ * delete opens a confirm dialog and is gated on the root being writable.
  */
 export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps) {
   const [downloading, setDownloading] = useState(false);
@@ -63,7 +64,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 16 }}
         transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-        className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl"
+        className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl max-w-[calc(100vw-2rem)]"
         style={{
           background: C.bgElevated,
           border: `1px solid ${C.border}`,

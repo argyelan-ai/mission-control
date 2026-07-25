@@ -141,8 +141,8 @@ export function TrashView() {
         <button
           onClick={() => setPurgeOpen(true)}
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-          style={{ color: STATUS_TEXT.error, border: `1px solid rgba(194,56,56,0.30)` }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(194,56,56,0.12)"; }}
+          style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}4D` }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${C.error}1F`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
@@ -225,7 +225,7 @@ export function TrashView() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 16 }}
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl"
+          className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl max-w-[calc(100vw-2rem)]"
           style={{
             background: C.bgElevated,
             border: `1px solid ${C.border}`,

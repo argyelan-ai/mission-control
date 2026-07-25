@@ -71,7 +71,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-sm truncate font-mono" style={{ color: C.textPrimary }}>
+            <span className="font-medium text-sm truncate font-mono min-w-0" style={{ color: C.textPrimary }}>
               {repo.full_name}
             </span>
             <VisibilityBadge visibility={repo.visibility} />
