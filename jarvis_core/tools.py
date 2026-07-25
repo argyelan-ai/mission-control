@@ -198,6 +198,105 @@ async def _get_task_result(client, channel: Channel, query: str) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+#: Titel-Stichworte, unter denen die Briefing-Tasks im Board laufen. Der
+#: Scheduler legt sie taeglich neu an ("Morning Briefing - Tech & News Digest",
+#: "Morgenbriefing X-Trends") — beide Varianten sollen gefunden werden.
+_BRIEFING_KEYWORDS = ("briefing", "morgenbriefing")
+
+
+async def _summarize_text(text: str) -> dict:
+    """Faesst einen langen Deliverable-Text ueber das Frontier-Modell zusammen.
+
+    Ein Morgenbriefing hat ~19'000 Zeichen — nicht vorlesbar und zu teuer fuer
+    den Realtime-Kontext. Ist Frontier deaktiviert oder faellt der Aufruf aus,
+    meldet die Funktion das strukturiert zurueck und der Aufrufer faellt auf
+    einen Auszug zurueck (degraded), statt zu scheitern.
+    """
+    from jarvis_core import frontier
+
+    if not frontier.is_tool_enabled():
+        return {"ok": False, "reason": "frontier_disabled"}
+    try:
+        return await frontier.ask_frontier(
+            "Fasse das folgende Morgenbriefing fuer eine gesprochene Wiedergabe "
+            "zusammen: die 3-5 wichtigsten Punkte, je ein Satz, ohne Vorrede, "
+            "ohne Meta-Kommentar. Deutsch.\n\n" + text[:16000]
+        )
+    except Exception as e:  # noqa: BLE001 — degradieren, nicht scheitern
+        logger.exception("briefing summarize failed")
+        return {"ok": False, "reason": "summarize_failed", "error": str(e)}
+
+
+async def _read_briefing(client, channel: Channel) -> dict:
+    logger.info("Tool: read_briefing()")
+    try:
+        task = None
+        for kw in _BRIEFING_KEYWORDS:
+            task = await _resolve_task(client, kw)
+            if task:
+                break
+        if task is None:
+            return {
+                "ok": False,
+                "reason": "no_briefing_found",
+                "message": "Ich finde keinen Briefing-Task im Board.",
+            }
+
+        deliv = await client.get_deliverables(task["id"], include_content=True)
+        items = [
+            d for d in (deliv.get("deliverables") or [])
+            if (d.get("content") or "").strip()
+        ]
+        if not items:
+            return {
+                "ok": False,
+                "reason": "no_content",
+                "task": task,
+                "message": "Der Briefing-Task hat noch kein fertiges Dokument.",
+            }
+
+        # Laengstes Dokument gewinnt — Telegram-Kurzfassungen liegen als
+        # separate, kurze Deliverables am selben Task.
+        best = max(items, key=lambda d: len(d.get("content") or ""))
+        text = best.get("content") or ""
+
+        summary = await _summarize_text(text)
+        if summary.get("ok"):
+            result = {
+                "ok": True,
+                "task_title": task.get("title"),
+                "document_title": best.get("title"),
+                "summary": summary.get("answer"),
+            }
+        else:
+            result = {
+                "ok": True,
+                "degraded": True,
+                "reason": summary.get("reason", "summarize_failed"),
+                "task_title": task.get("title"),
+                "document_title": best.get("title"),
+                "excerpt": text[:2000],
+            }
+
+        if channel.supports_cards:
+            try:
+                await client.voice_display(
+                    kind="memory",
+                    data={
+                        "title": best.get("title"),
+                        "snippet": text[:280],
+                        "type": "briefing",
+                    },
+                    title=best.get("title"),
+                )
+            except Exception:
+                logger.warning("briefing card push failed", exc_info=True)
+        return result
+    except Exception as e:
+        logger.exception("read_briefing failed")
+        return {"ok": False, "error": str(e)}
+
+
 async def _get_agent_status(client, channel: Channel, agent_name: str | None = None) -> dict:
     logger.info("Tool: get_agent_status(%s)", agent_name)
     try:
@@ -639,6 +738,17 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
             "required": ["query"],
         },
         handler=_get_task_result,
+    ),
+    ToolSpec(
+        name="read_briefing",
+        description=(
+            "Liest das ECHTE Morgenbriefing vor — das vom Researcher erstellte "
+            "Dokument, nicht den Board-Status. Nutze das IMMER, wenn der Operator "
+            "nach dem Briefing oder Morgenbriefing fragt. Fuer 'was steht an' bzw. "
+            "einen Statusueberblick bleibt briefing() richtig."
+        ),
+        parameters={"type": "object", "properties": {}},
+        handler=_read_briefing,
     ),
     ToolSpec(
         name="get_agent_status",

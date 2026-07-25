@@ -219,6 +219,11 @@ class VoiceAssistant(Agent):
         )
 
     @function_tool
+    async def read_briefing(self) -> dict:
+        """Liest das echte Morgenbriefing-Dokument vor."""
+        return await jtools.dispatch("read_briefing", mc_client, VOICE, {})
+
+    @function_tool
     async def get_agent_status(self, agent_name: str | None = None) -> dict:
         """Status eines bestimmten Agents oder Uebersicht aller Agents."""
         return await jtools.dispatch("get_agent_status", mc_client, VOICE,
