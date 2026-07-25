@@ -205,6 +205,13 @@ class VoiceAssistant(Agent):
         return await jtools.dispatch("list_open_tasks", mc_client, VOICE, {})
 
     @function_tool
+    async def list_tasks(self, status: str | None = None, limit: int = 10) -> dict:
+        """Listet Tasks, optional nach Status (auch 'done')."""
+        return await jtools.dispatch(
+            "list_tasks", mc_client, VOICE, {"status": status, "limit": limit}
+        )
+
+    @function_tool
     async def get_agent_status(self, agent_name: str | None = None) -> dict:
         """Status eines bestimmten Agents oder Uebersicht aller Agents."""
         return await jtools.dispatch("get_agent_status", mc_client, VOICE,

@@ -303,24 +303,50 @@ async def dispatch_to_agent(
     }
 
 
-async def list_open_tasks() -> dict[str, Any]:
-    """Holt alle offenen Tasks (inbox + in_progress + blocked + review)."""
-    resp = await _client.get(f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks")
+#: Status, die als "offen" gelten. Server-seitig gibt es keinen Sammelfilter
+#: dafuer (der Endpoint kennt nur einen einzelnen ?status=), deshalb bleibt
+#: dieser eine Fall client-seitig.
+_OPEN_STATUSES = ("inbox", "in_progress", "blocked", "review")
+
+
+async def list_tasks(status: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Tasks des Jarvis-Boards, optional nach Status gefiltert.
+
+    ``status=None`` → nur offene Tasks (bisheriges Verhalten von
+    list_open_tasks). Ein konkreter Status (z.B. "done") wird als Query-Param
+    ans Backend durchgereicht, statt clientseitig aus einer Seite gefiltert zu
+    werden — sonst waeren aeltere Tasks unerreichbar.
+    """
+    limit = max(1, min(int(limit or 10), 50))
+    params: dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks", params=params
+    )
     resp.raise_for_status()
     tasks = resp.json()
-    open_tasks = [t for t in tasks if t.get("status") in ("inbox", "in_progress", "blocked", "review")]
+    if not status:
+        tasks = [t for t in tasks if t.get("status") in _OPEN_STATUSES]
+    tasks = tasks[:limit]
     return {
         "ok": True,
-        "count": len(open_tasks),
+        "count": len(tasks),
         "tasks": [
             {
+                "id": t.get("id"),
                 "title": t.get("title"),
                 "status": t.get("status"),
                 "assignee": t.get("assigned_agent_name") or "unassigned",
             }
-            for t in open_tasks[:10]  # cap fuer Jarvis-Antwort
+            for t in tasks
         ],
     }
+
+
+async def list_open_tasks() -> dict[str, Any]:
+    """Rueckwaertskompatibler Alias — ruft list_tasks() ohne Status."""
+    return await list_tasks()
 
 
 async def get_agent_status(agent_name: str | None = None) -> dict[str, Any]:

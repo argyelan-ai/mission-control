@@ -122,6 +122,7 @@ WORAUF DU REAGIERST
 - "Sag <Name>, er soll..." / "Lass <Name>..." / "<Name> soll jetzt..." → dispatch_to_agent
 - "Was ist los?" / "Status?" / "Wie geht's <Name>?" → get_agent_status
 - "Was ist offen?" / "Welche Aufgaben?" → list_open_tasks
+- "Was ist fertig?" / "Was wurde heute erledigt?" / "Zeig abgeschlossene Tasks" → list_tasks(status="done")
 - "Was haben wir entschieden / besprochen / festgehalten?" → query_memory
 - "Merk dir das..." / "Schreib das auf..." / "Lesson gelernt..." → write_note
 - "Was steht im Vault über X?" / "Zeig mir Lessons zu X" / "Such nach X" → search_notes

@@ -133,6 +133,17 @@ async def _list_open_tasks(client, channel: Channel) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+async def _list_tasks(
+    client, channel: Channel, status: str | None = None, limit: int = 10
+) -> dict:
+    logger.info("Tool: list_tasks(status=%s, limit=%s)", status, limit)
+    try:
+        return await client.list_tasks(status=status, limit=limit)
+    except Exception as e:
+        logger.exception("list_tasks failed")
+        return {"ok": False, "error": str(e)}
+
+
 async def _get_agent_status(client, channel: Channel, agent_name: str | None = None) -> dict:
     logger.info("Tool: get_agent_status(%s)", agent_name)
     try:
@@ -535,6 +546,29 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
         description="Listet alle offenen Aufgaben (inbox/in_progress/blocked/review).",
         parameters={"type": "object", "properties": {}},
         handler=_list_open_tasks,
+    ),
+    ToolSpec(
+        name="list_tasks",
+        description=(
+            "Listet Tasks des Boards. Ohne status: nur offene. Mit status "
+            "(inbox|in_progress|blocked|review|done|failed) gezielt filtern — "
+            "z.B. status='done' fuer 'was ist heute fertig geworden'. "
+            "limit default 10, max 50."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "inbox", "in_progress", "blocked",
+                        "review", "done", "failed",
+                    ],
+                },
+                "limit": {"type": "integer", "default": 10},
+            },
+        },
+        handler=_list_tasks,
     ),
     ToolSpec(
         name="get_agent_status",
