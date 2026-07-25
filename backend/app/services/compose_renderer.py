@@ -64,11 +64,15 @@ OPENCLAUDE_IMAGE = "mc-agent-base:latest"
 # ADR-045: third harness image — omp headless driver (bridge.py --serve) instead
 # of an interactive openclaude pane. Selected by runtime_type == "omp".
 OMP_IMAGE = "mc-omp-agent:latest"
+# Fourth harness image — Kimi Code CLI (tmux+poll.sh like claude, own binary).
+# Selected by harness == "kimi" / runtime_type == "kimi".
+KIMI_IMAGE = "mc-kimi-agent:latest"
 
 HARNESS_IMAGES: dict[str, str] = {
     "claude": CLAUDE_IMAGE,
     "openclaude": OPENCLAUDE_IMAGE,
     "omp": OMP_IMAGE,
+    "kimi": KIMI_IMAGE,
 }
 
 # Token-hardening (fix/agent-token-recreate-hardening):
@@ -121,6 +125,10 @@ def pick_image_for_runtime(runtime: Runtime | None) -> str | None:
     # "assume image change" and the switch could not resolve the omp image.
     if rt_type == "omp":
         return OMP_IMAGE
+    # kimi runtimes bind to the kimi image — checked before the openclaude
+    # allowlist for the same reason as omp (never fall through to a shim).
+    if rt_type == "kimi":
+        return KIMI_IMAGE
     if rt_type in ("vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud"):
         return OPENCLAUDE_IMAGE
     return None
@@ -352,6 +360,31 @@ def _ensure_omp_sessions_volume(body_lines: list[str], slug: str) -> list[str]:
     return body
 
 
+def _ensure_kimi_config_volume(body_lines: list[str], slug: str) -> list[str]:
+    """Mounts the per-agent Kimi config dir (KIMI_CODE_HOME) for kimi-harness
+    services.
+
+    ~/.mc/agents/<slug>/kimi-config → /home/agent/.kimi-code (rw). Holds
+    config.toml (entrypoint-rendered) AND the OAuth credentials/ files from
+    the one-time per-agent `/login` — Kimi has no long-lived token, and
+    refresh-token rotation kills copied credentials, so this mount is the
+    ONLY thing that keeps the login alive across container recreates.
+    Idempotent via substring marker, same pattern as _ensure_omp_sessions_volume.
+    """
+    marker = f"/.mc/agents/{slug}/kimi-config:/home/agent/.kimi-code"
+    body = list(body_lines)
+    if marker not in "\n".join(body):
+        line = f"      - ${{HOME}}/.mc/agents/{slug}/kimi-config:/home/agent/.kimi-code"
+        vol_range = _find_block_range(body, "volumes")
+        if vol_range is not None:
+            _, end = vol_range
+            body.insert(end, line)
+        else:
+            body.append("    volumes:")
+            body.append(line)
+    return body
+
+
 def _ensure_msg_delivery_mode(body_lines: list[str]) -> list[str]:
     """Ensure ``MSG_DELIVERY_MODE`` is present in the service's environment
     block (fleet default nudge+pull, W2.1 / ADR-071).
@@ -547,6 +580,10 @@ def _rewrite_compose(
         if final_image == OMP_IMAGE:
             body_lines = _ensure_omp_sessions_volume(body_lines, slug)
 
+        # kimi harness needs its KIMI_CODE_HOME mount (config + OAuth files).
+        if final_image == KIMI_IMAGE:
+            body_lines = _ensure_kimi_config_volume(body_lines, slug)
+
         # Referenz-Dateien-Mount für ALLE Agent-Services (ADR-053).
         body_lines = _ensure_references_volume(body_lines)
 
@@ -587,6 +624,9 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
     if image == OMP_IMAGE:
         anchor = "omp-agent-base"
         anchor_default_image = OMP_IMAGE
+    elif image == KIMI_IMAGE:
+        anchor = "kimi-agent-base"
+        anchor_default_image = KIMI_IMAGE
     elif image == OPENCLAUDE_IMAGE:
         anchor = "openclaude-agent-base"
         anchor_default_image = OPENCLAUDE_IMAGE
@@ -635,6 +675,8 @@ def _build_new_agent_block(slug: str, image: str | None, is_vault_writer: bool) 
     ]
     if image == OMP_IMAGE:
         lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/omp-sessions:{_OMP_SESSIONS_TARGET}")
+    if image == KIMI_IMAGE:
+        lines.append(f"      - ${{HOME}}/.mc/agents/{slug}/kimi-config:/home/agent/.kimi-code")
     if is_vault_writer:
         lines.append("      - ${HOME}/.mc/vault:/vault:rw")
 

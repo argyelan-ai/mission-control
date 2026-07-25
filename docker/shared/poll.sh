@@ -73,7 +73,9 @@ LAST_BLOCKED_TASK_ID=""
 # Lockfile: poll.sh schreibt dieses File sobald ein Task aktiv ist.
 # recycler.sh prueft es vor idle-Kill — verhindert Recycle mitten im Task.
 # Stale-Lock-Schutz: recycler prueft ob poll.sh noch laeuft (pgrep).
-TASK_LOCK_FILE="/home/agent/.task-active.lock"
+# ENV-overridable fuer Host-Betrieb (kimi-host, 2026-07-24): auf macOS gibt es
+# kein /home/agent — der Host-Entrypoint setzt den Pfad ins Agent-Config-Dir.
+TASK_LOCK_FILE="${TASK_LOCK_FILE:-/home/agent/.task-active.lock}"
 
 # Interaction Model 2.0 (comm_v2) — Turn-Grenzen-Gate fuer Thread-Messages.
 # new_messages aus /me/poll (Task 4) werden NICHT sofort gepastet: waehrend

@@ -429,10 +429,27 @@ async def provision_cli_agent(
 
     if result.get("ok"):
         agent.provision_status = "provisioned"
-        if not agent.workspace_path or agent.workspace_path == "/home/mcuser/free-code-projects":
-            # Host-side path of the free-code projects mount (see
-            # FREE_CODE_PATH_MAPPINGS) — derived from the host home, not hardcoded.
-            agent.workspace_path = str(Path(settings.home_host) / "FreeCode" / "projects")
+        _LEGACY_WORKSPACES = {
+            "/home/mcuser/free-code-projects",
+            str(Path(settings.home_host) / "FreeCode" / "projects"),
+        }
+        if not agent.workspace_path or agent.workspace_path in _LEGACY_WORKSPACES:
+            # ADR-022 per-agent workspace: docker-compose.agents.yml mounts
+            # ~/.mc/workspaces/<slug> as /workspace. The old default here was
+            # the shared ~/FreeCode/projects path, which is NOT mounted into
+            # modern agent containers — dispatch's workspace setup then failed
+            # with "read-only file system" and posted a blocker comment on the
+            # very first task (live 2026-07-25, first kimi agent). Every newly
+            # provisioned cli-bridge agent hit this; the older fleet only looks
+            # fine because their rows were written before that default existed.
+            # slugify_project (git_service) is the canonical slug helper here —
+            # same convention as migration 0087 and provision_agent_background,
+            # so both provisioning paths land on one path per agent.
+            from app.services.git_service import slugify_project
+
+            agent.workspace_path = str(
+                Path(settings.home_host) / ".mc" / "workspaces" / slugify_project(agent.name)
+            )
     else:
         agent.provision_status = "error"
 
@@ -788,6 +805,13 @@ _HOST_AGENT_TMUX_TARGETS: dict[str, dict[str, str]] = {
     # grok was headless with no mountable session.
     "grok": {
         "session": "grok",
+        "socket": _user_default_tmux_socket(),
+    },
+    # Kimi: user-default tmux, session 'kimi-host' — persistent Kimi-TUI
+    # (boss-host pattern, docker/kimi-host/entrypoint.sh). Window 0 is the
+    # TUI the shared poll.sh pastes dispatches into.
+    "kimi": {
+        "session": "kimi-host",
         "socket": _user_default_tmux_socket(),
     },
 }

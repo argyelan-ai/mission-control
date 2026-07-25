@@ -1,0 +1,50 @@
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │                                                                                                                                                                                                    │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                                                                                                                                                    │
+ │  ▐█████▌  Send /help for help information.                                                                                                                                                         │
+ │                                                                                                                                                                                                    │
+ │  Directory: /                                                                                                                                                                                      │
+ │  Session:   session_1eb574be-58f4-4ab2-8c2b-dead3a79997e                                                                                                                                           │
+ │  Model:     K3                                                                                                                                                                                     │
+ │  Version:   0.29.1                                                                                                                                                                                 │
+ │                                                                                                                                                                                                    │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Use Kimi K3 with High thinking effort - for the best balance between token spend and capability
+   Run /model to switch to K3 and set thinking effort to High
+
+   tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf and restart tmux.
+
+ ✨ Reply with exactly: SPIKE-OK
+
+ ● The user wants me to reply with exactly "SPIKE-OK". This seems like a test message. I should just reply with exactly that.
+
+ ● SPIKE-OK
+
+ ✨ # Neue Nachricht von MC
+    Dies ist Zeile zwei der Testnachricht.
+    Bitte antworte mit exakt: PASTE-OK
+    [thread deadbeef · seq 42 · bis seq 42]
+
+ ● The user wants me to reply with exactly "PASTE-OK".
+
+ ● PASTE-OK
+
+ ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                                                                                                                                                  │
+ ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ K3 thinking: high  /                                                                        /yolo to skip most approvals for trusted batch work, only use it in repos you trust | /help: show commands
+                                                                                                                                                                                 context: 3% (21.4k/1M)
+
+
+
+
+
+
+
+
+
+
+
+

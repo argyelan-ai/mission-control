@@ -28,7 +28,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
-from app.services.cli_versions import TOOLS, fetch_latest, installed_version, read_manifest
+from app.services.cli_versions import (
+    TOOLS,
+    fetch_latest,
+    installed_version,
+    installed_version_host,
+    read_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +116,12 @@ async def run_check_once(session: AsyncSession) -> dict:
     result: dict = {}
 
     for tool in TOOLS:
-        installed = installed_version(tool)
+        if TOOLS[tool].get("host"):
+            # Host tool (z.B. grok): kein Docker-Image — Version kommt über
+            # die Host-Bridge (`<binary> --version`). None = Bridge down.
+            installed = await installed_version_host(tool)
+        else:
+            installed = installed_version(tool)
         target = manifest.get(tool, {}).get("version")
 
         try:

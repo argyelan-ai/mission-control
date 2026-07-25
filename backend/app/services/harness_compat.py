@@ -19,11 +19,12 @@ from app.services.secrets_helper import (
 
 logger = logging.getLogger(__name__)
 
-HARNESSES: tuple[str, ...] = ("claude", "openclaude", "omp")
+HARNESSES: tuple[str, ...] = ("claude", "openclaude", "omp", "kimi")
 HARNESS_LABELS: dict[str, str] = {
     "claude": "Claude Code",
     "openclaude": "OpenClaude",
     "omp": "omp",
+    "kimi": "Kimi Code",
 }
 
 # runtime_type values that speak the OpenAI-completions protocol. "omp" is a
@@ -46,12 +47,22 @@ _OPENAI_TYPES = frozenset(
 # only binds to the seed `grok-cloud` runtime (runtime_type "grok"); any
 # openai/anthropic runtime is a clean 422 mismatch. The binding is a display
 # anchor only — grok reads no provider env from it (ADR-066).
+# "kimi" is protocol-fixed like grok: the Kimi Code CLI talks to the Moonshot
+# managed endpoint (api.kimi.com/coding/v1) over its own OAuth device-code
+# grant (credentials/ files in the per-agent KIMI_CODE_HOME mount — no
+# long-lived token exists, and refresh-token ROTATION kills any copied
+# credential file; spike 2026-07-24). A kimi agent therefore only binds to a
+# `kimi-cloud` seed runtime (runtime_type "kimi"); the binding is a display
+# anchor — kimi reads no provider env from it. Kimi CAN speak to custom
+# OpenAI-compatible providers via config.toml — if that is ever wired, extend
+# this set with "openai" and render a provider block into the config template.
 HARNESS_PROTOCOLS: dict[str, frozenset[str]] = {
     "claude": frozenset({"anthropic"}),
     "openclaude": frozenset({"openai"}),
     "omp": frozenset({"openai"}),
     "hermes": frozenset({"openai"}),
     "grok": frozenset({"grok"}),
+    "kimi": frozenset({"kimi"}),
 }
 
 
@@ -76,6 +87,10 @@ def runtime_protocol(runtime: Runtime | None) -> str | None:
     # accepts them (ADR-066).
     if (runtime.runtime_type or "").strip() == "grok":
         return "grok"
+    # kimi runtimes carry their own fixed wire protocol (Moonshot managed
+    # endpoint + per-agent OAuth files) — only the kimi harness accepts them.
+    if (runtime.runtime_type or "").strip() == "kimi":
+        return "kimi"
     if (runtime.runtime_type or "").strip() in _OPENAI_TYPES:
         return "openai"
     return None
@@ -163,6 +178,8 @@ def derive_harness(runtime: Runtime | None) -> str | None:
         return None
     if (runtime.runtime_type or "").strip() == "omp":
         return "omp"
+    if (runtime.runtime_type or "").strip() == "kimi":
+        return "kimi"
     proto = runtime_protocol(runtime)
     if proto == "anthropic":
         return "claude"

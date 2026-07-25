@@ -170,3 +170,42 @@ async def test_cli_bridge_resolve_workspace_self_heals_null_path(monkeypatch):
         assert workspace == f"{settings.home_host}/.mc/workspaces/ghost-agent/healed-task"
         assert worktree_path is None
         assert has_repo is False
+
+
+# ── provision_cli_agent (the /provision endpoint path) ──────────────────────
+# Second regression, found live 2026-07-25 on the first kimi agent: the
+# endpoint path in routers/cli_terminal.py set the legacy SHARED
+# ~/FreeCode/projects instead of the per-agent ~/.mc/workspaces/<slug> the
+# container actually mounts. Dispatch's workspace setup then failed with
+# "read-only file system" and posted a blocker comment on the agent's very
+# first task. Migration 0087 masks this for the older fleet.
+
+@pytest.mark.asyncio
+async def test_provision_cli_agent_assigns_mc_workspace(async_session: AsyncSession, monkeypatch):
+    from pathlib import Path
+
+    from app.routers import cli_terminal
+
+    agent = Agent(
+        name="Kimi Test",
+        agent_runtime="cli-bridge",
+        harness="kimi",
+        provision_status="local",
+        workspace_path=None,
+        model="kimi-code/k3",
+        soul_md="x" * 1200,
+    )
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    monkeypatch.setattr(cli_terminal, "_bridge_post", lambda *a, **k: {"ok": True})
+    monkeypatch.setattr(cli_terminal, "_bridge_get", lambda *a, **k: {"ok": True})
+
+    await cli_terminal.provision_cli_agent(agent.id, None, async_session, None)
+    await async_session.refresh(agent)
+
+    assert agent.workspace_path == str(
+        Path(settings.home_host) / ".mc" / "workspaces" / "kimi-test"
+    )
+    assert "FreeCode" not in (agent.workspace_path or "")

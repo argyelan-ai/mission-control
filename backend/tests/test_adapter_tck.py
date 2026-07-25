@@ -213,8 +213,13 @@ def test_lib_copies_byte_identical(filename):
     """
     base = _ROOT / "docker" / "mc-agent-base" / "lib" / filename
     claude = _ROOT / "docker" / "mc-claude-agent" / "lib" / filename
+    kimi = _ROOT / "docker" / "mc-kimi-agent" / "lib" / filename
     assert base.is_file(), f"missing {base}"
     assert claude.is_file(), f"missing {claude}"
+    assert kimi.is_file(), f"missing {kimi}"
     assert base.read_bytes() == claude.read_bytes(), (
         f"{filename} differs between mc-agent-base and mc-claude-agent lib copies"
+    )
+    assert base.read_bytes() == kimi.read_bytes(), (
+        f"{filename} differs between mc-agent-base and mc-kimi-agent lib copies"
     )

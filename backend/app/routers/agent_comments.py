@@ -294,8 +294,16 @@ async def agent_add_comment(
             await maybe_post_finish_nudge(session, task)
         else:
             old_status = task.status
-            # Subtasks go straight to done (review runs at the phase level)
-            if task.parent_task_id is not None:
+            # Subtasks go straight to done (review runs at the phase level).
+            # skip_review automation tasks also go straight to done — they must
+            # never enter the review gate (live bug 2026-07-18: X-Trends scheduled
+            # job kept landing at Boss). human_review_required stays a HARD GATE:
+            # even with skip_review, a task routed to Mark still goes to review.
+            _skip_review_direct = (
+                getattr(task, "skip_review", False)
+                and not getattr(task, "human_review_required", None)
+            )
+            if task.parent_task_id is not None or _skip_review_direct:
                 task.status = "done"
                 task.completed_at = utcnow()
                 # See task_lifecycle.execute_review_decision for why "done"

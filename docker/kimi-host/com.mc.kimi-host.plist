@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.mc.kimi-host — Kimi Code CLI als Host-Agent (launchd).
+
+  Beispiel-Plist: YOUR_USER durch den macOS-Usernamen ersetzen und nach
+  ~/Library/LaunchAgents/com.mc.kimi-host.plist kopieren. bootstrap_kimi_agent
+  lädt sie via `launchctl bootstrap gui/<uid>`.
+
+  WICHTIG (Lesson Grok-Bridge 23.07.): `launchctl kickstart -k` lädt geänderte
+  EnvironmentVariables NICHT neu — nach Plist-Env-Änderung immer
+  `launchctl bootout gui/<uid>/com.mc.kimi-host` + `launchctl bootstrap`.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.mc.kimi-host</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/YOUR_USER/Workspace/Projects/mission-control/docker/kimi-host/entrypoint.sh</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/YOUR_USER/.mc/agents/kimi/logs/kimi-host.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/YOUR_USER/.mc/agents/kimi/logs/kimi-host.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/YOUR_USER</string>
+    <key>MC_REPO_PATH</key>
+    <string>/Users/YOUR_USER/Workspace/Projects/mission-control</string>
+  </dict>
+</dict>
+</plist>

@@ -1,0 +1,8 @@
+{
+  "cli_version": "0.29.1",
+  "container_image": "spike debian:bookworm-slim (pre mc-kimi-agent)",
+  "recorded_at": "2026-07-24",
+  "states": ["idle", "working", "crashed"],
+  "true_runtime": "kimi",
+  "expected_ui": "kimi"
+}

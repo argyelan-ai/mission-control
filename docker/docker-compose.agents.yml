@@ -73,6 +73,17 @@ x-omp-agent-base: &omp-agent-base
   env_file:
     - docker/.env.shared
 
+# Kimi Code Base — vierte Harness (tmux+poll.sh wie claude, Binary `kimi`,
+# Moonshot-OAuth als Datei-Grant im per-Agent kimi-config-Mount; kein
+# Env-Token — siehe docker/mc-kimi-agent/Dockerfile).
+x-kimi-agent-base: &kimi-agent-base
+  image: mc-kimi-agent:latest
+  restart: unless-stopped
+  networks:
+    - mission-control_default
+  env_file:
+    - docker/.env.shared
+
 services:
   # ── Anthropic Claude Fleet (7 Agents auf claude-sonnet-4-6) ─────────
 

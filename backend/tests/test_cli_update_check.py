@@ -23,10 +23,18 @@ _MANIFEST = {
     "openclaude": {"version": "1.0.0"},
     "claude": {"version": "2.0.0"},
     "omp": {"version": "3.0.0"},
+    "kimi": {"version": "0.29.1"},
+    "grok": {"version": "0.2.93"},
 }
 
 
 def _installed(tool):
+    return _MANIFEST[tool]["version"]
+
+
+# grok ist ein Host-Tool — run_check_once liest dessen installed-Version über
+# installed_version_host (Bridge). Im Test denselben Manifest-Stand liefern.
+async def _installed_host(tool):
     return _MANIFEST[tool]["version"]
 
 
@@ -38,7 +46,7 @@ def test_settings_and_keys_exist():
 
 
 async def _fetch_latest_update_available(tool):
-    bumped = {"openclaude": "1.1.0", "claude": "2.0.0", "omp": "3.0.0"}
+    bumped = {"openclaude": "1.1.0", "claude": "2.0.0", "omp": "3.0.0", "kimi": "0.29.1", "grok": "0.2.93"}
     return {"version": bumped[tool], "sha256": None}
 
 
@@ -52,6 +60,8 @@ async def test_update_available_writes_cache_and_emits_once(async_session, fake_
         "app.services.cli_update_check.read_manifest", return_value=_MANIFEST,
     ), patch(
         "app.services.cli_update_check.installed_version", side_effect=_installed,
+    ), patch(
+        "app.services.cli_update_check.installed_version_host", side_effect=_installed_host,
     ), patch(
         "app.services.cli_update_check.fetch_latest",
         side_effect=_fetch_latest_update_available,
@@ -95,6 +105,8 @@ async def test_no_update_available(async_session, fake_redis):
     ), patch(
         "app.services.cli_update_check.installed_version", side_effect=_installed,
     ), patch(
+        "app.services.cli_update_check.installed_version_host", side_effect=_installed_host,
+    ), patch(
         "app.services.cli_update_check.fetch_latest", side_effect=_fetch_latest_no_update,
     ):
         result = await run_check_once(async_session)
@@ -135,6 +147,8 @@ async def test_network_error_falls_back_to_old_cache_entry(async_session, fake_r
     ), patch(
         "app.services.cli_update_check.installed_version", side_effect=_installed,
     ), patch(
+        "app.services.cli_update_check.installed_version_host", side_effect=_installed_host,
+    ), patch(
         "app.services.cli_update_check.fetch_latest", side_effect=_fetch_flaky,
     ):
         result = await run_check_once(async_session)
@@ -159,6 +173,8 @@ async def test_network_error_with_no_prior_cache_yields_null_latest(async_sessio
     ), patch(
         "app.services.cli_update_check.installed_version", side_effect=_installed,
     ), patch(
+        "app.services.cli_update_check.installed_version_host", side_effect=_installed_host,
+    ), patch(
         "app.services.cli_update_check.fetch_latest", side_effect=_fetch_flaky,
     ):
         result = await run_check_once(async_session)
@@ -181,6 +197,8 @@ async def test_manifest_unreadable_does_not_crash_and_target_is_none(async_sessi
         side_effect=FileNotFoundError("cli-versions.json missing"),
     ), patch(
         "app.services.cli_update_check.installed_version", side_effect=_installed,
+    ), patch(
+        "app.services.cli_update_check.installed_version_host", side_effect=_installed_host,
     ), patch(
         "app.services.cli_update_check.fetch_latest", side_effect=_fetch_latest_no_update,
     ):

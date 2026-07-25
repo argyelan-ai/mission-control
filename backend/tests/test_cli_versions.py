@@ -39,8 +39,14 @@ def manifest_repo(tmp_path, monkeypatch):
 # ── TOOLS registry ────────────────────────────────────────────────────────
 
 
-def test_tools_registry_has_all_three_tools():
-    assert set(cli_versions.TOOLS.keys()) == {"openclaude", "claude", "omp"}
+def test_tools_registry_has_all_tools():
+    assert set(cli_versions.TOOLS.keys()) == {"openclaude", "claude", "omp", "kimi", "grok"}
+    assert cli_versions.TOOLS["kimi"]["image"] == "mc-kimi-agent:latest"
+    assert cli_versions.TOOLS["kimi"]["kimi_dist"] == "https://code.kimi.com/kimi-code"
+    # grok ist ein Host-Tool: kein Image, brew-Cask + Binary auf dem Mac.
+    assert cli_versions.TOOLS["grok"]["host"] is True
+    assert "image" not in cli_versions.TOOLS["grok"]
+    assert cli_versions.TOOLS["grok"]["brew_cask"] == "grok-build"
     assert cli_versions.TOOLS["openclaude"]["image"] == "mc-agent-base:latest"
     assert cli_versions.TOOLS["openclaude"]["npm"] == "@gitlawb/openclaude"
     assert cli_versions.TOOLS["claude"]["image"] == "mc-claude-agent:latest"

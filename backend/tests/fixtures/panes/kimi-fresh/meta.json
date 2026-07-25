@@ -1,0 +1,9 @@
+{
+  "cli_version": "0.29.1",
+  "container_image": "mc-kimi-agent:latest",
+  "recorded_at": "2026-07-25",
+  "states": ["idle"],
+  "true_runtime": "kimi",
+  "expected_ui": "kimi",
+  "notes": "FRISCH gestartete TUI (vor dem ersten Turn): die Statuszeile zeigt nur 'context: 0%' OHNE die (x/y)-Klammer. Dritte belegte Auspraegung neben kimi/ (K3, 0/1M) und kimi-prod/ (K2.7, 32.2k/256k) — der Klammerteil muss im Regex optional sein, sonst ist ein frisch gestarteter Agent weder als kimi erkennbar noch scrape-idle."
+}
