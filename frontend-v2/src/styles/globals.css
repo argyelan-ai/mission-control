@@ -236,6 +236,12 @@
   --color-status-warning: #b8870a;
   --color-status-info: #2e6fd8;
 
+  /* Status-Flächen/Ränder — abgeleitet aus --color-warning/--color-error (12%/38% Deckkraft) */
+  --color-warning-subtle: rgba(184, 135, 10, 0.12);
+  --color-error-subtle: rgba(194, 56, 56, 0.12);
+  --color-border-warning: rgba(184, 135, 10, 0.38);
+  --color-border-error: rgba(194, 56, 56, 0.38);
+
   /* Mono font alias (JetBrains Mono, bundled) */
   --font-mono: "JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, monospace;
   /* Wordmark/Display alias (ersetzt --font-wordmark aus layout.tsx) */
@@ -359,10 +365,10 @@ body {
 .text-err  { color: var(--color-status-error-text); }
 
 .bg-accent-subtle { background-color: var(--color-accent-subtle); }
-.bg-warn-subtle   { background-color: color-mix(in srgb, var(--color-warning) 12%, transparent); }
-.bg-err-subtle    { background-color: color-mix(in srgb, var(--color-error) 12%, transparent); }
-.border-warn      { border-color: color-mix(in srgb, var(--color-warning) 38%, transparent); }
-.border-err       { border-color: color-mix(in srgb, var(--color-error) 38%, transparent); }
+.bg-warn-subtle   { background-color: var(--color-warning-subtle); }
+.bg-err-subtle    { background-color: var(--color-error-subtle); }
+.border-warn      { border-color: var(--color-border-warning); }
+.border-err       { border-color: var(--color-border-error); }
 
 /* ============================================================
    v3 Signatur-Utilities — „Leitstand · argyelan Edition"
