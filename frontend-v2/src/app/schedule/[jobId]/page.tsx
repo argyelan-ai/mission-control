@@ -179,48 +179,58 @@ export default function ScheduleJobDetailPage() {
       <div className="flex flex-col h-full overflow-y-auto">
         {/* Header */}
         <div
-          className="flex items-center gap-3 px-6 py-3 border-b flex-shrink-0"
-          style={{ borderColor: C.border }}
+          className="px-6 py-3 flex-shrink-0"
         >
-          <Link
-            href="/schedule"
-            aria-label="Back to schedule"
-            className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors shrink-0"
-            style={{ color: C.textMuted }}
-          >
-            <ArrowLeft size={13} />
-            <span className="max-sm:hidden">Schedule</span>
-          </Link>
-          <span className="max-sm:hidden" style={{ color: C.textMuted }}>/</span>
-          {/* h2 intentionally — this is a sub-page breadcrumb, h1 already in AppShell nav */}
-          <h1
-            className="text-sm font-semibold flex-1 min-w-0 truncate"
-            style={{ color: C.textPrimary }}
-          >
-            {job.name}
-          </h1>
-          <button
-            onClick={() => updateMutation.mutate({ enabled: !job.enabled })}
-            className="px-2.5 py-1 rounded text-[11px] font-mono transition-colors cursor-pointer shrink-0"
-            style={{
-              color: job.enabled ? C.online : C.textMuted,
-              border: `1px solid ${C.borderActive}`,
-            }}
-          >
-            {job.enabled ? "ON" : "OFF"}
-          </button>
-          <button
-            onClick={() => setEditOpen(true)}
-            aria-label="Edit job"
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer shrink-0"
-            style={{
-              color: C.textSecondary,
-              border: `1px solid ${C.borderActive}`,
-            }}
-          >
-            <Pencil size={12} />
-            <span className="max-sm:hidden">Edit</span>
-          </button>
+          <div className="label-sys mb-1">Operations · Schedule</div>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/schedule"
+              aria-label="Back to schedule"
+              className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors shrink-0"
+              style={{ color: C.textMuted }}
+            >
+              <ArrowLeft size={13} />
+              <span className="max-sm:hidden">Schedule</span>
+            </Link>
+            <span className="max-sm:hidden" style={{ color: C.textMuted }}>/</span>
+            {/* h2 intentionally — this is a sub-page breadcrumb, h1 already in AppShell nav */}
+            <h1
+              className="display text-xl font-semibold flex-1 min-w-0 truncate"
+              style={{ color: C.textPrimary }}
+            >
+              {job.name}
+            </h1>
+            <button
+              onClick={() => updateMutation.mutate({ enabled: !job.enabled })}
+              className="px-2.5 py-1 rounded text-[11px] font-mono transition-colors cursor-pointer shrink-0"
+              style={{
+                color: job.enabled ? C.online : C.textMuted,
+                border: `1px solid ${C.borderActive}`,
+              }}
+            >
+              {job.enabled ? "ON" : "OFF"}
+            </button>
+            <button
+              onClick={() => setEditOpen(true)}
+              aria-label="Edit job"
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer shrink-0"
+              style={{
+                color: C.textSecondary,
+                border: `1px solid ${C.borderActive}`,
+              }}
+            >
+              <Pencil size={12} />
+              <span className="max-sm:hidden">Edit</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        <div className="relative h-px mx-6 flex-shrink-0" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16"
+            style={{ backgroundColor: C.accent }}
+          />
         </div>
 
         <div className="flex flex-col gap-5 p-6">

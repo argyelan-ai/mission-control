@@ -63,13 +63,13 @@ export function SemanticCardGrid({
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: index * 0.03, duration: 0.2 }}
         onClick={() => onOpen(item)}
-        className="group relative rounded-2xl p-4 cursor-pointer transition-colors"
+        className="group relative min-w-0 rounded-2xl p-4 cursor-pointer transition-colors"
         style={{
-          background: "rgba(255,255,255,0.03)",
-          border: "1px solid rgba(255,255,255,0.08)",
+          background: "var(--color-bg-surface)",
+          border: "1px solid var(--color-border)",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.05)")}
-        onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.03)")}
+        onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-elevated)")}
+        onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
       >
         {/* Pin button */}
         <button
@@ -77,9 +77,9 @@ export function SemanticCardGrid({
             e.stopPropagation();
             pinMutation.mutate({ id: item.id, pinned: !item.is_pinned });
           }}
-          className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer touch-visible"
+          className="absolute top-3 right-3 p-1.5 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer touch-visible max-sm:min-h-11 max-sm:min-w-11 max-sm:flex max-sm:items-center max-sm:justify-center"
           style={{
-            background: item.is_pinned ? "rgba(245,158,11,0.12)" : "rgba(255,255,255,0.05)",
+            background: item.is_pinned ? "rgba(245,158,11,0.12)" : "var(--color-bg-elevated)",
             color: item.is_pinned ? C.warning : "var(--color-text-muted)",
           }}
           title={item.is_pinned ? "Unpin" : "Pin"}
@@ -90,7 +90,7 @@ export function SemanticCardGrid({
         {/* Header */}
         <div className="flex items-center gap-2 mb-2">
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+            className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
             style={{ background: style.bg, color: style.color }}
           >
             {style.label}
@@ -119,7 +119,7 @@ export function SemanticCardGrid({
               <span
                 key={tag}
                 className="px-1.5 py-0.5 rounded text-[10px]"
-                style={{ background: "rgba(255,255,255,0.05)", color: "var(--color-text-muted)" }}
+                style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
               >
                 {tag}
               </span>
@@ -161,13 +161,13 @@ export function SemanticCardGrid({
           animate={{ opacity: 1 }}
           onClick={onNew}
           className="rounded-2xl p-4 cursor-pointer flex flex-col items-center justify-center gap-2 transition-colors min-h-[120px]"
-          style={{ border: "1px dashed rgba(255,255,255,0.08)", color: "var(--color-text-muted)" }}
+          style={{ border: "1px dashed var(--color-border)", color: "var(--color-text-muted)" }}
           onMouseEnter={(e) => {
             e.currentTarget.style.borderColor = C.accent;
             e.currentTarget.style.color = C.accent;
           }}
           onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)";
+            e.currentTarget.style.borderColor = "var(--color-border)";
             e.currentTarget.style.color = "var(--color-text-muted)";
           }}
         >

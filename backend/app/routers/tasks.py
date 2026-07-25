@@ -3,7 +3,7 @@ import sys
 import uuid
 from datetime import datetime, timedelta
 
-from app.utils import create_tracked_task, utcnow
+from app.utils import create_tracked_task, ensure_aware, utcnow
 
 from typing import Literal
 
@@ -2384,7 +2384,7 @@ class ThreadMessageCreate(BaseModel):
     @classmethod
     def _body_not_empty(cls, v: str) -> str:
         if not v.strip():
-            raise ValueError("body darf nicht leer sein")
+            raise ValueError("body must not be empty")
         return v
 
     @field_validator("message_type")
@@ -2530,6 +2530,285 @@ async def post_thread_message(
         "thread_id": str(thread.id),
         "task_status": task.status,
     }
+
+
+# ── Thread read API (Interaction 2.0 — user/operator side, UI THREAD panel) ──
+#
+# Seq-based read contract for the task chat view (shape proposal
+# mc-ui-redesign/04-thread-read-api-shape.md §1/§3): the client keeps only
+# `latest_seq`, polls deltas via `since_seq`, and pages older history via
+# `before_seq`. `delivery` is derived from the recipient agent's
+# AgentThreadCursor — no delivered_at/read_at timestamps are tracked, so the
+# proposal's timestamp fields are intentionally omitted. `my_read_seq` is the
+# caller's own UserThreadCursor.
+
+
+_THREAD_DIRECTIONS = {
+    "user": "user_to_agent",
+    "agent": "agent_to_user",
+    "system": "system",
+}
+
+
+def _thread_author_dict(message, agent_map: dict) -> dict:
+    """Author block for a thread message.
+
+    Message.sender_id only ever references agents — user/system rows carry
+    no user identity, so their author degrades to a generic Operator/System
+    (documented deviation from the proposal's per-user author.id). Agent
+    display falls back to the raw sender_id when the agent row is gone.
+    """
+    if message.sender_type == "agent" and message.sender_id is not None:
+        agent = agent_map.get(message.sender_id)
+        if agent is not None:
+            return {"kind": "agent", "id": agent.slug or str(agent.id), "display": agent.name}
+        fallback = str(message.sender_id)
+        return {"kind": "agent", "id": fallback, "display": fallback}
+    if message.sender_type == "user":
+        return {"kind": "user", "id": None, "display": "Operator"}
+    return {"kind": "system", "id": None, "display": "System"}
+
+
+def _serialize_thread_message(message, *, agent_map: dict, delivery: str | None) -> dict:
+    """User-side message shape (proposal §1). `delivery` is only set for
+    user_to_agent messages — agent/system rows carry no delivery tracking.
+    """
+    data = {
+        "seq": message.seq,
+        "id": str(message.id),
+        "direction": _THREAD_DIRECTIONS.get(message.sender_type, "system"),
+        "author": _thread_author_dict(message, agent_map),
+        "body": message.body,
+        "body_format": "text",
+        "created_at": ensure_aware(message.created_at).isoformat().replace("+00:00", "Z"),
+    }
+    if delivery is not None:
+        data["delivery"] = delivery
+    return data
+
+
+async def _thread_recipient(session: AsyncSession, task: Task):
+    """Current recipient of a task thread ("who is listening here").
+
+    Primary: the assigned agent (reason "assignee") — assignment already
+    flips on review hand-off, so it always names the current holder.
+    Fallback: the board lead (reason "board_lead", an extension of the
+    proposal's reason enum), mirroring the callback_agent_id fallback for
+    unrouted traffic. `listening` derives from the heartbeat-driven agent
+    status. Returns (recipient_dict | None, agent | None); the agent also
+    drives the delivery derivation.
+    """
+    agent: Agent | None = None
+    reason: str | None = None
+    if task.assigned_agent_id is not None:
+        agent = await session.get(Agent, task.assigned_agent_id)
+        if agent is not None:
+            reason = "assignee"
+    if agent is None:
+        result = await session.exec(
+            select(Agent)
+            .where(
+                Agent.board_id == task.board_id,
+                Agent.is_board_lead == True,  # noqa: E712
+                Agent.archived_at.is_(None),
+            )
+            .limit(1)
+        )
+        agent = result.first()
+        if agent is not None:
+            reason = "board_lead"
+    if agent is None:
+        return None, None
+    recipient = {
+        "kind": "agent",
+        "id": agent.slug or str(agent.id),
+        "display": agent.name,
+        "listening": agent.archived_at is None and agent.status in ("online", "idle", "working"),
+        "reason": reason,
+    }
+    return recipient, agent
+
+
+@router.get("/tasks/{task_id}/thread")
+async def get_task_thread(
+    task_id: uuid.UUID,
+    since_seq: int | None = Query(None, ge=0),
+    before_seq: int | None = Query(None, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Read a task thread (comm_v2 user side) — seq-paged, ascending seq order.
+
+    - no params: the newest `limit` messages
+    - since_seq: forward delta — messages with seq > since_seq (polling)
+    - before_seq: backward pagination — the `limit` messages with seq < before_seq
+    - has_more_before: True when messages older than the page's first exist
+      ("Load older" with before_seq = messages[0].seq)
+
+    A task without a thread yet (never messaged) reads as an empty page
+    instead of 404 — GET never creates the thread.
+    """
+    from sqlalchemy import func
+
+    from app.models.thread import AgentThreadCursor, Message, UserThreadCursor
+
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if since_seq is not None and before_seq is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="since_seq and before_seq are mutually exclusive",
+        )
+
+    recipient, recipient_agent = await _thread_recipient(session, task)
+
+    if task.thread_id is None:
+        return {
+            "task_id": str(task.id),
+            "recipient": recipient,
+            "messages": [],
+            "has_more_before": False,
+            "latest_seq": 0,
+            "my_read_seq": 0,
+        }
+
+    thread_id = task.thread_id
+
+    latest_seq = (
+        await session.exec(
+            select(func.coalesce(func.max(Message.seq), 0)).where(Message.thread_id == thread_id)
+        )
+    ).one()
+
+    if since_seq is not None:
+        result = await session.exec(
+            select(Message)
+            .where(Message.thread_id == thread_id, Message.seq > since_seq)
+            .order_by(Message.seq.asc())
+            .limit(limit)
+        )
+        rows = list(result.all())
+    else:
+        stmt = select(Message).where(Message.thread_id == thread_id)
+        if before_seq is not None:
+            stmt = stmt.where(Message.seq < before_seq)
+        result = await session.exec(stmt.order_by(Message.seq.desc()).limit(limit))
+        rows = list(reversed(result.all()))
+
+    has_more_before = False
+    if rows:
+        older = await session.exec(
+            select(Message.seq)
+            .where(Message.thread_id == thread_id, Message.seq < rows[0].seq)
+            .limit(1)
+        )
+        has_more_before = older.first() is not None
+
+    read_cursor = (
+        await session.exec(
+            select(UserThreadCursor).where(
+                UserThreadCursor.user_id == current_user.id,
+                UserThreadCursor.thread_id == thread_id,
+            )
+        )
+    ).first()
+    my_read_seq = read_cursor.last_read_seq if read_cursor is not None else 0
+
+    # Delivery state of user_to_agent messages lives on the recipient agent's
+    # cursor: acked = read, delivered = delivered, else queued. "failed" is
+    # never emitted — no failure state is tracked on this path.
+    delivery_cursor = None
+    if recipient_agent is not None:
+        delivery_cursor = (
+            await session.exec(
+                select(AgentThreadCursor).where(
+                    AgentThreadCursor.agent_id == recipient_agent.id,
+                    AgentThreadCursor.thread_id == thread_id,
+                )
+            )
+        ).first()
+
+    def _delivery_for(message) -> str | None:
+        if message.sender_type != "user":
+            return None
+        if delivery_cursor is None:
+            return "queued"
+        if message.seq <= delivery_cursor.last_acked_seq:
+            return "read"
+        if message.seq <= delivery_cursor.last_delivered_seq:
+            return "delivered"
+        return "queued"
+
+    agent_ids = {m.sender_id for m in rows if m.sender_id is not None}
+    agent_map: dict[uuid.UUID, Agent] = {}
+    if agent_ids:
+        agents_result = await session.exec(select(Agent).where(Agent.id.in_(agent_ids)))  # type: ignore[arg-type]
+        agent_map = {a.id: a for a in agents_result.all()}
+
+    return {
+        "task_id": str(task.id),
+        "recipient": recipient,
+        "messages": [
+            _serialize_thread_message(m, agent_map=agent_map, delivery=_delivery_for(m))
+            for m in rows
+        ],
+        "has_more_before": has_more_before,
+        "latest_seq": latest_seq,
+        "my_read_seq": my_read_seq,
+    }
+
+
+class ThreadReadMarker(BaseModel):
+    """Read-marker payload — the caller's cursor target."""
+    last_read_seq: int
+
+    @field_validator("last_read_seq")
+    @classmethod
+    def _not_negative(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("last_read_seq must not be negative")
+        return v
+
+
+@router.post("/tasks/{task_id}/thread/read", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_thread_read(
+    task_id: uuid.UUID,
+    payload: ThreadReadMarker,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Advance the caller's per-thread read cursor (idempotent, never backwards).
+
+    Mirrors the agent-side inbox-ack semantics. Creates the task thread
+    lazily when the marker lands before the first message.
+    """
+    from app.models.thread import UserThreadCursor
+    from app.services.messaging import ensure_task_thread
+
+    task = await session.get(Task, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    thread = await ensure_task_thread(session, task)
+
+    result = await session.exec(
+        select(UserThreadCursor).where(
+            UserThreadCursor.user_id == current_user.id,
+            UserThreadCursor.thread_id == thread.id,
+        )
+    )
+    cursor = result.first()
+    if cursor is None:
+        session.add(UserThreadCursor(
+            user_id=current_user.id,
+            thread_id=thread.id,
+            last_read_seq=payload.last_read_seq,
+        ))
+    elif payload.last_read_seq > cursor.last_read_seq:
+        cursor.last_read_seq = payload.last_read_seq
+    await session.commit()
 
 
 # ── Comments ─────────────────────────────────────────────────────────────────

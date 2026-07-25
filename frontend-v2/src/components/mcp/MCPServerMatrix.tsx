@@ -7,6 +7,7 @@ import type { Agent, MCPServer } from "@/lib/types";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface Props {
   servers: MCPServer[];
@@ -80,14 +81,14 @@ export function MCPServerMatrix({
         className="rounded-xl p-8 text-center"
         style={{
           backgroundColor: C.bgElevated,
-          border: "1px solid rgba(255,255,255,0.06)",
+          border: "1px solid var(--color-border)",
         }}
       >
-        <Server className="mx-auto h-8 w-8" style={{ color: "rgba(255,255,255,0.15)" }} />
+        <Server className="mx-auto h-8 w-8" style={{ color: "var(--color-text-dim)" }} />
         <p className="mt-3 text-sm" style={{ color: "var(--color-text-muted)" }}>
           No MCP servers installed
         </p>
-        <p className="mt-1 text-xs" style={{ color: "rgba(255,255,255,0.2)" }}>
+        <p className="mt-1 text-xs" style={{ color: "var(--color-text-dim)" }}>
           Boss can submit install requests, or you can install via CLI.
         </p>
       </div>
@@ -99,7 +100,7 @@ export function MCPServerMatrix({
       className="overflow-x-auto rounded-xl"
       style={{
         backgroundColor: C.bgElevated,
-        border: "1px solid rgba(255,255,255,0.06)",
+        border: "1px solid var(--color-border)",
         overscrollBehaviorX: "contain",
       } as React.CSSProperties}
       tabIndex={0}
@@ -124,7 +125,7 @@ export function MCPServerMatrix({
                 className="p-3 text-center font-medium min-w-[80px]"
                 style={{ color: "var(--color-text-secondary)" }}
               >
-                <span className="text-base">{a.emoji}</span>
+                <EntityIcon value={a.emoji} size={16} />
                 <br />
                 <span className="text-[10px]">{a.name}</span>
               </th>
@@ -138,7 +139,7 @@ export function MCPServerMatrix({
               <tr
                 key={s.name}
                 className="border-t"
-                style={{ borderColor: "rgba(255,255,255,0.04)" }}
+                style={{ borderColor: "var(--color-border-subtle)" }}
               >
                 <td
                   className="sticky left-0 z-10 p-3"
@@ -161,7 +162,7 @@ export function MCPServerMatrix({
                             </div>
                           )}
                           {(s.command || s.url) && (
-                            <div className="font-mono text-[10px] truncate" style={{ color: "rgba(255,255,255,0.3)" }}>
+                            <div className="font-mono text-[10px] truncate" style={{ color: "var(--color-text-dim)" }}>
                               {s.command ?? s.url}
                             </div>
                           )}
@@ -171,9 +172,10 @@ export function MCPServerMatrix({
                             <button
                               onMouseEnter={() => setTooltipServer(s.name)}
                               onMouseLeave={() => setTooltipServer(null)}
+                              onClick={() => setTooltipServer((cur) => (cur === s.name ? null : s.name))}
                               className="flex items-center cursor-pointer"
-                              style={{ color: "rgba(255,255,255,0.25)" }}
-                              aria-label={`Info zu ${s.name}`}
+                              style={{ color: "var(--color-text-dim)" }}
+                              aria-label={`About ${s.name}`}
                             >
                               <Info size={11} />
                             </button>
@@ -183,7 +185,7 @@ export function MCPServerMatrix({
                                 style={{
                                   width: "220px",
                                   background: C.bgElevated,
-                                  border: "1px solid rgba(255,255,255,0.1)",
+                                  border: "1px solid var(--color-border)",
                                   boxShadow: "0 8px 24px rgba(0,0,0,0.6)",
                                   color: "var(--color-text-secondary)",
                                 }}
@@ -192,7 +194,7 @@ export function MCPServerMatrix({
                                 {(s.command || s.url) && (
                                   <p
                                     className="mt-1 font-mono text-[10px] break-all"
-                                    style={{ color: "rgba(255,255,255,0.4)" }}
+                                    style={{ color: "var(--color-text-muted)" }}
                                   >
                                     {s.command ?? s.url}
                                   </p>
@@ -208,7 +210,7 @@ export function MCPServerMatrix({
                         onClick={() => onDeleteServer?.(s.name)}
                         className="p-1 rounded cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shrink-0 touch-visible"
                         style={{ color: "var(--color-text-muted)" }}
-                        title={`${s.name} entfernen`}
+                        title={`Remove ${s.name}`}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -226,11 +228,11 @@ export function MCPServerMatrix({
                         style={{
                           backgroundColor: enabled
                             ? `${C.accent}33`
-                            : "rgba(255,255,255,0.04)",
+                            : "var(--color-bg-hover)",
                           border: `1px solid ${
                             enabled
                               ? `${C.accent}66`
-                              : "rgba(255,255,255,0.08)"
+                              : "var(--color-border)"
                           }`,
                         }}
                         aria-label={`${enabled ? "Deactivate" : "Activate"} ${s.name} for ${a.name}`}

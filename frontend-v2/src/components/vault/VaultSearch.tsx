@@ -29,8 +29,8 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
         placeholder="what did sparky learn about rate limits?"
         className="w-full pl-9 pr-16 py-3.5 text-[15px] rounded-xl outline-none transition-colors"
         style={{
-          background: "rgba(255,255,255,0.03)",
-          border: "1px solid rgba(255,255,255,0.08)",
+          background: "var(--color-bg-deep)",
+          border: "1px solid var(--color-border)",
           color: "var(--color-text-primary)",
         }}
         onFocus={(e) => {
@@ -38,7 +38,7 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
           e.currentTarget.style.boxShadow = "none";
         }}
         onBlur={(e) => {
-          e.currentTarget.style.borderColor = "rgba(255,255,255,0.08)";
+          e.currentTarget.style.borderColor = "var(--color-border)";
           e.currentTarget.style.boxShadow = "none";
         }}
         onKeyDown={(e) => {

@@ -41,13 +41,12 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
     return (
       <div
         data-node-id={node.id}
-        className="org-node org-node--operator group relative w-[340px] rounded-2xl px-6 py-5"
+        className="org-node org-node--operator group relative w-[340px] rounded-md px-6 py-5"
         style={{
           background:
-            "linear-gradient(155deg, rgba(245,245,245,0.05) 0%, rgba(20,20,22,0.95) 60%)",
-          border: "1px solid rgba(245,245,245,0.18)",
-          boxShadow:
-            "0 1px 0 rgba(255,255,255,0.04) inset, 0 18px 40px -20px rgba(245,245,245,0.18)",
+            `linear-gradient(155deg, ${C.bgElevated} 0%, ${C.bgSurface} 60%)`,
+          border: `1px solid ${C.borderActive}`,
+          boxShadow: "0 18px 40px -20px rgba(0,0,0,0.6)",
         }}
       >
         {/* light streak on top edge — signals "human, source of truth" */}
@@ -56,7 +55,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           className="absolute inset-x-6 top-0 h-px"
           style={{
             background:
-              "linear-gradient(90deg, transparent, rgba(245,245,245,0.6), transparent)",
+              `linear-gradient(90deg, transparent, ${C.borderActive}, transparent)`,
           }}
         />
 
@@ -75,16 +74,16 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
 
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-medium">
+              <span className="text-[10px] uppercase tracking-[0.2em] font-mono font-medium">
                 Operator
               </span>
-              <span className="h-px flex-1 bg-zinc-800" />
+              <span className="h-px flex-1" style={{ background: C.borderSubtle }} />
               <StatusDot status={status} />
             </div>
-            <div className="text-[24px] font-semibold text-white leading-tight mt-1 tracking-tight">
+            <div className="display text-[24px] font-semibold leading-tight mt-1 tracking-tight" style={{ color: C.textPrimary }}>
               {node.name}
             </div>
-            <div className="text-[13px] text-zinc-400 mt-1.5 leading-snug">
+            <div className="text-[13px] mt-1.5 leading-snug" style={{ color: C.textSecondary }}>
               {node.tagline}
             </div>
           </div>
@@ -98,10 +97,10 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
     return (
       <div
         data-node-id={node.id}
-        className="org-node org-node--voice group relative w-[300px] rounded-2xl px-5 py-4"
+        className="org-node org-node--voice group relative w-[300px] rounded-md px-5 py-4"
         style={{
           background:
-            `linear-gradient(160deg, ${C.accentSubtle} 0%, rgba(15,15,18,0.92) 65%)`,
+            `linear-gradient(160deg, ${C.accentSubtle} 0%, ${C.bgSurface} 65%)`,
           border: `1px solid ${C.borderAccent}`,
           boxShadow: "0 14px 32px -22px rgba(0,0,0,0.5)",
         }}
@@ -112,7 +111,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             style={{
               width: 52, height: 52,
               background:
-                `linear-gradient(135deg, ${C.accentSubtle}, rgba(15,15,18,0.6))`,
+                `linear-gradient(135deg, ${C.accentSubtle}, ${C.bgSurface})`,
               border: `1px solid ${C.borderAccent}`,
               color: C.accentHover,
             }}
@@ -135,11 +134,11 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               <span className="h-px flex-1" style={{ background: C.borderSubtle }} />
               <StatusDot status={status} />
             </div>
-            <div className="text-[20px] font-semibold text-white mt-1 leading-tight">
+            <div className="display text-[20px] font-semibold mt-1 leading-tight" style={{ color: C.textPrimary }}>
               {node.name}
             </div>
             <RuntimeRow runtime={runtime} RuntimeIcon={RuntimeIcon} model={node.model} />
-            <div className="text-[12px] text-zinc-400 mt-2 leading-snug">
+            <div className="text-[12px] mt-2 leading-snug" style={{ color: C.textSecondary }}>
               {node.tagline}
             </div>
           </div>
@@ -153,10 +152,10 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
     return (
       <div
         data-node-id={node.id}
-        className="org-node org-node--lead group relative w-[380px] rounded-2xl px-6 py-5"
+        className="org-node org-node--lead group relative w-[380px] rounded-md px-6 py-5"
         style={{
           background:
-            `linear-gradient(135deg, ${C.accentSubtle} 0%, rgba(18,18,20,0.95) 55%, rgba(15,15,18,0.95) 100%)`,
+            `linear-gradient(135deg, ${C.accentSubtle} 0%, ${C.bgSurface} 55%, ${C.bgSurface} 100%)`,
           border: `1px solid ${C.borderAccent}`,
           boxShadow:
             "0 22px 52px -26px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.04)",
@@ -165,7 +164,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
         {/* radial accent — communicates "centre of gravity" */}
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-0 rounded-2xl"
+          className="pointer-events-none absolute inset-0 rounded-md"
           style={{
             background:
               `radial-gradient(60% 80% at 50% 0%, ${C.accentSubtle}, transparent 70%)`,
@@ -179,8 +178,8 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               width: 60, height: 60,
               background:
                 `linear-gradient(140deg, ${C.accent} 0%, ${C.accentHover} 100%)`,
-              boxShadow: "0 8px 22px -6px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.18)",
-              color: C.textPrimary,
+              boxShadow: "0 8px 22px -6px rgba(0,0,0,0.5)",
+              color: C.onAccent,
             }}
           >
             <Icon size={28} strokeWidth={2} />
@@ -194,11 +193,11 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               <span className="h-px flex-1" style={{ background: C.borderAccent }} />
               <StatusDot status={status} />
             </div>
-            <div className="text-[26px] font-bold text-white leading-tight mt-1 tracking-tight">
+            <div className="display text-[26px] font-semibold leading-tight mt-1 tracking-tight" style={{ color: C.textPrimary }}>
               {node.name}
             </div>
             <RuntimeRow runtime={runtime} RuntimeIcon={RuntimeIcon} model={node.model} />
-            <div className="text-[13px] text-zinc-400 mt-2 leading-snug">
+            <div className="text-[13px] mt-2 leading-snug" style={{ color: C.textSecondary }}>
               {node.tagline}
             </div>
           </div>
@@ -211,10 +210,10 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
   return (
     <div
       data-node-id={node.id}
-      className="org-node org-node--worker group relative w-[208px] rounded-xl px-4 py-3.5 transition-colors"
+      className="org-node org-node--worker group relative w-[208px] rounded-md px-4 py-3.5 transition-colors"
       style={{
-        background: "linear-gradient(170deg, rgba(28,28,32,0.85) 0%, rgba(15,15,18,0.95) 100%)",
-        border: "1px solid rgba(255,255,255,0.06)",
+        background: C.bgSurface,
+        border: `1px solid ${C.border}`,
       }}
     >
       <div className="flex items-center gap-3">
@@ -222,7 +221,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           className="grid place-items-center rounded-lg shrink-0"
           style={{
             width: 38, height: 38,
-            background: `linear-gradient(140deg, ${status.color}26, rgba(15,15,18,0.6))`,
+            background: `linear-gradient(140deg, ${status.color}26, ${C.bgSurface})`,
             border: `1px solid ${status.color}30`,
             color: status.color,
           }}
@@ -230,17 +229,17 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           <Icon size={19} strokeWidth={2.1} />
         </div>
         <div className="min-w-0 flex-1">
-          <div className="text-[15px] font-semibold text-zinc-100 leading-tight truncate">
+          <div className="text-[15px] font-semibold leading-tight truncate">
             {node.name}
           </div>
-          <div className="text-[10.5px] text-zinc-500 uppercase tracking-[0.1em] mt-0.5">
+          <div className="text-[10.5px] uppercase tracking-[0.1em] mt-0.5 font-mono">
             {node.role}
           </div>
         </div>
         <StatusDot status={status} compact />
       </div>
 
-      <div className="mt-3 flex items-center gap-1.5 text-[11px] text-zinc-500">
+      <div className="mt-3 flex items-center gap-1.5 text-[11px]">
         <RuntimeIcon size={12} strokeWidth={2} style={{ color: runtime.color }} />
         <span className="font-mono uppercase tracking-wide">{runtime.label}</span>
         {node.model && (
@@ -251,7 +250,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
         )}
       </div>
 
-      <div className="mt-2 text-[11.5px] text-zinc-400 leading-snug line-clamp-2">
+      <div className="mt-2 text-[11.5px] leading-snug line-clamp-2">
         {node.tagline}
       </div>
     </div>

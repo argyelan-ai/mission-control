@@ -73,16 +73,17 @@ export function AgentLessonMatrix({
   }
 
   return (
-    <div className="flex gap-4 min-h-[400px]">
-      {/* Left: Agent list */}
+    <div className="flex flex-col sm:flex-row gap-4 min-h-[400px]">
+      {/* Left: Agent list — full-width stacked block on mobile (393px),
+          fixed 224px rail from sm up. */}
       <div
-        className="w-56 shrink-0 rounded-xl overflow-hidden"
-        style={{ border: "1px solid rgba(255,255,255,0.06)" }}
+        className="w-full sm:w-56 shrink-0 rounded-xl overflow-hidden"
+        style={{ border: "1px solid var(--color-border)" }}
       >
-        <div className="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)", background: "rgba(255,255,255,0.02)" }}>
+        <div className="px-3 py-2.5 text-[10px] font-bold uppercase tracking-wider" style={{ color: "var(--color-text-muted)", background: "var(--color-bg-surface)" }}>
           Agents ({grouped.size})
         </div>
-        <div className="divide-y" style={{ borderColor: "rgba(255,255,255,0.04)" }}>
+        <div className="divide-y" style={{ borderColor: "var(--color-border-subtle)" }}>
           {Array.from(grouped.entries()).map(([agentId, { agent, lessons: agentLessons }]) => {
             const isActive = agentId === activeAgentId;
             return (
@@ -94,7 +95,7 @@ export function AgentLessonMatrix({
                   background: isActive ? `${C.error}0F` : "transparent",
                   borderLeft: isActive ? `2px solid ${C.error}` : "2px solid transparent",
                 }}
-                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.03)"; }}
+                onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.background = "var(--color-bg-surface)"; }}
                 onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
               >
                 <Bot size={14} style={{ color: isActive ? C.error : "var(--color-text-muted)" }} />
@@ -144,15 +145,15 @@ export function AgentLessonMatrix({
                   onClick={() => onOpen(lesson)}
                   className="rounded-xl p-4 cursor-pointer transition-colors"
                   style={{
-                    background: "rgba(255,255,255,0.02)",
-                    border: "1px solid rgba(255,255,255,0.06)",
+                    background: "var(--color-bg-surface)",
+                    border: "1px solid var(--color-border)",
                   }}
-                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-                  onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-elevated)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
                 >
                   <div className="flex items-center gap-2 mb-1.5">
                     <span
-                      className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                      className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                       style={{ background: `${C.error}1F`, color: STATUS_TEXT.error }}
                     >
                       Lesson
@@ -163,7 +164,7 @@ export function AgentLessonMatrix({
                       {timeAgo(lesson.created_at)}
                     </span>
                     {lesson.auto_generated && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--color-text-muted)" }}>
+                      <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                         Auto
                       </span>
                     )}
@@ -177,7 +178,7 @@ export function AgentLessonMatrix({
                   {lesson.tags?.length > 0 && (
                     <div className="flex gap-1 flex-wrap mt-2">
                       {lesson.tags.slice(0, 4).map((tag) => (
-                        <span key={tag} className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(255,255,255,0.05)", color: "var(--color-text-muted)" }}>
+                        <span key={tag} className="px-1.5 py-0.5 rounded text-[10px]" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                           {tag}
                         </span>
                       ))}

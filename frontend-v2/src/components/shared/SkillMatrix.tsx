@@ -162,14 +162,14 @@ export function SkillMatrix() {
       {/* Matrix — Mobile: horizontal scroll with sticky first column (M11/M17) */}
       <div
         className="rounded-xl overflow-x-auto"
-        style={{ border: "1px solid rgba(255,255,255,0.06)", overscrollBehaviorX: "contain" } as React.CSSProperties}
+        style={{ border: "1px solid var(--color-border)", overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"
         aria-label="Skill team assignments"
       >
         <table className="w-full text-xs">
           <thead>
-            <tr style={{ background: "rgba(255,255,255,0.02)" }}>
+            <tr style={{ background: "var(--color-bg-surface)" }}>
               {/* Sticky "Skill" header — opaque bg prevents row content bleed-through */}
               <th
                 className="sticky left-0 z-10 text-left px-3 py-2.5 font-semibold"
@@ -199,8 +199,8 @@ export function SkillMatrix() {
               <tr
                 key={skill.name}
                 style={{
-                  borderTop: i > 0 ? "1px solid rgba(255,255,255,0.04)" : "none",
-                  background: i % 2 === 0 ? "transparent" : "rgba(255,255,255,0.01)",
+                  borderTop: i > 0 ? "1px solid var(--color-border-subtle)" : "none",
+                  background: i % 2 === 0 ? "transparent" : "var(--color-bg-surface)",
                 }}
               >
                 {/* Sticky Skill name cell — opaque bg required (M11: no alpha, content must not bleed through) */}
@@ -224,12 +224,12 @@ export function SkillMatrix() {
                         onClick={() => toggle(agent.id, skill.name)}
                         className="w-5 h-5 rounded flex items-center justify-center cursor-pointer transition-colors mx-auto"
                         style={{
-                          background: enabled ? `${C.accent}33` : "rgba(255,255,255,0.04)",
+                          background: enabled ? `${C.accent}33` : "var(--color-bg-hover)",
                           border: changed
                             ? `2px solid ${C.warning}`
                             : enabled
                               ? `1px solid ${C.accent}66`
-                              : "1px solid rgba(255,255,255,0.08)",
+                              : "1px solid var(--color-border)",
                         }}
                       >
                         {enabled && <Check size={11} style={{ color: C.accentHover }} />}

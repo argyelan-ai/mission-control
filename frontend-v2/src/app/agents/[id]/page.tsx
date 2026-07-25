@@ -29,6 +29,7 @@ import { ActivityFeed } from "@/components/shared/ActivityFeed";
 import { SkillBadges } from "@/components/agent/AgentCard";
 import { RuntimePill, RUNTIME_TYPE_COLOR } from "@/components/shared/RuntimePill";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type {
   Agent, AgentMetrics, ActivityEvent as ActivityEventType,
   OpenClawSkill, AgentSkillsResponse,
@@ -36,6 +37,7 @@ import type {
 } from "@/lib/types";
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { AgentActions } from "@/components/agent/AgentActions";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -142,7 +144,7 @@ function SkillRow({
     : pendingChange === "remove"
     ? `${C.error}66`
     : skill.status === "ready"
-    ? "rgba(255,255,255,0.07)"
+    ? "var(--color-border)"
     : `${cfg.color}33`;
 
   const bgTint = pendingChange === "add"
@@ -158,7 +160,7 @@ function SkillRow({
       animate={{ opacity: pendingChange === "remove" ? 0.5 : 1, y: 0 }}
       className="flex items-center justify-between gap-3 py-2.5 px-3 rounded-xl transition-colors"
       style={{
-        backgroundColor: bgTint ?? "rgba(255,255,255,0.03)",
+        backgroundColor: bgTint ?? "var(--color-bg-surface)",
         border: `1px solid ${borderColor}`,
       }}
     >
@@ -173,15 +175,15 @@ function SkillRow({
                 textDecoration: pendingChange === "remove" ? "line-through" : undefined,
               }}
             >
-              {skill.emoji && <span className="mr-1">{skill.emoji}</span>}
+              {skill.emoji && <EntityIcon value={skill.emoji} size={12} className="mr-1" />}
               {skill.name}
             </span>
-            <span className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
+            <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
               {cfg.label}
             </span>
             {pendingChange && (
               <span
-                className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0 font-medium"
+                className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0 font-medium"
                 style={{
                   color: pendingChange === "add" ? C.online : C.error,
                   backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
@@ -191,7 +193,7 @@ function SkillRow({
               </span>
             )}
             {skill.source !== "bundled" && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full" style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono" style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}>
                 {skill.source}
               </span>
             )}
@@ -229,7 +231,7 @@ function SkillRow({
             onClick={() => toggleMutation.mutate(false)}
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
-            style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}
+            style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}
             title="Disable skill"
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <PowerOff size={11} />}
@@ -269,7 +271,7 @@ function SkillRow({
             style={{
               backgroundColor: isActive
                 ? pendingChange === "remove" ? `${C.error}18` : `${C.accent}26`
-                : pendingChange === "add" ? `${C.online}18` : "rgba(255,255,255,0.04)",
+                : pendingChange === "add" ? `${C.online}18` : "var(--color-bg-elevated)",
               color: isActive
                 ? pendingChange === "remove" ? C.error : C.accent
                 : pendingChange === "add" ? C.online : "var(--color-text-muted)",
@@ -310,7 +312,7 @@ function HostSkillRow({ name, meta, badge, badgeColor }: {
   return (
     <div
       className="flex items-center gap-3 py-2.5 px-3 rounded-xl"
-      style={{ backgroundColor: "rgba(255,255,255,0.03)", border: "1px solid rgba(255,255,255,0.06)" }}
+      style={{ backgroundColor: "var(--color-bg-surface)", border: "1px solid var(--color-border)" }}
     >
       <span className="w-[3px] self-stretch rounded-full shrink-0" style={{ background: badgeColor ?? C.online, minHeight: 18 }} />
       <div className="min-w-0 flex-1">
@@ -319,7 +321,7 @@ function HostSkillRow({ name, meta, badge, badgeColor }: {
       </div>
       {badge && (
         <span
-          className="text-[10px] px-1.5 py-0.5 rounded-full shrink-0"
+          className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0"
           style={{ color: badgeColor ?? C.online, backgroundColor: `${badgeColor ?? C.online}18` }}
         >
           {badge}
@@ -366,7 +368,7 @@ function HostSkillsView({
       {/* Honest host context banner */}
       <div
         className="rounded-xl p-3.5 flex items-start gap-3"
-        style={{ backgroundColor: "rgba(255,255,255,0.02)", border: "1px solid rgba(255,255,255,0.06)" }}
+        style={{ backgroundColor: "var(--color-bg-surface)", border: "1px solid var(--color-border)" }}
       >
         <Server size={15} className="shrink-0 mt-0.5" style={{ color: C.textSecondary }} />
         <div className="min-w-0">
@@ -550,7 +552,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
               <button
                 onClick={() => setDraftCliPlugins(null)}
                 className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer"
-                style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
+                style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}
               >
                 <Undo2 size={12} /> Discard
               </button>
@@ -642,8 +644,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
 
   const selectedRuntime = runtimesData?.runtimes.find((r) => r.id === selected || r.slug === selected);
   const borderColor = isSwitchable && selectedRuntime
-    ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "rgba(255,255,255,0.06)"
-    : "rgba(255,255,255,0.06)";
+    ? RUNTIME_TYPE_COLOR[selectedRuntime.runtime_type] ?? "var(--color-border)"
+    : "var(--color-border)";
 
   if (!isSwitchable) {
     // Locked badge for host agents without a HostHarnessAdapter (Boss, Jarvis)
@@ -655,8 +657,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
       <div
         className="rounded-xl p-4"
         style={{
-          backgroundColor: "rgba(255,255,255,0.02)",
-          border: "1px solid rgba(255,255,255,0.06)",
+          backgroundColor: "var(--color-bg-surface)",
+          border: "1px solid var(--color-border)",
         }}
       >
         <div className="flex items-center gap-2 mb-2">
@@ -664,9 +666,9 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
           <span
             className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wide"
             style={{
-              backgroundColor: "rgba(255,255,255,0.06)",
+              backgroundColor: "var(--color-bg-elevated)",
               color: C.textSecondary,
-              border: "1px solid rgba(255,255,255,0.10)",
+              border: "1px solid var(--color-border)",
             }}
           >
             locked · {agent.agent_runtime}
@@ -682,13 +684,13 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
       <div
         className="rounded-xl p-4"
         style={{
-          backgroundColor: "rgba(255,255,255,0.02)",
+          backgroundColor: "var(--color-bg-surface)",
           border: `1px solid ${borderColor}`,
           borderLeft: `3px solid ${borderColor}`,
         }}
       >
         <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-mono text-[var(--color-text-muted)]">RUNTIME</span>
               {selectedRuntime?.state === "ready" && (
@@ -705,8 +707,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
               onChange={(e) => setSelected(e.target.value === "" ? null : e.target.value)}
               className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
               style={{
-                backgroundColor: "rgba(255,255,255,0.04)",
-                border: `1px solid ${dirty ? C.borderAccent : "rgba(255,255,255,0.08)"}`,
+                backgroundColor: "var(--color-bg-deep)",
+                border: `1px solid ${dirty ? C.borderAccent : "var(--color-border)"}`,
                 color: "var(--color-text-primary)",
               }}
             >
@@ -883,12 +885,12 @@ function ConfigTab({
       <div
         className="rounded-xl p-4"
         style={{
-          backgroundColor: "rgba(255,255,255,0.02)",
-          border: "1px solid rgba(255,255,255,0.06)",
+          backgroundColor: "var(--color-bg-surface)",
+          border: "1px solid var(--color-border)",
         }}
       >
         <div className="flex items-start justify-between gap-4">
-          <div className="flex-1">
+          <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-mono text-[var(--color-text-muted)]">
                 API KEY (Provider)
@@ -899,8 +901,8 @@ function ConfigTab({
               onChange={(e) => handleSecretChange(e.target.value)}
               className="w-full text-sm rounded-lg px-3 py-2 outline-none cursor-pointer"
               style={{
-                backgroundColor: "rgba(255,255,255,0.04)",
-                border: `1px solid ${secretDirty ? C.borderAccent : "rgba(255,255,255,0.08)"}`,
+                backgroundColor: "var(--color-bg-elevated)",
+                border: `1px solid ${secretDirty ? C.borderAccent : "var(--color-border)"}`,
                 color: "var(--color-text-primary)",
               }}
             >
@@ -926,8 +928,8 @@ function ConfigTab({
                   : "cursor-pointer"
               )}
               style={{
-                backgroundColor: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.08)",
+                backgroundColor: "var(--color-bg-elevated)",
+                border: "1px solid var(--color-border)",
                 color: "var(--color-text-secondary)",
               }}
             >
@@ -961,8 +963,8 @@ function ConfigTab({
             className={cn(
               "text-left text-[12px] font-mono px-3 py-2 rounded-lg cursor-pointer transition-all",
               activeFile === key
-                ? "bg-[rgba(15,163,163,0.12)] text-[#0FA3A3]"
-                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[rgba(255,255,255,0.03)]"
+                ? "bg-[rgba(0,229,255,0.10)] text-[#00E5FF]"
+                : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
             )}
           >
             {label}
@@ -978,7 +980,7 @@ function ConfigTab({
             {isReadonly && (
               <span
                 className="ml-2 px-1.5 py-0.5 rounded text-[10px]"
-                style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "var(--color-text-muted)", border: "1px solid rgba(255,255,255,0.07)" }}
+                style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
               >
                 readonly
               </span>
@@ -1015,8 +1017,8 @@ function ConfigTab({
           readOnly={isReadonly}
           className="flex-1 w-full rounded-xl p-4 text-sm outline-none resize-none min-h-80"
           style={{
-            backgroundColor: "rgba(255,255,255,0.02)",
-            border: `1px solid ${isDirty && !isReadonly ? C.borderAccent : "rgba(255,255,255,0.06)"}`,
+            backgroundColor: "var(--color-bg-surface)",
+            border: `1px solid ${isDirty && !isReadonly ? C.borderAccent : "var(--color-border)"}`,
             color: "var(--color-text-primary)",
             fontFamily: "var(--font-mono)",
             fontSize: "13px",
@@ -1031,13 +1033,13 @@ function ConfigTab({
         {isReadonly && (
           <div className="flex items-center justify-between mt-1">
             <span className="text-xs text-[var(--color-text-muted)]">
-              Auto-generiert -- zeigt Operator-Kontext fuer diesen Agent
+              Auto-generated -- shows operator context for this agent
             </span>
             <button
               onClick={() => (syncConfigMutation as { mutate: () => void }).mutate()}
               disabled={syncConfigMutation.isPending}
               className="text-xs px-2 py-1 rounded-lg cursor-pointer"
-              style={{ color: "var(--color-text-secondary)", backgroundColor: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.07)" }}
+              style={{ color: "var(--color-text-secondary)", backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}
             >
               {syncConfigMutation.isPending ? "..." : "Regenerate"}
             </button>
@@ -1054,6 +1056,7 @@ function ConfigTab({
 function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
+  const [confirmClear, setConfirmClear] = useState(false);
   const qc = useQueryClient();
 
   const { data: config, isLoading } = useQuery({
@@ -1079,6 +1082,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
       notify.success("Memory cleared");
     },
+    onSettled: () => setConfirmClear(false),
   });
 
   if (isLoading) {
@@ -1092,7 +1096,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
   if (isEditing) {
     return (
       <GlassCard className="flex flex-col min-h-[400px]">
-        <div className="flex items-center justify-between p-4 border-b border-[rgba(255,255,255,0.06)]">
+        <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
           <span className="text-sm font-medium text-[var(--color-text-primary)]">
             Edit MEMORY.md
           </span>
@@ -1100,7 +1104,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             <button
               onClick={() => setIsEditing(false)}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
-              style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}
+              style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}
             >
               Cancel
             </button>
@@ -1119,22 +1123,23 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
           onChange={(e) => setEditContent(e.target.value)}
           className="flex-1 p-4 font-mono text-sm resize-none outline-none bg-transparent text-[var(--color-text-primary)]"
           style={{ minHeight: "400px" }}
-          placeholder={`# ${agentName} Memory\n\n## Gelerntes aus Tasks\n- ...\n\n## Bekannte Konventionen\n- ...`}
+          placeholder={`# ${agentName} Memory\n\n## Lessons from tasks\n- ...\n\n## Known conventions\n- ...`}
         />
       </GlassCard>
     );
   }
 
   return (
+    <>
     <GlassCard className="flex flex-col">
-      <div className="flex items-center justify-between p-4 border-b border-[rgba(255,255,255,0.06)]">
+      <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
         <span className="text-sm font-medium text-[var(--color-text-primary)]">
-          Persoenliches Wissen
+          Personal knowledge
         </span>
         <div className="flex gap-2">
           {memory && (
             <button
-              onClick={() => { if (confirm("Really delete memory?")) clearMutation.mutate(); }}
+              onClick={() => setConfirmClear(true)}
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: C.error, backgroundColor: `${C.error}14` }}
             >
@@ -1144,7 +1149,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
           <button
             onClick={() => { setEditContent(memory ?? ""); setIsEditing(true); }}
             className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
-            style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "var(--color-text-primary)", border: "1px solid rgba(255,255,255,0.07)" }}
+            style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border)" }}
           >
             Edit
           </button>
@@ -1163,15 +1168,15 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               {agentName} hasn't saved any insights yet.
             </p>
             <p className="text-xs text-center max-w-xs text-[var(--color-text-muted)]">
-              Agents aktualisieren ihre Memory via{" "}
-              <code className="px-1 rounded" style={{ backgroundColor: "rgba(255,255,255,0.04)" }}>
+              Agents update their memory via{" "}
+              <code className="px-1 rounded" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                 PATCH /api/v1/agent/me/memory
               </code>
             </p>
             <button
               onClick={() => { setEditContent(""); setIsEditing(true); }}
               className="mt-2 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
-              style={{ backgroundColor: "rgba(255,255,255,0.04)", color: "var(--color-text-secondary)", border: "1px solid rgba(255,255,255,0.07)" }}
+              style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
             >
               Fill in manually
             </button>
@@ -1179,6 +1184,16 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
         )}
       </div>
     </GlassCard>
+    <ConfirmDialog
+      open={confirmClear}
+      kicker="Memory"
+      title="Really delete memory?"
+      confirmLabel="Delete"
+      loading={clearMutation.isPending}
+      onConfirm={() => clearMutation.mutate()}
+      onCancel={() => setConfirmClear(false)}
+    />
+    </>
   );
 }
 
@@ -1220,6 +1235,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
 
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["agent-local-memory", agentId],
@@ -1237,6 +1253,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
       const msg = err instanceof Error ? err.message : "Delete failed";
       notify.error(msg);
     },
+    onSettled: () => setConfirmDeleteFile(null),
   });
 
   if (isLoading) {
@@ -1282,7 +1299,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
         <button
           onClick={() => qc.invalidateQueries({ queryKey: ["agent-local-memory", agentId] })}
           className="p-1.5 rounded-lg cursor-pointer transition-colors"
-          style={{ background: "rgba(255,255,255,0.04)", color: "var(--color-text-muted)" }}
+          style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
           title="Reload"
         >
           <RefreshCw size={14} />
@@ -1311,7 +1328,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
         const isExpanded = expanded.has(file.name);
         return (
           <GlassCard key={file.name} className="overflow-hidden">
-            <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+            <div className="flex items-center justify-between p-3 border-b" style={{ borderColor: "var(--color-border)" }}>
               <button
                 onClick={() => {
                   const next = new Set(expanded);
@@ -1330,11 +1347,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 </span>
               </button>
               <button
-                onClick={() => {
-                  if (confirm(`Really delete "${file.name}"? This action cannot be undone.`)) {
-                    deleteMutation.mutate(file.name);
-                  }
-                }}
+                onClick={() => setConfirmDeleteFile(file.name)}
                 disabled={deleteMutation.isPending}
                 className="p-1.5 rounded-lg cursor-pointer transition-colors disabled:opacity-50"
                 style={{
@@ -1361,6 +1374,16 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
           </GlassCard>
         );
       })}
+      <ConfirmDialog
+        open={confirmDeleteFile !== null}
+        kicker="Local Memory"
+        title={`Really delete "${confirmDeleteFile}"?`}
+        body="This action cannot be undone."
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => { if (confirmDeleteFile) deleteMutation.mutate(confirmDeleteFile); }}
+        onCancel={() => setConfirmDeleteFile(null)}
+      />
     </div>
   );
 }
@@ -1442,7 +1465,7 @@ function OverviewTab({
           <span className="text-[11px] text-[var(--color-text-muted)]">Run State</span>
           <div className="mt-2">
             <span
-              className="text-xs font-medium px-2 py-0.5 rounded-full"
+              className="text-xs font-medium px-2 py-0.5 rounded-sm font-mono"
               style={{ color: rsColor, backgroundColor: `${rsColor}18` }}
             >
               {agent.run_state}
@@ -1539,7 +1562,7 @@ function OverviewTab({
                     <div
                       key={job.id}
                       className="flex items-center gap-2 text-xs py-1 px-2 rounded-lg"
-                      style={{ backgroundColor: "rgba(255,255,255,0.02)" }}
+                      style={{ backgroundColor: "var(--color-bg-surface)" }}
                     >
                       <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: jobColor }} />
                       <span className="flex-1 min-w-0 truncate text-[var(--color-text-primary)]">{job.name}</span>
@@ -1547,7 +1570,7 @@ function OverviewTab({
                         {job.schedule_type === "interval" ? `${job.schedule_interval_hours}h` : job.schedule_time ?? job.schedule_type}
                       </span>
                       {!job.enabled && (
-                        <span className="text-[10px] px-1 rounded text-[var(--color-text-muted)]" style={{ backgroundColor: "rgba(255,255,255,0.04)" }}>
+                        <span className="text-[10px] px-1 rounded text-[var(--color-text-muted)]" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                           off
                         </span>
                       )}
@@ -1571,7 +1594,7 @@ function OverviewTab({
                   className={cn(
                     "text-[11px] px-2.5 py-1 rounded-lg transition-all cursor-pointer whitespace-nowrap",
                     activeFile === file.key
-                      ? "bg-[rgba(15,163,163,0.15)] text-[#0FA3A3]"
+                      ? "bg-[rgba(0,229,255,0.12)] text-[#00E5FF]"
                       : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                   )}
                 >
@@ -1585,12 +1608,12 @@ function OverviewTab({
               role="region"
               aria-label="Config file content"
               style={{
-                backgroundColor: "rgba(255,255,255,0.02)",
+                backgroundColor: "var(--color-bg-surface)",
                 color: "var(--color-text-body)",
-                border: "1px solid rgba(255,255,255,0.04)",
+                border: "1px solid var(--color-border-subtle)",
               }}
             >
-              {configContent || <span className="text-[var(--color-text-muted)]">Kein Inhalt</span>}
+              {configContent || <span className="text-[var(--color-text-muted)]">No content</span>}
             </div>
           </GlassCard>
 
@@ -1604,7 +1627,7 @@ function OverviewTab({
                 {activity.map((ev) => (
                   <div
                     key={ev.id}
-                    className="flex items-start gap-2.5 py-1.5 px-2 rounded-lg transition-colors hover:bg-[rgba(255,255,255,0.02)]"
+                    className="flex items-start gap-2.5 py-1.5 px-2 rounded-lg transition-colors hover:bg-[var(--color-bg-hover)]"
                   >
                     <span
                       className="mt-1 w-1.5 h-1.5 rounded-full shrink-0"
@@ -1687,6 +1710,7 @@ export default function AgentDetailPage() {
   const router = useRouter();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
+  const [confirmRecreate, setConfirmRecreate] = useState(false);
 
   // SSE updates
   const handleAgentEvent = useCallback(
@@ -1750,6 +1774,7 @@ export default function AgentDetailPage() {
       qc.invalidateQueries({ queryKey: ["agent-local-memory", id] });
     },
     onError: (e: Error) => notify.error(`Force recreate failed: ${e.message}`),
+    onSettled: () => setConfirmRecreate(false),
   });
 
   const provisionMutation = useMutation<unknown, Error>({
@@ -1835,12 +1860,13 @@ export default function AgentDetailPage() {
             className="p-6"
             glow={
               agent.status === "online"
-                ? "rgba(0, 204, 136, 0.08)"
+                ? `${C.online}14`
                 : agent.status === "error"
-                ? "rgba(239, 68, 68, 0.08)"
+                ? `${C.error}14`
                 : undefined
             }
           >
+            <div className="label-sys mb-3">Fleet · Agent</div>
             <div className="flex items-start gap-5">
               {/* Emoji */}
               <motion.div
@@ -1849,13 +1875,13 @@ export default function AgentDetailPage() {
                 transition={{ type: "spring", stiffness: 300, damping: 20 }}
                 className="text-5xl shrink-0"
               >
-                {agent.emoji ?? ""}
+                <EntityIcon value={agent.emoji} size={44} />
               </motion.div>
 
               {/* Info */}
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-3 flex-wrap">
-                  <h1 className="text-2xl font-bold tracking-tight text-[var(--color-text-primary)]">
+                  <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
                     {agent.name}
                   </h1>
                   {agent.role && (
@@ -1901,7 +1927,7 @@ export default function AgentDetailPage() {
                     <span className="text-[10px] text-[var(--color-text-muted)]">Context</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-[rgba(255,255,255,0.06)] overflow-hidden">
+                  <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
                     <motion.div
                       className="h-full rounded-full"
                       style={{ backgroundColor: barColor }}
@@ -1934,7 +1960,7 @@ export default function AgentDetailPage() {
             {/* Actions — mobile: even 2-col grid (≥44px touch targets); desktop: flex-wrap row */}
             <div
               className="mt-5 pt-4 border-t grid grid-cols-2 gap-2 sm:flex sm:items-center sm:flex-wrap"
-              style={{ borderColor: "rgba(255,255,255,0.06)" }}
+              style={{ borderColor: C.border }}
             >
               {isCliBridge ? (
                 <ActionButton
@@ -1960,16 +1986,7 @@ export default function AgentDetailPage() {
                   icon={RefreshCw}
                   label="Force-Recreate"
                   color={C.error}
-                  onClick={() => {
-                    const hasTask = !!agent.current_task_id;
-                    const baseMsg = `Fully recreate container ${agent.name}?\n\nThis pulls the current Docker image (~30-90s).\nThe running worker session will be terminated.`;
-                    const taskWarning = hasTask
-                      ? `\n\nWARNING: The agent is currently working on a task — the run will be aborted.\nClick OK to continue anyway (force=true).`
-                      : "";
-                    if (confirm(baseMsg + taskWarning)) {
-                      forceRecreateMutation.mutate({ force: hasTask });
-                    }
-                  }}
+                  onClick={() => setConfirmRecreate(true)}
                   loading={forceRecreateMutation.isPending}
                   title="Recreate container (pulls current image)"
                 />
@@ -2056,7 +2073,7 @@ export default function AgentDetailPage() {
         </SpotlightCard>
 
         {/* Tabs — .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
-        <div className="flex items-center gap-1 border-b tab-strip" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+        <div className="flex items-center gap-1 border-b tab-strip" style={{ borderColor: "var(--color-border)" }}>
           {TABS.map((tab) => (
             <button
               key={tab.key}
@@ -2103,6 +2120,30 @@ export default function AgentDetailPage() {
             {activeTab === "local-memory" && <LocalMemoryTab agentId={id} agentName={agent.name} />}
           </motion.div>
         </AnimatePresence>
+
+        <ConfirmDialog
+          open={confirmRecreate}
+          kicker="Force-Recreate"
+          title={`Fully recreate container ${agent.name}?`}
+          body={
+            <>
+              <p>
+                This pulls the current Docker image (~30-90s). The running worker
+                session will be terminated.
+              </p>
+              {agent.current_task_id && (
+                <p className="font-medium" style={{ color: C.warning }}>
+                  Warning: the agent is currently working on a task — the run will
+                  be aborted. Confirm to continue anyway (force=true).
+                </p>
+              )}
+            </>
+          }
+          confirmLabel="Force-Recreate"
+          loading={forceRecreateMutation.isPending}
+          onConfirm={() => forceRecreateMutation.mutate({ force: !!agent.current_task_id })}
+          onCancel={() => setConfirmRecreate(false)}
+        />
       </div>
     </AppShell>
   );

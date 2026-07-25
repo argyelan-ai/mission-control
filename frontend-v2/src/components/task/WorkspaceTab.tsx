@@ -175,7 +175,7 @@ export function WorkspaceTab({ task, boardId }: WorkspaceTabProps) {
                   border: isSelected ? `1px solid ${C.borderAccent}` : "1px solid transparent",
                 }}
                 onMouseOver={(e) => {
-                  if (!isSelected) (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.03)";
+                  if (!isSelected) (e.currentTarget as HTMLElement).style.background = "var(--color-bg-surface)";
                 }}
                 onMouseOut={(e) => {
                   if (!isSelected) (e.currentTarget as HTMLElement).style.background = "transparent";

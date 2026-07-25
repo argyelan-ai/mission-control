@@ -2,8 +2,8 @@
 
 /**
  * VaultHeader — editorial masthead for the memory page.
- * title: `memory_` in Geist Sans Bold with blinking underscore cursor.
- * subtitle: stats line in uppercase Geist Mono.
+ * title: `memory_` in Clash Display (.display) with blinking underscore cursor.
+ * subtitle: stats line in uppercase JetBrains Mono.
  */
 
 import type { ReactNode } from "react";
@@ -22,11 +22,13 @@ export function VaultHeader({ noteCount, agentCount, actions }: VaultHeaderProps
   return (
     <div className="flex items-start justify-between mb-8">
       <div>
+        <div className="label-sys mb-2">Knowledge · Memory</div>
+
         {/* Title with blinking cursor */}
         <h1
-          className="font-bold tracking-tight leading-none"
+          className="display font-semibold leading-none"
           style={{
-            fontSize: "clamp(2rem, 5vw, 3rem)",
+            fontSize: "clamp(1.5rem, 3.5vw, 1.75rem)",
             color: "var(--color-text-primary)",
           }}
         >
@@ -34,12 +36,12 @@ export function VaultHeader({ noteCount, agentCount, actions }: VaultHeaderProps
           <span className="vault-cursor" aria-hidden="true">_</span>
         </h1>
 
-        {/* Subtitle — stats line */}
+        {/* Subtitle — stats line (mono meta voice, secondary tone) */}
         <p
           className="font-mono uppercase tracking-wider mt-2"
           style={{
             fontSize: "11px",
-            color: "var(--color-text-muted)",
+            color: "var(--color-text-secondary)",
             letterSpacing: "0.08em",
           }}
         >

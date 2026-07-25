@@ -10,13 +10,14 @@
  *   Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, WifiOff, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostMetrics } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -285,6 +286,16 @@ function HostFormModal({
   const [form, setForm] = useState<HostCreate>(host ? hostToForm(host) : EMPTY_FORM);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  // iOS-safe scroll lock + Esc close (panel register rule 4)
+  useBodyScrollLock(true);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   const set = <K extends keyof HostCreate>(key: K, value: HostCreate[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
 
@@ -328,14 +339,14 @@ function HostFormModal({
           onClick={(e) => e.stopPropagation()}
           style={{
             backgroundColor: "var(--color-bg-elevated)",
-            border: "1px solid rgba(255,255,255,0.08)",
+            border: "1px solid var(--color-border)",
             boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
           }}
         >
           {/* Header */}
           <div
             className="flex items-center justify-between p-5 border-b shrink-0"
-            style={{ borderColor: "rgba(255,255,255,0.06)" }}
+            style={{ borderColor: "var(--color-border)" }}
           >
             <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
               {host ? `Edit host — ${host.display_name}` : "Add host"}
@@ -343,7 +354,7 @@ function HostFormModal({
             <button
               onClick={onClose}
               aria-label="Close"
-              className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer"
+              className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
             >
               <X size={14} style={{ color: C.textMuted }} />
             </button>
@@ -452,7 +463,7 @@ function HostFormModal({
           <div
             className="flex items-center justify-end gap-2 px-5 py-3 border-t shrink-0"
             style={{
-              borderColor: "rgba(255,255,255,0.06)",
+              borderColor: "var(--color-border)",
               paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
             }}
           >
@@ -664,7 +675,7 @@ export function HostsSection() {
             </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            Physische Boxen, auf denen LLM-Runtimes laufen
+            Physical boxes running LLM runtimes
           </p>
         </div>
         {isAdmin && (
@@ -686,7 +697,7 @@ export function HostsSection() {
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
           <Loader2 size={13} className="animate-spin" />
-          <span className="text-xs">Lade Hosts...</span>
+          <span className="text-xs">Loading hosts...</span>
         </div>
       )}
 

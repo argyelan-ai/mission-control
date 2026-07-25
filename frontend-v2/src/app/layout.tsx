@@ -1,16 +1,6 @@
 import type { Metadata, Viewport } from "next";
-import { GeistSans } from "geist/font/sans";
-import { GeistMono } from "geist/font/mono";
-import { Space_Grotesk } from "next/font/google";
 import "@/styles/globals.css";
 import { Providers } from "./providers";
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-wordmark",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
@@ -22,12 +12,12 @@ export const metadata: Metadata = {
     title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
   },
   other: {
-    "theme-color": "#050505", // C.bgDeep
+    "theme-color": "#04070C", // C.bgDeep
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#050505", // C.bgDeep
+  themeColor: "#04070C", // C.bgDeep
   viewportFit: "cover",
   width: "device-width",
   initialScale: 1,
@@ -42,13 +32,16 @@ export default function RootLayout({
   return (
     <html
       lang="de"
-      className={`dark ${GeistSans.variable} ${GeistMono.variable} ${spaceGrotesk.variable}`}
+      className="dark"
       style={{ colorScheme: "dark" }}
       suppressHydrationWarning
     >
       <head>
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <link rel="icon" href="/favicon.ico" sizes="any" />
+        {/* Preload the two critical self-hosted fonts (first paint: UI sans + display) */}
+        <link rel="preload" href="/fonts/GeneralSans-400.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/ClashDisplay-600.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body className="font-sans antialiased bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] min-h-[100dvh] overflow-x-hidden">
         <Providers>{children}</Providers>

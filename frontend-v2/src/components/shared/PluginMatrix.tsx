@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import type { Agent, CliPlugin, GithubSkillRepo } from "@/lib/types";
 import { notify } from "@/lib/notify";
 import { C } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface PluginAssignment {
   [agentId: string]: Set<string>;
@@ -30,7 +31,7 @@ function GithubSkillsSection() {
   if (!repos.length) return (
     <div className="text-xs py-4" style={{ color: "var(--color-text-muted)" }}>
       No GitHub skill repos installed.{" "}
-      <span style={{ color: "rgba(255,255,255,0.3)" }}>
+      <span style={{ color: "var(--color-text-dim)" }}>
         Install via: <code style={{ color: C.info }}>~/.agents/skills/install-skill.sh owner/repo</code>
       </span>
     </div>
@@ -46,7 +47,7 @@ function GithubSkillsSection() {
             className="rounded-xl overflow-hidden"
             style={{
               backgroundColor: C.bgElevated,
-              border: "1px solid rgba(255,255,255,0.06)",
+              border: "1px solid var(--color-border)",
             }}
           >
             <button
@@ -70,15 +71,15 @@ function GithubSkillsSection() {
             {isOpen && repo.skills.length > 0 && (
               <div
                 className="px-3 pb-3 flex flex-wrap gap-1.5"
-                style={{ borderTop: "1px solid rgba(255,255,255,0.04)" }}
+                style={{ borderTop: "1px solid var(--color-border-subtle)" }}
               >
                 {repo.skills.map((skill) => (
                   <span
                     key={skill}
-                    className="text-[10px] px-2 py-0.5 rounded-full"
+                    className="text-[10px] font-mono px-2 py-0.5 rounded-sm"
                     style={{
-                      backgroundColor: "rgba(255,255,255,0.04)",
-                      border: "1px solid rgba(255,255,255,0.08)",
+                      backgroundColor: "var(--color-bg-elevated)",
+                      border: "1px solid var(--color-border)",
                       color: "var(--color-text-secondary)",
                     }}
                   >
@@ -228,8 +229,8 @@ export function PluginMatrix() {
               className="text-xs px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center gap-1"
               style={{
                 color: "var(--color-text-muted)",
-                backgroundColor: "rgba(255,255,255,0.04)",
-                border: "1px solid rgba(255,255,255,0.07)",
+                backgroundColor: "var(--color-bg-elevated)",
+                border: "1px solid var(--color-border)",
               }}
             >
               <Undo2 size={12} />
@@ -256,7 +257,7 @@ export function PluginMatrix() {
         className="overflow-x-auto rounded-xl"
         style={{
           backgroundColor: C.bgElevated,
-          border: "1px solid rgba(255,255,255,0.06)",
+          border: "1px solid var(--color-border)",
           overscrollBehaviorX: "contain",
         } as React.CSSProperties}
         tabIndex={0}
@@ -281,7 +282,7 @@ export function PluginMatrix() {
                   className="p-3 text-center font-medium min-w-[80px]"
                   style={{ color: "var(--color-text-secondary)" }}
                 >
-                  <span className="text-base">{agent.emoji}</span>
+                  <EntityIcon value={agent.emoji} size={16} />
                   <br />
                   <span className="text-[10px]">{agent.name}</span>
                 </th>
@@ -293,7 +294,7 @@ export function PluginMatrix() {
               <tr
                 key={plugin.key}
                 className="border-t"
-                style={{ borderColor: "rgba(255,255,255,0.04)" }}
+                style={{ borderColor: "var(--color-border-subtle)" }}
               >
                 <td
                   className="sticky left-0 z-10 p-3"
@@ -322,11 +323,11 @@ export function PluginMatrix() {
                         style={{
                           backgroundColor: isActive
                             ? `${C.accent}33`
-                            : "rgba(255,255,255,0.04)",
+                            : "var(--color-bg-hover)",
                           border: `1px solid ${
                             isActive
                               ? `${C.accent}66`
-                              : "rgba(255,255,255,0.08)"
+                              : "var(--color-border)"
                           }`,
                         }}
                       >

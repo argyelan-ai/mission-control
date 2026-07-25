@@ -16,6 +16,7 @@ import { CommentCard } from "@/components/task/CommentCard";
 import { C } from "@/lib/colors";
 import Link from "next/link";
 import type { Task, Agent } from "@/lib/types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Review Task Row ──────────────────────────────────────────────────────────
 
@@ -71,7 +72,7 @@ export function ReviewTaskRow({
               <Pill color={C.accent} size="sm">review</Pill>
               {task.human_review_required && (
                 <span
-                  className="text-[10px] font-medium px-2 py-1 rounded-full inline-flex items-center gap-1"
+                  className="text-[10px] font-medium px-2 py-1 rounded-sm inline-flex items-center gap-1"
                   style={{
                     color: C.accent,
                     backgroundColor: `${C.accent}1A`,
@@ -89,7 +90,7 @@ export function ReviewTaskRow({
               </span>
               {agent && (
                 <span className="text-[11px] text-[var(--color-text-muted)]">
-                  {agent.emoji || "🤖"} {agent.name}
+                  <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name}
                 </span>
               )}
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
@@ -129,8 +130,8 @@ export function ReviewTaskRow({
                 <div
                   className="mt-3 ml-5 p-3 rounded-xl prose-description"
                   style={{
-                    backgroundColor: "rgba(255,255,255,0.02)",
-                    border: "1px solid rgba(255,255,255,0.04)",
+                    backgroundColor: "var(--color-bg-surface)",
+                    border: "1px solid var(--color-border-subtle)",
                   }}
                 >
                   <ReactMarkdown>{task.description}</ReactMarkdown>
@@ -172,7 +173,7 @@ export function ReviewTaskRow({
         {/* Actions */}
         <div
           className="flex flex-col gap-2 mt-3 pt-3 border-t"
-          style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           {/* Review Decision Badge */}
           {task.review_decision && (
@@ -257,9 +258,9 @@ export function ReviewTaskRow({
                 aria-label="Approve comment"
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{
-                  backgroundColor: "rgba(255,255,255,0.03)",
+                  backgroundColor: "var(--color-bg-surface)",
                   color: "var(--color-text-primary)",
-                  border: "1px solid rgba(255,255,255,0.06)",
+                  border: "1px solid var(--color-border)",
                 }}
                 autoFocus
               />
@@ -296,9 +297,9 @@ export function ReviewTaskRow({
                 aria-label="Reject comment"
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{
-                  backgroundColor: "rgba(255,255,255,0.03)",
+                  backgroundColor: "var(--color-bg-surface)",
                   color: "var(--color-text-primary)",
-                  border: "1px solid rgba(255,255,255,0.06)",
+                  border: "1px solid var(--color-border)",
                 }}
                 autoFocus
               />

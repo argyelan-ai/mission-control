@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Clock, Heart } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { GlassCard } from "@/components/shared/GlassCard";
+import { ConfirmDialog, PromptDialog } from "@/components/shared/ConfirmDialog";
 import { JobsTable } from "@/components/schedule/JobsTable";
 import { JobModal } from "@/components/schedule/JobModal";
 import { ScheduleHeader } from "@/components/schedule/ScheduleHeader";
@@ -24,8 +25,8 @@ type Tab = "overview" | "day" | "week" | "health";
 function chipColors(job: ScheduledJob, runningJobs: Set<string>) {
   if (!job.enabled)
     return {
-      bg: "rgba(255,255,255,0.03)",
-      border: "rgba(255,255,255,0.07)",
+      bg: "var(--color-bg-elevated)",
+      border: "var(--color-border)",
       text: C.textMuted,
     };
   if (runningJobs.has(job.id))
@@ -415,6 +416,11 @@ export default function SchedulePage() {
     open: boolean;
     job: ScheduledJob | null;
   }>({ open: false, job: null });
+  // Queue of jobs awaiting delete confirmation — bulk delete enqueues
+  // several; the ConfirmDialog walks them one by one (like the old
+  // sequential native confirm() calls did).
+  const [deleteQueue, setDeleteQueue] = useState<ScheduledJob[]>([]);
+  const [snoozeTargetId, setSnoozeTargetId] = useState<string | null>(null);
 
   // SSE
   useSSE(sseUrls.schedule(), {
@@ -489,7 +495,7 @@ export default function SchedulePage() {
   const handleDelete = (id: string) => {
     const job = jobs.find((j) => j.id === id);
     if (!job) return;
-    if (confirm(`Delete "${job.name}"?`)) deleteMutation.mutate(id);
+    setDeleteQueue((q) => (q.some((j) => j.id === id) ? q : [...q, job]));
   };
 
   const handleTrigger = (id: string) => {
@@ -517,11 +523,7 @@ export default function SchedulePage() {
   };
 
   const handleSnooze = (id: string) => {
-    const input = prompt("Snooze for how many hours?", "1");
-    if (!input) return;
-    const hours = Number(input);
-    if (!Number.isFinite(hours) || hours <= 0) return;
-    snoozeMutation.mutate({ id, hours });
+    setSnoozeTargetId(id);
   };
 
   const handleDuplicate = (id: string) => {
@@ -540,19 +542,21 @@ export default function SchedulePage() {
       <div className="flex flex-col h-full overflow-hidden">
         {/* Tab switcher header */}
         <div
-          className="flex items-center gap-3 px-6 py-3 border-b flex-shrink-0"
-          style={{ borderColor: C.border }}
+          className="flex items-center gap-3 px-6 py-3 flex-shrink-0"
         >
           <Clock
             size={16}
             style={{ color: C.accent }}
           />
-          <h1
-            className="text-sm font-semibold"
-            style={{ color: C.textPrimary }}
-          >
-            Schedule
-          </h1>
+          <div>
+            <div className="label-sys mb-1">Operations · Schedule</div>
+            <h1
+              className="display text-xl font-semibold"
+              style={{ color: C.textPrimary }}
+            >
+              Schedule
+            </h1>
+          </div>
           {/* tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
           <div
             className="ml-3 flex items-center rounded-lg p-0.5 gap-0.5 tab-strip"
@@ -586,6 +590,14 @@ export default function SchedulePage() {
               );
             })}
           </div>
+        </div>
+
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        <div className="relative h-px mx-6 flex-shrink-0" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16"
+            style={{ backgroundColor: C.accent }}
+          />
         </div>
 
         {/* Tab content */}
@@ -646,6 +658,47 @@ export default function SchedulePage() {
             />
           )}
         </AnimatePresence>
+
+        {/* v3 dialogs — replace native confirm()/prompt() (panel register rule 3) */}
+        <ConfirmDialog
+          open={deleteQueue.length > 0}
+          title="Delete job"
+          body={deleteQueue[0] ? `Delete "${deleteQueue[0].name}"?` : undefined}
+          confirmLabel="Delete"
+          loading={deleteMutation.isPending}
+          onConfirm={() => {
+            const job = deleteQueue[0];
+            if (!job) return;
+            deleteMutation.mutate(job.id, {
+              onSuccess: () => setDeleteQueue((q) => q.slice(1)),
+            });
+          }}
+          onCancel={() => setDeleteQueue((q) => q.slice(1))}
+        />
+        <PromptDialog
+          open={snoozeTargetId !== null}
+          title="Snooze job"
+          inputLabel="Snooze for how many hours?"
+          placeholder="1"
+          defaultValue="1"
+          confirmLabel="Snooze"
+          danger={false}
+          loading={snoozeMutation.isPending}
+          validate={(value) => {
+            const hours = Number(value);
+            if (!Number.isFinite(hours) || hours <= 0)
+              return "Enter a number greater than 0.";
+            return null;
+          }}
+          onConfirm={(value) => {
+            if (snoozeTargetId === null) return;
+            snoozeMutation.mutate(
+              { id: snoozeTargetId, hours: Number(value) },
+              { onSuccess: () => setSnoozeTargetId(null) }
+            );
+          }}
+          onCancel={() => setSnoozeTargetId(null)}
+        />
       </div>
     </AppShell>
   );

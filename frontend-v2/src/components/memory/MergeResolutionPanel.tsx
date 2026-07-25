@@ -10,7 +10,7 @@
  *   - 3 action buttons:
  *       1. "Merge into existing" (primary, teal gradient)
  *          → POST /knowledge/{id}/merge_into/{candidate_id}
- *          → window.confirm before destructive merge (UI-SPEC accepts for v0.5)
+ *          → ConfirmDialog before destructive merge (v3 panel register rule 3)
  *       2. "Keep both" (neutral ghost)
  *          → POST /knowledge/{id}/keep_both
  *       3. "Mark as unrelated" (destructive ghost, red text)
@@ -24,12 +24,13 @@
  * background (the operator's Design-DNA "no purple" rule).
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { api } from "@/lib/api";
 import type { BoardMemory } from "@/lib/types";
 import { C } from "@/lib/colors";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface Props {
   entry: BoardMemory;
@@ -40,6 +41,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
   const queryClient = useQueryClient();
   const prefersReduce = useReducedMotion();
   const [busy, setBusy] = useState(false);
+  const [confirmMerge, setConfirmMerge] = useState(false);
 
   const candidateId = entry.merge_candidate_id ?? null;
   const { data: candidate } = useQuery({
@@ -49,6 +51,27 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
     enabled: candidateId !== null,
     staleTime: 60_000,
   });
+
+  // The ConfirmDialog renders inside MemoryModal, which closes on a
+  // document-level Escape listener — swallow Esc in the capture phase so
+  // only the dialog dismisses (mirrors the native confirm it replaced).
+  useEffect(() => {
+    if (!confirmMerge) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !busy) {
+        e.stopPropagation();
+        setConfirmMerge(false);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [confirmMerge, busy]);
+
+  const targetTitle =
+    candidate?.entry?.title ??
+    candidate?.entry?.content?.slice(0, 40) ??
+    "Target";
+  const sourceLabel = entry.title ?? entry.content.slice(0, 40);
 
   if (!candidateId) return null;
 
@@ -61,24 +84,13 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
   }
 
   async function onMergeInto() {
-    const targetTitle =
-      candidate?.entry?.title ??
-      candidate?.entry?.content?.slice(0, 40) ??
-      "Target";
-    const sourceLabel = entry.title ?? entry.content.slice(0, 40);
-    if (
-      !window.confirm(
-        `Merge ${sourceLabel} into ${targetTitle}? The source entry will be deleted.`,
-      )
-    ) {
-      return;
-    }
     setBusy(true);
     try {
       await api.knowledge.mergeInto(entry.id, candidateId!);
       await invalidate();
     } finally {
       setBusy(false);
+      setConfirmMerge(false);
     }
   }
 
@@ -140,7 +152,7 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
         )}
         <div className="flex flex-wrap gap-2">
           <button
-            onClick={onMergeInto}
+            onClick={() => setConfirmMerge(true)}
             disabled={busy}
             className="px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-50 cursor-pointer focus-visible:ring-2 focus-visible:ring-teal-500/50"
             style={{
@@ -170,6 +182,16 @@ export function MergeResolutionPanel({ entry, onResolved }: Props) {
             Mark as unrelated
           </button>
         </div>
+        <ConfirmDialog
+          open={confirmMerge}
+          kicker="Merge"
+          title={`Merge ${sourceLabel} into ${targetTitle}?`}
+          body="The source entry will be deleted."
+          confirmLabel="Merge"
+          loading={busy}
+          onConfirm={onMergeInto}
+          onCancel={() => setConfirmMerge(false)}
+        />
       </motion.section>
     </AnimatePresence>
   );

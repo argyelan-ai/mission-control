@@ -17,7 +17,7 @@ interface PlannerSliderProps {
 const STOPS: { value: PlannerMode; label: string; hint: string }[] = [
   { value: "direct", label: "Direkt", hint: "Sofort ausfuehren" },
   { value: "auto", label: "Auto", hint: "System entscheidet" },
-  { value: "with_planner", label: "Planner", hint: "Erst planen" },
+  { value: "with_planner", label: "Planner", hint: "Plan first" },
 ];
 
 export function PlannerSlider({

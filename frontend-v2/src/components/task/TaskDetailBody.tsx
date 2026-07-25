@@ -28,7 +28,7 @@ import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, 
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { timeAgo } from "@/lib/utils";
-import { C, LANE } from "@/lib/colors";
+import { C, LANE, STATUS_TEXT } from "@/lib/colors";
 import { useAppStore } from "@/lib/store";
 import { TaskDescription } from "./TaskDescription";
 import { TaskActions } from "./TaskActions";
@@ -39,6 +39,7 @@ import { TaskTranscript } from "./TaskTranscript";
 import { DeliverablesTab } from "./DeliverablesTab";
 import { E2ETab } from "./E2ETab";
 import { WorkspaceTab } from "./WorkspaceTab";
+import { ThreadPanel } from "./ThreadPanel";
 import { GitPanel } from "./GitPanel";
 import { TaskReferences } from "./TaskReferences";
 import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus } from "@/lib/types";
@@ -90,17 +91,86 @@ function Section({ children, last = false }: { children: React.ReactNode; last?:
   );
 }
 
-/** Click-outside-closing popover shell for header menus. */
-function useClickOutside(onClose: () => void) {
-  const ref = useRef<HTMLDivElement>(null);
+/** Fixed-position coordinates for a body-portaled dropdown. */
+type PortalMenuPos = { top: number; bottom: number; left: number; width?: number; up: boolean };
+
+/**
+ * Portal-menu plumbing shared by the header/property dropdowns: measures the
+ * trigger on open and returns fixed coordinates for a menu rendered through
+ * `createPortal`, closing on outside click / Escape / scroll / resize.
+ * Horizontal position is clamped so the menu — including its right edge —
+ * stays inside the viewport with an 8px margin (matters at 393px). `width`
+ * is the menu width in px (or "trigger" to match the trigger), `align: right`
+ * anchors the menu's right edge to the trigger's right edge, and `flipMax`
+ * (menu max height) makes it open upward when there is no room below.
+ */
+function usePortalMenu({
+  width,
+  align = "left",
+  flipMax,
+}: {
+  width: number | "trigger";
+  align?: "left" | "right";
+  flipMax?: number;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pos, setPos] = useState<PortalMenuPos | null>(null);
+  const triggerRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    function handle(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    if (!open) return;
+    const close = () => setOpen(false);
+    function handleClick(e: MouseEvent) {
+      if (
+        !triggerRef.current?.contains(e.target as Node) &&
+        !menuRef.current?.contains(e.target as Node)
+      ) {
+        close();
+      }
     }
-    document.addEventListener("mousedown", handle);
-    return () => document.removeEventListener("mousedown", handle);
-  }, [onClose]);
-  return ref;
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") close();
+    }
+    // Fixed positioning goes stale when the panel scrolls or resizes — close.
+    function handleScroll(e: Event) {
+      if (menuRef.current?.contains(e.target as Node)) return; // menu's own scrollbar
+      close();
+    }
+    document.addEventListener("mousedown", handleClick);
+    document.addEventListener("keydown", handleKey);
+    window.addEventListener("scroll", handleScroll, true);
+    window.addEventListener("resize", handleScroll);
+    return () => {
+      document.removeEventListener("mousedown", handleClick);
+      document.removeEventListener("keydown", handleKey);
+      window.removeEventListener("scroll", handleScroll, true);
+      window.removeEventListener("resize", handleScroll);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (!open && triggerRef.current) {
+      const r = triggerRef.current.getBoundingClientRect();
+      const menuWidth = width === "trigger" ? r.width : width;
+      const up = flipMax != null && window.innerHeight - r.bottom < flipMax + 16 && r.top > flipMax + 16;
+      // "up" positions via bottom instead of a translate — Framer Motion
+      // animates transform and would clobber a translateY(-100%).
+      const desiredLeft = align === "right" ? r.right - menuWidth : r.left;
+      // Keep the menu (incl. right edge) inside the viewport, 8px margin.
+      const left = Math.min(Math.max(desiredLeft, 8), Math.max(8, window.innerWidth - menuWidth - 8));
+      setPos({
+        top: up ? 0 : r.bottom + 4,
+        bottom: up ? window.innerHeight - r.top + 4 : 0,
+        left,
+        width: width === "trigger" ? r.width : undefined,
+        up,
+      });
+    }
+    setOpen((o) => !o);
+  };
+
+  return { open, setOpen, toggle, pos, triggerRef, menuRef };
 }
 
 // ── Status dropdown ──────────────────────────────────────────────────────────
@@ -114,15 +184,16 @@ function StatusMenu({
   onChange: (s: TaskStatus) => void;
   pending: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const ref = useClickOutside(() => setOpen(false));
   const color = LANE[status] ?? C.textMuted;
+  // Portaled with fixed positioning + viewport clamp (see usePortalMenu) so
+  // the menu can never run off the right edge on narrow (393px) viewports.
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 150 });
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={triggerRef}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         disabled={pending}
         aria-haspopup="menu"
         aria-expanded={open}
@@ -134,19 +205,24 @@ function StatusMenu({
         {STATUS_LABEL[status]}
         <ChevronDown size={10} style={{ color: C.textDim }} />
       </button>
-      <AnimatePresence>
-        {open && (
+      {open && pos && createPortal(
+        <AnimatePresence>
           <motion.div
+            ref={menuRef}
             role="menu"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute left-0 top-full mt-1 z-20 min-w-[150px] rounded-lg py-1"
+            className="min-w-[150px] rounded-md py-1"
             style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              zIndex: 70,
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
             {STATUS_ORDER.map((s) => {
@@ -162,12 +238,12 @@ function StatusMenu({
                     onChange(s);
                   }}
                   className="w-full flex items-center gap-2 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer disabled:cursor-default"
-                  style={{ color: active ? C.textDim : C.textSecondary, background: active ? "rgba(255,255,255,0.03)" : "transparent" }}
+                  style={{ color: active ? C.textDim : C.textSecondary, background: active ? C.bgElevated : "transparent" }}
                   onMouseEnter={(e) => {
                     if (!active) (e.currentTarget as HTMLElement).style.background = C.bgHover;
                   }}
                   onMouseLeave={(e) => {
-                    (e.currentTarget as HTMLElement).style.background = active ? "rgba(255,255,255,0.03)" : "transparent";
+                    (e.currentTarget as HTMLElement).style.background = active ? C.bgElevated : "transparent";
                   }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c }} />
@@ -177,8 +253,9 @@ function StatusMenu({
               );
             })}
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   );
 }
@@ -194,39 +271,46 @@ function OverflowMenu({
   onDelete: () => void;
   deleteLoading: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState(false);
-  const ref = useClickOutside(() => {
-    setOpen(false);
-    setConfirm(false);
-  });
+  // Portaled with fixed positioning + viewport clamp (see usePortalMenu);
+  // right-aligned to the trigger like the old `right-0` dropdown.
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: 180, align: "right" });
+  // Closing the menu always resets the two-step delete confirm.
+  useEffect(() => {
+    if (!open) setConfirm(false);
+  }, [open]);
 
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative" ref={triggerRef}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-label="More actions"
-        className="w-[30px] h-[30px] rounded-lg flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
+        className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
         style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
       >
         <MoreHorizontal size={14} />
       </button>
-      <AnimatePresence>
-        {open && (
+      {open && pos && createPortal(
+        <AnimatePresence>
           <motion.div
+            ref={menuRef}
             role="menu"
             initial={{ opacity: 0, y: -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -4 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
-            className="absolute right-0 top-full mt-1 z-20 min-w-[180px] rounded-lg py-1"
+            className="min-w-[180px] rounded-md py-1"
             style={{
+              position: "fixed",
+              top: pos.top,
+              left: pos.left,
+              zIndex: 70,
               background: C.bgBase,
               border: `1px solid ${C.borderActive}`,
-              boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
+              boxShadow: "var(--shadow-elevated)",
             }}
           >
             {!confirm ? (
@@ -238,7 +322,7 @@ function OverflowMenu({
                 onMouseEnter={(e) => ((e.currentTarget as HTMLElement).style.background = C.bgHover)}
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
               >
-                <Trash2 size={12} style={{ color: "#D05F5F" }} />
+                <Trash2 size={12} style={{ color: STATUS_TEXT.error }} />
                 Delete task
               </button>
             ) : (
@@ -251,7 +335,7 @@ function OverflowMenu({
                     onClick={onDelete}
                     disabled={deleteLoading}
                     className="px-2 py-1 rounded text-[10px] font-semibold cursor-pointer"
-                    style={{ backgroundColor: `${C.error}26`, color: "#D05F5F" }}
+                    style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                   >
                     {deleteLoading ? "…" : "Delete task"}
                   </button>
@@ -269,8 +353,9 @@ function OverflowMenu({
               </div>
             )}
           </motion.div>
-        )}
-      </AnimatePresence>
+        </AnimatePresence>,
+        document.body,
+      )}
     </div>
   );
 }
@@ -288,57 +373,13 @@ function PropertyMenuCell({
   options: { id: string | null; label: string; active: boolean }[];
   onSelect: (id: string | null) => void;
 }) {
-  const [open, setOpen] = useState(false);
   // The properties grid clips its children (overflow-hidden for the rounded
   // corners) and sits inside a scroll container — an absolute dropdown gets
   // cut off after ~2 entries. Render the menu through a portal with fixed
-  // positioning measured off the trigger instead.
-  const [menuPos, setMenuPos] = useState<{ top: number; bottom: number; left: number; width: number; up: boolean } | null>(null);
-  const triggerRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function handleClick(e: MouseEvent) {
-      if (
-        !triggerRef.current?.contains(e.target as Node) &&
-        !menuRef.current?.contains(e.target as Node)
-      ) {
-        setOpen(false);
-      }
-    }
-    // Fixed positioning goes stale when the panel scrolls or resizes — close.
-    function handleScroll(e: Event) {
-      if (menuRef.current?.contains(e.target as Node)) return; // menu's own scrollbar
-      setOpen(false);
-    }
-    document.addEventListener("mousedown", handleClick);
-    window.addEventListener("scroll", handleScroll, true);
-    window.addEventListener("resize", handleScroll);
-    return () => {
-      document.removeEventListener("mousedown", handleClick);
-      window.removeEventListener("scroll", handleScroll, true);
-      window.removeEventListener("resize", handleScroll);
-    };
-  }, [open]);
-
+  // positioning measured off the trigger instead; usePortalMenu also clamps
+  // the horizontal position so the menu stays inside the viewport.
   const MENU_MAX = 240;
-  const toggle = () => {
-    if (!open && triggerRef.current) {
-      const r = triggerRef.current.getBoundingClientRect();
-      const up = window.innerHeight - r.bottom < MENU_MAX + 16 && r.top > MENU_MAX + 16;
-      // "up" positions via bottom instead of a translate — Framer Motion
-      // animates transform and would clobber a translateY(-100%).
-      setMenuPos({
-        top: up ? 0 : r.bottom + 4,
-        bottom: up ? window.innerHeight - r.top + 4 : 0,
-        left: r.left,
-        width: r.width,
-        up,
-      });
-    }
-    setOpen((o) => !o);
-  };
+  const { open, setOpen, toggle, pos, triggerRef, menuRef } = usePortalMenu({ width: "trigger", flipMax: MENU_MAX });
 
   return (
     <div className="relative" style={{ background: C.bgSurface }} ref={triggerRef}>
@@ -347,7 +388,7 @@ function PropertyMenuCell({
         onClick={toggle}
         aria-haspopup="listbox"
         aria-expanded={open}
-        className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.03)]"
+        className="w-full text-left px-2.5 py-2 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
       >
         <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
           {label}
@@ -357,21 +398,21 @@ function PropertyMenuCell({
           <ChevronDown size={9} className="ml-auto shrink-0" style={{ color: C.textDim }} />
         </span>
       </button>
-      {open && menuPos && createPortal(
+      {open && pos && createPortal(
         <AnimatePresence>
           <motion.div
             ref={menuRef}
             role="listbox"
-            initial={{ opacity: 0, y: menuPos.up ? 4 : -4 }}
+            initial={{ opacity: 0, y: pos.up ? 4 : -4 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0 }}
             transition={{ duration: 0.12, ease: "easeOut" }}
             className="rounded-lg py-1 overflow-y-auto"
             style={{
               position: "fixed",
-              ...(menuPos.up ? { bottom: menuPos.bottom } : { top: menuPos.top }),
-              left: menuPos.left,
-              width: menuPos.width,
+              ...(pos.up ? { bottom: pos.bottom } : { top: pos.top }),
+              left: pos.left,
+              width: pos.width,
               maxHeight: MENU_MAX,
               zIndex: 70,
               background: C.bgBase,
@@ -433,7 +474,7 @@ export function TaskDetailBody({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [activeTab, setActiveTab] = useState<"comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("comments");
+  const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("thread");
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [subtasksOpen, setSubtasksOpen] = useState(false);
 
@@ -556,6 +597,7 @@ export function TaskDetailBody({
   const projectName = task.project_id ? (projects.find((p) => p.id === task.project_id)?.name ?? "Project") : "Ad-hoc";
 
   const tabs: { key: typeof activeTab; label: string }[] = [
+    { key: "thread", label: "Thread" },
     { key: "comments", label: "Comments" },
     { key: "deliverables", label: "Deliverables" },
     ...(task.workspace_path ? [{ key: "workspace" as const, label: "Workspace" }] : []),
@@ -569,6 +611,7 @@ export function TaskDetailBody({
     <>
       {/* ── Header ── */}
       <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
+        <div className="label-sys label-sys--dim mb-1.5">Task · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
           <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
             {task.title}
@@ -578,7 +621,7 @@ export function TaskDetailBody({
             <button
               onClick={onClose}
               aria-label="Close task details"
-              className="w-[30px] h-[30px] rounded-lg flex items-center justify-center transition-colors hover:bg-[rgba(255,255,255,0.05)] cursor-pointer"
+              className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
               <X size={15} />
@@ -846,8 +889,8 @@ export function TaskDetailBody({
           <TaskActions task={task} boardId={boardId} />
         </Section>
 
-        {/* Tabs */}
-        <div className="flex gap-0.5 px-4" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
+        {/* Tabs — v3: Mono-Labels, eckiger Cyan-Unterstrich für den aktiven Tab */}
+        <div className="flex gap-0.5 px-4 tab-strip" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
           {tabs.map((tab) => {
             const active = activeTab === tab.key;
             return (
@@ -856,9 +899,9 @@ export function TaskDetailBody({
                 role="tab"
                 aria-selected={active}
                 onClick={() => setActiveTab(tab.key)}
-                className="px-2.5 py-2 text-[11.5px] cursor-pointer transition-colors -mb-px"
+                className="px-2.5 py-2 font-mono text-[10px] uppercase tracking-[0.12em] cursor-pointer transition-colors -mb-px"
                 style={{
-                  color: active ? C.textPrimary : C.textMuted,
+                  color: active ? C.accent : C.textMuted,
                   fontWeight: active ? 500 : 400,
                   borderBottom: `2px solid ${active ? C.accent : "transparent"}`,
                 }}
@@ -869,7 +912,9 @@ export function TaskDetailBody({
           })}
         </div>
         <div className="px-4 py-3 pb-4">
-          {activeTab === "comments" ? (
+          {activeTab === "thread" ? (
+            <ThreadPanel taskId={task.id} />
+          ) : activeTab === "comments" ? (
             <TaskComments task={task} boardId={boardId} agents={agents} />
           ) : activeTab === "transcript" ? (
             <TaskTranscript taskId={task.id} isLive={task.status === "in_progress" || task.status === "review"} />

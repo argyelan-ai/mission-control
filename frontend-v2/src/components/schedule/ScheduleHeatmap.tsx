@@ -17,8 +17,8 @@ interface ScheduleHeatmapProps {
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const HOUR_LABELS = [0, 6, 12, 18];
-// C.accent = "#0FA3A3" → RGB for use in rgba()
-const ACCENT = "15,163,163";
+// C.accent = "#00E5FF" → RGB for use in rgba()
+const ACCENT = "0,229,255";
 
 export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
   // Build lookup map (weekday, hour) → count

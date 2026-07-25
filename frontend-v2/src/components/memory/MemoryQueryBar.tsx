@@ -94,12 +94,12 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             if (e.key === "Escape") clear();
           }}
           placeholder="Semantic Memory Search — ask the memory (Qdrant + Spark embedding)..."
-          className="flex-1 bg-transparent outline-none text-sm text-white placeholder:text-white/30"
+          className="flex-1 bg-transparent outline-none text-sm text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)]"
         />
         {query && (
           <button
             onClick={clear}
-            className="p-1 rounded hover:bg-white/5 text-white/40 hover:text-white/70"
+            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
             aria-label="Clear"
           >
             <X size={14} />
@@ -141,7 +141,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             className="mt-3 space-y-3"
           >
             <div className="flex items-center justify-between px-1">
-              <span className="text-xs text-white/40">
+              <span className="text-xs text-[var(--color-text-muted)]">
                 {totalHits} hits for &ldquo;{result.query}&rdquo;
                 {result.fallback && (
                   <span className="ml-2 px-1.5 py-0.5 rounded text-[10px]" style={{ background: "rgba(184,135,10,0.15)", color: STATUS_TEXT.warning }}>
@@ -165,32 +165,32 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                     <span className="text-[11px] font-medium uppercase tracking-wider" style={{ color: cfg.color }}>
                       {cfg.label}
                     </span>
-                    <span className="text-[11px] text-white/30">{hits.length}</span>
+                    <span className="text-[11px] text-[var(--color-text-muted)]">{hits.length}</span>
                   </div>
                   <div className="space-y-1.5">
                     {hits.map((hit) => (
                       <div
                         key={hit.memory_id}
-                        className="px-3 py-2 rounded-lg border text-xs hover:bg-white/[0.03] transition-colors cursor-default"
+                        className="px-3 py-2 rounded-lg border text-xs hover:bg-[var(--color-bg-hover)] transition-colors cursor-default"
                         style={{
-                          background: "rgba(255,255,255,0.02)",
-                          borderColor: "rgba(255,255,255,0.06)",
+                          background: "var(--color-bg-surface)",
+                          borderColor: "var(--color-border)",
                         }}
                       >
                         <div className="flex items-start justify-between gap-2 mb-1">
-                          <div className="font-medium text-white/90 truncate">
+                          <div className="font-medium text-[var(--color-text-primary)] truncate">
                             {hit.title || "(No title)"}
                           </div>
                           <div className="flex items-center gap-2 flex-shrink-0">
                             {hit.memory_type && (
-                              <span className="text-[10px] text-white/40 uppercase">
+                              <span className="text-[10px] text-[var(--color-text-muted)] uppercase">
                                 {hit.memory_type}
                               </span>
                             )}
                             <span
                               className="text-[10px] font-mono px-1.5 py-0.5 rounded"
                               style={{
-                                background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "rgba(255,255,255,0.05)",
+                                background: hit.score > 0.75 ? "rgba(0,204,136,0.15)" : "var(--color-bg-elevated)",
                                 color: hit.score > 0.75 ? C.online : C.textSecondary,
                               }}
                             >
@@ -198,7 +198,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
                             </span>
                           </div>
                         </div>
-                        <div className="text-white/50 line-clamp-2">
+                        <div className="text-[var(--color-text-secondary)] line-clamp-2">
                           {hit.content_preview}
                         </div>
                       </div>
@@ -209,7 +209,7 @@ export function MemoryQueryBar({ boardId, agentId }: { boardId?: string | null; 
             })}
 
             {totalHits === 0 && (
-              <div className="px-4 py-6 text-center text-xs text-white/30">
+              <div className="px-4 py-6 text-center text-xs text-[var(--color-text-muted)]">
                 No hits — try a different phrasing
               </div>
             )}

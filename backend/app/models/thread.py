@@ -1,10 +1,12 @@
-"""Interaction Model 2.0 — Thread, Message, AgentThreadCursor.
+"""Interaction Model 2.0 — Thread, Message, AgentThreadCursor, UserThreadCursor.
 
 Thread = a conversation container (per-task, side thread, or DM).
 Message = a single entry in a thread's append-only log (seq unique per thread).
 AgentThreadCursor = per-agent read/ack position within a thread, used by
 the /me/poll-style delivery flow (mirrors AgentTaskCommentCursor's
 composite-PK pattern).
+UserThreadCursor = per-user read position within a thread, backing
+`my_read_seq` in the user-side thread READ API (same composite-PK pattern).
 
 See app.comm_constants for the canonical MESSAGE_TYPES/THREAD_KINDS/etc.
 vocab — validated at the service layer (Task 3), not enforced here.
@@ -76,6 +78,22 @@ class AgentThreadCursor(SQLModel, table=True):
     thread_id: uuid.UUID = Field(foreign_key="threads.id", primary_key=True)
     last_delivered_seq: int = Field(default=0)
     last_acked_seq: int = Field(default=0)
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(
+            DateTime(timezone=True),
+            server_default=text("CURRENT_TIMESTAMP"),
+            onupdate=datetime.utcnow,
+        ),
+    )
+
+
+class UserThreadCursor(SQLModel, table=True):
+    __tablename__ = "user_thread_cursor"
+
+    user_id: uuid.UUID = Field(foreign_key="users.id", primary_key=True)
+    thread_id: uuid.UUID = Field(foreign_key="threads.id", primary_key=True)
+    last_read_seq: int = Field(default=0)
     updated_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=Column(

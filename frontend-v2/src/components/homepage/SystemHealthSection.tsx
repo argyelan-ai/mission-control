@@ -34,7 +34,7 @@ function SystemActivityFeed() {
       {events.slice(0, 15).map((event: ActivityEvent) => (
         <div key={event.id} className="flex items-start gap-2 py-1">
           <span
-            className="w-1.5 h-1.5 rounded-full shrink-0 mt-1"
+            className="w-1.5 h-1.5 shrink-0 mt-1"
             style={{
               backgroundColor:
                 event.event_type?.includes("fail") || event.event_type?.includes("error")
@@ -105,21 +105,21 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
   const diskHistory = (historyData as MetricsHistoryResponse | undefined)?.snapshots?.map((s: MetricsSnapshot) => s.disk_pct ?? 0) ?? [];
 
   return (
-    <div className="p-4 rounded-lg" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
+    <div className="p-4 rounded-md corner-ticks" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
       <div className="flex items-center gap-4 mb-3 flex-wrap">
         <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: hasError ? C.error : C.online }} />
-          <span className="text-[10px] font-semibold uppercase tracking-[0.12em]" style={{ color: C.textMuted }}>System Health</span>
+          <span className="w-2 h-2 shrink-0" style={{ backgroundColor: hasError ? C.error : C.online }} />
+          <span className="label-sys">System Health</span>
         </div>
         <ServiceDot label="DB" status={database.status} detail={dbDetail} detailColor={database.latency_ms !== undefined ? latencyColor(database.latency_ms) : undefined} />
         <ServiceDot label="Redis" status={redis.status} detail={redisDetail} detailColor={redis.latency_ms !== undefined ? latencyColor(redis.latency_ms) : undefined} />
         <ServiceDot label="Watchdog" status={wdStatus} detail={watchdogDetail} />
         <div className="flex items-center gap-2 ml-auto">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: C.textMuted }}>Events</span>
+          <span className="label-sys">Events</span>
           <button
             onClick={onOpenActivity}
             aria-label="Show all activity"
-            className="inline-flex items-center min-h-touch px-2 -my-2 text-[10px] hover:opacity-70 transition-opacity cursor-pointer"
+            className="inline-flex items-center min-h-touch px-2 -my-2 text-[10px] font-mono uppercase tracking-[0.08em] hover:opacity-70 transition-opacity cursor-pointer"
             style={{ color: C.accent, background: "none", border: "none" }}
           >
             All <span aria-hidden="true">→</span>

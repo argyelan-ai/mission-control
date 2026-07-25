@@ -17,12 +17,12 @@ describe("IdentityStep", () => {
   it("typing a name updates state", () => {
     const update = vi.fn();
     wrap(<IdentityStep state={initialWizardState(null)} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    fireEvent.change(screen.getByPlaceholderText(/z\.B\. Cody/), { target: { value: "Nova" } });
+    fireEvent.change(screen.getByPlaceholderText(/e\.g\. Cody/), { target: { value: "Nova" } });
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ name: "Nova" }));
   });
 
   it("renders the SOUL preview panel heading", () => {
     wrap(<IdentityStep state={{ ...initialWizardState(null), name: "Nova" }} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
-    expect(screen.getByText(/Persona-Vorschau/)).toBeTruthy();
+    expect(screen.getByText(/Persona preview/)).toBeTruthy();
   });
 });

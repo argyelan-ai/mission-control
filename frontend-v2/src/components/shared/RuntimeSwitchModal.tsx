@@ -196,6 +196,17 @@ export function RuntimeSwitchModal({
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
 
+  // Esc closes (panel register rule 4) — blocked while a switch is in flight,
+  // same as the backdrop click below.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !submitting) onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, submitting, onClose]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -209,7 +220,7 @@ export function RuntimeSwitchModal({
           onClick={() => !submitting && onClose()}
         >
           {/* Drag indicator — mobile only */}
-          <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
+          <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
           <motion.div
             initial={{ opacity: 0, y: 32 }}
@@ -220,12 +231,12 @@ export function RuntimeSwitchModal({
             onClick={(e) => e.stopPropagation()}
             style={{
               backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
             }}
           >
               {/* Header */}
-              <div className="flex items-center justify-between p-5 border-b shrink-0" style={{ borderColor: "rgba(255,255,255,0.06)" }}>
+              <div className="flex items-center justify-between p-5 border-b shrink-0" style={{ borderColor: "var(--color-border)" }}>
                 <div className="flex items-center gap-2">
                   <RotateCcw size={16} style={{ color: C.accent }} />
                   <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
@@ -235,7 +246,7 @@ export function RuntimeSwitchModal({
                 <button
                   onClick={() => !submitting && onClose()}
                   disabled={submitting}
-                  className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer disabled:cursor-not-allowed"
+                  className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer disabled:cursor-not-allowed"
                 >
                   <X size={14} style={{ color: "var(--color-text-muted)" }} />
                 </button>
@@ -286,12 +297,12 @@ export function RuntimeSwitchModal({
                     className="w-full text-[12px] px-2.5 py-1.5 rounded-lg cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
                     style={{
                       backgroundColor: "var(--color-bg-elevated)",
-                      border: "1px solid rgba(255,255,255,0.1)",
+                      border: "1px solid var(--color-border)",
                       color: "var(--color-text-primary)",
                     }}
                   >
                     {agent.harness == null && (
-                      <option value="">Standard (aus Provider abgeleitet)</option>
+                      <option value="">Default (derived from provider)</option>
                     )}
                     {compatMatrix?.harnesses.map((h) => {
                       const incompatible = targetCompat ? !targetCompat.compatible_harnesses.includes(h.key) : false;
@@ -304,7 +315,7 @@ export function RuntimeSwitchModal({
                           title={incompatible ? reason : undefined}
                         >
                           {h.label}
-                          {incompatible ? " — nicht kompatibel" : ""}
+                          {incompatible ? " — incompatible" : ""}
                         </option>
                       );
                     })}
@@ -315,7 +326,7 @@ export function RuntimeSwitchModal({
                       style={{ color: STATUS_TEXT.error }}
                       data-testid="harness-incompatible-reason"
                     >
-                      {selectedHarnessIncompatibleReason ?? "Dieser Harness ist mit der Ziel-Runtime nicht kompatibel."}
+                      {selectedHarnessIncompatibleReason ?? "This harness is not compatible with the target runtime."}
                     </div>
                   )}
                 </div>
@@ -570,7 +581,7 @@ export function RuntimeSwitchModal({
               </div>
 
               {/* Footer */}
-              <div className="flex items-center justify-between gap-2 p-4 border-t shrink-0" style={{ borderColor: "rgba(255,255,255,0.06)", paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}>
+              <div className="flex items-center justify-between gap-2 p-4 border-t shrink-0" style={{ borderColor: "var(--color-border)", paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)" }}>
                 <div>
                   {/* ADR-060 — reload button for adapter-backed host agents.
                       Same host lifecycle restart used elsewhere for Hermes
@@ -592,8 +603,8 @@ export function RuntimeSwitchModal({
                         }
                       }}
                       disabled={reloading || submitting}
-                      className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
-                      style={{ color: "var(--color-text-secondary)", border: "1px solid rgba(255,255,255,0.1)" }}
+                      className="flex items-center gap-1.5 text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                      style={{ color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
                     >
                       {reloading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                       Reload
@@ -604,7 +615,7 @@ export function RuntimeSwitchModal({
                   <button
                     onClick={onClose}
                     disabled={submitting}
-                    className="text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.04)] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="text-[12px] px-3 py-1.5 rounded-lg cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
                     style={{ color: "var(--color-text-secondary)" }}
                   >
                     Cancel

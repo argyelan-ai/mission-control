@@ -44,6 +44,7 @@ import AppShell from "@/components/layout/AppShell";
 import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
@@ -209,7 +210,7 @@ function InputField({
           backgroundColor: C.bgDeep,
           borderWidth: 1,
           borderStyle: "solid",
-          borderColor: "rgba(255, 255, 255, 0.08)",
+          borderColor: "var(--color-border)",
           color: readOnly ? "var(--color-text-muted)" : "var(--color-text-primary)",
         }}
         onFocus={(e) => {
@@ -218,7 +219,7 @@ function InputField({
           }
         }}
         onBlur={(e) => {
-          e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+          e.currentTarget.style.borderColor = "var(--color-border)";
         }}
       />
       {rightElement && (
@@ -397,7 +398,7 @@ function ProfileSection() {
               backgroundColor: C.bgDeep,
               borderWidth: 1,
               borderStyle: "solid",
-              borderColor: "rgba(255, 255, 255, 0.08)",
+              borderColor: "var(--color-border)",
               color: "var(--color-text-primary)",
               cursor: "pointer",
             }}
@@ -405,7 +406,7 @@ function ProfileSection() {
               e.currentTarget.style.borderColor = C.borderAccent;
             }}
             onBlur={(e) => {
-              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+              e.currentTarget.style.borderColor = "var(--color-border)";
             }}
           >
             {TIMEZONES.map((tz) => (
@@ -643,8 +644,8 @@ function AutonomySection() {
                 key={action}
                 className="rounded-md px-3 py-2.5 transition-colors"
                 style={{
-                  backgroundColor: "rgba(255, 255, 255, 0.02)",
-                  border: "1px solid rgba(255, 255, 255, 0.04)",
+                  backgroundColor: "var(--color-bg-surface)",
+                  border: "1px solid var(--color-border-subtle)",
                 }}
               >
                 {/* Mobile: stacked layout */}
@@ -674,7 +675,7 @@ function AutonomySection() {
                           style={{
                             backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
                             color: isActive ? opt.color : "var(--color-text-muted)",
-                            border: `1px solid ${isActive ? opt.color : "rgba(255,255,255,0.06)"}`,
+                            border: `1px solid ${isActive ? opt.color : "var(--color-text-dim)"}`,
                           }}
                         >
                           {isActive && <Check size={11} />}
@@ -714,7 +715,7 @@ function AutonomySection() {
                         style={{
                           backgroundColor: isActive ? `color-mix(in srgb, ${opt.color} 20%, transparent)` : "transparent",
                           color: isActive ? opt.color : "var(--color-text-muted)",
-                          border: `1px solid ${isActive ? opt.color : "rgba(255,255,255,0.06)"}`,
+                          border: `1px solid ${isActive ? opt.color : "var(--color-text-dim)"}`,
                         }}
                       >
                         {isActive && <Check size={12} className="mr-0.5" />}
@@ -811,8 +812,8 @@ function IntelligenceSection() {
             onClick={() => update({ enabled: !config.enabled })}
             className="relative w-11 h-6 rounded-full transition-colors cursor-pointer"
             style={{
-              backgroundColor: config.enabled ? C.accent : "rgba(255, 255, 255, 0.06)",
-              border: config.enabled ? "none" : "1px solid rgba(255, 255, 255, 0.08)",
+              backgroundColor: config.enabled ? C.accent : "var(--color-bg-elevated)",
+              border: config.enabled ? "none" : "1px solid var(--color-border)",
             }}
           >
             <span
@@ -897,14 +898,14 @@ function IntelligenceSection() {
                 backgroundColor: C.bgDeep,
                 borderWidth: 1,
                 borderStyle: "solid",
-                borderColor: "rgba(255, 255, 255, 0.08)",
+                borderColor: "var(--color-border)",
                 color: "var(--color-text-primary)",
               }}
               onFocus={(e) => {
                 e.currentTarget.style.borderColor = C.borderAccent;
               }}
               onBlur={(e) => {
-                e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+                e.currentTarget.style.borderColor = "var(--color-border)";
               }}
             />
             <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
@@ -967,7 +968,7 @@ function IntelligenceSection() {
             style={{
               backgroundColor: triggerSuccess ? C.online : "transparent",
               color: triggerSuccess ? "white" : "var(--color-text-primary)",
-              border: triggerSuccess ? "none" : "1px solid rgba(255, 255, 255, 0.08)",
+              border: triggerSuccess ? "none" : "1px solid var(--color-border)",
             }}
           >
             {triggerMutation.isPending ? (
@@ -994,6 +995,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [showValue, setShowValue] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProviderTemplate | null>(null);
 
   const { data: providers } = useQuery<ProviderTemplate[]>({
     queryKey: ["secret-providers"],
@@ -1105,8 +1107,8 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                         className="text-[10px] px-1.5 py-0.5 rounded uppercase"
                         style={{
                           backgroundColor: isSet
-                            ? "rgba(0, 204, 136, 0.1)"
-                            : "rgba(255, 255, 255, 0.04)",
+                            ? `${C.online}1A`
+                            : "var(--color-bg-elevated)",
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
                       >
@@ -1141,11 +1143,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                           {isEditing ? "Cancel" : "Change"}
                         </button>
                         <button
-                          onClick={() => {
-                            if (confirm(`Really delete ${tmpl.label}?`)) {
-                              deleteMutation.mutate(tmpl.key);
-                            }
-                          }}
+                          onClick={() => setDeleteTarget(tmpl)}
                           className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                           style={{ color: C.error }}
                         >
@@ -1161,7 +1159,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                         className="flex items-center gap-1 px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                         style={{
                           backgroundColor: isAdding
-                            ? "rgba(255, 255, 255, 0.04)"
+                            ? "var(--color-bg-elevated)"
                             : C.accentSubtle,
                           color: isAdding ? "var(--color-text-muted)" : C.accent,
                         }}
@@ -1177,7 +1175,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                 {isAdding && (
                   <div
                     className="mt-3 pt-3 border-t flex gap-2"
-                    style={{ borderColor: "rgba(255, 255, 255, 0.06)" }}
+                    style={{ borderColor: "var(--color-border)" }}
                   >
                     <InputField
                       type={showValue === tmpl.key ? "text" : "password"}
@@ -1226,7 +1224,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                 {isEditing && (
                   <div
                     className="mt-3 pt-3 border-t flex gap-2"
-                    style={{ borderColor: "rgba(255, 255, 255, 0.06)" }}
+                    style={{ borderColor: "var(--color-border)" }}
                   >
                     <InputField
                       type={showValue === tmpl.key ? "text" : "password"}
@@ -1269,6 +1267,22 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
           })}
         </div>
       )}
+
+      {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete API key"
+        body={deleteTarget ? `Really delete ${deleteTarget.label}?` : undefined}
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteMutation.mutate(deleteTarget.key, {
+            onSuccess: () => setDeleteTarget(null),
+          });
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </SectionMotion>
   );
 }
@@ -1280,7 +1294,7 @@ function GithubSourceBadge({ source }: { source: "vault" | "env" | null }) {
   return (
     <span
       className="text-[10px] px-1.5 py-0.5 rounded uppercase"
-      style={{ backgroundColor: "rgba(255, 255, 255, 0.04)", color: "var(--color-text-muted)" }}
+      style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
     >
       {source === "vault" ? "App" : ".env"}
     </span>
@@ -1458,7 +1472,7 @@ function GithubSection() {
               onClick={handleTest}
               disabled={probing}
               className="mt-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 transition-all"
-              style={{ background: "rgba(255, 255, 255, 0.04)", color: "var(--color-text-secondary)" }}
+              style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-secondary)" }}
             >
               {probing ? "Testing (up to 15s)…" : "Test connection"}
             </button>
@@ -1487,12 +1501,12 @@ function GithubSection() {
             </div>
 
             {saveError && (
-              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: `${C.error}14`, border: `1px solid ${C.error}26` }}>
                 {saveError}
               </p>
             )}
             {saveMessage && (
-              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: "rgba(43, 154, 74, 0.1)" }}>
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: `${C.online}1A` }}>
                 <Check size={12} /> {saveMessage}
               </p>
             )}
@@ -1540,7 +1554,7 @@ function UsersSection() {
               ? "transparent"
               : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
             color: showCreateForm ? "var(--color-text-secondary)" : "white",
-            border: showCreateForm ? "1px solid rgba(255, 255, 255, 0.08)" : "none",
+            border: showCreateForm ? "1px solid var(--color-border)" : "none",
           }}
         >
           {showCreateForm ? (
@@ -1644,7 +1658,7 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
               backgroundColor: C.bgDeep,
               borderWidth: 1,
               borderStyle: "solid",
-              borderColor: "rgba(255, 255, 255, 0.08)",
+              borderColor: "var(--color-border)",
               color: "var(--color-text-primary)",
               cursor: "pointer",
             }}
@@ -1652,7 +1666,7 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
               e.currentTarget.style.borderColor = C.borderAccent;
             }}
             onBlur={(e) => {
-              e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+              e.currentTarget.style.borderColor = "var(--color-border)";
             }}
           >
             <option value="admin">Admin</option>
@@ -1703,7 +1717,7 @@ function UserRow({
   const roleColors: Record<string, { bg: string; text: string }> = {
     admin: { bg: C.accentSubtle, text: C.accent },
     operator: { bg: `${C.warning}1F`, text: C.warning },
-    viewer: { bg: "rgba(255, 255, 255, 0.04)", text: "var(--color-text-muted)" },
+    viewer: { bg: "var(--color-bg-elevated)", text: "var(--color-text-muted)" },
   };
 
   const rc = roleColors[user.role] ?? roleColors.viewer;
@@ -1719,7 +1733,7 @@ function UserRow({
         <div
           className="w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-sm font-semibold"
           style={{
-            backgroundColor: "rgba(255, 255, 255, 0.04)",
+            backgroundColor: "var(--color-bg-elevated)",
             color: "var(--color-text-secondary)",
           }}
         >
@@ -1739,7 +1753,7 @@ function UserRow({
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded"
                 style={{
-                  backgroundColor: "rgba(255, 255, 255, 0.04)",
+                  backgroundColor: "var(--color-bg-elevated)",
                   color: "var(--color-text-muted)",
                 }}
               >
@@ -1773,7 +1787,7 @@ function UserRow({
                 className="rounded px-2 py-1 text-xs outline-none cursor-pointer"
                 style={{
                   backgroundColor: C.bgDeep,
-                  border: "1px solid rgba(255, 255, 255, 0.08)",
+                  border: "1px solid var(--color-border)",
                   color: "var(--color-text-primary)",
                 }}
               >
@@ -1884,7 +1898,7 @@ function ShortcutsSection() {
               className="flex items-center justify-between py-2.5 px-3 rounded-lg transition-colors"
               style={{
                 backgroundColor:
-                  i % 2 === 0 ? "rgba(255, 255, 255, 0.02)" : "transparent",
+                  i % 2 === 0 ? "var(--color-bg-surface)" : "transparent",
               }}
             >
               <span className="text-sm" style={{ color: "var(--color-text-body)" }}>
@@ -1904,8 +1918,8 @@ function ShortcutsSection() {
                     <kbd
                       className="inline-block px-2 py-1 rounded text-xs font-mono"
                       style={{
-                        backgroundColor: "rgba(255, 255, 255, 0.05)",
-                        border: "1px solid rgba(255, 255, 255, 0.08)",
+                        backgroundColor: "var(--color-bg-elevated)",
+                        border: "1px solid var(--color-border)",
                         color: "var(--color-text-secondary)",
                         boxShadow: "0 1px 2px rgba(0, 0, 0, 0.3)",
                       }}
@@ -2047,12 +2061,19 @@ function SettingsContent() {
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
         className="shrink-0 px-4 py-4 md:px-6"
-        style={{ borderBottom: "1px solid rgba(255, 255, 255, 0.04)" }}
       >
-        <h1 className="text-heading-page">Settings</h1>
-        <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
+        <div className="label-sys mb-2">System · Settings</div>
+        <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>Settings</h1>
+        <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
           Profile, security, system configuration
         </p>
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16"
+            style={{ backgroundColor: C.accent }}
+          />
+        </div>
       </motion.div>
 
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
@@ -2063,8 +2084,8 @@ function SettingsContent() {
           transition={{ delay: 0.1, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
           className="w-full md:w-56 shrink-0 border-b md:border-b-0 md:border-r overflow-x-auto md:overflow-y-auto py-3 tab-strip-nav"
           style={{
-            borderColor: "rgba(255, 255, 255, 0.04)",
-            backgroundColor: "rgba(255, 255, 255, 0.01)",
+            borderColor: "var(--color-border-subtle)",
+            backgroundColor: "var(--color-bg-surface)",
           }}
         >
           <ul className="flex md:flex-col gap-1 md:gap-0.5 px-2 min-w-max md:min-w-0">
@@ -2089,7 +2110,7 @@ function SettingsContent() {
                     }}
                     onMouseEnter={(e) => {
                       if (!isActive) {
-                        e.currentTarget.style.backgroundColor = "rgba(255, 255, 255, 0.03)";
+                        e.currentTarget.style.backgroundColor = "var(--color-bg-surface)";
                       }
                     }}
                     onMouseLeave={(e) => {

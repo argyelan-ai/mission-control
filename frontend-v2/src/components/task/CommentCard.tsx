@@ -376,7 +376,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
           left: 0,
           right: 0,
           height: 1,
-          background: "linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06) 30%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.06) 70%, transparent)",
+          background: "linear-gradient(90deg, transparent, var(--color-bg-elevated) 30%, rgba(255, 255, 255, 0.1) 50%, rgba(255, 255, 255, 0.06) 70%, transparent)",
           pointerEvents: "none",
         }}
       />

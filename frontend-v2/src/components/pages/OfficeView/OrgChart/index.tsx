@@ -187,8 +187,8 @@ export function OrgChart({ zoom = 1 }: OrgChartProps = {}) {
               opacity from 0.16→0.45 and thickness from 1.2→1.8 so they
               read on the glass panel against AppShell deep tone. */}
           <linearGradient id="org-line-solid" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%"   stopColor="rgba(255,255,255,0.45)" />
-            <stop offset="100%" stopColor="rgba(255,255,255,0.18)" />
+            <stop offset="0%"   stopColor="rgba(146,170,206,0.45)" />
+            <stop offset="100%" stopColor="rgba(146,170,206,0.18)" />
           </linearGradient>
           <linearGradient id="org-line-voice" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%"   stopColor={`${C.accent}D9`} />

@@ -235,7 +235,7 @@ export function MonthMarker({ label }: { label: string }) {
     >
       <span
         className="font-mono"
-        style={{ fontSize: "10px", color: "rgba(255,255,255,0.35)" }}
+        style={{ fontSize: "10px", color: "var(--color-text-dim)" }}
       >
         ◆
       </span>
@@ -253,7 +253,7 @@ export function MonthMarker({ label }: { label: string }) {
         className="flex-1 h-px"
         style={{
           background:
-            "linear-gradient(to right, rgba(255,255,255,0.08), rgba(255,255,255,0.02) 50%, transparent)",
+            "linear-gradient(to right, var(--color-bg-hover), rgba(255,255,255,0.02) 50%, transparent)",
         }}
       />
     </div>
@@ -325,7 +325,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
               style={{
                 fontSize: "9.5px",
                 letterSpacing: "0.06em",
-                color: "rgba(255,255,255,0.22)",
+                color: "var(--color-text-dim)",
               }}
             >
               {date.year}
@@ -334,7 +334,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
         ) : (
           <div
             className="font-mono mt-2 group-hover:text-[var(--agent-color)] transition-colors duration-200"
-            style={{ fontSize: "22px", color: "rgba(255,255,255,0.14)" }}
+            style={{ fontSize: "22px", color: "var(--color-text-dim)" }}
           >
             ◌
           </div>
@@ -387,7 +387,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
             <>
               <span
                 className="font-mono"
-                style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)" }}
+                style={{ fontSize: "10px", color: "var(--color-text-dim)" }}
               >
                 ·
               </span>
@@ -451,7 +451,7 @@ export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
                 className="font-mono"
                 style={{
                   fontSize: "10px",
-                  color: "rgba(255,255,255,0.25)",
+                  color: "var(--color-text-dim)",
                 }}
               >
                 +{tags.length - 5}

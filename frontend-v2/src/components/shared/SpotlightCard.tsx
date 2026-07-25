@@ -16,7 +16,7 @@ const SPOTLIGHT_STYLE = (
       pointer-events: none;
       background: radial-gradient(
         400px circle at var(--mouse-x, 50%) var(--mouse-y, 50%),
-        rgba(255, 255, 255, 0.04),
+        var(--color-bg-hover),
         transparent 60%
       );
     }

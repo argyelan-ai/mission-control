@@ -157,7 +157,7 @@ describe("AddRuntimeModal", () => {
     expect(screen.getByRole("button", { name: /add runtime/i })).toBeDisabled();
   });
 
-  it("defaults to 'Kein Key' and creates the runtime without api_key_secret_id", async () => {
+  it("defaults to 'No key' and creates the runtime without api_key_secret_id", async () => {
     const probeResult: ProbeEndpointResult = {
       reachable: true,
       models: ["m1"],
@@ -180,7 +180,7 @@ describe("AddRuntimeModal", () => {
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, "Spark vLLM");
 
-    // "Kein Key" is the default — no explicit click needed.
+    // "No key" is the default — no explicit click needed.
     await userEvent.click(screen.getByRole("button", { name: /add runtime/i }));
 
     await waitFor(() =>
@@ -195,7 +195,7 @@ describe("AddRuntimeModal", () => {
     );
   });
 
-  it("'Neuer Key' creates the secret before the runtime and threads its id into the payload", async () => {
+  it("'New key' creates the secret before the runtime and threads its id into the payload", async () => {
     const probeResult: ProbeEndpointResult = {
       reachable: true,
       models: ["m1"],
@@ -221,8 +221,8 @@ describe("AddRuntimeModal", () => {
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, "Spark vLLM");
 
-    await userEvent.click(screen.getByLabelText(/neuer key/i));
-    await userEvent.type(screen.getByLabelText(/^wert$/i), "sk-secret-value");
+    await userEvent.click(screen.getByLabelText(/new key/i));
+    await userEvent.type(screen.getByLabelText(/^value$/i), "sk-secret-value");
 
     await userEvent.click(screen.getByRole("button", { name: /add runtime/i }));
 
@@ -256,7 +256,7 @@ describe("AddRuntimeModal", () => {
     await userEvent.click(screen.getByRole("button", { name: /probe/i }));
     await screen.findByText("vLLM");
 
-    expect(await screen.findByText(/endpoint verlangt einen api-key/i)).toBeInTheDocument();
+    expect(await screen.findByText(/endpoint requires an api key/i)).toBeInTheDocument();
   });
 
   it("derives a hyphen-free, backend-valid secret key for a multi-word runtime name", async () => {
@@ -283,13 +283,13 @@ describe("AddRuntimeModal", () => {
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, "Spark vLLM Prod");
 
-    await userEvent.click(screen.getByLabelText(/neuer key/i));
+    await userEvent.click(screen.getByLabelText(/new key/i));
     // Prefilled key derived from the multi-word name — no hyphens.
     const keyInput = screen.getByLabelText(/^name$/i) as HTMLInputElement;
     expect(keyInput.value).not.toContain("-");
     expect(keyInput.value).toMatch(/^[a-z0-9_]+$/);
 
-    await userEvent.type(screen.getByLabelText(/^wert$/i), "sk-secret-value");
+    await userEvent.type(screen.getByLabelText(/^value$/i), "sk-secret-value");
     await userEvent.click(screen.getByRole("button", { name: /add runtime/i }));
 
     await waitFor(() => expect(secretSpy).toHaveBeenCalled());
@@ -318,14 +318,14 @@ describe("AddRuntimeModal", () => {
     await userEvent.clear(nameInput);
     await userEvent.type(nameInput, "Spark vLLM");
 
-    await userEvent.click(screen.getByLabelText(/neuer key/i));
-    await userEvent.type(screen.getByLabelText(/^wert$/i), "sk-secret-value");
+    await userEvent.click(screen.getByLabelText(/new key/i));
+    await userEvent.type(screen.getByLabelText(/^value$/i), "sk-secret-value");
 
     const keyInput = screen.getByLabelText(/^name$/i);
     await userEvent.clear(keyInput);
     await userEvent.type(keyInput, "my-invalid key!");
 
-    expect(await screen.findByText(/nur kleinbuchstaben, zahlen und _/i)).toBeInTheDocument();
+    expect(await screen.findByText(/lowercase letters, numbers and _ only/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add runtime/i })).toBeDisabled();
   });
 });

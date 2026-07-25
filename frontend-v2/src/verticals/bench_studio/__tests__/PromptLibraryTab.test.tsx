@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { PromptTemplate } from "../types";
@@ -84,15 +84,19 @@ describe("PromptLibraryTab", () => {
   });
 
   it("deletes a template with confirmation", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
     renderTab();
     await screen.findByText("Bouncing balls");
     await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
+
+    // B2 dialog asks first — nothing deleted yet
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/wirklich löschen/)).toBeTruthy();
+    expect(benchApi.promptTemplates.remove).not.toHaveBeenCalled();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: "Löschen" }));
     await waitFor(() =>
       expect(benchApi.promptTemplates.remove).toHaveBeenCalledWith("tpl-1")
     );
-    expect(confirmSpy).toHaveBeenCalledWith(`Template "Bouncing balls" wirklich löschen?`);
-    confirmSpy.mockRestore();
   });
 
   it("fires onStartChallenge with the template", async () => {

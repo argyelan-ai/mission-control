@@ -347,7 +347,7 @@ export function VaultGraphPage({
     background: "rgba(12,12,16,0.55)",
     backdropFilter: "blur(20px) saturate(140%)",
     WebkitBackdropFilter: "blur(20px) saturate(140%)",
-    border: "1px solid rgba(255,255,255,0.06)",
+    border: "1px solid var(--color-border)",
     boxShadow:
       "inset 0 1px 0 rgba(255,255,255,0.04), 0 30px 60px -30px rgba(0,0,0,0.5)",
   };

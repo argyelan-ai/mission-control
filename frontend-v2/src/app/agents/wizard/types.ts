@@ -40,9 +40,9 @@ export interface WizardStepProps {
 
 export const WIZARD_STEPS: { key: string; label: string }[] = [
   { key: "start", label: "Start" },
-  { key: "identity", label: "Identität" },
-  { key: "runtime", label: "Runtime & Modell" },
-  { key: "rights", label: "Rechte & Skills" },
+  { key: "identity", label: "Identity" },
+  { key: "runtime", label: "Runtime & Model" },
+  { key: "rights", label: "Scopes & Skills" },
   { key: "review", label: "Review & Provision" },
 ];
 

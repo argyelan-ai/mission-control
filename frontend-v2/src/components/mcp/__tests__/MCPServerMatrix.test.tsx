@@ -105,7 +105,7 @@ describe("MCPServerMatrix", () => {
     const { rerender } = renderWithQuery(
       <MCPServerMatrix servers={baseServers} agents={[]} />,
     );
-    expect(screen.queryByTitle("filesystem entfernen")).toBeNull();
+    expect(screen.queryByTitle("Remove filesystem")).toBeNull();
     rerender(
       <QueryClientProvider client={new QueryClient()}>
         <MCPServerMatrix
@@ -116,7 +116,7 @@ describe("MCPServerMatrix", () => {
         />
       </QueryClientProvider>,
     );
-    await userEvent.click(screen.getByTitle("filesystem entfernen"));
+    await userEvent.click(screen.getByTitle("Remove filesystem"));
     expect(onDelete).toHaveBeenCalledWith("filesystem");
   });
 

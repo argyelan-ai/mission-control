@@ -71,7 +71,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-medium text-sm truncate font-mono" style={{ color: C.textPrimary }}>
+            <span className="font-medium text-sm truncate font-mono min-w-0" style={{ color: C.textPrimary }}>
               {repo.full_name}
             </span>
             <VisibilityBadge visibility={repo.visibility} />
@@ -190,10 +190,11 @@ export default function ReposPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-3 mb-6">
           <div>
-            <h1 className="text-xl font-semibold" style={{ color: C.textPrimary }}>
+            <div className="label-sys mb-2">Code · Repos</div>
+            <h1 className="display text-xl font-semibold" style={{ color: C.textPrimary }}>
               Repos
             </h1>
-            <p className="text-sm mt-0.5" style={{ color: C.textMuted }}>
+            <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
               GitHub repos and their working rules for agents
             </p>
           </div>

@@ -74,7 +74,7 @@ export function ModelInput({
                   onChange(m.id);
                   setOpen(false);
                 }}
-                className="block w-full text-left px-3 py-2 text-[11px] font-mono cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+                className="block w-full text-left px-3 py-2 text-[11px] font-mono cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {m.id}
@@ -97,7 +97,7 @@ export function TokenDisplay({ token }: { token: string }) {
     <div
       className="rounded-xl p-3 text-[11px] font-mono break-all flex items-start gap-2"
       style={{
-        backgroundColor: "rgba(255,255,255,0.03)",
+        backgroundColor: "var(--color-bg-surface)",
         color: "var(--color-text-muted)",
         border: `1px solid ${C.borderSubtle}`,
       }}
@@ -105,8 +105,8 @@ export function TokenDisplay({ token }: { token: string }) {
       <span className="flex-1">{token}</span>
       <button
         onClick={copy}
-        className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[rgba(255,255,255,0.06)]"
-        title="Token kopieren"
+        className="shrink-0 p-1 rounded-md cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+        title="Copy token"
       >
         {copied ? <Check size={12} className="text-[var(--color-online)]" /> : <Copy size={12} />}
       </button>

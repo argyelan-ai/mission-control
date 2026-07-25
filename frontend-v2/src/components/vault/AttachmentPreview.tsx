@@ -21,6 +21,7 @@ import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { X } from "lucide-react";
 
 import { api, getToken } from "@/lib/api";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 
 interface Props {
   deliverableId: string;
@@ -71,20 +72,37 @@ export function AttachmentPreview({
   const family = mime.split("/")[0];
   const sizeLabel = sizeBytes ? `${Math.round(sizeBytes / 1024)} KB` : null;
 
+  // Fullsize modal chrome (rule 4): iOS-safe scroll lock + Esc close.
+  // Esc is captured at the window so it does not also bubble into the
+  // VaultReadingPanel mobile sheet's own Esc handler (which would close the
+  // whole note underneath the lightbox).
+  useBodyScrollLock(fullsizeOpen);
+  useEffect(() => {
+    if (!fullsizeOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        setFullsizeOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handler, true);
+    return () => window.removeEventListener("keydown", handler, true);
+  }, [fullsizeOpen]);
+
   return (
     <div
       className="mt-6 rounded-lg overflow-hidden"
       style={{
-        border: "1px solid rgba(255,255,255,0.06)",
-        background: "rgba(255,255,255,0.02)",
+        border: "1px solid var(--color-border)",
+        background: "var(--color-bg-elevated)",
       }}
     >
       <div
         className="px-4 py-2 flex items-center justify-between text-xs"
         style={{
           background: "rgba(0,0,0,0.25)",
-          color: "rgba(255,255,255,0.7)",
-          borderBottom: "1px solid rgba(255,255,255,0.04)",
+          color: "var(--color-text-muted)",
+          borderBottom: "1px solid var(--color-border-subtle)",
         }}
       >
         <span className="font-mono tabular-nums">{mime}</span>
@@ -105,7 +123,7 @@ export function AttachmentPreview({
       {!error && !objectUrl && (
         <div
           className="p-6 text-sm opacity-60 animate-pulse"
-          style={{ color: "rgba(255,255,255,0.6)" }}
+          style={{ color: "var(--color-text-secondary)" }}
         >
           Loading attachment…
         </div>
@@ -149,7 +167,7 @@ export function AttachmentPreview({
         mime !== "application/pdf" &&
         family !== "image" &&
         family !== "audio" && (
-          <div className="p-4 text-sm" style={{ color: "rgba(255,255,255,0.75)" }}>
+          <div className="p-4 text-sm" style={{ color: "var(--color-text-secondary)" }}>
             <a
               href={objectUrl}
               download
@@ -173,11 +191,11 @@ export function AttachmentPreview({
             <button
               type="button"
               onClick={() => setFullsizeOpen(false)}
-              className="absolute top-6 right-6 p-2 rounded"
-              style={{ background: "rgba(255,255,255,0.1)" }}
-              aria-label="Schliessen"
+              className="absolute top-6 right-6 p-3 rounded"
+              style={{ background: "var(--color-bg-hover)" }}
+              aria-label="Close"
             >
-              <X size={20} className="text-white" />
+              <X size={20} style={{ color: "var(--color-text-primary)" }} />
             </button>
             <motion.img
               src={objectUrl}

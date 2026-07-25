@@ -168,7 +168,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
                     ) : (
                       <Globe2 size={10} style={{ color: C.textMuted }} />
                     )}
-                    <span className="text-sm font-mono truncate" style={{ color: C.textPrimary }}>
+                    <span className="text-sm font-mono truncate min-w-0" style={{ color: C.textPrimary }}>
                       {c.full_name}
                     </span>
                   </div>

@@ -1,44 +1,24 @@
 "use client";
 
+/**
+ * AmbientBackground — v3.1
+ *
+ * Ruhige, dunkle Bühne: ein dezenter Cyan-Schleier oben links für Tiefe,
+ * dazu feine Grain-Textur gegen digitalen Flach-Look. Kein Raster, keine
+ * Muster — der Fokus gehört dem Inhalt. Rein dekorativ (aria-hidden).
+ */
 export function AmbientBackground() {
   return (
     <div
       aria-hidden
       className="pointer-events-none fixed inset-0 z-0 overflow-hidden"
     >
-      {/* Static ambient glows — MC Teal, very faint. Radial-gradients instead
-          of blurred solid circles: same soft look, no filter compositing cost. */}
+      {/* Ein einziger, ruhiger Cyan-Schleier — Tiefe ohne Glow */}
       <div
-        className="absolute"
+        className="absolute inset-0"
         style={{
-          background: "radial-gradient(circle, rgba(15,163,163,0.06) 0%, rgba(15,163,163,0) 65%)",
-          width: 800,
-          height: 800,
-          left: "15%",
-          top: "20%",
-          transform: "translate(-50%, -50%)",
-        }}
-      />
-      <div
-        className="absolute"
-        style={{
-          background: "radial-gradient(circle, rgba(15,163,163,0.04) 0%, rgba(15,163,163,0) 65%)",
-          width: 700,
-          height: 700,
-          left: "70%",
-          top: "60%",
-          transform: "translate(-50%, -50%)",
-        }}
-      />
-      <div
-        className="absolute"
-        style={{
-          background: "radial-gradient(circle, rgba(255,255,255,0.025) 0%, rgba(255,255,255,0) 65%)",
-          width: 750,
-          height: 750,
-          left: "50%",
-          top: "80%",
-          transform: "translate(-50%, -50%)",
+          background:
+            "radial-gradient(ellipse 60% 45% at 18% -5%, rgba(0,229,255,0.05) 0%, rgba(0,229,255,0) 70%)",
         }}
       />
 

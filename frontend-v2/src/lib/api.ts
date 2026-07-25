@@ -718,6 +718,31 @@ export const api = {
           body: JSON.stringify({ content, ...(comment_type ? { comment_type } : {}) }),
         }),
     },
+    /** comm_v2 user-side thread API — NOT board-scoped (`/api/v1/tasks/...`).
+     *  Shape: mc-ui-redesign/04-thread-read-api-shape.md. Works on every task
+     *  status incl. `done` (post-`done` delivery is the fixed bug). */
+    thread: {
+      list: (taskId: string, opts?: { sinceSeq?: number; beforeSeq?: number; limit?: number }) => {
+        const qs = new URLSearchParams();
+        if (opts?.sinceSeq != null) qs.set("since_seq", String(opts.sinceSeq));
+        if (opts?.beforeSeq != null) qs.set("before_seq", String(opts.beforeSeq));
+        if (opts?.limit != null) qs.set("limit", String(opts.limit));
+        const suffix = qs.toString() ? `?${qs}` : "";
+        return request<import("./types").TaskThreadResponse>(`/api/v1/tasks/${taskId}/thread${suffix}`);
+      },
+      /** POST returns only ids (no seq/full message) — callers refetch a
+       *  `sinceSeq` delta to append the new message. */
+      post: (taskId: string, body: string) =>
+        request<{ message_id: string; thread_id: string; task_status: string }>(
+          `/api/v1/tasks/${taskId}/thread/messages`,
+          { method: "POST", body: JSON.stringify({ body }) },
+        ),
+      markRead: (taskId: string, lastReadSeq: number) =>
+        request<void>(`/api/v1/tasks/${taskId}/thread/read`, {
+          method: "POST",
+          body: JSON.stringify({ last_read_seq: lastReadSeq }),
+        }),
+    },
     deliverables: {
       list: (
         boardId: string,
@@ -1839,12 +1864,6 @@ export const api = {
       request<{ ok: boolean; session: string }>(`/api/v1/agents/${agentId}/shell`, { method: "POST" }),
     stopShell: (agentId: string) =>
       request<{ ok: boolean }>(`/api/v1/agents/${agentId}/shell`, { method: "DELETE" }),
-    wsUrl: (agentId: string, shell?: boolean): string => {
-      const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
-      const ws = base.replace(/^http/, "ws");
-      const shellParam = shell ? "&shell=1" : "";
-      return `${ws}/api/v1/agents/${agentId}/terminal/ws?token=${getToken()}${shellParam}`;
-    },
     ptyWsUrl: (agentId: string): string => {
       const base = (process.env.NEXT_PUBLIC_API_URL ?? "").replace(/\/$/, "");
       const ws = base.replace(/^http/, "ws");

@@ -133,8 +133,8 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
         <div
           className="mt-3 rounded-xl px-3 py-2.5"
           style={{
-            backgroundColor: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            backgroundColor: "var(--color-bg-elevated)",
+            border: "1px solid var(--color-border)",
           }}
         >
           <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">Paket</p>
@@ -147,8 +147,8 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
         <div
           className="mt-3 rounded-xl px-3 py-2.5"
           style={{
-            backgroundColor: "rgba(255,255,255,0.03)",
-            border: "1px solid rgba(255,255,255,0.06)",
+            backgroundColor: "var(--color-bg-elevated)",
+            border: "1px solid var(--color-border)",
           }}
         >
           <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">Begruendung</p>
@@ -162,8 +162,8 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
           <div
             className="mt-3 rounded-xl px-3 py-2.5"
             style={{
-              backgroundColor: "rgba(255,255,255,0.03)",
-              border: "1px solid rgba(255,255,255,0.06)",
+              backgroundColor: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border)",
             }}
           >
             <p className="text-[10px] text-[var(--color-text-muted)] mb-1">Proposed Config</p>
@@ -176,7 +176,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
         {/* Actions */}
         <div
           className="flex items-center gap-2 mt-3 pt-3 border-t flex-wrap"
-          style={{ borderColor: "rgba(255,255,255,0.06)" }}
+          style={{ borderColor: "var(--color-border)" }}
         >
           <button
             onClick={() => resolve("approved")}
@@ -213,9 +213,9 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             onChange={(e) => setRejectReason(e.target.value)}
             className="flex-1 min-w-[180px] rounded-xl px-3 py-2 text-[11px] outline-none"
             style={{
-              backgroundColor: "rgba(255,255,255,0.03)",
+              backgroundColor: "var(--color-bg-surface)",
               color: "var(--color-text-primary)",
-              border: "1px solid rgba(255,255,255,0.06)",
+              border: "1px solid var(--color-border)",
             }}
           />
         </div>

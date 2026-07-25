@@ -22,11 +22,11 @@ export const RUNTIME_TYPE_COLOR: Record<string, string> = {
   lmstudio: C.info,          // #2E6FD8 — local API, info-blue
   vllm_docker: C.online,     // #2B9A4A — running container, online-green
   unsloth: C.warning,        // #B8870A — fine-tune, warm-amber
-  openai_compatible: C.accent, // #0FA3A3 — was lila #A855F7, migrated
+  openai_compatible: C.accent, // #00E5FF — was lila #A855F7, migrated
   cloud: C.textDim,          // #6E6E6E — external, neutral
   // Phase 24 (Hermes) — distinct teal variant, intentionally NOT the same as
   // C.accent so single-instance host workers stand out from cli-bridge runtimes.
-  hermes: C.accentHover, // hermes — helle Teal-Stufe
+  hermes: C.accentHover, // hermes #6BEAFF — helle Cyan-Stufe
 };
 
 interface Props {

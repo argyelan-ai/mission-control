@@ -59,7 +59,7 @@ function AuthImage({
     return (
       <div
         className={className}
-        style={{ ...style, background: "rgba(255,255,255,0.03)", display: "flex", alignItems: "center", justifyContent: "center" }}
+        style={{ ...style, background: "var(--color-bg-surface)", display: "flex", alignItems: "center", justifyContent: "center" }}
       >
         <div className="w-4 h-4 rounded-full border-2 border-t-transparent animate-spin" style={{ borderColor: `${C.accent}40`, borderTopColor: "transparent" }} />
       </div>
@@ -185,7 +185,7 @@ export function DeliverablesTab({
                 className="group relative rounded-xl overflow-hidden cursor-pointer"
                 style={{
                   aspectRatio: "16/10",
-                  background: "rgba(255,255,255,0.02)",
+                  background: "var(--color-bg-surface)",
                   border: `1px solid ${C.border}`,
                 }}
                 onClick={() =>

@@ -93,10 +93,10 @@ function FinderButton({ root, subpath }: { root: FsRoot; subpath: string }) {
       disabled={busy}
       className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium shrink-0 transition-colors cursor-pointer disabled:opacity-60"
       style={{ background: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
-      title="Im Finder anzeigen"
+      title="Reveal in Finder"
     >
       {busy ? <Loader2 size={12} className="animate-spin" /> : <FolderSearch size={12} />}
-      Im Finder
+      Reveal in Finder
     </button>
   );
 }

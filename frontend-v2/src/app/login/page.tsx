@@ -54,15 +54,15 @@ export default function LoginPage() {
 
     if (mode === "register") {
       if (!name.trim()) {
-        setError("Name ist erforderlich.");
+        setError("Name is required.");
         return;
       }
       if (password.length < 6) {
-        setError("Passwort muss mindestens 6 Zeichen lang sein.");
+        setError("Password must be at least 6 characters.");
         return;
       }
       if (password !== confirmPassword) {
-        setError("Passwoerter stimmen nicht ueberein.");
+        setError("Passwords do not match.");
         return;
       }
     }
@@ -82,7 +82,7 @@ export default function LoginPage() {
       router.replace(mode === "register" ? "/setup" : "/");
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : "Verbindung fehlgeschlagen.";
+        err instanceof Error ? err.message : "Connection failed.";
       setError(msg.replace(/^"/, "").replace(/"$/, ""));
       setLoading(false);
     }
@@ -96,7 +96,7 @@ export default function LoginPage() {
       >
         <AmbientBackground />
         <div
-          className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
+          className="w-5 h-5 border-2 border-t-transparent animate-spin"
           style={{
             borderColor: "var(--color-accent)",
             borderTopColor: "transparent",
@@ -109,247 +109,276 @@ export default function LoginPage() {
   const isRegister = mode === "register";
 
   const inputClasses =
-    "w-full bg-transparent border rounded-lg px-3 py-2.5 text-sm outline-none transition-all duration-200";
+    "w-full bg-transparent border rounded-sm px-3 py-2.5 text-sm outline-none transition-all duration-200";
+
+  const inputStyle = {
+    backgroundColor: "var(--color-bg-deep)",
+    borderColor: "var(--color-border)",
+    color: "var(--color-text-primary)",
+  } as const;
 
   return (
     <main
-      className="min-h-dvh flex items-center justify-center relative"
+      className="min-h-dvh relative flex"
       style={{ backgroundColor: "var(--color-bg-deep)" }}
     >
       <AmbientBackground />
 
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
-        className="w-full max-w-sm px-4 relative z-10"
-      >
-        {/* Logo / Title */}
-        <div className="text-center mb-8">
-          <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.1, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-            className="mb-4"
-            style={{ height: 0 }}
-          />
+      {/* ── Brand-Zone (links, Desktop) — asymmetrische Bühne ──────────── */}
+      <div className="hidden md:flex flex-col justify-between flex-1 p-10 lg:p-14 relative z-10">
+        <motion.div
+          initial={{ opacity: 0, y: 12 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+        >
+          <div className="label-sys label-sys--accent">Console · Access</div>
           <h1
+            className="display mt-4"
             style={{
               color: "var(--color-text-primary)",
-              fontFamily: "var(--font-wordmark), ui-sans-serif, system-ui",
-              fontWeight: 500,
-              fontSize: "34px",
-              letterSpacing: "-0.04em",
-              lineHeight: 1,
+              fontWeight: 600,
+              fontSize: "clamp(2.75rem, 5vw, 4.5rem)",
+              lineHeight: 0.95,
+              letterSpacing: "-0.03em",
             }}
           >
-            {BRAND_MAIN}<span style={{ color: C.accent }}>{BRAND_ACCENT}</span>
+            {BRAND_MAIN}
+            <span style={{ color: C.accent }}>{BRAND_ACCENT}</span>
           </h1>
           <p
-            className="text-sm mt-1.5"
+            className="mt-5 max-w-sm text-[15px] leading-relaxed"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            {isRegister
-              ? "Ersten Admin-Account erstellen"
-              : "Anmelden"}
+            The control room for your agent fleet. One signal, no noise.
           </p>
-        </div>
+        </motion.div>
 
-        {/* Card */}
-        <motion.form
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.15, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          onSubmit={handleSubmit}
-          className="p-6 space-y-4 rounded-2xl"
-          style={{ background: C.bgSurface, border: `1px solid ${C.border}`, borderRadius: 12 }}
+        {/* Koordinaten-Fusszeile — Mono-Instrumenten-Detail */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.4, duration: 0.5 }}
+          className="flex items-center gap-6 font-mono uppercase"
+          style={{
+            color: "var(--color-text-dim)",
+            fontSize: "10px",
+            letterSpacing: "0.14em",
+          }}
         >
-          {/* Name (register only) */}
-          {isRegister && (
-            <div className="space-y-1.5">
-              <label
-                htmlFor="name"
-                className="text-nav"
-              >
-                Name
-              </label>
-              <input
-                ref={nameRef}
-                id="name"
-                type="text"
-                autoComplete="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Dein Name"
-                className={inputClasses}
-                style={{
-                  backgroundColor: "rgba(255, 255, 255, 0.03)",
-                  borderColor: "var(--color-border)",
-                  color: "var(--color-text-primary)",
-                }}
-                onFocus={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-accent)")
-                }
-                onBlur={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-border)")
-                }
-              />
-            </div>
-          )}
+          <span>47.3769° N · 8.5417° E</span>
+          <span aria-hidden style={{ color: "var(--color-border-accent)" }}>
+            /
+          </span>
+          <span>Fleet · Live</span>
+          <span aria-hidden style={{ color: "var(--color-border-accent)" }}>
+            /
+          </span>
+          <span>v3</span>
+        </motion.div>
+      </div>
 
-          {/* Email */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="email"
-              className="text-nav"
-            >
-              E-Mail
-            </label>
-            <input
-              ref={emailRef}
-              id="email"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@example.com"
-              className={inputClasses}
+      {/* ── Form-Zone ───────────────────────────────────────────────────── */}
+      <div className="flex flex-1 md:max-w-[480px] items-center justify-center px-4 py-10 relative z-10">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+          className="w-full max-w-sm"
+        >
+          {/* Mobile-Wordmark (Desktop hat die Brand-Zone links) */}
+          <div className="md:hidden mb-8">
+            <div className="label-sys label-sys--accent mb-3">Console · Access</div>
+            <h1
+              className="display"
               style={{
-                backgroundColor: "rgba(255, 255, 255, 0.03)",
-                borderColor: "var(--color-border)",
                 color: "var(--color-text-primary)",
-              }}
-              onFocus={(e) =>
-                (e.currentTarget.style.borderColor = "var(--color-accent)")
-              }
-              onBlur={(e) =>
-                (e.currentTarget.style.borderColor = "var(--color-border)")
-              }
-            />
-          </div>
-
-          {/* Password */}
-          <div className="space-y-1.5">
-            <label
-              htmlFor="password"
-              className="text-nav"
-            >
-              Passwort
-            </label>
-            <div className="relative">
-              <input
-                id="password"
-                type={showPassword ? "text" : "password"}
-                autoComplete={
-                  isRegister ? "new-password" : "current-password"
-                }
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder={isRegister ? "Min. 6 Zeichen" : "Passwort"}
-                className={`${inputClasses} pr-10 font-mono`}
-                style={{
-                  backgroundColor: "rgba(255, 255, 255, 0.03)",
-                  borderColor: "var(--color-border)",
-                  color: "var(--color-text-primary)",
-                }}
-                onFocus={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-accent)")
-                }
-                onBlur={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-border)")
-                }
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
-                style={{ color: "var(--color-text-muted)" }}
-                tabIndex={-1}
-                aria-label={showPassword ? "Passwort verbergen" : "Passwort anzeigen"}
-              >
-                {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Confirm Password (register only) */}
-          {isRegister && (
-            <div className="space-y-1.5">
-              <label
-                htmlFor="confirm"
-                className="text-nav"
-              >
-                Passwort wiederholen
-              </label>
-              <input
-                id="confirm"
-                type="password"
-                autoComplete="new-password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                placeholder="Nochmal eingeben"
-                className={`${inputClasses} font-mono`}
-                style={{
-                  backgroundColor: "rgba(255, 255, 255, 0.03)",
-                  borderColor: "var(--color-border)",
-                  color: "var(--color-text-primary)",
-                }}
-                onFocus={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-accent)")
-                }
-                onBlur={(e) =>
-                  (e.currentTarget.style.borderColor = "var(--color-border)")
-                }
-              />
-            </div>
-          )}
-
-          {/* Error message */}
-          {error && (
-            <motion.p
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              className="text-xs rounded-lg px-3 py-2"
-              style={{
-                color: "var(--color-error)",
-                backgroundColor: "rgba(239, 68, 68, 0.08)",
-                border: "1px solid rgba(239, 68, 68, 0.15)",
+                fontWeight: 600,
+                fontSize: "34px",
+                letterSpacing: "-0.03em",
+                lineHeight: 1,
               }}
             >
-              {error}
-            </motion.p>
-          )}
+              {BRAND_MAIN}
+              <span style={{ color: C.accent }}>{BRAND_ACCENT}</span>
+            </h1>
+          </div>
 
-          {/* Submit button */}
-          <button
-            type="submit"
-            disabled={loading || !email.trim() || !password.trim()}
-            className="w-full text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          <p className="label-sys mb-4">
+            {isRegister ? "Create the first admin account" : "Sign in"}
+          </p>
+
+          {/* Card */}
+          <motion.form
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.15, duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+            onSubmit={handleSubmit}
+            className="p-6 space-y-4 rounded-md corner-ticks"
             style={{
-              background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
+              background: "var(--color-bg-surface)",
+              border: "1px solid var(--color-border)",
             }}
           >
-            {loading && <Loader2 className="animate-spin" size={14} />}
-            {loading
-              ? "Wird geprueft..."
-              : isRegister
-                ? "Admin erstellen"
-                : "Einloggen"}
-          </button>
-        </motion.form>
+            {/* Name (register only) */}
+            {isRegister && (
+              <div className="space-y-1.5">
+                <label htmlFor="name" className="label-sys">
+                  Name
+                </label>
+                <input
+                  ref={nameRef}
+                  id="name"
+                  type="text"
+                  autoComplete="name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="Your name"
+                  className={inputClasses}
+                  style={inputStyle}
+                  onFocus={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-accent)")
+                  }
+                  onBlur={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-border)")
+                  }
+                />
+              </div>
+            )}
 
-        {isRegister && (
-          <motion.p
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.3 }}
-            className="text-center text-xs mt-4"
-            style={{ color: "var(--color-text-muted)" }}
-          >
-            Erster User wird automatisch zum Admin.
-          </motion.p>
-        )}
-      </motion.div>
+            {/* Email */}
+            <div className="space-y-1.5">
+              <label htmlFor="email" className="label-sys">
+                Email
+              </label>
+              <input
+                ref={emailRef}
+                id="email"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="admin@example.com"
+                className={inputClasses}
+                style={inputStyle}
+                onFocus={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--color-accent)")
+                }
+                onBlur={(e) =>
+                  (e.currentTarget.style.borderColor = "var(--color-border)")
+                }
+              />
+            </div>
+
+            {/* Password */}
+            <div className="space-y-1.5">
+              <label htmlFor="password" className="label-sys">
+                Password
+              </label>
+              <div className="relative">
+                <input
+                  id="password"
+                  type={showPassword ? "text" : "password"}
+                  autoComplete={
+                    isRegister ? "new-password" : "current-password"
+                  }
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder={isRegister ? "Min. 6 characters" : "Password"}
+                  className={`${inputClasses} pr-10 font-mono`}
+                  style={inputStyle}
+                  onFocus={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-accent)")
+                  }
+                  onBlur={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-border)")
+                  }
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
+                  style={{ color: "var(--color-text-muted)" }}
+                  tabIndex={-1}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
+            </div>
+
+            {/* Confirm Password (register only) */}
+            {isRegister && (
+              <div className="space-y-1.5">
+                <label htmlFor="confirm" className="label-sys">
+                  Repeat password
+                </label>
+                <input
+                  id="confirm"
+                  type="password"
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  placeholder="Repeat password"
+                  className={`${inputClasses} font-mono`}
+                  style={inputStyle}
+                  onFocus={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-accent)")
+                  }
+                  onBlur={(e) =>
+                    (e.currentTarget.style.borderColor = "var(--color-border)")
+                  }
+                />
+              </div>
+            )}
+
+            {/* Error message */}
+            {error && (
+              <motion.p
+                initial={{ opacity: 0, height: 0 }}
+                animate={{ opacity: 1, height: "auto" }}
+                className="text-xs rounded-sm px-3 py-2"
+                style={{
+                  color: "var(--color-status-error-text)",
+                  backgroundColor: "rgba(194, 56, 56, 0.1)",
+                  border: "1px solid rgba(194, 56, 56, 0.25)",
+                }}
+              >
+                {error}
+              </motion.p>
+            )}
+
+            {/* Submit button — Cyan-Fläche, dunkler Text (Kontrast!) */}
+            <button
+              type="submit"
+              disabled={loading || !email.trim() || !password.trim()}
+              className="w-full font-semibold text-sm rounded-sm px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed hover:brightness-110"
+              style={{
+                background: C.accent,
+                color: C.onAccent,
+              }}
+            >
+              {loading && <Loader2 className="animate-spin" size={14} />}
+              {loading
+                ? "Signing in…"
+                : isRegister
+                  ? "Create admin"
+                  : "Sign in"}
+            </button>
+          </motion.form>
+
+          {isRegister && (
+            <motion.p
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.3 }}
+              className="text-center text-xs mt-4"
+              style={{ color: "var(--color-text-muted)" }}
+            >
+              The first user automatically becomes the admin.
+            </motion.p>
+          )}
+        </motion.div>
+      </div>
     </main>
   );
 }

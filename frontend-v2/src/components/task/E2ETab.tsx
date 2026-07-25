@@ -69,7 +69,7 @@ function ResultBadge({ result, status }: { result: E2EResult; status: Task["stat
   return (
     <span
       className="inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium"
-      style={{ background: "rgba(255,255,255,0.04)", border: `1px solid ${C.border}`, color: C.textMuted }}
+      style={{ background: "var(--color-bg-elevated)", border: `1px solid ${C.border}`, color: C.textMuted }}
     >
       <Clock size={13} /> {running ? "Test running" : "Awaiting test"}
     </span>
@@ -113,7 +113,7 @@ function AuthVideo({ src }: { src: string }) {
     return (
       <div
         className="w-full aspect-video rounded-xl flex items-center justify-center"
-        style={{ background: "rgba(255,255,255,0.03)" }}
+        style={{ background: "var(--color-bg-surface)" }}
       >
         <div
           className="w-5 h-5 rounded-full border-2 border-t-transparent animate-spin"
@@ -158,7 +158,7 @@ function AuthImage({ src, alt, className, onClick }: { src: string; alt: string;
 
   if (failed) return null;
   if (!blobUrl) {
-    return <div className={className} style={{ background: "rgba(255,255,255,0.03)" }} />;
+    return <div className={className} style={{ background: "var(--color-bg-surface)" }} />;
   }
   return <img src={blobUrl} alt={alt} className={className} onClick={onClick} />;
 }
@@ -248,7 +248,7 @@ export function E2ETab({ task, boardId }: { task: Task; boardId: string }) {
           </div>
           <div
             className="text-xs leading-relaxed prose prose-invert prose-xs max-w-none rounded-xl px-3 py-2.5"
-            style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}`, color: C.textSecondary }}
+            style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}`, color: C.textSecondary }}
           >
             <ReactMarkdown>{resultInfo.comment.content}</ReactMarkdown>
           </div>
@@ -271,7 +271,7 @@ export function E2ETab({ task, boardId }: { task: Task; boardId: string }) {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.04, duration: 0.18, ease: "easeOut" }}
                   className="group relative rounded-xl overflow-hidden cursor-pointer"
-                  style={{ aspectRatio: "16/10", background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}
+                  style={{ aspectRatio: "16/10", background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}
                   onClick={() => setLightbox({ src, alt: d.title })}
                   aria-label={`View screenshot: ${d.title}`}
                 >
@@ -303,7 +303,7 @@ export function E2ETab({ task, boardId }: { task: Task; boardId: string }) {
         ) : (
           <div
             className="flex flex-col items-center justify-center py-8 gap-2 rounded-xl"
-            style={{ background: "rgba(255,255,255,0.02)", border: `1px solid ${C.border}` }}
+            style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}
           >
             <Film size={20} style={{ color: C.bgHover }} />
             <p className="text-xs" style={{ color: C.textMuted }}>No recording yet</p>

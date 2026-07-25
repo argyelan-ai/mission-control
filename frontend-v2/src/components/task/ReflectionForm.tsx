@@ -6,16 +6,17 @@ import { Sparkles, Send, AlertCircle } from "lucide-react";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 /**
- * 4-Felder-Formular fuer Reflection-Kommentare (Phase G, 2026-04-12).
+ * 4-field form for reflection comments (Phase G, 2026-04-12).
  *
- * Felder:
- * 1. Was gemacht
- * 2. Was funktioniert
- * 3. Was unklar / haette besser laufen koennen
- * 4. Lesson (wird automatisch ins Agent-Memory gespeichert via Phase B Pipeline)
+ * Fields:
+ * 1. What was done
+ * 2. What worked
+ * 3. What was unclear / could have gone better
+ * 4. Lesson (auto-saved to agent memory via the Phase B pipeline — the
+ *    backend extractor anchors on the "Lesson" heading, keep the word)
  *
- * Baut den Markdown-String zusammen und ruft onSubmit(content) auf.
- * Mindestlaenge: 80 Zeichen (Backend-Rule 4 Anforderung).
+ * Builds the markdown string and calls onSubmit(content).
+ * Min length: 80 chars (backend rule of 4 requirements).
  */
 
 interface ReflectionFormProps {
@@ -26,26 +27,26 @@ interface ReflectionFormProps {
 const FIELDS = [
   {
     key: "done",
-    label: "Was wurde gemacht",
-    placeholder: "Fakten — was konkret passiert ist",
-    heading: "Was gemacht",
+    label: "What was done",
+    placeholder: "Facts — what actually happened",
+    heading: "What was done",
   },
   {
     key: "worked",
-    label: "Was hat funktioniert",
-    placeholder: "Erfolgs-Signale, was gut lief",
-    heading: "Was funktioniert",
+    label: "What worked",
+    placeholder: "Success signals, what went well",
+    heading: "What worked",
   },
   {
     key: "unclear",
-    label: "Was war unklar",
-    placeholder: "Was haette besser laufen koennen, Unsicherheiten",
-    heading: "Was unklar",
+    label: "What was unclear",
+    placeholder: "What could have gone better, uncertainties",
+    heading: "What was unclear",
   },
   {
     key: "lesson",
-    label: "Lesson (wird ins Memory gespeichert)",
-    placeholder: "Was soll beim naechsten Mal anders laufen — dieser Teil wird automatisch als Agent-Lesson gespeichert",
+    label: "Lesson (saved to memory)",
+    placeholder: "What should go differently next time — this part is automatically saved as an agent lesson",
     heading: "Lesson",
   },
 ] as const;
@@ -81,7 +82,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
           Self-Reflection
         </span>
         <span className="text-[10px]" style={{ color: C.textMuted }}>
-          4 Pflichtfelder — mind. 80 Zeichen gesamt
+          4 required fields — min. 80 characters total
         </span>
       </div>
 
@@ -102,7 +103,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
             rows={field.key === "lesson" ? 3 : 2}
             className="w-full px-3 py-2 rounded-lg text-xs outline-none resize-none transition-colors"
             style={{
-              backgroundColor: "rgba(255, 255, 255, 0.03)",
+              backgroundColor: "var(--color-bg-surface)",
               color: C.textPrimary,
               border: `1px solid ${
                 field.key === "lesson"
@@ -125,7 +126,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
               style={{ color: C.warning }}
             >
               <AlertCircle size={10} />
-              <span>Noch {80 - totalChars} Zeichen bis Mindestlaenge</span>
+              <span>{80 - totalChars} more characters to minimum length</span>
             </motion.div>
           )}
         </AnimatePresence>
@@ -141,7 +142,7 @@ export function ReflectionForm({ onSubmit, isSubmitting }: ReflectionFormProps) 
           }}
         >
           <Send size={11} />
-          Reflection posten
+          Post reflection
         </button>
       </div>
     </div>

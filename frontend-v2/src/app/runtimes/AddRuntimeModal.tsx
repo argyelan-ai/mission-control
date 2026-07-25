@@ -6,7 +6,7 @@
  * created. No model identifiers typed by hand.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
@@ -69,6 +69,17 @@ export function AddRuntimeModal({ open, onClose }: Props) {
   // iOS-safe scroll lock (matches BindAgentModal)
   useBodyScrollLock(open);
 
+  // Esc closes (panel register rule 4)
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
   const secretsQuery = useQuery({
     queryKey: ["secrets"],
     queryFn: api.secrets.list,
@@ -116,7 +127,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
           const msg = err instanceof Error ? err.message : String(err);
           if (msg.includes("409") || msg.includes("existiert bereits")) {
             throw new Error(
-              'Key existiert bereits (evtl. aus einem vorherigen Versuch) — wähle ihn unter „Vorhandener Key" aus.',
+              'Key already exists (possibly from a previous attempt) — select it under "Existing key".',
             );
           }
           throw err;
@@ -169,7 +180,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
         >
           <div
             className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none"
-            style={{ backgroundColor: "rgba(255,255,255,0.18)" }}
+            style={{ backgroundColor: "var(--color-bg-hover)" }}
           />
 
           <motion.div
@@ -181,13 +192,13 @@ export function AddRuntimeModal({ open, onClose }: Props) {
             onClick={(e) => e.stopPropagation()}
             style={{
               backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
             }}
           >
             <div
               className="flex items-center justify-between p-5 border-b shrink-0"
-              style={{ borderColor: "rgba(255,255,255,0.06)" }}
+              style={{ borderColor: "var(--color-border)" }}
             >
               <div>
                 <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
@@ -199,7 +210,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
               </div>
               <button
                 onClick={handleClose}
-                className="p-1 rounded-md hover:bg-[rgba(255,255,255,0.06)] cursor-pointer"
+                className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
               >
                 <X size={14} style={{ color: "var(--color-text-muted)" }} />
               </button>
@@ -314,7 +325,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       style={{ color: STATUS_TEXT.warning, background: `${C.warning}0F`, border: `1px solid ${C.warning}26` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
-                      Endpoint verlangt einen API-Key
+                      Endpoint requires an API key
                     </div>
                   )}
 
@@ -325,9 +336,9 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                     <div className="flex gap-3 mb-2">
                       {(
                         [
-                          { value: "none", label: "Kein Key" },
-                          { value: "existing", label: "Vorhandener Key" },
-                          { value: "new", label: "Neuer Key" },
+                          { value: "none", label: "No key" },
+                          { value: "existing", label: "Existing key" },
+                          { value: "new", label: "New key" },
                         ] as { value: KeyMode; label: string }[]
                       ).map((opt) => (
                         <label key={opt.value} className="flex items-center gap-1.5 text-[12px] cursor-pointer" style={{ color: C.textSecondary }}>
@@ -359,7 +370,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                           color: C.textPrimary,
                         }}
                       >
-                        <option value="">— auswählen —</option>
+                        <option value="">— select —</option>
                         {(secretsQuery.data ?? []).map((s) => (
                           <option key={s.id} value={s.id}>
                             {(s.label ?? s.key)} · {s.value_masked}
@@ -385,15 +396,15 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                         />
                         {newSecretKeyInvalid && (
                           <div className="text-[11px]" style={{ color: STATUS_TEXT.error }}>
-                            Nur Kleinbuchstaben, Zahlen und _
+                            Lowercase letters, numbers and _ only
                           </div>
                         )}
                         <input
                           type="password"
-                          aria-label="Wert"
+                          aria-label="Value"
                           value={newSecretValue}
                           onChange={(e) => setNewSecretValue(e.target.value)}
-                          placeholder="API-Key-Wert"
+                          placeholder="API key value"
                           className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
                           style={{
                             backgroundColor: C.bgSurface,

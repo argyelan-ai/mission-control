@@ -22,6 +22,7 @@ import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { Pill } from "@/components/shared/Pill";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { FilePreview } from "@/components/task/FilePreview";
 import { benchApi } from "@/verticals/bench_studio/api";
 import { BENCH_STATUS_COLOR, ENTRY_STATUS_COLOR } from "./ChallengesTab";
@@ -241,6 +242,7 @@ export function ChallengeDetail({
   // vertical (e.g. a private catalog_publisher). Public build sees no
   // `actions` on the challenge — nothing renders below.
   const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<ChallengeAction | null>(null);
   const challengeActionMutation = useMutation({
     mutationFn: (action: ChallengeAction) => request(action.endpoint, { method: action.method }),
     onMutate: (action: ChallengeAction) => setPendingActionId(action.id),
@@ -262,7 +264,10 @@ export function ChallengeDetail({
       notify.error("Ungültiger Action-Endpoint — abgebrochen");
       return;
     }
-    if (action.confirm && !window.confirm(action.confirm)) return;
+    if (action.confirm) {
+      setConfirmAction(action);
+      return;
+    }
     challengeActionMutation.mutate(action);
   }
 
@@ -621,6 +626,26 @@ export function ChallengeDetail({
           </button>
         </div>
       </ResponsiveModal>
+
+      {/* Backend-declared action confirms (action.confirm copy) — B2 dialog,
+          no window.confirm (register rule 3) */}
+      <ConfirmDialog
+        open={confirmAction !== null}
+        kicker="Challenge-Action"
+        title={confirmAction?.label ?? ""}
+        body={confirmAction?.confirm}
+        confirmLabel={confirmAction?.label ?? "OK"}
+        cancelLabel="Abbrechen"
+        danger={confirmAction?.style === "danger"}
+        loading={challengeActionMutation.isPending}
+        onConfirm={() => {
+          if (!confirmAction) return;
+          challengeActionMutation.mutate(confirmAction, {
+            onSettled: () => setConfirmAction(null),
+          });
+        }}
+        onCancel={() => setConfirmAction(null)}
+      />
     </div>
   );
 }

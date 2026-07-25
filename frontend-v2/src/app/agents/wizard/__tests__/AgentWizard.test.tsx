@@ -16,9 +16,9 @@ describe("AgentWizard shell", () => {
       <AgentWizard boards={[]} defaultBoardId={null} onClose={() => {}} onCreated={() => {}} />
     );
     expect(screen.getByText(/Start/)).toBeTruthy();
-    expect(screen.getByText(/Identität/)).toBeTruthy();
+    expect(screen.getByText(/Identity/)).toBeTruthy();
     expect(screen.getByText(/Runtime/)).toBeTruthy();
-    expect(screen.getByText(/Rechte/)).toBeTruthy();
+    expect(screen.getByText(/Scopes/)).toBeTruthy();
     expect(screen.getByText(/Review/)).toBeTruthy();
   });
 
@@ -26,7 +26,7 @@ describe("AgentWizard shell", () => {
     wrap(
       <AgentWizard boards={[]} defaultBoardId={null} onClose={() => {}} onCreated={() => {}} />
     );
-    const back = screen.getByRole("button", { name: /Zurück/ }) as HTMLButtonElement;
+    const back = screen.getByRole("button", { name: /Back/ }) as HTMLButtonElement;
     expect(back.disabled).toBe(true);
   });
 
@@ -35,7 +35,7 @@ describe("AgentWizard shell", () => {
     wrap(
       <AgentWizard boards={[]} defaultBoardId={null} onClose={onClose} onCreated={() => {}} />
     );
-    fireEvent.click(screen.getByLabelText(/schliessen/i));
+    fireEvent.click(screen.getByLabelText(/close wizard/i));
     expect(onClose).toHaveBeenCalled();
   });
 

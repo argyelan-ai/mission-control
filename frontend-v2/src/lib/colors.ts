@@ -1,44 +1,47 @@
 "use client";
 
 /**
- * Mission Control — Color Tokens („Der Leitstand", see DESIGN.md)
- * Design-Guideline: Serious. Dark. No neon. No purple.
+ * Mission Control — Color Tokens (v3 „Leitstand · argyelan Edition")
+ * Design-Guideline: Serious. Dark. Cyan-solo. No purple.
  *
  * Inspirations: Bloomberg Terminal, Linear.app, Stripe Dashboard
  * Principles:
- *   - One accent only (Teal #0FA3A3 — subdued)
- *   - Greys only for structure (no cool/warm tint)
+ *   - One accent only (argyelan-Cyan #00E5FF — die Brand-Farbe)
+ *   - Blue-tinted off-blacks for structure (never neutral grey, never pure #000)
  *   - Status colors muted, never glowing
  *   - No blur, no glass, no shadow-glow
  *
  * App-wide single source since June 2026 (previously components/homepage/colors.ts —
  * a re-export lives there for existing imports).
+ * v3 (Juli 2026): Teal → argyelan-Cyan, neutrale Graus → blau-getönte Off-Blacks.
  */
 
 export const C = {
-  // Backgrounds
-  bgDeep: "#050505",
-  bgBase: "#0A0A0A",
-  bgSurface: "#111111",
-  bgElevated: "#161616",
-  bgHover: "#1C1C1C",
+  // Backgrounds — blau-getönte Off-Blacks (Stufung = Tiefe)
+  bgDeep: "#04070C",
+  bgBase: "#070B12",
+  bgSurface: "#0B111C",
+  bgElevated: "#101827",
+  bgHover: "#162134",
 
-  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #050505–#161616.
-  textPrimary: "#EDEDED",
-  textSecondary: "#A1A1A1", // ~7.3:1 (was #8C8C8C)
-  textMuted: "#888888",     // ~5.3:1 (was #525252 = 2.4:1, AA fail)
-  textDim: "#6E6E6E",       // decoration / inactive icons ONLY — never body text
+  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #04070C–#101827.
+  textPrimary: "#EDF2FA",
+  textSecondary: "#A5B0C2", // ~7.4:1
+  textMuted: "#7E8A9E",     // ~5.1:1
+  textDim: "#566178",       // decoration / inactive icons ONLY — never body text
 
-  // Borders
-  borderSubtle: "rgba(255,255,255,0.04)",
-  border: "rgba(255,255,255,0.06)",
-  borderActive: "rgba(255,255,255,0.10)",
-  borderAccent: "rgba(15,163,163,0.30)",
+  // Borders — kalt getönt
+  borderSubtle: "rgba(146,170,206,0.05)",
+  border: "rgba(146,170,206,0.10)",
+  borderActive: "rgba(146,170,206,0.16)",
+  borderAccent: "rgba(0,229,255,0.30)",
 
-  // ONE accent only — teal, subdued
-  accent: "#0FA3A3",
-  accentSubtle: "rgba(15,163,163,0.12)",
-  accentHover: "#14C4C4",
+  // ONE accent only — argyelan Cyan
+  accent: "#00E5FF",
+  accentSubtle: "rgba(0,229,255,0.10)",
+  accentHover: "#6BEAFF",
+  accentDeep: "#00B4CC",
+  onAccent: "#00252B", // Text auf Cyan-Fläche
 
   // Status (desaturated, never bright)
   online: "#2B9A4A",
@@ -47,9 +50,9 @@ export const C = {
   info: "#2E6FD8",
 
   chart: {
-    cpu: "#0FA3A3",
-    ram: "#6B8E8E",
-    disk: "#86A0A0", // was #7A6B8E (purple, 3.89:1) — teal-grey, 6.8:1, no purple
+    cpu: "#00E5FF",
+    ram: "#5E83A8",
+    disk: "#7D92AD",
   },
 } as const;
 
@@ -126,17 +129,49 @@ export const BRAND: Record<string, string> = {
   env: "#ECD53F",
 };
 
+// ── P2 „PHOSPHOR+ CYAN" (feat/ui-redesign-v3) — B2 token set ─────────────────
+// New components (shell first, then page-by-page per 00-redesign-brief) use P2
+// exclusively. C stays the single source for unconverted pages during the
+// transition. Mirrors --color-p2-* in styles/globals.css (keep both in sync).
+// Accent: argyelan-Cyan #00E5FF (Marks Colorway-Wahl 03, 23.07.2026).
+export const P2 = {
+  // Surfaces — warm off-blacks (bewusst wärmer als die alte blau-getönte Welt)
+  bg: "#080705", // canvas
+  pan: "#100E08", // raised panel
+  pan2: "#17140C", // hover / higher elevation
+  inset: "#0B0906", // sunken (inputs, meters)
+
+  // Lines
+  line: "#2A2517", // panel border
+  line2: "#1E1B10", // hairline / dashed separators
+
+  // Text — warm phosphor whites, ≥4.5:1 on bg/pan
+  txt: "#E9E0C8",
+  dim: "#847C68",
+  faint: "#5A5442", // decoration only — never body text
+
+  // ONE accent — argyelan Cyan; interaction/focus/selection only
+  amb: "#00E5FF",
+  ambD: "#0E6E7A", // dimmed accent (borders, gradient start)
+  inv: "#141008", // text on accent surfaces (reverse video)
+
+  // Status trio — distinct from accent, contextual glow allowed on dots
+  ok: "#4FD67E",
+  wrn: "#FFD84D",
+  err: "#FF5C47",
+} as const;
+
 // ── Terminal (xterm.js) theme — „Der Leitstand" ANSI set ────────────────────
 // Shared by the Sessions page, Agent CLI tab and Plugins shell. ANSI colors
 // stay distinguishable (terminal content fidelity) but desaturated to match
 // the Leitstand palette — and magenta is magenta, not the banned AI-violet.
 export const XTERM_THEME = {
-  background: "#0D0D0D",
-  foreground: "#E5E5E5",
+  background: "#070B12",
+  foreground: "#E5EAF2",
   cursor: C.accent,
-  cursorAccent: "#0D0D0D",
-  black: "#1A1A1A",
-  brightBlack: "#6E6E6E",
+  cursorAccent: "#070B12",
+  black: "#101827",
+  brightBlack: "#566178",
   red: "#D05F5F",
   brightRed: "#E08080",
   green: "#3FA96C",
@@ -147,9 +182,9 @@ export const XTERM_THEME = {
   brightBlue: "#88AEE8",
   magenta: "#C06BB0",
   brightMagenta: "#D68CC8",
-  cyan: "#14C4C4",
-  brightCyan: "#4ED9D9",
-  white: "#E5E5E5",
+  cyan: "#00D5EE",
+  brightCyan: "#6BEAFF",
+  white: "#E5EAF2",
   brightWhite: "#FFFFFF",
 } as const;
 

@@ -74,7 +74,7 @@ export function EpisodicTimeline({
             >
               {formatDay(items[0].created_at)}
             </div>
-            <div className="flex-1 h-px" style={{ background: "rgba(255,255,255,0.06)" }} />
+            <div className="flex-1 h-px" style={{ background: "var(--color-bg-elevated)" }} />
             <span className="text-[10px] tabular-nums" style={{ color: "var(--color-text-muted)" }}>
               {items.length} {items.length === 1 ? "entry" : "entries"}
             </span>
@@ -107,15 +107,15 @@ export function EpisodicTimeline({
                     onClick={() => onOpen(item)}
                     className="rounded-xl p-4 cursor-pointer transition-colors"
                     style={{
-                      background: "rgba(255,255,255,0.02)",
-                      border: "1px solid rgba(255,255,255,0.06)",
+                      background: "var(--color-bg-surface)",
+                      border: "1px solid var(--color-border)",
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.04)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-elevated)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
                   >
                     <div className="flex items-center gap-2 mb-1.5">
                       <span
-                        className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                        className="inline-flex items-center px-2 py-0.5 rounded-sm font-mono text-[10px] font-semibold"
                         style={{ background: `${color}18`, color }}
                       >
                         {TYPE_LABELS[item.memory_type] ?? item.memory_type}
@@ -126,7 +126,7 @@ export function EpisodicTimeline({
                         {timeAgo(item.created_at)}
                       </span>
                       {item.auto_generated && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "rgba(255,255,255,0.05)", color: "var(--color-text-muted)" }}>
+                        <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>
                           Auto
                         </span>
                       )}

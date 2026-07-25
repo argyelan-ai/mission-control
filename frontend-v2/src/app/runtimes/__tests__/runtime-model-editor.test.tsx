@@ -51,7 +51,7 @@ describe("RuntimeCard model editor", () => {
   it("shows the pencil edit affordance for non-probeable (cloud) runtimes", async () => {
     renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
     expect(
-      await screen.findByLabelText("Modell bearbeiten")
+      await screen.findByLabelText("Edit model")
     ).toBeInTheDocument();
     expect(screen.getByText("claude-opus-4-7")).toBeInTheDocument();
   });
@@ -61,7 +61,7 @@ describe("RuntimeCard model editor", () => {
       <RuntimeCard runtime={makeRuntime({ runtime_type: "vllm_docker" })} />
     );
     await waitFor(() => expect(api.runtimes.db.agents).toHaveBeenCalled());
-    expect(screen.queryByLabelText("Modell bearbeiten")).toBeNull();
+    expect(screen.queryByLabelText("Edit model")).toBeNull();
   });
 
   it("saving calls PATCH with the new model_identifier", async () => {
@@ -71,12 +71,12 @@ describe("RuntimeCard model editor", () => {
     const user = userEvent.setup();
 
     renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
-    await user.click(await screen.findByLabelText("Modell bearbeiten"));
+    await user.click(await screen.findByLabelText("Edit model"));
 
-    const input = screen.getByLabelText("Modell-Identifier");
+    const input = screen.getByLabelText("Model identifier");
     await user.clear(input);
     await user.type(input, "claude-opus-4-8");
-    await user.click(screen.getByLabelText("Speichern"));
+    await user.click(screen.getByLabelText("Save"));
 
     await waitFor(() =>
       expect(updateSpy).toHaveBeenCalledWith("anthropic-cloud", {
@@ -90,12 +90,12 @@ describe("RuntimeCard model editor", () => {
     const user = userEvent.setup();
 
     renderWithQuery(<RuntimeCard runtime={makeRuntime()} />);
-    await user.click(await screen.findByLabelText("Modell bearbeiten"));
+    await user.click(await screen.findByLabelText("Edit model"));
 
-    const input = screen.getByLabelText("Modell-Identifier");
+    const input = screen.getByLabelText("Model identifier");
     await user.clear(input);
     await user.type(input, "something-else");
-    await user.click(screen.getByLabelText("Abbrechen"));
+    await user.click(screen.getByLabelText("Cancel"));
 
     expect(updateSpy).not.toHaveBeenCalled();
     // Back to display mode with the original value.

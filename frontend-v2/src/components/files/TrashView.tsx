@@ -141,8 +141,8 @@ export function TrashView() {
         <button
           onClick={() => setPurgeOpen(true)}
           className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-          style={{ color: STATUS_TEXT.error, border: `1px solid rgba(194,56,56,0.30)` }}
-          onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(194,56,56,0.12)"; }}
+          style={{ color: STATUS_TEXT.error, border: `1px solid ${C.error}4D` }}
+          onMouseEnter={(e) => { e.currentTarget.style.background = `${C.error}1F`; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
@@ -151,7 +151,7 @@ export function TrashView() {
       </div>
 
       {/* Grouped list */}
-      <div className="rounded-2xl overflow-hidden" style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.border}` }}>
+      <div className="rounded-2xl overflow-hidden" style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}>
         {groups.map(([deletedAt, groupEntries], gi) => (
           <div key={deletedAt}>
             <div
@@ -159,7 +159,7 @@ export function TrashView() {
               style={{
                 borderBottom: `1px solid ${C.borderSubtle}`,
                 borderTop: gi === 0 ? "none" : `1px solid ${C.borderSubtle}`,
-                background: "rgba(255,255,255,0.015)",
+                background: "var(--color-bg-surface)",
               }}
             >
               <span className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.textSecondary }}>
@@ -179,7 +179,7 @@ export function TrashView() {
                   key={entry.trash_id}
                   className="flex items-center gap-3 px-4 py-2.5 transition-colors"
                   style={{ borderBottom: `1px solid ${C.borderSubtle}`, background: checked ? C.accentSubtle : "transparent" }}
-                  onMouseEnter={(e) => { if (!checked) e.currentTarget.style.background = "rgba(255,255,255,0.02)"; }}
+                  onMouseEnter={(e) => { if (!checked) e.currentTarget.style.background = "var(--color-bg-surface)"; }}
                   onMouseLeave={(e) => { if (!checked) e.currentTarget.style.background = "transparent"; }}
                 >
                   <input
@@ -225,7 +225,7 @@ export function TrashView() {
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: 16 }}
           transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
-          className="fixed bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl"
+          className="fixed bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-4 left-1/2 -translate-x-1/2 z-40 flex items-center gap-1.5 px-2.5 py-2 rounded-xl max-w-[calc(100vw-2rem)]"
           style={{
             background: C.bgElevated,
             border: `1px solid ${C.border}`,

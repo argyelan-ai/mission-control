@@ -39,6 +39,7 @@ import {
 import { TriggerEditor, type TriggerEditorValue } from "./TriggerEditor";
 import { JOB_TEMPLATES, type JobTemplate } from "./jobTemplates";
 import { C, STATUS_TEXT } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface JobModalProps {
   open: boolean;
@@ -378,7 +379,7 @@ export function JobModal({
           }}
         >
           {/* Drag indicator — mobile only */}
-          <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-full pointer-events-none" style={{ backgroundColor: "rgba(255,255,255,0.18)" }} />
+          <div className="sm:hidden absolute bottom-[calc(92dvh-0.5rem)] left-1/2 -translate-x-1/2 z-10 w-8 h-1 rounded-sm pointer-events-none" style={{ backgroundColor: "var(--color-bg-hover)" }} />
 
           <motion.div
             key="modal"
@@ -436,7 +437,7 @@ export function JobModal({
                           background: C.bgSurface,
                         }}
                       >
-                        <span className="text-base">{tpl.icon}</span>
+                        <EntityIcon value={tpl.icon} size={16} />
                         <span className="text-sm font-medium" style={{ color: C.textPrimary }}>
                           {tpl.name}
                         </span>

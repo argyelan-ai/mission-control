@@ -256,16 +256,16 @@ export function VoiceButton({ size = 36, variant = "header" }: VoiceButtonProps)
         minWidth: 44,
         minHeight: 44,
         backgroundColor: active
-          ? "var(--color-accent-subtle, rgba(15,163,163,0.12))"
+          ? "var(--color-accent-subtle, rgba(0,229,255,0.10))"
           : variant === "sidebar"
             ? "rgba(255, 255, 255, 0.04)"
             : "transparent",
         border: active
-          ? "1px solid var(--color-accent, #0FA3A3)"
+          ? "1px solid var(--color-accent, #00E5FF)"
           : variant === "sidebar"
-            ? "1px solid var(--color-border-subtle, rgba(255,255,255,0.06))"
+            ? "1px solid var(--color-border-subtle, var(--color-border))"
             : "1px solid transparent",
-        color: active ? "var(--color-accent-light, #14C4C4)" : "var(--color-text-secondary)",
+        color: active ? "var(--color-accent-light, #6BEAFF)" : "var(--color-text-secondary)",
       }}
       aria-label={active ? "Manage voice session" : "Start voice assistant"}
       title={active ? "Voice active — click for options" : "Start voice"}
@@ -504,9 +504,9 @@ function VoiceDrawer({
               background: "rgba(13, 13, 15, 0.92)",
               backdropFilter: "blur(20px) saturate(160%)",
               WebkitBackdropFilter: "blur(20px) saturate(160%)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow:
-                "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(15,163,163,0.10), inset 0 1px 0 0 rgba(255,255,255,0.06)",
+                "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,229,255,0.10), inset 0 1px 0 0 rgba(255,255,255,0.06)",
             }}
           >
             {/* Edge highlight — subtler "rim" at the top edge */}
@@ -640,7 +640,7 @@ function VoiceDrawer({
                 onClick={toggleMute}
                 className="flex items-center justify-center w-10 h-10 rounded-full transition-all cursor-pointer hover:scale-105 active:scale-95"
                 style={{
-                  background: muted ? `${C.error}1F` : "rgba(255,255,255,0.04)",
+                  background: muted ? `${C.error}1F` : "var(--color-bg-hover)",
                   border: `1px solid ${muted ? `${C.error}4D` : "rgba(255,255,255,0.06)"}`,
                   color: muted ? C.error : "var(--color-text-primary)",
                 }}

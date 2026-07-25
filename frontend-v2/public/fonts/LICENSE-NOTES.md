@@ -10,3 +10,4 @@
 Loaded for the xterm.js terminal views so agent TUIs (Claude Code, omp)
 render their logos, powerline segments and Nerd-Font icons identically in
 every browser, regardless of locally installed fonts.
+Space Mono (Regular/Bold) — SIL Open Font License 1.1, (c) 2016 Google Inc.

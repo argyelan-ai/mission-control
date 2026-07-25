@@ -7,11 +7,12 @@ import { C } from "@/lib/colors";
 import type { AgentTemplate, Agent, Harness } from "@/lib/types";
 import type { StartMode, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 const MODES: { key: StartMode; label: string; icon: typeof Sparkles; hint: string }[] = [
-  { key: "custom", label: "Individuell", icon: Sparkles, hint: "Von Grund auf konfigurieren" },
-  { key: "template", label: "Vorlage", icon: LayoutTemplate, hint: "Aus einem Rollen-Template" },
-  { key: "duplicate", label: "Duplizieren", icon: Copy, hint: "Bestehenden Agent kopieren" },
+  { key: "custom", label: "Custom", icon: Sparkles, hint: "Configure from scratch" },
+  { key: "template", label: "Template", icon: LayoutTemplate, hint: "From a role template" },
+  { key: "duplicate", label: "Duplicate", icon: Copy, hint: "Copy an existing agent" },
 ];
 
 // Prefillable fields only — board/step are shell-owned and must survive a mode switch.
@@ -50,7 +51,7 @@ export function StartStep({ state, update }: WizardStepProps) {
     update({
       startMode: "duplicate",
       sourceAgentId: src.id,
-      name: `${src.name} Kopie`,
+      name: `${src.name} Copy`,
       emoji: src.emoji ?? "",
       role: src.role ?? "",
       soulMd: src.soul_md,
@@ -97,7 +98,7 @@ export function StartStep({ state, update }: WizardStepProps) {
               }
               className="text-left rounded-xl p-4 cursor-pointer transition-all"
               style={{
-                backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                 border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
               }}
             >
@@ -117,7 +118,7 @@ export function StartStep({ state, update }: WizardStepProps) {
       {state.startMode === "template" && (
         <div className="space-y-2">
           <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
-            Template wählen
+            Select template
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
             {(templates ?? []).map((t) => {
@@ -128,7 +129,7 @@ export function StartStep({ state, update }: WizardStepProps) {
                   onClick={() => pickTemplate(t)}
                   className="flex items-center gap-2 text-left rounded-lg px-3 py-2.5 cursor-pointer transition-colors"
                   style={{
-                    backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                    backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                     border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                   }}
                 >
@@ -149,7 +150,7 @@ export function StartStep({ state, update }: WizardStepProps) {
       {state.startMode === "duplicate" && (
         <div className="space-y-2">
           <div className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)]">
-            Agent zum Duplizieren wählen
+            Select agent to duplicate
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto">
             {(agents ?? []).map((a) => {
@@ -160,11 +161,11 @@ export function StartStep({ state, update }: WizardStepProps) {
                   onClick={() => pickAgent(a)}
                   className="flex items-center gap-2 text-left rounded-lg px-3 py-2.5 cursor-pointer transition-colors"
                   style={{
-                    backgroundColor: active ? C.accentSubtle : "rgba(255,255,255,0.03)",
+                    backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                     border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
                   }}
                 >
-                  <span className="text-lg">{a.emoji ?? "🤖"}</span>
+                  <EntityIcon value={a.emoji} size={18} />
                   <span className="flex-1">
                     <span className="block text-sm text-[var(--color-text-primary)]">{a.name}</span>
                     <span className="block text-[10px] text-[var(--color-text-muted)]">

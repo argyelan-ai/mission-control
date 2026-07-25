@@ -17,7 +17,7 @@ export function SectionHeading({
 }) {
   return (
     <div className="flex items-center justify-between mb-2.5">
-      <h2 className="text-[11px] font-semibold uppercase tracking-[0.14em]" style={{ color: C.textMuted }}>{title}</h2>
+      <h2 className="label-sys">{title}</h2>
       {right}
     </div>
   );
@@ -68,8 +68,8 @@ export function ServiceDot({
 
   return (
     <div className="flex items-center gap-1.5">
-      <span className="w-1 h-1 rounded-full shrink-0" style={{ backgroundColor: color }} />
-      <span className="text-[10px]" style={{ color: C.textSecondary }}>{label}</span>
+      <span className="w-1.5 h-1.5 shrink-0" style={{ backgroundColor: color }} />
+      <span className="text-[10px] font-mono uppercase tracking-[0.08em]" style={{ color: C.textSecondary }}>{label}</span>
       <span className="text-[10px] font-mono tabular-nums" style={{ color: detailColor ?? C.textMuted }}>{detail}</span>
     </div>
   );
@@ -121,8 +121,8 @@ export function SparklineChart({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center justify-between">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.08em]" style={{ color: C.textMuted }}>{label}</span>
-        <span className="text-[10px] font-mono font-bold tabular-nums" style={{ color }}>{value}</span>
+        <span className="label-sys">{label}</span>
+        <span className="text-[11px] font-mono font-semibold tabular-nums" style={{ color }}>{value}</span>
       </div>
       <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={height} preserveAspectRatio="none">
         <path d={fillPath} fill={`${color}15`} />

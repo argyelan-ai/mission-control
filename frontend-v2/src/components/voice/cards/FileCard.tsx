@@ -64,7 +64,7 @@ export function FileCard({
               className="text-[10px] flex items-center gap-0.5 hover:opacity-80 cursor-pointer"
               style={{ color: "var(--color-text-secondary)" }}
             >
-              <Eye size={9} /> Vorschau
+              <Eye size={9} /> Preview
             </button>
             {data.vault_path && (
               <button

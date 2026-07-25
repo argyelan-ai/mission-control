@@ -16,6 +16,7 @@ import { FileText, Image as ImageIcon, X } from "lucide-react";
 
 import { api, getToken } from "@/lib/api";
 import type { BoardMemoryAttachment } from "@/lib/types";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface Props {
   attachment: BoardMemoryAttachment;
@@ -36,6 +37,7 @@ export function AttachmentThumb({
 }: Props) {
   const prefersReduce = useReducedMotion();
   const [objectUrl, setObjectUrl] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const filename = attachment.path.split("/").pop() ?? "file";
   const isImage = attachment.mime_type.startsWith("image/");
 
@@ -66,14 +68,15 @@ export function AttachmentThumb({
   }, [entryId, filename, isImage]);
 
   return (
+    <>
     <motion.div
       initial={prefersReduce ? false : { opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.2 }}
       className="group relative rounded-lg overflow-hidden"
       style={{
-        border: "1px solid rgba(255,255,255,0.06)",
-        background: "rgba(255,255,255,0.02)",
+        border: "1px solid var(--color-border)",
+        background: "var(--color-bg-surface)",
       }}
     >
       {isImage ? (
@@ -102,7 +105,7 @@ export function AttachmentThumb({
           target="_blank"
           rel="noreferrer noopener"
           className="flex flex-col items-center justify-center w-[80px] h-[80px] text-center p-1 text-[10px]"
-          style={{ color: "rgba(255,255,255,0.7)" }}
+          style={{ color: "var(--color-text-secondary)" }}
           title={`Open: ${attachment.original_name}`}
         >
           <FileText size={20} aria-hidden />
@@ -113,18 +116,14 @@ export function AttachmentThumb({
       )}
       <div
         className="absolute bottom-0 left-0 right-0 px-2 py-1 text-[10px] tabular-nums opacity-70 truncate"
-        style={{ background: "rgba(10,10,15,0.6)", color: "rgba(255,255,255,0.85)" }}
+        style={{ background: "rgba(10,10,15,0.6)", color: "var(--color-bg-hover)" }}
       >
         {Math.round(attachment.size_bytes / 1024)} KB
       </div>
       {editMode && onDelete && (
         <button
           type="button"
-          onClick={() => {
-            if (window.confirm(`Delete attachment "${attachment.original_name}"?`)) {
-              onDelete(filename);
-            }
-          }}
+          onClick={() => setConfirmDelete(true)}
           className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity touch-visible"
           style={{ background: "rgba(239,68,68,0.8)" }}
           aria-label={`Delete attachment ${attachment.original_name}`}
@@ -133,5 +132,16 @@ export function AttachmentThumb({
         </button>
       )}
     </motion.div>
+    {editMode && onDelete && (
+      <ConfirmDialog
+        open={confirmDelete}
+        kicker="Attachment"
+        title={`Delete attachment "${attachment.original_name}"?`}
+        confirmLabel="Delete"
+        onConfirm={() => { setConfirmDelete(false); onDelete(filename); }}
+        onCancel={() => setConfirmDelete(false)}
+      />
+    )}
+    </>
   );
 }

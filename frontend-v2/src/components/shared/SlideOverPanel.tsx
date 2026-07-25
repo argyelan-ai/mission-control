@@ -63,26 +63,26 @@ export function SlideOverPanel({
             exit={{ opacity: 0, y: "100%" }}
             // On md+: slide from right instead
             className={cn(
-              "fixed z-50 flex flex-col overflow-hidden",
+              "fixed z-50 flex flex-col overflow-hidden w-full",
               // Mobile: full-screen from bottom
-              "inset-x-0 bottom-0 rounded-t-2xl max-h-[94dvh]",
-              // Desktop: right side panel, full height
-              "md:inset-x-auto md:right-0 md:top-0 md:bottom-0 md:max-h-full md:rounded-none md:rounded-l-2xl",
+              "inset-x-0 bottom-0 rounded-t-md max-h-[94dvh]",
+              // Desktop: right side panel, full height, fixed width via --panel-w
+              "md:inset-x-auto md:right-0 md:top-0 md:bottom-0 md:max-h-full md:rounded-none md:w-[var(--panel-w)]",
               className
             )}
             style={{
-              width: "100%",
               "--panel-w": desktopWidth,
               backgroundColor: "var(--color-bg-elevated)",
-              borderLeft: "1px solid var(--color-border-subtle)",
-              boxShadow: "-8px 0 40px rgba(0,0,0,0.4)",
+              borderLeft: "1px solid var(--color-border)",
+              boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
             } as React.CSSProperties}
-            // Set desktop width via inline style targeting
-            onAnimationStart={() => {}}
           >
+            {/* Cyan-Kante oben — Signatur-Markierung */}
+            <div className="md:hidden h-[2px] w-full shrink-0" style={{ backgroundColor: "var(--color-accent)" }} />
+
             {/* Mobile drag handle */}
             <div className="md:hidden flex justify-center pt-2.5 shrink-0">
-              <div className="w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.12)" }} />
+              <div className="w-10 h-[3px]" style={{ backgroundColor: "var(--color-border-strong)" }} />
             </div>
 
             {/* Header with close button */}
@@ -96,7 +96,7 @@ export function SlideOverPanel({
                 </span>
                 <button
                   onClick={onClose}
-                  className="flex items-center justify-center min-h-touch min-w-touch rounded-lg transition-opacity hover:opacity-70 cursor-pointer"
+                  className="flex items-center justify-center min-h-touch min-w-touch rounded-sm transition-opacity hover:opacity-70 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
                   aria-label="Close"
                 >

@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, ChevronDown, Loader2, Check, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RuntimeSchedule, RuntimeScheduleCreate } from "@/lib/types";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
@@ -34,6 +35,7 @@ function ScheduleEntry({
   const [showRuns, setShowRuns] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [form, setForm] = useState<RuntimeScheduleCreate>({
     name: schedule.name,
     action: schedule.action,
@@ -86,15 +88,13 @@ function ScheduleEntry({
     updateMutation.mutate(form);
 
   const handleDelete = () => {
-    if (window.confirm(`Delete '${schedule.name}'?`)) {
-      deleteMutation.mutate();
-    }
+    setConfirmDelete(true);
   };
 
   const lr = schedule.last_run;
 
   const inputStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.06)",
+    background: "var(--color-bg-elevated)",
     border: `1px solid ${C.borderSubtle}`,
     color: C.textPrimary,
   };
@@ -164,7 +164,7 @@ function ScheduleEntry({
         <div className="px-3 pb-2">
           <div
             className="rounded-lg overflow-hidden text-xs"
-            style={{ background: "rgba(255,255,255,0.03)", border: `1px solid ${C.borderSubtle}` }}
+            style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.borderSubtle}` }}
           >
             {runs.length === 0 ? (
               <div className="px-3 py-2" style={{ color: C.textMuted }}>
@@ -203,7 +203,7 @@ function ScheduleEntry({
           <div
             className="rounded-lg p-3 flex flex-col gap-2.5"
             style={{
-              background: "rgba(255,255,255,0.03)",
+              background: "var(--color-bg-surface)",
               border: `1px solid ${C.borderSubtle}`,
             }}
           >
@@ -301,6 +301,21 @@ function ScheduleEntry({
           </div>
         </div>
       )}
+
+      {/* v3 confirm — replaces native window.confirm() (panel register rule 3) */}
+      <ConfirmDialog
+        open={confirmDelete}
+        title="Delete schedule"
+        body={`Delete '${schedule.name}'?`}
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() =>
+          deleteMutation.mutate(undefined, {
+            onSettled: () => setConfirmDelete(false),
+          })
+        }
+        onCancel={() => setConfirmDelete(false)}
+      />
     </div>
   );
 }
@@ -334,7 +349,7 @@ function AddScheduleForm({
   });
 
   const inputStyle: React.CSSProperties = {
-    background: "rgba(255,255,255,0.06)",
+    background: "var(--color-bg-elevated)",
     border: `1px solid ${C.borderSubtle}`,
     color: C.textPrimary,
   };

@@ -279,7 +279,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
                     onClick={() => toggleWeekday(i)}
                     className="rounded-md border px-2.5 py-1 text-xs font-medium transition"
                     style={{
-                      borderColor: active ? C.borderAccent : "rgba(255,255,255,0.08)",
+                      borderColor: active ? C.borderAccent : "var(--color-border)",
                       background: active ? C.accentSubtle : "transparent",
                       color: active ? C.accent : C.textSecondary,
                     }}

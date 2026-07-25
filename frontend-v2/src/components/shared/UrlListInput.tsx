@@ -20,7 +20,7 @@ export function UrlListInput({
   onChange,
   textPrimary = C.textPrimary,
   textMuted = C.textMuted,
-  border = "rgba(255,255,255,0.06)",
+  border = "var(--color-border)",
   deep = C.bgDeep,
   accent = C.accent,
 }: UrlListInputProps) {

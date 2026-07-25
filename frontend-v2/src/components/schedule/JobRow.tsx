@@ -24,6 +24,7 @@ import { motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 import cronstrue from "cronstrue";
 import { C, STATUS_TEXT } from "@/lib/colors";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 interface JobRowProps {
   job: ScheduledJob;
@@ -188,7 +189,7 @@ export function JobRow({
           <span className="truncate">{job.name}</span>
           {failures >= 2 && (
             <span
-              className="flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold"
+              className="flex shrink-0 items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[9px] font-semibold"
               style={{
                 background: `${C.error}1F`,
                 color: STATUS_TEXT.error,
@@ -202,7 +203,7 @@ export function JobRow({
           )}
           {snoozedUntil && (
             <span
-              className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+              className="shrink-0 rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
               style={{
                 background: `${C.warning}1F`,
                 color: C.warning,
@@ -210,7 +211,7 @@ export function JobRow({
               }}
               title={`Snoozed until ${new Date(snoozedUntil).toLocaleString("en-GB")}`}
             >
-              💤 {new Date(snoozedUntil).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+              <EntityIcon value="💤" size={12} className="inline-block align-[-1px] mr-0.5" /> {new Date(snoozedUntil).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
         </span>
@@ -221,7 +222,7 @@ export function JobRow({
               return (
                 <span
                   key={t}
-                  className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                  className="rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
                   style={{
                     background: `${c}1F`,
                     color: c,

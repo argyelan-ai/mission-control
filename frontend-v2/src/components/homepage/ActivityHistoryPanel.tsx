@@ -5,11 +5,13 @@
  * Slide-in side panel for full activity history.
  */
 
+import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { ActivityEvent } from "@/lib/types";
 import { timeAgo } from "@/lib/utils";
 import { C } from "./colors";
@@ -22,6 +24,16 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
     refetchInterval: 15_000,
   });
 
+  // M-wave overlay rules: scroll lock + Esc closes.
+  useBodyScrollLock(true);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -33,7 +45,8 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
     >
       <div
         className="absolute inset-0"
-        style={{ backgroundColor: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}
+        style={{ backgroundColor: "rgba(0,0,0,0.5)" }}
+        onClick={onClose}
       />
 
       <motion.div
@@ -44,15 +57,15 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         className="relative w-full max-w-md h-[80vh] rounded-2xl overflow-hidden flex flex-col"
         style={{
           background: C.bgElevated,
-          border: `1px solid rgba(255,255,255,0.08)`,
+          border: `1px solid var(--color-border)`,
           boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
         }}
       >
-        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent)" }} />
+        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
         <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
           <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>Activity History</span>
-          <button onClick={onClose} className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
+          <button onClick={onClose} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
             <X size={16} />
           </button>
         </div>
@@ -73,9 +86,9 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                   <div
                     key={event.id}
                     className="flex items-start gap-3 px-3 py-2.5 rounded-lg transition-colors"
-                    style={{ backgroundColor: "rgba(255,255,255,0.02)" }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.05)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "rgba(255,255,255,0.02)")}
+                    style={{ backgroundColor: "var(--color-bg-surface)" }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--color-bg-elevated)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "var(--color-bg-surface)")}
                   >
                     <span
                       className="w-2 h-2 rounded-full shrink-0 mt-1.5"
@@ -87,7 +100,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                         <span className="text-[10px]" style={{ color: C.textMuted }}>{timeAgo(event.created_at)}</span>
                         {event.severity && event.severity !== "info" && (
                           <span
-                            className="text-[10px] font-medium px-1.5 py-0.5 rounded-full uppercase"
+                            className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-sm uppercase"
                             style={{
                               color: event.severity === "error" ? C.error : event.severity === "warning" ? C.warning : C.textMuted,
                               backgroundColor: event.severity === "error" ? `${C.error}15` : event.severity === "warning" ? `${C.warning}15` : "transparent",

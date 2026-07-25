@@ -7,8 +7,8 @@ export default function manifest(): MetadataRoute.Manifest {
     description: "AI Agent Command Center",
     start_url: "/",
     display: "standalone",
-    theme_color: "#050505",
-    background_color: "#050505",
+    theme_color: "#04070C",
+    background_color: "#04070C",
     icons: [
       {
         src: "/icons/icon-192x192.png",

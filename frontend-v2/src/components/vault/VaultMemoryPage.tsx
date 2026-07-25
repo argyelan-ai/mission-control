@@ -37,9 +37,9 @@ import { C } from "@/lib/colors";
 type VaultView = "list" | "graph" | "trash";
 
 const TAB_LABELS: Record<VaultView, string> = {
-  list: "Liste",
+  list: "List",
   graph: "Graph",
-  trash: "Papierkorb",
+  trash: "Trash",
 };
 
 function VaultViewTabs({
@@ -71,7 +71,7 @@ function VaultViewTabs({
                 className="font-mono rounded-full px-1.5"
                 style={{
                   fontSize: "9.5px",
-                  background: active ? C.accentSubtle : "rgba(255,255,255,0.06)",
+                  background: active ? C.accentSubtle : "var(--color-bg-elevated)",
                   color: active ? C.accent : "var(--color-text-muted)",
                   letterSpacing: "0.04em",
                   lineHeight: 1.6,
@@ -470,7 +470,7 @@ export default function VaultMemoryPage() {
                 setSelectedPath(null);
                 pushUrl({ task: null, path: null });
               }}
-              className="text-xs px-2 py-1 rounded hover:bg-[rgba(255,255,255,0.05)] shrink-0"
+              className="text-xs px-2 py-1 rounded hover:bg-[var(--color-bg-hover)] shrink-0"
               style={{ color: "var(--color-text-muted)" }}
             >
               Alle Notes anzeigen
@@ -567,7 +567,7 @@ export default function VaultMemoryPage() {
             className="overflow-y-auto overflow-x-hidden shrink-0 min-h-0 scrollbar-none"
             style={{
               width: isMobile ? "100%" : "min(460px, 42%)",
-              borderRight: isMobile ? "none" : "1px solid rgba(255,255,255,0.05)",
+              borderRight: isMobile ? "none" : "1px solid var(--color-border-subtle)",
               scrollbarWidth: "none",
               msOverflowStyle: "none",
             } as React.CSSProperties}

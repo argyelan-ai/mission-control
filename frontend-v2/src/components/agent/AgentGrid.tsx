@@ -13,6 +13,7 @@ import { GlassCard } from "@/components/shared/GlassCard";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { Pill } from "@/components/shared/Pill";
 import type { Agent } from "@/lib/types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 type ViewMode = "grid" | "list";
 type StatusFilter = "all" | "online" | "busy" | "idle" | "offline" | "error";
@@ -45,7 +46,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {[...Array(6)].map((_, i) => (
           <GlassCard key={i} className="p-4 animate-pulse">
-            <div className="h-32 rounded-lg bg-[rgba(255,255,255,0.03)]" />
+            <div className="h-32 rounded-lg bg-[var(--color-bg-elevated)]" />
           </GlassCard>
         ))}
       </div>
@@ -63,10 +64,10 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
               key={opt.value}
               onClick={() => setStatusFilter(opt.value)}
               className={cn(
-                "text-[11px] px-2.5 py-1 rounded-full transition-all duration-150 cursor-pointer whitespace-nowrap",
+                "text-[11px] px-2.5 py-1 rounded-sm font-mono transition-all duration-150 cursor-pointer whitespace-nowrap",
                 statusFilter === opt.value
                   ? "bg-[var(--color-accent)] text-white"
-                  : "bg-[rgba(255,255,255,0.04)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+                  : "bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               )}
             >
               {opt.label}
@@ -75,13 +76,13 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
         </div>
 
         {/* View toggle */}
-        <div className="flex items-center gap-1 bg-[rgba(255,255,255,0.04)] rounded-lg p-0.5">
+        <div className="flex items-center gap-1 bg-[var(--color-bg-elevated)] rounded-lg p-0.5">
           <button
             onClick={() => setViewMode("grid")}
             className={cn(
               "p-1.5 rounded-md transition-colors cursor-pointer",
               viewMode === "grid"
-                ? "bg-[rgba(255,255,255,0.08)] text-[var(--color-text-primary)]"
+                ? "bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]"
                 : "text-[var(--color-text-muted)]"
             )}
           >
@@ -92,7 +93,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
             className={cn(
               "p-1.5 rounded-md transition-colors cursor-pointer",
               viewMode === "list"
-                ? "bg-[rgba(255,255,255,0.08)] text-[var(--color-text-primary)]"
+                ? "bg-[var(--color-bg-hover)] text-[var(--color-text-primary)]"
                 : "text-[var(--color-text-muted)]"
             )}
           >
@@ -167,10 +168,10 @@ function AgentListRow({ agent }: { agent: Agent }) {
 
   return (
     <Link href={`/agents/${agent.id}`}>
-      <GlassCard className="p-3 hover:border-[rgba(255,255,255,0.12)] transition-all duration-150 cursor-pointer">
+      <GlassCard className="p-3 hover:border-[var(--color-border)] transition-all duration-150 cursor-pointer">
         <div className="flex items-center gap-4">
           {/* Emoji + name */}
-          <span className="text-lg shrink-0">{agent.emoji ?? "🤖"}</span>
+          <EntityIcon value={agent.emoji} size={18} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-[var(--color-text-primary)] truncate">
@@ -185,7 +186,7 @@ function AgentListRow({ agent }: { agent: Agent }) {
 
           {/* Context bar (mini) */}
           <div className="w-20 shrink-0 hidden sm:block">
-            <div className="h-1 rounded-full bg-[rgba(255,255,255,0.06)] overflow-hidden">
+            <div className="h-1 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
               <div
                 className="h-full rounded-full transition-all"
                 style={{ backgroundColor: barColor, width: `${Math.min(pct, 100)}%` }}

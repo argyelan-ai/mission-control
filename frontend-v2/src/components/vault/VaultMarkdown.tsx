@@ -148,7 +148,7 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
         code: ({ children, className }) => {
           const isBlock = !!className?.includes("language-");
           return isBlock ? (
-            <pre className="p-4 rounded-md font-mono text-sm overflow-x-auto my-4" style={{ background: "rgba(255,255,255,0.04)" }}>
+            <pre className="p-4 rounded-md font-mono text-sm overflow-x-auto my-4" style={{ background: "var(--color-bg-deep)" }}>
               <code style={{ color: "var(--color-text-body)" }}>{children}</code>
             </pre>
           ) : (
@@ -198,7 +198,7 @@ export function VaultMarkdown({ content, onWikilinkClick }: VaultMarkdownProps) 
           </em>
         ),
         hr: () => (
-          <hr className="my-8" style={{ borderColor: "rgba(255,255,255,0.05)" }} />
+          <hr className="my-8" style={{ borderColor: "var(--color-border-subtle)" }} />
         ),
         a: ({ href, children }) => {
           // Detect wikilink tokens

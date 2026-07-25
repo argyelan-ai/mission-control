@@ -90,7 +90,7 @@ const AUTONOMY_OPTIONS = [
   { value: "draft_only", label: "Nur Entwurf" },
   { value: "execute_low_risk", label: "Low-Risk selbst ausführen" },
   { value: "execute_with_approval_on_risk", label: "Risiko → Freigabe" },
-  { value: "manual_dispatch_required", label: "Manuelles Dispatch" },
+  { value: "manual_dispatch_required", label: "Manual dispatch" },
 ];
 
 // ── Templates (Quick-Start Chips) ────────────────────────────────────
@@ -682,7 +682,7 @@ export function TaskFormFields({
             return (
               <button key={key} type="button"
                 onClick={() => (active ? patch({ activeTemplate: null }) : applyTemplate(key))}
-                className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-medium rounded-full transition-all cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
                 style={{ color: active ? t.color : C.textMuted, background: active ? `${t.color}15` : "transparent", border: `1px solid ${active ? `${t.color}55` : C.border}` }}>
                 <Icon size={10} />{t.label}
               </button>
@@ -752,7 +752,7 @@ export function TaskFormFields({
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor={`${fieldId}-phase`} className="text-[10px]" style={{ color: C.textMuted }}>Phase</label>
                   <select id={`${fieldId}-phase`} aria-label="Phase" value={value.phaseId ?? ""} onChange={(e) => patch({ phaseId: e.target.value || null })} className={selCls} style={selStyle(!!value.phaseId)}>
-                    <option value="">Keine Phase (optional)</option>
+                    <option value="">No phase (optional)</option>
                     {phases.filter((p) => p.status === "active" || p.status === "pending").map((p) => (<option key={p.id} value={p.id}>{p.status === "active" ? "● " : "○ "}{p.title}</option>))}
                   </select>
                 </div>
@@ -761,7 +761,7 @@ export function TaskFormFields({
                 <div className="flex flex-col gap-1.5">
                   <label htmlFor={`${fieldId}-deliverable`} className="text-[10px]" style={{ color: C.textMuted }}>Basiert auf</label>
                   <select id={`${fieldId}-deliverable`} aria-label="Basiert auf Deliverable" value={value.deliverableId ?? ""} onChange={(e) => patch({ deliverableId: e.target.value || null })} className={selCls} style={selStyle(!!value.deliverableId)}>
-                    <option value="">Kein Deliverable</option>
+                    <option value="">No deliverable</option>
                     {deliverables.map((d) => (<option key={d.id} value={d.id}>{d.title} ({d.deliverable_type})</option>))}
                   </select>
                 </div>
@@ -863,7 +863,7 @@ export function TaskFormFields({
                 <div className="flex items-center gap-1.5 flex-wrap">
                   {TASK_TYPE_OPTIONS.map((opt) => (
                     <button key={opt.value} type="button" onClick={() => patch({ taskType: opt.value })} aria-pressed={value.taskType === opt.value}
-                      className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.taskType === opt.value, C.accent)}>
+                      className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.taskType === opt.value, C.accent)}>
                       {opt.label}
                     </button>
                   ))}
@@ -905,20 +905,20 @@ export function TaskFormFields({
                       </select>
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap">
-                      <button type="button" onClick={() => patch({ needsBrowser: !value.needsBrowser })} aria-pressed={value.needsBrowser} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.needsBrowser, C.info)}><Globe size={11} />Browser</button>
-                      <button type="button" onClick={() => patch({ requiresAuth: !value.requiresAuth })} aria-pressed={value.requiresAuth} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.requiresAuth, C.warning)}><KeyRound size={11} />Auth</button>
-                      <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />Report-Back</button>
-                      <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title="After review, a tester agent drives the real user flows in a browser before the task can complete" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />E2E test</button>
-                      <button type="button" onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })} aria-pressed={value.humanReviewRequired} title="You review this task yourself instead of a review agent" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.humanReviewRequired, C.accent)}><UserCheck size={11} />Human review</button>
-                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title="Task goes straight to done — no review stage (typical for scheduled/report jobs)" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.skipReview, C.accent)}><FastForward size={11} />Skip review</button>
-                      <button type="button" onClick={() => patch({ blockerToOperator: !value.blockerToOperator })} aria-pressed={value.blockerToOperator} title="Blockers on this task come straight to you instead of going to Boss first" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.blockerToOperator, C.warning)}><BellRing size={11} />Blocker to me</button>
+                      <button type="button" onClick={() => patch({ needsBrowser: !value.needsBrowser })} aria-pressed={value.needsBrowser} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.needsBrowser, C.info)}><Globe size={11} />Browser</button>
+                      <button type="button" onClick={() => patch({ requiresAuth: !value.requiresAuth })} aria-pressed={value.requiresAuth} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.requiresAuth, C.warning)}><KeyRound size={11} />Auth</button>
+                      <button type="button" onClick={() => patch({ reportBack: !value.reportBack })} aria-pressed={value.reportBack} className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.reportBack, C.online)}><MessageSquare size={11} />Report-Back</button>
+                      <button type="button" onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })} aria-pressed={value.e2eTestRequired} title="After review, a tester agent drives the real user flows in a browser before the task can complete" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.e2eTestRequired, C.accent)}><MousePointerClick size={11} />E2E test</button>
+                      <button type="button" onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })} aria-pressed={value.humanReviewRequired} title="You review this task yourself instead of a review agent" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.humanReviewRequired, C.accent)}><UserCheck size={11} />Human review</button>
+                      <button type="button" onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })} aria-pressed={value.skipReview} title="Task goes straight to done — no review stage (typical for scheduled/report jobs)" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.skipReview, C.accent)}><FastForward size={11} />Skip review</button>
+                      <button type="button" onClick={() => patch({ blockerToOperator: !value.blockerToOperator })} aria-pressed={value.blockerToOperator} title="Blockers on this task come straight to you instead of going to Boss first" className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.blockerToOperator, C.warning)}><BellRing size={11} />Blocker to me</button>
                     </div>
                     <AnimatePresence>
                       {value.requiresAuth && (
                         <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${C.warning}33` }}>
                           <div className="flex items-center gap-2">
-                            <button type="button" onClick={() => patch({ credentialMode: "vault" })} className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer" style={pill(value.credentialMode === "vault", C.warning)}>Aus Vault</button>
-                            <button type="button" onClick={() => patch({ credentialMode: "inline" })} className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer" style={pill(value.credentialMode === "inline", C.warning)}>Einmalig eingeben</button>
+                            <button type="button" onClick={() => patch({ credentialMode: "vault" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "vault", C.warning)}>Aus Vault</button>
+                            <button type="button" onClick={() => patch({ credentialMode: "inline" })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.credentialMode === "inline", C.warning)}>Einmalig eingeben</button>
                           </div>
                           {value.credentialMode === "vault" && (
                             <select aria-label="Credential auswählen" value={value.credentialId ?? ""} onChange={(e) => patch({ credentialId: e.target.value || null })} className={selCls} style={selStyle(!!value.credentialId)}>
@@ -937,11 +937,11 @@ export function TaskFormFields({
                         <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.15 }} className="flex flex-col gap-2 overflow-hidden pl-2" style={{ borderLeft: `2px solid ${C.online}33` }}>
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="text-[10px]" style={{ color: C.textMuted }}>Kanal:</span>
-                            {["discord", "telegram"].map((ch) => (<button key={ch} type="button" onClick={() => patch({ reportChannel: ch })} className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer" style={pill(value.reportChannel === ch, C.online)}>{ch.charAt(0).toUpperCase() + ch.slice(1)}</button>))}
+                            {["discord", "telegram"].map((ch) => (<button key={ch} type="button" onClick={() => patch({ reportChannel: ch })} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportChannel === ch, C.online)}>{ch.charAt(0).toUpperCase() + ch.slice(1)}</button>))}
                           </div>
                           <div className="flex items-center gap-1.5 flex-wrap">
                             <span className="text-[10px]" style={{ color: C.textMuted }}>Format:</span>
-                            {[{ value: "summary", label: "Summary" }, { value: "screenshot", label: "Screenshot" }, { value: "before_after", label: "Before/After" }].map((fmt) => (<button key={fmt.value} type="button" onClick={() => toggleReportFormat(fmt.value)} className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer" style={pill(value.reportFormats.includes(fmt.value), C.online)}>{fmt.label}</button>))}
+                            {[{ value: "summary", label: "Summary" }, { value: "screenshot", label: "Screenshot" }, { value: "before_after", label: "Before/After" }].map((fmt) => (<button key={fmt.value} type="button" onClick={() => toggleReportFormat(fmt.value)} className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer" style={pill(value.reportFormats.includes(fmt.value), C.online)}>{fmt.label}</button>))}
                           </div>
                         </motion.div>
                       )}
@@ -968,8 +968,8 @@ export function TaskFormFields({
                       <textarea aria-label="Referenz-Notizen" value={value.referenceNotes} onChange={(e) => patch({ referenceNotes: e.target.value })} placeholder="Referenz-Notizen — Vorlagen, Inspirationen ..." rows={2} className="w-full text-[12px] outline-none px-3 py-2 rounded-xl resize-none" style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.deep }} />
                       <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[10px]" style={{ color: C.textMuted }}>Veröffentlichung:</span>
-                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })} className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.publishAllowed === true, C.online)}>Erlaubt</button>
-                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })} className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer" style={pill(value.publishAllowed === false, C.warning)}>Nur Draft</button>
+                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === true, C.online)}>Erlaubt</button>
+                        <button type="button" onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })} className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer" style={pill(value.publishAllowed === false, C.warning)}>Nur Draft</button>
                         {value.publishAllowed === null && (<span className="text-[10px]" style={{ color: C.textMuted }}>(Agent entscheidet)</span>)}
                       </div>
                     </div>
@@ -1000,7 +1000,7 @@ export function TaskFormFields({
               key={key}
               type="button"
               onClick={() => (active ? patch({ activeTemplate: null }) : applyTemplate(key))}
-              className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 color: active ? t.color : C.textMuted,
                 background: active ? `${t.color}15` : "transparent",
@@ -1093,7 +1093,7 @@ export function TaskFormFields({
                 key={opt.value}
                 type="button"
                 onClick={() => patch({ priority: opt.value })}
-                className="w-6 h-6 flex items-center justify-center rounded-full text-[10px] font-bold transition-all cursor-pointer"
+                className="w-6 h-6 flex items-center justify-center rounded-lg text-[10px] font-bold transition-all cursor-pointer"
                 style={{
                   backgroundColor: value.priority === opt.value ? `${opt.color}22` : "transparent",
                   color: value.priority === opt.value ? opt.color : C.textMuted,
@@ -1108,7 +1108,7 @@ export function TaskFormFields({
 
         {/* Mode toggle */}
         <div
-          className="flex items-center rounded-full p-0.5"
+          className="flex items-center rounded-lg p-0.5"
           style={{ background: C.deep, border: `1px solid ${C.border}` }}
         >
           {(["schnell", "strukturiert"] as TaskMode[]).map((m) => {
@@ -1119,7 +1119,7 @@ export function TaskFormFields({
                 key={m}
                 type="button"
                 onClick={() => toggleMode(m)}
-                className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-medium rounded-full transition-all cursor-pointer"
+                className="flex items-center gap-1 px-2.5 py-1 text-[10px] font-mono font-medium rounded-md transition-all cursor-pointer"
                 style={{
                   color: active ? C.accent : C.textMuted,
                   background: active ? `${C.accent}14` : "transparent",
@@ -1214,7 +1214,7 @@ export function TaskFormFields({
           onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })}
           aria-pressed={value.skipReview}
           title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
-          className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer self-start"
+          className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer self-start"
           style={{
             backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
             color: value.skipReview ? C.accent : C.textMuted,
@@ -1232,7 +1232,7 @@ export function TaskFormFields({
           <button
             type="button"
             onClick={() => patch({ requiresAuth: !value.requiresAuth })}
-            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer self-start"
+            className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer self-start"
             style={{
               backgroundColor: value.requiresAuth ? `${C.warning}22` : "transparent",
               color: value.requiresAuth ? C.warning : C.textMuted,
@@ -1297,7 +1297,7 @@ export function TaskFormFields({
                   color: value.phaseId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">Keine Phase (optional)</option>
+                <option value="">No phase (optional)</option>
                 {phases
                   .filter((p) => p.status === "active" || p.status === "pending")
                   .map((p) => (
@@ -1323,7 +1323,7 @@ export function TaskFormFields({
                   color: value.deliverableId ? C.accent : C.textMuted,
                 }}
               >
-                <option value="">Kein Deliverable</option>
+                <option value="">No deliverable</option>
                 {deliverables.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.title} ({d.deliverable_type})
@@ -1387,7 +1387,7 @@ export function TaskFormFields({
                   key={opt.value}
                   type="button"
                   onClick={() => patch({ taskType: opt.value })}
-                  className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+                  className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                   style={{
                     backgroundColor: value.taskType === opt.value ? `${C.accent}22` : "transparent",
                     color: value.taskType === opt.value ? C.accent : C.textMuted,
@@ -1511,7 +1511,7 @@ export function TaskFormFields({
             <button
               type="button"
               onClick={() => patch({ needsBrowser: !value.needsBrowser })}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.needsBrowser ? `${C.info}22` : "transparent",
                 color: value.needsBrowser ? C.info : C.textMuted,
@@ -1525,7 +1525,7 @@ export function TaskFormFields({
               type="button"
               onClick={() => patch({ e2eTestRequired: !value.e2eTestRequired })}
               title="After review, a tester agent drives the real user flows in a browser before the task can complete"
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.e2eTestRequired ? `${C.accent}22` : "transparent",
                 color: value.e2eTestRequired ? C.accent : C.textMuted,
@@ -1540,7 +1540,7 @@ export function TaskFormFields({
               onClick={() => patch({ humanReviewRequired: !value.humanReviewRequired, ...(value.humanReviewRequired ? {} : { skipReview: false }) })}
               title="You review this task yourself instead of a review agent"
               aria-pressed={value.humanReviewRequired}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.humanReviewRequired ? `${C.accent}22` : "transparent",
                 color: value.humanReviewRequired ? C.accent : C.textMuted,
@@ -1555,7 +1555,7 @@ export function TaskFormFields({
               onClick={() => patch({ skipReview: !value.skipReview, ...(value.skipReview ? {} : { humanReviewRequired: false }) })}
               aria-pressed={value.skipReview}
               title="Task goes straight to done — no review stage (typical for scheduled/report jobs)"
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.skipReview ? `${C.accent}22` : "transparent",
                 color: value.skipReview ? C.accent : C.textMuted,
@@ -1569,7 +1569,7 @@ export function TaskFormFields({
               type="button"
               onClick={() => patch({ blockerToOperator: !value.blockerToOperator })}
               title="Blockers on this task come straight to you instead of going to Boss first"
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.blockerToOperator ? `${C.warning}22` : "transparent",
                 color: value.blockerToOperator ? C.warning : C.textMuted,
@@ -1582,7 +1582,7 @@ export function TaskFormFields({
             <button
               type="button"
               onClick={() => patch({ requiresAuth: !value.requiresAuth })}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.requiresAuth ? `${C.warning}22` : "transparent",
                 color: value.requiresAuth ? C.warning : C.textMuted,
@@ -1595,7 +1595,7 @@ export function TaskFormFields({
             <button
               type="button"
               onClick={() => patch({ reportBack: !value.reportBack })}
-              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
               style={{
                 backgroundColor: value.reportBack ? `${C.online}22` : "transparent",
                 color: value.reportBack ? C.online : C.textMuted,
@@ -1622,7 +1622,7 @@ export function TaskFormFields({
                   <button
                     type="button"
                     onClick={() => patch({ credentialMode: "vault" })}
-                    className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer"
+                    className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                     style={{
                       backgroundColor: value.credentialMode === "vault" ? `${C.warning}22` : "transparent",
                       color: value.credentialMode === "vault" ? C.warning : C.textMuted,
@@ -1634,7 +1634,7 @@ export function TaskFormFields({
                   <button
                     type="button"
                     onClick={() => patch({ credentialMode: "inline" })}
-                    className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer"
+                    className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                     style={{
                       backgroundColor: value.credentialMode === "inline" ? `${C.warning}22` : "transparent",
                       color: value.credentialMode === "inline" ? C.warning : C.textMuted,
@@ -1699,7 +1699,7 @@ export function TaskFormFields({
                       key={ch}
                       type="button"
                       onClick={() => patch({ reportChannel: ch })}
-                      className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer"
+                      className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                       style={{
                         backgroundColor: value.reportChannel === ch ? `${C.online}22` : "transparent",
                         color: value.reportChannel === ch ? C.online : C.textMuted,
@@ -1721,7 +1721,7 @@ export function TaskFormFields({
                       key={fmt.value}
                       type="button"
                       onClick={() => toggleReportFormat(fmt.value)}
-                      className="px-2 py-0.5 text-[10px] rounded-full cursor-pointer"
+                      className="px-2 py-0.5 text-[10px] font-mono rounded-md cursor-pointer"
                       style={{
                         backgroundColor: value.reportFormats.includes(fmt.value) ? `${C.online}22` : "transparent",
                         color: value.reportFormats.includes(fmt.value) ? C.online : C.textMuted,
@@ -1827,7 +1827,7 @@ export function TaskFormFields({
                     <button
                       type="button"
                       onClick={() => patch({ publishAllowed: value.publishAllowed === true ? null : true })}
-                      className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+                      className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                       style={{
                         backgroundColor: value.publishAllowed === true ? `${C.online}22` : "transparent",
                         color: value.publishAllowed === true ? C.online : C.textMuted,
@@ -1839,7 +1839,7 @@ export function TaskFormFields({
                     <button
                       type="button"
                       onClick={() => patch({ publishAllowed: value.publishAllowed === false ? null : false })}
-                      className="px-2.5 py-1 text-[11px] font-medium rounded-full transition-all cursor-pointer"
+                      className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-md transition-all cursor-pointer"
                       style={{
                         backgroundColor: value.publishAllowed === false ? `${C.warning}22` : "transparent",
                         color: value.publishAllowed === false ? C.warning : C.textMuted,

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -31,6 +32,16 @@ export function ResponsiveModal({
   // iOS-safe scroll lock (M4) — fixed-position technique instead of overflow:hidden
   useBodyScrollLock(open);
 
+  // Esc closes (panel register rule 4) — same pattern as ConfirmDialog.
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, onClose]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -46,7 +57,7 @@ export function ResponsiveModal({
           {/* Backdrop */}
           <div
             className="absolute inset-0"
-            style={{ backgroundColor: "rgba(0,0,0,0.65)" }}
+            style={{ backgroundColor: "rgba(2,4,8,0.7)" }}
           />
 
           {/* Panel */}
@@ -62,20 +73,23 @@ export function ResponsiveModal({
             className={cn(
               "relative w-full flex flex-col overflow-hidden",
               // Mobile: full-width with margins, rounded top, max 92vh
-              "mx-2 rounded-t-2xl rounded-b-none max-h-[92dvh]",
+              "mx-2 rounded-t-md rounded-b-none max-h-[92dvh]",
               // Desktop: centered, max-width, fully rounded
-              "sm:mx-0 sm:max-w-[680px] sm:rounded-2xl sm:max-h-[88vh]",
+              "sm:mx-0 sm:max-w-[680px] sm:rounded-md sm:max-h-[88vh]",
               className
             )}
             style={{
               backgroundColor: "var(--color-bg-elevated)",
-              border: "1px solid rgba(255,255,255,0.08)",
+              border: "1px solid var(--color-border)",
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
             }}
           >
+            {/* Cyan-Kante oben — Signatur-Markierung */}
+            <div className="h-[2px] w-full shrink-0" style={{ backgroundColor: "var(--color-accent)" }} />
+
             {/* Top drag indicator on mobile */}
             <div className="sm:hidden flex justify-center pt-2.5 pb-0 shrink-0">
-              <div className="w-8 h-1 rounded-full" style={{ backgroundColor: "rgba(255,255,255,0.12)" }} />
+              <div className="w-10 h-[3px]" style={{ backgroundColor: "var(--color-border-strong)" }} />
             </div>
 
             {children}

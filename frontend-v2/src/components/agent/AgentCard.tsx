@@ -13,6 +13,7 @@ import { StatusDot } from "@/components/shared/StatusDot";
 import { Pill } from "@/components/shared/Pill";
 import { RuntimePill } from "@/components/shared/RuntimePill";
 import type { Agent, SkillsResponse, OpenClawSkill } from "@/lib/types";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Provision Badge ───────────────────────────────────────────────────────────
 
@@ -69,22 +70,22 @@ export function SkillBadges({ skills }: { skills: string[] }) {
         return (
           <span
             key={skillKey}
-            className="text-[10px] px-1.5 py-0.5 rounded-full leading-tight"
+            className="text-[10px] px-1.5 py-0.5 rounded-sm leading-tight"
             style={{
               backgroundColor: `${color}22`,
               color,
               border: `1px solid ${color}33`,
             }}
           >
-            {skill?.emoji && <span className="mr-0.5">{skill.emoji}</span>}
+            {skill?.emoji && <EntityIcon value={skill.emoji} size={10} className="mr-0.5" />}
             {name}
           </span>
         );
       })}
       {remaining > 0 && (
         <span
-          className="text-[10px] px-1.5 py-0.5 rounded-full"
-          style={{ color: "var(--color-text-muted)", backgroundColor: "rgba(255,255,255,0.04)" }}
+          className="text-[10px] px-1.5 py-0.5 rounded-sm"
+          style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}
         >
           +{remaining}
         </span>
@@ -107,7 +108,7 @@ function LearningBadge({ agentId }: { agentId: string }) {
 
   return (
     <span
-      className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full"
+      className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-sm"
       style={{ color: C.warning, backgroundColor: `${C.warning}1A` }}
     >
       <BookOpen size={10} />
@@ -150,7 +151,7 @@ export function AgentCard({ agent, className }: AgentCardProps) {
       <SpotlightCard>
         <GlassCard
           className={cn(
-            "p-4 hover:border-[rgba(255,255,255,0.12)] transition-all duration-200",
+            "p-4 hover:border-[var(--color-border-strong)] transition-all duration-200",
             className
           )}
         >
@@ -162,7 +163,7 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             {/* Top row: emoji + name + status */}
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
-                <span className="text-2xl shrink-0">{agent.emoji ?? "🤖"}</span>
+                <EntityIcon value={agent.emoji} size={24} />
                 <div className="min-w-0">
                   <h3 className="text-[16px] font-semibold text-[var(--color-text-primary)] truncate leading-tight">
                     {agent.name}
@@ -198,9 +199,9 @@ export function AgentCard({ agent, className }: AgentCardProps) {
                 <span className="text-[10px] text-[var(--color-text-muted)]">Context</span>
                 <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
               </div>
-              <div className="h-1 rounded-full bg-[rgba(255,255,255,0.06)] overflow-hidden">
+              <div className="h-1 rounded-sm bg-[var(--color-bg-elevated)] overflow-hidden">
                 <motion.div
-                  className="h-full rounded-full"
+                  className="h-full rounded-sm"
                   style={{ backgroundColor: barColor }}
                   initial={{ width: 0 }}
                   animate={{ width: `${Math.min(pct, 100)}%` }}

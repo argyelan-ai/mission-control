@@ -1,4 +1,57 @@
 
+/* ── Brand fonts (bundled, public/fonts/) ────────────────────────────────────
+   v3 „Leitstand — argyelan Edition": Clash Display (Headlines/Wordmark) +
+   General Sans (UI-Body). Self-hosted via Fontshare (SIL OFL). */
+@font-face {
+  font-family: "Clash Display";
+  src: url("/fonts/ClashDisplay-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Clash Display";
+  src: url("/fonts/ClashDisplay-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Clash Display";
+  src: url("/fonts/ClashDisplay-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Clash Display";
+  src: url("/fonts/ClashDisplay-700.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "General Sans";
+  src: url("/fonts/GeneralSans-400.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "General Sans";
+  src: url("/fonts/GeneralSans-500.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "General Sans";
+  src: url("/fonts/GeneralSans-600.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+
 /* ── Terminal fonts (bundled, public/fonts/) ─────────────────────────────────
    JetBrains Mono + Symbols Nerd Font Mono: agent TUIs (Claude Code, omp)
    draw logos/status lines with block elements and Nerd-Font icons — without
@@ -25,33 +78,77 @@
   font-display: swap;
 }
 
+/* ── Display font for P2 „PHOSPHOR+" (ui-redesign-v3) — Space Mono (SIL OFL),
+   latin subset, ~10 KB je Schnitt. Titel/Legenden/Sektions-Köpfe. */
+@font-face {
+  font-family: "Space Mono";
+  src: url("/fonts/SpaceMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Space Mono";
+  src: url("/fonts/SpaceMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
 @import "tailwindcss";
 
 /* ============================================================
-   Mission Control — „Der Leitstand" (siehe DESIGN.md)
-   Dark mode only. Ein Akzent: Teal. Werte spiegeln src/lib/colors.ts
-   (Single Source) — Änderungen IMMER dort zuerst.
+   Mission Control — v3 „Leitstand · argyelan Edition"
+   Dark mode only. Ein Akzent: argyelan-Cyan #00E5FF. Blau-getönte
+   Off-Blacks statt Neutralgrau, eckige Radien, Mono-Signatur.
+   Werte spiegeln src/lib/colors.ts (Single Source) — Änderungen
+   IMMER dort zuerst.
    ============================================================ */
 
 @theme {
-  /* ---- Backgrounds (Stufung = Tiefe: deep → hover) ---- */
-  --color-bg-dark: #050505;
-  --color-bg-deep: #050505;
-  --color-bg-base: #0a0a0a;
-  --color-bg-surface: #111111;
-  --color-bg-elevated: #161616;
-  --color-bg-hover: #1c1c1c;
+  /* ---- Backgrounds (Stufung = Tiefe: deep → hover, blau-getönt) ---- */
+  --color-bg-dark: #04070c;
+  --color-bg-deep: #04070c;
+  --color-bg-base: #070b12;
+  --color-bg-surface: #0b111c;
+  --color-bg-elevated: #101827;
+  --color-bg-hover: #162134;
 
-  /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf #050505–#161616) ---- */
-  --color-text-primary: #ededed;
-  --color-text-secondary: #a1a1a1;
-  --color-text-muted: #888888;
-  --color-text-body: #ededed;
+  /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
+  --color-text-primary: #edf2fa;
+  --color-text-secondary: #a5b0c2;
+  --color-text-muted: #7e8a9e;
+  --color-text-body: #edf2fa;
 
-  /* ---- Borders (mirrors colors.ts) ---- */
-  --color-border-subtle: rgba(255, 255, 255, 0.04);
-  --color-border: rgba(255, 255, 255, 0.06);
-  --color-border-strong: rgba(255, 255, 255, 0.1);
+  /* ---- Borders (kalt getönt, mirrors colors.ts) ---- */
+  --color-border-subtle: rgba(146, 170, 206, 0.05);
+  --color-border: rgba(146, 170, 206, 0.1);
+  --color-border-strong: rgba(146, 170, 206, 0.16);
+
+  /* ---- P2 „PHOSPHOR+ CYAN" (ui-redesign-v3, mirrors P2 in lib/colors.ts) ----
+     Neue Shell + seitenweise konvertierte Pages nutzen ausschliesslich diese
+     Tokens; die C-Welt oben bleibt für unkonvertierte Seiten bestehen. */
+  --color-p2-bg: #080705;
+  --color-p2-pan: #100e08;
+  --color-p2-pan2: #17140c;
+  --color-p2-inset: #0b0906;
+  --color-p2-line: #2a2517;
+  --color-p2-line2: #1e1b10;
+  --color-p2-txt: #e9e0c8;
+  --color-p2-dim: #847c68;
+  --color-p2-faint: #5a5442;
+  --color-p2-amb: #00e5ff;
+  --color-p2-amb-d: #0e6e7a;
+  --color-p2-inv: #141008;
+  --color-p2-ok: #4fd67e;
+  --color-p2-wrn: #ffd84d;
+  --color-p2-err: #ff5c47;
+  --font-p2-display: "Space Mono", "JetBrains Mono", monospace;
+  --font-p2-mono: "JetBrains Mono", "Symbols Nerd Font Mono", monospace;
+
+  /* ---- Brand fonts ---- */
+  --font-sans: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Clash Display", "General Sans", ui-sans-serif, system-ui, sans-serif;
 
   /* ---- Typography scale ---- */
   --text-xs: 12px;
@@ -85,11 +182,11 @@
   --space-12: 48px;
   --space-16: 64px;
 
-  /* ---- Radii ---- */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  /* ---- Radii (eckig — argyelan-Formensprache) ---- */
+  --radius-sm: 2px;
+  --radius-md: 4px;
+  --radius-lg: 6px;
+  --radius-xl: 10px;
   --radius-full: 9999px;
 
   /* ---- Blur ---- */
@@ -108,18 +205,22 @@
 }
 
 /* ============================================================
-   Runtime tokens — MC Teal (single source, mirrors homepage/colors.ts)
+   Runtime tokens — argyelan-Cyan (single source, mirrors lib/colors.ts)
    These are consumed via var() in TSX. Tailwind v4 tree-shakes @theme
    variables that aren't referenced in CSS, so runtime-only tokens must
    live in a plain :root block to always be emitted.
    ============================================================ */
 
 :root {
-  /* Accent */
-  --color-accent: #0fa3a3;
-  --color-accent-light: #14c4c4;
-  --color-accent-subtle: rgba(15, 163, 163, 0.12);
-  --color-text: #ededed; /* alias used by a few components */
+  /* Accent — argyelan Cyan #00E5FF (die EINZIGE Akzentfarbe) */
+  --color-accent: #00e5ff;
+  --color-accent-light: #6beaff;
+  --color-accent-deep: #00b4cc;
+  --color-accent-subtle: rgba(0, 229, 255, 0.1);
+  --color-border-accent: rgba(0, 229, 255, 0.3);
+  --color-on-accent: #00252b; /* Text auf Cyan-Fläche */
+  --color-text: #edf2fa; /* alias used by a few components */
+  --color-text-dim: #566178; /* Deko/inaktive Icons — nie für Fliesstext */
 
   /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
   --color-status-error-text: #d05f5f;
@@ -135,8 +236,10 @@
   --color-status-warning: #b8870a;
   --color-status-info: #2e6fd8;
 
-  /* Mono font alias (Geist Mono variable set in layout.tsx) */
-  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  /* Mono font alias (JetBrains Mono, bundled) */
+  --font-mono: "JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, monospace;
+  /* Wordmark/Display alias (ersetzt --font-wordmark aus layout.tsx) */
+  --font-wordmark: "Clash Display", "General Sans", ui-sans-serif, system-ui, sans-serif;
 }
 
 /* ============================================================
@@ -230,6 +333,61 @@ body {
 .text-muted { color: var(--color-text-muted); }
 
 .border-subtle { border-color: var(--color-border-subtle); }
+
+/* ============================================================
+   v3 Signatur-Utilities — „Leitstand · argyelan Edition"
+   ============================================================ */
+
+/* ── Mono-Micro-Label: die „Instrumenten"-Stimme. Uppercase, weit getrackt,
+   JetBrains Mono. Für Sektions-Header, Karten-Labels, Meta-Zeilen. */
+.label-sys {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+}
+.label-sys--accent { color: var(--color-accent); }
+.label-sys--dim { color: var(--color-text-dim, #566178); }
+
+/* ── Corner-Ticks: eckige Positions-Markierungen (TL + BR) auf Panels.
+   Signatur-Detail der argyelan-Formensprache — sparsam einsetzen:
+   aktive/hero-artige Panels, nicht jede Karte. */
+.corner-ticks { position: relative; }
+.corner-ticks::before,
+.corner-ticks::after {
+  content: "";
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  pointer-events: none;
+  z-index: 1;
+}
+.corner-ticks::before {
+  top: -1px;
+  left: -1px;
+  border-top: 1px solid var(--color-border-accent);
+  border-left: 1px solid var(--color-border-accent);
+}
+.corner-ticks::after {
+  bottom: -1px;
+  right: -1px;
+  border-bottom: 1px solid var(--color-border-accent);
+  border-right: 1px solid var(--color-border-accent);
+}
+
+/* ── Display-Headline (Clash Display), enger Tracking */
+.display {
+  font-family: var(--font-display);
+  letter-spacing: -0.02em;
+}
+
+/* ── Reduced Motion: alle Deko-Loops aus, Interaktion bleibt instant */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float { animation: none; }
+}
+
 
 /* ============================================================
    Prose — agent freetext (blockers, questions, descriptions, comments)
@@ -339,7 +497,7 @@ body {
 .prose-description code {
   font-family: var(--font-mono);
   font-size: 0.9em;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-bg-deep);
   border-radius: var(--radius-sm);
   padding: 0.1em 0.35em;
 }
@@ -349,7 +507,7 @@ body {
   margin: 0 0 0.65em;
   padding: 0.6em 0.8em;
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-bg-deep);
   overflow-x: auto;
 }
 .prose-comment pre code,
@@ -463,6 +621,17 @@ option {
 @media (min-width: 768px) {
   .main-content-pt {
     padding-top: 1.5rem;
+  }
+}
+
+/* Main content bottom padding — Platz für die Mobile-Tab-Bar (52px + safe-area).
+   Desktop: keine Tab-Bar → kleiner Standard-Abstand. */
+.main-content-pb {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
+}
+@media (min-width: 768px) {
+  .main-content-pb {
+    padding-bottom: 1rem;
   }
 }
 

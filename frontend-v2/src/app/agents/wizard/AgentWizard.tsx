@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { X, ChevronLeft, ChevronRight, Check } from "lucide-react";
 import { C } from "@/lib/colors";
@@ -40,6 +40,14 @@ export function AgentWizard({
   onCreated: () => void;
 }) {
   useBodyScrollLock(true);
+  // Esc closes (panel register rule 4) — backdrop click is on the overlay below.
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
   const [state, setState] = useState<WizardState>(() => ({
     ...initialWizardState(defaultBoardId),
     ...initialState,
@@ -59,7 +67,7 @@ export function AgentWizard({
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-label="Neuer Agent"
+        aria-label="New agent"
         initial={{ opacity: 0, scale: 0.97, y: 8 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.97, y: 8 }}
@@ -72,11 +80,11 @@ export function AgentWizard({
         <div className="px-5 py-4 border-b" style={{ borderColor: C.borderSubtle }}>
           <div className="flex items-center justify-between mb-3">
             <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-              Neuer Agent
+              New agent
             </h2>
             <button
               onClick={onClose}
-              aria-label="Wizard schliessen"
+              aria-label="Close wizard"
               className="cursor-pointer text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
             >
               <X size={16} />
@@ -92,7 +100,7 @@ export function AgentWizard({
                     <div
                       className="flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-medium shrink-0"
                       style={{
-                        backgroundColor: active || done ? C.accent : "rgba(255,255,255,0.06)",
+                        backgroundColor: active || done ? C.accent : "var(--color-bg-elevated)",
                         color: active || done ? "#fff" : "var(--color-text-muted)",
                       }}
                     >
@@ -112,7 +120,7 @@ export function AgentWizard({
                   {i < WIZARD_STEPS.length - 1 && (
                     <div
                       className="flex-1 h-px min-w-[8px]"
-                      style={{ backgroundColor: done ? C.accent : "rgba(255,255,255,0.08)" }}
+                      style={{ backgroundColor: done ? C.accent : "var(--color-bg-hover)" }}
                     />
                   )}
                 </div>
@@ -131,7 +139,7 @@ export function AgentWizard({
         </div>
 
         {/* Footer nav — the review step owns its own primary action, so hide
-            "Weiter" there. */}
+            "Next" there. */}
         <div
           className="flex items-center justify-between px-5 py-4 border-t"
           style={{ borderColor: C.borderSubtle }}
@@ -141,7 +149,7 @@ export function AgentWizard({
             disabled={state.step === 0}
             className="flex items-center gap-1.5 px-4 py-2 text-sm rounded-xl cursor-pointer transition-colors text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] disabled:opacity-30 disabled:cursor-not-allowed"
           >
-            <ChevronLeft size={15} /> Zurück
+            <ChevronLeft size={15} /> Back
           </button>
           {!isLastStep && (
             <button
@@ -150,7 +158,7 @@ export function AgentWizard({
               className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
               style={wizardBtnPrimaryStyle}
             >
-              Weiter <ChevronRight size={15} />
+              Next <ChevronRight size={15} />
             </button>
           )}
         </div>

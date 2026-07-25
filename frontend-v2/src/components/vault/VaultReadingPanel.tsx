@@ -91,7 +91,7 @@ function RelatedNotesSection({
                 {n.type}
               </span>
               <span
-                className="truncate"
+                className="truncate min-w-0"
                 style={{ color: "var(--color-text-secondary)" }}
               >
                 {(typeof n.title === "string" && n.title.trim())
@@ -145,7 +145,7 @@ function Breadcrumb({ path }: { path: string }) {
         <span key={i}>
           {p}
           {i < parts.length - 1 && (
-            <span style={{ color: "rgba(255,255,255,0.15)", margin: "0 6px" }}>
+            <span style={{ color: "var(--color-text-dim)", margin: "0 6px" }}>
               /
             </span>
           )}
@@ -280,7 +280,7 @@ function PanelContent({
       {/* Panel header — Editorial Codex masthead */}
       <div
         className="shrink-0 px-7 py-6"
-        style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+        style={{ borderBottom: "1px solid var(--color-border)" }}
       >
         <div className="flex items-start justify-between gap-3">
           <Breadcrumb path={note.path} />
@@ -293,7 +293,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label="Cancel edit"
                   title="Cancel (Esc)"
-                  className="rounded p-1.5 transition-colors"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -318,7 +318,7 @@ function PanelContent({
                   disabled={saveMutation.isPending}
                   aria-label="Save edit"
                   title="Save (⌘S)"
-                  className="rounded p-1.5 transition-colors flex items-center gap-1.5"
+                  className="rounded p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
                     background: "rgba(52,211,153,0.08)",
@@ -342,8 +342,8 @@ function PanelContent({
                   type="button"
                   onClick={startEdit}
                   aria-label="Edit note"
-                  title="Bearbeiten"
-                  className="rounded p-1.5 transition-colors"
+                  title="Edit"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -369,7 +369,7 @@ function PanelContent({
                   type="button"
                   onClick={() => setConfirmOpen(true)}
                   aria-label="Delete note"
-                  className="rounded p-1.5 transition-colors"
+                  className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
                     background: "transparent",
@@ -428,7 +428,7 @@ function PanelContent({
             <>
               <span
                 className="font-mono"
-                style={{ fontSize: "10px", color: "rgba(255,255,255,0.2)" }}
+                style={{ fontSize: "10px", color: "var(--color-text-dim)" }}
               >
                 ·
               </span>
@@ -565,7 +565,7 @@ function PanelContent({
                 key={i}
                 className="h-3 rounded"
                 style={{
-                  background: "rgba(255,255,255,0.05)",
+                  background: "var(--color-bg-elevated)",
                   width: `${60 + Math.random() * 35}%`,
                 }}
               />
@@ -716,7 +716,7 @@ function MobileOverlayPanel({
       <div
         className="flex items-center gap-2 px-4 shrink-0"
         style={{
-          borderBottom: "1px solid rgba(255,255,255,0.06)",
+          borderBottom: "1px solid var(--color-border)",
           paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)",
           paddingBottom: "0.5rem",
         }}
@@ -805,7 +805,7 @@ export function VaultReadingPanel({
           <div className="text-center">
             <div
               className="font-mono text-4xl mb-4 select-none"
-              style={{ color: "rgba(255,255,255,0.06)" }}
+              style={{ color: "var(--color-text-dim)" }}
             >
               ◈
             </div>

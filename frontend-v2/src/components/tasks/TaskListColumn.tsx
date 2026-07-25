@@ -20,6 +20,7 @@ import { api } from "@/lib/api";
 import { C, LANE } from "@/lib/colors";
 import type { Agent, Project, Task, TaskStatus } from "@/lib/types";
 import { ProjectReferencesDialog } from "./ProjectReferencesDialog";
+import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
@@ -58,7 +59,7 @@ function StatusDot({ status }: { status: TaskStatus }) {
   const outline = status === "inbox";
   return (
     <span
-      className="w-3.5 h-3.5 rounded-full shrink-0 flex items-center justify-center"
+      className="w-3.5 h-3.5 rounded-sm shrink-0 flex items-center justify-center"
       style={{
         backgroundColor: outline ? "transparent" : color,
         border: outline ? `2px solid ${color}` : "none",
@@ -108,8 +109,12 @@ function ListRow({
   return (
     <div className="relative group">
       <div
-        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors"
-        style={selected ? { backgroundColor: C.accentSubtle, boxShadow: `inset 0 0 0 1px ${C.borderAccent}` } : undefined}
+        className="w-full flex items-center gap-2.5 px-3 py-2 rounded-md transition-colors bg-[var(--color-bg-surface)] hover:bg-[var(--color-bg-hover)]"
+        style={
+          selected
+            ? { backgroundColor: C.accentSubtle, border: `1px solid ${C.borderAccent}` }
+            : { border: `1px solid ${C.border}` }
+        }
       >
         <StatusDot status={task.status} />
         <button
@@ -124,7 +129,7 @@ function ListRow({
         <div className="relative z-[1] flex items-center gap-1.5 shrink-0">
           {task.priority === "critical" || task.priority === "high" ? (
             <span
-              className="text-[9px] px-1 rounded uppercase font-semibold"
+              className="text-[9px] px-1 rounded-sm uppercase font-semibold"
               style={{ color: task.priority === "critical" ? C.error : C.warning }}
             >
               {task.priority}
@@ -132,7 +137,7 @@ function ListRow({
           ) : null}
           {isStale && (
             <span
-              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1 py-0.5 rounded"
+              className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1 py-0.5 rounded-sm"
               title={`No activity for ${staleMins} minutes`}
               style={{
                 color: isCritical ? C.error : C.warning,
@@ -145,7 +150,7 @@ function ListRow({
           )}
           {showProject && (
             <span
-              className="text-[9px] px-1.5 py-px rounded truncate max-w-[88px]"
+              className="text-[9px] px-1.5 py-px rounded-sm truncate max-w-[88px]"
               style={{ color: C.textDim, border: `1px solid ${C.border}` }}
             >
               {projectName ?? "Ad-hoc"}
@@ -153,13 +158,13 @@ function ListRow({
           )}
           {agent && (
             <span className="text-xs" title={agent.name}>
-              {agent.emoji || "🤖"}
+              <EntityIcon value={agent.emoji} size={13} />
             </span>
           )}
           <Link
             href={`/memory?task=${task.id}`}
             onClick={(e) => e.stopPropagation()}
-            className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
+            className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
             title="Vault: all notes and files for this task"
             style={{ color: C.textMuted }}
           >
@@ -172,7 +177,7 @@ function ListRow({
                 dispatchMutation.mutate();
               }}
               disabled={dispatchMutation.isPending}
-              className="p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[rgba(255,255,255,0.05)] cursor-pointer touch-visible"
+              className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
               title="Dispatch task"
               style={{ color: C.accent }}
             >
@@ -207,7 +212,7 @@ function GroupHeader({
   onOpenReferences?: () => void;
 }) {
   return (
-    <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1" style={{ backgroundColor: C.bgBase }}>
+    <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0" style={{ backgroundColor: C.bgBase }}>
       <button
         type="button"
         onClick={onToggle}
@@ -221,7 +226,7 @@ function GroupHeader({
           style={{ transform: collapsed ? "none" : "rotate(90deg)", color: C.textDim }}
         />
         {adHoc && <Zap size={10} style={{ color: C.accent }} />}
-        <span className="text-[10px] font-semibold tracking-[0.08em] uppercase truncate">{label}</span>
+        <span className="label-sys truncate">{label}</span>
         <span className="text-[10px] font-mono" style={{ color: C.textDim }}>
           {count}
         </span>
@@ -249,7 +254,7 @@ function GroupHeader({
             <button
               type="button"
               onClick={onOpenReferences}
-              className="p-1 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors"
+              className="p-1 rounded-sm cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
               style={{ color: C.textDim }}
               title="Reference files for this project"
               aria-label={`Reference files for ${label}`}
@@ -261,7 +266,7 @@ function GroupHeader({
             <button
               type="button"
               onClick={onOpenProject}
-              className="text-[10px] px-1.5 py-0.5 rounded cursor-pointer hover:bg-[rgba(255,255,255,0.05)] transition-colors whitespace-nowrap"
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors whitespace-nowrap"
               style={{ color: C.textMuted }}
               title="Open project view (phases)"
             >
@@ -461,16 +466,24 @@ export default function TaskListColumn({
   }, [focusTaskId]);
 
   return (
-    <div className="flex flex-col h-full min-h-0 w-full">
-      {/* Header */}
+    <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
+      {/* Header — v3: Micro-Label, Clash-Display-Titel, Cyan-Messmarke */}
       <div className="px-4 pt-4 pb-2 shrink-0">
+        <div className="label-sys mb-1.5">Console · Tasks</div>
         <div className="flex items-baseline gap-2">
-          <h1 className="text-[15px] font-semibold" style={{ color: C.textPrimary, letterSpacing: "-0.01em" }}>
+          <h1 className="display text-[20px] font-semibold leading-tight" style={{ color: C.textPrimary }}>
             Tasks
           </h1>
           <span className="text-[11px] font-mono" style={{ color: C.textDim }}>
             {openCount} open
           </span>
+        </div>
+        {/* Messmarke: 1px-Linie mit Cyan-Segment — Instrumenten-Detail */}
+        <div className="relative mt-3 h-px" style={{ backgroundColor: C.border }}>
+          <div
+            className="absolute left-0 -top-px h-[2px] w-16"
+            style={{ backgroundColor: C.accent }}
+          />
         </div>
       </div>
 
@@ -483,7 +496,7 @@ export default function TaskListColumn({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search tasks…"
             aria-label="Search tasks"
-            className="w-full rounded-lg pl-7 pr-2.5 py-1.5 text-xs outline-none transition-colors"
+            className="w-full rounded-md pl-7 pr-2.5 py-1.5 text-xs outline-none transition-colors"
             style={{
               backgroundColor: C.bgDeep,
               border: `1px solid ${C.border}`,
@@ -495,7 +508,7 @@ export default function TaskListColumn({
           <div
             role="tablist"
             aria-label="Group tasks by"
-            className="flex rounded-lg p-0.5"
+            className="flex rounded-md p-0.5"
             style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
           >
             {(["status", "project"] as const).map((m) => (
@@ -504,11 +517,11 @@ export default function TaskListColumn({
                 role="tab"
                 aria-selected={mode === m}
                 onClick={() => setMode(m)}
-                className="px-2 py-1 rounded-md text-[10.5px] font-medium capitalize cursor-pointer transition-colors"
+                className="px-2 py-1 rounded-sm text-[10px] font-mono uppercase tracking-[0.08em] cursor-pointer transition-colors"
                 style={
                   mode === m
-                    ? { backgroundColor: C.accentSubtle, color: C.accentHover }
-                    : { color: C.textMuted }
+                    ? { backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }
+                    : { color: C.textMuted, border: "1px solid transparent" }
                 }
               >
                 {m === "status" ? "Status" : "Project"}
@@ -519,13 +532,13 @@ export default function TaskListColumn({
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
             aria-label="Filter by agent"
-            className="text-[10.5px] rounded-lg px-2 py-1.5 outline-none cursor-pointer min-w-0 flex-1"
+            className="text-[10.5px] rounded-md px-2 py-1.5 outline-none cursor-pointer min-w-0 flex-1"
             style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}`, color: agentFilter ? C.textPrimary : C.textMuted }}
           >
             <option value="">All agents</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.emoji ? `${a.emoji} ` : ""}
+                {a.emoji ? <EntityIcon value={a.emoji} size={12} className="inline-block align-[-1px] mr-1" /> : null}
                 {a.name}
               </option>
             ))}
@@ -536,7 +549,7 @@ export default function TaskListColumn({
       {/* Grouped list */}
       <div className="flex-1 overflow-y-auto pb-4 px-1 min-h-0">
         {groups.length === 0 && (
-          <div className="px-4 py-10 text-center text-xs" style={{ color: C.textMuted }}>
+          <div className="px-4 py-10 text-center label-sys">
             {query || agentFilter ? "No tasks match the current filters." : "No tasks yet — create one with ⌘K or the + button."}
           </div>
         )}
@@ -558,7 +571,7 @@ export default function TaskListColumn({
                 onOpenReferences={g.projectId ? () => setReferencesProjectId(g.projectId!) : undefined}
               />
               {!isCollapsed && (
-                <div className="px-1">
+                <div className="px-1 space-y-1">
                   {shown.map((t) => (
                     <div key={t.id} id={`task-row-${t.id}`}>
                       <ListRow
@@ -576,7 +589,7 @@ export default function TaskListColumn({
                     <button
                       type="button"
                       onClick={() => setLimits((m) => ({ ...m, [g.key]: limit + DONE_PAGE }))}
-                      className="w-full text-center text-[11px] py-2 rounded-lg cursor-pointer hover:bg-[rgba(255,255,255,0.03)] transition-colors"
+                      className="w-full text-center text-[11px] font-mono py-2 rounded-md cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
                       style={{ color: C.textMuted }}
                     >
                       Show {Math.min(DONE_PAGE, g.tasks.length - limit)} more

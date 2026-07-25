@@ -3,11 +3,11 @@
     "version": "0.7.0"
   },
   "claude": {
-    "version": "2.1.201"
+    "version": "2.1.207"
   },
   "omp": {
-    "version": "16.3.8",
-    "sha256": "579e1b40c2abc61c6873d12176153ce14ffc0868520021ce1b9afe6392889961"
+    "version": "16.4.6",
+    "sha256": "aeb951f860904fd7d3c374698b873c273379635968aff32d0b0e00601aa2901c"
   },
   "kimi": {
     "version": "0.29.1",

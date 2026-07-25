@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { ModelPrice, ModelPriceCreate, UnmatchedModel } from "@/lib/types";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C } from "@/lib/colors";
 import { cn } from "@/lib/utils";
 
@@ -51,7 +52,7 @@ function InputNumber({
         backgroundColor: C.bgDeep,
         borderWidth: 1,
         borderStyle: "solid",
-        borderColor: "rgba(255, 255, 255, 0.08)",
+        borderColor: "var(--color-border)",
         color: "var(--color-text-primary)",
         minHeight: 44,
       }}
@@ -59,7 +60,7 @@ function InputNumber({
         e.currentTarget.style.borderColor = C.borderAccent;
       }}
       onBlur={(e) => {
-        e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+        e.currentTarget.style.borderColor = "var(--color-border)";
       }}
     />
   );
@@ -88,7 +89,7 @@ function TextInput({
         backgroundColor: C.bgDeep,
         borderWidth: 1,
         borderStyle: "solid",
-        borderColor: "rgba(255, 255, 255, 0.08)",
+        borderColor: "var(--color-border)",
         color: "var(--color-text-primary)",
         minHeight: 44,
       }}
@@ -96,7 +97,7 @@ function TextInput({
         e.currentTarget.style.borderColor = C.borderAccent;
       }}
       onBlur={(e) => {
-        e.currentTarget.style.borderColor = "rgba(255, 255, 255, 0.08)";
+        e.currentTarget.style.borderColor = "var(--color-border)";
       }}
     />
   );
@@ -117,7 +118,7 @@ function PriceRow({
     <tr
       style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
       className="transition-colors"
-      onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255,255,255,0.02)")}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--color-bg-surface)")}
       onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
     >
       <td
@@ -320,7 +321,7 @@ function AddPriceForm({
               backgroundColor: C.bgDeep,
               borderWidth: 1,
               borderStyle: "solid",
-              borderColor: "rgba(255, 255, 255, 0.08)",
+              borderColor: "var(--color-border)",
               color: "var(--color-text-primary)",
               minHeight: 44,
             }}
@@ -365,6 +366,8 @@ export function CostPricesTab() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [recomputeResult, setRecomputeResult] = useState<number | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ModelPrice | null>(null);
+  const [confirmRecompute, setConfirmRecompute] = useState(false);
 
   const { data: prices, isLoading: loadingPrices } = useQuery({
     queryKey: ["model-prices"],
@@ -412,9 +415,7 @@ export function CostPricesTab() {
   });
 
   const handleDelete = (price: ModelPrice) => {
-    if (window.confirm(`Really delete the price for "${price.model_pattern}"?`)) {
-      deleteMutation.mutate(price.id);
-    }
+    setDeleteTarget(price);
   };
 
   const handleAddFromUnmatched = (model: UnmatchedModel) => {
@@ -446,7 +447,7 @@ export function CostPricesTab() {
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer transition-all duration-200"
             style={{
               background: showAddForm
-                ? "rgba(255,255,255,0.04)"
+                ? "var(--color-bg-elevated)"
                 : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
               color: showAddForm ? "var(--color-text-muted)" : "white",
               border: showAddForm ? `1px solid ${C.border}` : "none",
@@ -624,15 +625,7 @@ export function CostPricesTab() {
           )}
         </div>
         <button
-          onClick={() => {
-            if (
-              window.confirm(
-                "Recompute all event costs with the current price table?"
-              )
-            ) {
-              recomputeMutation.mutate();
-            }
-          }}
+          onClick={() => setConfirmRecompute(true)}
           disabled={recomputeMutation.isPending}
           aria-label="Recompute costs"
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
@@ -657,6 +650,40 @@ export function CostPricesTab() {
             : "Recompute Now"}
         </button>
       </div>
+
+      {/* v3 confirms — replace native window.confirm() (panel register rule 3) */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete price"
+        body={
+          deleteTarget
+            ? `Really delete the price for "${deleteTarget.model_pattern}"?`
+            : undefined
+        }
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteMutation.mutate(deleteTarget.id, {
+            onSuccess: () => setDeleteTarget(null),
+          });
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
+      <ConfirmDialog
+        open={confirmRecompute}
+        title="Recompute costs"
+        body="Recompute all event costs with the current price table?"
+        confirmLabel="Recompute"
+        danger={false}
+        loading={recomputeMutation.isPending}
+        onConfirm={() =>
+          recomputeMutation.mutate(undefined, {
+            onSettled: () => setConfirmRecompute(false),
+          })
+        }
+        onCancel={() => setConfirmRecompute(false)}
+      />
     </div>
   );
 }
