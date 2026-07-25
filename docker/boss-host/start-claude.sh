@@ -67,18 +67,17 @@ if [ -n "${ANTHROPIC_MODEL:-}" ]; then
     # gesourced (Z. 37-43) und hat ANTHROPIC_MODEL bereits gesetzt. Nichts tun.
     echo "[start-claude] ANTHROPIC_MODEL=$ANTHROPIC_MODEL (aus agent.env)"
 else
-    # Struktureller Sonderfall: HOST_ADAPTERS (backend/app/services/
-    # host_harness_adapter.py) kennt hermes/grok/kimi, aber KEIN "claude" —
-    # und sync_host_agent_model laeuft nur fuer Agents MIT Adapter. Es gibt
-    # also keinen Schreiber, der agent.env fuer boss-host mit ANTHROPIC_MODEL
-    # befuellt. Per Wizard gestagte Host-Claude-Agents bekommen es dagegen
-    # schon (host_provisioning.stage_host_agent -> build_runtime_env);
-    # boss-host ist der Legacy-Vorgaenger dieses Mechanismus.
-    # keinen sync_host_agent_model-Aufrufer, der agent.env fuer boss-host
-    # schreibt. Ohne agent.env-Wert bleibt uns nur der veraltete Legacy-Pin,
-    # klar markiert, statt still auf einen unbekannten Zustand zu laufen.
-    echo "WARN: boss-host ist an keine Runtime gebunden (kein Host-Adapter fuer harness 'claude') — Modell bleibt auf Legacy-Fallback claude-opus-4-8 gepinnt" >&2  # model-catalog: allow
-    export ANTHROPIC_MODEL="claude-opus-4-8"  # Legacy-Fallback, NICHT die Wahrheit — model-catalog: allow
+    # Seit 2026-07-25 ist harness "claude" in HOST_ADAPTERS registriert
+    # (backend/app/services/host_harness_adapter.py -> ClaudeHostAdapter), d.h.
+    # sync_host_agent_model schreibt ANTHROPIC_MODEL aus runtime.model_identifier
+    # regulaer in diese agent.env. Fehlt der Wert trotzdem, ist der Agent an
+    # keine Runtime (oder an eine ohne model_identifier) gebunden.
+    #
+    # Dann wird KEIN Modell gepinnt: das claude-CLI nimmt seinen Account-Default,
+    # der neuen Releases automatisch folgt. Ein hier hart eingetragener Pin
+    # veraltet dagegen still (genau der Vorfall: Fleet blieb auf einem alten
+    # opus, waehrend Anthropic laengst weiter war). Warnen statt raten.
+    echo "WARN: ANTHROPIC_MODEL fehlt in $ENV_FILE — Boss ist an keine Runtime mit model_identifier gebunden. Kein Pin gesetzt, claude nutzt seinen Account-Default." >&2
 fi
 
 # --dangerously-skip-permissions matcht aktuelles Container-Verhalten.

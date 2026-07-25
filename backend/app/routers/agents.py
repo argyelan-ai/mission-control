@@ -306,8 +306,29 @@ async def _auto_provision_cli_bridge(agent_id: uuid.UUID, raw_token: str) -> Non
                 )
                 return
 
+            # runtime.model_identifier is the ONLY truth for which model this
+            # agent runs; the legacy agent.model column is write-only display
+            # data. Without a resolvable model we do not guess — an invented
+            # name would be baked into the container's settings.json and
+            # silently override the runtime binding.
+            from app.services.runtime_model_resolver import resolve_agent_model
+
+            effective_model = await resolve_agent_model(session, agent)
+            if not effective_model:
+                await emit_event(
+                    session,
+                    "agent.provision_failed",
+                    f"{agent.name}: no model resolvable — the agent is not bound "
+                    f"to a runtime with a model_identifier. Bind a runtime on the "
+                    f"agent page, then click Provision.",
+                    severity="warning",
+                    agent_id=agent.id,
+                    board_id=agent.board_id,
+                )
+                return
+
             payload = cli_terminal.CliProvisionPayload(
-                model=agent.model or "nvidia/nemotron-3-super",
+                model=effective_model,
                 mc_token=raw_token,
             )
             await cli_terminal.provision_cli_agent(agent.id, payload, session, None)
@@ -1820,6 +1841,15 @@ async def provision_agent_on_gateway(
 
             harness = agent.harness or derive_harness(runtime)
             adapter = get_adapter(harness)
+            # Being in HOST_ADAPTERS is not the same as owning a bootstrap.
+            # harness "claude" is registered ONLY so the runtime→agent model
+            # propagation reaches boss-host (ADR-064 / model sanitation
+            # 2026-07-25); it has no bespoke bootstrap, and wizard-created
+            # claude host agents must keep using the generic
+            # stage_host_agent_files path below. Skipping the adapter here
+            # preserves that pre-existing behavior exactly.
+            if adapter is not None and not getattr(adapter, "supports_bootstrap", True):
+                adapter = None
             if adapter is not None:
                 # Singleton host bridges (hermes/grok) hardcode their config dir
                 # + plist to one slug — provisioning onto a different agent would

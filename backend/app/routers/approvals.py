@@ -595,7 +595,12 @@ async def resolve_approval(
                         name=spawn_payload["name"],
                         emoji=spawn_payload.get("emoji", "🤖"),
                         role=spawn_payload.get("role", "developer"),
-                        model=spawn_payload.get("model") or "glm-5.1:cloud",
+                        # Legacy free-text display column — the real model comes
+                        # from the runtime binding (runtime.model_identifier) and
+                        # is written back here by the propagation paths. Leaving
+                        # it None when the payload says nothing is honest; the
+                        # old invented default just put a wrong name in the UI.
+                        model=spawn_payload.get("model"),
                         soul_md=spawn_payload.get("soul_md") or "",
                         skills=[],
                         skill_filter=spawn_payload.get("skill_filter"),

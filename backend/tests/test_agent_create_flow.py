@@ -208,9 +208,11 @@ async def test_auto_provision_bridge_up_runs_full_chain(
     monkeypatch.setattr(cli_terminal, "_bridge_get", lambda path: {"ok": True})
 
     chain: list[str] = []
+    models: list[str] = []
 
     async def _fake_provision_cli(agent_id, payload, session, current_user):
         chain.append(f"bridge:{payload.mc_token}")
+        models.append(payload.model)
         return {"provision_status": "provisioned", "bridge_result": {"ok": True}}
 
     async def _fake_background(agent_id):
@@ -221,12 +223,52 @@ async def test_auto_provision_bridge_up_runs_full_chain(
         "app.services.provisioning.provision_agent_background", _fake_background
     )
 
-    agent = await make_agent("Bridged", provision_status="local")
+    # The provisioning payload's model is resolved from the runtime binding
+    # (model sanitation 2026-07-25) — an unbound agent is refused, see
+    # test_auto_provision_without_resolvable_model_aborts below.
+    from app.models.runtime import Runtime
+    from sqlmodel.ext.asyncio.session import AsyncSession as _AS
+
+    async with _AS(test_engine, expire_on_commit=False) as s:
+        rt = Runtime(slug="auto-prov-rt", display_name="Auto Prov RT",
+                     runtime_type="lmstudio", endpoint="http://example.com/v1",
+                     model_identifier="test-model-1", enabled=True)
+        s.add(rt)
+        await s.commit()
+        await s.refresh(rt)
+
+    agent = await make_agent("Bridged", provision_status="local", runtime_id=rt.id)
     await agents_module._auto_provision_cli_bridge(agent.id, "tok-456")
 
     # Order matters: first the host helper renders ~/.mc/agents/<slug>/,
     # then the container half (compose + file sync + start).
     assert chain == ["bridge:tok-456", "container"]
+    assert models == ["test-model-1"]
+
+
+@pytest.mark.asyncio
+async def test_auto_provision_without_resolvable_model_aborts(make_agent, monkeypatch):
+    """No runtime binding → no model → do NOT guess one, abort and report.
+
+    Before model sanitation this path shipped a hardcoded
+    "nvidia/nemotron-3-super" into the bridge payload, silently pinning a
+    brand-new agent to a model nobody chose.
+    """
+    monkeypatch.setattr("app.database.engine", test_engine)
+    monkeypatch.setattr(cli_terminal, "_bridge_get", lambda path: {"ok": True})
+
+    called: list[str] = []
+
+    async def _fake_provision_cli(agent_id, payload, session, current_user):
+        called.append("bridge")
+        return {}
+
+    monkeypatch.setattr(cli_terminal, "provision_cli_agent", _fake_provision_cli)
+
+    agent = await make_agent("Unbound", provision_status="local")
+    await agents_module._auto_provision_cli_bridge(agent.id, "tok-000")
+
+    assert called == []
 
 
 @pytest.mark.asyncio
@@ -263,7 +305,10 @@ async def test_provision_cli_agent_reuses_supplied_token(
     )
 
     agent = await make_agent("Token Keeper", agent_token_hash="orig-hash")
-    payload = cli_terminal.CliProvisionPayload(mc_token="keep-me-token")
+    # Explicit model in the payload still wins over the runtime binding.
+    payload = cli_terminal.CliProvisionPayload(
+        mc_token="keep-me-token", model="test-model-1"
+    )
     result = await cli_terminal.provision_cli_agent(
         agent.id, payload, async_session, None
     )
@@ -274,6 +319,35 @@ async def test_provision_cli_agent_reuses_supplied_token(
 
     from app.models.agent import Agent
     refreshed = await async_session.get(Agent, agent.id)
+    assert refreshed.agent_token_hash == "orig-hash"
+
+
+@pytest.mark.asyncio
+async def test_provision_cli_agent_400s_without_resolvable_model(
+    make_agent, async_session, monkeypatch
+):
+    """Unbound agent + no payload model → 400, and NO side effects.
+
+    The check runs before token rotation / provision_status writes, so a
+    refused provision cannot leave the row stuck on "provisioning".
+    """
+    from fastapi import HTTPException
+
+    posted: list = []
+    monkeypatch.setattr(
+        cli_terminal, "_bridge_post", lambda *a, **k: posted.append(a) or {"ok": True}
+    )
+
+    agent = await make_agent("No Runtime", agent_token_hash="orig-hash",
+                             provision_status="local")
+    with pytest.raises(HTTPException) as exc:
+        await cli_terminal.provision_cli_agent(agent.id, None, async_session, None)
+
+    assert exc.value.status_code == 400
+    assert posted == []
+    from app.models.agent import Agent
+    refreshed = await async_session.get(Agent, agent.id)
+    assert refreshed.provision_status == "local"
     assert refreshed.agent_token_hash == "orig-hash"
 
 

@@ -23,6 +23,20 @@ class HostHarnessAdapter(Protocol):
     # plist to ONE slug; provisioning it onto any other agent would clobber the
     # real singleton. None = the adapter is safe for arbitrary agents.
     singleton_slug: str | None
+    # False = this adapter has NO bespoke bootstrap. Being in the registry is
+    # then purely about the runtime→agent propagation paths (model sync +
+    # in-place switch); the provision endpoint must keep routing such agents to
+    # the generic wizard staging path instead of calling bootstrap(). See
+    # ClaudeHostAdapter for the one case where this matters.
+    supports_bootstrap: bool
+
+    def env_dir(self, agent: Agent) -> str:
+        """Directory name under ``~/.mc/agents/`` holding this agent's agent.env.
+
+        Normally the agent slug. Exists as a hook because the LEGACY boss-host
+        layout does not follow that convention (see ClaudeHostAdapter).
+        """
+        ...
 
     async def build_agent_env(
         self, agent: Agent, runtime: Runtime, token: str, *, session: AsyncSession
@@ -35,10 +49,25 @@ class HostHarnessAdapter(Protocol):
     async def reload(self, agent: Agent) -> dict[str, Any]: ...
 
 
-class HermesAdapter:
+class _SingletonEnvDirMixin:
+    """env_dir for the singleton bridges: the slug IS the directory.
+
+    ``singleton_slug`` is the fallback for rows whose ``slug`` column is still
+    NULL — previously such a row silently fell back to the literal "hermes"
+    directory in ``sync_host_agent_model``, i.e. a grok/kimi sync could have
+    written into Hermes' agent.env. Using the adapter's own singleton is the
+    only correct answer here.
+    """
+
+    def env_dir(self, agent: Agent) -> str:
+        return agent.slug or self.singleton_slug  # type: ignore[attr-defined,return-value]
+
+
+class HermesAdapter(_SingletonEnvDirMixin):
     harness = "hermes"
     protocol = "openai"
     singleton_slug = "hermes"
+    supports_bootstrap = True
 
     async def build_agent_env(self, agent, runtime, token, *, session):
         from app.services.agent_bootstrap import build_hermes_agent_env
@@ -58,7 +87,7 @@ class HermesAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
-class GrokAdapter:
+class GrokAdapter(_SingletonEnvDirMixin):
     """Grok Build CLI as a host harness (ADR-066, delivery model superseded by ADR-068).
 
     Like Hermes, grok runs as a persistent tmux TUI (session "grok") that the
@@ -78,6 +107,7 @@ class GrokAdapter:
     harness = "grok"
     protocol = "grok"
     singleton_slug = "grok"
+    supports_bootstrap = True
 
     async def build_agent_env(self, agent, runtime, token, *, session):
         from app.services.agent_bootstrap import build_grok_agent_env
@@ -92,7 +122,7 @@ class GrokAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
-class KimiHostAdapter:
+class KimiHostAdapter(_SingletonEnvDirMixin):
     """Kimi Code CLI as a host harness (2026-07-24, boss-host pattern).
 
     Kimi runs as a persistent tmux TUI (session "kimi-host", Window 0) with
@@ -114,6 +144,7 @@ class KimiHostAdapter:
     harness = "kimi"
     protocol = "kimi"
     singleton_slug = "kimi"
+    supports_bootstrap = True
 
     async def build_agent_env(self, agent, runtime, token, *, session):
         from app.services.agent_bootstrap import build_kimi_agent_env
@@ -128,10 +159,92 @@ class KimiHostAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
+class ClaudeHostAdapter:
+    """Native Claude Code CLI as a host harness (boss-host, 2026-07-25).
+
+    WHY THIS EXISTS
+    ---------------
+    boss-host is the one host agent running the real `claude` binary, but it
+    predates this registry: it was provisioned by hand (docker/boss-host/
+    *.plist + entrypoint.sh). Because HOST_ADAPTERS had no "claude" entry, every
+    propagation path gated on ``get_adapter(...) is not None`` skipped Boss — so
+    NOTHING ever wrote ANTHROPIC_MODEL into ~/.mc/agents/boss-host/agent.env,
+    and start-claude.sh had to pin a model literal by hand (which then rotted to
+    claude-opus-4-8 while the account default had moved on). Registering the
+    adapter closes that hole: ``runtime.model_identifier`` becomes the single
+    truth for Boss exactly as it already is for hermes/grok/kimi.
+
+    protocol "anthropic" → ``sync_host_agent_model`` runs ``build_runtime_env``,
+    whose claude branch emits ANTHROPIC_MODEL (routers/internal.py). Absent
+    model_identifier stays absent — no pin beats a stale pin.
+
+    singleton_slug is None ON PURPOSE. Unlike hermes/grok/kimi the claude
+    harness is not bound to one slug: host_provisioning.stage_host_agent_files
+    already stages arbitrary wizard-created claude host agents into
+    ~/.mc/agents/<slug>/. Only the legacy Boss row has a hand-made layout.
+
+    supports_bootstrap is False: there is no build_claude_agent_env /
+    bootstrap_claude_agent, and inventing one would REPLACE the working generic
+    wizard path in routers/agents.py for every claude host agent. That endpoint
+    therefore skips non-bootstrap adapters and falls through to
+    stage_host_agent_files exactly as before this adapter existed.
+    """
+
+    harness = "claude"
+    protocol = "anthropic"
+    singleton_slug = None
+    supports_bootstrap = False
+
+    # The legacy Boss row's on-disk directory is "boss-host", NOT its slug
+    # "boss": docker/boss-host/{entrypoint,poll,start-claude}.sh all read
+    # ~/.mc/agents/boss-host/agent.env. Writing to ~/.mc/agents/boss/ would
+    # produce a file that nothing on the host ever sources — the sync would
+    # look green and change nothing.
+    _LEGACY_ENV_DIRS = {"boss": "boss-host"}
+
+    def env_dir(self, agent: Agent) -> str:
+        slug = (agent.slug or (agent.name or "").lower().replace(" ", "-")).strip()
+        if not slug:
+            raise ValueError(
+                "claude host agent without slug/name — cannot locate its agent.env"
+            )
+        return self._LEGACY_ENV_DIRS.get(slug, slug)
+
+    async def build_agent_env(self, agent, runtime, token, *, session):
+        # No bespoke bootstrap exists (see class docstring), so this is not on
+        # any live provisioning path today; it is implemented to satisfy the
+        # adapter contract and to keep one description of what a claude host
+        # agent.env contains. Shape mirrors host_provisioning.stage_host_agent_
+        # files: MC_* control plane + whatever build_runtime_env decides
+        # (ANTHROPIC_MODEL for an anthropic runtime).
+        from app.config import settings
+        from app.routers.internal import build_runtime_env
+
+        env: dict[str, str] = {
+            "MC_AGENT_TOKEN": token,
+            "MC_API_URL": settings.mc_base_url.rstrip("/"),
+        }
+        env.update(await build_runtime_env(runtime, session, agent))
+        return env
+
+    async def bootstrap(self, session, agent, runtime):
+        raise NotImplementedError(
+            "harness 'claude' has no bespoke host bootstrap: boss-host was "
+            "provisioned manually (docker/boss-host/) and wizard-created claude "
+            "host agents are staged by host_provisioning.stage_host_agent_files. "
+            "Callers must check supports_bootstrap before calling this."
+        )
+
+    async def reload(self, agent):
+        from app.routers.cli_terminal import _host_agent_lifecycle
+        return await _host_agent_lifecycle(agent, "restart")
+
+
 HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "hermes": HermesAdapter(),
     "grok": GrokAdapter(),
     "kimi": KimiHostAdapter(),
+    "claude": ClaudeHostAdapter(),
 }
 
 
@@ -153,7 +266,7 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     """
     from app.routers.internal import build_runtime_env
     from app.services.agent_bootstrap import _format_env_file, _unquote_env_value, _home_host
-    from app.services.harness_compat import runtime_protocol
+    from app.services.harness_compat import derive_harness, runtime_protocol
 
     # grok (xAI cloud OAuth, ADR-066) and kimi (OAuth credential files) are
     # protocol-fixed: their runtime binding is a display anchor only, so there
@@ -163,7 +276,12 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     if runtime_protocol(runtime) not in ("openai", "anthropic", None):
         return
 
-    slug = agent.slug or "hermes"
+    # The on-disk directory is the adapter's business, not always the slug: the
+    # legacy boss-host layout uses "boss-host" for the agent whose slug is
+    # "boss" (ClaudeHostAdapter.env_dir). Falling back to the raw slug keeps
+    # unknown/unregistered harnesses behaving as before.
+    adapter = get_adapter(agent.harness or derive_harness(runtime))
+    slug = adapter.env_dir(agent) if adapter is not None else (agent.slug or "hermes")
     env_path = _home_host() / ".mc" / "agents" / slug / "agent.env"
     existing: dict[str, str] = {}
     if env_path.exists():
@@ -174,6 +292,9 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
                 # .strip("'") leaves '"'"' sequences that re-escape and grow
                 # ~3× on every model-drift sync (13 KB token corruption).
                 existing[key.strip()] = _unquote_env_value(val)
-    existing.update(await build_runtime_env(runtime, session))
+    # Pass the agent so an explicitly set agent.harness wins over
+    # derive_harness(runtime) — that is what decides ANTHROPIC_MODEL vs
+    # OPENAI_MODEL inside build_runtime_env.
+    existing.update(await build_runtime_env(runtime, session, agent))
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(_format_env_file(existing))

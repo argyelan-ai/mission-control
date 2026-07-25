@@ -52,9 +52,8 @@ line. The marker is matched against the ORIGINAL line text (before comment
 stripping), so a trailing ``# model-catalog: allow`` on a code line works in
 every file type. With prose no longer scanned this should be needed only for
 real executable code: verified dead code with zero callers (grep-verified, note
-left alongside), a clearly labeled and loudly-logged intentional fallback (see
-``docker/boss-host/start-claude.sh``'s legacy pin, which warns to stderr every
-time it's hit), or a string literal that merely READS a model name rather than
+left alongside), a clearly labeled and loudly-logged intentional fallback, or a
+string literal that merely READS a model name rather than
 selecting one. Do NOT use the marker to silence a hardcode that is still live
 and still capable of silently overriding ``runtime.model_identifier`` — that
 defeats the entire purpose of this test.
@@ -84,20 +83,22 @@ ALLOWLISTED PATHS (skipped entirely)
   (see spec: "agent.model wird nicht wiederbelebt"), never into
   ``runtime.model_identifier``.
 
-KNOWN GAP (honestly disclosed, not fixed here — out of this PR's scope)
+FORMER KNOWN GAP — now closed (2026-07-25 follow-up)
 -------------------------------------------------------------------------
-``backend/app/routers/agents.py`` (~line 310), ``cli_terminal.py`` (~lines 29,
-415), ``skills.py`` (~line 318) and ``approvals.py`` (~line 598) all fall back
-to a hardcoded model string (``"nvidia/nemotron-3-super"``, ``"glm-5.1:cloud"``,
-``"minimax-m2.7"``) when the legacy ``agent.model`` free-text field is unset.
-``cli_terminal.py``'s fallback in particular feeds the exact ``/provision/``
-payload that ``scripts/cli-bridge.py`` now rejects when empty (this PR, task
-4a) — meaning a caller going through this path never actually exercises that
-guard, because it always supplies a non-empty (if stale) default first. These
-are real instances of the same bug class this test protects against; they are
-NOT marked with the opt-out and are deliberately left visible via
-``KNOWN_UNFIXED_HARDCODES``, because hiding them would contradict the test's
-purpose. Fixing them is tracked as follow-up work, not done in this PR.
+``agents.py:310``, ``cli_terminal.py:29`` + ``:415``, ``skills.py:318`` and
+``approvals.py:598`` used to fall back to a hardcoded model string
+(``"nvidia/nemotron-3-super"``, ``"glm-5.1:cloud"``, ``"minimax-m2.7"``) when
+the legacy ``agent.model`` free-text field was unset. All five now resolve the
+model from ``runtime.model_identifier`` (via
+``runtime_model_resolver.resolve_agent_model``) and fail loudly when it cannot
+be resolved — HTTP 400 in the two request handlers, a
+``agent.provision_failed`` activity event in the background auto-provision
+path, and a plain ``None`` for ``approvals.py``'s write into the dead legacy
+display column. In particular ``cli_terminal.py``'s ``/provision/`` payload no
+longer ships a stale non-empty default, so ``scripts/cli-bridge.py``'s
+empty-model guard is now actually reachable.
+``KNOWN_UNFIXED_HARDCODES`` is therefore empty; it stays in place as the
+mechanism for the next honestly-tracked exception.
 
 SELF-TEST
 ---------
@@ -293,21 +294,14 @@ def scan_for_hardcoded_models(roots: list[Path]) -> list[tuple[str, int, str]]:
     return findings
 
 
-# ── Known, deliberately-not-fixed gap (see module docstring "KNOWN GAP") ────
-# These are real pre-existing hardcodes outside this PR's explicit scope.
-# Listed explicitly — NOT silenced via the opt-out marker in source — so this
-# test documents them as a visible, tracked gap instead of hiding them. If any
-# of these disappear (fixed) or new ones appear, this set must be updated by
-# hand; it is not an allowlist, it is a to-do list with a name.
-# Line numbers verified 2026-07-25: agents.py:310, cli_terminal.py:29+415,
-# skills.py:318, approvals.py:598.
-KNOWN_UNFIXED_HARDCODES = {
-    ("backend/app/routers/agents.py", 'model=agent.model or "nvidia/nemotron-3-super"'),
-    ("backend/app/routers/cli_terminal.py", 'model: str = "nvidia/nemotron-3-super"'),
-    ("backend/app/routers/cli_terminal.py", 'or "nvidia/nemotron-3-super"'),
-    ("backend/app/routers/skills.py", 'current_model = agent.model or "minimax-m2.7"'),
-    ("backend/app/routers/approvals.py", '"glm-5.1:cloud"'),
-}
+# ── Known, deliberately-not-fixed gap (see module docstring) ────────────────
+# A to-do list with a name, NOT an allowlist: real hardcodes that are tracked
+# openly instead of being silenced with the opt-out marker in source.
+# EMPTY since 2026-07-25 — the original five (agents.py:310,
+# cli_terminal.py:29+415, skills.py:318, approvals.py:598) were fixed to read
+# runtime.model_identifier / fail fast. Keep the mechanism; do not refill it
+# with anything that could be fixed instead.
+KNOWN_UNFIXED_HARDCODES: set[tuple[str, str]] = set()
 
 
 def _is_known_unfixed(path: str, line: str) -> bool:

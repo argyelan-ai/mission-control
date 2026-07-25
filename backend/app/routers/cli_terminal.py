@@ -26,7 +26,11 @@ from app.models.agent import Agent
 
 
 class CliProvisionPayload(BaseModel):
-    model: str = "nvidia/nemotron-3-super"  # Default — set explicitly at provisioning time!
+    # Empty = "resolve it from the agent's runtime binding" (the single source
+    # of truth). There is deliberately NO model-name default here: the previous
+    # one made every caller ship a stale literal, which then overrode
+    # runtime.model_identifier without anyone noticing.
+    model: str = ""
     system_prompt: str = ""   # Identity only (name, role, skills) — protocol is auto-appended
     role: str = ""            # Convenience: role for default identity when system_prompt is empty
     skills: list[str] = []    # Convenience: skills for default identity
@@ -377,6 +381,28 @@ async def provision_cli_agent(
     if getattr(agent, "agent_runtime", "openclaw") != "cli-bridge":
         raise HTTPException(400, "Agent ist kein CLI-Bridge-Agent")
 
+    # 0. Resolve the model BEFORE any side effect (token rotation, status
+    # write, bridge call). Order matters: a 400 raised further down would
+    # leave provision_status stuck on "provisioning".
+    #
+    # Explicit payload.model wins (the operator/UI picked it); otherwise the
+    # agent's runtime binding decides. The old third fallback — a hardcoded
+    # "nvidia/nemotron-3-super" — is gone: it meant scripts/cli-bridge.py's
+    # empty-model guard could never fire, because this caller always shipped a
+    # non-empty (and by then years-stale) name.
+    from app.services.runtime_model_resolver import resolve_agent_model
+
+    effective_model = (payload and payload.model) or await resolve_agent_model(
+        session, agent
+    )
+    if not effective_model:
+        raise HTTPException(
+            400,
+            f"Kein Modell aufloesbar fuer '{agent.name}': der Agent ist an keine "
+            f"Runtime mit gesetztem model_identifier gebunden. Erst eine Runtime "
+            f"binden (oder 'model' im Payload mitgeben), dann provisionieren.",
+        )
+
     # 1. Token: reuse the supplied one (one-click create — hash is already
     # stored, rotation would invalidate the token the operator just saw) or
     # generate a new one (format: salt_hex:dk_hex — verify_agent_token-compatible).
@@ -411,8 +437,7 @@ async def provision_cli_agent(
     )
     full_system_prompt = _build_cli_system_prompt(agent.name, identity)
 
-    # 3. Provision the bridge
-    effective_model = (payload and payload.model) or getattr(agent, "model", None) or "nvidia/nemotron-3-super"
+    # 3. Provision the bridge (effective_model resolved in step 0 above)
     is_claude_model = effective_model.startswith("claude-")
 
     bridge_payload: dict = {

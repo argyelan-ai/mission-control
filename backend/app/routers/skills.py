@@ -299,35 +299,59 @@ async def update_agent_skills(
     cli_synced = False
     worker_restarted = False
     if body.update_cli_plugins:
+        # Everything the on-disk render needs is resolved BEFORE the DB write,
+        # so a refusal below cannot leave the row updated while settings.json
+        # on disk still lists the old plugins.
+        is_cli_bridge = agent.agent_runtime == "cli-bridge"
+        agent_slug = agent.name.lower().replace(" ", "-")
+        from app.services.plugin_manager import sync_agent_plugins_to_disk
+        import json as _json
+        from pathlib import Path
+        import os
+        home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
+        settings_path = Path(home) / ".mc" / "agents" / agent_slug / "settings.json"
+        # W2.1 turn-signal hooks only for the claude harness; openclaude
+        # must not receive the unknown `hooks` key. (Loaded up here because
+        # the runtime binding also decides the model, see below.)
+        from app.models.runtime import Runtime
+        from app.services.harness_compat import runtime_protocol
+        _rt = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+
+        # soul_md from DB is the source of truth for systemPrompt
+        current_prompt = (agent.soul_md and agent.soul_md.strip()) or ""
+        # This value is rewritten into the agent's settings.json, i.e. it IS
+        # the model the harness will use. It must therefore come from
+        # runtime.model_identifier (the single source of truth), never from the
+        # dead legacy agent.model column and never from an invented default — a
+        # plugin-list edit must not silently repin the model.
+        current_model = (_rt.model_identifier if _rt else None) or ""
+        if not current_prompt and settings_path.exists():
+            try:
+                data = _json.loads(settings_path.read_text())
+                current_prompt = data.get("systemPrompt", "")
+                current_model = data.get("model", current_model)
+            except Exception:
+                pass
+        if is_cli_bridge and not current_model:
+            # Fail loudly instead of writing settings.json with an empty or
+            # guessed model — the harness would then start unpinned/broken and
+            # the cause would be invisible.
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Kein Modell aufloesbar fuer '{agent.name}': der Agent ist "
+                    f"an keine Runtime mit gesetztem model_identifier gebunden. "
+                    f"Erst eine Runtime binden, dann die CLI-Plugins aendern."
+                ),
+            )
+
         agent.cli_plugins = body.cli_plugins
         session.add(agent)
         await session.commit()
         await session.refresh(agent)
 
         # Render settings.json + installed_plugins.json to disk
-        if agent.agent_runtime == "cli-bridge":
-            agent_slug = agent.name.lower().replace(" ", "-")
-            from app.services.plugin_manager import sync_agent_plugins_to_disk
-            import json as _json
-            from pathlib import Path
-            import os
-            home = os.environ.get("HOME_HOST") or os.path.expanduser("~")
-            settings_path = Path(home) / ".mc" / "agents" / agent_slug / "settings.json"
-            # soul_md from DB is the source of truth for systemPrompt
-            current_prompt = (agent.soul_md and agent.soul_md.strip()) or ""
-            current_model = agent.model or "minimax-m2.7"
-            if not current_prompt and settings_path.exists():
-                try:
-                    data = _json.loads(settings_path.read_text())
-                    current_prompt = data.get("systemPrompt", "")
-                    current_model = data.get("model", current_model)
-                except Exception:
-                    pass
-            # W2.1 turn-signal hooks only for the claude harness; openclaude
-            # must not receive the unknown `hooks` key.
-            from app.models.runtime import Runtime
-            from app.services.harness_compat import runtime_protocol
-            _rt = await session.get(Runtime, agent.runtime_id) if agent.runtime_id else None
+        if is_cli_bridge:
             written = sync_agent_plugins_to_disk(
                 agent_slug, current_prompt, current_model, body.cli_plugins,
                 turn_signal_hooks=(runtime_protocol(_rt) == "anthropic"),
