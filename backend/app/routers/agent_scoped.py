@@ -3792,3 +3792,39 @@ async def agent_get_credential(
         "url": credential.url,
         "notes": credential.notes,
     }
+
+
+@router.get("/operator")
+async def agent_get_operator(
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Anzeigename + Zeitzone des Operators, fuer die Anrede in der Jarvis-Persona.
+
+    Bewusst minimal: kein E-Mail, keine Rolle, keine ID. Der Endpoint existiert
+    nur, damit Jarvis den Operator beim Namen nennen kann statt generisch
+    "Operator" zu sagen. Fail-soft (200 + ok=False), weil der Voice-Agent auch
+    ohne Konfiguration starten koennen muss.
+    """
+    import os
+    import uuid as _uuid
+
+    from app.models.user import User
+
+    raw = os.environ.get("JARVIS_OPERATOR_USER_ID", "").strip()
+    if not raw:
+        return {"ok": False, "reason": "not_configured"}
+    try:
+        user_id = _uuid.UUID(raw)
+    except ValueError:
+        return {"ok": False, "reason": "invalid_user_id"}
+
+    user = await session.get(User, user_id)
+    if user is None:
+        return {"ok": False, "reason": "user_not_found"}
+
+    return {
+        "ok": True,
+        "name": (user.preferred_name or user.name or "").strip(),
+        "timezone": user.timezone or "Europe/Berlin",
+    }
