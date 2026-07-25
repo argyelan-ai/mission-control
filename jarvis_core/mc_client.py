@@ -350,6 +350,22 @@ async def get_agent_status(agent_name: str | None = None) -> dict[str, Any]:
     }
 
 
+async def get_operator() -> dict[str, Any]:
+    """GET /api/v1/agent/operator — Anzeigename des Operators fuer die Anrede.
+
+    Fail-soft: jeder Fehler wird zu {"ok": False}, damit der Agent auch bei
+    Backend-Ausfall startet (dann greift die neutrale Anrede in der Persona).
+    """
+    try:
+        resp = await _client.get("/api/v1/agent/operator")
+        if resp.status_code != 200:
+            return {"ok": False, "status": resp.status_code}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001 — fail-soft, Anrede ist nicht kritisch
+        logger.warning("get_operator failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+
 async def vault_briefing() -> dict[str, Any]:
     """Fetch pre-session briefing JSON from MC backend.
 
