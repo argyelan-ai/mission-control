@@ -384,6 +384,13 @@ class RedisKeys:
     def agent_recreate_fails(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:recreate-fails"
 
+    # ── Provider Model Catalog ───────────────────────────────────────────
+    # One key per discovery target (protocol, or "openai:<runtime-slug>") so a
+    # single unreachable provider never invalidates everyone else's cache.
+    @staticmethod
+    def model_catalog_provider(provider_key: str) -> str:
+        return f"mc:model-catalog:{provider_key}"
+
     # ── CLI Tool Update Check ────────────────────────────────────────────
     @staticmethod
     def cli_update_check_lock() -> str:
