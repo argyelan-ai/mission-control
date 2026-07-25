@@ -212,6 +212,13 @@ class VoiceAssistant(Agent):
         )
 
     @function_tool
+    async def get_task_result(self, query: str) -> dict:
+        """Das Ergebnis eines (auch abgeschlossenen) Tasks."""
+        return await jtools.dispatch(
+            "get_task_result", mc_client, VOICE, {"query": query}
+        )
+
+    @function_tool
     async def get_agent_status(self, agent_name: str | None = None) -> dict:
         """Status eines bestimmten Agents oder Uebersicht aller Agents."""
         return await jtools.dispatch("get_agent_status", mc_client, VOICE,

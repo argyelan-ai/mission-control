@@ -144,6 +144,60 @@ async def _list_tasks(
         return {"ok": False, "error": str(e)}
 
 
+async def _resolve_task(client, query: str) -> dict | None:
+    """Findet einen Task per Titel-Substring — erst offen, dann abgeschlossen.
+
+    Die Reihenfolge ist Absicht: fragt der Operator nach "dem Briefing", meint
+    er meist das aktuelle. Erst wenn offen nichts passt, wird unter done
+    gesucht (dort liegen die Ergebnisse).
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    for status in (None, "done", "failed"):
+        resp = await client.list_tasks(status=status, limit=50)
+        for t in resp.get("tasks") or []:
+            if q in (t.get("title") or "").lower():
+                return t
+    return None
+
+
+async def _get_task_result(client, channel: Channel, query: str) -> dict:
+    logger.info("Tool: get_task_result(q=%r)", query)
+    try:
+        task = await _resolve_task(client, query)
+        if task is None:
+            return {"ok": False, "reason": "nothing_found", "query": query}
+
+        deliv = await client.get_deliverables(task["id"], include_content=True)
+        items = deliv.get("deliverables") or []
+        if not items:
+            return {
+                "ok": True,
+                "reason": "no_deliverables",
+                "task": task,
+                "message": "Der Task hat kein abgelegtes Ergebnis.",
+            }
+        return {
+            "ok": True,
+            "task": task,
+            "deliverables": [
+                {
+                    "title": d.get("title"),
+                    "type": d.get("deliverable_type"),
+                    # 4000 Zeichen schuetzen den Realtime-Kontext; das
+                    # vollstaendige Zusammenfassen macht read_briefing.
+                    "content": (d.get("content") or "")[:4000],
+                    "path": d.get("path"),
+                }
+                for d in items[:5]
+            ],
+        }
+    except Exception as e:
+        logger.exception("get_task_result failed")
+        return {"ok": False, "error": str(e)}
+
+
 async def _get_agent_status(client, channel: Channel, agent_name: str | None = None) -> dict:
     logger.info("Tool: get_agent_status(%s)", agent_name)
     try:
@@ -569,6 +623,22 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
             },
         },
         handler=_list_tasks,
+    ),
+    ToolSpec(
+        name="get_task_result",
+        description=(
+            "Liefert das ERGEBNIS eines Tasks (die abgelegten Deliverables), auch "
+            "wenn der Task schon abgeschlossen ist. Nutze das, wenn der Operator "
+            "fragt was bei etwas rausgekommen ist ('was hat der Researcher "
+            "gefunden?', 'zeig mir das Ergebnis von X'). query = Stichwort aus dem "
+            "Task-Titel."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"query": _STR},
+            "required": ["query"],
+        },
+        handler=_get_task_result,
     ),
     ToolSpec(
         name="get_agent_status",

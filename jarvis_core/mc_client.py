@@ -605,6 +605,30 @@ async def get_task(task_id: str) -> dict[str, Any]:
     return resp.json()
 
 
+async def get_deliverables(
+    task_id: str, include_content: bool = False
+) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/deliverables.
+
+    Deliverables sind das eigentliche Arbeitsergebnis eines Tasks (Markdown-
+    Dokumente, Dateien, Reports). ``include_content=True`` liefert den
+    Volltext mit — nur anfordern, wenn er auch gebraucht wird, sonst wird die
+    Response gross.
+
+    Der Endpoint antwortet mit einer nackten Liste; der ``deliverables``-Key
+    wird hier defensiv trotzdem akzeptiert, falls sich die Form aendert.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/deliverables",
+        params={"include_content": str(bool(include_content)).lower()},
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("deliverables") or [])
+    return {"ok": True, "deliverables": items}
+
+
 async def voice_graph_highlight(filter: dict[str, Any]) -> dict[str, Any]:
     """POST /api/v1/voice/graph-highlight — broadcasts filter command to frontend.
 
