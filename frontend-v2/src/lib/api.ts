@@ -1762,6 +1762,23 @@ export const api = {
     update: (tool: string): Promise<{ status: string }> =>
       request(`/api/v1/cli-tools/${tool}/update`, { method: "POST" }),
   },
+  // Modell-Katalog — /api/v1/models/catalog. Sagt nur, welche Modelle es beim
+  // Anbieter GIBT. bind() legt daraus eine Runtime-Zeile an; der Agent-Switch
+  // bleibt unverändert (die neue Zeile erscheint im bestehenden Switch-Modal).
+  modelCatalog: {
+    list: (): Promise<import("@/lib/types").ModelCatalogResponse> =>
+      request("/api/v1/models/catalog"),
+    refresh: (): Promise<import("@/lib/types").ModelCatalogResponse> =>
+      request("/api/v1/models/catalog/refresh", { method: "POST" }),
+    bind: (
+      providerKey: string,
+      modelId: string,
+    ): Promise<import("@/lib/types").ModelCatalogBindResult> =>
+      request("/api/v1/models/catalog/bind", {
+        method: "POST",
+        body: JSON.stringify({ provider_key: providerKey, model_id: modelId }),
+      }),
+  },
   lmstudio: {
     list: (): Promise<LMStudioModelsResponse> =>
       request("/api/v1/runtimes/lmstudio/models"),

@@ -334,6 +334,36 @@ body {
 
 .border-subtle { border-color: var(--color-border-subtle); }
 
+/* ---- Semantische Flächen/Text/Rahmen (v3) ---------------------------------
+   Kurznamen für die Token-Welt. Neue Komponenten nutzen ausschliesslich diese
+   Klassen statt lib/colors.ts-Konstanten oder inline style={{}} — dann zieht
+   eine Nachkalibrierung der Werte in :root/@theme automatisch durch.
+   (Tailwind v4 generiert aus --color-bg-surface nur `bg-bg-surface`; diese
+   Aliase sind die lesbaren Namen, auf die die v3-Konvention verweist.) */
+.bg-base     { background-color: var(--color-bg-base); }
+.bg-surface  { background-color: var(--color-bg-surface); }
+.bg-elevated { background-color: var(--color-bg-elevated); }
+.bg-deep     { background-color: var(--color-bg-deep); }
+
+.text-primary { color: var(--color-text-primary); }
+.text-dim     { color: var(--color-text-dim); }
+.text-accent  { color: var(--color-accent); }
+
+.border-default { border-color: var(--color-border); }
+.border-strong  { border-color: var(--color-border-strong); }
+.border-accent  { border-color: var(--color-border-accent); }
+
+/* Status-Flächen/Text — AA-sichere Stufen, gleiche Quelle wie STATUS_TEXT */
+.text-ok   { color: var(--color-online); }
+.text-warn { color: var(--color-warning); }
+.text-err  { color: var(--color-status-error-text); }
+
+.bg-accent-subtle { background-color: var(--color-accent-subtle); }
+.bg-warn-subtle   { background-color: color-mix(in srgb, var(--color-warning) 12%, transparent); }
+.bg-err-subtle    { background-color: color-mix(in srgb, var(--color-error) 12%, transparent); }
+.border-warn      { border-color: color-mix(in srgb, var(--color-warning) 38%, transparent); }
+.border-err       { border-color: color-mix(in srgb, var(--color-error) 38%, transparent); }
+
 /* ============================================================
    v3 Signatur-Utilities — „Leitstand · argyelan Edition"
    ============================================================ */
