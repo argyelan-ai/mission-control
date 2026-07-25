@@ -38,6 +38,7 @@ export function SparkRecipeSwitcher({
     dropUp: boolean;
   } | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Compute viewport-relative coords for the portal-rendered dropdown.
   // Rendering into document.body (not the runtime card) lets us escape
@@ -48,24 +49,43 @@ export function SparkRecipeSwitcher({
       setCoords(null);
       return;
     }
+    const MENU_W = 320; // minWidth of the dropdown — used for the viewport clamp
     const update = () => {
       if (!buttonRef.current) return;
       const rect = buttonRef.current.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
       const spaceAbove = rect.top;
       const dropUp = spaceBelow < 420 && spaceAbove > spaceBelow;
+      // Clamp so the menu (incl. left edge) stays inside the viewport with an
+      // 8px margin — matters at 393px (panel register rule 4).
+      const right = Math.max(
+        8,
+        Math.min(window.innerWidth - rect.right, window.innerWidth - MENU_W - 8),
+      );
       setCoords({
         top: dropUp ? rect.top - 4 : rect.bottom + 4,
-        right: window.innerWidth - rect.right,
+        right,
         dropUp,
       });
+    };
+    const onPointerDown = (e: MouseEvent) => {
+      if (buttonRef.current?.contains(e.target as Node)) return;
+      if (menuRef.current?.contains(e.target as Node)) return;
+      setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
     };
     update();
     window.addEventListener("scroll", update, true);
     window.addEventListener("resize", update);
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("scroll", update, true);
       window.removeEventListener("resize", update);
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
@@ -148,6 +168,7 @@ export function SparkRecipeSwitcher({
         <AnimatePresence>
           {open && coords && (
             <motion.div
+              ref={menuRef}
               initial={{ opacity: 0, y: coords.dropUp ? 4 : -4 }}
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: coords.dropUp ? 4 : -4 }}
@@ -207,7 +228,7 @@ export function SparkRecipeSwitcher({
                   key={r.name}
                   title={
                     isDisabled
-                      ? `Braucht ${gpuHint ?? "mehr GPUs/Nodes"} — nicht solo-startbar auf diesem Host`
+                      ? `Needs ${gpuHint ?? "more GPUs/nodes"} — cannot run solo on this host`
                       : undefined
                   }
                   style={{
@@ -290,7 +311,7 @@ export function SparkRecipeSwitcher({
                       className="text-[10px]"
                       style={{ color: C.warning, marginTop: "2px" }}
                     >
-                      Braucht {gpuHint ?? "mehr GPUs/Nodes"} — nicht solo-startbar
+                      Needs {gpuHint ?? "more GPUs/nodes"} — cannot run solo
                     </span>
                   )}
                   {isConfirm && (

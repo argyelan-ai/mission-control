@@ -203,7 +203,7 @@ export function JobRow({
           )}
           {snoozedUntil && (
             <span
-              className="shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+              className="shrink-0 rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
               style={{
                 background: `${C.warning}1F`,
                 color: C.warning,
@@ -222,7 +222,7 @@ export function JobRow({
               return (
                 <span
                   key={t}
-                  className="rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                  className="rounded-sm px-1.5 py-0.5 text-[9px] font-mono font-medium"
                   style={{
                     background: `${c}1F`,
                     color: c,

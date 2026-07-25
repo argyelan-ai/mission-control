@@ -74,8 +74,8 @@ describe("CliToolsSection", () => {
     await userEvent.click(screen.getByText(/Update 2026\.5\.01/));
 
     // Modal open — manifest-commit hint + confirm button present
-    await waitFor(() => expect(screen.getByText(/Manifest-Änderung/)).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /Jetzt aktualisieren/ }));
+    await waitFor(() => expect(screen.getByText(/manifest change/i)).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: /Update now/ }));
 
     await waitFor(() => expect(updateSpy).toHaveBeenCalledWith("openclaude"));
   });
@@ -92,7 +92,7 @@ describe("CliToolsSection", () => {
 
     await waitFor(() => expect(screen.getByText(/Update 2026\.5\.01/)).toBeInTheDocument());
     await userEvent.click(screen.getByText(/Update 2026\.5\.01/));
-    await userEvent.click(screen.getByRole("button", { name: /Jetzt aktualisieren/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Update now/ }));
 
     await waitFor(() =>
       expect(screen.getByTestId("cli-update-error")).toHaveTextContent("docker build exited 1"),

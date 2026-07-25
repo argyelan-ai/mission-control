@@ -10,13 +10,14 @@
  *   Add/Edit-Modal (admin-only) + Delete mit 409-Guard-Feedback.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, WifiOff, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostMetrics } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -284,6 +285,16 @@ function HostFormModal({
   const queryClient = useQueryClient();
   const [form, setForm] = useState<HostCreate>(host ? hostToForm(host) : EMPTY_FORM);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // iOS-safe scroll lock + Esc close (panel register rule 4)
+  useBodyScrollLock(true);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onClose]);
 
   const set = <K extends keyof HostCreate>(key: K, value: HostCreate[K]) =>
     setForm((f) => ({ ...f, [key]: value }));
@@ -664,7 +675,7 @@ export function HostsSection() {
             </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            Physische Boxen, auf denen LLM-Runtimes laufen
+            Physical boxes running LLM runtimes
           </p>
         </div>
         {isAdmin && (
@@ -686,7 +697,7 @@ export function HostsSection() {
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
           <Loader2 size={13} className="animate-spin" />
-          <span className="text-xs">Lade Hosts...</span>
+          <span className="text-xs">Loading hosts...</span>
         </div>
       )}
 

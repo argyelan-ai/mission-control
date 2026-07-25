@@ -44,6 +44,7 @@ import AppShell from "@/components/layout/AppShell";
 import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
@@ -994,6 +995,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
   const [showValue, setShowValue] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ProviderTemplate | null>(null);
 
   const { data: providers } = useQuery<ProviderTemplate[]>({
     queryKey: ["secret-providers"],
@@ -1105,8 +1107,8 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                         className="text-[10px] px-1.5 py-0.5 rounded uppercase"
                         style={{
                           backgroundColor: isSet
-                            ? "rgba(0, 204, 136, 0.1)"
-                            : "rgba(255, 255, 255, 0.04)",
+                            ? `${C.online}1A`
+                            : "var(--color-bg-elevated)",
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
                       >
@@ -1141,11 +1143,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                           {isEditing ? "Cancel" : "Change"}
                         </button>
                         <button
-                          onClick={() => {
-                            if (confirm(`Really delete ${tmpl.label}?`)) {
-                              deleteMutation.mutate(tmpl.key);
-                            }
-                          }}
+                          onClick={() => setDeleteTarget(tmpl)}
                           className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                           style={{ color: C.error }}
                         >
@@ -1269,6 +1267,22 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
           })}
         </div>
       )}
+
+      {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete API key"
+        body={deleteTarget ? `Really delete ${deleteTarget.label}?` : undefined}
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteMutation.mutate(deleteTarget.key, {
+            onSuccess: () => setDeleteTarget(null),
+          });
+        }}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </SectionMotion>
   );
 }
@@ -1487,12 +1501,12 @@ function GithubSection() {
             </div>
 
             {saveError && (
-              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.15)" }}>
+              <p className="text-xs rounded-lg px-3 py-2" style={{ color: STATUS_TEXT.error, backgroundColor: `${C.error}14`, border: `1px solid ${C.error}26` }}>
                 {saveError}
               </p>
             )}
             {saveMessage && (
-              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: "rgba(43, 154, 74, 0.1)" }}>
+              <p className="text-xs rounded-lg px-3 py-2 flex items-center gap-1.5" style={{ color: C.online, backgroundColor: `${C.online}1A` }}>
                 <Check size={12} /> {saveMessage}
               </p>
             )}

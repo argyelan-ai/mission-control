@@ -137,7 +137,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
               placeholder="e.g. filesystem"
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
               style={{
-                border: `1px solid ${nameInvalid ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.08)"}`,
+                border: `1px solid ${nameInvalid ? `${C.error}66` : "var(--color-border)"}`,
                 color: "var(--color-text-primary)",
               }}
               aria-label="Name"
@@ -207,7 +207,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                 placeholder="https://example.com/mcp"
                 className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                 style={{
-                  border: `1px solid ${urlInvalid ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.08)"}`,
+                  border: `1px solid ${urlInvalid ? `${C.error}66` : "var(--color-border)"}`,
                   color: "var(--color-text-primary)",
                 }}
                 aria-label="URL"

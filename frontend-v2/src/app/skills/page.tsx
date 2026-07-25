@@ -12,12 +12,14 @@ import {
   Save, Check,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { MCPServer, Agent } from "@/lib/types";
 import { PluginMatrix } from "@/components/shared/PluginMatrix";
 import { SkillMatrix } from "@/components/shared/SkillMatrix";
 import { PluginsShellTab } from "@/components/plugins/PluginsShellTab";
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { MCPAddServerModal } from "@/components/mcp/MCPAddServerModal";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { notify } from "@/lib/notify";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
@@ -88,6 +90,9 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
   const [dirty, setDirty] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
 
+  // iOS-safe scroll lock (M4) — editor modal is always mounted open
+  useBodyScrollLock(true);
+
   const { data, isLoading, error } = useQuery({
     queryKey: ["skill-content", skillKey],
     queryFn: () => api.skills.content(skillKey),
@@ -117,11 +122,11 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
       <motion.div
         initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
         exit={{ scale: 0.95, opacity: 0 }} transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-        className="relative z-10 flex flex-col rounded-2xl overflow-hidden"
+        className="relative z-10 flex flex-col overflow-hidden rounded-none sm:rounded-2xl w-full h-dvh sm:w-[min(820px,95vw)] sm:h-[85vh]"
         role="dialog"
         aria-modal="true"
         aria-label={`Skill: ${skillKey}`}
-        style={{ width: "min(820px, 95vw)", height: "85vh", background: C.bgBase,
+        style={{ background: C.bgBase,
           border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -189,8 +194,8 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                     {tab === "write" ? <><Pencil size={11} /> Write</> : <><Eye size={11} /> Preview</>}
                   </button>
                 ))}
-                {dirty && <span className="ml-auto text-[10px] px-2 py-0.5 rounded-full"
-                  style={{ background: "rgba(245,158,11,0.1)", color: C.warning, border: "1px solid rgba(245,158,11,0.2)" }}>Unsaved</span>}
+                {dirty && <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-sm"
+                  style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}>Unsaved</span>}
               </div>
               <div className="flex-1 overflow-hidden">
                 {writeTab === "write" ? (
@@ -212,9 +217,9 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
         <AnimatePresence>
           {savedToast && (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
-              className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-full text-xs font-medium pointer-events-none"
-              style={{ background: "rgba(0,204,136,0.15)", border: "1px solid rgba(0,204,136,0.3)", color: C.online }}>
-              <Check size={12} /> Gespeichert
+              className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-sm font-mono text-xs font-medium pointer-events-none"
+              style={{ background: `${C.online}26`, border: `1px solid ${C.online}4D`, color: C.online }}>
+              <Check size={12} /> Saved
             </motion.div>
           )}
         </AnimatePresence>
@@ -314,6 +319,7 @@ export default function SkillsPage() {
   const [activeTab, setActiveTab] = useState<"local" | "plugins" | "mcp" | "installer">("local");
   const [search, setSearch] = useState("");
   const [showAddMcpModal, setShowAddMcpModal] = useState(false);
+  const [mcpDeleteTarget, setMcpDeleteTarget] = useState<string | null>(null);
 
   const qc = useQueryClient();
 
@@ -371,8 +377,7 @@ export default function SkillsPage() {
   });
 
   function handleMcpDelete(name: string) {
-    if (!confirm(`Really remove MCP server "${name}"?\nAll agent assignments will be cleaned up.`)) return;
-    deleteMcpMutation.mutate(name);
+    setMcpDeleteTarget(name);
   }
 
   return (
@@ -418,7 +423,7 @@ export default function SkillsPage() {
               <Icon size={13} />
               {label}
               {count > 0 && (
-                <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full"
+                <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-sm"
                   style={{ background: activeTab === id ? C.accentSubtle : "var(--color-bg-elevated)",
                     color: activeTab === id ? C.accent : "var(--color-text-muted)" }}>
                   {count}
@@ -451,7 +456,7 @@ export default function SkillsPage() {
               <div className="flex flex-col items-center gap-2 py-8">
                 <p className="text-xs" style={{ color: C.error }}>{(skillsError as Error).message}</p>
                 <button onClick={() => qc.invalidateQueries({ queryKey: ["skills"] })}
-                  className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Erneut versuchen</button>
+                  className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Try again</button>
               </div>
             ) : isLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -467,7 +472,7 @@ export default function SkillsPage() {
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                {search && <p className="text-xs px-1" style={{ color: "var(--color-text-muted)" }}>{filtered.length} von {installedSkills.length} Skills</p>}
+                {search && <p className="text-xs px-1" style={{ color: "var(--color-text-muted)" }}>{filtered.length} of {installedSkills.length} skills</p>}
                 {categoryOrder.map((cat, i) => (
                   <CategoryGroup key={cat} category={cat} skills={grouped[cat]} index={i} />
                 ))}
@@ -510,6 +515,26 @@ export default function SkillsPage() {
             </AnimatePresence>
           </div>
         )}
+
+        {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
+        <ConfirmDialog
+          open={mcpDeleteTarget !== null}
+          title="Remove MCP server"
+          body={
+            mcpDeleteTarget !== null
+              ? `Really remove MCP server "${mcpDeleteTarget}"? All agent assignments will be cleaned up.`
+              : undefined
+          }
+          confirmLabel="Remove"
+          loading={deleteMcpMutation.isPending}
+          onConfirm={() => {
+            if (mcpDeleteTarget === null) return;
+            deleteMcpMutation.mutate(mcpDeleteTarget, {
+              onSettled: () => setMcpDeleteTarget(null),
+            });
+          }}
+          onCancel={() => setMcpDeleteTarget(null)}
+        />
 
       </div>
     </AppShell>

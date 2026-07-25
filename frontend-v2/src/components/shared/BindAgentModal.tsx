@@ -9,7 +9,7 @@
  * modal is a thin agent-picker on top.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -33,6 +33,16 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
 
   // iOS-safe scroll lock (M4)
   useBodyScrollLock(open);
+
+  // Esc closes the picker (panel register rule 4)
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [open, onClose]);
 
   const { data: agents = [], isLoading } = useQuery({
     queryKey: ["agents", "all-cli-bridge"],

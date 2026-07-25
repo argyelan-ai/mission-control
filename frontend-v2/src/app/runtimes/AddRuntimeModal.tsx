@@ -6,7 +6,7 @@
  * created. No model identifiers typed by hand.
  */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
@@ -68,6 +68,17 @@ export function AddRuntimeModal({ open, onClose }: Props) {
 
   // iOS-safe scroll lock (matches BindAgentModal)
   useBodyScrollLock(open);
+
+  // Esc closes (panel register rule 4)
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") handleClose();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const secretsQuery = useQuery({
     queryKey: ["secrets"],
@@ -314,7 +325,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       style={{ color: STATUS_TEXT.warning, background: `${C.warning}0F`, border: `1px solid ${C.warning}26` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
-                      Endpoint verlangt einen API-Key
+                      Endpoint requires an API key
                     </div>
                   )}
 
@@ -385,7 +396,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                         />
                         {newSecretKeyInvalid && (
                           <div className="text-[11px]" style={{ color: STATUS_TEXT.error }}>
-                            Nur Kleinbuchstaben, Zahlen und _
+                            Lowercase letters, numbers and _ only
                           </div>
                         )}
                         <input

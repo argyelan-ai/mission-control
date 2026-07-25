@@ -66,7 +66,7 @@ describe("SparkRecipeSwitcher", () => {
     // Disabled recipe shows its tp/nodes requirement (badge) and a rejection
     // hint below it — both render the same "tp=2, nodes=1" text.
     expect(screen.getAllByText(/tp=2, nodes=1/).length).toBeGreaterThan(0);
-    expect(screen.getByText(/nicht solo-startbar/i)).toBeInTheDocument();
+    expect(screen.getByText(/cannot run solo/i)).toBeInTheDocument();
 
     // Clicking the disabled entry must NOT reveal the confirm/switch button.
     await user.click(screen.getByText(clusterRecipe.name));

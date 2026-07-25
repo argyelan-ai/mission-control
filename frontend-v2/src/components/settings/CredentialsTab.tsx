@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Pencil, Trash2, Eye, EyeOff, KeyRound, FileText, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
+import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Credential } from "@/lib/types";
 import { C } from "@/lib/colors";
 
@@ -26,6 +27,17 @@ export function CredentialsTab() {
   const qc = useQueryClient();
   const [modal, setModal] = useState<ModalState>({ open: false, editing: null });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
+
+  // iOS-safe scroll lock + Esc close while the modal is open (panel register rule 4)
+  useBodyScrollLock(modal.open);
+  useEffect(() => {
+    if (!modal.open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setModal({ open: false, editing: null });
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [modal.open]);
 
   // Form state
   const [name, setName] = useState("");
@@ -158,7 +170,7 @@ export function CredentialsTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-[12px] font-medium truncate" style={{ color: C.textPrimary }}>{c.name}</span>
-                    <span className="text-[9px] px-1.5 py-0.5 rounded-full" style={{ color: cfg.color, border: `1px solid ${cfg.color}33`, backgroundColor: `${cfg.color}11` }}>
+                    <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${cfg.color}33`, backgroundColor: `${cfg.color}11` }}>
                       {cfg.label}
                     </span>
                   </div>
@@ -170,7 +182,7 @@ export function CredentialsTab() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => openEdit(c)} className="p-1.5 rounded-lg cursor-pointer hover:bg-white/5 transition-colors" aria-label="Edit credential">
+                  <button onClick={() => openEdit(c)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label="Edit credential">
                     <Pencil size={12} style={{ color: C.textMuted }} />
                   </button>
                   {deleteConfirm === c.id ? (
@@ -178,7 +190,7 @@ export function CredentialsTab() {
                       Really?
                     </button>
                   ) : (
-                    <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 rounded-lg cursor-pointer hover:bg-white/5 transition-colors" aria-label="Delete credential">
+                    <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label="Delete credential">
                       <Trash2 size={12} style={{ color: C.textMuted }} />
                     </button>
                   )}
@@ -196,7 +208,8 @@ export function CredentialsTab() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
+            className="fixed inset-0 z-50 flex items-end sm:items-center justify-center sm:p-4"
+            style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
             onClick={(e) => { if (e.target === e.currentTarget) closeModal(); }}
           >
             <div className="absolute inset-0" style={{ backgroundColor: "rgba(0,0,0,0.6)" }} />
@@ -207,7 +220,7 @@ export function CredentialsTab() {
               role="dialog"
               aria-modal="true"
               aria-label={modal.editing ? "Edit credential" : "New credential"}
-              className="relative w-full max-w-md rounded-2xl overflow-hidden"
+              className="relative w-full sm:max-w-md rounded-t-2xl rounded-b-none sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
               style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
             >
               <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
@@ -217,7 +230,7 @@ export function CredentialsTab() {
                 <button onClick={closeModal} className="cursor-pointer hover:opacity-80" style={{ color: C.textMuted }} aria-label="Close modal"><X size={16} /></button>
               </div>
 
-              <div className="p-5 flex flex-col gap-3">
+              <div className="p-5 flex flex-col gap-3 overflow-y-auto">
                 {/* Name */}
                 <label className="flex flex-col gap-1">
                   <span className="text-[10px]" style={{ color: C.textMuted }}>Name</span>
@@ -241,7 +254,7 @@ export function CredentialsTab() {
                         key={t}
                         type="button"
                         onClick={() => setCredType(t)}
-                        className="px-2.5 py-1 text-[11px] font-medium rounded-full cursor-pointer transition-all"
+                        className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
                         style={{
                           backgroundColor: credType === t ? `${cfg.color}22` : "transparent",
                           color: credType === t ? cfg.color : C.textMuted,

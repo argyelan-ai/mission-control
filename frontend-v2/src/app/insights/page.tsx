@@ -410,7 +410,8 @@ export default function InsightsPage() {
                       No cost events recorded yet.
                     </div>
                   ) : (
-                    <table className="w-full">
+                    <div className="overflow-x-auto">
+                    <table className="w-full" style={{ minWidth: 640 }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                           {["Agent", "Input Tokens", "Output Tokens", "Events", "Cost USD"].map((h) => (
@@ -443,6 +444,7 @@ export default function InsightsPage() {
                         })}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 
@@ -459,7 +461,8 @@ export default function InsightsPage() {
                       No session data for this time range.
                     </div>
                   ) : (
-                    <table className="w-full">
+                    <div className="overflow-x-auto">
+                    <table className="w-full" style={{ minWidth: 640 }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                           {["Session", "Agent", "Input", "Output", "Cost", "Last"].map((h) => (
@@ -489,6 +492,7 @@ export default function InsightsPage() {
                         ))}
                       </tbody>
                     </table>
+                    </div>
                   )}
                 </div>
 

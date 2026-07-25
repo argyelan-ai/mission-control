@@ -256,7 +256,7 @@ describe("AddRuntimeModal", () => {
     await userEvent.click(screen.getByRole("button", { name: /probe/i }));
     await screen.findByText("vLLM");
 
-    expect(await screen.findByText(/endpoint verlangt einen api-key/i)).toBeInTheDocument();
+    expect(await screen.findByText(/endpoint requires an api key/i)).toBeInTheDocument();
   });
 
   it("derives a hyphen-free, backend-valid secret key for a multi-word runtime name", async () => {
@@ -325,7 +325,7 @@ describe("AddRuntimeModal", () => {
     await userEvent.clear(keyInput);
     await userEvent.type(keyInput, "my-invalid key!");
 
-    expect(await screen.findByText(/nur kleinbuchstaben, zahlen und _/i)).toBeInTheDocument();
+    expect(await screen.findByText(/lowercase letters, numbers and _ only/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /add runtime/i })).toBeDisabled();
   });
 });

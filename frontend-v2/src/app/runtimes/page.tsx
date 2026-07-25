@@ -1111,7 +1111,7 @@ function RuntimeModelEditor({
         `Model set to "${data.model_identifier ?? "—"}" — bound agents will be restarted on the next watcher tick.`
       );
     },
-    onError: () => onMessage?.("Modell-Update fehlgeschlagen."),
+    onError: () => onMessage?.("Model update failed."),
   });
 
   const save = () => {
@@ -1143,11 +1143,11 @@ function RuntimeModelEditor({
     return (
       <div className="flex items-center gap-1.5 mt-1">
         <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
-          Modell:
+          Model:
         </span>
         <input
           autoFocus
-          aria-label="Modell-Identifier"
+          aria-label="Model identifier"
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => {
@@ -1191,7 +1191,7 @@ function RuntimeModelEditor({
   return (
     <div className="flex items-center gap-1.5 mt-1">
       <span className="text-xs shrink-0" style={{ color: C.textMuted }}>
-        Modell:
+        Model:
       </span>
       <span
         className="font-mono text-xs truncate"
@@ -1205,8 +1205,8 @@ function RuntimeModelEditor({
           setValue(runtime.model_identifier ?? "");
           setEditing(true);
         }}
-        title="Modell bearbeiten"
-        aria-label="Modell bearbeiten"
+        title="Edit model"
+        aria-label="Edit model"
         style={iconBtn(C.textMuted)}
       >
         <Pencil size={12} />

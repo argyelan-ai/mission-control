@@ -15,6 +15,7 @@ import AppShell from "@/components/layout/AppShell";
 import { LoopCard } from "@/components/loops/LoopCard";
 import { LoopDetailPanel } from "@/components/loops/LoopDetailPanel";
 import { CreateLoopDialog } from "@/components/loops/CreateLoopDialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { C } from "@/lib/colors";
@@ -42,6 +43,7 @@ export default function LoopsPage() {
   const [selectedLoopId, setSelectedLoopId] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Loop | null>(null);
 
   const { data: loops = [], isLoading } = useQuery({
     queryKey: ["loops", activeBoardId],
@@ -91,9 +93,7 @@ export default function LoopsPage() {
   });
 
   const handleDelete = (loop: Loop) => {
-    if (confirm(`Delete "${loop.name}"? This cannot be undone.`)) {
-      deleteMutation.mutate(loop.id);
-    }
+    setDeleteTarget(loop);
   };
 
   return (
@@ -214,6 +214,26 @@ export default function LoopsPage() {
           if (loop) handleDelete(loop);
         }}
         actionPending={!!pendingId}
+      />
+
+      {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
+      <ConfirmDialog
+        open={!!deleteTarget}
+        title="Delete loop"
+        body={
+          deleteTarget
+            ? `Delete "${deleteTarget.name}"? This cannot be undone.`
+            : undefined
+        }
+        confirmLabel="Delete"
+        loading={deleteMutation.isPending}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          deleteMutation.mutate(deleteTarget.id, {
+            onSettled: () => setDeleteTarget(null),
+          });
+        }}
+        onCancel={() => setDeleteTarget(null)}
       />
     </AppShell>
   );

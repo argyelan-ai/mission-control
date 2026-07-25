@@ -5,6 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { VllmContainer } from "@/lib/types";
+import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onAdd: () => void }) {
@@ -91,20 +92,10 @@ function AddVllmModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.6)" }}
-      onClick={onClose}
-    >
+    <ResponsiveModal open onClose={onClose} aria-label="Add vLLM Runtime" className="sm:max-w-md">
       <form
         onSubmit={submit}
-        className="w-full max-w-md p-5 rounded-xl"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: C.bgElevated,
-          border: `1px solid ${C.borderSubtle}`,
-          boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
-        }}
+        className="w-full p-5 overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
@@ -164,11 +155,11 @@ function AddVllmModal({
                   key={tag}
                   type="button"
                   onClick={() => toggleTag(tag)}
-                  className="text-xs px-2.5 py-1 rounded-full cursor-pointer transition-colors"
+                  className="font-mono text-[11px] px-2.5 py-1 rounded-sm cursor-pointer transition-colors"
                   style={{
                     color: active ? C.info : C.textMuted,
                     border: `1px solid ${active ? `${C.info}66` : C.borderSubtle}`,
-                    background: active ? `${C.info}1A` : "rgba(255,255,255,0.02)",
+                    background: active ? `${C.info}1A` : "var(--color-bg-hover)",
                   }}
                 >
                   {tag}
@@ -216,7 +207,7 @@ function AddVllmModal({
           </button>
         </div>
       </form>
-    </div>
+    </ResponsiveModal>
   );
 }
 

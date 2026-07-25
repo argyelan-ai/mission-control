@@ -76,7 +76,7 @@ function GithubSkillsSection() {
                 {repo.skills.map((skill) => (
                   <span
                     key={skill}
-                    className="text-[10px] px-2 py-0.5 rounded-full"
+                    className="text-[10px] font-mono px-2 py-0.5 rounded-sm"
                     style={{
                       backgroundColor: "var(--color-bg-elevated)",
                       border: "1px solid var(--color-border)",
@@ -323,11 +323,11 @@ export function PluginMatrix() {
                         style={{
                           backgroundColor: isActive
                             ? `${C.accent}33`
-                            : "rgba(255,255,255,0.04)",
+                            : "var(--color-bg-hover)",
                           border: `1px solid ${
                             isActive
                               ? `${C.accent}66`
-                              : "rgba(255,255,255,0.08)"
+                              : "var(--color-border)"
                           }`,
                         }}
                       >

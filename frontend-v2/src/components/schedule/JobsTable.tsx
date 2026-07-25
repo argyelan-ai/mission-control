@@ -10,6 +10,7 @@ import { Search, X, Pause, Play, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
 import { JobRow } from "./JobRow";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 interface JobsTableProps {
@@ -34,6 +35,7 @@ export function JobsTable({
   const [search, setSearch] = useState("");
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmBulkDelete, setConfirmBulkDelete] = useState(false);
 
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
@@ -101,12 +103,10 @@ export function JobsTable({
     clearSelection();
   };
   const bulkDelete = () => {
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(`Delete ${selected.size} job(s)?`)
-    ) {
-      return;
-    }
+    setConfirmBulkDelete(true);
+  };
+  const runBulkDelete = () => {
+    setConfirmBulkDelete(false);
     for (const id of selected) onDelete(id);
     clearSelection();
   };
@@ -296,6 +296,17 @@ export function JobsTable({
           </div>
         </div>
       </div>
+
+      {/* v3 confirm — replaces native window.confirm() (panel register rule 3).
+          Each onDelete is additionally gated per job by the parent dialog. */}
+      <ConfirmDialog
+        open={confirmBulkDelete}
+        title="Delete jobs"
+        body={`Delete ${selected.size} job(s)?`}
+        confirmLabel="Delete"
+        onConfirm={runBulkDelete}
+        onCancel={() => setConfirmBulkDelete(false)}
+      />
     </div>
   );
 }

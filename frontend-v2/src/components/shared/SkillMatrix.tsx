@@ -224,12 +224,12 @@ export function SkillMatrix() {
                         onClick={() => toggle(agent.id, skill.name)}
                         className="w-5 h-5 rounded flex items-center justify-center cursor-pointer transition-colors mx-auto"
                         style={{
-                          background: enabled ? `${C.accent}33` : "rgba(255,255,255,0.04)",
+                          background: enabled ? `${C.accent}33` : "var(--color-bg-hover)",
                           border: changed
                             ? `2px solid ${C.warning}`
                             : enabled
                               ? `1px solid ${C.accent}66`
-                              : "1px solid var(--color-bg-hover)",
+                              : "1px solid var(--color-border)",
                         }}
                       >
                         {enabled && <Check size={11} style={{ color: C.accentHover }} />}

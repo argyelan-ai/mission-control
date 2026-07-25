@@ -172,9 +172,10 @@ export function MCPServerMatrix({
                             <button
                               onMouseEnter={() => setTooltipServer(s.name)}
                               onMouseLeave={() => setTooltipServer(null)}
+                              onClick={() => setTooltipServer((cur) => (cur === s.name ? null : s.name))}
                               className="flex items-center cursor-pointer"
                               style={{ color: "var(--color-text-dim)" }}
-                              aria-label={`Info zu ${s.name}`}
+                              aria-label={`About ${s.name}`}
                             >
                               <Info size={11} />
                             </button>
@@ -209,7 +210,7 @@ export function MCPServerMatrix({
                         onClick={() => onDeleteServer?.(s.name)}
                         className="p-1 rounded cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shrink-0 touch-visible"
                         style={{ color: "var(--color-text-muted)" }}
-                        title={`${s.name} entfernen`}
+                        title={`Remove ${s.name}`}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -227,11 +228,11 @@ export function MCPServerMatrix({
                         style={{
                           backgroundColor: enabled
                             ? `${C.accent}33`
-                            : "rgba(255,255,255,0.04)",
+                            : "var(--color-bg-hover)",
                           border: `1px solid ${
                             enabled
                               ? `${C.accent}66`
-                              : "rgba(255,255,255,0.08)"
+                              : "var(--color-border)"
                           }`,
                         }}
                         aria-label={`${enabled ? "Deactivate" : "Activate"} ${s.name} for ${a.name}`}
