@@ -1,0 +1,9 @@
+{
+  "cli_version": "0.29.1",
+  "container_image": "mc-kimi-agent:latest",
+  "recorded_at": "2026-07-25",
+  "states": ["idle", "working"],
+  "true_runtime": "kimi",
+  "expected_ui": "kimi",
+  "notes": "LIVE aus dem Prod-Agent mc-agent-kimi (Modell K2.7 Coding, 256k-Fenster). Unterscheidet sich vom kimi/-Fixture-Satz (Spike, K3/1M): Statuszeilen-Einheit klein (256k) und Braille-Spinner mit Literal 'working...' statt Mondphasen. Beide Auspraegungen muessen die Heuristik treffen."
+}

@@ -204,21 +204,27 @@ detect_turn_state() {
         return
     fi
 
-    # kimi-code working: waehrend eines Turns rendert kimi eine Spinner-Zeile
-    # mit Mondphasen-Emoji + Mitteldot (` 🌓 · Tip: …`). Die Zeile verschwindet
-    # am Turn-Ende vollstaendig (kein Vergangenheits-Artefakt im Transcript —
-    # Spike 2026-07-24). Alternation statt Bracket-Klasse: multibyte-sicher
+    # kimi-code working: waehrend eines Turns rendert kimi eine Spinner-Zeile,
+    # die am Turn-Ende vollstaendig verschwindet (kein Vergangenheits-Artefakt
+    # im Transcript). ZWEI belegte Auspraegungen — beide muessen greifen, sonst
+    # klassifiziert der Statuszeilen-Idle-Check unten einen aktiven Turn als
+    # idle (Live-Fund 2026-07-25, K2.7-Prod-Agent):
+    #   a) Mondphasen-Emoji + Mitteldot: ` 🌓 · Tip: …`   (Spike 24.07., K3)
+    #   b) Braille-Spinner + Literal:    ` ⠸ working... · Tip: …` (Prod 25.07.)
+    # Der Literal `working...` allein reicht als Anker fuer (b) — er erscheint
+    # nur in dieser Zeile. Alternation statt Bracket-Klasse: multibyte-sicher
     # unabhaengig von der grep-Locale.
-    if echo "$recent" | grep -qE '(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘) ·'; then
+    if echo "$recent" | grep -qE '(🌑|🌒|🌓|🌔|🌕|🌖|🌗|🌘) ·|working\.\.\.'; then
         echo "working"
         return
     fi
 
-    # kimi-code idle: die Statuszeile `context: N% (x/1M)` ist immer sichtbar
-    # (idle UND working) — idle ist sie OHNE die Mondphasen-Spinner-Zeile
-    # (working greift oben schon). Kein claude/openclaude-Pane rendert dieses
-    # Statuszeilen-Format, der Check ist kimi-eindeutig.
-    if echo "$capture" | tail -8 | grep -qE 'context: [0-9]+% \([0-9.]+[kM]?/[0-9]+[MK]\)'; then
+    # kimi-code idle: die Statuszeile `context: N% (x/256k)` ist immer sichtbar
+    # (idle UND working) — idle ist sie OHNE die Spinner-Zeile (working greift
+    # oben schon). Einheiten klein UND gross zulassen: das Modell bestimmt das
+    # Fenster (`1M` bei K3, `256k` bei K2.7 — Live-Fund 2026-07-25). Kein
+    # claude/openclaude-Pane rendert dieses Format, der Check ist kimi-eindeutig.
+    if echo "$capture" | tail -8 | grep -qE 'context: [0-9]+% \([0-9.]+[kKmM]?/[0-9.]+[kKmM]?\)'; then
         echo "idle"
         return
     fi
