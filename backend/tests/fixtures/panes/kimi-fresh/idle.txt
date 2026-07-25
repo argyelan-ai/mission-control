@@ -1,0 +1,24 @@
+ │                                                                            │
+ │  ▐█▛█▛█▌  Welcome to Kimi Code!                                            │
+ │  ▐█████▌  Send /help for help information.                                 │
+ │                                                                            │
+ │  Directory: /home/agent                                                    │
+ │  Session:   session_9a21773f-f53b-4152-9187-536fccc11314                   │
+ │  Model:     K3                                                             │
+ │  Version:   0.29.1                                                         │
+ │                                                                            │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+
+ ✦ Use Kimi K3 with High thinking effort - for the best balance between token
+                                         spend and capability
+   Run /model to switch to K3 and set thinking effort to High
+
+   Warning: AGENTS.md total 52.0 KB exceeds the recommended 32 KB. Large
+ instruction files increase cost and may impact performance; consider trimming.
+   Kimi Code · +4 models.
+
+ ╭────────────────────────────────────────────────────────────────────────────╮
+ │ >                                                                          │
+ ╰────────────────────────────────────────────────────────────────────────────╯
+ auto  K3 thinking: high  ~
+                                                                    context: 0%
