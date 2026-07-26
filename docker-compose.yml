@@ -125,6 +125,11 @@ services:
       # Jarvis-Agent-Token: der Brain fuehrt Tool-Calls ueber den agent-scoped
       # API-Pfad aus (kein Auth-Bypass), derselbe Token wie der voice_worker.
       JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      # Wer "der Operator" ist: liefert den Anzeigenamen fuer die Anrede
+      # (users.preferred_name) und ist der zweite, vom Scope unabhaengige
+      # Schalter fuer die Operator-Proxy-Endpoints. Leer => Jarvis bleibt bei
+      # der neutralen Anrede, Proxy-Endpoints antworten 503.
+      JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
       # Self-Call-Basis fuer den geteilten mc_client (Brain laeuft IM Backend).
       MC_BACKEND_URL: http://localhost:8000
       MC_BASE_URL: ${MC_BASE_URL:-http://localhost}
@@ -423,6 +428,8 @@ services:
       JARVIS_FRONTIER_MODEL: ${JARVIS_FRONTIER_MODEL:-}
       JARVIS_FRONTIER_ENABLED: ${JARVIS_FRONTIER_ENABLED:-false}
       JARVIS_AGENT_TOKEN: ${JARVIS_AGENT_TOKEN:-}
+      # Siehe Backend-Service: Anzeigename des Operators + Proxy-Schalter.
+      JARVIS_OPERATOR_USER_ID: ${JARVIS_OPERATOR_USER_ID:-}
       MC_BACKEND_URL: http://backend:8000
       VOICE_VOICE_ID: ${VOICE_VOICE_ID:-}
 
