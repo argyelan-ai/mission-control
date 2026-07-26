@@ -8,9 +8,11 @@ und WebSocket koennen keine Authorization-Header setzen, der Token MUSS also
 in die URL.
 
 Beide Logger sind fachlich wertvoll (Request-Tracing) und bleiben an; nur die
-Geheimnisse werden ersetzt. Der Filter haengt an den ROOT-Handlern, damit er
-unabhaengig vom Logger-Namen greift — auch fuer Libraries, die wir nicht
-kennen.
+Geheimnisse werden ersetzt. Der Filter haengt an Root UND an jedem Logger mit
+eigenem Handler bzw. abgeschalteter Propagation (siehe
+``install_log_redaction``) — Root allein reicht nachweislich nicht: uvicorn
+gibt ``uvicorn.access`` einen eigenen Handler mit ``propagate=False``, dessen
+Records die Root-Handler nie erreichen.
 
 Wichtig: Der Filter arbeitet auf der GERENDERTEN Message (`getMessage()`),
 nicht auf `record.msg` — uvicorn formatiert seine Access-Zeilen ueber
@@ -80,13 +82,44 @@ class SecretRedactingFilter(logging.Filter):
         return True
 
 
-def install_log_redaction() -> None:
-    """Haenge den Filter an alle Root-Handler (idempotent).
+def _attach(target) -> None:
+    """Filter an einen Logger ODER Handler haengen (idempotent)."""
+    if not any(isinstance(f, SecretRedactingFilter) for f in target.filters):
+        target.addFilter(SecretRedactingFilter())
 
-    Handler-Ebene statt Logger-Ebene: Filter auf einem Logger greifen NICHT
-    fuer Records, die von Child-Loggern hochpropagiert werden — Handler-Filter
-    sehen dagegen jeden Record, der tatsaechlich ausgegeben wird.
+
+def install_log_redaction() -> None:
+    """Haenge den Filter flotten-weit an (idempotent, mehrfach aufrufbar).
+
+    Zwei Ebenen, weil eine allein nachweislich nicht reicht (Live-Befund
+    26.07.2026, direkt nach dem ersten Deploy: httpx-Zeilen waren sauber,
+    uvicorn-Access-Zeilen leakten weiter den JWT):
+
+    * **Handler-Filter** fangen alles, was bei einem Handler ankommt — auch
+      Records, die von Child-Loggern hochpropagiert wurden (httpx & Co.).
+    * **Logger-Filter** braucht es fuer Logger mit EIGENEM Handler und
+      ``propagate=False`` — genau so konfiguriert uvicorn ``uvicorn.access``.
+      Deren Records erreichen die Root-Handler nie. Ein Filter am Logger
+      selbst greift dagegen fuer jeden Record, der dort entsteht.
+
+    Der Aufruf ist idempotent und soll BEIDE Male laufen: einmal beim Import
+    (fuer alles, was bereits konfiguriert ist) und einmal im lifespan-Startup
+    (fuer Logger, die uvicorn erst beim Server-Start anlegt).
     """
-    for handler in logging.getLogger().handlers:
-        if not any(isinstance(f, SecretRedactingFilter) for f in handler.filters):
-            handler.addFilter(SecretRedactingFilter())
+    root = logging.getLogger()
+    _attach(root)
+    for handler in root.handlers:
+        _attach(handler)
+
+    # Alle bereits existierenden Logger — Snapshot ueber list(), weil das
+    # Anlegen eines Loggers waehrend der Iteration das Dict veraendern kann.
+    for name in list(logging.Logger.manager.loggerDict):
+        logger = logging.getLogger(name)
+        if not isinstance(logger, logging.Logger):  # PlaceHolder-Eintraege
+            continue
+        # Nur wo es noetig ist: eigener Handler (Records enden dort) oder
+        # abgeschaltete Propagation (Records erreichen Root nie).
+        if logger.handlers or not logger.propagate:
+            _attach(logger)
+            for handler in logger.handlers:
+                _attach(handler)

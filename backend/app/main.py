@@ -141,6 +141,11 @@ async def lifespan(app: FastAPI):
     # Fail fast on placeholder secrets (default JWT key = forgeable admin
     # tokens) BEFORE anything else touches the DB or starts services.
     validate_boot_secrets()
+    # Zweiter Durchlauf: uvicorn legt `uvicorn.access` & Co. erst beim
+    # Server-Start an (eigener Handler, propagate=False) — beim Import oben
+    # existierten sie noch nicht. Ohne diesen Aufruf leaken Access-Zeilen
+    # weiter den `?token=<JWT>` (Live-Befund 26.07.2026). Idempotent.
+    install_log_redaction()
     _verify_jinja_templates()
     await _seed_templates()
     await _seed_scheduled_jobs()
