@@ -247,3 +247,90 @@ def test_no_duplicate_filters_on_repeat_install():
         lg.handlers.clear()
         lg.filters.clear()
         lg.propagate = True
+
+
+# ── record.args muss STRUKTUR behalten (uvicorn AccessFormatter) ──────────
+#
+# Live-Befund 26.07. nach #165: der Token war zwar redigiert, die Zeile kam
+# aber als "--- Logging error ---" samt Traceback statt als Access-Zeile.
+# Grund: der Filter ersetzte record.msg durch die fertige Message und leerte
+# record.args. uvicorns AccessFormatter entpackt aber genau fuenf Args
+# (client_addr, method, full_path, http_version, status_code) — mit leerem
+# Tupel wirft das Unpacking. Bei SSE/WebSocket-Requests, die den Token IMMER
+# in der Query tragen, waere das Traceback-Dauerspam gewesen.
+
+class _UvicornLikeFormatter(logging.Formatter):
+    """Minimaler Nachbau von uvicorn.logging.AccessFormatter: verlaesst sich
+    darauf, dass record.args ein 5-Tupel bleibt."""
+
+    def formatMessage(self, record):
+        client_addr, method, full_path, http_version, status_code = record.args
+        return f'{client_addr} - "{method} {full_path} HTTP/{http_version}" {status_code}'
+
+
+def test_args_structure_survives_redaction():
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname=__file__, lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("1.2.3.4:5678", "GET", "/api/v1/tasks/stream?token=LEAKYJWT", "1.1", 200),
+        exc_info=None,
+    )
+    f.filter(record)
+
+    assert isinstance(record.args, tuple) and len(record.args) == 5, (
+        "uvicorn braucht genau 5 Args — der Filter darf sie nicht wegwerfen"
+    )
+    # Der Formatter muss ohne Exception durchlaufen ...
+    out = _UvicornLikeFormatter().formatMessage(record)
+    # ... und das Secret darf weg sein, der Rest lesbar bleiben.
+    assert "LEAKYJWT" not in out
+    assert "tasks/stream" in out and "200" in out and "1.2.3.4" in out
+
+
+def test_redacts_inside_individual_args():
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="x", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="calling %s", args=("https://api.telegram.org/bot42:SECRETX/getMe",),
+        exc_info=None,
+    )
+    f.filter(record)
+    assert "SECRETX" not in record.getMessage()
+    assert len(record.args) == 1  # Struktur bleibt
+
+
+def test_dict_args_are_redacted_and_stay_a_dict():
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="x", level=logging.INFO, pathname=__file__, lineno=1,
+        # dict muss als 1-Tupel kommen — LogRecord packt es selbst aus
+        # (direktes dict laesst schon den Konstruktor mit KeyError: 0 werfen).
+        msg="%(url)s", args=({"url": "/x?api_key=SECRETDICT"},), exc_info=None,
+    )
+    f.filter(record)
+    assert isinstance(record.args, dict)
+    assert "SECRETDICT" not in record.getMessage()
+
+
+def test_non_string_args_are_left_alone():
+    """Zahlen/None duerfen nicht zu Strings werden — sonst bricht %d."""
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="x", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="%s %d %s", args=("/x?token=SEC", 200, None), exc_info=None,
+    )
+    f.filter(record)
+    assert record.args[1] == 200 and isinstance(record.args[1], int)
+    assert record.args[2] is None
+    assert "SEC" not in record.getMessage()
+
+
+def test_secret_only_in_msg_still_redacted_without_args():
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="x", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="/x?token=PLAINSECRET", args=None, exc_info=None,
+    )
+    f.filter(record)
+    assert "PLAINSECRET" not in record.getMessage()

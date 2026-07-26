@@ -73,12 +73,26 @@ class SecretRedactingFilter(logging.Filter):
         except Exception:  # noqa: BLE001 — kaputte %-Args nie zum Crash fuehren lassen
             return True
 
-        cleaned = redact_secrets(original)
-        if cleaned != original:
-            # Message ist bereits gerendert -> Args entfernen, sonst wuerde
-            # ein zweiter getMessage()-Aufruf erneut zu formatieren versuchen.
-            record.msg = cleaned
-            record.args = ()
+        if redact_secrets(original) == original:
+            return True  # nichts zu tun — haeufigster Fall, kein Anfassen
+
+        # An Ort und Stelle redigieren: msg UND jedes Arg einzeln. Die
+        # %-Struktur muss erhalten bleiben — uvicorns AccessFormatter entpackt
+        # record.args in genau fuenf Felder, ein geleertes Tupel liesse ihn
+        # werfen ("--- Logging error ---" statt Access-Zeile, Live-Befund
+        # 26.07.2026). Nicht-Strings bleiben unangetastet, sonst bricht %d.
+        if isinstance(record.msg, str):
+            record.msg = redact_secrets(record.msg)
+
+        if isinstance(record.args, dict):
+            record.args = {
+                k: (redact_secrets(v) if isinstance(v, str) else v)
+                for k, v in record.args.items()
+            }
+        elif isinstance(record.args, tuple):
+            record.args = tuple(
+                redact_secrets(a) if isinstance(a, str) else a for a in record.args
+            )
         return True
 
 
