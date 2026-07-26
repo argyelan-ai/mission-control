@@ -133,6 +133,266 @@ async def _list_open_tasks(client, channel: Channel) -> dict:
         return {"ok": False, "error": str(e)}
 
 
+async def _list_tasks(
+    client, channel: Channel, status: str | None = None, limit: int = 10
+) -> dict:
+    logger.info("Tool: list_tasks(status=%s, limit=%s)", status, limit)
+    try:
+        return await client.list_tasks(status=status, limit=limit)
+    except Exception as e:
+        logger.exception("list_tasks failed")
+        return {"ok": False, "error": str(e)}
+
+
+async def _resolve_task(client, query: str) -> dict | None:
+    """Findet einen Task per Titel-Substring — erst offen, dann abgeschlossen.
+
+    Die Reihenfolge ist Absicht: fragt der Operator nach "dem Briefing", meint
+    er meist das aktuelle. Erst wenn offen nichts passt, wird unter done
+    gesucht (dort liegen die Ergebnisse).
+    """
+    q = (query or "").strip().lower()
+    if not q:
+        return None
+    for status in (None, "done", "failed"):
+        resp = await client.list_tasks(status=status, limit=50)
+        for t in resp.get("tasks") or []:
+            if q in (t.get("title") or "").lower():
+                return t
+    return None
+
+
+async def _get_task_result(client, channel: Channel, query: str) -> dict:
+    logger.info("Tool: get_task_result(q=%r)", query)
+    try:
+        task = await _resolve_task(client, query)
+        if task is None:
+            return {"ok": False, "reason": "nothing_found", "query": query}
+
+        deliv = await client.get_deliverables(task["id"], include_content=True)
+        items = deliv.get("deliverables") or []
+        if not items:
+            return {
+                "ok": True,
+                "reason": "no_deliverables",
+                "task": task,
+                "message": "Der Task hat kein abgelegtes Ergebnis.",
+            }
+        return {
+            "ok": True,
+            "task": task,
+            "deliverables": [
+                {
+                    "title": d.get("title"),
+                    "type": d.get("deliverable_type"),
+                    # 4000 Zeichen schuetzen den Realtime-Kontext; das
+                    # vollstaendige Zusammenfassen macht read_briefing.
+                    "content": (d.get("content") or "")[:4000],
+                    "path": d.get("path"),
+                }
+                for d in items[:5]
+            ],
+        }
+    except Exception as e:
+        logger.exception("get_task_result failed")
+        return {"ok": False, "error": str(e)}
+
+
+#: Checklist-Status, die als "abgehakt" zaehlen. ``skipped`` gehoert dazu:
+#: ein bewusst uebersprungener Schritt ist erledigt, nicht offen (siehe
+#: `mc checklist skip --reason`).
+_CHECKLIST_CLOSED = frozenset({"done", "skipped"})
+
+
+def _item_is_done(item: dict) -> bool:
+    """Ist ein Checklist-Item abgeschlossen?
+
+    Der reale Endpoint liefert ``status``; ein boolesches ``done``/``checked``
+    wird zusaetzlich akzeptiert, damit ein Formwechsel das Tool nicht killt.
+    """
+    if item.get("done") is not None:
+        return bool(item.get("done"))
+    if item.get("checked") is not None:
+        return bool(item.get("checked"))
+    return str(item.get("status") or "").lower() in _CHECKLIST_CLOSED
+
+
+def _item_text(item: dict) -> str:
+    """Der Anzeigetext eines Checklist-Items (real: ``title``)."""
+    return str(item.get("title") or item.get("text") or item.get("label") or "")
+
+
+def _event_text(event: dict) -> str:
+    """Ein TaskEvent als vorlesbarer Einzeiler.
+
+    Reale Felder: from_status / to_status / changed_by / reason. Ein freies
+    ``message``/``event_type`` gewinnt, falls es je eins gibt.
+    """
+    free = event.get("message") or event.get("event_type")
+    if free:
+        return str(free)
+    frm, to = event.get("from_status"), event.get("to_status")
+    if to:
+        line = f"{frm} → {to}" if frm else str(to)
+        who = event.get("changed_by")
+        if who:
+            line += f" ({who})"
+        reason = event.get("reason")
+        if reason:
+            line += f": {reason}"
+        return line
+    return ""
+
+
+async def _task_progress(client, channel: Channel, query: str) -> dict:
+    """Wie weit ist ein laufender Task? Checkliste + letzte Ereignisse.
+
+    Checkliste und Events werden EINZELN abgesichert: faellt eine Quelle aus,
+    liefert das Tool trotzdem den Rest — ein fehlender Endpoint darf die
+    Antwort nicht komplett verschlucken.
+    """
+    logger.info("Tool: task_progress(q=%r)", query)
+    try:
+        task = await _resolve_task(client, query)
+        if task is None:
+            return {"ok": False, "reason": "nothing_found", "query": query}
+
+        checklist = None
+        try:
+            cl = await client.get_task_checklist(task["id"])
+            items = cl.get("items") or []
+            if items:
+                checklist = {
+                    "done": sum(1 for i in items if _item_is_done(i)),
+                    "total": len(items),
+                    "open_items": [
+                        _item_text(i)[:60] for i in items if not _item_is_done(i)
+                    ][:3],
+                }
+        except Exception:
+            logger.warning("checklist fetch failed", exc_info=True)
+
+        events: list[str] = []
+        try:
+            ev = await client.get_task_events(task["id"], limit=5)
+            events = [
+                text[:80]
+                for text in (_event_text(e) for e in (ev.get("events") or []))
+                if text
+            ]
+        except Exception:
+            logger.warning("events fetch failed", exc_info=True)
+
+        return {
+            "ok": True,
+            "task": task,
+            "checklist": checklist,
+            "recent_events": events,
+        }
+    except Exception as e:
+        logger.exception("task_progress failed")
+        return {"ok": False, "error": str(e)}
+
+
+#: Titel-Stichworte, unter denen die Briefing-Tasks im Board laufen. Der
+#: Scheduler legt sie taeglich neu an ("Morning Briefing - Tech & News Digest",
+#: "Morgenbriefing X-Trends") — beide Varianten sollen gefunden werden.
+_BRIEFING_KEYWORDS = ("briefing", "morgenbriefing")
+
+
+async def _summarize_text(text: str) -> dict:
+    """Faesst einen langen Deliverable-Text ueber das Frontier-Modell zusammen.
+
+    Ein Morgenbriefing hat ~19'000 Zeichen — nicht vorlesbar und zu teuer fuer
+    den Realtime-Kontext. Ist Frontier deaktiviert oder faellt der Aufruf aus,
+    meldet die Funktion das strukturiert zurueck und der Aufrufer faellt auf
+    einen Auszug zurueck (degraded), statt zu scheitern.
+    """
+    from jarvis_core import frontier
+
+    if not frontier.is_tool_enabled():
+        return {"ok": False, "reason": "frontier_disabled"}
+    try:
+        return await frontier.ask_frontier(
+            "Fasse das folgende Morgenbriefing fuer eine gesprochene Wiedergabe "
+            "zusammen: die 3-5 wichtigsten Punkte, je ein Satz, ohne Vorrede, "
+            "ohne Meta-Kommentar. Deutsch.\n\n" + text[:16000]
+        )
+    except Exception as e:  # noqa: BLE001 — degradieren, nicht scheitern
+        logger.exception("briefing summarize failed")
+        return {"ok": False, "reason": "summarize_failed", "error": str(e)}
+
+
+async def _read_briefing(client, channel: Channel) -> dict:
+    logger.info("Tool: read_briefing()")
+    try:
+        task = None
+        for kw in _BRIEFING_KEYWORDS:
+            task = await _resolve_task(client, kw)
+            if task:
+                break
+        if task is None:
+            return {
+                "ok": False,
+                "reason": "no_briefing_found",
+                "message": "Ich finde keinen Briefing-Task im Board.",
+            }
+
+        deliv = await client.get_deliverables(task["id"], include_content=True)
+        items = [
+            d for d in (deliv.get("deliverables") or [])
+            if (d.get("content") or "").strip()
+        ]
+        if not items:
+            return {
+                "ok": False,
+                "reason": "no_content",
+                "task": task,
+                "message": "Der Briefing-Task hat noch kein fertiges Dokument.",
+            }
+
+        # Laengstes Dokument gewinnt — Telegram-Kurzfassungen liegen als
+        # separate, kurze Deliverables am selben Task.
+        best = max(items, key=lambda d: len(d.get("content") or ""))
+        text = best.get("content") or ""
+
+        summary = await _summarize_text(text)
+        if summary.get("ok"):
+            result = {
+                "ok": True,
+                "task_title": task.get("title"),
+                "document_title": best.get("title"),
+                "summary": summary.get("answer"),
+            }
+        else:
+            result = {
+                "ok": True,
+                "degraded": True,
+                "reason": summary.get("reason", "summarize_failed"),
+                "task_title": task.get("title"),
+                "document_title": best.get("title"),
+                "excerpt": text[:2000],
+            }
+
+        if channel.supports_cards:
+            try:
+                await client.voice_display(
+                    kind="memory",
+                    data={
+                        "title": best.get("title"),
+                        "snippet": text[:280],
+                        "type": "briefing",
+                    },
+                    title=best.get("title"),
+                )
+            except Exception:
+                logger.warning("briefing card push failed", exc_info=True)
+        return result
+    except Exception as e:
+        logger.exception("read_briefing failed")
+        return {"ok": False, "error": str(e)}
+
+
 async def _get_agent_status(client, channel: Channel, agent_name: str | None = None) -> dict:
     logger.info("Tool: get_agent_status(%s)", agent_name)
     try:
@@ -535,6 +795,71 @@ ALL_TOOLS: tuple[ToolSpec, ...] = (
         description="Listet alle offenen Aufgaben (inbox/in_progress/blocked/review).",
         parameters={"type": "object", "properties": {}},
         handler=_list_open_tasks,
+    ),
+    ToolSpec(
+        name="list_tasks",
+        description=(
+            "Listet Tasks des Boards. Ohne status: nur offene. Mit status "
+            "(inbox|in_progress|blocked|review|done|failed) gezielt filtern — "
+            "z.B. status='done' fuer 'was ist heute fertig geworden'. "
+            "limit default 10, max 50."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "inbox", "in_progress", "blocked",
+                        "review", "done", "failed",
+                    ],
+                },
+                "limit": {"type": "integer", "default": 10},
+            },
+        },
+        handler=_list_tasks,
+    ),
+    ToolSpec(
+        name="get_task_result",
+        description=(
+            "Liefert das ERGEBNIS eines Tasks (die abgelegten Deliverables), auch "
+            "wenn der Task schon abgeschlossen ist. Nutze das, wenn der Operator "
+            "fragt was bei etwas rausgekommen ist ('was hat der Researcher "
+            "gefunden?', 'zeig mir das Ergebnis von X'). query = Stichwort aus dem "
+            "Task-Titel."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"query": _STR},
+            "required": ["query"],
+        },
+        handler=_get_task_result,
+    ),
+    ToolSpec(
+        name="task_progress",
+        description=(
+            "Zeigt, wie weit ein laufender Task ist (Checklisten-Fortschritt + "
+            "letzte Ereignisse). Nutze das bei 'wie weit ist Rex?', 'was macht "
+            "Sparky gerade?', 'ist X schon durch?'. query = Stichwort aus dem "
+            "Task-Titel oder Agent-Name."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"query": _STR},
+            "required": ["query"],
+        },
+        handler=_task_progress,
+    ),
+    ToolSpec(
+        name="read_briefing",
+        description=(
+            "Liest das ECHTE Morgenbriefing vor — das vom Researcher erstellte "
+            "Dokument, nicht den Board-Status. Nutze das IMMER, wenn der Operator "
+            "nach dem Briefing oder Morgenbriefing fragt. Fuer 'was steht an' bzw. "
+            "einen Statusueberblick bleibt briefing() richtig."
+        ),
+        parameters={"type": "object", "properties": {}},
+        handler=_read_briefing,
     ),
     ToolSpec(
         name="get_agent_status",

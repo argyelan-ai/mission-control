@@ -102,7 +102,9 @@ class VoiceAssistant(Agent):
     Telegram-Kanal (dieselbe Wahrheit), nur ueber ein anderes Transport-Modell.
     """
 
-    def __init__(self, briefing: dict | None = None) -> None:
+    def __init__(
+        self, briefing: dict | None = None, operator_name: str | None = None
+    ) -> None:
         # Low-latency turn-detection: kurze Silence-Window damit der Operator schneller
         # Antworten bekommt (default ist ~700ms, wir gehen auf 400ms).
         # OpenAI + xAI Realtime akzeptieren beide dieselbe TurnDetection-Struktur
@@ -111,7 +113,10 @@ class VoiceAssistant(Agent):
         frontier_on = frontier.is_tool_enabled()
         super().__init__(
             instructions=build_instructions(
-                VOICE, briefing_ctx=briefing_ctx, frontier_enabled=frontier_on
+                VOICE,
+                briefing_ctx=briefing_ctx,
+                frontier_enabled=frontier_on,
+                operator_name=operator_name,
             ),
             llm=_build_realtime_model(),
         )
@@ -200,6 +205,32 @@ class VoiceAssistant(Agent):
         return await jtools.dispatch("list_open_tasks", mc_client, VOICE, {})
 
     @function_tool
+    async def list_tasks(self, status: str | None = None, limit: int = 10) -> dict:
+        """Listet Tasks, optional nach Status (auch 'done')."""
+        return await jtools.dispatch(
+            "list_tasks", mc_client, VOICE, {"status": status, "limit": limit}
+        )
+
+    @function_tool
+    async def get_task_result(self, query: str) -> dict:
+        """Das Ergebnis eines (auch abgeschlossenen) Tasks."""
+        return await jtools.dispatch(
+            "get_task_result", mc_client, VOICE, {"query": query}
+        )
+
+    @function_tool
+    async def task_progress(self, query: str) -> dict:
+        """Fortschritt eines laufenden Tasks."""
+        return await jtools.dispatch(
+            "task_progress", mc_client, VOICE, {"query": query}
+        )
+
+    @function_tool
+    async def read_briefing(self) -> dict:
+        """Liest das echte Morgenbriefing-Dokument vor."""
+        return await jtools.dispatch("read_briefing", mc_client, VOICE, {})
+
+    @function_tool
     async def get_agent_status(self, agent_name: str | None = None) -> dict:
         """Status eines bestimmten Agents oder Uebersicht aller Agents."""
         return await jtools.dispatch("get_agent_status", mc_client, VOICE,
@@ -221,7 +252,7 @@ class VoiceAssistant(Agent):
         """Speichere eine Notiz/Lesson/Insight ins Vault.
 
         Args:
-            content: Markdown-Inhalt (was der Operator merken will)
+            content: Markdown-Inhalt (was gemerkt werden soll)
             type: lesson | decision | knowledge | reference | journal | concept | weekly_review | note
             tags: optionale Tags (z.B. ["vault", "voice"])
             title: optionaler Titel (sonst aus erster Zeile von content abgeleitet)
@@ -254,7 +285,7 @@ class VoiceAssistant(Agent):
     async def briefing(self) -> dict:
         """Pre-Session Briefing aus Vault — was laeuft, was ist neu, was offen.
 
-        Wird automatisch beim Session-Start gerufen — der Operator kann es aber auch
+        Wird automatisch beim Session-Start gerufen — laesst sich aber auch
         explizit triggern ('was laeuft gerade', 'gib mir ein Briefing').
         """
         return await jtools.dispatch("briefing", mc_client, VOICE, {})
@@ -266,22 +297,22 @@ class VoiceAssistant(Agent):
         force_path: str | None = None,
         caption: str | None = None,
     ) -> dict:
-        """Schickt eine Datei aus dem Brain des Operators (PDF / Screenshot / Doc) auf Telegram.
+        """Schickt eine Datei aus dem Brain (PDF / Screenshot / Doc) auf Telegram.
 
-        Nutze diese Funktion wenn der Operator explizit sagt 'schick mir das auf
+        Nutze diese Funktion bei einem expliziten 'schick mir das auf
         Telegram' oder 'ich brauch die Datei aufs Handy'. Vorher selber
         per search_notes() den passenden Treffer suchen.
 
         Args:
             query: Such-Stichwort (z.B. "wetterbericht staufen").
-            force_path: Wenn der Operator schon DIE Datei explizit gewählt hat,
+            force_path: Ist DIE Datei schon explizit gewaehlt,
                 den vault_path direkt setzen — die Suche wird übersprungen.
             caption: Optionaler Begleittext auf Telegram.
 
         Verhalten:
         - 0 Treffer → 'nothing_found', schlag vor recherchieren zu lassen
         - 1 Treffer ODER klarer Top-Hit → sofort schicken + Bestätigung sprechen
-        - 2+ ähnliche Treffer → 'ambiguous' + Kandidaten, der Operator waehlt,
+        - 2+ aehnliche Treffer → 'ambiguous' + Kandidaten, nach der Wahl
           dann mit force_path nochmal aufrufen
         """
         return await jtools.dispatch("deliver_to_telegram", mc_client, VOICE, {
@@ -290,7 +321,7 @@ class VoiceAssistant(Agent):
 
     @function_tool
     async def show_memory(self, query: str) -> dict:
-        """Zeigt dem Operator eine Vault-Notiz als Card im Voice-Drawer.
+        """Zeigt eine Vault-Notiz als Card im Voice-Drawer.
 
         Args:
             query: Stichworte (1-3 Begriffe, NICHT volle Saetze).
@@ -299,7 +330,7 @@ class VoiceAssistant(Agent):
 
     @function_tool
     async def show_url(self, url: str, title: str | None = None) -> dict:
-        """Zeigt dem Operator eine externe URL als Card im Voice-Drawer.
+        """Zeigt eine externe URL als Card im Voice-Drawer.
 
         Args:
             url: Vollstaendige URL (https://...)
@@ -309,7 +340,7 @@ class VoiceAssistant(Agent):
 
     @function_tool
     async def show_file(self, query: str) -> dict:
-        """Zeigt dem Operator eine Vault-Datei (PDF/Image/Doc) als Card im Drawer.
+        """Zeigt eine Vault-Datei (PDF/Image/Doc) als Card im Drawer.
 
         Args:
             query: Stichworte zur gesuchten Datei.
@@ -318,7 +349,7 @@ class VoiceAssistant(Agent):
 
     @function_tool
     async def show_task(self, task_id: str | None = None, query: str | None = None) -> dict:
-        """Zeigt dem Operator einen Task als Card im Voice-Drawer.
+        """Zeigt einen Task als Card im Voice-Drawer.
 
         Args:
             task_id: UUID eines bekannten Tasks (bevorzugt wenn du sie hast).
@@ -368,70 +399,87 @@ async def entrypoint(ctx: JobContext) -> None:
         logger.warning("Briefing fetch failed (non-fatal): %s", e)
         briefing = None
 
+    # Anzeigename fuer die Anrede (Persona + Begruessung). Fail-soft in
+    # mc_client.get_operator: ohne Namen bleibt die Persona neutral und die
+    # Begruessung laesst die Anrede weg.
+    operator = await mc_client.get_operator()
+    operator_name = operator.get("name") if operator.get("ok") else None
+
     session = AgentSession()
-    await session.start(agent=VoiceAssistant(briefing=briefing), room=ctx.room)
+    await session.start(
+        agent=VoiceAssistant(briefing=briefing, operator_name=operator_name),
+        room=ctx.room,
+    )
 
     # Adaptive Begruessung mit Briefing-Snapshot (siehe Greeting-Pool unten).
-    await session.generate_reply(instructions=_build_greeting(briefing))
+    await session.generate_reply(instructions=_build_greeting(briefing, operator_name))
 
 
 # ── Greeting Pool ─────────────────────────────────────────────────────
-# Eintoenige Begruessungen waren ein Beschwerde-Punkt des Operators — jeder
-# Anruf fing mit "Guten Tag/Abend Operator, X Tasks offen" an. Der Pool unten
-# variiert Anrede, Zahlen-Einkleidung und die abschliessende Frage. Jeder
-# Eintrag ist ein Template; {tasks} = Tasks-Count, {appr} = Approvals-Count.
+# Eintoenige Begruessungen waren ein Beschwerde-Punkt — jeder Anruf fing mit
+# "Guten Tag/Abend Operator, X Tasks offen" an. Der Pool unten variiert Anrede,
+# Zahlen-Einkleidung und die abschliessende Frage. Jeder Eintrag ist ein
+# Template; {tasks} = Tasks-Count, {appr} = Approvals-Count, {vok} = Vokativ
+# (", Mark"). Ohne konfigurierten Namen ist {vok} LEER — dann faellt die Anrede
+# ganz weg, statt jemanden generisch "Operator" zu nennen. Deshalb sitzt {vok}
+# in jedem Template an einer Stelle, die auch leer noch sauber klingt.
 _GREETINGS_NO_APPROVALS = [
-    "Operator, {tasks} Tasks im Board. Womit fangen wir an?",
-    "Hey Operator, {tasks} offen — welche zuerst?",
-    "Servus Operator, {tasks} Aufgaben warten. Was machst du als erstes?",
-    "Operator, da liegen {tasks} Tasks. Sollen wir die durchgehen?",
-    "Bereit, Operator. {tasks} Tasks offen — wie willst du anfangen?",
-    "Hi Operator — {tasks} im Board. Was steht heute an?",
-    "Operator, {tasks} Tasks offen. Brauchst du nen Ueberblick oder hast du was Konkretes?",
-    "Hallo Operator. {tasks} offen. Soll ich was rauspicken?",
+    "{tasks} Tasks im Board{vok}. Womit fangen wir an?",
+    "Hey{vok} — {tasks} offen, welche zuerst?",
+    "Servus{vok}, {tasks} Aufgaben warten. Was machst du als erstes?",
+    "Da liegen {tasks} Tasks{vok}. Sollen wir die durchgehen?",
+    "Bereit{vok}. {tasks} Tasks offen — wie willst du anfangen?",
+    "Hi{vok} — {tasks} im Board. Was steht heute an?",
+    "{tasks} Tasks offen{vok}. Brauchst du nen Ueberblick oder hast du was Konkretes?",
+    "Hallo{vok}. {tasks} offen — soll ich was rauspicken?",
 ]
 _GREETINGS_WITH_APPROVALS = [
-    "Operator, {tasks} Tasks offen plus {appr} Approvals warten — die Approvals zuerst?",
-    "Hey Operator, {appr} Approvals und {tasks} Tasks. Womit machst du weiter?",
-    "Servus Operator, da haengen {appr} Approvals. Soll ich die durchgehen, oder erst die {tasks} Tasks?",
-    "Operator, {appr} Approvals brauchen dich, {tasks} Tasks offen. Was zuerst?",
-    "Bereit, Operator. {appr} Approvals, {tasks} Tasks — wie willst du starten?",
-    "Hallo Operator — {appr} Approvals hängen, {tasks} Tasks im Board. Approvals durchklicken?",
+    "{tasks} Tasks offen plus {appr} Approvals{vok} — die Approvals zuerst?",
+    "Hey{vok} — {appr} Approvals und {tasks} Tasks. Womit machst du weiter?",
+    "Servus{vok}, da haengen {appr} Approvals. Soll ich die durchgehen, oder erst die {tasks} Tasks?",
+    "{appr} Approvals brauchen dich{vok}, {tasks} Tasks offen. Was zuerst?",
+    "Bereit{vok}. {appr} Approvals, {tasks} Tasks — wie willst du starten?",
+    "Hallo{vok} — {appr} Approvals haengen, {tasks} Tasks im Board. Approvals durchklicken?",
 ]
 _GREETINGS_EMPTY = [
-    "Hey Operator, alles aufgeraeumt — Board ist leer. Was machst du?",
-    "Operator, kein offener Task. Soll ich was suchen oder neu anlegen?",
-    "Bereit, Operator. Board ist sauber — was hast du im Kopf?",
-    "Servus Operator, nichts offen gerade. Was treibst du?",
+    "Hey{vok} — alles aufgeraeumt, Board ist leer. Was machst du?",
+    "Kein offener Task{vok}. Soll ich was suchen oder neu anlegen?",
+    "Bereit{vok}. Board ist sauber — was hast du im Kopf?",
+    "Servus{vok}, nichts offen gerade. Was treibst du?",
 ]
 _GREETINGS_FALLBACK = [
-    "Hi Operator, bin da. Was machst du?",
-    "Operator, ich hoere — was brauchst du?",
-    "Bereit, Operator. Sag an.",
+    "Hi{vok}, bin da. Was machst du?",
+    "Ich hoere{vok} — was brauchst du?",
+    "Bereit{vok}. Sag an.",
 ]
 
 
-def _build_greeting(briefing: dict | None) -> str:
+def _build_greeting(briefing: dict | None, operator_name: str | None = None) -> str:
     """Pick a randomized greeting template + render with briefing numbers.
 
     Falls kein Briefing da ist (Backend nicht erreichbar beim Session-Start),
     nutzen wir den Fallback-Pool — Jarvis erwaehnt dann keine Zahlen.
+
+    ``operator_name`` ist der Anzeigename aus ``mc_client.get_operator``. Ohne
+    Namen bleibt der Vokativ leer und die Begruessung kommt ganz ohne Anrede.
     """
+    vok = f", {operator_name.strip()}" if (operator_name or "").strip() else ""
+
     if not briefing:
-        line = random.choice(_GREETINGS_FALLBACK)
+        line = random.choice(_GREETINGS_FALLBACK).format(vok=vok)
         return f"Sag GENAU diesen einen kurzen Satz auf Deutsch: '{line}'"
 
     n_tasks = len(briefing.get("open_tasks", []) or [])
     n_appr = briefing.get("open_approvals_count", 0)
 
     if n_tasks == 0 and n_appr == 0:
-        line = random.choice(_GREETINGS_EMPTY)
+        line = random.choice(_GREETINGS_EMPTY).format(vok=vok)
     elif n_appr > 0:
         template = random.choice(_GREETINGS_WITH_APPROVALS)
-        line = template.format(tasks=n_tasks, appr=n_appr)
+        line = template.format(tasks=n_tasks, appr=n_appr, vok=vok)
     else:
         template = random.choice(_GREETINGS_NO_APPROVALS)
-        line = template.format(tasks=n_tasks)
+        line = template.format(tasks=n_tasks, vok=vok)
 
     return (
         f"Sag GENAU diesen einen kurzen Satz auf Deutsch (Schweizer-Hochdeutsche "

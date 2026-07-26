@@ -303,24 +303,50 @@ async def dispatch_to_agent(
     }
 
 
-async def list_open_tasks() -> dict[str, Any]:
-    """Holt alle offenen Tasks (inbox + in_progress + blocked + review)."""
-    resp = await _client.get(f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks")
+#: Status, die als "offen" gelten. Server-seitig gibt es keinen Sammelfilter
+#: dafuer (der Endpoint kennt nur einen einzelnen ?status=), deshalb bleibt
+#: dieser eine Fall client-seitig.
+_OPEN_STATUSES = ("inbox", "in_progress", "blocked", "review")
+
+
+async def list_tasks(status: str | None = None, limit: int = 10) -> dict[str, Any]:
+    """Tasks des Jarvis-Boards, optional nach Status gefiltert.
+
+    ``status=None`` → nur offene Tasks (bisheriges Verhalten von
+    list_open_tasks). Ein konkreter Status (z.B. "done") wird als Query-Param
+    ans Backend durchgereicht, statt clientseitig aus einer Seite gefiltert zu
+    werden — sonst waeren aeltere Tasks unerreichbar.
+    """
+    limit = max(1, min(int(limit or 10), 50))
+    params: dict[str, Any] = {"limit": limit}
+    if status:
+        params["status"] = status
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks", params=params
+    )
     resp.raise_for_status()
     tasks = resp.json()
-    open_tasks = [t for t in tasks if t.get("status") in ("inbox", "in_progress", "blocked", "review")]
+    if not status:
+        tasks = [t for t in tasks if t.get("status") in _OPEN_STATUSES]
+    tasks = tasks[:limit]
     return {
         "ok": True,
-        "count": len(open_tasks),
+        "count": len(tasks),
         "tasks": [
             {
+                "id": t.get("id"),
                 "title": t.get("title"),
                 "status": t.get("status"),
                 "assignee": t.get("assigned_agent_name") or "unassigned",
             }
-            for t in open_tasks[:10]  # cap fuer Jarvis-Antwort
+            for t in tasks
         ],
     }
+
+
+async def list_open_tasks() -> dict[str, Any]:
+    """Rueckwaertskompatibler Alias — ruft list_tasks() ohne Status."""
+    return await list_tasks()
 
 
 async def get_agent_status(agent_name: str | None = None) -> dict[str, Any]:
@@ -348,6 +374,22 @@ async def get_agent_status(agent_name: str | None = None) -> dict[str, Any]:
             for a in agents
         ],
     }
+
+
+async def get_operator() -> dict[str, Any]:
+    """GET /api/v1/agent/operator — Anzeigename des Operators fuer die Anrede.
+
+    Fail-soft: jeder Fehler wird zu {"ok": False}, damit der Agent auch bei
+    Backend-Ausfall startet (dann greift die neutrale Anrede in der Persona).
+    """
+    try:
+        resp = await _client.get("/api/v1/agent/operator")
+        if resp.status_code != 200:
+            return {"ok": False, "status": resp.status_code}
+        return resp.json()
+    except Exception as e:  # noqa: BLE001 — fail-soft, Anrede ist nicht kritisch
+        logger.warning("get_operator failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 async def vault_briefing() -> dict[str, Any]:
@@ -561,6 +603,66 @@ async def get_task(task_id: str) -> dict[str, Any]:
     if resp.status_code != 200:
         return {"ok": False, "status": resp.status_code}
     return resp.json()
+
+
+async def get_deliverables(
+    task_id: str, include_content: bool = False
+) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/deliverables.
+
+    Deliverables sind das eigentliche Arbeitsergebnis eines Tasks (Markdown-
+    Dokumente, Dateien, Reports). ``include_content=True`` liefert den
+    Volltext mit — nur anfordern, wenn er auch gebraucht wird, sonst wird die
+    Response gross.
+
+    Der Endpoint antwortet mit einer nackten Liste; der ``deliverables``-Key
+    wird hier defensiv trotzdem akzeptiert, falls sich die Form aendert.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/deliverables",
+        params={"include_content": str(bool(include_content)).lower()},
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("deliverables") or [])
+    return {"ok": True, "deliverables": items}
+
+
+async def get_task_events(task_id: str, limit: int = 10) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/events — Status-Historie.
+
+    Verifiziert 25.07. (agent_task_status.py): der Endpoint antwortet mit einer
+    nackten Liste von ``TaskEvent``-Dumps, jeweils mit ``from_status``,
+    ``to_status``, ``changed_by``, ``reason``, ``created_at`` — neueste zuerst.
+    Der ``events``-Key wird defensiv trotzdem akzeptiert.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/events",
+        params={"limit": max(1, min(int(limit or 10), 100))},
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("events") or [])
+    return {"ok": True, "events": items}
+
+
+async def get_task_checklist(task_id: str) -> dict[str, Any]:
+    """GET /api/v1/agent/boards/{board}/tasks/{id}/checklist — Fortschritt.
+
+    Verifiziert 25.07. (agent_scoped.py): nackte Liste von
+    ``TaskChecklistItem`` mit ``title`` und ``status``
+    (pending|in_progress|done|blocked|skipped), sortiert nach ``sort_order``.
+    """
+    resp = await _client.get(
+        f"/api/v1/agent/boards/{JARVIS_BOARD_ID}/tasks/{task_id}/checklist"
+    )
+    if resp.status_code != 200:
+        return {"ok": False, "status": resp.status_code}
+    data = resp.json()
+    items = data if isinstance(data, list) else (data.get("items") or [])
+    return {"ok": True, "items": items}
 
 
 async def voice_graph_highlight(filter: dict[str, Any]) -> dict[str, Any]:
