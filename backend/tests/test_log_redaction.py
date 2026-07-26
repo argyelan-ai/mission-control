@@ -334,3 +334,150 @@ def test_secret_only_in_msg_still_redacted_without_args():
     )
     f.filter(record)
     assert "PLAINSECRET" not in record.getMessage()
+
+
+# ── BEIDE realen Aufrufer zugleich (Regression-Klammer) ───────────────────
+#
+# Diese Datei hat drei Deploys gebraucht, weil jeder Fix den jeweils anderen
+# Aufrufer brach:
+#   #164 Root-Handler          -> uvicorn.access (propagate=False) ungeschuetzt
+#   #165 msg ersetzen/args leer -> uvicorns AccessFormatter warf
+#   #166 nur str-Args          -> httpx uebergibt ein URL-OBJEKT, blieb roh
+# Ab hier wird jede Aenderung gegen BEIDE Formen zugleich geprueft.
+
+
+class _FakeURL:
+    """Steht fuer httpx.URL: kein str, Secret erst in der Textform."""
+
+    def __init__(self, raw):
+        self._raw = raw
+
+    def __str__(self):
+        return self._raw
+
+
+def test_httpx_shape_object_arg_is_redacted():
+    """httpx: logger.info('HTTP Request: %s %s ...', method, request.url, ...)
+    — die URL ist ein Objekt, kein str."""
+    f = SecretRedactingFilter()
+    record = logging.LogRecord(
+        name="httpx", level=logging.INFO, pathname=__file__, lineno=1,
+        msg='HTTP Request: %s %s "%s %d %s"',
+        args=(
+            "GET",
+            _FakeURL("https://api.telegram.org/bot99887766:OBJECTARGSECRET/getUpdates"),
+            "HTTP/1.1", 200, "OK",
+        ),
+        exc_info=None,
+    )
+    f.filter(record)
+    out = record.getMessage()
+    assert "OBJECTARGSECRET" not in out, "Objekt-Arg wurde nicht redigiert"
+    assert "api.telegram.org" in out and "getUpdates" in out and "200" in out
+
+
+def test_both_callers_stay_fixed_together():
+    """Die Klammer: httpx-Form UND uvicorn-Form in einem Test."""
+    f = SecretRedactingFilter()
+
+    # 1) httpx — Objekt-Arg, Secret muss weg
+    httpx_rec = logging.LogRecord(
+        name="httpx", level=logging.INFO, pathname=__file__, lineno=1,
+        msg='HTTP Request: %s %s "%s %d %s"',
+        args=("GET", _FakeURL("https://api.telegram.org/bot1:BOTHSECRET/getMe"),
+              "HTTP/1.1", 200, "OK"),
+        exc_info=None,
+    )
+    f.filter(httpx_rec)
+    assert "BOTHSECRET" not in httpx_rec.getMessage()
+
+    # 2) uvicorn — 5-Tupel muss 5-Tupel bleiben, Formatter darf nicht werfen
+    uvicorn_rec = logging.LogRecord(
+        name="uvicorn.access", level=logging.INFO, pathname=__file__, lineno=1,
+        msg='%s - "%s %s HTTP/%s" %d',
+        args=("1.2.3.4:5678", "GET", "/stream?token=BOTHJWT", "1.1", 200),
+        exc_info=None,
+    )
+    f.filter(uvicorn_rec)
+    assert len(uvicorn_rec.args) == 5
+    line = _UvicornLikeFormatter().formatMessage(uvicorn_rec)
+    assert "BOTHJWT" not in line and "200" in line
+
+
+def test_object_arg_without_secret_keeps_its_type():
+    """Nur anfassen, was ein Secret traegt — sonst bleibt das Objekt Objekt
+    (fremde Formatter koennen auf dem Typ bestehen)."""
+    f = SecretRedactingFilter()
+    url = _FakeURL("https://example.com/harmless?page=2")
+    record = logging.LogRecord(
+        name="httpx", level=logging.INFO, pathname=__file__, lineno=1,
+        msg="%s", args=(url,), exc_info=None,
+    )
+    f.filter(record)
+    assert record.args[0] is url  # unveraendert durchgereicht
+
+
+# ── Integration gegen die ECHTEN Bibliotheken ─────────────────────────────
+#
+# Die Nachbauten oben beschreiben, wie httpx und uvicorn loggen — sie koennen
+# aber veralten, wenn die Libraries ihren Aufruf aendern. Dieser Test bindet
+# die echten Klassen ein: httpx.URL als Argument und uvicorns AccessFormatter
+# als Formatter. Bricht eine Library ihren Kontrakt, faellt es hier auf.
+
+def test_integration_real_httpx_url_and_uvicorn_formatter():
+    import httpx
+    from uvicorn.logging import AccessFormatter
+
+    captured = []
+
+    class _Cap(logging.Handler):
+        def emit(self, record):
+            try:
+                captured.append(self.format(record))
+            except Exception as exc:  # noqa: BLE001
+                captured.append(f"FORMAT-FEHLER: {exc!r}")
+
+    httpx_log = logging.getLogger("test.integration.httpx")
+    httpx_log.handlers.clear()
+    httpx_log.filters.clear()
+    httpx_log.propagate = False
+    httpx_log.setLevel(logging.INFO)
+    httpx_log.addHandler(_Cap())
+
+    access = logging.getLogger("test.integration.uvicorn.access")
+    access.handlers.clear()
+    access.filters.clear()
+    access.propagate = False
+    access.setLevel(logging.INFO)
+    access_handler = _Cap()
+    access_handler.setFormatter(
+        AccessFormatter(fmt='%(client_addr)s - "%(request_line)s" %(status_code)s')
+    )
+    access.addHandler(access_handler)
+
+    try:
+        install_log_redaction()
+
+        # httpx' eigener Aufruf — request.url ist ein httpx.URL-OBJEKT
+        httpx_log.info(
+            'HTTP Request: %s %s "%s %d %s"',
+            "GET",
+            httpx.URL("https://api.telegram.org/bot777888:REALHTTPXSECRET/getUpdates"),
+            "HTTP/1.1", 200, "OK",
+        )
+        # uvicorns Access-Zeile — der Formatter entpackt genau fuenf Args
+        access.info('%s - "%s %s HTTP/%s" %d',
+                    "1.2.3.4:5", "GET", "/stream?token=REALUVICORNJWT", "1.1", 200)
+
+        blob = "\n".join(captured)
+        assert "REALHTTPXSECRET" not in blob, "httpx-Objekt-Arg leakte"
+        assert "REALUVICORNJWT" not in blob, "uvicorn-Query leakte"
+        assert "FORMAT-FEHLER" not in blob, "Formatter ist gebrochen"
+        # Kontext muss erhalten bleiben, sonst waeren die Logs wertlos
+        assert "api.telegram.org" in blob and "getUpdates" in blob
+        assert "/stream" in blob and "200" in blob
+    finally:
+        for lg in (httpx_log, access):
+            lg.handlers.clear()
+            lg.filters.clear()
+            lg.propagate = True

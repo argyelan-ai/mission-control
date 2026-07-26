@@ -60,6 +60,28 @@ def redact_secrets(text: str) -> str:
     return text
 
 
+def _redact_arg(value):
+    """Ein einzelnes Log-Argument saeubern — typ-erhaltend, wo es geht.
+
+    Strings direkt. Nicht-Strings ueber ihre Textform, denn genau da versteckt
+    sich der haeufigste Fall: httpx loggt ``request.url`` als ``httpx.URL``-
+    OBJEKT, nicht als str (`'HTTP Request: %s %s ...', method, request.url`).
+    Ein reiner ``isinstance(str)``-Test liess den Telegram-Token dort ungefiltert
+    durch (Live-Befund 26.07.2026, dritter Anlauf).
+
+    Objekte ohne Secret werden UNVERAENDERT durchgereicht — Zahlen bleiben
+    Zahlen (``%d``!), fremde Typen behalten ihre Identitaet.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    try:
+        text = str(value)
+    except Exception:  # noqa: BLE001 — kaputtes __str__ nie eskalieren lassen
+        return value
+    cleaned = redact_secrets(text)
+    return cleaned if cleaned != text else value
+
+
 class SecretRedactingFilter(logging.Filter):
     """Logging-Filter, der Secrets aus der Message entfernt.
 
@@ -85,14 +107,9 @@ class SecretRedactingFilter(logging.Filter):
             record.msg = redact_secrets(record.msg)
 
         if isinstance(record.args, dict):
-            record.args = {
-                k: (redact_secrets(v) if isinstance(v, str) else v)
-                for k, v in record.args.items()
-            }
+            record.args = {k: _redact_arg(v) for k, v in record.args.items()}
         elif isinstance(record.args, tuple):
-            record.args = tuple(
-                redact_secrets(a) if isinstance(a, str) else a for a in record.args
-            )
+            record.args = tuple(_redact_arg(a) for a in record.args)
         return True
 
 
