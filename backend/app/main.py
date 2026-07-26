@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings, validate_boot_secrets
 from app.database import engine
+from app.log_redaction import install_log_redaction
 from app.redis_client import close_redis
 
 # Structured logging (structlog) — JSON in production, human-readable in dev
@@ -45,6 +46,12 @@ else:
     )
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
+
+# Secrets aus Log-Zeilen entfernen, BEVOR ein Handler sie schreibt (httpx
+# loggt ausgehende URLs inkl. Telegram-Bot-Token, uvicorn.access die
+# `?token=<JWT>`-Query von SSE/WebSocket-Verbindungen). Direkt nach
+# basicConfig, damit die Root-Handler existieren.
+install_log_redaction()
 from app.routers import (
     activity,
     agent_comments,
