@@ -160,3 +160,90 @@ def test_install_is_idempotent():
             for filt in list(handler.filters):
                 if isinstance(filt, SecretRedactingFilter):
                     handler.removeFilter(filt)
+
+
+# ── Logger mit EIGENEN Handlern (uvicorn.access-Klasse) ───────────────────
+#
+# Live-Befund 26.07. NACH dem ersten Deploy: httpx-Zeilen waren redigiert,
+# uvicorn-Access-Zeilen NICHT. Grund: uvicorn konfiguriert `uvicorn.access`
+# mit einem EIGENEN Handler und `propagate=False` — der Record erreicht die
+# Root-Handler nie, an denen der Filter hing. Ein Filter am Logger selbst
+# greift dagegen fuer jeden Record, der an diesem Logger entsteht.
+
+def _isolated_logger(name):
+    lg = logging.getLogger(name)
+    lg.handlers.clear()
+    lg.filters.clear()
+    lg.propagate = False  # wie uvicorn.access
+    lg.setLevel(logging.INFO)  # sonst schluckt der geerbte Level die Zeile
+    records = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    lg.addHandler(_Capture())
+    return lg, records
+
+
+def test_redacts_on_logger_with_own_handler_and_no_propagate():
+    """Der uvicorn.access-Fall: eigener Handler + propagate=False."""
+    lg, records = _isolated_logger("uvicorn.access")
+    try:
+        install_log_redaction()
+        lg.info('1.2.3.4 - "GET /api/v1/tasks/stream?token=SECRETJWTVALUE HTTP/1.1" 200')
+        assert records, "kein Record aufgezeichnet"
+        assert "SECRETJWTVALUE" not in records[-1]
+        assert "tasks/stream" in records[-1]
+        assert "200" in records[-1]
+    finally:
+        lg.handlers.clear()
+        lg.filters.clear()
+        lg.propagate = True
+
+
+def test_redacts_uvicorn_access_with_percent_args():
+    """uvicorn formatiert Access-Zeilen ueber %-Args."""
+    lg, records = _isolated_logger("uvicorn.access")
+    try:
+        install_log_redaction()
+        lg.info('%s - "%s %s HTTP/1.1" %d', "1.2.3.4", "GET",
+                "/api/v1/vault/voice-display?token=ANOTHERSECRET", 200)
+        assert records and "ANOTHERSECRET" not in records[-1]
+        assert "voice-display" in records[-1]
+    finally:
+        lg.handlers.clear()
+        lg.filters.clear()
+        lg.propagate = True
+
+
+def test_install_covers_late_configured_loggers():
+    """uvicorn kann seine Logger NACH dem App-Import konfigurieren — ein
+    erneuter install_log_redaction()-Aufruf (z.B. im lifespan-Startup) muss
+    die dann neu entstandenen Handler ebenfalls erfassen."""
+    install_log_redaction()
+    lg, records = _isolated_logger("some.late.logger")
+    try:
+        install_log_redaction()  # zweiter Durchlauf nach der Handler-Anlage
+        lg.info("GET /x?api_key=LATESECRET")
+        assert records and "LATESECRET" not in records[-1]
+    finally:
+        lg.handlers.clear()
+        lg.filters.clear()
+        lg.propagate = True
+
+
+def test_no_duplicate_filters_on_repeat_install():
+    lg, _ = _isolated_logger("dupe.check")
+    try:
+        install_log_redaction()
+        install_log_redaction()
+        install_log_redaction()
+        own = [f for f in lg.filters if isinstance(f, SecretRedactingFilter)]
+        assert len(own) <= 1
+        for h in lg.handlers:
+            assert len([f for f in h.filters if isinstance(f, SecretRedactingFilter)]) <= 1
+    finally:
+        lg.handlers.clear()
+        lg.filters.clear()
+        lg.propagate = True
