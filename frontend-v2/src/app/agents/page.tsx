@@ -247,7 +247,7 @@ function TemplatesTab({
               <div className="mt-auto pt-2">
                 <button
                   onClick={() => onUseTemplate(tmpl.id)}
-                  className="w-full text-xs px-3 py-2 rounded-xl font-medium cursor-pointer transition-all text-white"
+                  className="w-full text-xs px-3 py-2 rounded-xl font-medium cursor-pointer transition-all text-[var(--color-on-accent)]"
                   style={btnPrimaryStyle}
                 >
                   Create agent

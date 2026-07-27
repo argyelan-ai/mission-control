@@ -66,7 +66,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
               className={cn(
                 "text-[11px] px-2.5 py-1 rounded-sm font-mono transition-all duration-150 cursor-pointer whitespace-nowrap",
                 statusFilter === opt.value
-                  ? "bg-[var(--color-accent)] text-white"
+                  ? "bg-[var(--color-accent)] text-[var(--color-on-accent)]"
                   : "bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               )}
             >

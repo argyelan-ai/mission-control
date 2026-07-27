@@ -1,58 +1,64 @@
 "use client";
 
 /**
- * Mission Control — Color Tokens (v3 „Leitstand · argyelan Edition")
- * Design-Guideline: Serious. Dark. Cyan-solo. No purple.
+ * Mission Control — Color Tokens (v4 „Signal")
+ * Design-Guideline: Serious. Dark. Achromatic. Colour means status — nothing else.
  *
  * Inspirations: Bloomberg Terminal, Linear.app, Stripe Dashboard
  * Principles:
- *   - One accent only (argyelan-Cyan #00E5FF — die Brand-Farbe)
- *   - Blue-tinted off-blacks for structure (never neutral grey, never pure #000)
- *   - Status colors muted, never glowing
+ *   - NO chromatic brand accent. The primary accent is a near-white off-cream
+ *     (#EBE8DE); it carries through brightness and area, never through hue.
+ *   - Neutral off-blacks for structure (never pure #000)
+ *   - The ONLY chromatic tokens are the four status hues. If something is
+ *     coloured, it must mean something.
+ *   - Error outranks warning through chroma (C .215 vs .095), not brightness.
  *   - No blur, no glass, no shadow-glow
  *
  * App-wide single source since June 2026 (previously components/homepage/colors.ts —
  * a re-export lives there for existing imports).
- * v3 (Juli 2026): Teal → argyelan-Cyan, neutrale Graus → blau-getönte Off-Blacks.
+ * v4 (Juli 2026): argyelan-Cyan als Akzent entfernt (System A „Signal"),
+ * blau-getönte Off-Blacks → neutrale Off-Blacks.
  */
 
 export const C = {
-  // Backgrounds — blau-getönte Off-Blacks (Stufung = Tiefe)
-  bgDeep: "#04070C",
-  bgBase: "#070B12",
-  bgSurface: "#0B111C",
-  bgElevated: "#101827",
-  bgHover: "#162134",
+  // Backgrounds — neutrale Off-Blacks (Stufung = Tiefe)
+  bgDeep: "#0A0A0A",
+  bgBase: "#101010",
+  bgSurface: "#171717",
+  bgElevated: "#222222",
+  bgHover: "#2C2C2C",
 
-  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #04070C–#101827.
-  textPrimary: "#EDF2FA",
-  textSecondary: "#A5B0C2", // ~7.4:1
-  textMuted: "#7E8A9E",     // ~5.1:1
-  textDim: "#566178",       // decoration / inactive icons ONLY — never body text
+  // Text — all body/label tones clear WCAG AA (≥4.5:1) on bg #0A0A0A–#222222.
+  textPrimary: "#EEEEEE",
+  textSecondary: "#BABABA",
+  textMuted: "#8F8F8F",
+  textDim: "#666666",       // decoration / inactive icons ONLY — never body text
 
-  // Borders — kalt getönt
-  borderSubtle: "rgba(146,170,206,0.05)",
-  border: "rgba(146,170,206,0.10)",
-  borderActive: "rgba(146,170,206,0.16)",
-  borderAccent: "rgba(0,229,255,0.30)",
+  // Borders — neutral (Basisfarbe #A8A8A8, bestehende Alpha-Stufen)
+  borderSubtle: "rgba(168,168,168,0.05)",
+  border: "rgba(168,168,168,0.10)",
+  borderActive: "rgba(168,168,168,0.16)",
+  borderAccent: "rgba(235,232,222,0.30)",
 
-  // ONE accent only — argyelan Cyan
-  accent: "#00E5FF",
-  accentSubtle: "rgba(0,229,255,0.10)",
-  accentHover: "#6BEAFF",
-  accentDeep: "#00B4CC",
-  onAccent: "#00252B", // Text auf Cyan-Fläche
+  // ONE accent — achromatisch hell (System A „Signal"): trägt über Helligkeit
+  // und Fläche, nicht über Buntheit.
+  accent: "#EBE8DE",
+  accentSubtle: "rgba(235,232,222,0.10)",
+  accentHover: "#F9F7EF",
+  accentDeep: "#C1BEB2",
+  onAccent: "#151411", // Text auf Akzent-Fläche
 
-  // Status (desaturated, never bright)
-  online: "#2B9A4A",
-  warning: "#B8870A",
-  error: "#C23838",
-  info: "#2E6FD8",
+  // Status — die EINZIGEN bunten Tokens
+  online: "#55A964",
+  warning: "#A67F3E",
+  error: "#FA4942",
+  info: "#5890CA",
 
+  // Charts: Ressourcen-Serien tragen über Helligkeit, nicht über Farbton.
   chart: {
-    cpu: "#00E5FF",
-    ram: "#5E83A8",
-    disk: "#7D92AD",
+    cpu: "#EBE8DE",
+    ram: "#8F8F8F",
+    disk: "#666666",
   },
 } as const;
 
@@ -60,22 +66,23 @@ export const C = {
 // Replaces the ad-hoc inline hex that AgentStrip + PipelineView used to carry.
 
 export const STATUS: Record<string, string> = {
-  online: C.online,        // #2B9A4A
-  busy: C.accent,          // teal — active work (was purple #8B5CF6)
-  idle: C.textDim,         // #6E6E6E
+  online: C.online,        // #55A964
+  busy: C.info,            // #5890CA — active work is an info state, not an accent
+  idle: C.textDim,         // #666666
   offline: "#3A3A3A",
-  error: C.error,          // #C23838
-  warning: C.warning,      // #B8870A
+  error: C.error,          // #FA4942
+  warning: C.warning,      // #A67F3E
   provisioning: C.warning,
   restarting: C.warning,
 };
 
 export const LANE: Record<string, string> = {
   inbox: C.textMuted,      // neutral
-  in_progress: C.info,     // #2E6FD8
-  review: C.warning,       // #B8870A
-  user_test: C.accent,     // teal (was purple #8B5CF6)
-  waiting: C.info,         // #2E6FD8 — answer-wait, same info-blue family as in_progress
+  in_progress: C.info,     // #5890CA
+  review: C.warning,       // #A67F3E
+  // user_test = wartet auf den Operator → hellster Ton, nicht bunt (System A)
+  user_test: C.accent,     // #EBE8DE
+  waiting: C.info,         // #5890CA — answer-wait, same info family as in_progress
   blocked: C.error,
   failed: C.error,
   aborted: C.warning,
@@ -83,14 +90,15 @@ export const LANE: Record<string, string> = {
 };
 
 // ── Status text — AA-safe tones for body text on dark surfaces ──────────────
-// C.error (3.7:1) and C.info (3.8:1) are fine as border/surface/icon, but too
-// dark for body text. These tones meet ≥4.5:1 on #050505–#161616.
+// Measured against bg-elevated #222222 (the brightest card surface):
+// online 5.49:1, error 4.62:1, info 4.74:1 all clear AA unchanged. Only the
+// warning ochre lands at 4.34:1, so body text gets a lifted tone.
 
 export const STATUS_TEXT = {
-  online: C.online,   // 5.0:1 — usable unchanged
-  warning: C.warning, // 5.6:1 — usable unchanged
-  error: "#D05F5F",   // Text tone derived from C.error
-  info: "#5A8CE0",    // Text tone derived from C.info
+  online: C.online,   // 5.49:1 on #222222 — usable unchanged
+  warning: "#B98F4D", // 5.38:1 — lifted tone derived from C.warning (#A67F3E = 4.34:1)
+  error: C.error,     // 4.62:1 — usable unchanged
+  info: C.info,       // 4.74:1 — usable unchanged
 } as const;
 
 // ── External brand colors — the only allowed non-token colors ──────────────
@@ -129,62 +137,70 @@ export const BRAND: Record<string, string> = {
   env: "#ECD53F",
 };
 
-// ── P2 „PHOSPHOR+ CYAN" (feat/ui-redesign-v3) — B2 token set ─────────────────
-// New components (shell first, then page-by-page per 00-redesign-brief) use P2
-// exclusively. C stays the single source for unconverted pages during the
-// transition. Mirrors --color-p2-* in styles/globals.css (keep both in sync).
-// Accent: argyelan-Cyan #00E5FF (Marks Colorway-Wahl 03, 23.07.2026).
+// ── P2 „SIGNAL" shell token set (feat/ui-redesign-v3 → palette-signal) ───────
+// The app shell (Sidebar, TopBar, StatusBar, MobileNav, WorkspaceSwitcher) uses
+// P2 exclusively; C stays the single source for the pages. Mirrors
+// --color-p2-* in styles/globals.css (keep both in sync).
+//
+// v4: P2 was a warm „PHOSPHOR+ CYAN" set (cream text #E9E0C8, cyan accent).
+// System A's accent #EBE8DE sits 1.06:1 against that cream text — the shell
+// accent would have been invisible. P2 is therefore mapped onto the same
+// System A values as C, so shell and pages are one system again.
 export const P2 = {
-  // Surfaces — warm off-blacks (bewusst wärmer als die alte blau-getönte Welt)
-  bg: "#080705", // canvas
-  pan: "#100E08", // raised panel
-  pan2: "#17140C", // hover / higher elevation
-  inset: "#0B0906", // sunken (inputs, meters)
+  // Surfaces — neutrale Off-Blacks
+  bg: "#0A0A0A", // canvas
+  pan: "#171717", // raised panel
+  pan2: "#222222", // hover / higher elevation
+  inset: "#101010", // sunken (inputs, meters)
 
-  // Lines
-  line: "#2A2517", // panel border
-  line2: "#1E1B10", // hairline / dashed separators
+  // Lines — Border-Basisfarbe #A8A8A8, gleiche Alpha-Stufen wie C
+  line: "rgba(168,168,168,0.16)", // panel border
+  line2: "rgba(168,168,168,0.08)", // hairline / dashed separators
 
-  // Text — warm phosphor whites, ≥4.5:1 on bg/pan
-  txt: "#E9E0C8",
-  dim: "#847C68",
-  faint: "#5A5442", // decoration only — never body text
+  // Text — neutral, ≥4.5:1 on bg/pan
+  txt: "#EEEEEE",
+  dim: "#8F8F8F",
+  faint: "#666666", // decoration only — never body text
 
-  // ONE accent — argyelan Cyan; interaction/focus/selection only
-  amb: "#00E5FF",
-  ambD: "#0E6E7A", // dimmed accent (borders, gradient start)
-  inv: "#141008", // text on accent surfaces (reverse video)
+  // ONE accent — achromatisch; interaction/focus/selection only
+  amb: "#EBE8DE",
+  ambD: "#C1BEB2", // dimmed accent (borders, gradient start)
+  inv: "#151411", // text on accent surfaces (reverse video)
 
-  // Status trio — distinct from accent, contextual glow allowed on dots
-  ok: "#4FD67E",
-  wrn: "#FFD84D",
-  err: "#FF5C47",
+  // Status trio — die einzigen bunten Shell-Tokens, kein Glow
+  ok: "#55A964",
+  wrn: "#A67F3E",
+  err: "#FA4942",
 } as const;
 
 // ── Terminal (xterm.js) theme — „Der Leitstand" ANSI set ────────────────────
 // Shared by the Sessions page, Agent CLI tab and Plugins shell. ANSI colors
 // stay distinguishable (terminal content fidelity) but desaturated to match
 // the Leitstand palette — and magenta is magenta, not the banned AI-violet.
+// NOTE: the ANSI slots below (incl. `cyan`) are terminal CONTENT fidelity, not
+// UI accent — programs emit ANSI 6/14 and expect a cyan. They are deliberately
+// exempt from System A's no-chroma rule; only the chrome (bg/fg/cursor/black)
+// follows the tokens.
 export const XTERM_THEME = {
-  background: "#070B12",
-  foreground: "#E5EAF2",
+  background: "#101010",
+  foreground: "#EEEEEE",
   cursor: C.accent,
-  cursorAccent: "#070B12",
-  black: "#101827",
-  brightBlack: "#566178",
-  red: "#D05F5F",
-  brightRed: "#E08080",
-  green: "#3FA96C",
-  brightGreen: "#5FC98C",
-  yellow: "#C9A227",
-  brightYellow: "#E0BE55",
-  blue: "#5A8CE0",
-  brightBlue: "#88AEE8",
+  cursorAccent: "#101010",
+  black: "#222222",
+  brightBlack: "#666666",
+  red: "#FA4942",
+  brightRed: "#FF7A74",
+  green: "#55A964",
+  brightGreen: "#7FCB8C",
+  yellow: "#B98F4D",
+  brightYellow: "#D6AC66",
+  blue: "#5890CA",
+  brightBlue: "#86B3E0",
   magenta: "#C06BB0",
   brightMagenta: "#D68CC8",
-  cyan: "#00D5EE",
-  brightCyan: "#6BEAFF",
-  white: "#E5EAF2",
+  cyan: "#4FA9B5",
+  brightCyan: "#7FC9D3",
+  white: "#EEEEEE",
   brightWhite: "#FFFFFF",
 } as const;
 

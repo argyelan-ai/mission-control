@@ -125,10 +125,10 @@ export function AttachmentThumb({
           type="button"
           onClick={() => setConfirmDelete(true)}
           className="absolute top-1 right-1 p-1 rounded opacity-0 group-hover:opacity-100 transition-opacity touch-visible"
-          style={{ background: "rgba(239,68,68,0.8)" }}
+          style={{ background: "rgba(250,73,66,0.9)" }}
           aria-label={`Delete attachment ${attachment.original_name}`}
         >
-          <X size={12} className="text-white" />
+          <X size={12} className="text-[var(--color-on-accent)]" />
         </button>
       )}
     </motion.div>

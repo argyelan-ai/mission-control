@@ -59,7 +59,7 @@ export function UrlCard({
       >
         <div className="min-w-0 flex-1">
           <div
-            className="text-[11px] font-medium leading-snug truncate group-hover:text-white transition-colors"
+            className="text-[11px] font-medium leading-snug truncate group-hover:text-[var(--color-text-primary)] transition-colors"
             style={{ color: "var(--color-text-primary)" }}
           >
             {displayTitle}

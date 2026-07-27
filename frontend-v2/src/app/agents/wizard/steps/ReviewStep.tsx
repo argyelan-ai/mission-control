@@ -124,7 +124,7 @@ export function ReviewStep({
           <button
             onClick={handleCreate}
             disabled={creating}
-            className="px-5 py-2.5 text-sm rounded-xl font-medium text-white disabled:opacity-40 cursor-pointer transition-all"
+            className="px-5 py-2.5 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 cursor-pointer transition-all"
             style={wizardBtnPrimaryStyle}
           >
             {creating ? (
@@ -173,7 +173,7 @@ export function ReviewStep({
       <div className="flex justify-end">
         <button
           onClick={onCreated}
-          className="px-5 py-2.5 text-sm rounded-xl font-medium text-white cursor-pointer"
+          className="px-5 py-2.5 text-sm rounded-xl font-medium text-[var(--color-on-accent)] cursor-pointer"
           style={wizardBtnPrimaryStyle}
         >
           Done

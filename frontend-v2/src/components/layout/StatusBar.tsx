@@ -6,9 +6,15 @@ import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 
 /**
- * StatusBar — P2 „PHOSPHOR+ CYAN" (ui-redesign-v3).
- * Die Signatur-Instrumentenleiste: volle Cyan-Fläche, dunkler Text, htop-Stil.
- * Gleiche Daten wie v3 (SYS · AGT · BRD · Clock · ⌘K) — nur neue Oberfläche.
+ * StatusBar — P2 „SIGNAL" (ui-redesign-v3).
+ * Die Instrumentenleiste im htop-Stil: SYS · AGT · BRD · Clock · ⌘K.
+ *
+ * System A: die Leiste war früher eine volle Akzent-Fläche (erst Cyan, dann
+ * Bone) mit dunkler Tinte. Ein heller Vollflächen-Balken macht das Rahmenwerk
+ * zum lautesten Element der Seite — Betonung muss aber Bedeutung tragen.
+ * Jetzt: dunkle Chrome-Fläche wie die übrige Shell, neutral heller Text,
+ * Trennung über eine Hairline. Farbe trägt nur noch der SYS-Punkt
+ * (online/error) — das ist die einzige Information hier, die einen Zustand hat.
  */
 export default function StatusBar() {
   const { setCommandPaletteOpen, activeBoardId, boards } = useAppStore();
@@ -42,13 +48,8 @@ export default function StatusBar() {
 
   const activeBoard = boards.find((b) => b.id === activeBoardId);
 
-  // On-cyan inks: readable dark variants of status hues (reverse-video logic)
-  const ink = "var(--color-p2-inv)";
-  const okInk = "#0E3A1C";
-  const errInk = "#7A1A0E";
-
   const sep = (
-    <span aria-hidden style={{ opacity: 0.45 }}>
+    <span aria-hidden style={{ color: "var(--color-p2-faint)" }}>
       |
     </span>
   );
@@ -58,8 +59,10 @@ export default function StatusBar() {
       className="hidden md:flex items-center justify-between px-4 shrink-0"
       style={{
         height: "30px",
-        backgroundColor: "var(--color-p2-amb)",
-        color: ink,
+        // Chrome, kein Banner: dunkle Fläche + Hairline statt Helligkeitssprung.
+        backgroundColor: "var(--color-p2-pan)",
+        borderBottom: "1px solid var(--color-p2-line)",
+        color: "var(--color-p2-txt)", // #EEEEEE auf #171717 = 15.5:1
         fontFamily: "var(--font-p2-mono)",
         fontWeight: 700,
         fontSize: "10.5px",
@@ -69,9 +72,14 @@ export default function StatusBar() {
       {/* Left: telemetry datastream */}
       <div className="flex items-center gap-2.5">
         <span className="flex items-center gap-1.5">
+          {/* Die einzige Farbe in der Leiste — sie trägt einen Zustand. */}
           <span
             className="w-1.5 h-1.5"
-            style={{ backgroundColor: connected ? okInk : errInk }}
+            style={{
+              backgroundColor: connected
+                ? "var(--color-p2-ok)"
+                : "var(--color-p2-err)",
+            }}
           />
           <span>{connected ? "SYS OK" : "SYS OFFLINE"}</span>
         </span>
@@ -88,7 +96,7 @@ export default function StatusBar() {
         {now && (
           <>
             {sep}
-            <span suppressHydrationWarning style={{ opacity: 0.65 }}>
+            <span suppressHydrationWarning style={{ color: "var(--color-p2-dim)" }}>
               {now.toLocaleTimeString("de-CH", { hour12: false })}
             </span>
           </>
@@ -99,13 +107,13 @@ export default function StatusBar() {
       <button
         onClick={() => setCommandPaletteOpen(true)}
         className="flex items-center gap-1.5 cursor-pointer hover:opacity-70 transition-opacity uppercase"
-        style={{ color: ink, letterSpacing: "0.05em", fontWeight: 700 }}
+        style={{ color: "var(--color-p2-txt)", letterSpacing: "0.05em", fontWeight: 700 }}
         aria-label="Open command palette"
       >
         <kbd
           className="px-1.5 py-0.5"
           style={{
-            border: "1px solid var(--color-p2-inv)",
+            border: "1px solid var(--color-p2-line)",
             fontFamily: "var(--font-p2-mono)",
             fontSize: "10px",
           }}

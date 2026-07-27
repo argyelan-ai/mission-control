@@ -9,30 +9,31 @@ import type { VaultNoteType } from "@/lib/types";
 import { C } from "@/lib/colors";
 
 // ── Accent alias — single source for selected/hover/highlight states ──────────
-// (Was purple #7C3AED; replaced with teal per Lila-Null-Regel)
+// (Was purple #7C3AED, then cyan; now the achromatic System-A accent.)
 
-export const GRAPH_SELECTED = C.accent; // cyan #00E5FF
+export const GRAPH_SELECTED = C.accent; // #EBE8DE — achromatic accent
 
 // ── Memory layer color schema — consistent tokens, defined once ───────────────
 // Consumers (MemoryLayerTabs, MemoryQueryBar, etc.) import from here.
 
 export const LAYER_COLORS = {
-  semantic:   C.info,      // #2E6FD8 — knowledge/reference layer
-  episodic:   C.online,    // #2B9A4A — journal/timeline layer
-  agent:      C.error,     // #C23838 — agent lessons/actions layer
-  topics:     C.warning,   // #B8870A — topic clusters layer
+  semantic:   C.info,      // #5890CA — knowledge/reference layer
+  episodic:   C.online,    // #55A964 — journal/timeline layer
+  agent:      C.error,     // #FA4942 — agent lessons/actions layer
+  topics:     C.warning,   // #A67F3E — topic clusters layer
 } as const;
 
 // ── Node type colors ──────────────────────────────────────────────────────────
 
 export const TYPE_COLORS: Record<VaultNoteType, string> = {
-  lesson:       C.online,    // #2B9A4A — green
-  knowledge:    C.info,      // #2E6FD8 — blue
-  reference:    C.accent,    // #00E5FF — cyan (was violet)
-  journal:      C.warning,   // #B8870A — warm amber
-  weekly_review:C.error,     // #C23838 — red
-  note:         C.textMuted, // #888888 — grey (default / untyped)
-  deliverable:  C.accent,    // #00E5FF — cyan (file attachment wrapper)
+  lesson:       C.online,    // #55A964 — green
+  knowledge:    C.info,      // #5890CA — blue
+  reference:    C.accent,    // #EBE8DE — brightest neutral (was violet, then cyan)
+  journal:      C.warning,   // #A67F3E — warm ochre
+  weekly_review:C.error,     // #FA4942 — red
+  note:         C.textMuted, // #8F8F8F — grey (default / untyped)
+  deliverable:  C.accentDeep, // #C1BEB2 — dimmed accent, separated from `reference`
+                             //           by brightness instead of hue
 };
 
 // ── Human-readable type labels (German) ──────────────────────────────────────
@@ -94,7 +95,10 @@ export const RESET_DURATION_MS   = 800;    // zoom-to-fit reset
 export const ZOOM_TARGET_LEVEL   = 3;      // zoom level when flying to a node cluster
 export const ZOOM_FIT_PADDING_PX = 60;     // padding around all nodes on reset
 
-// ── Community color palette (12 distinct hues — no purple) ───────────────────
+// ── Community color palette (12 distinct hues) ───────────────────────────────
+// NOTE (System A): currently UNUSED — no consumer imports it. If graph
+// communities ever get wired up, this rainbow has to be revisited: it is pure
+// categorical chroma and would contradict „Farbe bedeutet nur Status".
 export const COMMUNITY_PALETTE = [
   C.accent,   "#10B981", "#F59E0B", "#3B82F6", "#EC4899", "#06B6D4",
   "#EF4444",  C.info,    "#22C55E", "#FB923C", "#0EA5E9", "#F472B6",

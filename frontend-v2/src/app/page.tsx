@@ -88,7 +88,7 @@ function HomePage() {
 
   return (
     <div className="flex flex-col gap-6 max-w-6xl mx-auto">
-      {/* Header — v3: Clash Display Headline, Mono-Metadaten, Cyan-Messmarke.
+      {/* Header — v3: Clash Display Headline, Mono-Metadaten, Akzent-Messmarke.
           Mobile: kompakte einzeilige Variante (Datum in der Meta-Zeile). */}
       <motion.div custom={0} variants={sectionVariants} initial="hidden" animate="visible">
         <div className="label-sys mb-2 flex items-center justify-between gap-3">
@@ -107,7 +107,7 @@ function HomePage() {
             <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
           </div>
         </div>
-        {/* Messmarke: 1px-Linie mit Cyan-Segment — Desktop; Mobile nur feine Linie */}
+        {/* Messmarke: 1px-Linie mit Akzent-Segment — Desktop; Mobile nur feine Linie */}
         <div className="relative mt-3 sm:mt-4 h-px" style={{ backgroundColor: C.border }}>
           <div
             className="absolute left-0 -top-px h-[2px] w-16 hidden sm:block"

@@ -10,7 +10,7 @@ import { useState } from "react";
 import { Paperclip, Download, Trash2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import { C } from "@/lib/colors";
+import { C, STATUS_TEXT } from "@/lib/colors";
 import { formatBytes } from "@/lib/utils";
 import type { ReferenceFile } from "@/lib/types";
 
@@ -83,7 +83,7 @@ export function ReferenceFileRow({
               onClick={onDelete}
               disabled={deleting}
               className="text-[10px] font-semibold px-1.5 py-0.5 rounded cursor-pointer"
-              style={{ backgroundColor: `${C.error}26`, color: "#D05F5F" }}
+              style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
             >
               {deleting ? "…" : "Delete"}
             </button>

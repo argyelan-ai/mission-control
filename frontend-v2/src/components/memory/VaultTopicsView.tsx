@@ -31,13 +31,13 @@ interface TopicsResponse {
 // Agent color map — consistent with the rest of the memory UI (no purple)
 const AGENT_COLORS: Record<string, string> = {
   boss:       C.accent,          // teal (was purple)
-  researcher: C.online,          // #2B9A4A
-  sparky:     C.warning,         // #B8870A
-  deployer:   C.info,            // #2E6FD8
-  tester:     C.error,           // #C23838
+  researcher: C.online,          // #55A964
+  sparky:     C.warning,         // #A67F3E
+  deployer:   C.info,            // #5890CA
+  tester:     C.error,           // #FA4942
   davinci:    "#EC4899",         // pink — external brand identity
   freecode:   C.accent,          // teal (was indigo #6366F1 — non-brand, mapped to accent)
-  jarvis:     C.accentHover,     // #6BEAFF
+  jarvis:     C.accentHover,     // #F9F7EF
   system:     C.textMuted,       // #888888
 };
 

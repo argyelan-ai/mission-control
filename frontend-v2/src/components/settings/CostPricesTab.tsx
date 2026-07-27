@@ -333,7 +333,7 @@ function AddPriceForm({
           onClick={() => onSave(form)}
           disabled={!form.model_pattern || isLoading}
           aria-label="Save price"
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-[var(--color-on-accent)] cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
             minHeight: 44,
@@ -449,7 +449,7 @@ export function CostPricesTab() {
               background: showAddForm
                 ? "var(--color-bg-elevated)"
                 : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
-              color: showAddForm ? "var(--color-text-muted)" : "white",
+              color: showAddForm ? "var(--color-text-muted)" : C.onAccent,
               border: showAddForm ? `1px solid ${C.border}` : "none",
               minHeight: 36,
             }}

@@ -889,7 +889,7 @@ export function TaskDetailBody({
           <TaskActions task={task} boardId={boardId} />
         </Section>
 
-        {/* Tabs — v3: Mono-Labels, eckiger Cyan-Unterstrich für den aktiven Tab */}
+        {/* Tabs — v3: Mono-Labels, eckiger Akzent-Unterstrich für den aktiven Tab */}
         <div className="flex gap-0.5 px-4 tab-strip" style={{ borderBottom: `1px solid ${C.border}` }} role="tablist">
           {tabs.map((tab) => {
             const active = activeTab === tab.key;

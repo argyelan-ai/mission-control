@@ -331,9 +331,11 @@ function AgentCard({
       onClick={onSelect}
       className="flex flex-col gap-1 p-2.5 rounded-lg text-left cursor-pointer transition-all relative"
       style={{
+        // System A: „selected" trägt über Fläche + Rahmen. Kein Glow mehr — ein
+        // weisser Halo wäre auf Schwarz das lauteste Element der Seite.
         background: selected ? `${C.accent}0F` : C.deep,
         border: `1px solid ${selected ? `${C.accent}66` : C.border}`,
-        boxShadow: selected ? `0 0 0 1px ${C.accent}22, 0 0 24px ${C.accent}14` : "none",
+        boxShadow: selected ? `0 0 0 1px ${C.accent}33` : "none",
       }}
     >
       <div className="flex items-center gap-1.5">
@@ -343,7 +345,8 @@ function AgentCard({
         />
         <span
           className="text-[12px] font-semibold truncate"
-          style={{ color: selected ? C.accent : C.textPrimary }}
+          // Textfarbe bleibt konstant — der Zustand steht in Fläche/Rahmen.
+          style={{ color: C.textPrimary }}
         >
           {agent.name}
         </span>

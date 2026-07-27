@@ -11,7 +11,7 @@ import { C, STATUS } from "@/lib/colors";
  * Connector descriptor — computed from card DOM rects relative to the
  * wrapping <svg>. Two flavours:
  *   - "solid"  → standard parent→child line
- *   - "voice"  → dashed cyan line for the operator→Jarvis sideways branch
+ *   - "voice"  → dashed accent line for the operator→Jarvis sideways branch
  */
 interface Connector {
   id: string;

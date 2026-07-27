@@ -234,7 +234,7 @@ export function BrowserLiveView() {
       {/* Viewport */}
       <div
         className="relative flex-1 min-h-0 flex items-center justify-center overflow-hidden"
-        style={{ background: "#0d0d0d" }}
+        style={{ background: "var(--color-bg-base)" }}
       >
         {!connect && (
           <p className="text-[11px] px-6 text-center" style={{ color: C.textMuted }}>

@@ -248,7 +248,7 @@ function SaveButton({
     <button
       onClick={onClick}
       disabled={loading || disabled}
-      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-[var(--color-on-accent)] cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
       style={{
         background: success
           ? C.online
@@ -967,7 +967,7 @@ function IntelligenceSection() {
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
               backgroundColor: triggerSuccess ? C.online : "transparent",
-              color: triggerSuccess ? "white" : "var(--color-text-primary)",
+              color: triggerSuccess ? "var(--color-on-accent)" : "var(--color-text-primary)",
               border: triggerSuccess ? "none" : "1px solid var(--color-border)",
             }}
           >
@@ -1206,7 +1206,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                         }
                       }}
                       disabled={!newValue || createMutation.isPending}
-                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-white"
+                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
                       style={{
                         background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
                       }}
@@ -1249,7 +1249,7 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                         }
                       }}
                       disabled={!editValue || updateMutation.isPending}
-                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-white"
+                      className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
                       style={{
                         background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
                       }}
@@ -1514,7 +1514,7 @@ function GithubSection() {
             <button
               onClick={handleSave}
               disabled={saveMutation.isPending}
-              className="text-xs px-3 py-2 rounded-lg font-medium cursor-pointer disabled:opacity-40 text-white"
+              className="text-xs px-3 py-2 rounded-lg font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
               style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
             >
               {saveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : "Save"}
@@ -1548,12 +1548,12 @@ function UsersSection() {
       <div className="flex justify-end mb-4">
         <button
           onClick={() => setShowCreateForm(!showCreateForm)}
-          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer text-white"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 cursor-pointer text-[var(--color-on-accent)]"
           style={{
             background: showCreateForm
               ? "transparent"
               : `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
-            color: showCreateForm ? "var(--color-text-secondary)" : "white",
+            color: showCreateForm ? "var(--color-text-secondary)" : "var(--color-on-accent)",
             border: showCreateForm ? "1px solid var(--color-border)" : "none",
           }}
         >
@@ -1811,7 +1811,7 @@ function UserRow({
               <button
                 onClick={() => updateMutation.mutate({ role })}
                 disabled={updateMutation.isPending}
-                className="px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors text-white"
+                className="px-2 py-1 rounded text-xs font-medium cursor-pointer transition-colors text-[var(--color-on-accent)]"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
               >
                 {updateMutation.isPending ? (
@@ -2067,7 +2067,7 @@ function SettingsContent() {
         <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
           Profile, security, system configuration
         </p>
-        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
         <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
           <div
             className="absolute left-0 -top-px h-[2px] w-16"
@@ -2119,7 +2119,7 @@ function SettingsContent() {
                       }
                     }}
                   >
-                    {/* Active state = accent-subtle surface + teal icon (DESIGN.md
+                    {/* Active state = accent-subtle surface + accent icon (DESIGN.md
                         navigation pattern) — no side-stripe indicator on top. */}
                     <Icon
                       size={16}

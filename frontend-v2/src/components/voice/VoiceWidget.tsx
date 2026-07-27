@@ -256,16 +256,16 @@ export function VoiceButton({ size = 36, variant = "header" }: VoiceButtonProps)
         minWidth: 44,
         minHeight: 44,
         backgroundColor: active
-          ? "var(--color-accent-subtle, rgba(0,229,255,0.10))"
+          ? "var(--color-accent-subtle, rgba(235,232,222,0.10))"
           : variant === "sidebar"
             ? "rgba(255, 255, 255, 0.04)"
             : "transparent",
         border: active
-          ? "1px solid var(--color-accent, #00E5FF)"
+          ? "1px solid var(--color-accent, #EBE8DE)"
           : variant === "sidebar"
             ? "1px solid var(--color-border-subtle, var(--color-border))"
             : "1px solid transparent",
-        color: active ? "var(--color-accent-light, #6BEAFF)" : "var(--color-text-secondary)",
+        color: active ? "var(--color-accent-light, #F9F7EF)" : "var(--color-text-secondary)",
       }}
       aria-label={active ? "Manage voice session" : "Start voice assistant"}
       title={active ? "Voice active — click for options" : "Start voice"}

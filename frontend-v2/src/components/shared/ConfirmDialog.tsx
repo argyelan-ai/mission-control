@@ -3,7 +3,7 @@
 /**
  * ConfirmDialog / PromptDialog — the v3 replacement for every browser-native
  * `confirm()` / `prompt()` (panel register rule 3). Small centered dialog on
- * all viewports (per M12), B2 chrome: cyan top edge, mono micro-labels,
+ * all viewports (per M12), B2 chrome: accent top edge, mono micro-labels,
  * ghost cancel + danger/primary confirm key, backdrop without blur.
  *
  * Usage: keep an `open` state at the call site, render
@@ -26,7 +26,7 @@ interface BaseProps {
   body?: React.ReactNode;
   confirmLabel?: string;
   cancelLabel?: string;
-  /** danger (default) = red key; false = primary cyan key. */
+  /** danger (default) = red key; false = primary accent key. */
   danger?: boolean;
   loading?: boolean;
   onConfirm: () => void;
@@ -88,7 +88,7 @@ function DialogShell({
             aria-modal="true"
             aria-label={title}
           >
-            {/* v3 modal signature: 2px cyan top edge */}
+            {/* v3 modal signature: 2px accent top edge */}
             <div className="h-[2px] w-full" style={{ background: danger ? C.error : C.accent }} />
 
             <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">

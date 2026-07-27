@@ -273,7 +273,7 @@ export function ReviewTaskRow({
                   }
                 }}
                 className="p-2 rounded-xl cursor-pointer"
-                style={{ backgroundColor: C.online, color: "white" }}
+                style={{ backgroundColor: C.online, color: C.onAccent }}
               >
                 <CheckCircle size={14} />
               </button>
@@ -312,7 +312,7 @@ export function ReviewTaskRow({
                   }
                 }}
                 className="p-2 rounded-xl cursor-pointer"
-                style={{ backgroundColor: C.error, color: "white" }}
+                style={{ backgroundColor: C.error, color: C.onAccent }}
               >
                 <MessageSquare size={14} />
               </button>

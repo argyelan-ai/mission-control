@@ -81,13 +81,14 @@ describe("RuntimePill", () => {
       <RuntimePill agent={mkAgent({ runtime_id: "rt-hermes" })} variant="default" />,
     );
     await waitFor(() => expect(screen.getByText("Hermes")).toBeInTheDocument());
-    // jsdom normalises hex → rgb(107, 234, 255) — C.accentHover (v3 cyan)
+    // jsdom normalises hex → rgb(193, 190, 178) — C.accentDeep (System A:
+    // hermes is separated from openai_compatible by brightness, not by hue)
     const dot = Array.from(container.querySelectorAll("span")).find(
       (el) =>
-        el.getAttribute("style")?.includes("107, 234, 255") ||
-        el.getAttribute("style")?.toLowerCase().includes("#6beaff"),
+        el.getAttribute("style")?.includes("193, 190, 178") ||
+        el.getAttribute("style")?.toLowerCase().includes("#c1beb2"),
     );
-    expect(dot, "expected a span with the hermes cyan color #6BEAFF").toBeDefined();
+    expect(dot, "expected a span with the hermes accent-deep color #C1BEB2").toBeDefined();
     expect(dot).toBeTruthy();
   });
 

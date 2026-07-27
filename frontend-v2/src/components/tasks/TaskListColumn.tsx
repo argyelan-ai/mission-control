@@ -50,10 +50,11 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
 
 function StatusDot({ status }: { status: TaskStatus }) {
   const icons: Partial<Record<TaskStatus, React.ReactNode>> = {
-    done: <Check size={8} strokeWidth={3} className="text-white" />,
-    blocked: <X size={8} strokeWidth={3} className="text-white" />,
-    failed: <X size={8} strokeWidth={3} className="text-white" />,
-    aborted: <X size={8} strokeWidth={3} className="text-white" />,
+    // Glyphs sit ON the status fill → dark ink (see tasks/page.tsx).
+    done: <Check size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    blocked: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    failed: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    aborted: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
   };
   const color = LANE[status] ?? C.textMuted;
   const outline = status === "inbox";
@@ -467,7 +468,7 @@ export default function TaskListColumn({
 
   return (
     <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
-      {/* Header — v3: Micro-Label, Clash-Display-Titel, Cyan-Messmarke */}
+      {/* Header — v3: Micro-Label, Clash-Display-Titel, Akzent-Messmarke */}
       <div className="px-4 pt-4 pb-2 shrink-0">
         <div className="label-sys mb-1.5">Console · Tasks</div>
         <div className="flex items-baseline gap-2">
@@ -478,7 +479,7 @@ export default function TaskListColumn({
             {openCount} open
           </span>
         </div>
-        {/* Messmarke: 1px-Linie mit Cyan-Segment — Instrumenten-Detail */}
+        {/* Messmarke: 1px-Linie mit Akzent-Segment — Instrumenten-Detail */}
         <div className="relative mt-3 h-px" style={{ backgroundColor: C.border }}>
           <div
             className="absolute left-0 -top-px h-[2px] w-16"

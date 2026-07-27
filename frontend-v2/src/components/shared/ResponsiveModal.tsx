@@ -84,7 +84,7 @@ export function ResponsiveModal({
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
             }}
           >
-            {/* Cyan-Kante oben — Signatur-Markierung */}
+            {/* Akzent-Kante oben — Signatur-Markierung */}
             <div className="h-[2px] w-full shrink-0" style={{ backgroundColor: "var(--color-accent)" }} />
 
             {/* Top drag indicator on mobile */}

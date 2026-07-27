@@ -377,7 +377,7 @@ export function CredentialsTab() {
                   onClick={handleSubmit}
                   disabled={isSubmitDisabled() || createMut.isPending || updateMut.isPending}
                   className="px-3.5 py-1.5 text-[11px] font-semibold rounded-lg cursor-pointer transition-all disabled:opacity-30"
-                  style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`, color: "#fff" }}
+                  style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`, color: C.onAccent }}
                 >
                   {createMut.isPending || updateMut.isPending ? "..." : modal.editing ? "Save" : "Create"}
                 </button>

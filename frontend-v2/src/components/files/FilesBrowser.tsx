@@ -100,7 +100,10 @@ export function FilesBrowser({
           <button
             onClick={() => navigateToBreadcrumb(-1)}
             className="hover:underline cursor-pointer font-medium"
-            style={{ color: parts.length > 0 ? C.accent : C.textPrimary }}
+            // Breadcrumb-Wurzel: ist sie ein Vorfahre (parts>0), tritt sie zurück;
+            // ist sie die aktuelle Ebene, ist sie der hellste Ton. Hierarchie über
+            // Helligkeit statt über Akzentfarbe (System A).
+            style={{ color: parts.length > 0 ? C.textSecondary : C.textPrimary }}
           >
             {root.label}
           </button>

@@ -1,5 +1,5 @@
 /**
- * Channel indicator (P2 „PHOSPHOR+ CYAN", ui-redesign-v3) — shared by
+ * Channel indicator (P2 „SIGNAL", ui-redesign-v3) — shared by
  * TopBar (desktop) and MobileNav (mobile). Every screen carries a persistent
  * channel id; daily destinations get fixed channels, everything else CH05.
  */

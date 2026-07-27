@@ -8,7 +8,7 @@ import { api } from "@/lib/api";
 import { channelFor } from "./channel";
 
 /**
- * TopBar — P2 „PHOSPHOR+ CYAN" desktop chrome (ui-redesign-v3).
+ * TopBar — P2 „SIGNAL" desktop chrome (ui-redesign-v3).
  * Slim instrument strip above the content column: brand + channel id (CH) +
  * page name left, board / agents / local clock right. Display-only — board
  * switching stays in the WorkspaceSwitcher rail, palette stays on ⌘K.
@@ -41,7 +41,7 @@ export default function TopBar() {
       className="hidden md:flex items-center shrink-0 px-4"
       style={{
         height: "38px",
-        backgroundColor: "rgba(8,7,5,0.92)",
+        backgroundColor: "rgba(10,10,10,0.92)",
         borderBottom: "1px solid var(--color-p2-line2)",
         fontFamily: "var(--font-p2-mono)",
         fontSize: "11px",

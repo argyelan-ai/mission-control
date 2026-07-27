@@ -112,7 +112,8 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
               >
                 <div
                   className="text-sm font-medium"
-                  style={{ color: active ? C.accent : "var(--color-text-primary)" }}
+                  // aktiv trägt die Akzent-Fläche + der Rahmen, nicht die Textfarbe
+                  style={{ color: "var(--color-text-primary)" }}
                 >
                   {r.label}
                 </div>
@@ -145,7 +146,7 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
                       opacity: taken ? 0.4 : 1,
                       backgroundColor: active ? C.accentSubtle : "var(--color-bg-surface)",
                       border: `1px solid ${active ? C.borderAccent : C.borderSubtle}`,
-                      color: active ? C.accent : "var(--color-text-primary)",
+                      color: "var(--color-text-primary)", // aktiv = Fläche + Rahmen
                     }}
                   >
                     <span className="inline-flex items-center justify-center gap-2">

@@ -101,7 +101,7 @@ export function AgentWizard({
                       className="flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-medium shrink-0"
                       style={{
                         backgroundColor: active || done ? C.accent : "var(--color-bg-elevated)",
-                        color: active || done ? "#fff" : "var(--color-text-muted)",
+                        color: active || done ? C.onAccent : "var(--color-text-muted)",
                       }}
                     >
                       {done ? <Check size={11} /> : i + 1}
@@ -155,7 +155,7 @@ export function AgentWizard({
             <button
               onClick={goNext}
               disabled={!canProceed(state)}
-              className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-white disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
+              className="flex items-center gap-1.5 px-5 py-2 text-sm rounded-xl font-medium text-[var(--color-on-accent)] disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer transition-all"
               style={wizardBtnPrimaryStyle}
             >
               Next <ChevronRight size={15} />

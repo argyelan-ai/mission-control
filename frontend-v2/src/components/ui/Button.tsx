@@ -14,10 +14,12 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles = {
+  // primary sits ON the accent surface → must use the on-accent ink, never white.
   primary:
-    'text-white active:scale-[0.98]',
+    'text-[var(--color-on-accent)] active:scale-[0.98]',
+  // secondary is a transparent outline button on a dark surface.
   secondary:
-    'bg-transparent text-white active:scale-[0.98]',
+    'bg-transparent text-[var(--color-text-primary)] active:scale-[0.98]',
 };
 
 const sizeStyles = {
@@ -50,7 +52,7 @@ export function Button({
   const hoverClass =
     variant === 'primary'
       ? 'hover:brightness-110'
-      : 'hover:border-[var(--color-accent)] hover:text-[var(--color-accent)]';
+      : 'hover:border-[var(--color-accent)] hover:bg-[var(--color-accent-subtle)]';
 
   return (
     <button
@@ -73,7 +75,7 @@ export function Button({
           xmlns="http://www.w3.org/2000/svg"
           fill="none"
           viewBox="0 0 24 24"
-          style={{ color: C.accentHover, borderTopColor: C.accent }}
+          style={{ color: C.onAccent, borderTopColor: C.accent }}
         >
           <circle
             className="opacity-25"

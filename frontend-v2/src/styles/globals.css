@@ -98,51 +98,53 @@
 @import "tailwindcss";
 
 /* ============================================================
-   Mission Control — v3 „Leitstand · argyelan Edition"
-   Dark mode only. Ein Akzent: argyelan-Cyan #00E5FF. Blau-getönte
-   Off-Blacks statt Neutralgrau, eckige Radien, Mono-Signatur.
+   Mission Control — v4 „Signal"
+   Dark mode only. KEIN chromatischer Akzent: der Primär-Akzent ist
+   ein achromatisches Off-Cream (#EBE8DE) und trägt über Helligkeit
+   und Fläche. Farbe bedeutet ausschliesslich Status.
    Werte spiegeln src/lib/colors.ts (Single Source) — Änderungen
    IMMER dort zuerst.
    ============================================================ */
 
 @theme {
-  /* ---- Backgrounds (Stufung = Tiefe: deep → hover, blau-getönt) ---- */
-  --color-bg-dark: #04070c;
-  --color-bg-deep: #04070c;
-  --color-bg-base: #070b12;
-  --color-bg-surface: #0b111c;
-  --color-bg-elevated: #101827;
-  --color-bg-hover: #162134;
+  /* ---- Backgrounds (Stufung = Tiefe: deep → hover, neutral) ---- */
+  --color-bg-dark: #0a0a0a;
+  --color-bg-deep: #0a0a0a;
+  --color-bg-base: #101010;
+  --color-bg-surface: #171717;
+  --color-bg-elevated: #222222;
+  --color-bg-hover: #2c2c2c;
 
   /* ---- Text (mirrors colors.ts — alle ≥4.5:1 auf bg-deep–bg-elevated) ---- */
-  --color-text-primary: #edf2fa;
-  --color-text-secondary: #a5b0c2;
-  --color-text-muted: #7e8a9e;
-  --color-text-body: #edf2fa;
+  --color-text-primary: #eeeeee;
+  --color-text-secondary: #bababa;
+  --color-text-muted: #8f8f8f;
+  --color-text-body: #eeeeee;
 
-  /* ---- Borders (kalt getönt, mirrors colors.ts) ---- */
-  --color-border-subtle: rgba(146, 170, 206, 0.05);
-  --color-border: rgba(146, 170, 206, 0.1);
-  --color-border-strong: rgba(146, 170, 206, 0.16);
+  /* ---- Borders (neutral, Basisfarbe #a8a8a8, mirrors colors.ts) ---- */
+  --color-border-subtle: rgba(168, 168, 168, 0.05);
+  --color-border: rgba(168, 168, 168, 0.1);
+  --color-border-strong: rgba(168, 168, 168, 0.16);
 
-  /* ---- P2 „PHOSPHOR+ CYAN" (ui-redesign-v3, mirrors P2 in lib/colors.ts) ----
-     Neue Shell + seitenweise konvertierte Pages nutzen ausschliesslich diese
-     Tokens; die C-Welt oben bleibt für unkonvertierte Seiten bestehen. */
-  --color-p2-bg: #080705;
-  --color-p2-pan: #100e08;
-  --color-p2-pan2: #17140c;
-  --color-p2-inset: #0b0906;
-  --color-p2-line: #2a2517;
-  --color-p2-line2: #1e1b10;
-  --color-p2-txt: #e9e0c8;
-  --color-p2-dim: #847c68;
-  --color-p2-faint: #5a5442;
-  --color-p2-amb: #00e5ff;
-  --color-p2-amb-d: #0e6e7a;
-  --color-p2-inv: #141008;
-  --color-p2-ok: #4fd67e;
-  --color-p2-wrn: #ffd84d;
-  --color-p2-err: #ff5c47;
+  /* ---- P2 „SIGNAL" Shell-Set (mirrors P2 in lib/colors.ts) ----
+     Die Shell (Sidebar/TopBar/StatusBar/MobileNav) nutzt ausschliesslich diese
+     Tokens. v4: von warm-phosphor auf die System-A-Werte gezogen — der helle
+     Akzent #ebe8de wäre gegen das alte Creme-Textweiss unsichtbar gewesen. */
+  --color-p2-bg: #0a0a0a;
+  --color-p2-pan: #171717;
+  --color-p2-pan2: #222222;
+  --color-p2-inset: #101010;
+  --color-p2-line: rgba(168, 168, 168, 0.16);
+  --color-p2-line2: rgba(168, 168, 168, 0.08);
+  --color-p2-txt: #eeeeee;
+  --color-p2-dim: #8f8f8f;
+  --color-p2-faint: #666666;
+  --color-p2-amb: #ebe8de;
+  --color-p2-amb-d: #c1beb2;
+  --color-p2-inv: #151411;
+  --color-p2-ok: #55a964;
+  --color-p2-wrn: #a67f3e;
+  --color-p2-err: #fa4942;
   --font-p2-display: "Space Mono", "JetBrains Mono", monospace;
   --font-p2-mono: "JetBrains Mono", "Symbols Nerd Font Mono", monospace;
 
@@ -205,36 +207,37 @@
 }
 
 /* ============================================================
-   Runtime tokens — argyelan-Cyan (single source, mirrors lib/colors.ts)
+   Runtime tokens — System A „Signal" (single source, mirrors lib/colors.ts)
    These are consumed via var() in TSX. Tailwind v4 tree-shakes @theme
    variables that aren't referenced in CSS, so runtime-only tokens must
    live in a plain :root block to always be emitted.
    ============================================================ */
 
 :root {
-  /* Accent — argyelan Cyan #00E5FF (die EINZIGE Akzentfarbe) */
-  --color-accent: #00e5ff;
-  --color-accent-light: #6beaff;
-  --color-accent-deep: #00b4cc;
-  --color-accent-subtle: rgba(0, 229, 255, 0.1);
-  --color-border-accent: rgba(0, 229, 255, 0.3);
-  --color-on-accent: #00252b; /* Text auf Cyan-Fläche */
-  --color-text: #edf2fa; /* alias used by a few components */
-  --color-text-dim: #566178; /* Deko/inaktive Icons — nie für Fliesstext */
+  /* Accent — achromatisch (System A): trägt über Helligkeit + Fläche, nie Hue */
+  --color-accent: #ebe8de;
+  --color-accent-light: #f9f7ef;
+  --color-accent-deep: #c1beb2;
+  --color-accent-subtle: rgba(235, 232, 222, 0.1);
+  --color-border-accent: rgba(235, 232, 222, 0.3);
+  --color-on-accent: #151411; /* Text auf Akzent-Fläche — 15.0:1 */
+  --color-text: #eeeeee; /* alias used by a few components */
+  --color-text-dim: #666666; /* Deko/inaktive Icons — nie für Fliesstext */
 
   /* Status-Text — AA-sichere Stufen für Fliesstext (mirrors colors.ts STATUS_TEXT) */
-  --color-status-error-text: #d05f5f;
-  --color-status-info-text: #5a8ce0;
+  --color-status-error-text: #fa4942;
+  --color-status-info-text: #5890ca;
+  --color-status-warning-text: #b98f4d; /* gelifteter Ton — Token selbst = 4.34:1 */
 
-  /* Status (desaturated, mirrors colors.ts C — used app-wide via lib/utils.ts) */
-  --color-online: #2b9a4a;
-  --color-error: #c23838;
-  --color-warning: #b8870a;
-  --color-info: #2e6fd8;
-  --color-status-online: #2b9a4a;
-  --color-status-error: #c23838;
-  --color-status-warning: #b8870a;
-  --color-status-info: #2e6fd8;
+  /* Status — die EINZIGEN bunten Tokens (mirrors colors.ts C) */
+  --color-online: #55a964;
+  --color-error: #fa4942;
+  --color-warning: #a67f3e;
+  --color-info: #5890ca;
+  --color-status-online: #55a964;
+  --color-status-error: #fa4942;
+  --color-status-warning: #a67f3e;
+  --color-status-info: #5890ca;
 
   /* Mono font alias (JetBrains Mono, bundled) */
   --font-mono: "JetBrains Mono", "Symbols Nerd Font Mono", ui-monospace, SFMono-Regular, monospace;
@@ -349,7 +352,7 @@ body {
   color: var(--color-text-muted);
 }
 .label-sys--accent { color: var(--color-accent); }
-.label-sys--dim { color: var(--color-text-dim, #566178); }
+.label-sys--dim { color: var(--color-text-dim, #666666); }
 
 /* ── Corner-Ticks: eckige Positions-Markierungen (TL + BR) auf Panels.
    Signatur-Detail der argyelan-Formensprache — sparsam einsetzen:

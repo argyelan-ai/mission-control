@@ -26,6 +26,7 @@ export const wizardInputClass =
 export const wizardSelectStyle = { ...wizardInputStyle, backgroundColor: C.bgBase } as const;
 export const wizardBtnPrimaryStyle = {
   background: `linear-gradient(135deg, ${C.accentHover}, ${C.accent})`,
+  color: C.onAccent,
 } as const;
 
 export function ModelInput({

@@ -347,7 +347,7 @@ export default function LoginPage() {
               </motion.p>
             )}
 
-            {/* Submit button — Cyan-Fläche, dunkler Text (Kontrast!) */}
+            {/* Submit button — Akzent-Fläche, dunkler Text (Kontrast!) */}
             <button
               type="submit"
               disabled={loading || !email.trim() || !password.trim()}

@@ -204,7 +204,7 @@ export default function InsightsPage() {
   return (
     <AppShell>
       <div className="max-w-6xl mx-auto">
-        {/* Header — v3: .label-sys Micro-Label, Clash Display Titel, Cyan-Messmarke */}
+        {/* Header — v3: .label-sys Micro-Label, Clash Display Titel, Akzent-Messmarke */}
         <div className="mb-6">
           <div className="label-sys mb-2">Performance · Cost · Token Usage · AI Analysis</div>
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
@@ -240,7 +240,7 @@ export default function InsightsPage() {
               </div>
             </div>
           </div>
-          {/* Messmarke: 1px-Linie mit Cyan-Segment — wie Homepage-Header */}
+          {/* Messmarke: 1px-Linie mit Akzent-Segment — wie Homepage-Header */}
           <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
             <div
               className="absolute left-0 -top-px h-[2px] w-16"
@@ -249,7 +249,7 @@ export default function InsightsPage() {
           </div>
         </div>
 
-        {/* Tabs — eckig, Mono-Labels, aktiver Tab = 2px Cyan-Unterstrich.
+        {/* Tabs — eckig, Mono-Labels, aktiver Tab = 2px Akzent-Unterstrich.
             .tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
         <div className="flex gap-0 border-b mb-6 tab-strip" style={{ borderColor: IN_borderSubtle }}>
           {tabs.map((tab) => {
