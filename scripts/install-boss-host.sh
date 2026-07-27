@@ -40,8 +40,13 @@ LAUNCHD_LABEL="com.openclaw.boss"
 # NICHT in der Liste: agent.env, settings.json, claude-config/, logs/,
 # .tmux.conf, .tmux.sock, com.openclaw.boss*.plist — die sind entweder
 # agent-spezifisch (env/config) oder werden separat installiert (plist).
+#
+# poll.sh ist bewusst NICHT mehr hier: seit comm_v2 (2026-07-27) faehrt Boss die
+# GETEILTE docker/shared/poll.sh, die entrypoint.sh direkt aus dem Repo-Checkout
+# startet ($REPO/docker/shared/poll.sh). Es gibt keine boss-eigene poll.sh-Kopie
+# mehr — die alte ~/.mc/agents/boss-host/poll.sh-Symlink wird beim Cutover
+# entfernt (siehe Handoff). Vorbild: kimi-host (auch ohne eigene poll.sh).
 SYMLINK_FILES=(
-    "poll.sh"
     "entrypoint.sh"
     "start-claude.sh"
 )
