@@ -44,3 +44,41 @@ async def test_thread_stores_its_dm_partner(async_session: AsyncSession):
     ).one()
     assert found.id == thread.id
     assert found.task_id is None  # DM haengt an keiner Aufgabe
+
+
+from app.services.messaging import ensure_dm_thread, post_message
+
+
+@pytest.mark.asyncio
+async def test_ensure_dm_thread_is_idempotent(async_session: AsyncSession):
+    agent = await _agent(async_session)
+
+    first = await ensure_dm_thread(async_session, agent)
+    second = await ensure_dm_thread(async_session, agent)
+
+    assert first.id == second.id, "zweiter Aufruf darf keinen zweiten Thread anlegen"
+    assert first.kind == "dm"
+    assert first.agent_id == agent.id
+
+
+@pytest.mark.asyncio
+async def test_dm_threads_are_per_agent(async_session: AsyncSession):
+    boss = await _agent(async_session, "Boss")
+    rex = await _agent(async_session, "Rex")
+
+    assert (await ensure_dm_thread(async_session, boss)).id != (
+        await ensure_dm_thread(async_session, rex)
+    ).id
+
+
+@pytest.mark.asyncio
+async def test_dm_thread_accepts_messages(async_session: AsyncSession):
+    agent = await _agent(async_session)
+    thread = await ensure_dm_thread(async_session, agent)
+
+    msg = await post_message(
+        async_session, thread_id=thread.id, sender_type="user",
+        message_type="message", body="Lass uns kurz brainstormen.",
+    )
+    await async_session.commit()
+    assert msg.seq == 1

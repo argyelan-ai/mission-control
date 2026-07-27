@@ -18,6 +18,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.comm_constants import MESSAGE_TYPES
+from app.models.agent import Agent
 from app.models.task import Task, TaskComment
 from app.models.thread import Thread, Message
 from app.utils import ensure_aware
@@ -63,6 +64,27 @@ async def ensure_task_thread(session: AsyncSession, task: Task) -> Thread:
     await session.commit()
     await session.refresh(task)
 
+    return thread
+
+
+async def ensure_dm_thread(session: AsyncSession, agent: Agent) -> Thread:
+    """Return the Mark <-> agent DM thread, creating it on first use. Idempotent.
+
+    Zwilling von ensure_task_thread fuer kind="dm": kein Task-Bezug, der
+    Gespraechspartner steckt in Thread.agent_id. Der Operator ist implizit die
+    zweite Seite — MC hat genau einen.
+    """
+    result = await session.exec(
+        select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+    )
+    existing = result.first()
+    if existing is not None:
+        return existing
+
+    thread = Thread(kind="dm", agent_id=agent.id, title=f"DM {agent.name}")
+    session.add(thread)
+    await session.commit()
+    await session.refresh(thread)
     return thread
 
 
