@@ -135,6 +135,29 @@ async def test_ensure_topic_creates_and_persists(async_session: AsyncSession):
 
 
 @pytest.mark.asyncio
+async def test_ensure_topic_handles_unique_collision(async_session: AsyncSession):
+    """Notnagel (P2.2-Review): scheitert unser Commit am Unique-Constraint
+    (uq_threads_telegram_topic_id), weil ein anderer Thread dieses Thema schon
+    haelt, degradiert ensure sauber statt den IntegrityError durchzureichen.
+
+    In der Praxis vergibt Telegram global eindeutige IDs — hier wird die
+    Kollision erzwungen, indem der gefaelschte Client zweimal dieselbe ID
+    ausgibt: A belegt 500, B bekommt 500 -> Kollision an der DB."""
+    a = await _task_thread(async_session, "A")
+    b = await _task_thread(async_session, "B")
+
+    assert await ensure_topic_for_thread(async_session, a, FakeForumClient(next_id=500)) == 500
+
+    # B bekommt vom (gefaelschten) Telegram dieselbe ID 500.
+    colliding = FakeForumClient(next_id=500)
+    result = await ensure_topic_for_thread(async_session, b, colliding)
+
+    assert result is None, "kein Crash, B bleibt ungemappt"
+    await async_session.refresh(b)
+    assert b.telegram_topic_id is None
+
+
+@pytest.mark.asyncio
 async def test_ensure_topic_is_idempotent(async_session: AsyncSession):
     thread = await _task_thread(async_session, "Recherche")
     client = FakeForumClient()
@@ -223,6 +246,30 @@ async def test_mark_done_prefixes_check_once(async_session: AsyncSession):
     for _tid, name in client.edited:
         assert name.startswith("✓ ")
         assert not name.startswith("✓ ✓"), "das Haekchen darf nie doppelt gesetzt werden"
+
+
+@pytest.mark.asyncio
+async def test_mark_done_does_not_double_prefix_an_already_checked_title(async_session: AsyncSession):
+    """Trifft die Strip-Zeile in telegram_topics.py (`base = title[len(PREFIX):]
+    ...`) tatsaechlich: traegt der Titel-Ursprung schon ein `✓ ` (z.B. ein
+    operator-gesetzter Thread-Titel oder ein erneuter Lauf), darf mark_done kein
+    zweites Haekchen davorsetzen.
+
+    Der bestehende Idempotenz-Test verfehlt diese Zeile, weil er den Titel frisch
+    aus dem Task rechnet (`#<id> Recherche` beginnt nie mit `✓ `) — der
+    Reviewer konnte die Zeile sabotieren, ohne dass ein Test rot wurde. Dieser
+    Thread hat keinen Task/kein Projekt, sein Titel IST bereits `✓ …`."""
+    thread = Thread(kind="task", title="✓ Erledigt", telegram_topic_id=777)
+    async_session.add(thread)
+    await async_session.commit()
+    await async_session.refresh(thread)
+    client = FakeForumClient()
+
+    await mark_topic_done(async_session, thread, client)
+
+    assert len(client.edited) == 1
+    _tid, name = client.edited[0]
+    assert name == "✓ Erledigt", "genau ein Haekchen — die Strip-Zeile muss greifen"
 
 
 @pytest.mark.asyncio
