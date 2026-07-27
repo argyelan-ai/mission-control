@@ -366,7 +366,12 @@ async def test_expired_token_get_shows_error(client, fake_redis):
 
 @pytest.mark.asyncio
 async def test_polling_disabled():
-    """start() no longer starts a poller (no-op)."""
+    """Approval-only: with both inbound features off, start() arms no poller.
+
+    The getUpdates loop runs only for an inbound consumer (Jarvis, ADR-061, or
+    the team-chat thread ingest, P2.4). With both flags off — the approval-only
+    setup — start() stays a no-op even though a token + chat are configured.
+    """
     from app.services.telegram_bot import TelegramBotService
 
     bot = TelegramBotService()
@@ -374,6 +379,8 @@ async def test_polling_disabled():
     with patch("app.services.telegram_bot.settings") as mock_settings:
         mock_settings.telegram_bot_token = "test-token"
         mock_settings.telegram_chat_id = "12345"
+        mock_settings.jarvis_telegram_enabled = False
+        mock_settings.telegram_team_chat_enabled = False
 
         await bot.start()
 
