@@ -40,7 +40,7 @@ export function CardShell({
       <div
         className="absolute left-0 top-2 bottom-2 w-px rounded-full"
         style={{
-          background: "linear-gradient(to bottom, rgba(0,229,255,0.6), rgba(0,229,255,0.12))",
+          background: "linear-gradient(to bottom, var(--color-accent), var(--color-accent-subtle))",
         }}
       />
 

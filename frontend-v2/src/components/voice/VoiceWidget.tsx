@@ -506,7 +506,7 @@ function VoiceDrawer({
               WebkitBackdropFilter: "blur(20px) saturate(160%)",
               border: "1px solid var(--color-border)",
               boxShadow:
-                "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,229,255,0.10), inset 0 1px 0 0 rgba(255,255,255,0.06)",
+                "0 24px 60px -16px rgba(0,0,0,0.7), 0 0 0 1px var(--color-accent-subtle), inset 0 1px 0 0 rgba(255,255,255,0.06)",
             }}
           >
             {/* Edge highlight — subtler "rim" at the top edge */}
