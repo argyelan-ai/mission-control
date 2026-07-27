@@ -228,10 +228,12 @@ const STATUS_CONFIG: Record<TaskStatus, { color: string; label: string }> = {
 
 function TaskStatusDot({ status }: { status: TaskStatus }) {
   const icons: Partial<Record<TaskStatus, React.ReactNode>> = {
-    done: <Check size={8} strokeWidth={3} className="text-white" />,
-    blocked: <X size={8} strokeWidth={3} className="text-white" />,
-    failed: <X size={8} strokeWidth={3} className="text-white" />,
-    aborted: <X size={8} strokeWidth={3} className="text-white" />,
+    // Glyphs sit ON the status fill → dark ink (≥5:1 on every status hue;
+    // white would be 2.9–3.7:1 against the System-A status colours).
+    done: <Check size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    blocked: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    failed: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
+    aborted: <X size={8} strokeWidth={3} className="text-[var(--color-on-accent)]" />,
   };
 
   const color = STATUS_CONFIG[status].color;

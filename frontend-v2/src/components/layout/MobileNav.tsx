@@ -91,7 +91,7 @@ export default function MobileNav() {
         style={{
           paddingBottom: "0.5rem",
           minHeight: "calc(env(safe-area-inset-top) + 3.5rem)",
-          backgroundColor: "rgba(8,7,5,0.92)",
+          backgroundColor: "rgba(10,10,10,0.92)",
           borderBottom: "1px solid var(--color-p2-line2)",
         }}
       >
@@ -135,7 +135,7 @@ export default function MobileNav() {
         aria-label="Hauptnavigation"
         className="fixed bottom-0 left-0 right-0 z-40 md:hidden"
         style={{
-          backgroundColor: "rgba(8,7,5,0.95)",
+          backgroundColor: "rgba(10,10,10,0.95)",
           borderTop: "1px solid var(--color-p2-line)",
           paddingBottom: "env(safe-area-inset-bottom)",
         }}
@@ -147,20 +147,30 @@ export default function MobileNav() {
               <Link
                 key={href}
                 href={href}
-                className="flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
+                className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
                 style={{
-                  backgroundColor: active ? "var(--color-p2-amb)" : "transparent",
-                  color: active ? "var(--color-p2-inv)" : "var(--color-p2-dim)",
+                  // System A: aktiv war eine volle Akzent-Fläche. Auf fünf
+                  // Tabs nebeneinander ist das ein Leuchtblock — jetzt dunkle
+                  // Fläche + 2px-Akzentmarke oben.
+                  backgroundColor: active ? "var(--color-p2-pan2)" : "transparent",
+                  color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
                   ...MONO,
                 }}
                 aria-current={active ? "page" : undefined}
               >
+                {active && (
+                  <span
+                    aria-hidden
+                    className="absolute top-0 left-0 right-0 h-[2px]"
+                    style={{ backgroundColor: "var(--color-p2-amb)" }}
+                  />
+                )}
                 <span
                   style={{
                     fontStyle: "normal",
                     fontSize: "8px",
                     lineHeight: 1.4,
-                    color: active ? "var(--color-p2-inv)" : "var(--color-p2-faint)",
+                    color: active ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
                   }}
                 >
                   {num}
@@ -178,8 +188,8 @@ export default function MobileNav() {
             aria-label="Open menu"
             className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
             style={{
-              backgroundColor: indexActive ? "var(--color-p2-amb)" : "transparent",
-              color: indexActive ? "var(--color-p2-inv)" : "var(--color-p2-dim)",
+              backgroundColor: indexActive ? "var(--color-p2-pan2)" : "transparent",
+              color: indexActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
               ...MONO,
             }}
           >
@@ -188,7 +198,7 @@ export default function MobileNav() {
                 fontStyle: "normal",
                 fontSize: "8px",
                 lineHeight: 1.4,
-                color: indexActive ? "var(--color-p2-inv)" : "var(--color-p2-faint)",
+                color: indexActive ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
               }}
             >
               05
@@ -300,8 +310,9 @@ export default function MobileNav() {
                                   ...MONO,
                                   fontSize: "12.5px",
                                   fontWeight: isActive ? 700 : 400,
-                                  backgroundColor: isActive ? "var(--color-p2-amb)" : "transparent",
-                                  color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-txt)",
+                                  backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
+                                  color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                                  borderLeft: `2px solid ${isActive ? "var(--color-p2-amb)" : "transparent"}`,
                                 }}
                               >
                                 <span className="flex-1">{label}</span>
@@ -309,9 +320,7 @@ export default function MobileNav() {
                                   <span
                                     className="w-2 h-2 rounded-full shrink-0"
                                     style={{
-                                      backgroundColor: isActive
-                                        ? "var(--color-p2-inv)"
-                                        : "var(--color-p2-err)",
+                                      backgroundColor: "var(--color-p2-err)",
                                     }}
                                   />
                                 )}
@@ -362,8 +371,9 @@ export default function MobileNav() {
                                   ...MONO,
                                   fontSize: "12px",
                                   fontWeight: isActive ? 700 : 400,
-                                  backgroundColor: isActive ? "var(--color-p2-amb)" : "transparent",
-                                  color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-txt)",
+                                  backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
+                                  color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                                  borderLeft: `2px solid ${isActive ? "var(--color-p2-amb)" : "transparent"}`,
                                 }}
                               >
                                 {board.icon ? (
@@ -374,7 +384,7 @@ export default function MobileNav() {
                                   <span
                                     className="shrink-0 w-2.5 h-2.5 rounded-full"
                                     style={{
-                                      backgroundColor: isActive ? "var(--color-p2-inv)" : (board.color ?? P2.amb),
+                                      backgroundColor: board.color ?? P2.amb,
                                     }}
                                   />
                                 )}

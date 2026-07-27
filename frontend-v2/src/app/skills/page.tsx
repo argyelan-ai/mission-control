@@ -158,7 +158,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                 <button onClick={() => saveMutation.mutate(editContent)} disabled={saveMutation.isPending || !dirty}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                   style={{ background: dirty ? `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` : "var(--color-bg-hover)",
-                    color: dirty ? "white" : "var(--color-text-muted)", cursor: !dirty ? "default" : "pointer" }}>
+                    color: dirty ? C.onAccent : "var(--color-text-muted)", cursor: !dirty ? "default" : "pointer" }}>
                   {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> Saving...</> : <><Save size={11} /> Save</>}
                 </button>
               </>

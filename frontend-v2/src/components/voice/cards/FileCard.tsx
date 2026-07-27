@@ -52,7 +52,7 @@ export function FileCard({
           <button
             type="button"
             onClick={onPreview}
-            className="text-[11px] font-medium leading-snug truncate text-left hover:text-white transition-colors cursor-pointer w-full"
+            className="text-[11px] font-medium leading-snug truncate text-left hover:text-[var(--color-text-primary)] transition-colors cursor-pointer w-full"
             style={{ color: "var(--color-text-primary)" }}
           >
             {displayTitle}

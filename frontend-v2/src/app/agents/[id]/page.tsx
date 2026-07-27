@@ -560,7 +560,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
                 onClick={handleCliSave}
                 disabled={setAgentSkillsMutation.isPending}
                 className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg cursor-pointer"
-                style={{ backgroundColor: C.accent, color: "#fff" }}
+                style={{ backgroundColor: C.accent, color: C.onAccent }}
               >
                 {setAgentSkillsMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
                 Save
@@ -751,7 +751,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
                 "flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap transition-all",
                 !dirty ? "cursor-not-allowed opacity-40" : "cursor-pointer",
               )}
-              style={{ backgroundColor: C.accent, color: "white" }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               <RotateCcw size={12} />
               Switch…
@@ -939,7 +939,7 @@ function ConfigTab({
               onClick={handleSaveAndApply}
               disabled={applyRestartMutation.isPending || updateSecretMutation.isPending}
               className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-lg whitespace-nowrap cursor-pointer"
-              style={{ backgroundColor: C.accent, color: "white" }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {applyRestartMutation.isPending ? (
                 <Loader2 size={12} className="animate-spin" />
@@ -961,9 +961,9 @@ function ConfigTab({
             key={key}
             onClick={() => handleFileChange(key)}
             className={cn(
-              "text-left text-[12px] font-mono px-3 py-2 rounded-lg cursor-pointer transition-all",
+              "text-left text-[12px] font-mono px-3 py-2 rounded-lg cursor-pointer transition-all border border-transparent",
               activeFile === key
-                ? "bg-[rgba(0,229,255,0.10)] text-[#00E5FF]"
+                ? "bg-[var(--color-accent-subtle)] text-[var(--color-text-primary)] border border-[var(--color-border-accent)]"
                 : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]"
             )}
           >
@@ -991,7 +991,7 @@ function ConfigTab({
               onClick={handleSave}
               disabled={saveConfigMutation.isPending}
               className="flex items-center gap-1.5 text-xs px-3 py-1 rounded-lg cursor-pointer"
-              style={{ backgroundColor: C.accent, color: "white" }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {saveConfigMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
               Save & Sync
@@ -1112,7 +1112,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               onClick={() => saveMutation.mutate(editContent)}
               disabled={saveMutation.isPending}
               className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
-              style={{ backgroundColor: C.accent, color: "white" }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {saveMutation.isPending ? "Saving..." : "Save & Sync"}
             </button>
@@ -1592,9 +1592,9 @@ function OverviewTab({
                   key={file.key}
                   onClick={() => setActiveFile(file.key)}
                   className={cn(
-                    "text-[11px] px-2.5 py-1 rounded-lg transition-all cursor-pointer whitespace-nowrap",
+                    "text-[11px] px-2.5 py-1 rounded-lg transition-all cursor-pointer whitespace-nowrap border border-transparent",
                     activeFile === file.key
-                      ? "bg-[rgba(0,229,255,0.12)] text-[#00E5FF]"
+                      ? "bg-[var(--color-accent-subtle)] text-[var(--color-text-primary)] border border-[var(--color-border-accent)]"
                       : "text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                   )}
                 >

@@ -117,7 +117,7 @@ export default function Sidebar() {
         borderRight: "1px solid var(--color-p2-line2)",
       }}
     >
-      {/* Logo area — Space-Mono-Wordmark, Cyan-Akzent */}
+      {/* Logo area — Space-Mono-Wordmark, Akzent */}
       <div
         className="shrink-0 flex items-center gap-3 px-3 h-14"
         style={{ borderBottom: "1px solid var(--color-p2-line2)" }}
@@ -215,23 +215,35 @@ export default function Sidebar() {
                           ...MONO,
                           fontSize: sidebarCollapsed ? undefined : "12px",
                           fontWeight: isActive ? 700 : 400,
-                          backgroundColor: isActive ? "var(--color-p2-amb)" : "transparent",
-                          color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-txt)",
+                          // System A: der Aktivzustand war eine volle Akzent-
+                          // Fläche pro Zeile — auf 224px Sidebar-Breite ein
+                          // Bone-Block, der die Navigation zum lautesten
+                          // Element machte. Jetzt: dunkle Fläche + Gewicht,
+                          // der Akzent bleibt als schmaler Marker (unten).
+                          backgroundColor: isActive ? "var(--color-p2-pan2)" : "transparent",
+                          color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
                         }}
                         title={sidebarCollapsed ? label : undefined}
                       >
+                        {isActive && (
+                          <span
+                            aria-hidden
+                            className="absolute left-0 top-0 bottom-0 w-[2px]"
+                            style={{ backgroundColor: "var(--color-p2-amb)" }}
+                          />
+                        )}
                         {sidebarCollapsed ? (
                           <span className="relative shrink-0 flex items-center justify-center">
                             <Icon
                               size={17}
                               strokeWidth={isActive ? 2 : 1.75}
-                              style={{ color: isActive ? "var(--color-p2-inv)" : "var(--color-p2-dim)" }}
+                              style={{ color: isActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)" }}
                             />
                             {showBadge && (
                               <span
                                 className="absolute -top-1 -right-1 w-2 h-2 rounded-full"
                                 style={{
-                                  backgroundColor: isActive ? "var(--color-p2-inv)" : "var(--color-p2-err)",
+                                  backgroundColor: "var(--color-p2-err)",
                                 }}
                               />
                             )}
@@ -243,7 +255,7 @@ export default function Sidebar() {
                               <span
                                 className="w-2 h-2 rounded-full shrink-0"
                                 style={{
-                                  backgroundColor: isActive ? "var(--color-p2-inv)" : "var(--color-p2-err)",
+                                  backgroundColor: "var(--color-p2-err)",
                                 }}
                               />
                             )}

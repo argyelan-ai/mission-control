@@ -183,7 +183,7 @@ export function PluginsShellTab() {
               onClick={handleStart}
               disabled={starting}
               className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
-              style={{ backgroundColor: C.accent, color: "#fff" }}
+              style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {starting ? <Loader2 size={12} className="animate-spin" /> : <Terminal size={12} />}
               Start installer

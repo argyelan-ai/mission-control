@@ -48,14 +48,14 @@ export function GitInfoBox({
   onRepoIdChange,
   onCreateRepo,
   onLinkRepo,
-  accent = "#00E5FF",
-  textPrimary = "#EDEDEF",
-  textMuted = "#888888",
-  textSecondary = "#8A8F98",
+  accent = "#EBE8DE",
+  textPrimary = "#EEEEEE",
+  textMuted = "#8F8F8F",
+  textSecondary = "#BABABA",
   border = "var(--color-border)",
-  deep = "#020203",
-  warning = "#F59E0B",
-  online = "#2B9A4A",
+  deep = "#0A0A0A",
+  warning = "#A67F3E",
+  online = "#55A964",
 }: GitInfoBoxProps) {
   const [editingBranch, setEditingBranch] = useState(false);
 

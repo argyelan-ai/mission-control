@@ -12,12 +12,12 @@ export const metadata: Metadata = {
     title: process.env.NEXT_PUBLIC_BRAND?.replace(".", "") || "Mission Control",
   },
   other: {
-    "theme-color": "#04070C", // C.bgDeep
+    "theme-color": "#0A0A0A", // C.bgDeep
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: "#04070C", // C.bgDeep
+  themeColor: "#0A0A0A", // C.bgDeep
   viewportFit: "cover",
   width: "device-width",
   initialScale: 1,

@@ -21,7 +21,7 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── v3 styles (Tokens only) ─────────────────────────────────────────────────
-// Items: 13px General Sans, ausgewählt = accent-subtle Fläche + 2px Cyan-Balken
+// Items: 13px General Sans, ausgewählt = accent-subtle Fläche + 2px Akzent-Balken
 // links (inset shadow, eckig) + accent-light Text.
 const itemClass =
   "flex items-center gap-3 px-3 py-2 rounded-sm text-[13px] cursor-pointer transition-colors " +

@@ -225,7 +225,7 @@ export default function ScheduleJobDetailPage() {
           </div>
         </div>
 
-        {/* Messmarke: 1px-Linie mit Cyan-Segment — Header-Trenner */}
+        {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
         <div className="relative h-px mx-6 flex-shrink-0" style={{ backgroundColor: C.border }}>
           <div
             className="absolute left-0 -top-px h-[2px] w-16"

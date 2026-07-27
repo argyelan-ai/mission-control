@@ -160,7 +160,7 @@ export default function WorkspaceSwitcher() {
               boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)",
             }}
           >
-            {/* Cyan-Kante oben — Signatur */}
+            {/* Akzent-Kante oben — Signatur */}
             <div className="h-[2px] w-full" style={{ backgroundColor: P2.amb }} />
 
             <div

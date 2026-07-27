@@ -45,10 +45,10 @@ interface Props {
 }
 
 const RUNTIME_TYPE_COLOR: Record<string, string> = {
-  lmstudio: C.info,          // #2E6FD8 — local API, info-blue
-  vllm_docker: C.online,     // #2B9A4A — running container, online-green
-  unsloth: C.warning,        // #B8870A — fine-tune, warm-amber
-  openai_compatible: C.accent, // teal — was lila #A855F7, migrated
+  lmstudio: C.info,          // #5890CA — local API, info-blue
+  vllm_docker: C.online,     // #55A964 — running container, online-green
+  unsloth: C.warning,        // #A67F3E — fine-tune, warm-amber
+  openai_compatible: C.accent, // #EBE8DE — achromatic accent
   cloud: C.textDim,          // #6E6E6E — external, neutral
   // Phase 24 (Hermes) — mirror of RuntimePill.RUNTIME_TYPE_COLOR. Single-SoT
   // extraction is deferred to v0.9 per 24-CONTEXT.md L-F.

@@ -105,7 +105,9 @@ export function StartStep({ state, update }: WizardStepProps) {
               <Icon size={18} style={{ color: active ? C.accent : "var(--color-text-muted)" }} />
               <div
                 className="text-sm font-medium mt-2"
-                style={{ color: active ? C.accent : "var(--color-text-primary)" }}
+                // System A: aktiv/inaktiv trägt die Fläche + der Rahmen (oben), nicht die
+                // Textfarbe — Akzent und text-primary stehen 1.06:1 zueinander.
+                style={{ color: "var(--color-text-primary)" }}
               >
                 {m.label}
               </div>

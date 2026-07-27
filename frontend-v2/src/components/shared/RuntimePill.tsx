@@ -19,14 +19,14 @@ import type { Agent } from "@/lib/types";
 import { C } from "@/lib/colors";
 
 export const RUNTIME_TYPE_COLOR: Record<string, string> = {
-  lmstudio: C.info,          // #2E6FD8 — local API, info-blue
-  vllm_docker: C.online,     // #2B9A4A — running container, online-green
-  unsloth: C.warning,        // #B8870A — fine-tune, warm-amber
-  openai_compatible: C.accent, // #00E5FF — was lila #A855F7, migrated
-  cloud: C.textDim,          // #6E6E6E — external, neutral
-  // Phase 24 (Hermes) — distinct teal variant, intentionally NOT the same as
-  // C.accent so single-instance host workers stand out from cli-bridge runtimes.
-  hermes: C.accentHover, // hermes #6BEAFF — helle Cyan-Stufe
+  lmstudio: C.info,          // #5890CA — local API, info-blue
+  vllm_docker: C.online,     // #55A964 — running container, online-green
+  unsloth: C.warning,        // #A67F3E — fine-tune, warm-amber
+  openai_compatible: C.accent, // #EBE8DE — achromatic accent
+  cloud: C.textDim,          // #666666 — external, neutral
+  // Phase 24 (Hermes) — separated from openai_compatible by BRIGHTNESS, not hue
+  // (System A): accentDeep is the dimmed accent step, still clearly not accent.
+  hermes: C.accentDeep, // #C1BEB2 — gedimmte Akzentstufe
 };
 
 interface Props {

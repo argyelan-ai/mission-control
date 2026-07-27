@@ -162,7 +162,7 @@ export default function SetupWizardPage() {
                   style={{
                     background: s.done ? C.accent : step === s.n ? C.accentSubtle : "transparent",
                     border: `1px solid ${s.done || step === s.n ? C.accent : C.border}`,
-                    color: s.done ? "#04110F" : step === s.n ? C.accent : "var(--color-text-muted)",
+                    color: s.done ? C.onAccent : step === s.n ? C.accent : "var(--color-text-muted)",
                   }}
                 >
                   {s.done ? <Check size={13} strokeWidth={3} /> : s.n}
@@ -253,7 +253,7 @@ export default function SetupWizardPage() {
                 <button
                   onClick={saveKey}
                   disabled={saving || !keyValue.trim()}
-                  className="flex-1 text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {saving && <Loader2 className="animate-spin" size={14} />}
@@ -329,7 +329,7 @@ export default function SetupWizardPage() {
                 <button
                   onClick={saveGithub}
                   disabled={githubSaving || (!githubOwner.trim() && !githubToken.trim())}
-                  className="flex-1 text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="flex-1 text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {githubSaving && <Loader2 className="animate-spin" size={14} />}
@@ -410,7 +410,7 @@ export default function SetupWizardPage() {
 
               <button
                 onClick={() => router.replace("/")}
-                className="w-full text-white font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200"
+                className="w-full text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
               >
                 <Rocket size={14} /> Go to command center

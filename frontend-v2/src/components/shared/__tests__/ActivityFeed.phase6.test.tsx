@@ -5,30 +5,31 @@
  * correct StatusDot color per UI-SPEC §1 visual contract (lines 150-165 of
  * 06-UI-SPEC.md):
  *
- *   agent.compaction              -> warning (#B8870A)
- *   agent.recovery_started        -> warning (#B8870A)
- *   agent.recovery_tier_complete  -> online  (#2B9A4A)
- *   agent.recovery_failed         -> error   (#C23838)
+ *   agent.compaction              -> warning (#A67F3E)
+ *   agent.recovery_started        -> warning (#A67F3E)
+ *   agent.recovery_tier_complete  -> online  (#55A964)
+ *   agent.recovery_failed         -> error   (#FA4942)
  *
  * StatusDot.tsx renders the status color via inline `backgroundColor` style on
  * a child <span>, so we assert against `style.backgroundColor` (computed as
  * `rgb(...)` by jsdom) rather than a class name. Mapping:
- *   warning #B8870A -> rgb(184, 135, 10)   (C.warning from colors.ts)
- *   online  #2B9A4A -> rgb(43, 154, 74)    (C.online from colors.ts)
- *   error   #C23838 -> rgb(194, 56, 56)    (C.error from colors.ts)
+ *   warning #A67F3E -> rgb(166, 127, 62)   (C.warning from colors.ts)
+ *   online  #55A964 -> rgb(85, 169, 100)   (C.online from colors.ts)
+ *   error   #FA4942 -> rgb(250, 73, 66)    (C.error from colors.ts)
  *
- * Note: Token values migrated from old Tailwind bright palette to the
- * desaturated MC-Teal design system (C.warning/#B8870A, C.online/#2B9A4A,
- * C.error/#C23838). These are the actual runtime colors StatusDot renders.
+ * Note: Token values migrated again in v4 („Signal"): the status hues are now
+ * the ONLY chromatic tokens in the app, and error outranks warning by chroma
+ * (C .215 vs .095) instead of by brightness. These are the actual runtime
+ * colors StatusDot renders.
  */
 import { render } from "@testing-library/react";
 import { describe, it, expect } from "vitest";
 import { ActivityFeed } from "@/components/shared/ActivityFeed";
 
 const STATUS_TO_RGB: Record<string, string> = {
-  warning: "rgb(184, 135, 10)",  // C.warning = #B8870A
-  online: "rgb(43, 154, 74)",    // C.online  = #2B9A4A
-  error: "rgb(194, 56, 56)",     // C.error   = #C23838
+  warning: "rgb(166, 127, 62)",  // C.warning = #A67F3E
+  online: "rgb(85, 169, 100)",   // C.online  = #55A964
+  error: "rgb(250, 73, 66)",     // C.error   = #FA4942
 };
 
 describe("ActivityFeed Phase 6 events", () => {

@@ -24,6 +24,7 @@ const C = {
   borderSubtle: MC.borderSubtle,
   accent: MC.accent,
   accentHover: MC.accentHover,
+  onAccent: MC.onAccent,
   info: MC.info,
   error: MC.error,
   warning: MC.warning,
@@ -423,8 +424,9 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
                     className="flex items-center gap-1.5 px-3.5 py-1.5 text-[11px] font-semibold rounded-lg cursor-pointer transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                     style={{
                       background: `linear-gradient(135deg, ${C.accentHover}, ${C.accent})`,
-                      color: "#fff",
-                      boxShadow: `0 0 16px ${C.accent}30`,
+                      color: C.onAccent,
+                      // System A: kein Glow — der helle Akzent trägt selbst genug.
+                      boxShadow: "none",
                     }}
                   >
                     <Send size={11} />

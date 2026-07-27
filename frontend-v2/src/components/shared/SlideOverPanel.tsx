@@ -77,7 +77,7 @@ export function SlideOverPanel({
               boxShadow: "-8px 0 40px rgba(0,0,0,0.5)",
             } as React.CSSProperties}
           >
-            {/* Cyan-Kante oben — Signatur-Markierung */}
+            {/* Akzent-Kante oben — Signatur-Markierung */}
             <div className="md:hidden h-[2px] w-full shrink-0" style={{ backgroundColor: "var(--color-accent)" }} />
 
             {/* Mobile drag handle */}
