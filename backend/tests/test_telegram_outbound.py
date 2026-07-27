@@ -335,3 +335,62 @@ async def test_unknown_agent_falls_back_to_generic_name(async_session: AsyncSess
     )
 
     assert bot.sent[0]["text"] == "Agent: x"
+
+
+# ── Nachtruhe in der Zeitzone des Operators ───────────────────────────────
+#
+# Review-Fund 27.07. (MAJOR): _is_night nutzte datetime.now(). Der Kommentar
+# nahm an, das sei CH-Ortszeit — der Mac Mini laeuft so. post_message laeuft
+# aber im Backend-CONTAINER, und der steht auf UTC (live geprueft: Container
+# 19:56 waehrend es in Zuerich 21:56 war). Folge: die Nacht-Grenze war um 1-2h
+# verschoben, ein lauter Approval-Ping um 08:00 CEST waere STUMM angekommen.
+#
+# Warum keiner der bestehenden Tests das fing: sie injizieren alle ein naives
+# `now=` und laufen damit nie durch den echten datetime.now()-Pfad. Diese Tests
+# gehen ueber echte UTC-Zeitstempel — die Form, in der das Backend rechnet.
+
+from datetime import timezone as _timezone
+
+
+def _utc(hour: int, minute: int = 0):
+    from datetime import datetime as _dt
+    return _dt(2026, 7, 27, hour, minute, tzinfo=_timezone.utc)
+
+
+def test_night_is_measured_in_operator_time_not_utc():
+    """Sommer: Zuerich = UTC+2. 06:00 UTC ist 08:00 in Zuerich — Tag, nicht Nacht.
+    Genau der Fall, in dem ein Approval-Ping stumm liegengeblieben waere."""
+    from app.services.telegram_outbound import _is_night
+
+    assert _is_night(_utc(6, 0)) is False, "08:00 Zuerich ist Tag — Ping muss laut sein"
+    assert _is_night(_utc(5, 30)) is False, "07:30 Zuerich ist Tag"
+
+
+def test_night_starts_at_local_eleven_pm():
+    """22:00 UTC = 00:00 Zuerich → Nacht. 20:00 UTC = 22:00 Zuerich → noch Tag."""
+    from app.services.telegram_outbound import _is_night
+
+    assert _is_night(_utc(22, 0)) is True
+    assert _is_night(_utc(20, 0)) is False
+    assert _is_night(_utc(21, 30)) is True  # 23:30 Zuerich
+
+
+def test_winter_offset_is_handled_too():
+    """Im Winter ist Zuerich UTC+1 — ZoneInfo rechnet die Umstellung mit,
+    ein fester Offset wuerde hier zweimal im Jahr falsch liegen."""
+    from datetime import datetime as _dt
+    from app.services.telegram_outbound import _is_night
+
+    # 06:30 UTC im Januar = 07:30 Zuerich → Tag
+    assert _is_night(_dt(2026, 1, 15, 6, 30, tzinfo=_timezone.utc)) is False
+    # 22:30 UTC im Januar = 23:30 Zuerich → Nacht
+    assert _is_night(_dt(2026, 1, 15, 22, 30, tzinfo=_timezone.utc)) is True
+
+
+def test_naive_datetime_is_treated_as_local():
+    """Bestehende Tests uebergeben naive Lokalzeit — das muss weiter gelten."""
+    from datetime import datetime as _dt
+    from app.services.telegram_outbound import _is_night
+
+    assert _is_night(_dt(2026, 7, 27, 23, 30)) is True
+    assert _is_night(_dt(2026, 7, 27, 12, 0)) is False

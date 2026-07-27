@@ -25,6 +25,7 @@ garantieren sie, dass nichts, was aus Telegram kam, nach Telegram zurueckläuft.
 """
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -41,8 +42,17 @@ from app.services.telegram_topics import (
 
 logger = logging.getLogger("mc.telegram_outbound")
 
-# Nachtruhe: 23:00–06:59 Ortszeit kein Ton (ausser question priority=critical).
-# Der Mac Mini laeuft in CH-Ortszeit — datetime.now() ist damit Ortszeit.
+# Nachtruhe: 23:00–06:59 Ortszeit des Operators kein Ton (ausser priority=critical).
+#
+# ⚠️ NICHT datetime.now() verwenden. Der Kommentar hier behauptete frueher, der
+# Mac Mini laufe in CH-Zeit — das stimmt fuer den HOST, aber post_message laeuft
+# im Backend-CONTAINER, und der steht auf UTC (live geprueft 27.07.: Container
+# 19:56 waehrend es in Zuerich 21:56 war). Mit naiver Ortszeit-Annahme waere die
+# Nacht-Grenze um 1–2h verschoben: ein lauter Approval-Ping um 08:00 CEST faellt
+# in UTC-06:00 und damit unter NIGHT_END_HOUR — er kaeme STUMM an und bliebe
+# liegen. Genau der Schaden, den die Regel verhindern soll.
+# ZoneInfo erledigt zugleich die Sommerzeit.
+OPERATOR_TZ = ZoneInfo("Europe/Zurich")
 NIGHT_START_HOUR = 23
 NIGHT_END_HOUR = 7
 
@@ -54,7 +64,13 @@ _LOUD_CATEGORIES = ("approval", "review")
 
 
 def _is_night(now: datetime) -> bool:
-    return now.hour >= NIGHT_START_HOUR or now.hour < NIGHT_END_HOUR
+    """Nacht in der Zeitzone des Operators.
+
+    Ein zeitzonen-behaftetes ``now`` wird umgerechnet; ein naives wird als
+    bereits lokal betrachtet (so uebergeben es die Tests).
+    """
+    local = now.astimezone(OPERATOR_TZ) if now.tzinfo is not None else now
+    return local.hour >= NIGHT_START_HOUR or local.hour < NIGHT_END_HOUR
 
 
 def _mentions_mark(mentions) -> bool:
@@ -150,7 +166,7 @@ async def mirror_message_to_telegram(
             sender_name = agent.name if agent is not None else None
 
         text = f"{_sender_prefix(message, sender_name)}: {message.body}"
-        disable = _should_disable_notification(message, now or datetime.now())
+        disable = _should_disable_notification(message, now or datetime.now(tz=OPERATOR_TZ))
         # GENERAL_TOPIC_ID (0) -> ohne message_thread_id (Chat-Stamm). send_message
         # laesst den falsy Wert ohnehin weg; wir sind hier explizit.
         thread_arg = None if topic_id == GENERAL_TOPIC_ID else topic_id
