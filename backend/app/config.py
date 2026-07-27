@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
 
+    # Telegram Team-Chat (P2.3): spiegelt Thread-Nachrichten in ihr Telegram-Thema.
+    # Default false → Verhalten wie heute (kein ausgehender Spiegel), damit die
+    # Flotte lauffaehig bleibt, solange die Brücke nicht vollstaendig gebaut ist.
+    telegram_team_chat_enabled: bool = False
+
     # Telegram Reports Bot (separate — agent deliverables, no approval flow)
     # Second bot + chat so info delivery doesn't clutter the command chat.
     telegram_reports_bot_token: str = ""

@@ -84,6 +84,9 @@ async def persist_briefing_message(
         sender_type="system",
         message_type="system",
         body=f"{marker}\n{message}",
+        # Internes 8k-Dispatch-Briefing — gehoert nicht in den Telegram-Chat.
+        # telegram_outbound ueberspringt es zusaetzlich am Marker (Guertel+Hose).
+        mirror_to_telegram=False,
     )
 
 
