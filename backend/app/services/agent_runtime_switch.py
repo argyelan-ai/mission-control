@@ -76,11 +76,66 @@ _PROBEABLE_RUNTIME_TYPES = {
 }
 
 
+# Model ids that can never be the chat model of a chat runtime. LM Studio
+# routinely serves an embedding model alongside the chat one (vector search),
+# and `/models` order is not specified — so taking data[0] blindly let an
+# embedding model become a runtime's model_identifier. Observed 2026-07-25:
+# both `nemotron-super` and `qwen-coder-lms` sat on
+# `text-embedding-nomic-embed-text-v1.5`, which cannot answer a completion.
+_NON_CHAT_MODEL_MARKERS = (
+    "embed",        # text-embedding-*, nomic-embed-*, *-embedding-*
+    "rerank",
+    "whisper",
+    "tts-",
+    "-tts",
+    "stable-diffusion",
+    "clip-",
+)
+
+
+def _is_chat_capable(model_id: str) -> bool:
+    """Heuristic: could this id plausibly be a chat/completion model?
+
+    Deliberately a denylist of unmistakable non-chat families rather than an
+    allowlist — an allowlist would reject every new model name the moment a
+    provider ships one, which is the exact failure this whole change exists to
+    prevent.
+    """
+    lowered = model_id.lower()
+    return not any(marker in lowered for marker in _NON_CHAT_MODEL_MARKERS)
+
+
+def select_probed_model(model_ids: list[str], current: str | None) -> str | None:
+    """Pick the model a probe should report, given everything the endpoint serves.
+
+    Three rules, in order:
+
+    1. Drop ids that cannot be chat models at all.
+    2. If the runtime's CURRENT model is still being served, keep it. A probe
+       exists to CONFIRM a binding, not to re-pick one — without this, a restart
+       that happens to reorder `/models` would silently repoint every agent on
+       that runtime at a different model.
+    3. Otherwise take the first remaining candidate.
+
+    Returns None when nothing plausible remains. That is deliberate: writing
+    "no idea" is worse than writing nothing, because the runtime watcher would
+    persist the wrong value as confirmed drift and flag agents for a restart.
+    """
+    candidates = [m.strip() for m in model_ids if isinstance(m, str) and m.strip()]
+    chat_candidates = [m for m in candidates if _is_chat_capable(m)]
+    if not chat_candidates:
+        return None
+    if current and current.strip() in chat_candidates:
+        return current.strip()
+    return chat_candidates[0]
+
+
 async def probe_runtime_model(runtime: Runtime) -> str | None:
     """Best-effort probe of an OpenAI-compatible `/models` endpoint.
 
-    Returns the first model id reported by the runtime, or None on failure.
-    Caller is responsible for persisting the value if desired.
+    Returns the model id the endpoint is serving for this runtime, or None on
+    failure or when nothing chat-capable is on offer. Selection rules live in
+    `select_probed_model`. Caller is responsible for persisting the value.
     """
     if not runtime.endpoint:
         return None
@@ -108,10 +163,25 @@ async def probe_runtime_model(runtime: Runtime) -> str | None:
                 data = resp.json()
                 items = data.get("data") if isinstance(data, dict) else None
                 if isinstance(items, list) and items:
-                    first = items[0]
-                    mid = first.get("id") if isinstance(first, dict) else None
-                    if isinstance(mid, str) and mid.strip():
-                        return mid.strip()
+                    ids = [
+                        it.get("id")
+                        for it in items
+                        if isinstance(it, dict) and isinstance(it.get("id"), str)
+                    ]
+                    picked = select_probed_model(ids, runtime.model_identifier)
+                    if picked:
+                        return picked
+                    # Endpoint answered, but served nothing chat-capable. Do not
+                    # fall through to the next candidate URL with a different
+                    # shape — report "unknown" so the caller leaves the binding
+                    # alone instead of confirming a wrong value.
+                    logger.info(
+                        "probe_runtime_model %s: no chat-capable model among %s "
+                        "— leaving model_identifier untouched",
+                        runtime.slug,
+                        ids,
+                    )
+                    return None
             except Exception as e:
                 logger.debug("probe_runtime_model %s failed: %s", url, e)
                 continue
