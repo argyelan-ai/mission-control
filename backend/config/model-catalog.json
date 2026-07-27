@@ -1,0 +1,45 @@
+{
+  "_comment": [
+    "Fallback manifest for the provider model catalog (services/model_catalog.py).",
+    "It is used ONLY when a live /models probe fails (network down, credential",
+    "unreachable inside the backend container, provider 5xx). It is deliberately",
+    "NOT a source of truth about what a runtime RUNS — runtimes.model_identifier",
+    "stays the only answer to that question. This file only answers",
+    "'which models does this provider offer', and it will go stale; every entry",
+    "served from here is flagged status=manifest_fallback in the API so the UI",
+    "can say so out loud.",
+    "Keyed by wire protocol (harness_compat.runtime_protocol), not by runtime slug:",
+    "anthropic/grok/kimi are single-endpoint protocols. The 'openai' protocol has",
+    "no entry on purpose — every openai runtime is a different endpoint (local vLLM,",
+    "LM Studio, Ollama Cloud, ...), so a shared static list would be a lie.",
+    "Verified live on 2026-07-25."
+  ],
+  "anthropic": {
+    "note": "api.anthropic.com/v1/models, verified 2026-07-25 (11 models).",
+    "verified_at": "2026-07-25",
+    "models": [
+      {"id": "claude-opus-5", "display_name": "Claude Opus 5"},
+      {"id": "claude-sonnet-5", "display_name": "Claude Sonnet 5"},
+      {"id": "claude-fable-5", "display_name": "Claude Fable 5"},
+      {"id": "claude-opus-4-8", "display_name": "Claude Opus 4.8"},
+      {"id": "claude-sonnet-4-5", "display_name": "Claude Sonnet 4.5"},
+      {"id": "claude-haiku-4-5", "display_name": "Claude Haiku 4.5"}
+    ]
+  },
+  "grok": {
+    "note": "cli-chat-proxy.grok.com/v1/models — the Grok Build CLI proxy, NOT api.x.ai. The public xAI API advertises ~10 models; the CLI proxy exposes exactly one, and only that one is drivable by the grok harness.",
+    "verified_at": "2026-07-25",
+    "models": [
+      {"id": "grok-4.5", "display_name": "Grok 4.5"}
+    ]
+  },
+  "kimi": {
+    "note": "api.kimi.com/coding/v1/models, verified 2026-07-25 (4 entries).",
+    "verified_at": "2026-07-25",
+    "models": [
+      {"id": "kimi-for-coding", "display_name": "Kimi for Coding"},
+      {"id": "k3", "display_name": "Kimi K3"},
+      {"id": "k3-256k", "display_name": "Kimi K3 (256k)"}
+    ]
+  }
+}

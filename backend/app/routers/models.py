@@ -11,13 +11,18 @@ Combines:
 2. Usage statistics from MC (which agents use which model)
 """
 
-from fastapi import APIRouter, Depends
+import re
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.auth import require_user
+from app.auth import Role, require_role, require_user
 from app.database import get_session
 from app.models.agent import Agent
+from app.models.runtime import Runtime
+from app.services import model_catalog
 
 router = APIRouter(prefix="/api/v1", tags=["models"])
 
@@ -365,6 +370,146 @@ async def list_models(
         "gateway_connected": False,  # Phase 29: gateway removed
         "total": len(catalog),
     }
+
+
+# ── Provider model catalog ───────────────────────────────────────────────────
+# Lives in this router (rather than its own file) purely for route ordering:
+# ``/models/{model_id}`` below would otherwise swallow ``/models/catalog``.
+# FastAPI matches in declaration order, and keeping both in one file makes that
+# dependency visible instead of hiding it in main.py's include order. All actual
+# logic sits in ``services/model_catalog.py``.
+#
+# Reminder on the contract: the catalog says which models a provider OFFERS.
+# ``runtime.model_identifier`` remains the only statement about what RUNS.
+
+
+def _catalog_response(providers: list[dict]) -> dict:
+    """One response shape for GET and refresh, so the frontend needs one type."""
+    return {
+        "providers": providers,
+        "total_models": sum(len(p["models"]) for p in providers),
+        "new_models": sum(p["new_count"] for p in providers),
+    }
+
+
+@router.get("/models/catalog")
+async def get_model_catalog(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Per provider: available models, probe status, cache age.
+
+    Each model carries ``bound`` — true when some runtime row already uses this
+    ``model_identifier``. "New at the provider" is exactly ``bound == false``;
+    no extra DB column is involved.
+    """
+    return _catalog_response(await model_catalog.build_catalog(session))
+
+
+@router.post("/models/catalog/refresh")
+async def refresh_model_catalog(
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.OPERATOR)),
+):
+    """Drop the cache and re-probe every provider (the "Jetzt prüfen" button).
+
+    Same response shape as GET so the frontend can reuse one client type —
+    mirrors ``POST /api/v1/cli-tools/check``.
+    """
+    await model_catalog.invalidate_cache(session)
+    return _catalog_response(await model_catalog.build_catalog(session, force=True))
+
+
+class CatalogBindBody(BaseModel):
+    """Create a runtime row for a catalog model, inheriting the provider setup."""
+
+    provider_key: str = Field(min_length=1, max_length=128)
+    model_id: str = Field(min_length=1, max_length=256)
+    slug: str | None = Field(default=None, max_length=64)
+    display_name: str | None = Field(default=None, max_length=128)
+
+
+_SLUG_SANITIZE = re.compile(r"[^a-z0-9]+")
+
+
+def _derive_slug(prefix: str, model_id: str) -> str:
+    """``claude-opus-5`` under the anthropic provider → ``anthropic-claude-opus-5``.
+
+    The prefix is skipped when the model id already starts with it, so
+    ``grok-4.5`` stays ``grok-4-5`` instead of becoming ``grok-grok-4-5``.
+    """
+    base = _SLUG_SANITIZE.sub("-", model_id.lower()).strip("-")
+    prefix = _SLUG_SANITIZE.sub("-", prefix.lower()).strip("-")
+    slug = base if (prefix and base.startswith(prefix)) else f"{prefix}-{base}"
+    return slug.strip("-")[:64]
+
+
+@router.post("/models/catalog/bind", status_code=201)
+async def bind_catalog_model(
+    body: CatalogBindBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Turn a catalog entry into a real runtime row.
+
+    Endpoint / protocol / api_key_secret_id are inherited from an EXISTING
+    runtime of the same provider rather than re-entered — a bound model that
+    points at a different endpoint than its siblings is always a mistake.
+    Creation itself goes through ``runtimes.create_runtime_db`` so validation,
+    the 409-on-duplicate-slug rule and the response shape stay in one place.
+    """
+    from app.routers.runtimes import RuntimeCreate, create_runtime_db
+
+    targets = {t.key: t for t in await model_catalog.build_provider_targets(session)}
+    target = targets.get(body.provider_key)
+    if target is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unbekannter Provider '{body.provider_key}' (GET /api/v1/models/catalog)",
+        )
+    template = target.runtime
+    if template is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Provider '{body.provider_key}' hat keine Vorlage-Runtime.",
+        )
+
+    prefix = target.protocol if target.protocol != "openai" else template.slug
+    slug = body.slug or _derive_slug(prefix, body.model_id)
+
+    # Idempotency: a row that already points at exactly this model on this
+    # provider is a no-op (200-style success), while a slug that means something
+    # ELSE is a genuine conflict the operator must resolve.
+    existing = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
+    if existing is not None:
+        if existing.model_identifier == body.model_id:
+            return {"slug": existing.slug, "created": False, "runtime": existing.model_dump()}
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Runtime-Slug '{slug}' existiert bereits mit Modell "
+                f"'{existing.model_identifier}'. Eigenen Slug angeben."
+            ),
+        )
+
+    create = RuntimeCreate(
+        slug=slug,
+        display_name=body.display_name or body.model_id,
+        runtime_type=template.runtime_type,
+        endpoint=template.endpoint,
+        healthcheck_path=template.healthcheck_path,
+        model_identifier=body.model_id,
+        api_key_secret_id=template.api_key_secret_id,
+        host_id=template.host_id,
+        role_tags=list(template.role_tags or []),
+        supports_tools=template.supports_tools,
+        supports_reasoning=template.supports_reasoning,
+        supports_streaming=template.supports_streaming,
+        max_context_len=template.max_context_len,
+        preferred_context_len=template.preferred_context_len,
+    )
+    runtime = await create_runtime_db(create, session=session, current_user=current_user)
+    return {"slug": slug, "created": True, "runtime": runtime}
 
 
 @router.get("/models/{model_id}")
