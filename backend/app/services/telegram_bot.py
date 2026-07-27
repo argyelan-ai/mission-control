@@ -119,9 +119,21 @@ class TelegramBotService:
     # ── Bot API Methods ─────────────────────────────────────────────────
 
     async def send_message(
-        self, text: str, reply_markup: dict | None = None
+        self,
+        text: str,
+        reply_markup: dict | None = None,
+        message_thread_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int | None:
-        """Send message, return message_id or None on failure."""
+        """Send message, return message_id or None on failure.
+
+        `message_thread_id` routes the message into a Telegram forum topic (P2.3
+        — its absence is why Jarvis' reply landed in the main chat). Falsy values
+        (None or the General-topic sentinel 0) omit the parameter, so the message
+        goes to the chat root. `disable_notification=True` sends it silently (the
+        ping rule decides). Both default to the pre-P2.3 behaviour, so existing
+        callers are unaffected.
+        """
         client = await self._get_client()
         payload: dict = {
             "chat_id": settings.telegram_chat_id,
@@ -130,6 +142,10 @@ class TelegramBotService:
         }
         if reply_markup:
             payload["reply_markup"] = json.dumps(reply_markup)
+        if message_thread_id:  # None und 0 (Allgemein-Thema) fallen weg
+            payload["message_thread_id"] = message_thread_id
+        if disable_notification:
+            payload["disable_notification"] = True
 
         try:
             resp = await client.post(self._api_url("sendMessage"), data=payload)
