@@ -7,7 +7,7 @@ import { getToken, getStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
-import MobileNav from "./MobileNav";
+import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
 import StatusBar from "./StatusBar";
 import TopBar from "./TopBar";
 import CommandPalette from "@/components/shared/CommandPalette";
@@ -60,6 +60,7 @@ export default function AppShell({
 
   return (
     <VoiceProvider>
+    <MobileNavProvider>
     <div
       className="flex h-dvh overflow-hidden relative"
       style={{ backgroundColor: "var(--color-p2-bg)" }}
@@ -102,6 +103,12 @@ export default function AppShell({
           </main>
         )}
         <StatusBar />
+        {/* Mobile-Tab-Leiste: bewusst KEIN position:fixed. Als Flex-Kind der
+            h-dvh-Box sitzt sie zuverlässig am unteren Rand — auch auf iOS,
+            wo der Viewport-Bezug von `fixed` unzuverlässig ist. StatusBar ist
+            auf Mobil ausgeblendet (hidden md:flex), die Tab-Leiste auf Desktop
+            (md:hidden) — sie schliessen sich also gegenseitig aus. */}
+        <MobileTabBar />
       </div>
 
       {/* Global Command Palette */}
@@ -114,6 +121,7 @@ export default function AppShell({
       {/* Toast notifications (app-wide, driven by lib/notify.ts) */}
       <ToastRenderer />
     </div>
+    </MobileNavProvider>
     </VoiceProvider>
   );
 }

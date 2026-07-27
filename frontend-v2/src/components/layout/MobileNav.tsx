@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
@@ -32,8 +32,167 @@ const TAB_ITEMS = [
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
 
-export default function MobileNav() {
+function isTabActive(pathname: string, href: string) {
+  return href === "/" ? pathname === "/" : pathname.startsWith(href);
+}
+
+/* ────────────────────────────────────────────────────────────────
+   Geteilter Zustand.
+
+   Der Drawer ist ein Overlay (fixed, korrekt) und lebt in <MobileNav />,
+   der 05/INDEX-Knopf der ihn öffnet sitzt aber in <MobileTabBar />, die
+   jetzt ein normales Flex-Kind der App-Shell ist (kein `fixed` mehr, damit
+   sie auf iOS wirklich am unteren Rand der h-dvh-Box klebt). Beide hängen
+   deshalb an einem gemeinsamen Context statt an lokalem State.
+   ──────────────────────────────────────────────────────────────── */
+type MobileNavState = { open: boolean; setOpen: (v: boolean) => void };
+
+const MobileNavContext = createContext<MobileNavState | null>(null);
+
+export function MobileNavProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = useState(false);
+  const pathname = usePathname();
+
+  // Close on route change
+  useEffect(() => {
+    setOpen(false);
+  }, [pathname]);
+
+  // Prevent body scroll when menu open — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
+  useBodyScrollLock(open);
+
+  const value = useMemo(() => ({ open, setOpen }), [open]);
+
+  return <MobileNavContext.Provider value={value}>{children}</MobileNavContext.Provider>;
+}
+
+function useMobileNav(): MobileNavState {
+  const ctx = useContext(MobileNavContext);
+  if (!ctx) {
+    throw new Error("useMobileNav must be used inside <MobileNavProvider>");
+  }
+  return ctx;
+}
+
+/**
+ * MobileTabBar — die untere Tab-Leiste.
+ *
+ * WICHTIG: kein `position: fixed`. Die Leiste wird als Flex-Kind der
+ * App-Shell-Spalte gerendert (neben <StatusBar />) und sitzt dadurch am
+ * unteren Rand der h-dvh-Box. Auf iOS ist der Viewport-Bezug von `fixed`
+ * unzuverlässig (Safari-Toolbar, PWA-Standalone-Insets) — daher der Umbau.
+ * `paddingBottom: env(safe-area-inset-bottom)` bleibt, damit der
+ * Home-Indicator nicht auf den Tabs liegt.
+ */
+export function MobileTabBar() {
+  const { open, setOpen } = useMobileNav();
+  const pathname = usePathname();
+
+  const { data: approvals } = useQuery<Approval[]>({
+    queryKey: ["approvals-badge"],
+    queryFn: () => api.approvals.list(),
+    refetchInterval: 30_000,
+  });
+  const hasPendingApprovals = (approvals ?? []).some((a) => a.status === "pending");
+
+  // Ist das aktive Ziel nur über den Index erreichbar? → Index-Tab als aktiv markieren
+  const menuCoversCurrent = !TAB_ITEMS.some((t) => isTabActive(pathname, t.href));
+  const indexActive = open || menuCoversCurrent;
+
+  return (
+    <nav
+      aria-label="Hauptnavigation"
+      className="md:hidden shrink-0"
+      style={{
+        backgroundColor: "rgba(10,10,10,0.95)",
+        borderTop: "1px solid var(--color-p2-line)",
+        paddingBottom: "env(safe-area-inset-bottom)",
+      }}
+    >
+      <div className="grid grid-cols-5">
+        {TAB_ITEMS.map(({ href, label, num }) => {
+          const active = isTabActive(pathname, href);
+          return (
+            <Link
+              key={href}
+              href={href}
+              className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
+              style={{
+                // System A: aktiv war eine volle Akzent-Fläche. Auf fünf
+                // Tabs nebeneinander ist das ein Leuchtblock — jetzt dunkle
+                // Fläche + 2px-Akzentmarke oben.
+                backgroundColor: active ? "var(--color-p2-pan2)" : "transparent",
+                color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+                ...MONO,
+              }}
+              aria-current={active ? "page" : undefined}
+            >
+              {active && (
+                <span
+                  aria-hidden
+                  className="absolute top-0 left-0 right-0 h-[2px]"
+                  style={{ backgroundColor: "var(--color-p2-amb)" }}
+                />
+              )}
+              <span
+                style={{
+                  fontStyle: "normal",
+                  fontSize: "8px",
+                  lineHeight: 1.4,
+                  color: active ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
+                }}
+              >
+                {num}
+              </span>
+              <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
+                {label}
+              </span>
+            </Link>
+          );
+        })}
+
+        {/* Index-Tab öffnet den Drawer (lebt in <MobileNav />) */}
+        <button
+          onClick={() => setOpen(true)}
+          aria-label="Open menu"
+          className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
+          style={{
+            backgroundColor: indexActive ? "var(--color-p2-pan2)" : "transparent",
+            color: indexActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
+            ...MONO,
+          }}
+        >
+          <span
+            style={{
+              fontStyle: "normal",
+              fontSize: "8px",
+              lineHeight: 1.4,
+              color: indexActive ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
+            }}
+          >
+            05
+          </span>
+          <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
+            ≡ INDEX
+          </span>
+          {hasPendingApprovals && (
+            <span
+              className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
+              style={{ backgroundColor: "var(--color-p2-err)" }}
+            />
+          )}
+        </button>
+      </div>
+    </nav>
+  );
+}
+
+/**
+ * MobileNav — die beiden Overlays: obere Insel + Index-Drawer.
+ * Beide bleiben bewusst `fixed` — das ist für Overlays korrekt.
+ */
+export default function MobileNav() {
+  const { open, setOpen } = useMobileNav();
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
@@ -55,14 +214,6 @@ export default function MobileNav() {
   const activeBoard = boards.find((b) => b.id === activeBoardId) ?? boards[0] ?? null;
   const hasMultipleBoards = boards.length > 1;
 
-  // Close on route change
-  useEffect(() => {
-    setOpen(false);
-  }, [pathname]);
-
-  // Prevent body scroll when menu open — iOS-fest via Fixed-Position-Technik (MOBILE-SPEC M4)
-  useBodyScrollLock(open);
-
   function handleLogout() {
     clearToken();
     setOpen(false);
@@ -73,14 +224,6 @@ export default function MobileNav() {
     setActiveBoardId(id);
     setOpen(false);
   }
-
-  function isTabActive(href: string) {
-    return href === "/" ? pathname === "/" : pathname.startsWith(href);
-  }
-
-  // Ist das aktive Ziel nur über den Index erreichbar? → Index-Tab als aktiv markieren
-  const menuCoversCurrent = !TAB_ITEMS.some((t) => isTabActive(t.href));
-  const indexActive = open || menuCoversCurrent;
 
   return (
     <>
@@ -129,92 +272,6 @@ export default function MobileNav() {
           <VoiceButton size={40} variant="header" />
         </div>
       </header>
-
-      {/* Bottom tab bar — Daumen-Zone, safe-area-aware. Aktiv = Reverse-Video. */}
-      <nav
-        aria-label="Hauptnavigation"
-        className="fixed bottom-0 left-0 right-0 z-40 md:hidden"
-        style={{
-          backgroundColor: "rgba(10,10,10,0.95)",
-          borderTop: "1px solid var(--color-p2-line)",
-          paddingBottom: "env(safe-area-inset-bottom)",
-        }}
-      >
-        <div className="grid grid-cols-5">
-          {TAB_ITEMS.map(({ href, label, num }) => {
-            const active = isTabActive(href);
-            return (
-              <Link
-                key={href}
-                href={href}
-                className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
-                style={{
-                  // System A: aktiv war eine volle Akzent-Fläche. Auf fünf
-                  // Tabs nebeneinander ist das ein Leuchtblock — jetzt dunkle
-                  // Fläche + 2px-Akzentmarke oben.
-                  backgroundColor: active ? "var(--color-p2-pan2)" : "transparent",
-                  color: active ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-                  ...MONO,
-                }}
-                aria-current={active ? "page" : undefined}
-              >
-                {active && (
-                  <span
-                    aria-hidden
-                    className="absolute top-0 left-0 right-0 h-[2px]"
-                    style={{ backgroundColor: "var(--color-p2-amb)" }}
-                  />
-                )}
-                <span
-                  style={{
-                    fontStyle: "normal",
-                    fontSize: "8px",
-                    lineHeight: 1.4,
-                    color: active ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
-                  }}
-                >
-                  {num}
-                </span>
-                <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
-                  {label}
-                </span>
-              </Link>
-            );
-          })}
-
-          {/* Index-Tab öffnet den Drawer */}
-          <button
-            onClick={() => setOpen(true)}
-            aria-label="Open menu"
-            className="relative flex flex-col items-center justify-center min-h-[52px] cursor-pointer"
-            style={{
-              backgroundColor: indexActive ? "var(--color-p2-pan2)" : "transparent",
-              color: indexActive ? "var(--color-p2-txt)" : "var(--color-p2-dim)",
-              ...MONO,
-            }}
-          >
-            <span
-              style={{
-                fontStyle: "normal",
-                fontSize: "8px",
-                lineHeight: 1.4,
-                color: indexActive ? "var(--color-p2-dim)" : "var(--color-p2-faint)",
-              }}
-            >
-              05
-            </span>
-            <span style={{ fontSize: "10.5px", fontWeight: 700, letterSpacing: "0.06em" }}>
-              ≡ INDEX
-            </span>
-            {hasPendingApprovals && (
-              <span
-                className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
-                style={{ backgroundColor: "var(--color-p2-err)" }}
-              />
-            )}
-          </button>
-        </div>
-      </nav>
 
       {/* Overlay + slide-out index drawer */}
       <AnimatePresence>
@@ -298,7 +355,7 @@ export default function MobileNav() {
                       </div>
                       <ul>
                         {items.map(({ href, label }) => {
-                          const isActive = isTabActive(href);
+                          const isActive = isTabActive(pathname, href);
                           const showBadge = href === "/inbox" && hasPendingApprovals;
                           return (
                             <li key={href}>

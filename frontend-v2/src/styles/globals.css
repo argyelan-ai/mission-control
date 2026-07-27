@@ -663,15 +663,13 @@ option {
   }
 }
 
-/* Main content bottom padding — Platz für die Mobile-Tab-Bar (52px + safe-area).
-   Desktop: keine Tab-Bar → kleiner Standard-Abstand. */
+/* Main content bottom padding — reiner Atem-Abstand.
+   Früher glich das hier die FIXED Mobile-Tab-Bar aus (52px + safe-area).
+   Die Leiste liegt jetzt als Flex-Kind der App-Shell im Fluss und beansprucht
+   ihren Platz selbst (inkl. safe-area-inset-bottom) — ein Ausgleich wäre
+   doppelt. Desktop hatte nie einen Ausgleich und bleibt unverändert bei 1rem. */
 .main-content-pb {
-  padding-bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
-}
-@media (min-width: 768px) {
-  .main-content-pb {
-    padding-bottom: 1rem;
-  }
+  padding-bottom: 1rem;
 }
 
 /* ── Tab-Strip — horizontaler Scroller für Tab-Leisten (MOBILE-SPEC M17)
