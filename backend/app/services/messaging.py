@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -83,7 +84,22 @@ async def ensure_dm_thread(session: AsyncSession, agent: Agent) -> Thread:
 
     thread = Thread(kind="dm", agent_id=agent.id, title=f"DM {agent.name}")
     session.add(thread)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Race: zwischen SELECT und INSERT hat ein zweiter Aufruf denselben
+        # DM-Thread angelegt (der partielle Unique-Index uq_threads_dm_per_agent
+        # faengt das ab). Der Verlierer nimmt den Thread des Gewinners — sonst
+        # zerfiele das Gespraech in zwei Haelften.
+        await session.rollback()
+        existing = (
+            await session.exec(
+                select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+            )
+        ).first()
+        if existing is None:  # pragma: no cover — nur bei fremdem IntegrityError
+            raise
+        return existing
     await session.refresh(thread)
     return thread
 

@@ -82,3 +82,53 @@ async def test_dm_thread_accepts_messages(async_session: AsyncSession):
     )
     await async_session.commit()
     assert msg.seq == 1
+
+
+# ── Race-Festigkeit (Review-Fund 27.07.) ──────────────────────────────────
+#
+# ensure_dm_thread macht SELECT-dann-INSERT. Zwei gleichzeitige Aufrufe
+# (Telegram-Nachricht + Poll im selben Moment) legten damit ZWEI DM-Threads an
+# — beide wuerden zugestellt und der Gespraechsverlauf zerfiele in zwei
+# Haelften. Abgesichert durch den partiellen Unique-Index
+# uq_threads_dm_per_agent + IntegrityError-Fang.
+
+@pytest.mark.asyncio
+async def test_duplicate_dm_thread_is_rejected_by_the_database(async_session: AsyncSession):
+    """Der Index muss greifen — nicht nur der Anwendungscode."""
+    from sqlalchemy.exc import IntegrityError
+
+    agent = await _agent(async_session)
+    await ensure_dm_thread(async_session, agent)
+
+    async_session.add(Thread(kind="dm", agent_id=agent.id))
+    with pytest.raises(IntegrityError):
+        await async_session.commit()
+    await async_session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_ensure_dm_thread_survives_a_lost_race(async_session: AsyncSession):
+    """Verliert ensure_dm_thread das Rennen, nimmt es den Thread des Gewinners
+    statt zu werfen. Simuliert, indem der Konkurrent zwischen SELECT und INSERT
+    einfuegt."""
+    agent = await _agent(async_session)
+
+    winner = Thread(kind="dm", agent_id=agent.id, title="vom Konkurrenten")
+    async_session.add(winner)
+    await async_session.commit()
+    await async_session.refresh(winner)
+
+    # Der Cache muss geleert werden, sonst sieht der Aufruf den Gewinner nicht
+    # als "fremd" an — wir wollen den echten DB-Pfad testen.
+    got = await ensure_dm_thread(async_session, agent)
+    assert got.id == winner.id, "verlorenes Rennen muss den bestehenden Thread liefern"
+
+
+@pytest.mark.asyncio
+async def test_task_threads_are_not_affected_by_the_unique_index(async_session: AsyncSession):
+    """Der Index ist partiell (WHERE kind='dm') — Task-/Side-Threads duerfen
+    weiterhin beliebig viele mit agent_id NULL sein."""
+    async_session.add(Thread(kind="task"))
+    async_session.add(Thread(kind="task"))
+    async_session.add(Thread(kind="side"))
+    await async_session.commit()  # darf nicht werfen

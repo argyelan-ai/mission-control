@@ -15,12 +15,26 @@ vocab — validated at the service layer (Task 3), not enforced here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, UniqueConstraint, Uuid, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, UniqueConstraint, Uuid, text
 from sqlmodel import Column, Field, SQLModel
 
 
 class Thread(SQLModel, table=True):
     __tablename__ = "threads"
+    __table_args__ = (
+        # Ein Agent hat hoechstens EINEN DM-Thread mit dem Operator. Partiell,
+        # damit Task-/Side-Threads (agent_id IS NULL) unberuehrt bleiben.
+        # Muss identisch in Migration 0165 stehen: Tests bauen die Tabellen aus
+        # diesem Modell, Produktion aus der Migration — nur wenn beide denselben
+        # Index tragen, prueft der Test tatsaechlich das Produktionsverhalten.
+        Index(
+            "uq_threads_dm_per_agent",
+            "agent_id",
+            unique=True,
+            sqlite_where=text("kind = 'dm'"),
+            postgresql_where=text("kind = 'dm'"),
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     kind: str  # "task" | "side" | "dm" (see comm_constants.THREAD_KINDS)
