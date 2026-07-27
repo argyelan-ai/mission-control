@@ -15,7 +15,16 @@ vocab — validated at the service layer (Task 3), not enforced here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, Index, UniqueConstraint, Uuid, text
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Index,
+    UniqueConstraint,
+    Uuid,
+    text,
+)
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -34,6 +43,12 @@ class Thread(SQLModel, table=True):
             sqlite_where=text("kind = 'dm'"),
             postgresql_where=text("kind = 'dm'"),
         ),
+        # 1:1 Telegram-Thema <-> Thread. Muss identisch in Migration 0166 stehen:
+        # Tests bauen die Tabellen aus dem Modell, Produktion aus der Migration —
+        # nur wenn beide denselben Constraint tragen, prueft der Test das
+        # Produktionsverhalten (der Fehler aus PR #171). NULL ist im Sinne von
+        # UNIQUE kein Wert: beliebig viele Threads bleiben ohne Thema.
+        UniqueConstraint("telegram_topic_id", name="uq_threads_telegram_topic_id"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -54,6 +69,12 @@ class Thread(SQLModel, table=True):
         sa_column=Column(
             Uuid, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True
         ),
+    )
+    # Telegram-Forum-Thema (message_thread_id) dieses Threads. NULL = noch keins
+    # (lazy angelegt bei der ersten Nachricht). Das Allgemein-Thema hat keine
+    # eigene ID — es bleibt NULL, seine Nachrichten gehen ohne message_thread_id.
+    telegram_topic_id: int | None = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
     )
     title: str | None = None
     summary: str | None = None
