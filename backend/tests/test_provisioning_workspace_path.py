@@ -184,7 +184,23 @@ async def test_cli_bridge_resolve_workspace_self_heals_null_path(monkeypatch):
 async def test_provision_cli_agent_assigns_mc_workspace(async_session: AsyncSession, monkeypatch):
     from pathlib import Path
 
+    from app.models.runtime import Runtime
     from app.routers import cli_terminal
+
+    # The provision payload's model now comes from the runtime binding, not
+    # from the dead legacy agent.model column (model sanitation 2026-07-25) —
+    # so this agent needs a bound runtime to be provisionable at all.
+    rt = Runtime(
+        slug="kimi-cloud-wsp",
+        display_name="Kimi",
+        runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+        model_identifier="kimi-code/k3",
+        enabled=True,
+    )
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
 
     agent = Agent(
         name="Kimi Test",
@@ -192,7 +208,7 @@ async def test_provision_cli_agent_assigns_mc_workspace(async_session: AsyncSess
         harness="kimi",
         provision_status="local",
         workspace_path=None,
-        model="kimi-code/k3",
+        runtime_id=rt.id,
         soul_md="x" * 1200,
     )
     async_session.add(agent)

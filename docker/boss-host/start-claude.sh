@@ -4,8 +4,10 @@
 # Startet das offizielle claude binary mit OAuth-Login (aus macOS Keychain
 # unter ~/.claude/) + SOUL.md als --append-system-prompt.
 #
-# Modell: claude-opus-4-7 (1M context). Direkter Anthropic-API-Call,
-# KEIN openclaude/LM-Studio-Detour wie im Container.
+# Modell: kommt aus agent.env (ANTHROPIC_MODEL, gesourced unten aus
+# runtime.model_identifier — siehe backend/app/routers/internal.py
+# build_runtime_env). Direkter Anthropic-API-Call, KEIN openclaude/
+# LM-Studio-Detour wie im Container.
 #
 # Wird von entrypoint.sh via tmux aufgerufen (Task B4).
 
@@ -56,9 +58,27 @@ unset OPENAI_BASE_URL
 unset OPENAI_API_KEY
 unset OPENAI_MODEL
 unset CLAUDE_CODE_USE_OPENAI
+# ANTHROPIC_MODEL absichtlich NICHT unset — das ist der einzige Modellkanal
+# fuer Host-Claude (kommt aus agent.env, oben gesourced) und darf hier nicht
+# verloren gehen.
 
-# Modell explizit auf Opus 4.8
-export ANTHROPIC_MODEL="claude-opus-4-8"
+if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+    # runtime.model_identifier ist die einzige Wahrheit: agent.env wurde oben
+    # gesourced (Z. 37-43) und hat ANTHROPIC_MODEL bereits gesetzt. Nichts tun.
+    echo "[start-claude] ANTHROPIC_MODEL=$ANTHROPIC_MODEL (aus agent.env)"
+else
+    # Seit 2026-07-25 ist harness "claude" in HOST_ADAPTERS registriert
+    # (backend/app/services/host_harness_adapter.py -> ClaudeHostAdapter), d.h.
+    # sync_host_agent_model schreibt ANTHROPIC_MODEL aus runtime.model_identifier
+    # regulaer in diese agent.env. Fehlt der Wert trotzdem, ist der Agent an
+    # keine Runtime (oder an eine ohne model_identifier) gebunden.
+    #
+    # Dann wird KEIN Modell gepinnt: das claude-CLI nimmt seinen Account-Default,
+    # der neuen Releases automatisch folgt. Ein hier hart eingetragener Pin
+    # veraltet dagegen still (genau der Vorfall: Fleet blieb auf einem alten
+    # opus, waehrend Anthropic laengst weiter war). Warnen statt raten.
+    echo "WARN: ANTHROPIC_MODEL fehlt in $ENV_FILE — Boss ist an keine Runtime mit model_identifier gebunden. Kein Pin gesetzt, claude nutzt seinen Account-Default." >&2
+fi
 
 # --dangerously-skip-permissions matcht aktuelles Container-Verhalten.
 # Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =

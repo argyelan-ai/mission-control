@@ -129,10 +129,16 @@ def _known_agent_names() -> set:
 def _start_plugins_shell() -> bool:
     """Startet eine interaktive Installer-Agent-Session.
 
-    Hostet einen claude-cli mit Sonnet 4.6 + Installer-Persona im Workspace
+    Hostet einen claude-cli mit Installer-Persona im Workspace
     ~/.mc/agents/installer/. Persona+Tools werden als
     --append-system-prompt geladen, MC-API-Token aus agent.env injiziert.
     Tab heisst weiterhin "plugins-shell" damit Frontend-Code unverändert bleibt.
+
+    Modell: ueber MC_PLUGINS_SHELL_MODEL konfigurierbar (env-Var auf dem
+    Host). Ist sie nicht gesetzt, wird ANTHROPIC_MODEL gar nicht erst gesetzt
+    — der claude-CLI faellt dann auf seinen Account-Default zurueck, der
+    neuen Releases automatisch folgt statt an einem gepinnten Modellnamen
+    (frueher: fest "claude-sonnet-4-6") zu veralten.
     """
     session = "plugins-shell"
 
@@ -186,9 +192,15 @@ def _start_plugins_shell() -> bool:
     config_dir.mkdir(parents=True, exist_ok=True)
 
     claude_bin = str(HOME / ".local/bin/claude")
+    # MC_PLUGINS_SHELL_MODEL ist ein bewusster Opt-in-Pin (Host-env, nicht
+    # runtime.model_identifier — diese Shell ist kein MC-Agent/Runtime).
+    # Unset -> kein ANTHROPIC_MODEL im Kommando -> claude-CLI nimmt seinen
+    # Account-Default statt eines veraltenden Hardcodes.
+    plugins_shell_model = os.environ.get("MC_PLUGINS_SHELL_MODEL", "").strip()
+    model_env = f"ANTHROPIC_MODEL={shlex.quote(plugins_shell_model)} " if plugins_shell_model else ""
     cmd = (
         f"CLAUDE_CODE_OAUTH_TOKEN={shlex.quote(oauth_token)} "
-        f"ANTHROPIC_MODEL=claude-sonnet-4-6 "
+        f"{model_env}"
         f"CLAUDE_CONFIG_DIR={shlex.quote(str(config_dir))} "
         f"MC_API_URL={shlex.quote(mc_url)} "
         f"MC_AGENT_TOKEN={shlex.quote(mc_token)} "
@@ -1057,7 +1069,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_error(400, str(e))
                 return
             mc_agent_token = data.get("mc_agent_token", "")
-            model = data.get("model", "nvidia/nemotron-3-super")
+            # Kein stiller Modell-Default mehr (2026-07-25): runtime.model_identifier
+            # ist die einzige Wahrheit, der Aufrufer muss das Modell explizit
+            # mitschicken statt uns raten zu lassen.
+            model = data.get("model", "")
+            if not model:
+                self.send_error(400, "model is required — refusing to provision with a silent default")
+                return
             system_prompt = data.get("system_prompt",
                 f"Du bist {agent_name}, ein autonomer Developer Agent in Mission Control. "
                 f"Bearbeite zugewiesene Tasks selbststaendig.\n\n"

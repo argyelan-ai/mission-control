@@ -179,6 +179,34 @@ async def get_active_model_for_runtime(
     return None
 
 
+async def resolve_agent_model(session: AsyncSession, agent) -> str | None:
+    """The model an agent actually runs — from its bound runtime, nothing else.
+
+    ``runtime.model_identifier`` is the single source of truth (model-sanitation
+    2026-07-25). The legacy ``agent.model`` free-text column is NOT consulted:
+    it is write-only display data (set by the propagation paths AFTER a sync,
+    surfaced in the UI) and using it as an input is exactly how stale model
+    names leaked back into provisioning payloads.
+
+    Returns ``None`` when the agent has no runtime, the runtime row is gone, or
+    the runtime has no model_identifier. Callers must fail loudly on ``None``
+    instead of substituting a guess — a wrong model name is a silent
+    misconfiguration, a missing one is a fixable error message.
+
+    Deliberately does NOT probe ``/v1/models`` or touch Redis: this runs inside
+    request handlers where a network round-trip to a down endpoint would turn a
+    fast 400 into a timeout. Use ``get_active_model_for_runtime`` when a probe
+    and cache are actually wanted.
+    """
+    runtime_id = getattr(agent, "runtime_id", None)
+    if not runtime_id:
+        return None
+    runtime = await session.get(Runtime, runtime_id)
+    if runtime is None:
+        return None
+    return runtime.model_identifier or None
+
+
 async def invalidate_and_reprobe(
     session: AsyncSession,
     slug_or_id: str,

@@ -6,6 +6,19 @@ repo as a seed template for open-source first-deploys.
 
 For open-source users: runtimes.json can ship with placeholder hosts. On first
 startup the seeder populates the DB; users then edit runtimes via UI.
+
+IMPORTANT — runtimes.json is SEED-ONLY, the DB is the truth after first run.
+Once a slug exists in the DB (`existing_slugs`, see below), this file is never
+consulted for that slug again — edits to `model_identifier` etc. in the JSON
+have zero effect on an already-seeded fleet. A stale value in runtimes.json
+(e.g. an old model name) is therefore harmless drift, not a bug: it only
+matters for a brand-new deploy's first-run seed. `model_identifier` stays the
+single runtime truth via the DB row, never via this file, after that point.
+(No top-level comment key was added to runtimes.json itself — the file is a
+bare JSON array with no native comment syntax, and a dummy entry without an
+`id` would just log a "seed entry missing id" warning on every startup for no
+benefit. This docstring is the clarification instead — see
+docs/plans/2026-07-25-model-sanitation-and-catalog.md.)
 """
 import json
 import logging

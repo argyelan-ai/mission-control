@@ -143,6 +143,183 @@ async def test_sync_host_agent_model_preserves_token(async_session, tmp_path, mo
     assert "OPENAI_MODEL='nvidia/Qwen3.6'" in env
 
 
+@pytest.mark.asyncio
+async def test_sync_host_agent_model_skips_kimi(async_session, tmp_path, monkeypatch):
+    """kimi is protocol-fixed too — no provider model env may be injected."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    d = tmp_path / ".mc" / "agents" / "kimi"
+    d.mkdir(parents=True)
+    (d / "agent.env").write_text("MC_AGENT_TOKEN='keepme'\n")
+    rt = Runtime(slug="kimi-cloud", display_name="Kimi", runtime_type="kimi",
+                 endpoint="https://api.kimi.com/coding/v1",
+                 model_identifier="kimi-k2.7", enabled=True)
+    async_session.add(rt)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = Agent(name="Kimi", role="developer", agent_runtime="host",
+                  harness="kimi", runtime_id=rt.id, slug="kimi")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    from app.services.host_harness_adapter import sync_host_agent_model
+    await sync_host_agent_model(agent, rt, session=async_session)
+
+    env = (d / "agent.env").read_text()
+    assert "MC_AGENT_TOKEN='keepme'" in env
+    assert "OPENAI_MODEL" not in env
+    assert "ANTHROPIC_MODEL" not in env
+
+
+# ── harness "claude" / boss-host (model sanitation 2026-07-25) ──────────────
+
+
+def _mk_anthropic_rt(session, model="claude-test-model-1"):
+    rt = Runtime(
+        slug="anthropic-claude-oauth",
+        display_name="Claude OAuth",
+        runtime_type="anthropic_cloud",
+        endpoint="https://api.anthropic.com",
+        model_identifier=model,
+        enabled=True,
+    )
+    session.add(rt)
+    return rt
+
+
+@pytest.mark.asyncio
+async def test_claude_registry_lookup_and_protocol():
+    """Boss' harness must own an adapter — that is the gate every propagation
+    path checks (`get_adapter(...) is not None`)."""
+    from app.services.host_harness_adapter import get_adapter, ClaudeHostAdapter
+
+    a = get_adapter("claude")
+    assert isinstance(a, ClaudeHostAdapter)
+    assert a.harness == "claude"
+    assert a.protocol == "anthropic"
+    # NOT a singleton: the wizard stages arbitrary claude host agents.
+    assert a.singleton_slug is None
+    # No bespoke bootstrap — routers/agents.py must keep using the generic
+    # host_provisioning staging path for claude host agents.
+    assert a.supports_bootstrap is False
+    with pytest.raises(NotImplementedError):
+        await a.bootstrap(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_other_host_adapters_still_support_bootstrap():
+    from app.services.host_harness_adapter import get_adapter
+
+    for harness in ("hermes", "grok", "kimi"):
+        assert get_adapter(harness).supports_bootstrap is True
+
+
+@pytest.mark.asyncio
+async def test_claude_env_dir_maps_legacy_boss_slug():
+    """Boss' agent.env lives in ~/.mc/agents/boss-host/, not .../boss/."""
+    from app.services.host_harness_adapter import get_adapter
+
+    adapter = get_adapter("claude")
+    assert adapter.env_dir(Agent(name="Boss", role="lead", slug="boss")) == "boss-host"
+    # Any other claude host agent uses its own slug unchanged.
+    assert adapter.env_dir(Agent(name="Alice", role="dev", slug="alice")) == "alice"
+
+
+@pytest.mark.asyncio
+async def test_sync_host_agent_model_writes_anthropic_model_for_boss(
+    async_session, tmp_path, monkeypatch
+):
+    """The whole point: runtime.model_identifier lands in boss-host's agent.env
+    as ANTHROPIC_MODEL, while MC_AGENT_TOKEN and other keys survive."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    d = tmp_path / ".mc" / "agents" / "boss-host"
+    d.mkdir(parents=True)
+    (d / "agent.env").write_text(
+        "MC_AGENT_TOKEN='keepme'\n"
+        "MC_API_URL='http://backend:8000'\n"
+        "MC_AGENT_NAME='Boss'\n"
+    )
+
+    rt = _mk_anthropic_rt(async_session)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = Agent(name="Boss", role="lead", agent_runtime="host",
+                  harness="claude", runtime_id=rt.id, slug="boss")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    from app.services.host_harness_adapter import sync_host_agent_model
+    await sync_host_agent_model(agent, rt, session=async_session)
+
+    env = (d / "agent.env").read_text()
+    assert "ANTHROPIC_MODEL='claude-test-model-1'" in env
+    assert "MC_AGENT_TOKEN='keepme'" in env
+    assert "MC_API_URL='http://backend:8000'" in env
+    assert "MC_AGENT_NAME='Boss'" in env
+    # anthropic harness gets no OpenAI provider env.
+    assert "OPENAI_BASE_URL" not in env
+    assert "OPENAI_MODEL" not in env
+    # The slug-named directory must NOT be created — nothing on the host reads it.
+    assert not (tmp_path / ".mc" / "agents" / "boss").exists()
+
+
+@pytest.mark.asyncio
+async def test_sync_host_agent_model_without_model_identifier_writes_no_pin(
+    async_session, tmp_path, monkeypatch
+):
+    """No model_identifier → no ANTHROPIC_MODEL. start-claude.sh then lets the
+    CLI use its account default instead of a stale pin."""
+    monkeypatch.setenv("HOME_HOST", str(tmp_path))
+    d = tmp_path / ".mc" / "agents" / "boss-host"
+    d.mkdir(parents=True)
+    (d / "agent.env").write_text("MC_AGENT_TOKEN='keepme'\n")
+
+    rt = _mk_anthropic_rt(async_session, model=None)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    agent = Agent(name="Boss", role="lead", agent_runtime="host",
+                  harness="claude", runtime_id=rt.id, slug="boss")
+    async_session.add(agent)
+    await async_session.commit()
+    await async_session.refresh(agent)
+
+    from app.services.host_harness_adapter import sync_host_agent_model
+    await sync_host_agent_model(agent, rt, session=async_session)
+
+    env = (d / "agent.env").read_text()
+    assert "ANTHROPIC_MODEL" not in env
+    assert "MC_AGENT_TOKEN='keepme'" in env
+
+
+@pytest.mark.asyncio
+async def test_marked_for_sync_covers_claude_host_but_not_generic_harnesses(
+    async_session,
+):
+    """mark_agents_for_sync flags host agents only when their harness has an
+    adapter — claude now does, openclaude/omp still do not."""
+    from app.services.runtime_propagation import mark_agents_for_sync
+
+    rt = _mk_anthropic_rt(async_session)
+    await async_session.commit()
+    await async_session.refresh(rt)
+    boss = Agent(name="Boss", role="lead", agent_runtime="host",
+                 harness="claude", runtime_id=rt.id, slug="boss")
+    other = Agent(name="Generic", role="dev", agent_runtime="host",
+                  harness="openclaude", runtime_id=rt.id, slug="generic")
+    async_session.add(boss)
+    async_session.add(other)
+    await async_session.commit()
+
+    flagged = await mark_agents_for_sync(async_session, rt)
+
+    await async_session.refresh(boss)
+    await async_session.refresh(other)
+    assert flagged == 1
+    assert boss.pending_runtime_sync is True
+    assert other.pending_runtime_sync is not True
+
+
 def test_env_value_roundtrip_is_idempotent():
     """read(write(x)) == x for every value — including values with quotes.
 

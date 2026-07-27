@@ -16,5 +16,12 @@ async def test_incompatible_host_harness_is_rejected():
 @pytest.mark.asyncio
 async def test_unknown_host_harness_has_no_adapter():
     from app.services.host_harness_adapter import get_adapter
-    assert get_adapter("claude") is None   # claude host adapter is design-only (Phase 2)
+    # 2026-07-25 (model sanitation): claude IS registered now — that registry
+    # entry is what lets runtime.model_identifier propagate to boss-host. It
+    # deliberately owns NO bootstrap, so provisioning still goes through the
+    # generic host_provisioning staging path.
+    claude = get_adapter("claude")
+    assert claude is not None
+    assert claude.supports_bootstrap is False
     assert get_adapter("hermes") is not None
+    assert get_adapter("openclaude") is None  # genuinely unknown host harness

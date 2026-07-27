@@ -34,7 +34,7 @@ PROVIDER_TEMPLATES = [
         "provider": "openai",
         "key": "openai_api_key",
         "label": "OpenAI API Key",
-        "description": "Für GPT-4o, o1, o3 etc.",
+        "description": "Für GPT-4o, o1, o3 etc.",  # model-catalog: allow (UI-Text zum API-Key, kein Modell-Selektor)
         "placeholder": "sk-...",
     },
     {
@@ -55,7 +55,7 @@ PROVIDER_TEMPLATES = [
         "provider": "openrouter",
         "key": "openrouter_api_key",
         "label": "OpenRouter API Key",
-        "description": "Multi-Provider-Gateway (Claude, GPT-4, Llama, Mistral, ...)",
+        "description": "Multi-Provider-Gateway (Claude, GPT-4, Llama, Mistral, ...)",  # model-catalog: allow (UI-Text zum API-Key, kein Modell-Selektor)
         "placeholder": "sk-or-v1-...",
     },
     {

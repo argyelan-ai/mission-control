@@ -924,7 +924,7 @@ def run_omp_subprocess(
     prompt: str,
     *,
     cwd: str,
-    model: str = "claude-opus-4-8",
+    model: str,
     max_time: int = 900,
     stream_idle_timeout: int = 90,
     wall_clock_margin: int = 120,
