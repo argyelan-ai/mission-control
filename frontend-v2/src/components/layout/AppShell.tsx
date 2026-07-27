@@ -62,7 +62,7 @@ export default function AppShell({
     <VoiceProvider>
     <MobileNavProvider>
     <div
-      className="flex h-dvh overflow-hidden relative"
+      className="flex overflow-hidden relative app-shell-height"
       style={{ backgroundColor: "var(--color-p2-bg)" }}
     >
       <AmbientBackground />

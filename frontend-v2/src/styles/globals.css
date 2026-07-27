@@ -768,3 +768,32 @@ option {
     opacity: 0.7;
   }
 }
+
+/* ── App-Shell-Höhe: iOS-PWA misst dvh falsch ──────────────────────────────
+   Auf dem iPhone (PWA vom Home-Screen) gemessen, 27.07.2026:
+
+     innerHeight 793 · visualViewport 793 · dvh 793 · svh 793
+     lvh 852 · vh 852 · screen.height 852 · safe-area-inset-bottom 34
+
+   Das Fenster ist also 59px kürzer als der Bildschirm, und dieser Fehlbetrag
+   erscheint UNTEN: die Shell endet über dem Bildschirmrand, die Tab-Leiste
+   steht in der Luft. Der gemessene Abstand zwischen Leiste und Fensterunterkante
+   war dabei 0 — die Leiste sass korrekt, nur war das Fenster zu klein.
+
+   `lvh` ist der einzige Wert, der die Wahrheit sagt (852 = screen.height).
+   Er gilt aber NUR in der installierten App: im normalen Safari-Tab meint
+   `lvh` die Höhe OHNE Browserleisten, dort würde die Tab-Leiste hinter der
+   Adressleiste verschwinden. Deshalb die Fallunterscheidung über display-mode
+   statt eines pauschalen Austauschs.
+
+   Kein JavaScript: window.innerHeight liefert auf iOS exakt den falschen Wert
+   (793), eine JS-Messung würde den Fehler nur getreu übernehmen. */
+.app-shell-height {
+  height: 100dvh;
+}
+
+@media all and (display-mode: standalone) {
+  .app-shell-height {
+    height: 100lvh;
+  }
+}
