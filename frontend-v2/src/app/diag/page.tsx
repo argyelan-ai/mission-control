@@ -95,8 +95,12 @@ export default function DiagPage() {
           Flex-Kind. Wenn die Leiste HIER nicht unten sitzt, liegt es an der
           Box — nicht an der Komponente. */}
       <div
-        className="flex flex-col h-dvh overflow-hidden"
-        style={{ backgroundColor: "#0A0A0A", color: "#EEEEEE" }}
+        className="flex flex-col overflow-hidden"
+        style={{
+          height: "var(--app-h, 100dvh)",
+          backgroundColor: "#0A0A0A",
+          color: "#EEEEEE",
+        }}
       >
         <div className="flex-1 overflow-y-auto" style={{ padding: "12px" }}>
           <div
