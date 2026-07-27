@@ -211,6 +211,30 @@ SCHWERE FRAGEN — ask_frontier
 """
 
 
+# Gegenstueck zu FRONTIER_ADDENDUM: eingefuegt, wenn ask_frontier AUS ist.
+# Ohne diesen Block faellt Jarvis auf Selbstbeantwortung mit dem kleinen
+# Chat-Modell zurueck — schlechtere Antworten, und die Arbeit landet nie im
+# Board. Operator-Entscheid 27.07.2026: Boss laeuft auf dem Abo und kostet
+# nichts extra, ein Frontier-Call kostet pro Anfrage. Jarvis bleibt Vorzimmer.
+DELEGATION_ADDENDUM = """\
+SCHWERE FRAGEN — an Boss delegieren
+- Du denkst NICHT selbst nach. Analyse, Planung, Konzept, Abwaegung, Recherche,
+  Code — das ist Arbeit fuer das Team, nicht fuer dich.
+- SCHWERE FRAGE (Analyse, Planung, Konzept, Abwaegung, oder eine Wissensfrage,
+  die NICHT im Vault/Board steht) → dispatch_to_agent("Boss", <die Frage als
+  Auftrag>). Boss entscheidet, wer es bearbeitet, und liefert das Ergebnis in
+  den Task. Sag {operator} kurz, dass Boss dran ist — keine eigene Vermutung
+  hinterherschieben.
+- Eilt es nicht ("notier mal", "irgendwann"), reicht create_task ohne assignee —
+  das landet ebenfalls bei Boss.
+- Beantworte solche Fragen NIEMALS SELBST aus dem Bauch. Lieber ehrlich:
+  "Das gebe ich Boss, du kriegst das Ergebnis im Task."
+- Was du weiterhin SOFORT selbst machst: Status, Listen, Task-Ergebnisse
+  abrufen, Vault-Recall (query_memory/search_notes), Notizen schreiben,
+  Briefing vorlesen. Das ist Lookup — kein Nachdenken.
+"""
+
+
 # Kanal-Name → Addendum. Getrennt vom ``Channel``-Dataclass gehalten, damit die
 # Kanal-Definition (channels.py) keinen Persona-Text kennen muss.
 _ADDENDA = {
@@ -245,8 +269,9 @@ def build_instructions(
     who = (operator_name or "").strip() or DEFAULT_OPERATOR
 
     parts = [PERSONA_CORE, _ADDENDA.get(channel.name, "")]
-    if frontier_enabled:
-        parts.append(FRONTIER_ADDENDUM)
+    # Genau EINE Regel fuer schwere Fragen — beide zugleich waeren ein
+    # Widerspruch in der Anweisung und fuehren zu inkonsistentem Verhalten.
+    parts.append(FRONTIER_ADDENDUM if frontier_enabled else DELEGATION_ADDENDUM)
     if briefing_ctx:
         parts.append(
             "## Aktueller Kontext (Pre-Session Briefing)\n" + briefing_ctx
