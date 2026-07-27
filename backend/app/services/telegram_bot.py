@@ -360,26 +360,32 @@ class TelegramBotService:
     # ── Poller ──────────────────────────────────────────────────────────
 
     async def start(self) -> None:
-        # Approval notifications use URL buttons (no polling needed). Polling is
-        # (re)started ONLY for Jarvis Telegram-Inbound (ADR-061), gated behind
-        # JARVIS_TELEGRAM_ENABLED. With the feature off, behaviour is unchanged:
-        # no getUpdates loop at all.
+        # Approval notifications use URL buttons (no polling needed). The getUpdates
+        # loop is started for exactly ONE inbound consumer — Telegram allows no two
+        # parallel pollers. Which destination the single loop feeds is decided per
+        # message in _handle_inbound_message by telegram_team_chat_enabled:
+        #   * team-chat on  → inbound goes into the MC thread (P2.4, Jarvis-Umzug)
+        #   * team-chat off → inbound goes to the Jarvis handler (ADR-061)
+        # Flipping the flag is therefore atomic — the poller never doubles up.
+        # With both off, behaviour is unchanged: no getUpdates loop at all.
         if settings.jarvis_telegram_enabled and not self._jarvis.core_available:
             logger.warning(
                 "JARVIS_TELEGRAM_ENABLED=true but jarvis_core is not importable "
                 "— Telegram-Jarvis disabled (check the ./jarvis_core mount)."
             )
-        if not self._jarvis.enabled:
+        team_chat = settings.telegram_team_chat_enabled
+        if not (self._jarvis.enabled or team_chat):
             logger.info("Telegram bot ready (inbound disabled — URL-button approvals only)")
             return
         if not self.configured:
-            logger.info("Telegram bot not configured — skipping Jarvis inbound poll")
+            logger.info("Telegram bot not configured — skipping inbound poll")
             return
         if self._running:
             return
         self._running = True
         self._task = asyncio.create_task(self._poll_loop())
-        logger.info("Jarvis Telegram inbound poller started (interval=%ds)", POLL_INTERVAL)
+        mode = "team-chat" if team_chat else "Jarvis"
+        logger.info("Telegram inbound poller started (mode=%s, interval=%ds)", mode, POLL_INTERVAL)
 
     async def stop(self) -> None:
         self._running = False
@@ -437,15 +443,56 @@ class TelegramBotService:
                 await self._handle_inbound_message(message)
 
     async def _handle_inbound_message(self, message: dict) -> None:
-        """Route an inbound Telegram message to the Jarvis handler (ADR-061).
+        """Route an inbound Telegram message by feature flag (P2.4 Jarvis-Umzug).
 
-        Wrapped so a handler error never breaks the poll loop. The chat_id gate
-        lives inside JarvisTelegramHandler.handle_message.
+        team_chat on → into the MC thread; off → the Jarvis handler (ADR-061).
+        Wrapped so a per-message error never breaks the poll loop. Both targets
+        run their own hard chat_id gate.
         """
         try:
-            await self._jarvis.handle_message(message)
+            if settings.telegram_team_chat_enabled:
+                await self._ingest_to_thread(message)
+            else:
+                await self._jarvis.handle_message(message)
         except Exception as e:  # noqa: BLE001 — isolate per-message failures
-            logger.exception("Jarvis inbound handler error: %s", e)
+            logger.exception("Telegram inbound handler error: %s", e)
+
+    async def _ingest_to_thread(self, message: dict) -> None:
+        """Store an inbound Telegram message in its MC thread (P2.4).
+
+        Opens its own session (the poll loop has none). Voice notes reuse the
+        shared jarvis_core STT chain via `_voice_transcriber`.
+        """
+        from sqlmodel.ext.asyncio.session import AsyncSession
+        from app.database import engine
+        from app.services.telegram_inbound import ingest_inbound_message
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await ingest_inbound_message(
+                session, message, bot=self, transcribe=self._voice_transcriber()
+            )
+
+    def _voice_transcriber(self):
+        """Async ``(audio_bytes) -> str | None`` bound to the shared jarvis_core
+        STT chain (`jarvis_stt_model`), or None when unavailable (no OpenAI key or
+        no jarvis_core mount). Reuses the exact voice path the Jarvis channel uses
+        — no second STT implementation."""
+        if not settings.openai_api_key:
+            return None
+        try:
+            from jarvis_core.brain import transcribe_audio
+        except Exception:  # noqa: BLE001 — the ./jarvis_core mount may be absent
+            return None
+
+        async def _transcribe(audio: bytes) -> str | None:
+            return await transcribe_audio(
+                audio,
+                filename="voice.ogg",
+                api_key=settings.openai_api_key,
+                model=settings.jarvis_stt_model,
+            )
+
+        return _transcribe
 
     async def _handle_callback(self, callback: dict) -> None:
         callback_id = callback["id"]
