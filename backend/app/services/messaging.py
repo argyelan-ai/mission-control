@@ -14,10 +14,12 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.comm_constants import MESSAGE_TYPES
+from app.models.agent import Agent
 from app.models.task import Task, TaskComment
 from app.models.thread import Thread, Message
 from app.utils import ensure_aware
@@ -63,6 +65,42 @@ async def ensure_task_thread(session: AsyncSession, task: Task) -> Thread:
     await session.commit()
     await session.refresh(task)
 
+    return thread
+
+
+async def ensure_dm_thread(session: AsyncSession, agent: Agent) -> Thread:
+    """Return the Mark <-> agent DM thread, creating it on first use. Idempotent.
+
+    Zwilling von ensure_task_thread fuer kind="dm": kein Task-Bezug, der
+    Gespraechspartner steckt in Thread.agent_id. Der Operator ist implizit die
+    zweite Seite — MC hat genau einen.
+    """
+    result = await session.exec(
+        select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+    )
+    existing = result.first()
+    if existing is not None:
+        return existing
+
+    thread = Thread(kind="dm", agent_id=agent.id, title=f"DM {agent.name}")
+    session.add(thread)
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Race: zwischen SELECT und INSERT hat ein zweiter Aufruf denselben
+        # DM-Thread angelegt (der partielle Unique-Index uq_threads_dm_per_agent
+        # faengt das ab). Der Verlierer nimmt den Thread des Gewinners — sonst
+        # zerfiele das Gespraech in zwei Haelften.
+        await session.rollback()
+        existing = (
+            await session.exec(
+                select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+            )
+        ).first()
+        if existing is None:  # pragma: no cover — nur bei fremdem IntegrityError
+            raise
+        return existing
+    await session.refresh(thread)
     return thread
 
 

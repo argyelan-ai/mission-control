@@ -15,12 +15,26 @@ vocab — validated at the service layer (Task 3), not enforced here.
 import uuid
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, ForeignKey, UniqueConstraint, Uuid, text
+from sqlalchemy import JSON, DateTime, ForeignKey, Index, UniqueConstraint, Uuid, text
 from sqlmodel import Column, Field, SQLModel
 
 
 class Thread(SQLModel, table=True):
     __tablename__ = "threads"
+    __table_args__ = (
+        # Ein Agent hat hoechstens EINEN DM-Thread mit dem Operator. Partiell,
+        # damit Task-/Side-Threads (agent_id IS NULL) unberuehrt bleiben.
+        # Muss identisch in Migration 0165 stehen: Tests bauen die Tabellen aus
+        # diesem Modell, Produktion aus der Migration — nur wenn beide denselben
+        # Index tragen, prueft der Test tatsaechlich das Produktionsverhalten.
+        Index(
+            "uq_threads_dm_per_agent",
+            "agent_id",
+            unique=True,
+            sqlite_where=text("kind = 'dm'"),
+            postgresql_where=text("kind = 'dm'"),
+        ),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     kind: str  # "task" | "side" | "dm" (see comm_constants.THREAD_KINDS)
@@ -32,6 +46,15 @@ class Thread(SQLModel, table=True):
         sa_column=Column(Uuid, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True),
     )
     project_id: uuid.UUID | None = Field(default=None, foreign_key="projects.id", nullable=True, index=True)
+    # Gespraechspartner bei kind="dm" (Mark <-> dieser Agent). Bei task/side
+    # None — dort ergibt sich die Teilnahme aus Aufgabe bzw. Erwaehnung.
+    # ondelete=CASCADE: ein DM-Thread ohne seinen Agenten hat keine Bedeutung.
+    agent_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True
+        ),
+    )
     title: str | None = None
     summary: str | None = None
     summary_through_seq: int | None = None
