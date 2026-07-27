@@ -7,6 +7,7 @@ import { getToken, getStoredUser } from "@/lib/api";
 import { AmbientBackground } from "./AmbientBackground";
 import Sidebar from "./Sidebar";
 import WorkspaceSwitcher from "./WorkspaceSwitcher";
+import ViewportDebug from "@/components/layout/ViewportDebug";
 import MobileNav, { MobileNavProvider, MobileTabBar } from "./MobileNav";
 import StatusBar from "./StatusBar";
 import TopBar from "./TopBar";
@@ -76,6 +77,9 @@ export default function AppShell({
       }}
     >
       <AmbientBackground />
+
+      {/* TEMPORÄR: Viewport-Messung auf dem Gerät (nach Diagnose entfernen) */}
+      <ViewportDebug />
 
       {/* Mobile navigation */}
       <MobileNav />
