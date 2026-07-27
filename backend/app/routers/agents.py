@@ -2531,14 +2531,22 @@ async def _message_threads_for_agent(agent: Agent, session: AsyncSession) -> lis
     tasks_by_thread = {
         t.thread_id: t for t in active_res.all() if t.thread_id is not None
     }
+    # DM-Thread des Agenten (Mark <-> Agent, ohne Task-Bezug). Zweiter
+    # Tupel-Eintrag ist None: kein Task, also auch kein done/failed-Fast-Forward
+    # — bei einem DM gibt es keine "abgeschlossene Historie", die man
+    # ueberspringen duerfte.
+    dm_res = await session.exec(
+        select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+    )
+    dm_pairs = [(th, None) for th in dm_res.all()]
     if not tasks_by_thread:
-        return []
+        return dm_pairs
     threads_res = await session.exec(
         select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
     )
     # (thread, task) pairs — _collect_new_messages braucht den Task-Status
     # fuer die Erst-Cursor-Initialisierung (fast-forward bei done/failed).
-    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()]
+    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()] + dm_pairs
 
 
 async def _get_or_create_thread_cursor(
@@ -2631,7 +2639,7 @@ async def _resolve_agent_threads_with_cursors(session: AsyncSession, agent: Agen
     for thread, thread_task in await _message_threads_for_agent(agent, session):
         cursor, created = await _get_or_create_thread_cursor(
             session, agent.id, thread.id,
-            fast_forward=thread_task.status in ("done", "failed"),
+            fast_forward=bool(thread_task) and thread_task.status in ("done", "failed"),
         )
         created_any = created_any or created
         resolved.append((thread, cursor))
