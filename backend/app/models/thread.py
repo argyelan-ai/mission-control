@@ -32,6 +32,15 @@ class Thread(SQLModel, table=True):
         sa_column=Column(Uuid, ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True),
     )
     project_id: uuid.UUID | None = Field(default=None, foreign_key="projects.id", nullable=True, index=True)
+    # Gespraechspartner bei kind="dm" (Mark <-> dieser Agent). Bei task/side
+    # None — dort ergibt sich die Teilnahme aus Aufgabe bzw. Erwaehnung.
+    # ondelete=CASCADE: ein DM-Thread ohne seinen Agenten hat keine Bedeutung.
+    agent_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid, ForeignKey("agents.id", ondelete="CASCADE"), nullable=True, index=True
+        ),
+    )
     title: str | None = None
     summary: str | None = None
     summary_through_seq: int | None = None
