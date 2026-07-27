@@ -77,6 +77,16 @@ LAST_BLOCKED_TASK_ID=""
 # kein /home/agent — der Host-Entrypoint setzt den Pfad ins Agent-Config-Dir.
 TASK_LOCK_FILE="${TASK_LOCK_FILE:-/home/agent/.task-active.lock}"
 
+# Poll-interne Prompt-Dateien (nur poll.sh liest/schreibt sie: run_task pastet
+# TASK_PROMPT_FILE, deliver_comments pastet COMMENTS_PROMPT_FILE). Im Container
+# ist /tmp pro Container isoliert; auf dem Host teilen sich mehrere poll.sh-
+# Prozesse dasselbe /tmp und wuerden sich gegenseitig den Prompt ueberschreiben
+# — der Host-Entrypoint lenkt sie deshalb ins Agent-Config-Dir um. Exportiert,
+# damit die python3-Bloecke die Pfade via os.environ lesen (Default = altes
+# Verhalten, byte-identisch fuer die Container).
+export TASK_PROMPT_FILE="${TASK_PROMPT_FILE:-/tmp/current_task_prompt.txt}"
+export COMMENTS_PROMPT_FILE="${COMMENTS_PROMPT_FILE:-/tmp/new_comments_prompt.txt}"
+
 # Interaction Model 2.0 (comm_v2) — Turn-Grenzen-Gate fuer Thread-Messages.
 # new_messages aus /me/poll (Task 4) werden NICHT sofort gepastet: waehrend
 # claude arbeitet (turn_state=working) oder der Prompt nicht clean ist, landen
@@ -445,9 +455,9 @@ EOF
 
     # Prompt in Datei schreiben
     echo "$response_json" | python3 -c "
-import json, sys
+import json, sys, os
 data = json.load(sys.stdin)
-with open('/tmp/current_task_prompt.txt', 'w') as f:
+with open(os.environ['TASK_PROMPT_FILE'], 'w') as f:
     f.write(data['task']['prompt'])
 "
 
@@ -570,7 +580,7 @@ except Exception:
     # Task doch lief. Jetzt: Return-Code explicit handlen — bei Fehler nur
     # WARN-Log, kein poll.sh exit. Der Task bleibt assigned + in_progress,
     # claude meldet sich entweder selbst oder der Operator sieht den Task stuck.
-    if ! paste_and_submit /tmp/current_task_prompt.txt; then
+    if ! paste_and_submit "$TASK_PROMPT_FILE"; then
         log "WARNING: paste_and_submit returnte non-zero fuer Task $task_id — claude koennte den Prompt verzoegert verarbeiten oder Task ist stuck. Kein poll.sh exit, Task bleibt in_progress."
     else
         log "Task $task_id (attempt ${attempt_id:-unbekannt}) an claude gesendet (fire-and-forget)"
@@ -783,13 +793,13 @@ if sys_c:
         lines.append('')
 
 lines.append('**Aktion:** Arbeite am relevanten Task weiter. Antwort-Kommentar nur wenn inhaltlich noetig.')
-with open('/tmp/new_comments_prompt.txt', 'w') as f:
+with open(os.environ['COMMENTS_PROMPT_FILE'], 'w') as f:
     f.write('\n'.join(lines))
 " || { log "deliver_comments: python parse failed — skipping"; unset MC_POLL_RESPONSE; return; }
     unset MC_POLL_RESPONSE
 
     # Bug 12 fix (2026-05-13): siehe run_task — kein set-e-kill bei Fehler.
-    if ! paste_and_submit /tmp/new_comments_prompt.txt; then
+    if ! paste_and_submit "$COMMENTS_PROMPT_FILE"; then
         log "WARNING: paste_and_submit fuer new_comments returnte non-zero — Comments wurden ggf. nicht ans claude-Pane geliefert. Nicht fatal, poll-Loop laeuft weiter."
     fi
 }
