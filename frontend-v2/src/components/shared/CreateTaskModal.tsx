@@ -333,7 +333,11 @@ export function CreateTaskModal({ activeBoardId, agents }: CreateTaskModalProps)
               style={{
                 background: C.elevated,
                 border: "1px solid var(--color-border)",
-                boxShadow: `0 0 60px rgba(0,229,255,0.08), 0 25px 80px rgba(0,0,0,0.6)`,
+                // Kein farbiger Halo mehr: unter dem hellen Akzent wäre ein
+                // 60px-Schein um den Dialog das lauteste Element der Seite,
+                // und Farbe ist hier reserviert für Status. Tiefe kommt allein
+                // aus dem Schlagschatten.
+                boxShadow: `0 25px 80px rgba(0,0,0,0.6)`,
               }}
             >
               {/* Top edge highlight */}
