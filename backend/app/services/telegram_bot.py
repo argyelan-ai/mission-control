@@ -93,6 +93,18 @@ async def consume_action_token(token: str) -> dict | None:
     return payload
 
 
+def _is_parse_error(description: str) -> bool:
+    """Ob Telegram die Nachricht wegen der Formatierung abgelehnt hat.
+
+    Telegram liefert dafuer keinen Fehlercode, nur Prosa wie
+    "Bad Request: can't parse entities: Unsupported start tag ..." — bewusst
+    breit gematcht, weil ein verpasster Treffer die Nachricht kostet, ein
+    falsch-positiver Treffer dagegen nur einen unformatierten Zweitversuch.
+    """
+    low = description.lower()
+    return "parse" in low and ("entit" in low or "tag" in low or "markup" in low)
+
+
 class TelegramBotService:
     def __init__(self):
         self._running = False
@@ -152,7 +164,27 @@ class TelegramBotService:
             data = resp.json()
             if data.get("ok"):
                 return data["result"]["message_id"]
-            logger.warning("sendMessage failed: %s", data.get("description"))
+
+            description = data.get("description") or ""
+            # Zustellung schlaegt Formatierung: Agenten schreiben staendig Code
+            # (`a < b`, `<div>`), und Telegram lehnt so einen Body im HTML-Modus
+            # mit "can't parse entities" ab. Ohne diesen zweiten Versuch waere die
+            # Nachricht still weg — geloggt, aber nie zugestellt. Genau den
+            # stillen Verlust soll comm_v2 abschaffen, also lieber unformatiert
+            # ankommen als formatiert verschwinden.
+            if "parse_mode" in payload and _is_parse_error(description):
+                logger.info(
+                    "sendMessage: HTML-Parse abgelehnt (%s) — sende unformatiert nach.",
+                    description,
+                )
+                retry = {k: v for k, v in payload.items() if k != "parse_mode"}
+                resp = await client.post(self._api_url("sendMessage"), data=retry)
+                data = resp.json()
+                if data.get("ok"):
+                    return data["result"]["message_id"]
+                description = data.get("description") or description
+
+            logger.warning("sendMessage failed: %s", description)
         except Exception as e:
             logger.warning("sendMessage error: %s", e)
         return None

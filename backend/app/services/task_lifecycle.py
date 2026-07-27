@@ -1838,7 +1838,11 @@ async def _notify_lead_on_completion(
                     if preferred == "telegram":
                         try:
                             from app.services.telegram_bot import telegram_bot
-                            await telegram_bot.send_message(notify_message, parse_mode="Markdown")
+                            # parse_mode gab es an send_message nie — der TypeError wurde vom
+                            # except unten verschluckt, die Meldung kam also NIE an.
+                            # send_message formatiert selbst (HTML, mit unformatiertem
+                            # Zweitversuch bei Parse-Fehlern).
+                            await telegram_bot.send_message(notify_message)
                         except Exception as e:
                             logger.warning("Telegram completion notify failed: %s", e)
 
