@@ -63,3 +63,217 @@ async def test_many_threads_may_have_no_topic(async_session: AsyncSession):
 
     rows = (await async_session.exec(select(Thread))).all()
     assert sum(1 for t in rows if t.telegram_topic_id is None) == 3
+
+
+# ── Gefaelschter Telegram-Client (kein Netz) ──────────────────────────────
+
+from app.services.telegram_topics import (  # noqa: E402
+    GENERAL_TOPIC_ID,
+    TELEGRAM_TOPIC_NAME_MAX,
+    TelegramNotAForumError,
+    TelegramRateLimitError,
+    TelegramTopicError,
+    ensure_topic_for_thread,
+    mark_topic_done,
+    purge_old_topics,
+)
+
+
+class FakeForumClient:
+    """Zeichnet Aufrufe auf und kann gezielt Fehler werfen — ersetzt das Netz."""
+
+    def __init__(self, *, next_id: int = 100, create_raises: Exception | None = None,
+                 edit_raises: Exception | None = None, delete_raises: Exception | None = None):
+        self.created: list[str] = []
+        self.edited: list[tuple[int, str]] = []
+        self.deleted: list[int] = []
+        self._next_id = next_id
+        self._create_raises = create_raises
+        self._edit_raises = edit_raises
+        self._delete_raises = delete_raises
+
+    async def create_forum_topic(self, name: str) -> int:
+        self.created.append(name)
+        if self._create_raises is not None:
+            raise self._create_raises
+        tid = self._next_id
+        self._next_id += 1
+        return tid
+
+    async def edit_forum_topic(self, message_thread_id: int, name: str) -> None:
+        if self._edit_raises is not None:
+            raise self._edit_raises
+        self.edited.append((message_thread_id, name))
+
+    async def delete_forum_topic(self, message_thread_id: int) -> None:
+        if self._delete_raises is not None:
+            raise self._delete_raises
+        self.deleted.append(message_thread_id)
+
+
+async def _dm_thread(async_session: AsyncSession) -> Thread:
+    thread = Thread(kind="dm", agent_id=uuid.uuid4(), title="DM Boss")
+    async_session.add(thread)
+    await async_session.commit()
+    await async_session.refresh(thread)
+    return thread
+
+
+# ── ensure_topic_for_thread ───────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_ensure_topic_creates_and_persists(async_session: AsyncSession):
+    thread = await _task_thread(async_session, "Landing-Page")
+    client = FakeForumClient(next_id=555)
+
+    topic_id = await ensure_topic_for_thread(async_session, thread, client)
+
+    assert topic_id == 555
+    assert len(client.created) == 1
+    await async_session.refresh(thread)
+    assert thread.telegram_topic_id == 555
+
+
+@pytest.mark.asyncio
+async def test_ensure_topic_is_idempotent(async_session: AsyncSession):
+    thread = await _task_thread(async_session, "Recherche")
+    client = FakeForumClient()
+
+    first = await ensure_topic_for_thread(async_session, thread, client)
+    second = await ensure_topic_for_thread(async_session, thread, client)
+
+    assert first == second
+    assert len(client.created) == 1, "zweiter Aufruf darf kein zweites Thema anlegen"
+
+
+@pytest.mark.asyncio
+async def test_ensure_topic_degrades_when_chat_not_a_forum(async_session: AsyncSession):
+    """Der Chat wird erst zum Forum, wenn der Nutzer das erste Thema anlegt.
+    Vorher liefert Telegram `not a forum` — das muss None ergeben, nicht werfen."""
+    thread = await _task_thread(async_session, "Recherche")
+    client = FakeForumClient(create_raises=TelegramNotAForumError("the chat is not a forum"))
+
+    topic_id = await ensure_topic_for_thread(async_session, thread, client)
+
+    assert topic_id is None
+    await async_session.refresh(thread)
+    assert thread.telegram_topic_id is None, "kein halber Zustand bei Degradation"
+
+
+@pytest.mark.asyncio
+async def test_ensure_topic_survives_rate_limit(async_session: AsyncSession):
+    """HTTP 429 darf keinen Crash ausloesen — der Thread bleibt einfach ungemappt."""
+    thread = await _task_thread(async_session, "Recherche")
+    client = FakeForumClient(create_raises=TelegramRateLimitError("Too Many Requests"))
+
+    topic_id = await ensure_topic_for_thread(async_session, thread, client)
+
+    assert topic_id is None
+    await async_session.refresh(thread)
+    assert thread.telegram_topic_id is None
+
+
+@pytest.mark.asyncio
+async def test_ensure_topic_survives_generic_error(async_session: AsyncSession):
+    thread = await _task_thread(async_session, "Recherche")
+    client = FakeForumClient(create_raises=TelegramTopicError("boom"))
+
+    assert await ensure_topic_for_thread(async_session, thread, client) is None
+
+
+@pytest.mark.asyncio
+async def test_general_topic_is_never_created(async_session: AsyncSession):
+    """Das Allgemein-Thema (DM-Thread) hat keine eigene ID (reserviert: 0) und
+    wird nie via API angelegt — seine Nachrichten gehen ohne message_thread_id."""
+    thread = await _dm_thread(async_session)
+    client = FakeForumClient()
+
+    topic_id = await ensure_topic_for_thread(async_session, thread, client)
+
+    assert topic_id == GENERAL_TOPIC_ID == 0
+    assert client.created == [], "fuer das Allgemein-Thema darf kein createForumTopic laufen"
+    await async_session.refresh(thread)
+    assert thread.telegram_topic_id is None, "0 wird nicht persistiert — der Thread hat kein eigenes Thema"
+
+
+@pytest.mark.asyncio
+async def test_topic_title_is_truncated_to_telegram_limit(async_session: AsyncSession):
+    long_title = "L" * 300
+    thread = await _task_thread(async_session, long_title)
+    client = FakeForumClient()
+
+    await ensure_topic_for_thread(async_session, thread, client)
+
+    assert len(client.created) == 1
+    assert len(client.created[0]) <= TELEGRAM_TOPIC_NAME_MAX
+
+
+# ── mark_topic_done ───────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_mark_done_prefixes_check_once(async_session: AsyncSession):
+    thread = await _task_thread(async_session, "Recherche")
+    client = FakeForumClient()
+    await ensure_topic_for_thread(async_session, thread, client)
+
+    await mark_topic_done(async_session, thread, client)
+    await mark_topic_done(async_session, thread, client)
+
+    assert len(client.edited) == 2
+    for _tid, name in client.edited:
+        assert name.startswith("✓ ")
+        assert not name.startswith("✓ ✓"), "das Haekchen darf nie doppelt gesetzt werden"
+
+
+@pytest.mark.asyncio
+async def test_mark_done_skips_threads_without_own_topic(async_session: AsyncSession):
+    """Still gelaufene Aufgaben (kein Thema) und das Allgemein-Thema haben nichts
+    umzubenennen."""
+    silent = await _task_thread(async_session, "Still")
+    general = await _dm_thread(async_session)
+    client = FakeForumClient()
+
+    await mark_topic_done(async_session, silent, client)   # telegram_topic_id is None
+    await mark_topic_done(async_session, general, client)  # DM = Allgemein
+
+    assert client.edited == []
+
+
+# ── purge_old_topics ──────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_purge_deletes_old_closed_topics_and_nulls_the_id(async_session: AsyncSession):
+    from datetime import datetime, timedelta
+
+    thread = await _task_thread(async_session, "Alt")
+    client = FakeForumClient()
+    topic_id = await ensure_topic_for_thread(async_session, thread, client)
+    thread.closed_at = datetime.utcnow() - timedelta(days=45)
+    async_session.add(thread)
+    await async_session.commit()
+
+    purged = await purge_old_topics(async_session, client, older_than_days=30)
+
+    assert purged == 1
+    assert client.deleted == [topic_id]
+    await async_session.refresh(thread)
+    assert thread.telegram_topic_id is None
+
+
+@pytest.mark.asyncio
+async def test_purge_leaves_recent_and_open_topics_alone(async_session: AsyncSession):
+    from datetime import datetime, timedelta
+
+    recent = await _task_thread(async_session, "Neu")
+    still_open = await _task_thread(async_session, "Offen")
+    client = FakeForumClient()
+    await ensure_topic_for_thread(async_session, recent, client)
+    await ensure_topic_for_thread(async_session, still_open, client)
+    recent.closed_at = datetime.utcnow() - timedelta(days=5)  # geschlossen, aber jung
+    async_session.add(recent)
+    await async_session.commit()
+
+    purged = await purge_old_topics(async_session, client, older_than_days=30)
+
+    assert purged == 0
+    assert client.deleted == []
