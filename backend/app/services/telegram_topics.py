@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 import httpx
+from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -198,9 +199,29 @@ async def ensure_topic_for_thread(
         logger.warning("createForumTopic fuer Thread %s fehlgeschlagen: %s", thread.id, e)
         return None
 
+    thread_id = thread.id  # vor dem Commit festhalten: nach einem Rollback ist das
+    #                        Attribut expired und ein Zugriff loeste Lazy-IO aus.
     thread.telegram_topic_id = topic_id
     session.add(thread)
-    await session.commit()
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Guertel-und-Hosentraeger (P2.2-Review): zwei gleichzeitige Aufrufe fuer
+        # denselben Thread koennen je ein Telegram-Thema anlegen. Scheitert unser
+        # Commit am Unique-Constraint (uq_threads_telegram_topic_id), reissen wir
+        # nicht mit einem 500 ab, sondern lesen den bereits persistierten
+        # (Gewinner-)Wert und verwenden ihn. Ist keiner da (Fremd-Kollision:
+        # dieselbe ID an einem anderen Thread — bei echtem Telegram unmoeglich,
+        # da IDs global eindeutig sind), degradieren wir wie bei „nicht bereit".
+        await session.rollback()
+        winner = (
+            await session.exec(select(Thread).where(Thread.id == thread_id))
+        ).one().telegram_topic_id
+        logger.warning(
+            "createForumTopic-Kollision fuer Thread %s (Thema %s); bestehender Wert=%s",
+            thread_id, topic_id, winner,
+        )
+        return winner
     await session.refresh(thread)
     return topic_id
 

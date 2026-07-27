@@ -93,6 +93,18 @@ async def consume_action_token(token: str) -> dict | None:
     return payload
 
 
+def _is_parse_error(description: str) -> bool:
+    """Ob Telegram die Nachricht wegen der Formatierung abgelehnt hat.
+
+    Telegram liefert dafuer keinen Fehlercode, nur Prosa wie
+    "Bad Request: can't parse entities: Unsupported start tag ..." — bewusst
+    breit gematcht, weil ein verpasster Treffer die Nachricht kostet, ein
+    falsch-positiver Treffer dagegen nur einen unformatierten Zweitversuch.
+    """
+    low = description.lower()
+    return "parse" in low and ("entit" in low or "tag" in low or "markup" in low)
+
+
 class TelegramBotService:
     def __init__(self):
         self._running = False
@@ -119,9 +131,21 @@ class TelegramBotService:
     # ── Bot API Methods ─────────────────────────────────────────────────
 
     async def send_message(
-        self, text: str, reply_markup: dict | None = None
+        self,
+        text: str,
+        reply_markup: dict | None = None,
+        message_thread_id: int | None = None,
+        disable_notification: bool = False,
     ) -> int | None:
-        """Send message, return message_id or None on failure."""
+        """Send message, return message_id or None on failure.
+
+        `message_thread_id` routes the message into a Telegram forum topic (P2.3
+        — its absence is why Jarvis' reply landed in the main chat). Falsy values
+        (None or the General-topic sentinel 0) omit the parameter, so the message
+        goes to the chat root. `disable_notification=True` sends it silently (the
+        ping rule decides). Both default to the pre-P2.3 behaviour, so existing
+        callers are unaffected.
+        """
         client = await self._get_client()
         payload: dict = {
             "chat_id": settings.telegram_chat_id,
@@ -130,13 +154,37 @@ class TelegramBotService:
         }
         if reply_markup:
             payload["reply_markup"] = json.dumps(reply_markup)
+        if message_thread_id:  # None und 0 (Allgemein-Thema) fallen weg
+            payload["message_thread_id"] = message_thread_id
+        if disable_notification:
+            payload["disable_notification"] = True
 
         try:
             resp = await client.post(self._api_url("sendMessage"), data=payload)
             data = resp.json()
             if data.get("ok"):
                 return data["result"]["message_id"]
-            logger.warning("sendMessage failed: %s", data.get("description"))
+
+            description = data.get("description") or ""
+            # Zustellung schlaegt Formatierung: Agenten schreiben staendig Code
+            # (`a < b`, `<div>`), und Telegram lehnt so einen Body im HTML-Modus
+            # mit "can't parse entities" ab. Ohne diesen zweiten Versuch waere die
+            # Nachricht still weg — geloggt, aber nie zugestellt. Genau den
+            # stillen Verlust soll comm_v2 abschaffen, also lieber unformatiert
+            # ankommen als formatiert verschwinden.
+            if "parse_mode" in payload and _is_parse_error(description):
+                logger.info(
+                    "sendMessage: HTML-Parse abgelehnt (%s) — sende unformatiert nach.",
+                    description,
+                )
+                retry = {k: v for k, v in payload.items() if k != "parse_mode"}
+                resp = await client.post(self._api_url("sendMessage"), data=retry)
+                data = resp.json()
+                if data.get("ok"):
+                    return data["result"]["message_id"]
+                description = data.get("description") or description
+
+            logger.warning("sendMessage failed: %s", description)
         except Exception as e:
             logger.warning("sendMessage error: %s", e)
         return None
