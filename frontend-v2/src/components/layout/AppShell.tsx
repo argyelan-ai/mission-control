@@ -63,18 +63,8 @@ export default function AppShell({
     <VoiceProvider>
     <MobileNavProvider>
     <div
-      className="flex overflow-hidden relative"
-      style={{
-        backgroundColor: "var(--color-p2-bg)",
-        // --app-h wird im RootLayout vor der Hydration aus window.innerHeight
-        // gesetzt und bei jedem Resize nachgezogen. `dvh` bleibt als Fallback
-        // für den Fall, dass das Skript nicht lief (noscript, Fehler) — auf dem
-        // Desktop sind beide Werte ohnehin identisch. Grund für die Ablösung
-        // von h-dvh: iOS meldet die Höhe beim ersten Rendern zu klein und
-        // korrigiert erst nach einer Scroll-Geste, wodurch die untere Leiste
-        // bis zur ersten Berührung in der Luft steht.
-        height: "var(--app-h, 100dvh)",
-      }}
+      className="flex overflow-hidden relative app-shell-height"
+      style={{ backgroundColor: "var(--color-p2-bg)" }}
     >
       <AmbientBackground />
 
