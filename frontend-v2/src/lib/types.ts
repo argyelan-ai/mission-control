@@ -1758,6 +1758,57 @@ export interface CliUpdateProgress {
   updated_at?: string;
 }
 
+// ── Modell-Katalog (/api/v1/models/catalog) ─────────────────────────────────
+// Der Katalog beantwortet NUR „welche Modelle gibt es beim Anbieter" — nie
+// „welches Modell läuft". Laufende Wahrheit bleibt runtime.model_identifier.
+// Ein Katalog-Eintrag wird per bind() zu einer Runtime-Zeile; erst dann taucht
+// er im bestehenden RuntimeSwitchModal auf.
+
+/**
+ * Probe-Ergebnis pro Anbieter.
+ *  - ok                  Live-Abfrage erfolgreich
+ *  - credential_missing  Backend kommt an die Zugangsdaten nicht heran
+ *                        (z.B. auth.json nicht in den Container gemountet)
+ *  - unreachable         Endpoint antwortet nicht (typisch: lokale Runtime aus)
+ *  - manifest_fallback   Live-Abfrage scheiterte → bekannte Liste aus Manifest
+ */
+export type ModelCatalogStatus =
+  | "ok"
+  | "credential_missing"
+  | "unreachable"
+  | "manifest_fallback";
+
+export interface ModelCatalogModel {
+  id: string;
+  display_name?: string | null;
+  bound: boolean;
+}
+
+export interface ModelCatalogProvider {
+  key: string; // "anthropic" | "grok" | "kimi" | "openai:qwen-general" | …
+  protocol: string; // "anthropic" | "grok" | "kimi" | "openai"
+  display_name: string;
+  endpoint: string | null;
+  status: ModelCatalogStatus;
+  /** Warum die Live-Probe scheiterte — orthogonal zu `status`. */
+  reason: string | null;
+  cached_at: string | null; // ISO
+  models: ModelCatalogModel[];
+  /** Anzahl Modelle mit bound=false. */
+  new_count: number;
+}
+
+export interface ModelCatalogResponse {
+  providers: ModelCatalogProvider[];
+}
+
+export interface ModelCatalogBindResult {
+  created: boolean;
+  slug?: string | null;
+  runtime_id?: string | null;
+  message?: string | null;
+}
+
 // Phase 15 T2.1 — return shape of switch_agent_runtime() service. Used by
 // both POST /agents/{id}/preview-runtime-switch (dry_run=true) and the
 // `_switch` summary attached to PATCH /agents/{id} when runtime_id changes.
