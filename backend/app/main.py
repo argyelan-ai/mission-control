@@ -106,6 +106,7 @@ from app.routers import (
 )
 from app.services.embedding_retry import embedding_retry
 from app.services.cli_update_check import cli_update_checker
+from app.services.model_catalog_check import model_catalog_checker
 from app.services.intelligence import intelligence
 from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
@@ -198,6 +199,10 @@ async def lifespan(app: FastAPI):
     await runtime_schedule_service.start()
     await runtime_watcher.start()  # Runtime & Model Management v1 (ADR-054)
     await cli_update_checker.start()  # CLI Tool Updates — periodic version check
+    # Provider Model Catalog — hourly probe + "model.new_available" notification
+    # so a newly shipped provider model no longer waits for someone to open the
+    # /runtimes page.
+    await model_catalog_checker.start()
     await telegram_bot.start()
     # Defense-in-depth: agents that call `gh repo create` without --private
     # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
@@ -397,6 +402,7 @@ async def lifespan(app: FastAPI):
         await obsidian_export.stop()
     await runtime_watcher.stop()
     await cli_update_checker.stop()
+    await model_catalog_checker.stop()
     await runtime_schedule_service.stop()
     await loop_runner.stop()
     await task_runner.stop()

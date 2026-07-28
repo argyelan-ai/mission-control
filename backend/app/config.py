@@ -234,6 +234,15 @@ class Settings(BaseSettings):
     # upstream CLI tool versions (openclaude/claude/omp). 0 = disabled.
     cli_update_check_interval: int = 21600  # 6 hours
 
+    # Provider Model Catalog — periodic background probe of the provider
+    # catalogs + "a model you have no runtime for appeared" notification.
+    # 0 = loop disabled entirely (the /models/catalog endpoint keeps working
+    # lazily). Hourly: providers ship a new model a handful of times per YEAR,
+    # so an hour of detection latency is irrelevant, while each tick costs one
+    # HTTP round trip per provider. Anything faster buys nothing; anything
+    # slower and the operator learns about a new model from the page again.
+    model_catalog_check_interval: int = 3600  # 1 hour
+
     # Lifecycle Safety Watchdog (ADR-046) — global kill-switch for the
     # silent-abort auto-block check (task_runner._check_stuck_in_progress).
     # The idle THRESHOLD stays per-agent in agents.dispatch_config
