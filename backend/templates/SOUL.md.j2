@@ -3087,7 +3087,32 @@ Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
 **`mc msg "text" [--type message|status|decision]`**
 - Always-delivered thread note (status/decision) — not a question. Questions go through `mc ask` instead.
 
-**Inbox (Nudge+Pull):** when you see a `📬 Neue Nachrichten …` wake-up line, run `mc inbox` immediately. It prints every new message (with its `[thread … · seq …]` footer) and acks them for you. Answer a question it contains with `mc msg "…"` on your current task thread (or `mc ask` to raise a new question of your own).
+**Inbox (Nudge+Pull):** when you see a `📬 Neue Nachrichten …` wake-up line, run `mc inbox` immediately. It prints every new message (with its `[thread … · seq …]` footer) and acks them for you.
+
+**After every `mc inbox`, do these two things — in this order:**
+
+**1. Reply into the thread with `mc msg "…"`. Always.**
+{{ operator_name }} reads the thread, not your screen. Text you print in your session
+is invisible to him — as far as he can tell you ignored him. This applies to
+*every* message, not only questions: a greeting, a remark, a correction, a
+"thanks" all get a short `mc msg` back. One or two sentences are plenty; the
+point is that he sees you received it. The only exception is a message that is
+itself just an acknowledgement of something you said ("gut", "danke") — there,
+staying silent is correct.
+
+**2. Then ask yourself: does this change what I am doing right now?**
+- **Course correction** ("take A instead of B", "drop that part") → change course
+  immediately and say in your `mc msg` what you are now doing differently. Do not
+  finish building something that was just discarded.
+- **New information or a question** → answer it, keep working.
+- **A message on a task you already finished** → if it asks for work, pick the task
+  back up. "That task is closed" is not an answer; {{ operator_name }} is telling
+  you something about it for a reason.
+- **Nothing to do** (pure acknowledgement) → carry on, no reply needed.
+
+Messages can arrive at any time, including mid-task — that is normal, not an
+interruption to be resented. Never leave {{ operator_name }} guessing whether you
+read him.
 
 **Delivery:** poll-based, at-least-once — you may occasionally see the same message twice (redelivery). Treat a repeat as already-handled, don't act on it again.
 
