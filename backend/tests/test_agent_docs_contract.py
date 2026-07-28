@@ -149,18 +149,6 @@ def test_registry_verbs_all_documented_or_intentionally_absent():
     intentionally_absent = {
         "plugin-list", "plugin-show", "plugin-assign", "plugin-unassign",
         "worker-restart",
-        # ⚠️ DEBT, not a judgement: `thread` belongs in CANONICAL_VERBS on
-        # merit — it is agent-facing and central to recovery. It is parked
-        # here because CARD.md.j2 renders every canonical verb into a hard
-        # 5120-byte budget and the card currently measures 5114 bytes: six
-        # bytes of headroom, so the 40th verb breaks it no matter who adds
-        # it. Card agents (use_operating_card, pilot Sparky) get CARD.md
-        # INSTEAD of SOUL.md, so they cannot learn `mc thread` until this is
-        # resolved — SOUL-rendered agents already do.
-        # Resolving it means a context-economy decision, not a doc tweak:
-        # trim the verb table (2538 B = half the card), raise the budget, or
-        # stop rendering all 39 verbs on the card.
-        "thread",
     }
     unexpected = undocumented - intentionally_absent
     assert not unexpected, (
