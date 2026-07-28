@@ -224,6 +224,18 @@ services:
       # Join). Beides read-only, Grok Build CLI schreibt hier auf dem Host.
       - ${HOME}/.grok/logs:${HOME}/.grok/logs:ro
       - ${HOME}/.grok/sessions:${HOME}/.grok/sessions:ro
+      # Modellkatalog-Quelle (28.07.): NUR auth.json, read-only — services/
+      # model_catalog.py:read_grok_token() liest daraus den OAuth-Bearer fuer
+      # cli-chat-proxy.grok.com/v1/models. Ohne diesen Mount meldete der Katalog
+      # fuer grok dauerhaft credential_missing und zeigte nur das Manifest.
+      # Bewusst die EINZELNE Datei statt ~/.grok/ komplett: das Verzeichnis
+      # enthaelt auch Sessions/Logs mit Prompt-Inhalten — ein Blanket-Mount waere
+      # mehr Zugriff als noetig (gleiche Regel wie beim Hermes-state.db-Mount).
+      # ⚠️ Gleiche Falle wie dort: fehlt ~/.grok/auth.json auf dem Host, legt
+      # Docker an der Stelle ein VERZEICHNIS an und der naechste `grok login`
+      # schlaegt fehl. Auf einem Host ohne Grok-CLI diesen Mount in
+      # docker-compose.override.yml herausnehmen.
+      - ${HOME}/.grok/auth.json:${HOME}/.grok/auth.json:ro
       # Token-Harvester Hermes-Quelle (Bench #18 PR1): NUR state.db — NIEMALS
       # das ganze ~/.hermes/-Verzeichnis mounten (enthaelt Secrets: .env,
       # auth.json). Der Harvester kopiert die Datei vor dem Oeffnen in ein

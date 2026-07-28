@@ -474,6 +474,21 @@ async def bind_catalog_model(
             detail=f"Provider '{body.provider_key}' hat keine Vorlage-Runtime.",
         )
 
+    # cli_only: das Manifest kennt das Modell, das Wire-Protokoll lehnt es ab
+    # (grok/composer-2.5-fast → HTTP 400 "Model not found", gemessen 28.07.).
+    # Der Katalog ZEIGT solche Modelle, damit der Operator weiss, dass es sie
+    # gibt — eine Runtime-Zeile daraus waere aber sofort kaputt. Deshalb hier
+    # die Grenze, nicht erst beim ersten fehlschlagenden Dispatch.
+    if body.model_id in model_catalog.manifest_cli_only_ids(target.protocol):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{body.model_id}' ist nur im CLI selbst verfuegbar und wird vom "
+                f"Endpoint des Providers abgelehnt — eine Runtime damit wuerde beim "
+                f"ersten Dispatch scheitern. Details: config/model-catalog.json."
+            ),
+        )
+
     prefix = target.protocol if target.protocol != "openai" else template.slug
     slug = body.slug or _derive_slug(prefix, body.model_id)
 

@@ -1785,17 +1785,30 @@ export interface CliUpdateProgress {
  *                        (z.B. auth.json nicht in den Container gemountet)
  *  - unreachable         Endpoint antwortet nicht (typisch: lokale Runtime aus)
  *  - manifest_fallback   Live-Abfrage scheiterte → bekannte Liste aus Manifest
+ *  - cli_config          Live-Abfrage scheiterte, aber die Liste stammt aus der
+ *                        CLI-eigenen Config auf Platte (kimi: config.toml) —
+ *                        also weder „live bestätigt" noch „unser Handmanifest".
  */
 export type ModelCatalogStatus =
   | "ok"
   | "credential_missing"
   | "unreachable"
-  | "manifest_fallback";
+  | "manifest_fallback"
+  | "cli_config";
 
 export interface ModelCatalogModel {
   id: string;
   display_name?: string | null;
   bound: boolean;
+  /** Kontextfenster in Tokens, wenn die Quelle es kennt. */
+  context_window?: number | null;
+  /**
+   * Modell existiert nur im CLI selbst; der HTTP-Endpoint des Providers lehnt
+   * es ab. Wird angezeigt, ist aber nicht bindbar (Backend antwortet 422).
+   */
+  cli_only?: boolean;
+  /** Warum das Modell so eingestuft ist — Tooltip-Text aus dem Manifest. */
+  note?: string | null;
 }
 
 export interface ModelCatalogProvider {

@@ -1,21 +1,41 @@
 {
   "_comment": [
-    "Fallback manifest for the provider model catalog (services/model_catalog.py).",
-    "It is used ONLY when a live /models probe fails (network down, credential",
-    "unreachable inside the backend container, provider 5xx). It is deliberately",
-    "NOT a source of truth about what a runtime RUNS — runtimes.model_identifier",
-    "stays the only answer to that question. This file only answers",
-    "'which models does this provider offer', and it will go stale; every entry",
-    "served from here is flagged status=manifest_fallback in the API so the UI",
-    "can say so out loud.",
+    "Model manifest for the provider model catalog (services/model_catalog.py).",
+    "For MOST providers this is a pure fallback: it is consulted ONLY when a live",
+    "/models probe fails (network down, credential unreachable inside the backend",
+    "container, provider 5xx), and every entry served that way is flagged",
+    "status=manifest_fallback in the API so the UI can say so out loud.",
+    "",
+    "⚠️ GROK IS THE EXCEPTION AND IT IS DELIBERATE — DO NOT 'CLEAN THIS UP'.",
+    "For grok this file is MERGED INTO a successful probe (union, deduplicated;",
+    "see _MANIFEST_UNION_PROTOCOLS in model_catalog.py), because the Grok Build",
+    "CLI ships model slugs that NO HTTP surface reports. Measured 2026-07-28:",
+    "cli-chat-proxy.grok.com/v1/models (with every client-surface header the",
+    "0.2.93 binary knows), `grok models` and ~/.grok/models_cache.json ALL return",
+    "exactly grok-4.5 — while composer-2.5-fast is present inside the binary next",
+    "to the bundled 'Cursor Composer toolset and prompt'. If the grok entry below",
+    "were deleted as 'stale handwork', that knowledge would be gone and no API",
+    "could give it back. It is manifest-driven ON PURPOSE.",
+    "",
+    "cli_only: true marks a model the CLI knows but the wire protocol refuses.",
+    "Such entries are DISPLAYED (so the operator learns they exist) but are NOT",
+    "bindable — POST /models/catalog/bind rejects them with 422. Offering a model",
+    "that 400s on first use would be worse than not listing it at all.",
+    "",
+    "This file is NOT a source of truth about what a runtime RUNS —",
+    "runtimes.model_identifier stays the only answer to that question.",
     "Keyed by wire protocol (harness_compat.runtime_protocol), not by runtime slug:",
     "anthropic/grok/kimi are single-endpoint protocols. The 'openai' protocol has",
     "no entry on purpose — every openai runtime is a different endpoint (local vLLM,",
     "LM Studio, Ollama Cloud, ...), so a shared static list would be a lie.",
-    "Verified live on 2026-07-25."
+    "",
+    "Note on kimi: since 2026-07-28 the kimi adapter reads the CLI's own config",
+    "(~/.mc/agents/<slug>/kimi-config/config.toml) token-independently, so the",
+    "kimi block below is a last-resort net only — it is normally never reached.",
+    "Verified live on 2026-07-28."
   ],
   "anthropic": {
-    "note": "api.anthropic.com/v1/models, verified 2026-07-25 (11 models).",
+    "note": "api.anthropic.com/v1/models, verified 2026-07-25 (11 models). Fallback only — a live probe replaces this list entirely.",
     "verified_at": "2026-07-25",
     "models": [
       {"id": "claude-opus-5", "display_name": "Claude Opus 5"},
@@ -27,19 +47,31 @@
     ]
   },
   "grok": {
-    "note": "cli-chat-proxy.grok.com/v1/models — the Grok Build CLI proxy, NOT api.x.ai. The public xAI API advertises ~10 models; the CLI proxy exposes exactly one, and only that one is drivable by the grok harness.",
-    "verified_at": "2026-07-25",
+    "note": "MERGED INTO the live probe, not replaced by it (see _comment). cli-chat-proxy.grok.com/v1/models — the Grok Build CLI proxy, NOT api.x.ai. The public xAI API advertises ~10 models; the CLI proxy exposes exactly one, and only that one is drivable by the grok harness over HTTP.",
+    "manifest_is_authoritative": true,
+    "verified_at": "2026-07-28",
     "models": [
-      {"id": "grok-4.5", "display_name": "Grok 4.5"}
+      {
+        "id": "grok-4.5",
+        "display_name": "Grok 4.5",
+        "context_window": 500000
+      },
+      {
+        "id": "composer-2.5-fast",
+        "display_name": "Composer 2.5 Fast (nur im CLI)",
+        "cli_only": true,
+        "note": "Im grok-Binary 0.2.93 enthalten (neben dem mitgelieferten 'Cursor Composer toolset and prompt'), aber von KEINER HTTP-Quelle gemeldet: /v1/models liefert unter jeder client-surface nur grok-4.5, ebenso `grok models` und models_cache.json. Direkt getestet am 2026-07-28 gegen cli-chat-proxy.grok.com/v1/chat/completions mit den CLI-eigenen Headern: HTTP 400, 'Model not found: composer-2.5-fast' (grok-4.5 im selben Lauf: HTTP 200). Deshalb NICHT bindbar — hier nur dokumentiert, damit der Eintrag nicht als vergessene Handarbeit wieder verschwindet."
+      }
     ]
   },
   "kimi": {
-    "note": "api.kimi.com/coding/v1/models, verified 2026-07-25 (4 entries).",
-    "verified_at": "2026-07-25",
+    "note": "Letztes Netz. Primaerquelle ist seit 2026-07-28 die CLI-Config (~/.mc/agents/<slug>/kimi-config/config.toml, tokenunabhaengig) — dieselbe Datei, die `kimi provider list --json` liest. api.kimi.com/coding/v1/models liefert dieselben IDs, braucht aber einen Access-Token mit ~900 s Lebensdauer.",
+    "verified_at": "2026-07-28",
     "models": [
-      {"id": "kimi-for-coding", "display_name": "Kimi for Coding"},
-      {"id": "k3", "display_name": "Kimi K3"},
-      {"id": "k3-256k", "display_name": "Kimi K3 (256k)"}
+      {"id": "kimi-for-coding", "display_name": "K2.7 Coding", "context_window": 262144},
+      {"id": "kimi-for-coding-highspeed", "display_name": "K2.7 Coding Highspeed", "context_window": 262144},
+      {"id": "k3", "display_name": "K3", "context_window": 1048576},
+      {"id": "k3-256k", "display_name": "K3-256k", "context_window": 262144}
     ]
   }
 }

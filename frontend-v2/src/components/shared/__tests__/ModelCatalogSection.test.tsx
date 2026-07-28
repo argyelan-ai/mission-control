@@ -205,6 +205,80 @@ describe("ModelCatalogSection", () => {
     expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "unreachable");
   });
 
+  it("status cli_config: names the CLI config as the source, not 'live' and not 'Manifest'", async () => {
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "kimi",
+          protocol: "kimi",
+          display_name: "Kimi Code",
+          status: "cli_config",
+          reason: "credential_missing",
+          models: [mkModel("k3", false, { display_name: "K3", context_window: 1048576 })],
+          new_count: 1,
+        }),
+      ]),
+    );
+    renderSection();
+
+    const banner = await screen.findByTestId("catalog-status-banner");
+    expect(banner).toHaveTextContent(/Config des CLI/);
+    // Darf sich NICHT als bestätigte Live-Abfrage ausgeben …
+    expect(banner).toHaveTextContent(/nicht vom Anbieter bestätigt/);
+    // … und nicht als veraltetes Handmanifest verleumdet werden.
+    expect(banner).not.toHaveTextContent(/bekannte Liste/);
+    expect(screen.getByTestId("catalog-provider")).toHaveAttribute(
+      "data-status",
+      "cli_config",
+    );
+    // Modelle sind echt da — der Leerzustand darf nicht greifen.
+    expect(screen.getByText("k3")).toBeInTheDocument();
+    expect(screen.queryByText(/meldet aktuell keine Modelle/)).not.toBeInTheDocument();
+  });
+
+  it("cli_only model: shown, explained, and NOT offered as bindable", async () => {
+    const bind = vi.spyOn(api.modelCatalog, "bind");
+    vi.spyOn(api.modelCatalog, "list").mockResolvedValue(
+      mkList([
+        mkProvider({
+          key: "grok",
+          protocol: "grok",
+          display_name: "Grok (CLI-Proxy)",
+          status: "ok",
+          models: [
+            mkModel("grok-4.5", true),
+            mkModel("composer-2.5-fast", false, {
+              cli_only: true,
+              note: "Vom Endpoint abgelehnt (HTTP 400).",
+            }),
+          ],
+          new_count: 0,
+        }),
+      ]),
+    );
+    renderSection();
+
+    // Gruppe bleibt zu: cli_only zählt nicht als „neu", also gibt es hier
+    // nichts, wofür die Seite unaufgefordert aufklappen müsste.
+    const header = await screen.findByRole("button", { name: /Grok \(CLI-Proxy\)/ });
+    expect(screen.queryByTestId("catalog-new-count")).not.toBeInTheDocument();
+    await userEvent.click(header);
+
+    // Aufgeklappt sichtbar — der Operator soll wissen, dass es das Modell gibt.
+    await waitFor(() => expect(screen.getByText("composer-2.5-fast")).toBeInTheDocument());
+    const badge = screen.getByTestId("catalog-cli-only-badge");
+    expect(badge).toHaveTextContent(/nur im CLI/);
+    expect(badge).toHaveAttribute("title", "Vom Endpoint abgelehnt (HTTP 400).");
+
+    // Aber weder als „neu" beworben noch anlegbar — ein Angebot, das dann
+    // scheitert, wäre schlechter als gar keins.
+    expect(screen.queryByTestId("catalog-new-badge")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Als Runtime anlegen/ }),
+    ).not.toBeInTheDocument();
+    expect(bind).not.toHaveBeenCalled();
+  });
+
   it("renders an explicit empty state when no providers are configured", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(mkList([]));
     renderSection();
