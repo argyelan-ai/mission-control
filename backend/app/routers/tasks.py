@@ -1506,8 +1506,9 @@ async def update_task(
         await vertical_hooks.run_task_done_hooks(session, task)
         await session.commit()
         await session.refresh(task)
-        # Telegram-Thema auf `✓ …` (nur eigenes Ad-hoc-Thema, nie Projekt/Eltern).
-        from app.services.telegram_topics import handle_task_done
+        # Chat-Raum als erledigt markieren (kanal-neutral, ADR-072; Telegram:
+        # `✓ …` nur am eigenen Ad-hoc-Thema, nie Projekt/Eltern).
+        from app.services.chat_rooms import handle_task_done
         await handle_task_done(session, task)
 
     # Auto-trigger: notify agent when a task is assigned

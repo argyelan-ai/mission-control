@@ -114,6 +114,11 @@ services:
       # Zeile erreicht das Flag den Container nie — die .env allein reicht
       # nicht, weil hier jede Telegram-Variable einzeln durchgereicht wird.
       TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
+      # Kanal-Schalter des Team-Chats (ADR-072): Komma-Liste der aktiven
+      # Kanaele, z.B. "telegram", "slack" oder "telegram,slack". Leer =
+      # keine explizite Auswahl → jeder registrierte Kanal darf laufen,
+      # sofern sein eigener Schalter an ist (heutiges Verhalten).
+      CHAT_CHANNELS: ${CHAT_CHANNELS:-}
       JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}

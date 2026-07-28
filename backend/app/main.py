@@ -722,14 +722,16 @@ TELEGRAM_TOPIC_RETENTION_DAYS = 30
 
 
 async def _telegram_topic_purge_loop() -> None:
-    """Taeglicher Purge alter Telegram-Themen (Marks Regel: nach 30 Tagen weg).
+    """Taeglicher Purge alter Chat-Raeume (Marks Regel: nach 30 Tagen weg).
 
     Sleep-first wie die Vault-Loops: nach einem Neustart laeuft nicht sofort ein
     Purge (Restart-Sturm). Die eigentliche Arbeit steckt in
-    ``telegram_topics.purge_topics_tick`` — dort sitzen Feature-Flag,
-    eigene Session und das Fehler-Schlucken, damit dieser Loop nie stirbt.
+    ``chat_rooms.purge_rooms_tick`` — es faechert ueber alle aktiven Kanaele auf
+    (ADR-072); pro Kanal sitzen Feature-Flag, eigene Session und das
+    Fehler-Schlucken, damit dieser Loop nie stirbt. (Name + Konstanten bleiben
+    aus Kompatibilitaet telegram-benannt.)
     """
-    from app.services.telegram_topics import purge_topics_tick
+    from app.services.chat_rooms import purge_rooms_tick as purge_topics_tick
 
     logger.info(
         "telegram_topic_purge_loop started (interval=%ds, retention=%dd)",

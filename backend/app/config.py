@@ -53,6 +53,16 @@ class Settings(BaseSettings):
     # Flotte lauffaehig bleibt, solange die Brücke nicht vollstaendig gebaut ist.
     telegram_team_chat_enabled: bool = False
 
+    # ── Kanal-Schalter fuer den Team-Chat (ADR-072) ──────────────────────
+    # Komma-Liste der aktiven Chat-Kanaele, z.B. "telegram", "slack" oder
+    # "telegram,slack" (mehrere gleichzeitig sind ausdruecklich erlaubt).
+    # Leer (Default) = keine explizite Auswahl → jeder registrierte Kanal darf
+    # laufen, sofern sein eigener Schalter an ist; heute also exakt das
+    # bisherige Verhalten (Telegram haengt weiter an
+    # TELEGRAM_TEAM_CHAT_ENABLED). Ein Kanal wird ruhiggestellt, indem er hier
+    # nicht aufgefuehrt wird — sein Code bleibt vollstaendig erhalten.
+    chat_channels: str = ""
+
     # Telegram Reports Bot (separate — agent deliverables, no approval flow)
     # Second bot + chat so info delivery doesn't clutter the command chat.
     telegram_reports_bot_token: str = ""
