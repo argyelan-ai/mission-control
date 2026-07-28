@@ -708,21 +708,80 @@ production container.*
 
 ## 9. Re-entry for the next session
 
-**Where we are (after the 2026-07-28 second pass):** direction unchanged (§3 Decisions
-A + B, staged per §5–§7). Open questions §8.1 and §8.2 are **closed**. Stage 1 shrank —
-see the scope-correction box at the top of §5. No implementation plan written yet.
+Trigger phrase: **"Kontext-Recovery weiter"**.
 
-**Start here:**
+### 9.1 State in one paragraph
 
-1. Read this document, then `docs/decisions/024-*` (`mc recover`, read-only recovery) and
+Direction unchanged and approved (§3: **A — reconstruct over preserve**, **B — pull over
+push**). The hard gate stays deferred (§4). Two passes of verification shrank Stage 1 from
+six items to **one and a half**, because most of what the first draft proposed either already
+existed (F10, `mc recover`) or could not be used safely (F11, Hermes). Both open questions
+are **closed** (§8.1, §8.2). Collision check against the parallel comm_v2 work is **done and
+clean** (F12). **Nothing has been implemented — this branch is documentation only.**
+
+### 9.2 What to build, in order
+
+| # | Item | Why this order |
+|---|---|---|
+| 1 | **Instrumentation**: per context-loss event, did `mc recover` happen before the first write? | Smallest item, but the only one needing **wall-clock time** to yield data. Start it first so it accumulates while #2 is built. Nearly free: the endpoint already writes a Redis key per recovery (`agents.py:3094`). |
+| 2 | **`mc thread`** — `GET /agent/me/thread` in `agent_scoped.py` + CLI verb + tests (§5.1, §5.6) | The one real capability gap (F3). Purely additive, no risk. |
+| 3 | delete `get_last_checkpoint` (`task_context_builder.py:809`) + its `noqa: F401` re-export (`dispatch.py:587`) | Rides along; zero callers, §8.1 closed. |
+| — | Hermes, the gate, the valve, JSONL rotation | **Not now.** #1 decides the first three; rotation is an unrelated ticket. |
+
+Honest limit of the measurement, stated so nobody over-reads it: the backend only sees a
+context loss **where poll.sh reports one**, so it is blind for Hermes and Grok — the same
+blindness that helped kill the gate. That is acceptable here, because for those two the
+answer is already known (no recovery at all, F4). We measure where we don't know.
+
+### 9.3 The five things that will bite
+
+1. 🔴 **`mc thread` must never touch the ack cursor.** `mc inbox` acks (consume), `mc thread`
+   never does (look up). Otherwise an agent rebuilding context eats its own unread mail and
+   comm_v2 loses at-least-once. **The test comes before the endpoint.**
+2. 🔴 **Do not reuse `_resolve_agent_threads_with_cursors`** — it creates cursors *and*
+   fast-forwards them (§5.1, F12). Resolve `task → task.thread_id` instead. That is not a
+   style choice; it is what makes #1 enforceable.
+3. **Do not modify `agents.py`.** Agreed boundary with the Telegram team-chat work (F12).
+   Costs nothing — the new endpoint belongs in `agent_scoped.py`.
+4. **Task resolution follows `/me/poll`** (`agents.py:2816-2839`): pointer as *validated*
+   hint, task-table fallback, optional explicit `task_id`. Not `current_task_id` alone — it
+   is null by design for every non-lead worker under subagent dispatch (§8.2).
+5. **Empty page, never 422.** A recovery-shaped read must not explode when there is nothing
+   to recover.
+
+### 9.4 Before writing code
+
+1. Read this document top to bottom — especially §4 (why no gate) and F10/F11/F12.
+2. Then `docs/decisions/024-*` (`mc recover`, read-only recovery) and
    `docs/decisions/071-w21-delivery-foundation.md` (adapter contract).
-2. Invoke the `writing-plans` skill on the reduced §5 list.
-3. TDD per `superpowers:test-driven-development`; the cursor-untouched test (§5.6) is the
-   one that must exist **before** the endpoint.
+3. Templates to copy rather than invent: `backend/tests/test_inbox_pull.py` (agent-token
+   fixtures + cursor assertions) and `backend/tests/test_thread_read_api.py` (pagination
+   cases). The new file combines them.
+4. `writing-plans` on §9.2, then TDD per `superpowers:test-driven-development`.
 
-**A worktree is already set up** for this branch; see `git worktree list`. It was rebased
-onto `origin/main` on 2026-07-28 — the original base predated comm_v2 entirely (see the
-base note in §0). Verify you are on a current base before trusting any `file:line` here.
+### 9.5 Loose ends deliberately left
+
+Each is real, none belongs in this stage:
+
+- **Hermes' MC instructions live in an untracked host file**
+  (`~/.hermes/skills/mission-control/SKILL.md`) — referenced once in the repo, generated
+  nowhere. Own ticket.
+- **Two Hermes unknowns** that would change F11: does `hermes --yolo` auto-resume from
+  `~/.hermes/state.db` (287 MB)? Is the background review suppressed unattended?
+- **ADR-020 rollout never finished**: `POST /checkpoint` should have been deleted after
+  2 releases (still a 410 shim), `task_checkpoints` dropped after 3 weeks (still there,
+  still read by a live GET).
+- **Should `mc thread` read the agent's DM thread too?** DMs entered message scope with the
+  Telegram work (F12). Argument exists; v1 says task threads only.
+- **`scripts/rotate-gateway-logs.sh` is scheduled nowhere** and serves a retired component.
+  Cautionary precedent for the JSONL rotation: ship the schedule or don't ship it.
+
+### 9.6 Working state
+
+Branch `feat/context-reconstruction`, worktree of the same name, **pushed** (backup) and
+based on `origin/main` `5a63c678`. Documentation only — no code, no migrations, nothing to
+revert. The original base predated comm_v2 entirely (see §0); **verify the base is current
+before trusting any `file:line` here.**
 
 **Do not** start with the gate or `context_state`. §4 explains why; if you find yourself
 reaching for it, the answer is instrumentation first.
