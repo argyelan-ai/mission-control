@@ -391,6 +391,19 @@ class RedisKeys:
     def model_catalog_provider(provider_key: str) -> str:
         return f"mc:model-catalog:{provider_key}"
 
+    # Background check (services/model_catalog_check.py). Same shape as the CLI
+    # update check: one lock so only one worker probes per tick, plus one
+    # long-lived "already told the operator" key per provider+model so a new
+    # model is announced ONCE — not on every tick and not again after a
+    # backend restart.
+    @staticmethod
+    def model_catalog_check_lock() -> str:
+        return "mc:model-catalog:check-lock"
+
+    @staticmethod
+    def model_catalog_notified(provider_key: str, model_id: str) -> str:
+        return f"mc:model-catalog:notified:{provider_key}:{model_id}"
+
     # ── CLI Tool Update Check ────────────────────────────────────────────
     @staticmethod
     def cli_update_check_lock() -> str:
