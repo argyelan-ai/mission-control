@@ -286,6 +286,58 @@ Three real gaps remain behind this:
 3. **Nobody has ever measured whether agents actually run it.** Unchanged, and now the
    single most valuable thing to build.
 
+#### F11 — ⭐ Hermes persists its own memory automatically, and MC cannot see it ✅ (2026-07-28)
+
+Raised by the operator as a caution before building; it turned out to be the sharpest
+constraint in the whole design. Hermes is not "an agent with a different CLI" — it has a
+**second, independent memory system that MC neither writes nor reads**.
+
+**MC's SOUL never reaches Hermes.** Hermes' binary loads `~/.hermes/SOUL.md` into the stable
+identity slot of its system prompt (`hermes-agent/agent/prompt_builder.py:1796-1823`,
+`system_prompt.py:153-162`). MC renders its own 43 KB SOUL to
+`~/.mc/agents/hermes/…` (`docker_agent_sync.py:552-564`). Nothing copies one to the other —
+verified across `docker/hermes/entrypoint.sh` (70 lines), `scripts/hermes-bridge.py` (1101
+lines) and `hermes-config-patch.py`. The live `~/.hermes/SOUL.md` is 513 bytes of vendor
+default text.
+→ **F10's claim that "Hermes is ordered by its SOUL to run `mc recover`" is false.** The
+instruction never arrives. Hermes' real instruction surface is the dispatch prompt built in
+`hermes-bridge.py:250-271` plus `~/.hermes/skills/mission-control/SKILL.md` — and that
+SKILL.md is **referenced once in the repo and generated nowhere**, i.e. untracked host state.
+
+**The auto-memory loop** (verified in config and code):
+
+| Mechanism | Evidence |
+|---|---|
+| every ~5 user turns a background fork digests the last 24 messages and may write memory | `turn_context.py:307-314` + `nudge_interval: 5` in `~/.hermes/config.yaml:367` |
+| it writes without operator or task involvement | `background_review.py:6-7,167-168`, origin tag `"background_review"` `:698` |
+| the store is capped at **2200 characters** | `~/.hermes/config.yaml:364` `memory_char_limit: 2200` |
+| it is injected into **every** later system prompt | `system_prompt.py:426-435`, reloaded on each compression `:503-505` |
+| context auto-compaction is on | `~/.hermes/config.yaml:359-360` `engine: compressor` |
+| MC has no visibility: zero `memory_md` calls in `hermes-bridge.py` / `mc-mcp.py` | grep, no hits |
+
+**Why this bites this design specifically.** A bridge paste *is* a user turn
+(`hermes-bridge.py:274-282`). So anything we hand Hermes is eligible, within ~5 turns, to be
+summarised into a 2200-char store that then prefixes every future task — **across task
+boundaries, invisible to MC, with no rollback**. Two concrete consequences:
+
+1. A 4000-char `mc recover` payload or an unbounded `mc thread` dump landing shortly before
+   a review tick can **evict genuine long-term memory** and pin one task's context onto all
+   later ones.
+2. `mc thread` returns **third-party text** (operator and other agents). Making that eligible
+   for automatic persistence into an identity-level prompt is a prompt-injection path *with
+   persistence*, not merely a context path.
+
+🔴 **And the obvious implementation is the trap.** `scripts/mc-mcp.py` has two clients:
+`_api_agent` (agent token) and `_api` (`:36-44`) — which mints a **`role: admin` JWT valid
+24 h**. Most read tools use `_api`. Writing `mc_thread` the easy way (`_api` against the
+existing `tasks.py:2632`) would hand Hermes **fleet-wide thread read with admin rights**,
+silently voiding the least-privilege rule in §5.1. Any Hermes tool here must use
+`_api_agent` against the new agent-scoped endpoint, and a test must assert it.
+
+*Unverified:* whether `hermes --yolo` auto-resumes the prior session from
+`~/.hermes/state.db` (287 MB) on restart, and whether the background review is suppressed in
+unattended mode. Both would change the picture and should be checked before any Hermes work.
+
 #### F9 — comm_v2 is end-to-end at-least-once ✅ (good news, no action)
 
 Verified by hand in `docker/shared/poll.sh`:
@@ -408,17 +460,23 @@ Independently valuable even if Stages 2–3 never happen.
 > stage: `mc resume` was going to duplicate `mc recover`, which already exists and is
 > already mandated by SOUL. What remains:
 >
-> | # | Item | Why it survives |
+> | # | Item | Status |
 > |---|---|---|
-> | 5.1 | `GET /agent/me/thread` → `mc thread` | the genuine gap (F3) — nothing reads a thread agent-side |
-> | 5.4 | `mc_recover` + `mc_thread` MCP tools for Hermes | Hermes is ordered by its SOUL to run a command it cannot run |
-> | 5.2 | `mc recover --brief` | refinement of the existing verb, not a new one |
-> | 5.3 | MEMORY.md pointer | unchanged (F6) |
-> | 5.5 | JSONL rotation | unchanged (F2), independent |
-> | — | delete `get_last_checkpoint` + its `noqa: F401` shim | §8.1 closed: dead code, zero callers |
+> | 5.1 | `GET /agent/me/thread` → `mc thread` | ✅ **the stage** — the genuine gap (F3) |
+> | — | delete `get_last_checkpoint` + its `noqa: F401` shim | ✅ ride along; §8.1 closed, zero callers |
+> | 5.2 | `mc recover --brief` | → Stage 2, same change as retiring the F7 double-inject |
+> | 5.3 | MEMORY.md pointer | → Stage 2, it is an instruction, not a capability |
+> | 5.4 | Hermes MCP tools | ⛔ **cut** — see F11; a tool with no trigger, plus a memory hazard |
+> | 5.5 | JSONL rotation | ⏸ separate ticket — unrelated to context recovery, and see the note below |
 >
-> Smaller, sharper, and one item (Hermes) turned out to be a live defect rather than an
-> enhancement.
+> **Two passes shrank this stage from six items to one and a half**, and that is the finding,
+> not an accident: the first draft proposed building four things MC either already had (F10)
+> or could not safely use (F11).
+>
+> On 5.5: the precedent to copy, `scripts/rotate-gateway-logs.sh`, rotates logs for the
+> **retired** OpenClaw Gateway (ADR-039) and is scheduled **nowhere** — the crontab line
+> exists only as a comment. Lesson for whoever picks it up: an unscheduled rotation script is
+> theatre. Ship the schedule or don't ship it.
 
 ### 5.1 `GET /agent/me/thread` → `mc thread`
 
@@ -489,15 +547,33 @@ stays consistent with Decision B.
 *(Open: whether the pointer belongs in the SOUL template or in the `mc resume` payload —
 arguably both. See §8.)*
 
-### 5.4 Bridge parity — bigger than it looked (F10)
+### 5.4 Bridge parity — **Hermes is cut from Stage 1** (F11)
 
 - **Grok** — has shell `mc` (PR #150) → inherits `mc thread` automatically once the endpoint
-  exists, and already has `mc recover`.
-- **Hermes** — MCP-only. Needs **two** tools in `scripts/mc-mcp.py`:
-  - `mc_thread` — the new read (mirrors `mc_inbox` at `:639`).
-  - ⭐ `mc_recover` — **not a nice-to-have.** Hermes' SOUL orders it to run `mc recover` on
-    startup (`SOUL.md.j2:2935`) and it has no way to comply. This is a live instruction the
-    agent cannot follow, independent of anything else in this design.
+  exists, and already has `mc recover`. Nothing to build.
+- **Hermes — deliberately deferred.** The earlier plan (add `mc_recover` + `mc_thread` to
+  `scripts/mc-mcp.py`) does not survive F11. Three reasons, each sufficient on its own:
+
+  1. **Nothing would ever call them.** MC's SOUL does not reach Hermes, and the bridge sends
+     nothing on restart. A tool with no trigger is dead weight — and it would *look* like
+     parity while delivering none. The blast radius is at least contained: `mc-mcp.py` is
+     registered only by `hermes-config-patch.py:28-41`, Grok has no MCP, and Docker agents
+     use a different registry — so this is Hermes-only either way.
+  2. **`mc_recover` would return the full dispatch prompt**, whose body re-instructs ACK,
+     checklist creation and hand-off (`hermes-bridge.py:250-271`) → duplicate ACKs and
+     duplicate checklists. It must not ship before `--brief` exists.
+  3. **The auto-memory hazard (F11)** needs a bounded payload *and* the two unverified
+     questions answered first (session auto-resume; whether background review runs
+     unattended).
+
+  **The real Hermes gap is a trigger, not a tool** — restart detection in the bridge that
+  pastes a compact re-entry line. That is Stage 2 fleet parity (§6.3), where it belongs, and
+  it should carry hard output caps modelled on the existing precedents (`mc_logs:484` caps
+  at 4000 chars; `mc_task_detail:232` caps at 5 comments × 200 chars).
+
+  Separately and independently of this design: **Hermes' MC instructions live in an
+  untracked host file** (`~/.hermes/skills/mission-control/SKILL.md`). That is a drift risk
+  worth its own ticket.
 
 ### 5.5 JSONL rotation (F2)
 
