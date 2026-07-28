@@ -51,8 +51,8 @@ MERGE ORDER: numbered 0168 on top of 0167. This repo has had migration-number
 collisions on parallel branches twice — if another 0168 lands first, RENUMBER
 this file (revision + down_revision) so the chain stays linear.
 
-Revision ID: 0168_merge_lmstudio_runtime_rows
-Revises: 0167_runtime_display_name_derived
+Revision ID: 0168_merge_lmstudio_rows
+Revises: 0167_runtime_display_names
 Create Date: 2026-07-28
 """
 import json
@@ -61,8 +61,8 @@ import logging
 import sqlalchemy as sa
 from alembic import op
 
-revision = "0168_merge_lmstudio_runtime_rows"
-down_revision = "0167_runtime_display_name_derived"
+revision = "0168_merge_lmstudio_rows"
+down_revision = "0167_runtime_display_names"
 branch_labels = None
 depends_on = None
 

@@ -42,7 +42,7 @@ twice already in this repo — if another 0167 lands first, RENUMBER this file
 (revision + down_revision) so the chain stays linear and single-headed.
 Alembic cannot express "either order".
 
-Revision ID: 0167_runtime_display_name_derived
+Revision ID: 0167_runtime_display_names
 Revises: 0166_thread_telegram_topic_id
 Create Date: 2026-07-28
 """
@@ -53,7 +53,7 @@ from alembic import op
 
 from app.services.runtime_naming import derive_runtime_display_name
 
-revision = "0167_runtime_display_name_derived"
+revision = "0167_runtime_display_names"
 down_revision = "0166_thread_telegram_topic_id"
 branch_labels = None
 depends_on = None
