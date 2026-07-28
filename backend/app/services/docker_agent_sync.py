@@ -147,11 +147,6 @@ def write_operating_card(config_dir: Path, agent: Agent, context: dict) -> dict[
         return {"CARD.md": f"error: {e}"}
 
 
-# Default model for the native-claude host launcher when agent.model is
-# unset. Kept as a fallback only — agent.model is the DB source of truth
-# (matches docker/boss-host/start-claude.sh's previous hardcoded value).
-DEFAULT_HOST_CLAUDE_MODEL = "claude-opus-4-8"
-
 HOST_LAUNCHER_TEMPLATE = "start-agent.sh.j2"
 
 
@@ -207,7 +202,6 @@ def render_host_launcher_script(agent: Agent) -> dict[str, str]:
 
     config_dir = str(Path(agent.workspace_path) / "claude-config")
     env_file = str(launcher_dir / "agent.env")
-    model = agent.model or DEFAULT_HOST_CLAUDE_MODEL
 
     try:
         rendered = render_agent_file(
@@ -216,7 +210,6 @@ def render_host_launcher_script(agent: Agent) -> dict[str, str]:
                 "slug": slug,
                 "config_dir": config_dir,
                 "env_file": env_file,
-                "model": model,
             },
         )
     except Exception as e:

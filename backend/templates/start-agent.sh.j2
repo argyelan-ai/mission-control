@@ -19,8 +19,9 @@
 # binary mit OAuth-Login (aus macOS Keychain unter ~/.claude/) + CARD.md
 # (Fallback: SOUL.md) als --append-system-prompt.
 #
-# Modell: {{ model }}. Direkter Anthropic-API-Call, KEIN openclaude/LM-Studio-
-# Detour wie im Container.
+# Modell: aus agent.env (ANTHROPIC_MODEL, gerendert aus
+# runtime.model_identifier — siehe unten). Direkter Anthropic-API-Call, KEIN
+# openclaude/LM-Studio-Detour wie im Container.
 
 set -eu
 
@@ -69,8 +70,22 @@ unset OPENAI_API_KEY
 unset OPENAI_MODEL
 unset CLAUDE_CODE_USE_OPENAI
 
-# Modell explizit setzen
-export ANTHROPIC_MODEL="{{ model }}"
+# ANTHROPIC_MODEL kommt aus agent.env (oben gesourct), das MC aus
+# runtime.model_identifier rendert — die einzige Wahrheit fuer das Modell
+# (docs/plans/2026-07-25-model-sanitation-and-catalog.md). Deshalb steht der
+# Wert hier bewusst NICHT: ein ins Skript eingebackenes Modell wuerde beim
+# naechsten Runtime-Wechsel veralten, waehrend agent.env korrekt neu
+# gerendert wird — genau die Divergenz, die dieser Generator beseitigt.
+# Darum ist ANTHROPIC_MODEL auch von den unsets oben ausgenommen.
+if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+    echo "[start-{{ slug }}] ANTHROPIC_MODEL=$ANTHROPIC_MODEL (aus agent.env)"
+else
+    # Kein Pin: das claude-CLI nimmt seinen Account-Default, der neuen
+    # Releases folgt. Ein hier hart gesetzter Wert veraltet dagegen still —
+    # genau der Vorfall, bei dem die Fleet auf einem alten opus stehenblieb,
+    # waehrend Anthropic laengst weiter war. Warnen statt raten.
+    echo "WARN: ANTHROPIC_MODEL fehlt in $ENV_FILE — {{ slug }} ist an keine Runtime mit model_identifier gebunden. Kein Pin gesetzt, claude nutzt seinen Account-Default." >&2
+fi
 
 # --dangerously-skip-permissions matcht aktuelles Container-Verhalten.
 # Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =

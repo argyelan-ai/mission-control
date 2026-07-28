@@ -133,6 +133,30 @@ def test_launcher_missing_workspace_path_returns_clean_error_no_crash(tmp_path):
     assert not launcher_path.exists()
 
 
+def test_launcher_is_generated_even_without_agent_model(tmp_path):
+    """A missing agent.model must not block the launcher.
+
+    An earlier draft failed fast here, on the reasoning that a model is
+    mandatory. But the launcher does not carry the model at all — it inherits
+    ANTHROPIC_MODEL from agent.env, which MC renders from
+    runtime.model_identifier. Refusing to generate would have left an agent
+    with no launcher over a value the launcher never uses, and the missing
+    model is already reported loudly at runtime (see the WARN branch pinned by
+    test_launcher_does_not_bake_the_model_into_the_script).
+    """
+    workspace = tmp_path / "boss"
+    workspace.mkdir()
+    agent = _make_claude_host_agent(workspace_path=str(workspace), name="NoModelHost")
+    agent.model = None
+
+    result = render_host_launcher_script(agent)
+    assert "_error" not in result, result
+
+    from app.services import docker_agent_sync as das
+    launcher_path = das.AGENTS_DIR / f"{_agent_slug(agent)}-host" / "start-claude.sh"
+    assert launcher_path.exists()
+
+
 def test_launcher_non_claude_harness_is_noop(tmp_path):
     """Hermes/Grok don't run the native-claude launcher pattern at all
     (verified live: Hermes starts via launchd -> python -m hermes_cli, no
@@ -204,3 +228,45 @@ async def test_launcher_sync_host_agent_files_wires_it_in(tmp_path):
     from app.services import docker_agent_sync as das
     launcher_path = das.AGENTS_DIR / f"{_agent_slug(agent)}-host" / "start-claude.sh"
     assert launcher_path.exists()
+
+
+def test_launcher_does_not_bake_the_model_into_the_script(tmp_path):
+    """The model must come from agent.env, never from the generated script.
+
+    runtime.model_identifier is the single source of truth
+    (docs/plans/2026-07-25-model-sanitation-and-catalog.md); MC renders it into
+    agent.env. A model written into start-claude.sh would go stale on the next
+    runtime switch while agent.env updated correctly — reintroducing exactly
+    the divergence this generator exists to remove, one layer down.
+
+    An earlier draft of this template did `export ANTHROPIC_MODEL="{{ model }}"`
+    and it looked harmless, because for Boss agent.model and
+    runtime.model_identifier happened to agree.
+    """
+    import re
+
+    from app.services import docker_agent_sync as das
+
+    workspace = tmp_path / "workspaces" / "boss"
+    workspace.mkdir(parents=True)
+    agent = _make_claude_host_agent(workspace_path=str(workspace))
+    agent.model = "claude-opus-4-8"  # must NOT reach the rendered script
+
+    result = render_host_launcher_script(agent)
+    assert "_error" not in result, result
+
+    script = (das.AGENTS_DIR / f"{_agent_slug(agent)}-host" / "start-claude.sh").read_text()
+
+    assert agent.model not in script, (
+        f"the model literal {agent.model!r} was baked into the launcher; it must "
+        f"be read from agent.env so a runtime switch actually takes effect"
+    )
+    assert not re.search(r'^\s*export\s+ANTHROPIC_MODEL=', script, re.M), (
+        "the launcher assigns ANTHROPIC_MODEL itself instead of inheriting it "
+        "from the sourced agent.env"
+    )
+    # ...but it must still notice when the value is missing rather than
+    # starting an unpinned agent in silence.
+    assert "ANTHROPIC_MODEL" in script and "WARN" in script, (
+        "the launcher must warn when agent.env carries no ANTHROPIC_MODEL"
+    )
