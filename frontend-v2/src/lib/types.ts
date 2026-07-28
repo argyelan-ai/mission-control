@@ -1042,6 +1042,19 @@ export interface Credential {
   updated_at: string;
 }
 
+/** Result of POST /api/v1/slack/test-connection — never carries token material. */
+export interface SlackConnectionResult {
+  connected: boolean;
+  team: string | null;
+  bot_user: string | null;
+  bot_token_set: boolean;
+  app_token_set: boolean;
+  socket_mode_ready: boolean;
+  error: string | null;
+  /** Separate from `error`: a missing app-level token is its own defect. */
+  app_token_error: string | null;
+}
+
 export interface ProviderTemplate {
   provider: string;
   key: string;

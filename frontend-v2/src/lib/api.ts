@@ -50,6 +50,7 @@ import type {
   ScheduleFiringPreview,
   SecretEntry,
   SkillsResponse,
+  SlackConnectionResult,
   SystemMetrics,
   SystemStatus,
   Automation,
@@ -1509,6 +1510,12 @@ export const api = {
     // Phase 31 / OCS-15: secrets.syncToGateway removed — Phase 29 deleted
     // the gateway sync route; LLM-Provider-Keys now live per-runtime via
     // `runtime_manager.build_runtime_env()`.
+  },
+
+  // ── Slack (team chat channel; Socket Mode) ─────────────────────────────────
+  slack: {
+    testConnection: () =>
+      request<SlackConnectionResult>("/api/v1/slack/test-connection", { method: "POST" }),
   },
 
   // ── Discord (Phase 29-01 router; singleton guild) ───────────────────────────

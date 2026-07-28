@@ -94,6 +94,27 @@ PROVIDER_TEMPLATES = [
         "placeholder": "my-github-user",
     },
     {
+        "provider": "slack",
+        "key": "slack_bot_token",
+        "label": "Slack Bot Token",
+        "description": (
+            "Lets MC post as your agents in Slack and read the channels the app "
+            "was invited to. From OAuth & Permissions -> Bot User OAuth Token."
+        ),
+        "placeholder": "xoxb-...",
+    },
+    {
+        "provider": "slack",
+        "key": "slack_app_token",
+        "label": "Slack App-Level Token",
+        "description": (
+            "Opens the Socket Mode connection so Slack can deliver messages to a "
+            "self-hosted MC without a public URL. From Basic Information -> "
+            "App-Level Tokens, scope connections:write."
+        ),
+        "placeholder": "xapp-...",
+    },
+    {
         "provider": "x",
         "key": "x_api_key",
         "label": "X (Twitter) API Key",

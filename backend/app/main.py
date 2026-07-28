@@ -94,6 +94,7 @@ from app.routers import (
     schedule,
     secrets,
     settings as settings_router,
+    slack,
     skills,
     skill_lab,
     system,
@@ -818,6 +819,7 @@ app.include_router(prompt_templates.router)  # /api/v1/prompt-templates — Prom
 app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)
+app.include_router(slack.router)  # /api/v1/slack — Slack channel setup + connection test
 app.include_router(credentials.router)
 app.include_router(skills.router)
 app.include_router(clawhub.router)
