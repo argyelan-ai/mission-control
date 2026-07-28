@@ -357,10 +357,10 @@ async def intelligence_costs(
         total_out += a_out
         total_cost += a_cost
 
-        # agent_id NULL → "Unattributiert" (Boss rows without cwd match, etc.)
+        # agent_id NULL → "Unattributed" (Boss rows without cwd match, etc.)
         # The UI schema needs agent_id as a string → empty string for NULL.
         aid_str = str(row.agent_id) if row.agent_id else ""
-        aname = agent_name_cache.get(aid_str, "Unattributiert") if aid_str else "Unattributiert"
+        aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
 
         agent_costs.append({
             "agent_id": aid_str,
@@ -399,7 +399,7 @@ async def intelligence_costs(
         sessions = []
         for row in session_result.all():
             aid_str = str(row.agent_id) if row.agent_id else ""
-            aname = agent_name_cache.get(aid_str, "Unattributiert") if aid_str else "Unattributiert"
+            aname = agent_name_cache.get(aid_str, "Unattributed") if aid_str else "Unattributed"
             sessions.append({
                 "agent_id": aid_str,
                 "agent_name": aname,
