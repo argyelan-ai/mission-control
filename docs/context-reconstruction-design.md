@@ -717,21 +717,26 @@ push**). The hard gate stays deferred (§4). Two passes of verification shrank S
 six items to **one and a half**, because most of what the first draft proposed either already
 existed (F10, `mc recover`) or could not be used safely (F11, Hermes). Both open questions
 are **closed** (§8.1, §8.2). Collision check against the parallel comm_v2 work is **done and
-clean** (F12). **Nothing has been implemented — this branch is documentation only.**
+clean** (F12).
+
+> **Update 2026-07-28 (third pass — implementation).** Items #2 and #3 below are **shipped**
+> (§11). Item #1 turned out **not** to be nearly free, and the reason is worth reading before
+> anyone picks it up: see F13.
 
 ### 9.2 What to build, in order
 
-| # | Item | Why this order |
+| # | Item | Status |
 |---|---|---|
-| 1 | **Instrumentation**: per context-loss event, did `mc recover` happen before the first write? | Smallest item, but the only one needing **wall-clock time** to yield data. Start it first so it accumulates while #2 is built. Nearly free: the endpoint already writes a Redis key per recovery (`agents.py:3094`). |
-| 2 | **`mc thread`** — `GET /agent/me/thread` in `agent_scoped.py` + CLI verb + tests (§5.1, §5.6) | The one real capability gap (F3). Purely additive, no risk. |
-| 3 | delete `get_last_checkpoint` (`task_context_builder.py:809`) + its `noqa: F401` re-export (`dispatch.py:587`) | Rides along; zero callers, §8.1 closed. |
+| 1 | **Instrumentation**: per context-loss event, did `mc recover` happen before the first write? | ⚠️ **re-scoped — see F13.** The numerator is already recorded durably; the *denominator* (restarts with no recovery) is recorded nowhere, and there is no cheap honest proxy. Needs a decision, not just code. |
+| 2 | **`mc thread`** — `GET /agent/me/thread` in `agent_scoped.py` + CLI verb + tests (§5.1, §5.6) | ✅ **shipped** — `747e4a32`, `a2a3ce91`, `5f05c909` |
+| 3 | delete `get_last_checkpoint` (`task_context_builder.py:809`) + its re-export (`dispatch.py:604`) | ✅ **shipped** — `9647c88d` |
 | — | Hermes, the gate, the valve, JSONL rotation | **Not now.** #1 decides the first three; rotation is an unrelated ticket. |
 
-Honest limit of the measurement, stated so nobody over-reads it: the backend only sees a
-context loss **where poll.sh reports one**, so it is blind for Hermes and Grok — the same
-blindness that helped kill the gate. That is acceptable here, because for those two the
-answer is already known (no recovery at all, F4). We measure where we don't know.
+~~Honest limit of the measurement: the backend only sees a context loss where poll.sh reports
+one, so it is blind for Hermes and Grok.~~ **That framing was too generous** — F13 shows the
+blindness is worse and differently shaped than assumed. Kimi-Host was never the problem
+(it runs the shared `poll.sh`, F4); the problem is that *no* harness reports a restart as
+such.
 
 ### 9.3 The five things that will bite
 
@@ -779,16 +784,111 @@ Each is real, none belongs in this stage:
 ### 9.6 Working state
 
 Branch `feat/context-reconstruction`, worktree of the same name, **pushed** (backup) and
-based on `origin/main` `5a63c678`. Documentation only — no code, no migrations, nothing to
-revert. The original base predated comm_v2 entirely (see §0); **verify the base is current
-before trusting any `file:line` here.**
+based on `origin/main` `5a63c678`. **No longer documentation-only — §10 lists what shipped.**
+Still no migrations and nothing destructive to revert. The original base predated comm_v2
+entirely (see §0); **verify the base is current before trusting any `file:line` here.**
 
-**Do not** start with the gate or `context_state`. §4 explains why; if you find yourself
-reaching for it, the answer is instrumentation first.
+**Do not** start with the gate or `context_state`. §4 explains why. The old advice here was
+"the answer is instrumentation first" — read F13 before acting on that, because
+instrumentation now needs a decision from the operator before it needs code.
 
 ---
 
-## 10. Provenance
+#### F13 — The measurement is half-built already, and the missing half is the hard half ✅
+
+*(Recorded out of sequence with F1–F12 on purpose: this one came out of the implementation
+pass, not the survey, and only makes sense next to §10.)*
+
+Stage 1 item #1 was described as "nearly free: the endpoint already writes a Redis key per
+recovery". That was wrong on both counts — the Redis key is a 30-second rate-limit slot, not
+a record, and the real recording lives elsewhere and is better than assumed. Verified
+2026-07-28:
+
+**What MC already records (the numerator):**
+
+| Signal | Where | Durable? |
+|---|---|---|
+| Every recovery | `emit_event("task.agent_recovery", …)` `agents.py:3133` | ✅ `activity_events` row, committed before the Redis SSE publish (`services/activity.py:18-59`) |
+| An agent writing from pre-recovery context | `emit_event("task.stale_update_rejected", …)` `agent_task_status.py:1448-1454` | ✅ same table |
+
+No retention job touches `activity_events` — the only pruner in the repo is
+`_prune_run_history` (`services/scheduler.py:505`), and it targets `ScheduledJobRun`.
+So the history is intact all the way back. `GET /api/v1/activity`
+(`routers/activity.py:16-38`) already filters by `agent_id` + `event_type`; it lacks a
+`since`/`until` param, which is a small addition, not a build.
+
+**What MC does not record — and this is the blocker:**
+
+1. 🔴 **No harness reports a restart as such.** `HeartbeatPayload`
+   (`agent_scoped.py:126-131`) carries `context_tokens`, `session_message_count`,
+   `current_task_id`, `status`, `model_id` — no boot id, no session id, no start time. The
+   `Agent` model has `last_seen_at` (liveness) but nothing that changes discontinuously on
+   restart. **Without a denominator, "how often does an agent skip recovery" is unanswerable
+   — we can only count the times it didn't skip.**
+2. **`poll.sh` FIRST_POLL is a lossy proxy.** It calls `recover_task()` only when
+   `STATE=working` *and* `CURRENT_TASK_ID` is empty *and* `detect_turn_state` resolves to
+   idle/crashed or times out. Three branches skip recovery silently
+   (`docker/shared/poll.sh:1178-1213`) — including, by design, "the TUI looks busy".
+3. ⚠️ **The stale-attempt-id guard covers exactly one endpoint.**
+   `PATCH /boards/{id}/tasks/{id}` (`agent_task_status.py:1403-1465`) is the *only* place
+   that reads `X-Dispatch-Attempt-Id`. `report-back` (`:2415`), `review` (`:2466`),
+   `checkpoint` (`:2493`), `mc comment`, `mc ask`, `mc msg` and deliverable creation do
+   **not** check it. So "wrote without recovering" is observable for status changes only.
+4. ⚠️ **`task.missing_dispatch_attempt_id` is log-only.** The event type is assigned
+   (`:1422`) but never passed to `emit_event`; the comment at `:1439-1444` says so
+   deliberately (Discord-noise avoidance). Reasonable for alerting, invisible to any query.
+
+**Two pre-existing defects surfaced on the way, neither caused by this work:**
+
+- **The recovery endpoint bypasses the attempt-id audit trail.** `task_attempt_audit.py:4`
+  declares `dispatch_attempt_audit.{set_,clear_}` the *exclusive* writer, but
+  `agents.py:3103` and `:3116` assign `active.dispatch_attempt_id` directly. Recovery-driven
+  attempt-id changes leave no audit row — exactly the forensics the table exists for.
+- The missing-header class above has no durable trail at all.
+
+**Consequence for the plan:** item #1 is not a coding task, it is a fork —
+(a) add a boot-id to the heartbeat (fleet-wide client change, but it would give the true
+denominator *and* cover Hermes/Grok, removing the blindness that helped kill the gate),
+(b) ship only the cheap query surface and measure the numerator plus stale-writes, accepting
+that the denominator stays unknown, or (c) leave it: Stage 1's actual value (`mc thread`)
+is delivered either way. **Operator decision, not an implementation detail.**
+
+---
+
+## 10. Implementation log — Stage 1 (2026-07-28)
+
+Branch `feat/context-reconstruction`. Order followed §9.2; the cursor-safety test was written
+and made to fail **before** the endpoint existed, per §9.3.
+
+| Commit | What |
+|---|---|
+| `747e4a32` | `GET /agent/me/thread` + the three cursor-safety tests |
+| `a2a3ce91` | pagination, task resolution, authorization tests |
+| `5f05c909` | `mc thread` CLI verb + tests |
+| `9647c88d` | dead `get_last_checkpoint` removed |
+| `f2b07bf9` | `mc recover` now points at `mc thread` |
+
+**Two decisions taken during implementation:**
+
+1. **`mc recover` prints a pointer to `mc thread`** (`commands.py`). The SOUL edit is blocked
+   behind PR #181, but the moment an agent needs to learn the verb exists *is* recovery — and
+   SOUL does not reach every harness anyway (F11). The pointer lives in a file this work owns,
+   so it waits for nobody.
+2. **Thread reads are deliberately not comm_v2-gated**, unlike `GET /me/inbox`, which blanks
+   non-pilots. Delivery is what was piloted; reading history is not delivery, the thread fills
+   regardless of the flag, and hiding it from a recovering agent would recreate the exact gap
+   this endpoint closes. Pinned by a test so it stays deliberate.
+
+**Deliberately not done:** `agents.py` untouched (F12 boundary) and `SOUL.md.j2` untouched
+(PR #181). Task 4 of the plan — the SOUL/TOOLS.md wording — is still open and gated on that
+merge.
+
+**Not yet deployed.** Fleet agents are working; per the standing rule no rebuild happens
+while they are. Deploy is the operator's call.
+
+---
+
+## 11. Provenance
 
 Current state produced 2026-07-27 by four parallel read-only agents (cold boot / continue /
 handoff / crash-respawn) against branch `feat/ui-redesign-v3`, plus follow-ups that resolved
@@ -806,3 +906,12 @@ stage roughly in half and turned one item (Hermes) from an enhancement into a li
 Lesson worth keeping: the first pass searched for the *mechanism* it expected
 (`--continue`, `--resume`) and concluded it was absent; MC's answer was a CLI verb under a
 different name. **Search for the capability, not the implementation you have in mind.**
+
+Third pass, 2026-07-28 — implementation (§10). Stage 1's two build items shipped. The third
+item, instrumentation, was checked before being built and turned out to be **half already
+present and half genuinely missing** (F13) — the same shape of finding as F10 and F11, now
+three for three. The pattern is stable enough to state as a rule: **in this codebase, verify
+what exists before scoping what to build; the estimate has been wrong in that direction every
+single time.** F13 also surfaced two pre-existing defects (the recovery path bypassing its own
+audit trail; the missing-header event class having no durable record) that predate this work
+and are logged there rather than fixed here.
