@@ -1,6 +1,6 @@
 """Context-economy Stage 2 — contract + sync tests for the L1 Operating Card.
 
-CARD.md.j2 (<=5KB, backend/templates/CARD.md.j2) is the pilot replacement
+CARD.md.j2 (<=5.5KB, backend/templates/CARD.md.j2) is the pilot replacement
 for the full ~29KB SOUL.md --append-system-prompt (Migration 0151,
 agent.use_operating_card). Mirrors test_agent_docs_contract.py's structure:
 denylist, verb-syntax dry-run, and here additionally the byte budget across
@@ -30,12 +30,18 @@ MC_CLI_PATH = REPO_ROOT / "scripts" / "mc-cli"
 if str(MC_CLI_PATH) not in sys.path:
     sys.path.insert(0, str(MC_CLI_PATH))
 
-CARD_BYTE_BUDGET = 5120  # 5KB
+# 5.5KB. Was 5120 (5KB) until the comm_v2 inbox-reply gate landed: the card's
+# worst case (orchestrator + board lead + claude harness) already sat at 5099
+# bytes, so the 303-byte gate did not fit. The gate closes a live one-way-chat
+# bug (see test_card_inbox_reply_rule.py / PR #181) and is as load-bearing as
+# "ACK first" — the budget exists for context economy against the ~29KB SOUL,
+# and 5.4KB still keeps that 5x saving. Do not spend the new headroom casually.
+CARD_BYTE_BUDGET = 5632  # 5.5KB
 
 ROLES = ["orchestrator", "reviewer", "researcher", "deployer", "tester", "writer", "designer", "developer"]
 
 
-def _make_agent(role: str, *, is_lead: bool, harness: str) -> Agent:
+def _make_agent(role: str, *, is_lead: bool, harness: str, comm_v2: bool = False) -> Agent:
     return Agent(
         id=uuid.uuid4(),
         name=f"Test{role.capitalize()}",
@@ -43,6 +49,7 @@ def _make_agent(role: str, *, is_lead: bool, harness: str) -> Agent:
         board_id=uuid.uuid4(),
         is_board_lead=is_lead,
         harness=harness,
+        comm_v2=comm_v2,
     )
 
 
@@ -56,13 +63,16 @@ def _render_card(agent: Agent) -> str:
 @pytest.mark.parametrize("role", ROLES)
 @pytest.mark.parametrize("is_lead", [True, False])
 @pytest.mark.parametrize("harness", ["omp", "claude"])
-def test_card_respects_byte_budget(role, is_lead, harness):
-    agent = _make_agent(role, is_lead=is_lead, harness=harness)
+@pytest.mark.parametrize("comm_v2", [True, False])
+def test_card_respects_byte_budget(role, is_lead, harness, comm_v2):
+    # comm_v2 gehoert in die Matrix: die comm_v2-Bloecke der Card wurden vorher
+    # von KEINER Budget-Parametrisierung gerendert — blinder Fleck der Wache.
+    agent = _make_agent(role, is_lead=is_lead, harness=harness, comm_v2=comm_v2)
     card = _render_card(agent)
     size = len(card.encode("utf-8"))
     assert size <= CARD_BYTE_BUDGET, (
         f"CARD.md for role={role} is_lead={is_lead} harness={harness} "
-        f"is {size} bytes, over the {CARD_BYTE_BUDGET} budget"
+        f"comm_v2={comm_v2} is {size} bytes, over the {CARD_BYTE_BUDGET} budget"
     )
 
 
