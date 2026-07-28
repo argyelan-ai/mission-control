@@ -370,7 +370,7 @@ export default function InsightsPage() {
                       <ResponsiveContainer width="100%" height={agentChartHeight}>
                         <BarChart data={agentCostData} barSize={14} layout="vertical">
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
-                          <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={60} />
+                          <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Cost"]} />
                           <Bar dataKey="cost" fill={`${C.accent}B3`} radius={[0, 2, 2, 0]} />
                         </BarChart>
@@ -864,7 +864,7 @@ export default function InsightsPage() {
                         layout="vertical"
                       >
                         <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} unit="min" />
-                        <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={60} />
+                        <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                         <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, "Ø duration"]} />
                         <Bar dataKey="mins" fill={`${C.chart.ram}B3`} radius={[0, 2, 2, 0]} />
                       </BarChart>
