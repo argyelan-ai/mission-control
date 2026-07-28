@@ -1964,6 +1964,9 @@ async def agent_update_task(
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_task_done_hooks(session, task)
         await session.commit()
+        # Telegram-Thema auf `✓ …` (nur eigenes Ad-hoc-Thema, nie Projekt/Eltern).
+        from app.services.telegram_topics import handle_task_done
+        await handle_task_done(session, task)
 
     # Auto-trigger: dispatch dependent tasks whose dependencies are now met
     if updates.get("status") == "done":

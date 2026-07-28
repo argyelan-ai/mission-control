@@ -344,6 +344,20 @@ async def lifespan(app: FastAPI):
         )
     except Exception as e:
         logger.error("Jarvis briefing loop failed to schedule: %s", e, exc_info=True)
+
+    # ── Telegram-Themen-Purge (P3.1) ──────────────────────────────────
+    # Taeglicher asyncio-Loop: loescht Telegram-Themen, die seit 30 Tagen
+    # erledigt sind (Task-Threads mit closed_at, abgeschlossene Projekte).
+    # Feature-gated ueber TELEGRAM_TEAM_CHAT_ENABLED — der Tick kehrt sonst
+    # sofort zurueck. Das Allgemein-Thema wird nie angefasst.
+    app.state.telegram_topic_purge_task = None
+    try:
+        app.state.telegram_topic_purge_task = _create_background_task(
+            _telegram_topic_purge_loop(),
+            name="telegram_topic_purge_loop",
+        )
+    except Exception as e:
+        logger.error("Telegram topic purge loop failed to schedule: %s", e, exc_info=True)
     yield
     # Shutdown — stop Telegram + Intelligence + Task Runner + Watchdog.
     # Phase 29 (ADR-039): Gateway RPC lifecycle removed (no socket to drain).
@@ -392,6 +406,13 @@ async def lifespan(app: FastAPI):
         _vault_decay_task.cancel()
         try:
             await _vault_decay_task
+        except (_asyncio.CancelledError, Exception):
+            pass
+    _topic_purge_task = getattr(app.state, "telegram_topic_purge_task", None)
+    if _topic_purge_task is not None and not _topic_purge_task.done():
+        _topic_purge_task.cancel()
+        try:
+            await _topic_purge_task
         except (_asyncio.CancelledError, Exception):
             pass
     await telegram_bot.stop()
@@ -694,6 +715,35 @@ async def _vault_decay_loop() -> None:
             break
         except Exception as e:
             logger.error("vault_decay_loop iteration error: %s", e, exc_info=True)
+
+
+TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS = 24 * 3600
+TELEGRAM_TOPIC_RETENTION_DAYS = 30
+
+
+async def _telegram_topic_purge_loop() -> None:
+    """Taeglicher Purge alter Telegram-Themen (Marks Regel: nach 30 Tagen weg).
+
+    Sleep-first wie die Vault-Loops: nach einem Neustart laeuft nicht sofort ein
+    Purge (Restart-Sturm). Die eigentliche Arbeit steckt in
+    ``telegram_topics.purge_topics_tick`` — dort sitzen Feature-Flag,
+    eigene Session und das Fehler-Schlucken, damit dieser Loop nie stirbt.
+    """
+    from app.services.telegram_topics import purge_topics_tick
+
+    logger.info(
+        "telegram_topic_purge_loop started (interval=%ds, retention=%dd)",
+        TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS, TELEGRAM_TOPIC_RETENTION_DAYS,
+    )
+    while True:
+        try:
+            await asyncio.sleep(TELEGRAM_TOPIC_PURGE_INTERVAL_SECONDS)
+            await purge_topics_tick(older_than_days=TELEGRAM_TOPIC_RETENTION_DAYS)
+        except asyncio.CancelledError:
+            logger.info("telegram_topic_purge_loop cancelled")
+            break
+        except Exception as e:  # pragma: no cover — Tick schluckt bereits alles
+            logger.error("telegram_topic_purge_loop iteration error: %s", e, exc_info=True)
 
 
 app = FastAPI(

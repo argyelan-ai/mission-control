@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -143,6 +144,75 @@ def _is_general_thread(thread: Thread) -> bool:
     return thread.kind == "dm"
 
 
+async def _load_task(session: AsyncSession, task_id) -> Task | None:
+    if task_id is None:
+        return None
+    return (await session.exec(select(Task).where(Task.id == task_id))).one_or_none()
+
+
+async def _load_project(session: AsyncSession, project_id) -> Project | None:
+    if project_id is None:
+        return None
+    return (await session.exec(select(Project).where(Project.id == project_id))).one_or_none()
+
+
+# Ein Subtask-Baum ist flach (Phase -> Task), aber ein kaputter Datenstand koennte
+# zyklisch sein. Die Kette bricht darum hart ab, statt endlos zu laufen.
+_MAX_PARENT_DEPTH = 10
+
+
+async def _resolve_topic_owner(session: AsyncSession, thread: Thread):
+    """Wem gehoert das Thema, in dem dieser Thread redet? (Marks Regeln)
+
+    Kette:
+      1. Gehoert der Task zu einem Projekt -> dem PROJEKT (ein Thema fuer alle
+         seine Tasks).
+      2. Ist es ein Subtask -> dem ELTERNTASK (dessen Thread bzw. dessen Projekt,
+         darum rekursiv).
+      3. Sonst -> dem Thread selbst (Ad-hoc-Task = eigenes Thema).
+
+    Gibt das Objekt zurueck, an dem `telegram_topic_id` haengt: eine `Project`-
+    oder eine `Thread`-Zeile.
+    """
+    task = await _load_task(session, thread.task_id)
+
+    # Projekt-Bezug: am Task (kanonisch) oder am Thread (Side-Thread eines Projekts).
+    project_id = task.project_id if task is not None else None
+    if project_id is None:
+        project_id = thread.project_id
+    project = await _load_project(session, project_id)
+    if project is not None:
+        return project
+
+    # Subtask: das Thema gehoert dem Elterntask.
+    depth = 0
+    while task is not None and task.parent_task_id is not None and depth < _MAX_PARENT_DEPTH:
+        parent = await _load_task(session, task.parent_task_id)
+        if parent is None:
+            break
+        parent_project = await _load_project(session, parent.project_id)
+        if parent_project is not None:
+            return parent_project
+        if parent.parent_task_id is None:
+            parent_thread = (
+                await session.exec(select(Thread).where(Thread.task_id == parent.id))
+            ).first()
+            # Hat der Elterntask (noch) keinen Thread, faellt der Subtask auf sein
+            # eigenes Thema zurueck — besser ein eigenes als gar keins.
+            return parent_thread if parent_thread is not None else thread
+        # Der Elterntask ist selbst Subtask — weiter die Kette hoch.
+        task = parent
+        depth += 1
+
+    return thread
+
+
+async def _topic_title_for_owner(session: AsyncSession, owner) -> str:
+    if isinstance(owner, Project):
+        return _truncate(owner.name)
+    return await _topic_title_for_thread(session, owner)
+
+
 async def _topic_title_for_thread(session: AsyncSession, thread: Thread) -> str:
     """Titel eines Themas: `#<short-id> <Task-Titel>` bzw. Projektname, sonst der
     Thread-Titel. (Es gibt keine fortlaufende Task-Nummer im Schema — die 8-stellige
@@ -169,8 +239,12 @@ async def ensure_topic_for_thread(
 ) -> int | None:
     """Gib das Telegram-Thema dieses Threads zurueck, lege es bei Bedarf an.
 
+    Der Besitzer des Themas folgt Marks Kette (siehe `_resolve_topic_owner`):
+    Projekt-Task -> Projekt-Thema, Subtask -> Thema des Elterntasks, sonst ->
+    eigenes Task-Thema.
+
     Idempotent (ein zweiter Aufruf legt nichts Neues an). Liefert:
-      * die gespeicherte ID, wenn der Thread schon eins hat,
+      * die gespeicherte ID, wenn der Besitzer schon eine hat,
       * GENERAL_TOPIC_ID (0) fuer das Allgemein-Thema (nie via API angelegt),
       * die frisch angelegte ID sonst,
       * None, wenn Telegram (noch) nicht bereit ist (`not a forum`, 429, Fehler) —
@@ -181,7 +255,14 @@ async def ensure_topic_for_thread(
     if _is_general_thread(thread):
         return GENERAL_TOPIC_ID
 
-    title = await _topic_title_for_thread(session, thread)
+    owner = await _resolve_topic_owner(session, thread)
+    if owner.telegram_topic_id is not None:
+        return owner.telegram_topic_id
+
+    owner_id = owner.id  # vor dem Commit festhalten: nach einem Rollback ist das
+    #                      Attribut expired und ein Zugriff loeste Lazy-IO aus.
+    owner_model = type(owner)
+    title = await _topic_title_for_owner(session, owner)
     try:
         topic_id = await client.create_forum_topic(title)
     except TelegramNotAForumError:
@@ -199,83 +280,185 @@ async def ensure_topic_for_thread(
         logger.warning("createForumTopic fuer Thread %s fehlgeschlagen: %s", thread.id, e)
         return None
 
-    thread_id = thread.id  # vor dem Commit festhalten: nach einem Rollback ist das
-    #                        Attribut expired und ein Zugriff loeste Lazy-IO aus.
-    thread.telegram_topic_id = topic_id
-    session.add(thread)
+    owner.telegram_topic_id = topic_id
+    session.add(owner)
     try:
         await session.commit()
     except IntegrityError:
         # Guertel-und-Hosentraeger (P2.2-Review): zwei gleichzeitige Aufrufe fuer
-        # denselben Thread koennen je ein Telegram-Thema anlegen. Scheitert unser
-        # Commit am Unique-Constraint (uq_threads_telegram_topic_id), reissen wir
-        # nicht mit einem 500 ab, sondern lesen den bereits persistierten
-        # (Gewinner-)Wert und verwenden ihn. Ist keiner da (Fremd-Kollision:
-        # dieselbe ID an einem anderen Thread — bei echtem Telegram unmoeglich,
-        # da IDs global eindeutig sind), degradieren wir wie bei „nicht bereit".
+        # denselben Besitzer koennen je ein Telegram-Thema anlegen. Scheitert unser
+        # Commit am Unique-Constraint (uq_threads_telegram_topic_id bzw.
+        # uq_projects_telegram_topic_id), reissen wir nicht mit einem 500 ab,
+        # sondern lesen den bereits persistierten (Gewinner-)Wert und verwenden
+        # ihn. Ist keiner da (Fremd-Kollision: dieselbe ID an einem anderen
+        # Besitzer — bei echtem Telegram unmoeglich, da IDs global eindeutig
+        # sind), degradieren wir wie bei „nicht bereit".
         await session.rollback()
         winner = (
-            await session.exec(select(Thread).where(Thread.id == thread_id))
+            await session.exec(select(owner_model).where(owner_model.id == owner_id))
         ).one().telegram_topic_id
         logger.warning(
-            "createForumTopic-Kollision fuer Thread %s (Thema %s); bestehender Wert=%s",
-            thread_id, topic_id, winner,
+            "createForumTopic-Kollision fuer Besitzer %s (Thema %s); bestehender Wert=%s",
+            owner_id, topic_id, winner,
         )
         return winner
-    await session.refresh(thread)
+    await session.refresh(owner)
     return topic_id
 
 
 async def mark_topic_done(
-    session: AsyncSession, thread: Thread, client: ForumTopicClient
+    session: AsyncSession, owner, client: ForumTopicClient
 ) -> None:
-    """Benenne das Thema zu `✓ …` um (erledigte Aufgabe). No-op fuer Threads ohne
-    eigenes Thema (still gelaufen) und fuer das Allgemein-Thema. Das Haekchen wird
-    nie doppelt gesetzt."""
-    topic_id = thread.telegram_topic_id
+    """Benenne das Thema zu `✓ …` um (erledigte Aufgabe). `owner` ist die Zeile,
+    an der die Themen-ID haengt — ein Thread ODER ein Projekt. No-op fuer Besitzer
+    ohne eigenes Thema (still gelaufen) und fuer das Allgemein-Thema. Das
+    Haekchen wird nie doppelt gesetzt.
+
+    Bewusst besitzer-generisch: WER umbenannt werden darf, entscheidet allein
+    `handle_task_done` (Marks Regel — ein Projekt-Thema laeuft weiter, wenn ein
+    einzelner Task fertig wird). Zwei Orte mit derselben Regel waeren zwei Orte,
+    an denen sie brechen kann."""
+    topic_id = owner.telegram_topic_id
     if topic_id is None or topic_id == GENERAL_TOPIC_ID:
         return
 
-    title = await _topic_title_for_thread(session, thread)
+    title = await _topic_title_for_owner(session, owner)
     base = title[len(_DONE_PREFIX):] if title.startswith(_DONE_PREFIX) else title
     done_title = _truncate(f"{_DONE_PREFIX}{base}")
     try:
         await client.edit_forum_topic(topic_id, done_title)
     except TelegramTopicError as e:
-        logger.warning("editForumTopic fuer Thread %s fehlgeschlagen: %s", thread.id, e)
+        logger.warning(
+            "editForumTopic fuer %s %s fehlgeschlagen: %s", type(owner).__name__, owner.id, e
+        )
+
+
+async def handle_task_done(
+    session: AsyncSession, task: Task, *, client: ForumTopicClient | None = None
+) -> None:
+    """Ein Task ist `done` — kuemmere dich um sein Telegram-Thema.
+
+    Marks Regeln, hier explizit durchgesetzt (nicht bloss als Nebenwirkung der
+    Themen-Aufloesung):
+      * Ad-hoc-Task -> sein EIGENES Thema wird zu `✓ …` umbenannt und der Thread
+        geschlossen (`closed_at`), damit der 30-Tage-Purge ihn spaeter sieht.
+      * Task eines PROJEKTS -> nichts. Das Projekt-Thema traegt alle Tasks des
+        Projekts und laeuft weiter.
+      * SUBTASK -> nichts. Das Thema gehoert dem Elterntask.
+
+    Wirft nie: ein Telegram- oder DB-Fehler darf einen Task-Abschluss nicht
+    kippen. Ist der Team-Chat abgeschaltet, passiert gar nichts.
+    """
+    try:
+        if not getattr(settings, "telegram_team_chat_enabled", False):
+            return
+        if task.thread_id is None:
+            return  # still gelaufen, es gibt keinen Thread
+
+        thread = (
+            await session.exec(select(Thread).where(Thread.id == task.thread_id))
+        ).one_or_none()
+        if thread is None:
+            return
+        if _is_general_thread(thread):
+            return  # Allgemein-Thema wird nie umbenannt
+
+        # DIE Regel: umbenannt wird nur ein Thema, das diesem Task ALLEIN gehoert.
+        # Gehoert es dem Projekt (alle seine Tasks reden dort) oder dem Elterntask
+        # (Subtask), laeuft es weiter — sonst haengt an einem laufenden Projekt
+        # ploetzlich ein ✓, nur weil ein einzelner Task fertig wurde.
+        owner = await _resolve_topic_owner(session, thread)
+        if not isinstance(owner, Thread) or owner.id != thread.id:
+            return
+
+        if client is None:
+            client = TelegramForumClient()
+        await mark_topic_done(session, thread, client)
+
+        if thread.closed_at is None:
+            thread.closed_at = datetime.utcnow()
+            session.add(thread)
+            await session.commit()
+    except Exception as e:  # noqa: BLE001 — nie den Task-Abschluss kippen
+        logger.warning("handle_task_done fuer Task %s fehlgeschlagen: %s", task.id, e)
 
 
 async def purge_old_topics(
     session: AsyncSession, client: ForumTopicClient, older_than_days: int = 30
 ) -> int:
-    """Loesche Themen geschlossener Threads, die aelter als `older_than_days` sind
-    (`deleteForumTopic`), und setze danach `telegram_topic_id` auf NULL. Der
-    Verlauf bleibt im Web vollstaendig. Gibt die Anzahl geloeschter Themen zurueck.
+    """Loesche alte Themen (`deleteForumTopic`) und setze danach
+    `telegram_topic_id` auf NULL. Der Verlauf bleibt im Web vollstaendig. Gibt die
+    Anzahl geloeschter Themen zurueck.
 
-    Ein Loesch-Fehler laesst die ID stehen, damit ein spaeterer Lauf es erneut
-    versucht."""
+    Zwei Quellen:
+      * Task-Threads, die seit mehr als `older_than_days` geschlossen sind
+        (`closed_at`, gesetzt von `handle_task_done`).
+      * Projekte, die seit mehr als `older_than_days` abgeschlossen/archiviert
+        sind — sonst waechst die Themenliste eines langlebigen Chats ewig.
+
+    Das Allgemein-Thema (Sentinel 0) wird nie geloescht. Ein Loesch-Fehler laesst
+    die ID stehen, damit ein spaeterer Lauf es erneut versucht."""
     cutoff = datetime.utcnow() - timedelta(days=older_than_days)
-    stmt = select(Thread).where(
-        Thread.telegram_topic_id.is_not(None),
-        Thread.telegram_topic_id != GENERAL_TOPIC_ID,
-        Thread.closed_at.is_not(None),
-        Thread.closed_at < cutoff,
-    )
-    threads = (await session.exec(stmt)).all()
+    threads = (
+        await session.exec(
+            select(Thread).where(
+                Thread.telegram_topic_id.is_not(None),
+                Thread.telegram_topic_id != GENERAL_TOPIC_ID,
+                Thread.closed_at.is_not(None),
+                Thread.closed_at < cutoff,
+            )
+        )
+    ).all()
+    projects = (
+        await session.exec(
+            select(Project).where(
+                Project.telegram_topic_id.is_not(None),
+                Project.telegram_topic_id != GENERAL_TOPIC_ID,
+                Project.status.in_(("done", "archived")),
+                # `completed_at` schreibt in MC KEIN Code-Pfad (geprueft
+                # 28.07.2026) — ein Projekt wird per PATCH auf `done` gesetzt.
+                # Haengt der Purge allein daran, loescht er nie ein Projekt-Thema.
+                # `updated_at` (onupdate) traegt den Zeitpunkt dieses PATCH.
+                func.coalesce(Project.completed_at, Project.updated_at) < cutoff,
+            )
+        )
+    ).all()
 
     purged = 0
-    for thread in threads:
+    for owner in [*threads, *projects]:
         try:
-            await client.delete_forum_topic(thread.telegram_topic_id)
+            await client.delete_forum_topic(owner.telegram_topic_id)
         except TelegramTopicError as e:
             logger.warning(
-                "deleteForumTopic fuer Thread %s fehlgeschlagen: %s", thread.id, e
+                "deleteForumTopic fuer %s %s fehlgeschlagen: %s",
+                type(owner).__name__, owner.id, e,
             )
             continue
-        thread.telegram_topic_id = None
-        session.add(thread)
+        owner.telegram_topic_id = None
+        session.add(owner)
         purged += 1
 
     if purged:
         await session.commit()
     return purged
+
+
+async def purge_topics_tick(older_than_days: int = 30) -> int:
+    """Ein Purge-Lauf des periodischen Jobs (siehe `_telegram_topic_purge_loop`
+    in main.py). Oeffnet seine eigene Session, respektiert das Feature-Flag und
+    schluckt jeden Fehler — der Job darf nie sterben."""
+    if not getattr(settings, "telegram_team_chat_enabled", False):
+        return 0
+    try:
+        from app.database import engine
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            purged = await purge_old_topics(
+                session, TelegramForumClient(), older_than_days=older_than_days
+            )
+        if purged:
+            logger.info("telegram_topic_purge: %d Themen geloescht", purged)
+        return purged
+    except Exception as e:  # noqa: BLE001 — der periodische Job darf nie sterben
+        logger.warning("telegram_topic_purge fehlgeschlagen: %s", e)
+        return 0
