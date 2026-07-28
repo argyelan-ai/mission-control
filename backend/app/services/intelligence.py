@@ -98,29 +98,43 @@ class IntelligenceService:
     async def _run_loop(self) -> None:
         # Grace period: wait until DB + Redis + other services are ready
         await asyncio.sleep(20)
-        while self._running:
-            try:
-                config = await self._get_config()
-                if not config.enabled:
-                    logger.debug("Intelligence disabled via config — skipping")
-                    await asyncio.sleep(config.interval_seconds)
-                    continue
-                if await self._acquire_lock():
-                    await self._analyze_all()
-                    self._last_analysis_at = utcnow()
-                    self._cycles_total += 1
-                else:
-                    # MEM-05: emit at WARNING (was DEBUG) so multi-worker dedup
-                    # is observable at default log level. The fail-fast itself
-                    # (return False from _acquire_lock + short-circuit here)
-                    # already existed — only visibility changes.
-                    logger.warning("intelligence: lock contention, skipping cycle")
-            except asyncio.CancelledError:
-                return
-            except Exception as e:
-                logger.error("Intelligence analysis error: %s", e)
-            config = await self._get_config()
-            await asyncio.sleep(config.interval_seconds)
+        try:
+            while self._running:
+                # Contention means another instance holds the (possibly stale,
+                # e.g. pre-restart) lock — retry soon instead of going blind
+                # for a full interval. 28.07.: a recreated container skipped
+                # its first cycle on the old container's lock and the page
+                # served an empty cache for the whole window.
+                sleep_s: int | None = None
+                try:
+                    config = await self._get_config()
+                    if not config.enabled:
+                        logger.debug("Intelligence disabled via config — skipping")
+                        await asyncio.sleep(config.interval_seconds)
+                        continue
+                    if await self._acquire_lock():
+                        await self._analyze_all()
+                        self._last_analysis_at = utcnow()
+                        self._cycles_total += 1
+                    else:
+                        # MEM-05: emit at WARNING (was DEBUG) so multi-worker dedup
+                        # is observable at default log level. The fail-fast itself
+                        # (return False from _acquire_lock + short-circuit here)
+                        # already existed — only visibility changes.
+                        logger.warning("intelligence: lock contention, retrying in 60s")
+                        sleep_s = 60
+                except asyncio.CancelledError:
+                    return
+                except Exception as e:
+                    logger.error("Intelligence analysis error: %s", e)
+                if sleep_s is None:
+                    config = await self._get_config()
+                    sleep_s = config.interval_seconds
+                await asyncio.sleep(sleep_s)
+        finally:
+            # A silently dead loop looks identical to "no data yet" from the
+            # outside — make every exit visible.
+            logger.warning("Intelligence loop exited (running=%s)", self._running)
 
     async def _acquire_lock(self) -> bool:
         """Redis lock so only one worker per cycle runs the analysis."""
@@ -564,7 +578,10 @@ class IntelligenceService:
             await redis.set(
                 RedisKeys.intelligence_insights(),
                 json.dumps(insights, default=str),
-                ex=600,  # 10 minute TTL
+                # TTL must outlive one delayed/skipped cycle — with TTL ==
+                # interval any drift opened windows where the API served an
+                # empty cache ("0 completed" flashes on /insights).
+                ex=max(2 * self._interval, 1200),
             )
         except Exception as e:
             logger.warning("Failed to cache insights: %s", e)

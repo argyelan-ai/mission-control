@@ -71,6 +71,6 @@ def test_lock_miss_log_level_is_warning_not_debug():
     if bad:
         pytest.xfail("Plan 02-04: intelligence.py log level not yet flipped to warning")
     # Also enforce that the new WARN message exists once we're past the flip.
-    assert re.search(r'logger\.warning\(\s*["\']intelligence: lock contention, skipping cycle', text), (
-        "expected WARN log 'intelligence: lock contention, skipping cycle' in intelligence.py"
+    assert re.search(r'logger\.warning\(\s*["\']intelligence: lock contention', text), (
+        "expected WARN log 'intelligence: lock contention' in intelligence.py"
     )
