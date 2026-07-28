@@ -132,3 +132,31 @@ def test_registry_entry_is_read_only():
     spec = commands.REGISTRY["thread"]
     assert spec.scope == "tasks:read"
     assert spec.endpoints == ("GET /me/thread",)
+
+
+# ── Discoverability: `mc recover` must point at `mc thread` ───────────────
+# A verb nobody knows about is dead weight. The moment an agent needs to know
+# the thread is re-readable is the moment it recovers, so the pointer lives in
+# the recovery output rather than only in SOUL.md.
+
+def test_recover_points_at_thread(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    payload = {
+        "active": True,
+        "task": {
+            "id": TASK,
+            "title": "Nach dem Crash",
+            "status": "in_progress",
+            "board_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+            "dispatch_attempt_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+            "prompt": "der eigentliche prompt",
+        },
+    }
+    client = _mock_client(payload)
+    rc = commands._cmd_recover(_Args(), client, MagicMock())
+    assert rc == 0
+
+    out = capsys.readouterr().out
+    assert "mc thread" in out
+    # The prompt itself must still be the payload — the pointer is a header line.
+    assert "der eigentliche prompt" in out

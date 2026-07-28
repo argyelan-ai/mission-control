@@ -1817,6 +1817,10 @@ def _cmd_recover(args, client, cfg):
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
     print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
+    # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
+    # auf den Gespraechsverlauf, sonst kennt er das Verb nie.
+    print("# Gespraechsverlauf nachlesen: `mc thread` (read-only, ackt nichts)")
     print()
     print(task["prompt"])
     return 0
