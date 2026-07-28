@@ -338,6 +338,40 @@ silently voiding the least-privilege rule in §5.1. Any Hermes tool here must us
 `~/.hermes/state.db` (287 MB) on restart, and whether the background review is suppressed in
 unattended mode. Both would change the picture and should be checked before any Hermes work.
 
+#### F12 — Parallel work on the same tables, and where the boundary runs ✅ (2026-07-28)
+
+The Telegram team-chat work (PRs #171–#178, all merged to `main`; only the template-only
+PR #181 is open) touched the comm_v2 read path. Coordinated directly with its author. Three
+consequences for this design, each verified here against `origin/main`:
+
+1. ⭐ **The cursor trap is independently confirmed** — and it is worse than "don't ack".
+   `_get_or_create_thread_cursor` (`agents.py:2552`) now returns **`(cursor, created)`**, and
+   `_resolve_agent_threads_with_cursors` returns **`(list, created_any)`** (`:2646`). The
+   reason is a real bug fixed in PR #150: the old code detected fresh cursors via
+   `cursor in session.new`, but any later SELECT in the same request autoflushes the pending
+   insert out of `session.new` — so the cursor creation rolled back, and threads of finished
+   tasks were **re-fast-forwarded on every poll**, losing every message that arrived in
+   between, permanently.
+   → **Anyone building a second read path must carry the `created_any` signal.** Relying on
+   `session.new` reintroduces the bug. Regression cover: `test_message_delivery.py`,
+   `test_inbox_pull.py` — run both.
+
+2. **DM threads now exist and are in scope.** `Thread.kind == "dm"` with `Thread.agent_id`
+   (`agents.py:2534-2541`). Their pair carries **`None` instead of a Task**, deliberately —
+   a DM has no "finished history" to fast-forward past. Any code reading
+   `thread_task.status` must null-guard it (`:2642` already does via `bool(thread_task)`).
+   *Open for this design:* should `mc thread` also read the agent's DM? It is arguably
+   context the agent should be able to look up. Deferred — v1 is task threads.
+
+3. **Boundary agreed.** `scripts/mc-cli/` and `scripts/mc-mcp.py` are untouched by that work
+   → free. `agents.py`'s read path is theirs → **this design must not modify it.**
+
+That third point is a design constraint, not just etiquette, and it happens to be free:
+**`mc thread` reads one task's thread by id** — resolve the task, then `task.thread_id` —
+so it never needs `_message_threads_for_agent` or the cursor helper at all. The new endpoint
+lives in `agent_scoped.py`. Sidestepping that machinery is what makes constraint 🔴 in §5.1
+enforceable rather than merely intended.
+
 #### F9 — comm_v2 is end-to-end at-least-once ✅ (good news, no action)
 
 Verified by hand in `docker/shared/poll.sh`:
@@ -512,6 +546,10 @@ thread (matching `tasks.py` behaviour).
    → `mc thread` must resolve the thread via `task.thread_id` directly and **must not create
    or advance any cursor**. The test asserts on *both* cursor columns **and** on
    cursor-row-count, so an accidental create fails too.
+   ✅ Independently confirmed by the author of the comm_v2 read path — see F12, which also
+   documents the `created_any` signal any *other* read path would have to carry. Resolving
+   by `task.thread_id` avoids that whole machinery, which is precisely why it is the right
+   shape here.
 
 2. **Own tasks only.** The agent may read threads of tasks assigned to it. No fleet-wide
    reading. Least privilege.
