@@ -211,14 +211,18 @@ def build_agent_context(
         # generated from the same single-source registries the L2 docs and
         # their contract tests use (app.agent_doc_constants) — no
         # duplication of the verb list/topic metadata in the template itself.
-        "canonical_verbs": _canonical_verbs(),
+        # Scope-filtered (D-XX, 2026-07-28): a verb only appears if the
+        # agent's effective scopes allow calling its endpoint — mirrors the
+        # _has(scope) pattern _generate_tools_md/tools_md_builder use for
+        # TOOLS.md sections. scopes computed once above and reused here.
+        "canonical_verbs": _canonical_verbs(_get_agent_scopes(agent)),
         "doc_topics": _doc_topics(),
     }
 
 
-def _canonical_verbs() -> dict:
-    from app.agent_doc_constants import CANONICAL_VERBS
-    return CANONICAL_VERBS
+def _canonical_verbs(scopes: list[str] | None = None) -> dict:
+    from app.agent_doc_constants import filter_verbs_by_scopes
+    return filter_verbs_by_scopes(scopes)
 
 
 def _doc_topics() -> dict:
