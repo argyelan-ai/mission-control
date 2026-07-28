@@ -55,7 +55,7 @@ a row drives. Nothing here writes it, and provider + model are never collapsed
 into one row: one model = one runtime row remains the schema.
 
 .. note::
-   Alembic revision ``0167_runtime_display_names`` imports
+   Alembic revision ``0168_runtime_display_names`` imports
    ``derive_runtime_display_name`` (same pattern as ``0152`` importing
    ``app.services.vault_key_migration``) so the historical data fix and the
    live code can never disagree. Keep that function importable.

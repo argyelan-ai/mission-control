@@ -24,7 +24,7 @@ REVISION_PATH = (
     pathlib.Path(__file__).parents[1]
     / "alembic"
     / "versions"
-    / "0167_runtime_display_names.py"
+    / "0168_runtime_display_names.py"
 )
 
 # slug, display_name, endpoint, model_identifier, runtime_type
@@ -138,7 +138,7 @@ def _run_upgrade(engine) -> dict[str, str]:
 
 def test_revision_chains_onto_the_previous_head():
     module = _load_migration()
-    assert module.revision == "0167_runtime_display_names"
+    assert module.revision == "0168_runtime_display_names"
     assert module.down_revision == "0166_thread_telegram_topic_id"
 
 
