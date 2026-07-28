@@ -14,13 +14,16 @@ vi.mock("@/lib/api", () => ({
           { key: "omp", label: "omp" },
         ],
         // Mirrors backend host_harness_catalog() — the HostHarnessAdapter
-        // registry, including `claude` (NOT a singleton) which the wizard's
-        // old hardcoded list omitted entirely.
+        // registry. The wizard's old hardcoded list had only the first three:
+        // claude/openclaude/omp were missing, so those CLI types could not be
+        // created as host agents at all.
         host_harnesses: [
           { key: "hermes", label: "Hermes", protocol: "openai", singleton: true, singleton_slug: "hermes", supports_bootstrap: true },
           { key: "grok", label: "Grok Build", protocol: "grok", singleton: true, singleton_slug: "grok", supports_bootstrap: true },
           { key: "kimi", label: "Kimi Code", protocol: "kimi", singleton: true, singleton_slug: "kimi", supports_bootstrap: true },
           { key: "claude", label: "Claude Code", protocol: "anthropic", singleton: false, singleton_slug: null, supports_bootstrap: false },
+          { key: "openclaude", label: "OpenClaude", protocol: "openai", singleton: false, singleton_slug: null, supports_bootstrap: false },
+          { key: "omp", label: "omp", protocol: "openai", singleton: false, singleton_slug: null, supports_bootstrap: false },
         ],
         runtimes: [
           { slug: "vllm-a", display_name: "vLLM A", protocol: "openai", compatible_harnesses: ["openclaude", "omp"], reasons: { claude: "nur Anthropic" } },
@@ -81,9 +84,12 @@ describe("RuntimeStep", () => {
     const state = { ...initialWizardState(null), agentRuntime: "host" as const };
     wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
     await waitFor(() => screen.getByText("Grok Build"));
+    // The host picker must render host_harnesses, not the cli-bridge list.
+    // Hermes/Grok are the tell: they are host-only bridges and appear in no
+    // cli-bridge list. (Until 2026-07-28 this test used OpenClaude's ABSENCE
+    // as the tell — openclaude/omp now legitimately exist in both worlds, so
+    // absence is no longer the right signal; host-only presence is.)
     expect(screen.getByText("Hermes")).toBeTruthy();
-    // cli-bridge-only harnesses must NOT appear for host.
-    expect(screen.queryByText("OpenClaude")).toBeNull();
     fireEvent.click(screen.getByText("Grok Build"));
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ harness: "grok" }));
   });
@@ -163,6 +169,45 @@ describe("RuntimeStep", () => {
     fireEvent.click(claudeBtn);
     expect(update).toHaveBeenCalledWith(expect.objectContaining({ harness: "claude" }));
   });
+
+  it.each(["OpenClaude", "omp"])(
+    "offers '%s' as a host harness so every CLI type exists in both worlds",
+    async (label) => {
+      // Mark's requirement: any CLI type must be creatable as a container AND
+      // as a host agent. Backend invariant: HARNESSES ⊆ HOST_ADAPTERS.
+      const update = vi.fn();
+      const state = { ...initialWizardState(null), agentRuntime: "host" as const };
+      wrap(<RuntimeStep state={state} update={update} boards={[]} goNext={() => {}} goBack={() => {}} />);
+      await waitFor(() => screen.getByText("Grok Build"));
+      const btn = screen.getByText(label).closest("button") as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+      fireEvent.click(btn);
+      expect(update).toHaveBeenCalledWith(
+        expect.objectContaining({ harness: label === "omp" ? "omp" : "openclaude" }),
+      );
+    },
+  );
+
+  it.each(["OpenClaude", "omp"])(
+    "host+%s: openai providers selectable, anthropic not",
+    async (label) => {
+      const harness = label === "omp" ? "omp" : "openclaude";
+      const state = {
+        ...initialWizardState(null),
+        agentRuntime: "host" as const,
+        harness: harness as "omp" | "openclaude",
+      };
+      wrap(<RuntimeStep state={state} update={() => {}} boards={[]} goNext={() => {}} goBack={() => {}} />);
+      await waitFor(() => screen.getByText("vLLM A"));
+      // openai protocol → the vLLM provider is bindable...
+      expect((screen.getByText("vLLM A").closest("button") as HTMLButtonElement).disabled).toBe(false);
+      // ...anthropic and the protocol-fixed grok cloud are not.
+      expect((screen.getByText("Claude Cloud").closest("button") as HTMLButtonElement).disabled).toBe(true);
+      expect(
+        (screen.getByText("Grok Build (xAI Cloud)").closest("button") as HTMLButtonElement).disabled,
+      ).toBe(true);
+    },
+  );
 
   it("filters providers by the protocol the registry ships with the host harness", async () => {
     // No local protocol map any more: claude → anthropic comes from

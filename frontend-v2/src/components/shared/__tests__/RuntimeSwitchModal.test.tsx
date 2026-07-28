@@ -494,10 +494,10 @@ describe("RuntimeSwitchModal", () => {
       vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
       const agent = mkAgent({
         agent_runtime: "host",
-        harness: "openclaude" as Agent["harness"],
+        harness: "openclaw" as Agent["harness"],
         runtime_switchable: false,
         runtime_switch_blocked_reason:
-          "Host agent with harness 'openclaude' has no host adapter.",
+          "Host agent with harness 'openclaw' has no host adapter.",
       });
       renderWithQuery(
         <RuntimeSwitchModal

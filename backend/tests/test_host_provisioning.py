@@ -515,3 +515,123 @@ def test_teardown_refuses_to_delete_agents_root(home_host, monkeypatch):
 
     # Sibling agent dir must be untouched.
     assert (agents_root / "boss").exists()
+
+
+# ── omp host harness: models.yml (2026-07-28) ─────────────────────────────
+#
+# omp joined HOST_ADAPTERS so it can be created as a host agent and switched
+# like any other. Unlike openclaude it does NOT resolve a served model from
+# OPENAI_BASE_URL — docker/omp-bridge/entrypoint.sh §2 calls its models.yml
+# mandatory and renders it there from exactly these env vars. The host path
+# has no entrypoint, so staging renders the same file into a PER-AGENT omp
+# profile. Without this, a staged omp host agent boots against whatever
+# ~/.omp config the operator happens to have and silently ignores the runtime
+# bound in MC.
+
+
+@pytest.mark.asyncio
+async def test_stage_omp_host_agent_renders_models_yml(home_host, async_session, monkeypatch):
+    async def _fake_env(runtime, session):
+        return {
+            "OPENAI_BASE_URL": "http://192.0.2.9:8000/v1",
+            "OPENAI_MODEL": "qwen-coder",
+            "OMP_CONTEXT_WINDOW": "131072",
+            "OMP_MAX_TOKENS": "32768",
+        }
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+
+    rt = Runtime(
+        slug="omp-rt", display_name="omp RT", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.9:8000/v1", model_identifier="qwen-coder", enabled=True,
+    )
+    agent = Agent(name="Omp Host", agent_runtime="host", harness="omp")
+
+    result = await hp.stage_host_agent_files(agent, rt, "tok-omp", session=async_session)
+
+    assert result.omp_models_path, "omp host agent must get a models.yml"
+    models = open(result.omp_models_path).read()
+    # Provider + model come from the runtime binding, not from a baked default.
+    assert "baseUrl: http://192.0.2.9:8000/v1" in models
+    assert "- id: qwen-coder" in models
+    assert "contextWindow: 131072" in models
+    assert "auth: none" in models  # keyless local vLLM
+    # 0600: an apiKey can be rendered inline for keyed endpoints.
+    assert (os.stat(result.omp_models_path).st_mode & 0o777) == 0o600
+
+    # OMP_PROFILE must be in agent.env — run.sh exports it, and WITHOUT it omp
+    # reads a different models.yml than the one just rendered.
+    env_txt = open(result.env_path).read()
+    assert f"OMP_PROFILE='{hp.omp_host_profile(result.slug)}'" in env_txt
+    # ...and the rendered file must sit in exactly that profile.
+    assert f"/.omp/profiles/{hp.omp_host_profile(result.slug)}/agent/models.yml" in result.omp_models_path
+
+
+@pytest.mark.asyncio
+async def test_stage_omp_uses_a_per_agent_profile_never_the_operator_default(
+    home_host, async_session, monkeypatch
+):
+    """Two omp host agents must not share a models.yml, and neither may touch
+    the operator's own default omp profile."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1", "OPENAI_MODEL": "m"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    rt = Runtime(slug="r", display_name="r", runtime_type="lmstudio",
+                 endpoint="http://x/v1", model_identifier="m", enabled=True)
+
+    a = await hp.stage_host_agent_files(
+        Agent(name="Omp One", agent_runtime="host", harness="omp"), rt, "t1", session=async_session)
+    b = await hp.stage_host_agent_files(
+        Agent(name="Omp Two", agent_runtime="host", harness="omp"), rt, "t2", session=async_session)
+
+    assert a.omp_models_path != b.omp_models_path
+    profiles = home_host / ".omp" / "profiles"
+    assert sorted(p.name for p in profiles.iterdir()) == ["mc-omp-one", "mc-omp-two"]
+    # The bare default profile is never created by MC.
+    assert not (profiles / "default").exists()
+
+
+@pytest.mark.asyncio
+async def test_stage_openclaude_host_agent_gets_no_models_yml(
+    home_host, async_session, monkeypatch
+):
+    """Counter-case, so the omp branch cannot silently become unconditional:
+    openclaude reads OPENAI_* straight from the exported env."""
+    async def _fake_env(runtime, session):
+        return {"OPENAI_BASE_URL": "http://x/v1", "OPENAI_MODEL": "m"}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    rt = Runtime(slug="r2", display_name="r2", runtime_type="lmstudio",
+                 endpoint="http://x/v1", model_identifier="m", enabled=True)
+
+    result = await hp.stage_host_agent_files(
+        Agent(name="OC Host", agent_runtime="host", harness="openclaude"),
+        rt, "t", session=async_session,
+    )
+    assert result.omp_models_path is None
+    assert not (home_host / ".omp").exists()
+    assert "OMP_PROFILE" not in open(result.env_path).read()
+
+
+@pytest.mark.asyncio
+async def test_stage_omp_without_a_usable_binding_skips_models_yml(
+    home_host, async_session, monkeypatch
+):
+    """ADR-054's "no baked-in defaults": with no endpoint/model we must NOT
+    write a models.yml full of guesses — a stale/invented model is the exact
+    drift bug this render exists to prevent."""
+    async def _fake_env(runtime, session):
+        return {}
+
+    monkeypatch.setattr(hp, "build_runtime_env", _fake_env)
+    rt = Runtime(slug="r3", display_name="r3", runtime_type="lmstudio",
+                 endpoint="http://x/v1", model_identifier=None, enabled=True)
+
+    result = await hp.stage_host_agent_files(
+        Agent(name="Omp Bare", agent_runtime="host", harness="omp"),
+        rt, "t", session=async_session,
+    )
+    assert result.omp_models_path is None
+    # Staging itself still succeeds — the agent exists, just unbound.
+    assert os.path.isfile(result.env_path)

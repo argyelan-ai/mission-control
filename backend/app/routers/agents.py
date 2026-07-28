@@ -1852,25 +1852,42 @@ async def provision_agent_on_gateway(
             # 2026-07-25); it has no bespoke bootstrap, and wizard-created
             # claude host agents must keep using the generic
             # stage_host_agent_files path below. Skipping the adapter here
-            # preserves that pre-existing behavior exactly.
+            # preserves that pre-existing behavior exactly — and now equally for
+            # openclaude/omp, which joined HOST_ADAPTERS for wizard visibility +
+            # runtime switching but are likewise generic-staged.
             if adapter is not None and not getattr(adapter, "supports_bootstrap", True):
                 adapter = None
             if adapter is not None:
-                # Singleton host bridges (hermes/grok) hardcode their config dir
-                # + plist to one slug — provisioning onto a different agent would
-                # overwrite the real singleton's agent.env with a foreign token
-                # (2026-07-12: creating "Dev" with harness=hermes clobbered the
-                # live Hermes). Reject with a clear 422 before any file is touched.
+                # Singleton host bridges (hermes/grok/kimi) hardcode their config
+                # dir + plist to one slug — provisioning onto a different agent
+                # would overwrite the real singleton's agent.env with a foreign
+                # token (2026-07-12: creating "Dev" with harness=hermes clobbered
+                # the live Hermes). Reject with a clear 422 before any file is
+                # touched. The alternatives named below are computed from the
+                # registry, not hardcoded: the previous text pointed at
+                # "openclaude or omp" back when those were the only non-registry
+                # host harnesses — they are registered adapters now, so a stale
+                # literal would have sent the operator somewhere else than the
+                # wizard actually offers.
                 singleton = getattr(adapter, "singleton_slug", None)
                 agent_slug = (agent.slug or agent.name or "").lower().replace(" ", "-")
                 if singleton and agent_slug != singleton:
+                    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+                    generic = ", ".join(
+                        sorted(
+                            key
+                            for key, a in HOST_ADAPTERS.items()
+                            if getattr(a, "singleton_slug", None) is None
+                        )
+                    )
                     raise HTTPException(
                         status_code=422,
                         detail=(
-                            f"Der Harness '{harness}' ist eine Singleton-Host-Bridge "
-                            f"(fest an den Agent '{singleton}' gebunden) und kann nicht "
-                            f"auf '{agent.name}' provisioniert werden. Für einen generischen "
-                            f"Host-Agent 'openclaude' oder 'omp' als Harness wählen."
+                            f"Harness '{harness}' is a singleton host bridge, pinned "
+                            f"to the agent '{singleton}', and cannot be provisioned "
+                            f"onto '{agent.name}'. For a generic host agent pick one "
+                            f"of these harnesses instead: {generic}."
                         ),
                     )
                 if not is_compatible(harness, runtime):

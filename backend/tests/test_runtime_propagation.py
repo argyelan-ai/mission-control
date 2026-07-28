@@ -43,18 +43,32 @@ def _fake_get_redis(fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_mark_agents_flags_cli_bridge_only(async_session):
+async def test_mark_agents_flags_cli_bridge_and_adapter_backed_hosts(async_session):
+    """cli-bridge always; host agents only when their harness has an adapter.
+
+    Rewritten 2026-07-28 (was `..._flags_cli_bridge_only`): a host agent whose
+    harness owns a HostHarnessAdapter must follow a model change too — its
+    agent.env is rewritten by sync_host_agent_model exactly like a container's
+    .env. Here the NULL-harness host agent derives "openclaude" from this
+    openai-protocol runtime, which is a registered host harness, so it is
+    correctly flagged. Only a harness with no adapter at all stays untouched.
+    """
     rt = await _mk_rt(async_session)
     cli = await _mk_agent(async_session, rt, name="CliAgent")
     host = await _mk_agent(async_session, rt, name="HostAgent", agent_runtime="host")
+    # "openclaw" = retired Phase-29 gateway runtime (ADR-039): never adaptable.
+    adapterless = await _mk_agent(async_session, rt, name="LegacyHost",
+                                  agent_runtime="host", harness="openclaw")
 
     flagged = await rp.mark_agents_for_sync(async_session, rt)
 
     await async_session.refresh(cli)
     await async_session.refresh(host)
-    assert flagged == 1
+    await async_session.refresh(adapterless)
+    assert flagged == 2
     assert cli.pending_runtime_sync is True
-    assert host.pending_runtime_sync is False
+    assert host.pending_runtime_sync is True
+    assert adapterless.pending_runtime_sync is False
 
 
 @pytest.mark.asyncio

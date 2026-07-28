@@ -38,7 +38,13 @@ from app.services.host_harness_adapter import (
 # A harness that must never be in HOST_ADAPTERS — the "adapter-less host"
 # control case. Asserted rather than assumed, so this file fails loudly if
 # someone ever registers it instead of silently testing nothing.
-ADAPTERLESS_HARNESS = "openclaude"
+#
+# "openclaw" is the retired Phase-29 gateway runtime (ADR-039): it cannot come
+# back, which makes it the stable stand-in for "a host agent carrying a legacy
+# harness value nothing can manage". It deliberately is NOT a current harness —
+# openclaude/omp were used here until 2026-07-28, when they gained adapters so
+# every CLI type exists in both worlds.
+ADAPTERLESS_HARNESS = "openclaw"
 
 
 def _agent(**kwargs) -> Agent:

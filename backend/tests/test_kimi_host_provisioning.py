@@ -138,5 +138,9 @@ async def test_kimi_singleton_guard_rejects_foreign_slug(
     with _patch_redis(fake_redis):
         resp = await auth_client.post(f"/api/v1/agents/{agent.id}/provision")
     assert resp.status_code == 422
-    assert "Singleton" in resp.json()["detail"]
+    detail = resp.json()["detail"]
+    # Message moved to English on 2026-07-28 (MC is English-only) and now names
+    # the generic alternatives from the registry instead of a stale literal.
+    assert "singleton host bridge" in detail
+    assert "'kimi'" in detail
     assert not (tmp_path / ".mc" / "agents" / "kimi" / "agent.env").exists()
