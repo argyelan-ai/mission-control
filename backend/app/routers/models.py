@@ -11,7 +11,6 @@ Combines:
 2. Usage statistics from MC (which agents use which model)
 """
 
-import re
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -22,7 +21,7 @@ from app.auth import Role, require_role, require_user
 from app.database import get_session
 from app.models.agent import Agent
 from app.models.runtime import Runtime
-from app.services import model_catalog
+from app.services import model_catalog, runtime_naming
 
 router = APIRouter(prefix="/api/v1", tags=["models"])
 
@@ -429,19 +428,16 @@ class CatalogBindBody(BaseModel):
     display_name: str | None = Field(default=None, max_length=128)
 
 
-_SLUG_SANITIZE = re.compile(r"[^a-z0-9]+")
+#: Slug rule — re-exported from services/runtime_naming so the bind, the seeder
+#: and the historical data fix (migration 0167) all use ONE implementation.
+#: Kept under the old private name because it is referenced by tests and reads
+#: naturally at the call site below.
+_derive_slug = runtime_naming.derive_slug
 
 
-def _derive_slug(prefix: str, model_id: str) -> str:
-    """``claude-opus-5`` under the anthropic provider → ``anthropic-claude-opus-5``.
-
-    The prefix is skipped when the model id already starts with it, so
-    ``grok-4.5`` stays ``grok-4-5`` instead of becoming ``grok-grok-4-5``.
-    """
-    base = _SLUG_SANITIZE.sub("-", model_id.lower()).strip("-")
-    prefix = _SLUG_SANITIZE.sub("-", prefix.lower()).strip("-")
-    slug = base if (prefix and base.startswith(prefix)) else f"{prefix}-{base}"
-    return slug.strip("-")[:64]
+def _same_endpoint(a: str | None, b: str | None) -> bool:
+    """Endpoint equality for the dedupe guard — trailing slash / case agnostic."""
+    return (a or "").rstrip("/").lower() == (b or "").rstrip("/").lower()
 
 
 @router.post("/models/catalog/bind", status_code=201)
@@ -489,16 +485,38 @@ async def bind_catalog_model(
             ),
         )
 
-    prefix = target.protocol if target.protocol != "openai" else template.slug
+    # Naming goes through services/runtime_naming — the SAME rule the seeder and
+    # migration 0167 use, so "bind claude-opus-5" and "seed claude-opus-5"
+    # cannot end up with two different labels for one model.
+    provider = runtime_naming.resolve_provider(template.endpoint, protocol=target.protocol)
+    fallback_prefix = target.protocol if target.protocol != "openai" else template.slug
+    prefix = provider.slug_prefix if provider else fallback_prefix
     slug = body.slug or _derive_slug(prefix, body.model_id)
+    # Never the raw model id as a label, and never a hand-typed version: the
+    # name is built from body.model_id plus the provider label, nothing else.
+    display_name = body.display_name or runtime_naming.derive_display_name(
+        body.model_id, provider
+    )
 
-    # Idempotency: a row that already points at exactly this model on this
-    # provider is a no-op (200-style success), while a slug that means something
-    # ELSE is a genuine conflict the operator must resolve.
+    # Dedupe guard: the identity of a bound runtime is (endpoint, model) — the
+    # slug is just a handle. A row already driving this model at this endpoint
+    # is returned as-is (idempotent), whatever it happens to be called. Without
+    # this, binding `claude-opus-4-8` next to the seeded `anthropic-claude-opus`
+    # (same endpoint, same model, different slug) would silently create the
+    # second row that made the registry look duplicated in the first place.
+    twins = (
+        await session.exec(
+            select(Runtime).where(Runtime.model_identifier == body.model_id)
+        )
+    ).all()
+    for twin in twins:
+        if _same_endpoint(twin.endpoint, template.endpoint):
+            return {"slug": twin.slug, "created": False, "runtime": twin.model_dump()}
+
+    # A slug that means something ELSE is a genuine conflict the operator must
+    # resolve (the same-model case was already handled above).
     existing = (await session.exec(select(Runtime).where(Runtime.slug == slug))).first()
     if existing is not None:
-        if existing.model_identifier == body.model_id:
-            return {"slug": existing.slug, "created": False, "runtime": existing.model_dump()}
         raise HTTPException(
             status_code=409,
             detail=(
@@ -509,7 +527,7 @@ async def bind_catalog_model(
 
     create = RuntimeCreate(
         slug=slug,
-        display_name=body.display_name or body.model_id,
+        display_name=display_name,
         runtime_type=template.runtime_type,
         endpoint=template.endpoint,
         healthcheck_path=template.healthcheck_path,
