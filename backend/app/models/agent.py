@@ -197,7 +197,7 @@ class Agent(SQLModel, table=True):
     )
 
     # Context-economy Stage 2 (Migration 0151): per-agent opt-in for the L1
-    # Operating Card (backend/templates/CARD.md.j2, <=5KB) as a replacement
+    # Operating Card (backend/templates/CARD.md.j2, <=5.5KB) as a replacement
     # for the full SOUL.md --append-system-prompt. False by default — the
     # pilot (Sparky) is flipped via DB at deploy time, not by app code.
     # docker_agent_sync writes/removes claude-config/CARD.md based on this

@@ -16,7 +16,7 @@ set -eu
 CONFIG_DIR="$HOME/.mc/agents/boss-host/claude-config"
 CARD_FILE="$CONFIG_DIR/CARD.md"
 SOUL_FILE="$CONFIG_DIR/SOUL.md"
-# Context-Economy Stufe 2: CARD.md (<=5KB) ersetzt SOUL.md (~29KB) als
+# Context-Economy Stufe 2: CARD.md (<=5.5KB) ersetzt SOUL.md (~29KB) als
 # --append-system-prompt, aber nur fuer Agenten mit gesetztem Opt-in-Flag
 # (docker_agent_sync.write_operating_card schreibt/loescht die Datei je nach
 # agent.use_operating_card). -s statt -f: eine LEERE CARD.md (0 Byte) muss

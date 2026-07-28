@@ -24,6 +24,12 @@ you must never skip.
    never repeat the same failing call, never wait in silence.
 6. **Deliverables only under `/deliverables/<task_id>/`.** Any other path
    is invisible to {{ operator_name }} and to the memory system.
+{%- if comm_v2 %}
+7. **Every `mc inbox` ends with `mc msg`.** Reply to every message, not only
+   questions: {{ operator_name }} reads the thread, your screen output is
+   invisible to him. Then judge what changes — course correction → switch now,
+   don't finish discarded work; message on a finished task → pick it back up.
+{%- endif %}
 
 ## Forbidden
 
