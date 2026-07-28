@@ -33,13 +33,27 @@ This document records:
 > re-checked. Nothing here is inferred from memory or assumption — where something could
 > not be verified, it says so.
 
+> **Base note (2026-07-28, second pass).** The branch was originally cut from a *local*
+> `main` that was 54 commits behind `origin/main` — comm_v2 was not in it at all, so none
+> of the thread code referenced below existed on the working base. The branch has since been
+> rebased onto `origin/main` (`5a63c678`) and **every `file:line` in §2 was re-checked against
+> that base**. `tasks.py:2632` is exact; `mc ask` / `mc msg` are at `agent_scoped.py:1346` /
+> `:1480` (the §2 draft said `:1352` / `:1480`, a 6-line drift from the `feat/ui-redesign-v3`
+> analysis base).
+
 ---
 
 ## 1. Problem in one line
 
 An MC agent's working context lives **only in the RAM of a running TUI process**. Every
 restart path throws it away, the recovery that follows differs per harness, and the agent
-has **no way to read back its own conversation** — so it cannot rebuild what it lost.
+has **no way to read back its own conversation** — so it can recover *the task* but not
+*the reasoning*.
+
+> Sharpened after F10. The first draft said "cannot rebuild what it lost", which is wrong:
+> `mc recover` rebuilds the task and has since ADR-024. The gap is narrower and more
+> specific — the thread, the agent's own richest record, is operator-readable and
+> agent-invisible.
 
 ---
 
@@ -202,7 +216,33 @@ optional sections until it fits. The pasted prompt is a *budget-capped continue 
 → **Redundancy worth cleaning up, not an active bug.** Note that the `CLAUDE.local.md` rule
 predates the budget system and should be re-worded when this is touched.
 
-#### F8 — `TaskCheckpoint` is dormant, and `get_last_checkpoint` is likely dead ⚠️
+#### F8 — `TaskCheckpoint` is dormant, and `get_last_checkpoint` is dead ✅ (resolved 2026-07-28)
+
+> **Resolved — open question §8.1 is closed.** Migration 0082
+> (`0082_deprecate_checkpoint_comments.py`) is a one-shot data backfill:
+> `UPDATE task_comments SET comment_type='progress' WHERE comment_type='checkpoint'`, with a
+> deliberately irreversible no-op `downgrade()`. The *why* is **ADR-020 §A4**: three parallel
+> progress-tracking systems (`TaskCheckpoint`, `comment_type='checkpoint'`,
+> `TaskChecklistItem`) with overlapping semantics were consolidated onto `TaskChecklistItem`
+> — 163 real usages vs. 8 for `TaskCheckpoint`.
+>
+> `get_last_checkpoint` (`task_context_builder.py:809`) has **zero call sites** repo-wide.
+> The only non-definition reference is an unused `# noqa: F401` re-export shim
+> (`dispatch.py:587`). And even if called it would always return `None` on any migrated DB.
+> **Verdict: delete it plus the shim entry. Do not revive.** `build_recovery_context` is its
+> documented replacement.
+>
+> Caveat worth knowing: `"checkpoint"` is *still* an accepted API value
+> (`comment_types.py:19`) — 0082 added no CHECK constraint — so an agent could write a *new*
+> checkpoint-typed comment today. Four consumers tolerate the value via `.in_([...])`
+> alongside `"progress"`; none require it.
+>
+> Also surfaced: two ADR-020 rollout steps were never executed — delete `POST /checkpoint`
+> after 2 releases (still a 410 shim at `agent_task_status.py:2473`) and `DROP TABLE
+> task_checkpoints` after 3 weeks (still there, still read by a live `GET`). **Out of scope
+> here** — but it is a real loose end someone should pick up.
+
+Original finding, kept for the record:
 
 - `models/checkpoint.py` (`state_summary`, `context_data`) — migration 0082 moved
   checkpoints to `progress` comments; `POST /checkpoint` returns **410**;
@@ -215,6 +255,36 @@ predates the budget system and should be re-worded when this is touched.
 > `mc checkpoint` writing `comment_type="checkpoint"` as an elegant way to bring the dead
 > path back to life. That would **re-split what migration 0082 deliberately merged**.
 > Before going that way, read 0082 and find out *why* it merged them.
+
+#### F10 — ⭐ `mc recover` already exists, and SOUL already mandates it ✅ (2026-07-28, corrects §1)
+
+**This finding removes roughly half of what §5 originally proposed to build.** It was missed
+in the first pass because the analysis searched for *session* resume (`--continue`,
+`--resume`) and found nothing — but MC's answer to "where was I?" was never a session flag.
+It is a CLI verb, and it has been shipped since ADR-024:
+
+| Piece | Location | State |
+|---|---|---|
+| Endpoint | `agents.py:3056` `GET /agent/me/active-task-recovery` | live, read-only, mutates no status, Redis-rate-limited 1/30 s per task |
+| CLI verb | `commands.py:1665` `_cmd_recover`, registry `:2378` | live — prints the prompt, writes `/tmp/mc-context.env` with a fresh `dispatch_attempt_id` |
+| SOUL rule | `SOUL.md.j2:79` and `:2935` ("Startup Check — `mc recover` first (ADR-024)") | live, instructs *every* agent to run it after a restart |
+| poll.sh fallback | `poll.sh:404,418` | live — calls the same endpoint if the agent doesn't |
+
+So the capability, the instruction, and the automatic fallback all already exist. §1's
+"the agent has no way to rebuild what it lost" is **too strong**: it can rebuild *the task*.
+What it still cannot rebuild is *the conversation* (F3) — and that part stands unchanged.
+
+Three real gaps remain behind this:
+
+1. **Hermes cannot execute the SOUL rule at all.** It is MCP-only; `scripts/mc-mcp.py`
+   exposes 17 `mc_*` tools (`mc_inbox`, `mc_tasks`, …) and **`mc_recover` is not among
+   them**. The SOUL instruction is literally unexecutable for it. Grok has shell `mc`
+   (PR #150) so it inherits the verb — nothing verifies it ever runs it.
+2. **`mc recover` returns the full budget-capped dispatch prompt** (up to 4000 chars),
+   not the compact spine §5.2 wanted — and it is precisely one half of the F7 double
+   injection.
+3. **Nobody has ever measured whether agents actually run it.** Unchanged, and now the
+   single most valuable thing to build.
 
 #### F9 — comm_v2 is end-to-end at-least-once ✅ (good news, no action)
 
@@ -334,6 +404,22 @@ Independently valuable even if Stages 2–3 never happen.
 
 **Risk: none.** Purely additive capability.
 
+> **Scope correction, 2026-07-28 (second pass).** F10 removed the largest item in this
+> stage: `mc resume` was going to duplicate `mc recover`, which already exists and is
+> already mandated by SOUL. What remains:
+>
+> | # | Item | Why it survives |
+> |---|---|---|
+> | 5.1 | `GET /agent/me/thread` → `mc thread` | the genuine gap (F3) — nothing reads a thread agent-side |
+> | 5.4 | `mc_recover` + `mc_thread` MCP tools for Hermes | Hermes is ordered by its SOUL to run a command it cannot run |
+> | 5.2 | `mc recover --brief` | refinement of the existing verb, not a new one |
+> | 5.3 | MEMORY.md pointer | unchanged (F6) |
+> | 5.5 | JSONL rotation | unchanged (F2), independent |
+> | — | delete `get_last_checkpoint` + its `noqa: F401` shim | §8.1 closed: dead code, zero callers |
+>
+> Smaller, sharper, and one item (Hermes) turned out to be a live defect rather than an
+> enhancement.
+
 ### 5.1 `GET /agent/me/thread` → `mc thread`
 
 New endpoint in `backend/app/routers/agent_scoped.py`. Mirrors the semantics of
@@ -341,10 +427,12 @@ New endpoint in `backend/app/routers/agent_scoped.py`. Mirrors the semantics of
 
 | Param | Type | Meaning |
 |---|---|---|
-| `task_id` | uuid, optional | defaults to the agent's current task |
+| `task_id` | uuid, optional | explicit override; omitted → resolved per §8.2 |
 | `limit` | int, 1–200, default 50 | page size |
 | `before_seq` | int, optional | backward pagination (older) |
 | `since_seq` | int, optional | forward delta |
+
+`since_seq` and `before_seq` are mutually exclusive → 400, mirroring `tasks.py:2659-2663`.
 
 Response: ascending `seq` order, `has_more_before` flag, same shape as the user endpoint.
 A task with no thread reads as an **empty page**, never 404, and **never creates** the
@@ -352,36 +440,45 @@ thread (matching `tasks.py` behaviour).
 
 **Two hard constraints:**
 
-1. 🔴 **Reading must NOT touch the ack cursor.** This is the one real trap in Stage 1.
+1. 🔴 **Reading must NOT touch the ack cursor — and the trap is wider than it looks.**
    If reading acked, an agent rebuilding its context after a restart would **swallow its own
    undelivered mail** — and comm_v2 would lose the at-least-once guarantee F9 just
    confirmed intact.
    **Rule: `mc inbox` acks (consume). `mc thread` never acks (look up).**
-   This belongs in the test suite as an explicit assertion, not as a code comment.
+
+   ⚠️ **Verified 2026-07-28, and this is the part that would have bitten:** the obvious
+   helper to reuse, `_resolve_agent_threads_with_cursors` (`agents.py:2619`), is **not
+   read-only**. It *creates* `AgentThreadCursor` rows on first sight and **fast-forwards them
+   past all history** for tasks in `done`/`failed` (Befund C, live pilot 2026-07-20). A
+   `mc thread` built on it would silently skip messages on a re-opened task.
+   → `mc thread` must resolve the thread via `task.thread_id` directly and **must not create
+   or advance any cursor**. The test asserts on *both* cursor columns **and** on
+   cursor-row-count, so an accidental create fails too.
 
 2. **Own tasks only.** The agent may read threads of tasks assigned to it. No fleet-wide
    reading. Least privilege.
 
-### 5.2 `GET /agent/me/resume` → `mc resume [task]`
+### 5.2 ~~`GET /agent/me/resume` → `mc resume [task]`~~ — **cancelled, see F10**
 
-Compact re-entry spine, ~600–800 chars. Read-only — **mutates no status** (same discipline
-as `/me/active-task-recovery`, which was deliberately made read-only per ADR-024 to avoid
-dispatch-loop risk).
+**Do not build this.** `mc recover` (ADR-024) already occupies this slot: same read-only
+discipline, same "where was I" job, already wired into SOUL and poll.sh. A second verb next
+to it would be a second lifecycle for one concept — exactly what
+`feedback_no_second_lifecycle` warns against, and agents would have to be taught which of
+two near-identical commands to reach for.
 
-Contents:
+What survives from this section is a **refinement of the existing verb**, and it is small:
 
-- Task ID / title / status
-- Checklist with a `← CONTINUE HERE` marker (reuse `build_recovery_context`'s existing
-  marker logic, `task_context_builder.py:883-951`)
-- Workspace path + short `git` state
-- Last ~5 thread events as one-liners
-- An explicit pointer: *"full history: `mc thread`"*
+- `mc recover --brief` — the ~600–800 char spine (status · checklist with
+  `← HIER WEITERMACHEN` · workspace · last 5 thread lines · pointer to `mc thread`) instead
+  of the full budget-capped dispatch prompt. `build_recovery_context`
+  (`task_context_builder.py:883-951`) already produces the checklist-with-marker and the
+  workspace hint, so this is composition, not new logic.
+- Whether it becomes the *default* is a **Stage 2** question, because that is the same
+  change as retiring the F7 double injection — and it should be made with the measurement
+  in hand, not before.
 
-Deliberately **not** a full reconstruction — depth is pulled, per Decision B.
-
-*Relationship to the existing endpoint:* `/me/active-task-recovery` (`agents.py:3018`)
-returns a full budget-capped dispatch prompt. Stage 1 **adds** `mc resume` alongside it.
-Stage 2 switches `poll.sh` over and retires the double injection (F7).
+**Open question §8.2 is thereby answered for `mc recover`: it takes no `task_id` and derives
+from the task table** (`agents.py:3078-3085`). That was already the right call — see §8.2.
 
 ### 5.3 Make MEMORY.md visible (F6)
 
@@ -392,12 +489,15 @@ stays consistent with Decision B.
 *(Open: whether the pointer belongs in the SOUL template or in the `mc resume` payload —
 arguably both. See §8.)*
 
-### 5.4 Bridge parity for the read commands
+### 5.4 Bridge parity — bigger than it looked (F10)
 
-- **Grok** — has shell `mc` (fixed in PR #150) → inherits both commands automatically once
-  the endpoints exist.
-- **Hermes** — MCP-only, no shell `mc`. Needs `mc_thread` and `mc_resume` MCP tools
-  alongside the existing `mc_inbox` tool.
+- **Grok** — has shell `mc` (PR #150) → inherits `mc thread` automatically once the endpoint
+  exists, and already has `mc recover`.
+- **Hermes** — MCP-only. Needs **two** tools in `scripts/mc-mcp.py`:
+  - `mc_thread` — the new read (mirrors `mc_inbox` at `:639`).
+  - ⭐ `mc_recover` — **not a nice-to-have.** Hermes' SOUL orders it to run `mc recover` on
+    startup (`SOUL.md.j2:2935`) and it has no way to comply. This is a live instruction the
+    agent cannot follow, independent of anything else in this design.
 
 ### 5.5 JSONL rotation (F2)
 
@@ -419,15 +519,21 @@ are a recovery mechanism, and stop letting them grow unbounded.
 
 ## 6. Stage 2 — Make it happen, and measure
 
-1. **SOUL instruction + wake-up wording** — *"if you don't know what you're working on:
-   `mc resume` first, never guess."*
-2. ⭐ **Instrumentation — the point of this stage.** Record, per context-loss event, whether
-   `mc resume` was called **before the first write**. This is a cheap counter and it answers
-   the question the rejected gate was guessing at: *do agents actually forget?*
-3. **Fleet parity (F4)** — Hermes/Grok get restart detection + a resume wake-up through the
-   adapter contract (ADR-071 + TCK). This is needed regardless of any gate.
-4. **Remove the double injection (F7)** — `recover_task` pastes the wake-up, not the
-   dispatch prompt. Re-word the stale `CLAUDE.local.md` rule while touching it.
+1. ~~SOUL instruction~~ — **already there** (`SOUL.md.j2:79`, `:2935`, ADR-024). Nothing to
+   write; what is missing is evidence that it is *obeyed*, which is item 2. Revisit the
+   wording only if the numbers say the instruction is being skipped.
+2. ⭐ **Instrumentation — the point of this stage, and now cheaper than planned.** Record,
+   per context-loss event, whether `mc recover` was called **before the first write**. The
+   endpoint already exists and already sets a Redis key per recovery
+   (`mc:recovery:attempt_id:<task_id>`, `agents.py:3094`), so the call is observable
+   without touching the agent side at all. This answers the question the rejected gate was
+   guessing at: *do agents actually forget?*
+3. **Fleet parity (F4)** — Hermes/Grok get restart *detection* + a recover wake-up through
+   the adapter contract (ADR-071 + TCK). Stage 1 gives Hermes the *ability*; this gives it
+   the *trigger*. Needed regardless of any gate.
+4. **Remove the double injection (F7)** — `recover_task` pastes the brief spine, not the
+   full dispatch prompt; i.e. make `--brief` the default for the poll.sh path. Re-word the
+   stale `CLAUDE.local.md` rule while touching it.
 
 **Live gate:** kill an agent mid-task; does it come back cleanly? Run it per harness — the
 Kimi lesson (2026-07-25) applies: *a spike shows only ONE state; verify against the running
@@ -445,12 +551,38 @@ production container.*
 
 ## 8. Open questions
 
-1. **Migration 0082** — why were `checkpoint` and `progress` comment types merged? Answer
-   before touching F8 either way (revive vs. delete `get_last_checkpoint`).
-2. **Does `mc resume` default to the current task, or require an explicit ID?** Defaulting
-   is friendlier; explicit is safer if `current_task_id` is stale after a hard crash — which
-   F4 notes is exactly the failure mode that breaks recovery #2.
-3. **MEMORY.md pointer placement** — SOUL template, `mc resume` payload, or both.
+1. ✅ **CLOSED — Migration 0082.** See the resolved block under F8: consolidation onto
+   `TaskChecklistItem` per ADR-020 §A4. `get_last_checkpoint` has zero callers → **delete**,
+   do not revive.
+2. ✅ **CLOSED — how does the read resolve "my task"?** Not "default vs. explicit" — the
+   real answer is *which* default, and the codebase already settled it. Three patterns
+   exist and they disagree:
+
+   | Pattern | Used by | Shape |
+   |---|---|---|
+   | (a) task-table only | `/me/active-task-recovery` (`agents.py:3078`) | ignores `current_task_id`; `assigned + status IN (in_progress, blocked, review) ORDER BY updated_at DESC`; soft `{active: false}`, never 4xx |
+   | (b) hybrid, pointer as *validated hint* | `/me/poll` (`agents.py:2816-2839`) | pointer first, re-checked against ownership **and** status, then falls back to (a) |
+   | (c) bare pointer, 409 | `mc ask` (`:1363`), `mc msg` (`:1495`), help/delegate/clarification | no fallback, no status check |
+
+   **Decision: `mc thread` follows (b), plus an optional explicit `task_id`.** The deciding
+   fact is not crash-staleness but something sharper: **under `use_subagent_dispatch` every
+   non-lead worker's `current_task_id` is null by design** — every set site except the
+   heartbeat is gated on `not (use_subagent_dispatch and not agent.is_board_lead)`
+   (`task_lifecycle.py:372`). A (c)-style endpoint would be **unusable for most of the
+   fleet**, and a pointer-only default would serve board leads alone. `task_lifecycle.py:249`
+   says it outright: *`current_task_id` can only track ONE task and is therefore just a
+   hint, not a lock.*
+
+   Corollaries worth carrying into the plan:
+   - The pointer survives restarts uncleared, and the **only** convergent repair is the
+     heartbeat self-heal (`agents.py:3419-3484`) — the watchdog does not reconcile it
+     (zero `current_task_id` hits in `watchdog/`).
+   - Do **not** reuse `_resolve_active_task_for_agent` (`agent_scoped.py:539`) unchanged:
+     its fallback is a bare `session.get(Task, current_task_id)` with **no status and no
+     ownership re-check**, so it hands back a stale pointer at a `done` task as-is.
+   - No 422 on "nothing found" — return an empty page. A recovery-shaped read must not
+     explode when there is nothing to recover.
+3. **MEMORY.md pointer placement** — SOUL template, `mc recover --brief` payload, or both.
 4. **Host-form recovery** — Boss-Host has its **own copy** of `poll.sh`
    (`docker/boss-host/poll.sh`, 436 lines) rather than sharing `docker/shared/poll.sh`.
    Stage 2 parity work should decide whether to converge them or keep them separate. Drift
@@ -462,20 +594,21 @@ production container.*
 
 ## 9. Re-entry for the next session
 
-**Where we are:** direction approved (§3 Decisions A + B, staged per §5–§7). Stage 1 is
-specced at the level above; it has **not** been turned into an implementation plan yet.
+**Where we are (after the 2026-07-28 second pass):** direction unchanged (§3 Decisions
+A + B, staged per §5–§7). Open questions §8.1 and §8.2 are **closed**. Stage 1 shrank —
+see the scope-correction box at the top of §5. No implementation plan written yet.
 
 **Start here:**
 
-1. Read this document, then `docs/decisions/071-w21-delivery-foundation.md` (adapter
-   contract) and `backend/app/routers/agent_scoped.py` (where the new endpoints go).
-2. Answer open question §8.2 (resume default) — it shapes the endpoint signature.
-3. Invoke the `writing-plans` skill to turn §5 into an implementation plan.
-4. TDD per `superpowers:test-driven-development`; the cursor-untouched test (§5.6) is the
+1. Read this document, then `docs/decisions/024-*` (`mc recover`, read-only recovery) and
+   `docs/decisions/071-w21-delivery-foundation.md` (adapter contract).
+2. Invoke the `writing-plans` skill on the reduced §5 list.
+3. TDD per `superpowers:test-driven-development`; the cursor-untouched test (§5.6) is the
    one that must exist **before** the endpoint.
 
-**A worktree is already set up** for this branch (branched from `main`); see
-`git worktree list`.
+**A worktree is already set up** for this branch; see `git worktree list`. It was rebased
+onto `origin/main` on 2026-07-28 — the original base predated comm_v2 entirely (see the
+base note in §0). Verify you are on a current base before trusting any `file:line` here.
 
 **Do not** start with the gate or `context_state`. §4 explains why; if you find yourself
 reaching for it, the answer is instrumentation first.
@@ -492,3 +625,11 @@ not.
 
 Direction reviewed and revised on 2026-07-28: Decisions A and B kept, the hard gate demoted
 to instrumentation, and the work staged (§4).
+
+Second pass the same day, before planning: the branch was rebased off a stale pre-comm_v2
+base and every `file:line` re-verified; §8.1 and §8.2 were researched and closed; and F10
+was found — `mc recover` already does most of what Stage 1 proposed to build, which cut the
+stage roughly in half and turned one item (Hermes) from an enhancement into a live defect.
+Lesson worth keeping: the first pass searched for the *mechanism* it expected
+(`--continue`, `--resume`) and concluded it was absent; MC's answer was a CLI verb under a
+different name. **Search for the capability, not the implementation you have in mind.**
