@@ -139,7 +139,7 @@ def _run_upgrade(engine) -> dict[str, str]:
 def test_revision_chains_onto_the_previous_head():
     module = _load_migration()
     assert module.revision == "0168_runtime_display_names"
-    assert module.down_revision == "0166_thread_telegram_topic_id"
+    assert module.down_revision == "0167_project_telegram_topic_id"
 
 
 def test_migration_renames_only_the_provider_backed_rows(engine):
