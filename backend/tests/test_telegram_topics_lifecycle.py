@@ -400,6 +400,31 @@ async def test_purge_deletes_old_project_topics_too(async_session: AsyncSession)
 
 
 @pytest.mark.asyncio
+async def test_purge_uses_updated_at_when_a_project_has_no_completed_at(
+    async_session: AsyncSession,
+):
+    """`Project.completed_at` schreibt in MC KEIN Code-Pfad (geprueft 28.07.) —
+    ein Projekt wird per PATCH auf `done` gesetzt, completed_at bleibt NULL.
+    Haengt der Purge allein daran, loescht er nie ein Projekt-Thema und waere
+    genau das tote Kapital, das dieser PR beseitigen soll. Fallback: updated_at.
+    """
+    board = await _board(async_session)
+    project = await _project(async_session, board, "Ohne Datum")
+    _t, thread = await _task_with_thread(async_session, board, "A", project=project)
+    client = FakeForumClient(next_id=515)
+    await ensure_topic_for_thread(async_session, thread, client)
+
+    project.status = "done"
+    project.completed_at = None
+    project.updated_at = datetime.utcnow() - timedelta(days=45)
+    async_session.add(project)
+    await async_session.commit()
+
+    assert await purge_old_topics(async_session, client, older_than_days=30) == 1
+    assert client.deleted == [515]
+
+
+@pytest.mark.asyncio
 async def test_purge_spares_a_running_project(async_session: AsyncSession):
     board = await _board(async_session)
     project = await _project(async_session, board, "Laeuft")

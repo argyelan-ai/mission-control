@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 import httpx
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -414,8 +415,11 @@ async def purge_old_topics(
                 Project.telegram_topic_id.is_not(None),
                 Project.telegram_topic_id != GENERAL_TOPIC_ID,
                 Project.status.in_(("done", "archived")),
-                Project.completed_at.is_not(None),
-                Project.completed_at < cutoff,
+                # `completed_at` schreibt in MC KEIN Code-Pfad (geprueft
+                # 28.07.2026) — ein Projekt wird per PATCH auf `done` gesetzt.
+                # Haengt der Purge allein daran, loescht er nie ein Projekt-Thema.
+                # `updated_at` (onupdate) traegt den Zeitpunkt dieses PATCH.
+                func.coalesce(Project.completed_at, Project.updated_at) < cutoff,
             )
         )
     ).all()
