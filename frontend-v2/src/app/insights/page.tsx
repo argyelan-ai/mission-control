@@ -117,6 +117,14 @@ export default function InsightsPage() {
     refetchInterval: 120_000,
   });
 
+  // Analysis window is a backend config (analysis_window_days), independent of
+  // the cost-days selector — the task KPIs must label the real window.
+  const { data: intelConfig } = useQuery({
+    queryKey: ["intelligence-config"],
+    queryFn: () => api.intelligence.config(),
+    staleTime: 5 * 60_000,
+  });
+
   const { data: byModel } = useQuery({
     queryKey: ["intelligence-costs-by-model", days],
     queryFn: () => api.intelligence.byModel(days),
@@ -285,16 +293,16 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
                     label="Tasks completed"
-                    value={String(tasksDone)}
-                    sub={`last ${days} days`}
+                    value={insights ? String(tasksDone) : "—"}
+                    sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={CheckCircle2}
                     color={C.online}
                     hero
                   />
                   <KPICard
                     label="Failed"
-                    value={String(tasksFailed)}
-                    sub="total"
+                    value={insights ? String(tasksFailed) : "—"}
+                    sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={XCircle}
                     color={C.error}
                     valueColor={tasksFailed > 0 ? "var(--color-status-error-text)" : undefined}
