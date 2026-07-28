@@ -65,16 +65,25 @@ EOF
 
 # Compute md5 of a local file (macOS `md5 -q` or GNU `md5sum`)
 local_md5() {
+    # Same `|| true` reasoning as container_md5 — an unreadable file must
+    # yield an empty hash, not a non-zero status that `set -e` turns fatal.
     if command -v md5 >/dev/null 2>&1; then
-        md5 -q "$1" 2>/dev/null
+        md5 -q "$1" 2>/dev/null || true
     else
-        md5sum "$1" 2>/dev/null | awk '{print $1}'
+        md5sum "$1" 2>/dev/null | awk '{print $1}' || true
     fi
 }
 
 # Compute md5 of a file inside a container (busybox `md5sum` exists in alpine)
 container_md5() {
-    docker exec "$1" md5sum "$2" 2>/dev/null | awk '{print $1}'
+    # A missing file is a legitimate answer (empty hash → "can't compare"),
+    # not a script error. Without the `|| true` the failing `docker exec`
+    # propagates through `set -o pipefail` into the caller's
+    # `cont_hash=$(container_md5 ...)` — an assignment adopts the exit status
+    # of its command substitution, so `set -e` killed the whole run.
+    # This fired on the very first container (Sparky runs the omp bridge and
+    # has no poll.sh), so the watchdog never inspected anyone at all.
+    docker exec "$1" md5sum "$2" 2>/dev/null | awk '{print $1}' || true
 }
 
 # Pre-flight
@@ -95,10 +104,14 @@ while IFS=: read -r c variant; do
         [ -f "$REPO/$src" ] || continue
         repo_hash=$(local_md5 "$REPO/$src")
         cont_hash=$(container_md5 "$c" "$dst")
-        [ -n "$repo_hash" ] && [ -n "$cont_hash" ] && [ "$repo_hash" != "$cont_hash" ] && {
+        # `if` instead of an `[ ... ] && { ... }` chain on purpose: as the last
+        # statement in this loop body, a failing chain makes the whole `while`
+        # exit 1, and `set -e` kills the script — silently, with no stderr.
+        # That fired on the NO-drift path (hashes equal), i.e. every normal run.
+        if [ -n "$repo_hash" ] && [ -n "$cont_hash" ] && [ "$repo_hash" != "$cont_hash" ]; then
             drifted=1
             break
-        }
+        fi
     done < <(files_for_variant "$variant")
 
     if [ "$drifted" = "1" ]; then
@@ -181,11 +194,17 @@ if ! docker compose \
 fi
 
 # Verify env-tokens survived (per mc-container-lifecycle skill)
+# `|| true` on both: a container legitimately missing one of these vars makes
+# `grep` exit 1, `set -o pipefail` promotes that to the pipeline, and the
+# assignment adopts it — `set -e` then killed the script HERE, after the
+# rebuild had already happened but before the success message was printed.
+# Same failure class as container_md5 above; that is why the operator only
+# ever saw "Stop hook error", never the summary.
 for c in "${SAFE[@]}"; do
     tok=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-          | grep "^CLAUDE_CODE_OAUTH_TOKEN=" | cut -d= -f2-)
+          | grep "^CLAUDE_CODE_OAUTH_TOKEN=" | cut -d= -f2- || true)
     mc=$(docker inspect "$c" --format '{{range .Config.Env}}{{println .}}{{end}}' 2>/dev/null \
-         | grep "^MC_TOKEN=" | cut -d= -f2-)
+         | grep "^MC_TOKEN=" | cut -d= -f2- || true)
     echo "  $c: CLAUDE=${#tok}c MC=${#mc}c" >> "$LOG"
 done
 
@@ -194,5 +213,7 @@ echo "Done [$ts]" >> "$LOG"
 # User-facing summary
 safe_csv=$(IFS=,; echo "${SAFE[*]}")
 suffix=""
-[ ${#BUSY[@]} -gt 0 ] && suffix=" (mid-task skipped: $(IFS=,; echo "${BUSY[*]}"))"
+if [ ${#BUSY[@]} -gt 0 ]; then
+    suffix=" (mid-task skipped: $(IFS=,; echo "${BUSY[*]}"))"
+fi
 printf '{"systemMessage": "🔄 Container-Scripts gedriftet → rebuilt + recreated: %s%s"}\n' "$safe_csv" "$suffix"
