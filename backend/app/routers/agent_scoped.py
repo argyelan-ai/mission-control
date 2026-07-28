@@ -1781,7 +1781,43 @@ _EMPTY_THREAD_PAGE = {
     "has_more_before": False,
     "latest_seq": 0,
     "my_acked_seq": 0,
+    "budget_truncated": False,
 }
+
+# Everything that enters an agent's context here is bounded — dispatch
+# 2000/2500/4000 (dispatch_message_builder.py:62-64), memory 800, lessons 400,
+# the waiting recap 1500, mc_logs 4000. `limit` bounds the message *count*,
+# not their size, so a thread read was the one unbounded payload. Matched to
+# DISPATCH_HARD_CHARS: this lands in the same place a dispatch prompt does.
+THREAD_READ_MAX_CHARS = 4000
+_TRUNCATION_MARKER = "\n\n… [gekuerzt — ganze Nachricht via `mc thread --task-id … --json`]"
+
+
+def _apply_thread_char_budget(rows: list) -> tuple[list, bool, bool]:
+    """Trim an ascending-seq page to THREAD_READ_MAX_CHARS.
+
+    Drops from the OLD end: an agent rebuilding context needs the newest
+    exchange, not the opening of the task. Returns
+    (kept_rows, budget_truncated, dropped_any) — `dropped_any` feeds
+    has_more_before so a budget-trimmed page still advertises that older
+    messages exist and can be paged to.
+
+    A single message larger than the whole budget is truncated rather than
+    dropped: dropping it would hand the agent an empty page with no
+    explanation of why.
+    """
+    kept: list = []
+    used = 0
+    for message in reversed(rows):  # newest first
+        body = message.body or ""
+        if not kept and len(body) > THREAD_READ_MAX_CHARS:
+            message.body = body[:THREAD_READ_MAX_CHARS] + _TRUNCATION_MARKER
+            return [message], True, len(rows) > 1
+        if used + len(body) > THREAD_READ_MAX_CHARS:
+            return list(reversed(kept)), True, True
+        kept.append(message)
+        used += len(body)
+    return list(reversed(kept)), False, False
 
 
 @router.get("/me/thread")
@@ -1854,8 +1890,10 @@ async def agent_read_own_thread(
         result = await session.exec(stmt.order_by(Message.seq.desc()).limit(limit))  # type: ignore[union-attr]
         rows = list(reversed(result.all()))
 
-    has_more_before = False
-    if rows:
+    rows, budget_truncated, budget_dropped = _apply_thread_char_budget(rows)
+
+    has_more_before = budget_dropped
+    if rows and not has_more_before:
         older = await session.exec(
             select(Message.seq)
             .where(Message.thread_id == thread_id, Message.seq < rows[0].seq)
@@ -1888,6 +1926,7 @@ async def agent_read_own_thread(
         "has_more_before": has_more_before,
         "latest_seq": latest_seq,
         "my_acked_seq": cursor.last_acked_seq if cursor is not None else 0,
+        "budget_truncated": budget_truncated,
     }
 
 

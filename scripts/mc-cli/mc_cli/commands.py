@@ -1094,6 +1094,11 @@ def _cmd_thread(args, client, cfg):
         print(m.get("body") or "")
         print()
 
+    if resp.get("budget_truncated"):
+        # Never let a partial history look complete — an agent acting
+        # confidently on half the story is worse than one that knows it is
+        # missing a piece.
+        print("# ⚠ gekuerzt: Zeichen-Budget erreicht, aeltere Nachrichten fehlen.")
     if resp.get("has_more_before"):
         print(f"# aeltere Nachrichten: mc thread --before-seq {messages[0].get('seq')}")
     return 0

@@ -347,3 +347,59 @@ async def test_parked_waiting_task_is_readable(client: AsyncClient, async_sessio
     body = (await _thread(client, token)).json()
     assert body["task_id"] == str(task.id)
     assert [m["body"] for m in body["messages"]] == ["die antwort auf deine frage"]
+
+
+# ── Character budget ─────────────────────────────────────────────────────
+# Everything that lands in an agent's context in this codebase is bounded:
+# dispatch 2000/2500/4000, memory 800, lessons 400, the waiting recap 1500,
+# mc_logs 4000. A thread read had no bound at all — `limit` caps the number of
+# messages, not their size, so 200 long messages were unbounded text. That is
+# the same hazard F11 documents for Hermes, whose auto-memory digests whatever
+# it is shown.
+
+@pytest.mark.asyncio
+async def test_long_thread_is_capped_and_says_so(client: AsyncClient, async_session):
+    """Budget trims from the OLD end: a recovering agent needs the newest
+    exchange, not the beginning of the task."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    for i in range(12):
+        await post_message(async_session, thread_id=thread.id, sender_type="user",
+                           message_type="message", body=f"m{i} " + "x" * 600)
+
+    body = (await _thread(client, token)).json()
+    total = sum(len(m["body"]) for m in body["messages"])
+    assert total <= 4000
+    assert body["budget_truncated"] is True
+    # Newest kept, oldest dropped.
+    assert body["messages"][-1]["body"].startswith("m11")
+    assert not any(m["body"].startswith("m0 ") for m in body["messages"])
+    # Dropping for budget must still report that older messages exist.
+    assert body["has_more_before"] is True
+
+
+@pytest.mark.asyncio
+async def test_single_oversized_message_is_truncated_not_dropped(
+    client: AsyncClient, async_session
+):
+    """One message bigger than the whole budget must still be readable —
+    dropping it would leave the agent with an empty page and no explanation."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="y" * 9000)
+
+    body = (await _thread(client, token)).json()
+    assert len(body["messages"]) == 1
+    assert len(body["messages"][0]["body"]) <= 4100  # budget + marker
+    assert "gekuerzt" in body["messages"][0]["body"]
+    assert body["budget_truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_short_thread_is_not_flagged_as_truncated(client: AsyncClient, async_session):
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="kurz")
+
+    body = (await _thread(client, token)).json()
+    assert body["budget_truncated"] is False
+    assert body["messages"][0]["body"] == "kurz"

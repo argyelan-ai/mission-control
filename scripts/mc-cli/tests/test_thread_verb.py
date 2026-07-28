@@ -160,3 +160,14 @@ def test_recover_points_at_thread(capsys, tmp_path, monkeypatch):
     assert "mc thread" in out
     # The prompt itself must still be the payload — the pointer is a header line.
     assert "der eigentliche prompt" in out
+
+
+def test_budget_truncation_is_visible(capsys):
+    """If the server dropped messages to stay inside the char budget, the
+    agent must see that — silently showing a partial history is how you get an
+    agent confidently acting on half the story."""
+    client = _mock_client(_payload(budget_truncated=True, has_more_before=True))
+    commands._cmd_thread(_Args(), client, MagicMock())
+    out = capsys.readouterr().out
+    assert "gekuerzt" in out or "Budget" in out
+    assert "--before-seq" in out
