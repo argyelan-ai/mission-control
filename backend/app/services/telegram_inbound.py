@@ -34,6 +34,8 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.agent import Agent
+from app.models.board import Project
+from app.models.task import Task
 from app.models.thread import Thread
 from app.services.messaging import ensure_dm_thread, post_message
 
@@ -160,9 +162,43 @@ async def _transcribe_voice(voice: dict, *, bot, transcribe) -> str | None:
 
 
 async def _thread_for_topic(session: AsyncSession, topic_id: int) -> Thread | None:
-    return (
+    """Welcher MC-Thread gehoert zu diesem Telegram-Thema?
+
+    Zwei Besitzer-Arten (P3.1): ein Ad-hoc-Task-Thema haengt am Thread selbst,
+    ein PROJEKT-Thema am Projekt (dort reden alle seine Tasks — threads.
+    telegram_topic_id ist unique, mehrere Task-Threads koennten sich die ID also
+    gar nicht teilen). Faellt die Projekt-Aufloesung weg, beantwortet MC jede
+    Nachricht in einem Projekt-Thema mit „unbekanntes Thema" — der Rueckkanal
+    waere tot.
+
+    Bei einem Projekt-Thema landet die Nachricht im juengsten OFFENEN Task-Thread
+    des Projekts (das ist die Aufgabe, an der gerade gearbeitet wird); gibt es
+    keinen offenen, im juengsten ueberhaupt.
+    """
+    thread = (
         await session.exec(select(Thread).where(Thread.telegram_topic_id == topic_id))
     ).one_or_none()
+    if thread is not None:
+        return thread
+
+    project = (
+        await session.exec(select(Project).where(Project.telegram_topic_id == topic_id))
+    ).one_or_none()
+    if project is None:
+        return None
+
+    candidates = (
+        await session.exec(
+            select(Thread)
+            .join(Task, Task.thread_id == Thread.id, isouter=True)
+            .where((Thread.project_id == project.id) | (Task.project_id == project.id))
+            .order_by(Thread.created_at.desc())
+        )
+    ).all()
+    if not candidates:
+        return None
+    open_threads = [t for t in candidates if t.closed_at is None]
+    return (open_threads or candidates)[0]
 
 
 async def _general_chat_thread(session: AsyncSession) -> Thread | None:

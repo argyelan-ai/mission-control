@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, ForeignKey, text, Uuid
+from sqlalchemy import JSON, BigInteger, DateTime, ForeignKey, UniqueConstraint, text, Uuid
 from sqlmodel import Column, Field, SQLModel
 
 
@@ -91,6 +91,15 @@ class Board(SQLModel, table=True):
 
 class Project(SQLModel, table=True):
     __tablename__ = "projects"
+    __table_args__ = (
+        # 1:1 Telegram-Thema <-> Projekt (Marks Regel: EIN Thema fuer alle Tasks
+        # eines Projekts). Muss identisch in Migration 0167 stehen: Tests bauen
+        # die Tabellen aus dem Modell, Produktion aus der Migration — nur wenn
+        # beide denselben Constraint tragen, prueft der Test das echte
+        # Produktionsverhalten. NULL ist im Sinne von UNIQUE kein Wert:
+        # beliebig viele Projekte bleiben ohne Thema.
+        UniqueConstraint("telegram_topic_id", name="uq_projects_telegram_topic_id"),
+    )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
     board_id: uuid.UUID = Field(foreign_key="boards.id", index=True)
@@ -109,6 +118,13 @@ class Project(SQLModel, table=True):
     # FK into the repos registry (ADR-050). Legacy github_repo_url/name stay
     # synced on link so existing clone/PR flows keep working.
     workspace_path: str | None = None  # Local path to the project (e.g. /private/tmp/my-portfolio)
+    # Telegram-Forum-Thema (message_thread_id) dieses Projekts. Alle Tasks des
+    # Projekts reden in DIESEM Thema — darum haengt die ID am Projekt und nicht
+    # am Thread (threads.telegram_topic_id ist unique, mehrere Task-Threads
+    # koennten sich dort keine ID teilen). NULL = noch keins (lazy angelegt).
+    telegram_topic_id: int | None = Field(
+        default=None, sa_column=Column(BigInteger, nullable=True)
+    )
     project_config: dict | None = Field(
         default=None, sa_column=Column(JSON, nullable=True)
     )
