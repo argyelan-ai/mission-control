@@ -33,6 +33,8 @@ import {
   ChevronRight,
   Plus,
   CheckCircle2,
+  FileCode2,
+  Terminal,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
@@ -70,6 +72,13 @@ const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
       "Live-Abfrage fehlgeschlagen, zeige bekannte Liste — sie kann veraltet sein.",
     tone: "warn",
     Icon: AlertTriangle,
+  },
+  cli_config: {
+    label: "aus CLI-Config",
+    headline:
+      "Live-Abfrage fehlgeschlagen — die Liste kommt aus der Config des CLI selbst (dieselbe Datei, die das Tool zur Modellwahl liest). Aktuell, aber nicht vom Anbieter bestätigt.",
+    tone: "warn",
+    Icon: FileCode2,
   },
   credential_missing: {
     label: "Zugangsdaten fehlen",
@@ -110,12 +119,19 @@ function ModelRow({
   onBind: (model: ModelCatalogModel) => void;
   binding: boolean;
 }) {
-  const isNew = model.bound === false;
+  // cli_only: existiert nur im CLI selbst, der Provider-Endpoint lehnt es ab.
+  // Es wird gezeigt (der Operator soll wissen, dass es das Modell gibt), aber
+  // NICHT als „neu" beworben und nicht zum Anlegen angeboten — das Backend
+  // würde den Bind ohnehin mit 422 ablehnen. Eine Option anzubieten, die dann
+  // scheitert, wäre schlechter als sie wegzulassen.
+  const isCliOnly = model.cli_only === true;
+  const isNew = model.bound === false && !isCliOnly;
 
   return (
     <li
       data-testid="catalog-model-row"
       data-bound={model.bound ? "true" : "false"}
+      data-cli-only={isCliOnly ? "true" : "false"}
       className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md border ${
         isNew ? "bg-surface border-subtle" : "border-transparent"
       }`}
@@ -129,12 +145,32 @@ function ModelRow({
         >
           {model.id}
         </div>
-        {model.display_name && model.display_name !== model.id && (
-          <div className="text-[10px] truncate text-dim">{model.display_name}</div>
+        {(model.display_name || model.context_window) && (
+          <div className="text-[10px] truncate text-dim">
+            {model.display_name !== model.id ? model.display_name : null}
+            {model.display_name && model.display_name !== model.id && model.context_window
+              ? " · "
+              : null}
+            {model.context_window
+              ? `${Math.round(model.context_window / 1024)}k Kontext`
+              : null}
+          </div>
         )}
       </div>
 
-      {isNew ? (
+      {isCliOnly ? (
+        <span
+          data-testid="catalog-cli-only-badge"
+          title={
+            model.note ??
+            "Nur im CLI selbst wählbar — der HTTP-Endpoint des Anbieters kennt dieses Modell nicht. Als Runtime nicht anlegbar."
+          }
+          className="shrink-0 inline-flex items-center gap-1 label-sys text-dim border border-subtle rounded-sm px-1.5 py-px"
+        >
+          <Terminal size={10} />
+          nur im CLI
+        </span>
+      ) : isNew ? (
         <>
           <span
             data-testid="catalog-new-badge"

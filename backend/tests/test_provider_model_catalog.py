@@ -11,6 +11,8 @@ fixture.
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from sqlmodel import select
@@ -183,9 +185,12 @@ async def test_grok_uses_cli_proxy_not_x_ai(session, monkeypatch):
     result = await model_catalog.discover_provider(session, target)
 
     assert result.status == model_catalog.STATUS_OK
-    assert [m["id"] for m in result.models] == ["grok-4.5"]
+    assert "grok-4.5" in [m["id"] for m in result.models]
     assert "cli-chat-proxy.grok.com" in str(seen[0].url)
     assert "api.x.ai" not in str(seen[0].url)
+    # The probe result is UNIONED with the manifest, never replaced by it —
+    # covered in detail by the "manifest union" block further down.
+    assert [m["id"] for m in result.models][0] == "grok-4.5"
 
 
 @pytest.mark.asyncio
@@ -207,8 +212,152 @@ async def test_grok_token_unreadable_degrades_to_manifest(session, monkeypatch):
     # The badge says "stale", but the underlying cause stays inspectable.
     assert result.reason == model_catalog.STATUS_CREDENTIAL_MISSING
     assert "nicht lesbar" in (result.error or "")
-    assert [m["id"] for m in result.models] == ["grok-4.5"]
+    assert "grok-4.5" in [m["id"] for m in result.models]
     assert seen == []
+
+
+# ── Grok: manifest UNION (the composer-2.5-fast guard) ───────────────────────
+# Regression guard for the whole point of _MANIFEST_UNION_PROTOCOLS: the Grok
+# CLI knows model slugs no HTTP surface reports, so a WORKING probe must not be
+# able to delete them from the catalog.
+
+
+@pytest.mark.asyncio
+async def test_grok_probe_is_unioned_with_manifest_not_replaced_by_it(
+    session, monkeypatch
+):
+    """Probe says grok-4.5, manifest additionally knows composer-2.5-fast →
+    both are served. Measured on 2026-07-28: cli-chat-proxy /v1/models reports
+    exactly one model while the CLI binary ships more."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "grok-4.5"}]}))
+    monkeypatch.setattr(model_catalog, "read_grok_token", lambda: "grok-oauth-test")
+
+    await add_runtime(
+        session, slug="grok-cloud", runtime_type="grok",
+        endpoint="https://cli-chat-proxy.grok.com",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "grok"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    ids = [m["id"] for m in result.models]
+    assert result.status == model_catalog.STATUS_OK
+    assert "grok-4.5" in ids
+    assert "composer-2.5-fast" in ids, (
+        "a working probe must never remove manifest-only models for grok — "
+        "see _MANIFEST_UNION_PROTOCOLS"
+    )
+    # Live data wins the ordering; manifest-only entries are appended.
+    assert ids[0] == "grok-4.5"
+
+
+@pytest.mark.asyncio
+async def test_grok_union_deduplicates_and_live_entry_wins(session, monkeypatch):
+    """A model present in BOTH sources appears exactly once, with the live row."""
+    mock_httpx(
+        monkeypatch,
+        lambda r: httpx.Response(
+            200, json={"data": [{"id": "grok-4.5", "name": "Live Grok"}]}
+        ),
+    )
+    monkeypatch.setattr(model_catalog, "read_grok_token", lambda: "grok-oauth-test")
+
+    await add_runtime(
+        session, slug="grok-cloud", runtime_type="grok",
+        endpoint="https://cli-chat-proxy.grok.com",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "grok"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    ids = [m["id"] for m in result.models]
+    assert ids.count("grok-4.5") == 1
+    assert len(ids) == len(set(ids)), f"duplicate model ids: {ids}"
+    live = next(m for m in result.models if m["id"] == "grok-4.5")
+    assert live["raw_provider"] == "grok"
+    assert live["display_name"] == "Live Grok"
+
+
+@pytest.mark.asyncio
+async def test_manifest_union_is_opt_in_per_protocol(session, monkeypatch):
+    """Anthropic must NOT get the union treatment: for every provider except
+    grok the live API is better informed than a file in this repo, so a stale
+    manifest entry would invent models that no longer exist."""
+    mock_httpx(
+        monkeypatch,
+        lambda r: httpx.Response(200, json={"data": [{"id": "claude-opus-5"}]}),
+    )
+    patch_creds(monkeypatch, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-oauth-test"})
+
+    target = await anthropic_target(session)
+    result = await model_catalog.discover_provider(session, target)
+
+    assert [m["id"] for m in result.models] == ["claude-opus-5"]
+    # The manifest lists several more — none of them may leak in.
+    assert "claude-haiku-4-5" not in [m["id"] for m in result.models]
+    assert model_catalog._MANIFEST_UNION_PROTOCOLS == frozenset({"grok"})
+
+
+def test_composer_is_flagged_cli_only_and_not_bindable():
+    """composer-2.5-fast is documented but NOT offered: the CLI proxy answers
+    HTTP 400 'Model not found' for it (measured 2026-07-28)."""
+    entry = next(
+        m for m in model_catalog._manifest_models("grok") if m["id"] == "composer-2.5-fast"
+    )
+    assert entry["cli_only"] is True
+    assert entry["note"], "a cli_only entry must explain itself in the UI"
+    assert model_catalog.manifest_cli_only_ids("grok") == {"composer-2.5-fast"}
+    # grok-4.5 is drivable and must stay bindable.
+    assert "grok-4.5" not in model_catalog.manifest_cli_only_ids("grok")
+    assert model_catalog.manifest_cli_only_ids("anthropic") == set()
+
+
+@pytest.mark.asyncio
+async def test_cli_only_models_are_not_counted_as_new(session, monkeypatch, fake_redis):
+    """A model that can never be bound must not sit in the "neu" badge forever."""
+    use_fake_redis(monkeypatch, fake_redis)
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "grok-4.5"}]}))
+    monkeypatch.setattr(model_catalog, "read_grok_token", lambda: "grok-oauth-test")
+
+    await add_runtime(
+        session, slug="grok-cloud", runtime_type="grok",
+        endpoint="https://cli-chat-proxy.grok.com",
+        model_identifier="grok-4.5",
+    )
+    providers = await model_catalog.build_catalog(session, force=True)
+    grok = next(p for p in providers if p["key"] == "grok")
+
+    composer = next(m for m in grok["models"] if m["id"] == "composer-2.5-fast")
+    assert composer["cli_only"] is True
+    assert composer["bound"] is False
+    assert grok["new_count"] == 0, "cli_only entries must not inflate the new badge"
+
+
+@pytest.mark.asyncio
+async def test_bind_rejects_cli_only_model(auth_client, session, monkeypatch):
+    """Binding composer-2.5-fast would create a runtime that 400s on first use."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": [{"id": "grok-4.5"}]}))
+    monkeypatch.setattr(model_catalog, "read_grok_token", lambda: "grok-oauth-test")
+    await add_runtime(
+        session, slug="grok-cloud", runtime_type="grok",
+        endpoint="https://cli-chat-proxy.grok.com",
+    )
+
+    resp = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "grok", "model_id": "composer-2.5-fast"},
+    )
+    assert resp.status_code == 422
+    assert "CLI" in resp.json()["detail"]
+
+    # The drivable sibling stays bindable — the guard must be surgical.
+    ok = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "grok", "model_id": "grok-4.5"},
+    )
+    assert ok.status_code == 201
 
 
 # ── Kimi adapter ─────────────────────────────────────────────────────────────
@@ -293,6 +442,219 @@ async def test_kimi_missing_credentials_raises_credential_unavailable(monkeypatc
     monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
     with pytest.raises(model_catalog._CredentialUnavailable):
         model_catalog.read_kimi_token()
+
+
+# ── Kimi: the CLI's own config as PRIMARY, token-independent source ──────────
+# The access token lives ~900 s, so the HTTP probe is only current right after a
+# Kimi agent logged in. config.toml is always readable — it is the same file
+# `kimi provider list --json` reads.
+
+KIMI_CONFIG_TOML = """\
+default_model = "kimi-code/k3"
+
+[providers."managed:kimi-code"]
+kind = "managed"
+
+[models."kimi-code/kimi-for-coding"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+max_context_size = 262144
+display_name = "K2.7 Coding"
+
+[models."kimi-code/kimi-for-coding-highspeed"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding-highspeed"
+max_context_size = 262144
+display_name = "K2.7 Coding Highspeed"
+
+[models."kimi-code/k3"]
+provider = "managed:kimi-code"
+model = "k3"
+max_context_size = 1048576
+display_name = "K3"
+
+[models."kimi-code/k3-256k"]
+provider = "managed:kimi-code"
+model = "k3-256k"
+max_context_size = 262144
+display_name = "K3-256k"
+"""
+
+
+def write_kimi_config(tmp_path, slug: str = "kimi", body: str = KIMI_CONFIG_TOML):
+    cfg_dir = tmp_path / ".mc" / "agents" / slug / "kimi-config"
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    path = cfg_dir / "config.toml"
+    path.write_text(body)
+    return path
+
+
+def test_kimi_cli_config_yields_all_four_models(monkeypatch, tmp_path):
+    """The live shape on this host (kimi-code 0.29.x): four models, incl. the
+    one the old hand-written manifest was missing."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path)
+
+    models = model_catalog.read_kimi_cli_models()
+
+    assert [m["id"] for m in models] == [
+        "kimi-for-coding",
+        "kimi-for-coding-highspeed",
+        "k3",
+        "k3-256k",
+    ]
+    by_id = {m["id"]: m for m in models}
+    # The bare `model` value is the id — NOT the table key "kimi-code/k3":
+    # runtime.model_identifier carries the bare form and `bound` compares strings.
+    assert by_id["k3"]["display_name"] == "K3"
+    assert by_id["k3"]["context_window"] == 1048576
+    assert by_id["kimi-for-coding-highspeed"]["display_name"] == "K2.7 Coding Highspeed"
+    assert by_id["k3-256k"]["context_window"] == 262144
+
+
+@pytest.mark.asyncio
+async def test_kimi_serves_config_models_when_token_is_gone(session, monkeypatch, tmp_path):
+    """THE regression this feature exists for: an expired/absent token must no
+    longer empty the Kimi catalog."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path)
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+    # No credentials/kimi-code.json anywhere → read_kimi_token raises.
+
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "kimi"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    assert len(result.models) == 4
+    assert "kimi-for-coding-highspeed" in [m["id"] for m in result.models]
+    # Honest status: not "ok" (no live confirmation) and not "manifest_fallback"
+    # (this did not come from our hand-typed file).
+    assert result.status == model_catalog.STATUS_CLI_CONFIG
+    assert result.reason == model_catalog.STATUS_CREDENTIAL_MISSING
+    assert seen == [], "no HTTP call may be attempted without a token"
+
+
+@pytest.mark.asyncio
+async def test_kimi_serves_config_models_when_token_is_rejected(
+    session, monkeypatch, tmp_path
+):
+    """Same for a token that exists but the provider 401s (expired ~900 s TTL)."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path)
+    mock_httpx(monkeypatch, lambda r: httpx.Response(401, json={"error": "expired"}))
+    monkeypatch.setattr(model_catalog, "read_kimi_token", lambda: "stale-token")
+
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "kimi"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    assert result.status == model_catalog.STATUS_CLI_CONFIG
+    assert result.reason == model_catalog.STATUS_UNREACHABLE
+    assert len(result.models) == 4
+
+
+@pytest.mark.asyncio
+async def test_kimi_http_augments_config_and_dedupes(session, monkeypatch, tmp_path):
+    """Both sources alive: no duplicates, HTTP-only models are added, and the
+    config's display_name / context window are backfilled onto the live rows
+    (the endpoint returns bare ids)."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path)
+    mock_httpx(
+        monkeypatch,
+        lambda r: httpx.Response(
+            200, json={"data": [{"id": "k3"}, {"id": "k4-preview"}]}
+        ),
+    )
+    monkeypatch.setattr(model_catalog, "read_kimi_token", lambda: "fresh-token")
+
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "kimi"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    ids = [m["id"] for m in result.models]
+    assert result.status == model_catalog.STATUS_OK
+    assert len(ids) == len(set(ids)), f"duplicate model ids: {ids}"
+    assert set(ids) == {
+        "k3", "k4-preview", "kimi-for-coding", "kimi-for-coding-highspeed", "k3-256k",
+    }
+    by_id = {m["id"]: m for m in result.models}
+    assert by_id["k3"]["display_name"] == "K3"  # backfilled from the config
+    assert by_id["k3"]["context_window"] == 1048576
+    assert by_id["k4-preview"]["display_name"] is None  # unknown stays unknown
+
+
+def test_kimi_config_newest_agent_file_wins(monkeypatch, tmp_path):
+    """Several agents may hold their own config.toml — the freshest wins,
+    mirroring read_kimi_token()'s newest-expiry rule."""
+    import os
+
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    old = write_kimi_config(
+        tmp_path,
+        slug="kimi-old",
+        body='[models."kimi-code/k3"]\nmodel = "k3"\ndisplay_name = "ALT"\n',
+    )
+    new = write_kimi_config(
+        tmp_path,
+        slug="kimi-new",
+        body='[models."kimi-code/k3"]\nmodel = "k3"\ndisplay_name = "NEU"\n',
+    )
+    os.utime(old, (1_000_000, 1_000_000))
+    os.utime(new, (2_000_000, 2_000_000))
+
+    models = model_catalog.read_kimi_cli_models()
+    assert [m["display_name"] for m in models] == ["NEU"]
+
+
+def test_kimi_broken_config_is_not_fatal(monkeypatch, tmp_path):
+    """A corrupt config must degrade to "no config models", never raise — the
+    HTTP path still has to be able to carry the provider."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path, body="this is = not [valid toml")
+    assert model_catalog.read_kimi_cli_models() == []
+
+
+def test_kimi_config_absent_yields_empty_list(monkeypatch, tmp_path):
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    assert model_catalog.read_kimi_cli_models() == []
+
+
+@pytest.mark.asyncio
+async def test_kimi_without_config_and_without_token_still_falls_back(
+    session, monkeypatch, tmp_path
+):
+    """Nothing on disk at all → the old manifest behaviour is untouched."""
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    seen = mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+    )
+    target = next(
+        t for t in await model_catalog.build_provider_targets(session) if t.key == "kimi"
+    )
+    result = await model_catalog.discover_provider(session, target)
+
+    assert result.status == model_catalog.STATUS_MANIFEST_FALLBACK
+    assert result.reason == model_catalog.STATUS_CREDENTIAL_MISSING
+    assert seen == []
 
 
 # ── OpenAI adapter ───────────────────────────────────────────────────────────
@@ -607,6 +969,23 @@ def test_manifest_ships_verified_ids():
     assert "claude-opus-5" in anthropic_ids
     # No openai entry on purpose — every openai runtime is its own endpoint.
     assert "openai" not in manifest
+    # The Kimi CLI ships four models; the manifest used to list only three.
+    kimi_ids = {m["id"] for m in manifest["kimi"]["models"]}
+    assert kimi_ids == {"kimi-for-coding", "kimi-for-coding-highspeed", "k3", "k3-256k"}
+
+
+def test_manifest_documents_why_grok_is_manifest_driven():
+    """Guard for the real deliverable: the next person must not be able to
+    delete the grok block as 'stale handwork' without reading why it exists."""
+    with open(model_catalog._MANIFEST_PATH, encoding="utf-8") as f:
+        raw = json.load(f)
+    comment = " ".join(raw["_comment"])
+    assert "composer-2.5-fast" in comment
+    assert "_MANIFEST_UNION_PROTOCOLS" in comment
+    assert raw["grok"].get("manifest_is_authoritative") is True
+    # And the module itself carries the same warning.
+    assert "MANIFEST-DRIVEN" in (model_catalog.__doc__ or "").upper()
+    assert "composer-2.5-fast" in (model_catalog.__doc__ or "")
 
 
 def test_manifest_unreadable_is_not_fatal(monkeypatch, tmp_path):

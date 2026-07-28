@@ -43,6 +43,47 @@ Three field-verified facts this module encodes (live-checked 2026-07-25)
    Redis. Caching the token would guarantee 401s within the quarter hour.
 
 
+⚠️ GROK IS DELIBERATELY MANIFEST-DRIVEN — do not "clean this up" (2026-07-28)
+-----------------------------------------------------------------------------
+``config/model-catalog.json`` looks like hand-maintained cruft for grok. It is
+not, and deleting it would silently drop knowledge no API can give back:
+
+* The Grok Build CLI ships model slugs that **no HTTP surface reports**. Checked
+  on 2026-07-28: ``cli-chat-proxy.grok.com/v1/models`` (with every client-surface
+  header the binary knows), ``grok models`` and ``~/.grok/models_cache.json`` ALL
+  return exactly ``grok-4.5`` — while ``composer-2.5-fast`` is present inside the
+  0.2.93 binary, next to the bundled "Cursor Composer toolset and prompt".
+* Therefore the grok adapter **merges probe ∪ manifest** instead of using the
+  manifest only as a fallback (see ``_MANIFEST_UNION_PROTOCOLS``). A working
+  probe must not be able to *delete* knowledge — only add to it.
+* Entries the CLI knows but the wire protocol refuses carry ``cli_only: true``
+  in the manifest. They are shown (so the operator learns they exist) but are
+  NOT bindable — ``POST /models/catalog/bind`` rejects them. Offering a model
+  that 400s on first use is worse than not listing it.
+
+Measured on 2026-07-28 against the live CLI proxy, with the CLI's own headers
+(``x-grok-client-version`` / ``-identifier`` / ``-surface``; without them the
+proxy answers 426 "CLI version (none) is outdated"):
+``grok-4.5`` → HTTP 200 · ``composer-2.5-fast`` → HTTP 400
+``{"code":"invalid-argument","error":"Model not found: composer-2.5-fast"}``.
+All 50 recorded grok sessions on this host ran ``grok-4.5``; ``composer-2.5-fast``
+appears in the binary only inside a vendored Cursor subagent prompt. Hence
+``cli_only: true`` — documented, visible, unbindable.
+
+
+⚠️ KIMI READS THE CLI'S OWN CONFIG — that is the primary source, not HTTP
+-------------------------------------------------------------------------
+The Kimi HTTP probe needs an access token that lives ~900 s, so the catalog was
+only ever current while a Kimi agent had recently logged in — the rest of the
+time it degraded to the manifest. But the Kimi Code CLI keeps its full model
+table on disk, **token-independently**, in
+``~/.mc/agents/<slug>/kimi-config/config.toml`` — the same file
+``kimi provider list --json`` reads, complete with ``display_name`` and
+``max_context_size``. That file is reachable through the existing ``${HOME}/.mc``
+mount, so the kimi adapter reads it FIRST and only augments it over HTTP.
+Consequence: a dead token no longer empties the Kimi catalog.
+
+
 Credential reachability from inside the backend container (investigated 2026-07-25)
 -----------------------------------------------------------------------------------
 * **anthropic** — reachable. ``resolve_provider_credentials`` reads the vault
@@ -54,14 +95,13 @@ Credential reachability from inside the backend container (investigated 2026-07-
   (KIMI_CODE_HOME of the host variant). Verified present on this host. Because
   several agents may hold their own credential file, all of them are globbed and
   the newest still-valid one wins.
-* **grok** — NOT reachable. The Grok CLI keeps its OAuth at
-  ``~/.grok/auth.json``, and compose deliberately mounts only
-  ``~/.grok/logs`` and ``~/.grok/sessions`` (read-only, for the token
-  harvester) — never the credential file. No mount was added and no
-  ``docker exec`` shell-out was built: the backend must not reach into an
-  agent container for secrets. Grok therefore degrades to the manifest with an
-  explanatory ``credential_missing`` status. The reader below still works the
-  moment such a mount is added, so no code change would be needed then.
+* **grok** — reachable SINCE 2026-07-28. ``docker-compose.yml`` now bind-mounts
+  ``~/.grok/auth.json`` read-only into the backend (next to the pre-existing
+  ``~/.grok/logs`` and ``~/.grok/sessions`` harvester mounts), so
+  ``read_grok_token()`` finds the file. Still no ``docker exec`` shell-out: the
+  backend must never reach into an agent container for secrets. A missing mount
+  degrades to the manifest with an explanatory ``credential_missing`` status,
+  exactly as before.
 """
 
 from __future__ import annotations
@@ -69,6 +109,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import tomllib
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -113,6 +154,25 @@ STATUS_OK = "ok"
 STATUS_CREDENTIAL_MISSING = "credential_missing"
 STATUS_UNREACHABLE = "unreachable"
 STATUS_MANIFEST_FALLBACK = "manifest_fallback"
+# A FOURTH, honest state — deliberately neither `ok` nor `manifest_fallback`.
+# It means: the live provider was not reached, but the list did not come from
+# our hand-typed manifest either — it was read out of the CLI's OWN config file
+# on disk, the same file the CLI consults to decide which models it may drive.
+# Calling that `ok` would claim a live confirmation we do not have; calling it
+# `manifest_fallback` would slander a source that is more current than our
+# manifest and is maintained by the vendor's own updater, not by us.
+STATUS_CLI_CONFIG = "cli_config"
+
+# Protocols whose MANIFEST outranks a successful probe and is therefore MERGED
+# into it (union, deduplicated) instead of only standing in when the probe dies.
+#
+# grok and grok alone: its CLI ships model slugs that no HTTP surface reports
+# (see the module docstring — measured, not assumed). For every other provider
+# the live API is strictly better informed than a file in this repo, so letting
+# a stale manifest add entries there would invent models. The rule is therefore
+# opt-in per protocol and must stay that way: add a protocol here only with a
+# measurement showing the manifest knows something the probe cannot.
+_MANIFEST_UNION_PROTOCOLS = frozenset({"grok"})
 
 PROTOCOL_LABELS = {
     "anthropic": "Anthropic",
@@ -185,11 +245,59 @@ def _manifest_models(protocol: str) -> list[dict]:
             "id": m["id"],
             "display_name": m.get("display_name"),
             "created": None,
+            "context_window": m.get("context_window"),
             "raw_provider": "manifest",
+            # A model the CLI knows but the wire protocol refuses. Shown so the
+            # operator learns it exists, never offered as bindable.
+            "cli_only": bool(m.get("cli_only")),
+            "note": m.get("note"),
         }
         for m in models
         if isinstance(m, dict) and isinstance(m.get("id"), str)
     ]
+
+
+def manifest_cli_only_ids(protocol: str) -> set[str]:
+    """Model ids flagged ``cli_only`` for this protocol.
+
+    Used by the bind endpoint to refuse creating a runtime row for a model the
+    provider's own API rejects — showing it is informative, binding it would
+    hand the operator a runtime that 400s on first use.
+    """
+    return {m["id"] for m in _manifest_models(protocol) if m.get("cli_only")}
+
+
+def _merge_models(primary: list[dict], extra: list[dict]) -> list[dict]:
+    """Union of two model lists, deduplicated by id, ``primary`` winning.
+
+    Order is stable: everything from ``primary`` first (live data, richer
+    fields), then the ids only ``extra`` knows about. Never mutates its inputs.
+    """
+    merged = list(primary)
+    seen = {m["id"] for m in merged}
+    for model in extra:
+        if model["id"] in seen:
+            continue
+        seen.add(model["id"])
+        merged.append(model)
+    return merged
+
+
+def _with_manifest_union(protocol: str, discovery: Discovery) -> Discovery:
+    """For opt-in protocols: fold the manifest INTO a successful probe.
+
+    Guards the exact regression this feature exists to prevent — the grok probe
+    starting to work and thereby *removing* ``composer-2.5-fast`` from the
+    catalog, because the proxy has never heard of it.
+    """
+    if protocol not in _MANIFEST_UNION_PROTOCOLS:
+        return discovery
+    return Discovery(
+        status=discovery.status,
+        models=_merge_models(discovery.models, _manifest_models(protocol)),
+        error=discovery.error,
+        reason=discovery.reason,
+    )
 
 
 def _fallback(protocol: str, reason: str, error: str | None) -> Discovery:
@@ -256,7 +364,12 @@ def _normalize_openai_list(data: dict, provider_tag: str) -> list[dict]:
                 "id": item["id"],
                 "display_name": item.get("display_name") or item.get("name"),
                 "created": item.get("created") or item.get("created_at"),
+                # Grok's proxy reports this; most others don't. None means
+                # "unknown", never "no context".
+                "context_window": item.get("context_window"),
                 "raw_provider": provider_tag,
+                "cli_only": False,
+                "note": None,
             }
         )
     return models
@@ -276,6 +389,84 @@ def _kimi_credentials_paths() -> list[Path]:
         return sorted(root.glob("*/kimi-config/credentials/kimi-code.json"))
     except OSError:
         return []
+
+
+def _kimi_config_paths() -> list[Path]:
+    """All per-agent Kimi CLI config files visible to the backend.
+
+    Same ``${HOME}/.mc`` bind-mount as the credentials — one directory up.
+    Newest file first, so the freshest CLI version wins on conflicting entries.
+    """
+    root = Path(settings.home_host) / ".mc" / "agents"
+    try:
+        paths = list(root.glob("*/kimi-config/config.toml"))
+    except OSError:
+        return []
+
+    def _mtime(p: Path) -> float:
+        try:
+            return p.stat().st_mtime
+        except OSError:
+            return 0.0
+
+    return sorted(paths, key=lambda p: (-_mtime(p), str(p)))
+
+
+def read_kimi_cli_models() -> list[dict]:
+    """Kimi's model table straight out of the CLI's own config — NO token needed.
+
+    This is the file behind ``kimi provider list --json``; the backend container
+    cannot execute ``kimi``, so it reads the same source instead of shelling into
+    an agent container. Layout (verified 2026-07-28, kimi-code 0.29.x)::
+
+        [models."kimi-code/k3"]
+        provider = "managed:kimi-code"
+        model = "k3"
+        max_context_size = 1048576
+        display_name = "K3"
+
+    The catalog id is the bare ``model`` value (``k3``), not the table key
+    (``kimi-code/k3``): ``runtime.model_identifier`` carries the bare form, and
+    the ``bound`` flag is a string comparison against exactly that.
+
+    Never raises — an unparsable config yields an empty list so the HTTP path
+    can still carry the provider.
+    """
+    models: list[dict] = []
+    seen: set[str] = set()
+    for path in _kimi_config_paths():
+        try:
+            with open(path, "rb") as f:
+                data = tomllib.load(f)
+        except (OSError, tomllib.TOMLDecodeError) as exc:
+            logger.warning("model catalog: kimi config %s unreadable (%s)", path, exc)
+            continue
+        table = data.get("models")
+        if not isinstance(table, dict):
+            continue
+        for key, entry in table.items():
+            if not isinstance(entry, dict):
+                continue
+            model_id = entry.get("model")
+            if not isinstance(model_id, str) or not model_id:
+                # Fall back to the part after the provider alias in the key.
+                model_id = str(key).split("/")[-1]
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            ctx = entry.get("max_context_size")
+            models.append(
+                {
+                    "id": model_id,
+                    "display_name": entry.get("display_name"),
+                    "created": None,
+                    "context_window": ctx if isinstance(ctx, int) else None,
+                    "raw_provider": "kimi-cli-config",
+                    "cli_only": False,
+                    "note": None,
+                }
+            )
+    return models
 
 
 def read_kimi_token() -> str:
@@ -362,13 +553,61 @@ async def _discover_grok(session: AsyncSession, target: ProviderTarget) -> Disco
     # sees, and the two catalogs differ (10 vs 1 model).
     token = read_grok_token()
     data = await _get_json(GROK_MODELS_URL, {"Authorization": f"Bearer {token}"})
-    return Discovery(STATUS_OK, _normalize_openai_list(data, "grok"))
+    # Union, not replacement — the proxy reports exactly one model while the CLI
+    # binary ships more (see module docstring). Applied via the generic hook so
+    # the opt-in list stays the single place that decides who gets this.
+    return _with_manifest_union(
+        "grok", Discovery(STATUS_OK, _normalize_openai_list(data, "grok"))
+    )
 
 
 async def _discover_kimi(session: AsyncSession, target: ProviderTarget) -> Discovery:
-    token = read_kimi_token()  # fresh read — ~900 s TTL, see read_kimi_token()
-    data = await _get_json(KIMI_MODELS_URL, {"Authorization": f"Bearer {token}"})
-    return Discovery(STATUS_OK, _normalize_openai_list(data, "kimi"))
+    """CLI config first, HTTP second.
+
+    Inverted on purpose (2026-07-28): the config file is always readable, the
+    access token dies after ~900 s. Reading HTTP first meant the Kimi catalog
+    was empty-but-for-the-manifest whenever no Kimi agent had recently logged
+    in. Now the token only ever ADDS models; it can no longer remove any.
+    """
+    config_models = read_kimi_cli_models()
+
+    try:
+        token = read_kimi_token()  # fresh read — ~900 s TTL, see read_kimi_token()
+        data = await _get_json(KIMI_MODELS_URL, {"Authorization": f"Bearer {token}"})
+    except (_CredentialUnavailable, httpx.HTTPError, ValueError) as exc:
+        if not config_models:
+            raise  # nothing on disk either → normal failure handling / manifest
+        # Live list unavailable, but the CLI's own config is right here. That is
+        # NOT a manifest fallback and NOT an "ok" — hence its own status.
+        return Discovery(
+            status=STATUS_CLI_CONFIG,
+            models=config_models,
+            error=f"{exc.__class__.__name__}: {exc}",
+            reason=(
+                STATUS_CREDENTIAL_MISSING
+                if isinstance(exc, _CredentialUnavailable)
+                else STATUS_UNREACHABLE
+            ),
+        )
+
+    # Both sources alive: HTTP wins on shared ids (it is the live truth), the
+    # config contributes anything the endpoint omits.
+    live = _normalize_openai_list(data, "kimi")
+    merged = _merge_models(live, config_models)
+    # The endpoint returns bare ids without labels; the config has display_name
+    # and max_context_size for the same models. Backfill instead of discarding.
+    by_id = {m["id"]: m for m in config_models}
+    enriched = []
+    for model in merged:
+        extra = by_id.get(model["id"])
+        if extra is not None:
+            model = {
+                **model,
+                "display_name": model.get("display_name") or extra.get("display_name"),
+                "context_window": model.get("context_window") or extra.get("context_window"),
+            }
+        enriched.append(model)
+    return Discovery(STATUS_OK, enriched)
 
 
 async def _discover_openai(session: AsyncSession, target: ProviderTarget) -> Discovery:
@@ -535,7 +774,15 @@ async def get_provider_catalog(
         "models": discovery.models,
         "cached_at": _utcnow_iso(),
     }
-    ttl = CACHE_TTL if discovery.status == STATUS_OK else NEGATIVE_CACHE_TTL
+    # cli_config caches long like a success: it is a stable answer read from a
+    # local file, not a transient outage that a 60-second retry could heal. The
+    # short negative TTL is reserved for states that really might fix themselves
+    # (provider 5xx, runtime just booting).
+    ttl = (
+        CACHE_TTL
+        if discovery.status in (STATUS_OK, STATUS_CLI_CONFIG)
+        else NEGATIVE_CACHE_TTL
+    )
     await _cache_set(target.key, payload, ttl)
     return {**payload, "cached": False}
 
@@ -567,6 +814,10 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
             **entry,
             "models": [{**m, "bound": m["id"] in bound_ids} for m in entry["models"]],
         }
-        entry["new_count"] = sum(1 for m in entry["models"] if not m["bound"])
+        # cli_only models never count as "new": they cannot be bound, so a badge
+        # nagging about them would never go away no matter what the operator does.
+        entry["new_count"] = sum(
+            1 for m in entry["models"] if not m["bound"] and not m.get("cli_only")
+        )
         providers.append(entry)
     return providers
