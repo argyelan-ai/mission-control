@@ -117,6 +117,14 @@ export default function InsightsPage() {
     refetchInterval: 120_000,
   });
 
+  // Analysis window is a backend config (analysis_window_days), independent of
+  // the cost-days selector — the task KPIs must label the real window.
+  const { data: intelConfig } = useQuery({
+    queryKey: ["intelligence-config"],
+    queryFn: () => api.intelligence.config(),
+    staleTime: 5 * 60_000,
+  });
+
   const { data: byModel } = useQuery({
     queryKey: ["intelligence-costs-by-model", days],
     queryFn: () => api.intelligence.byModel(days),
@@ -285,16 +293,16 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
                     label="Tasks completed"
-                    value={String(tasksDone)}
-                    sub={`last ${days} days`}
+                    value={insights ? String(tasksDone) : "—"}
+                    sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={CheckCircle2}
                     color={C.online}
                     hero
                   />
                   <KPICard
                     label="Failed"
-                    value={String(tasksFailed)}
-                    sub="total"
+                    value={insights ? String(tasksFailed) : "—"}
+                    sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={XCircle}
                     color={C.error}
                     valueColor={tasksFailed > 0 ? "var(--color-status-error-text)" : undefined}
@@ -322,13 +330,15 @@ export default function InsightsPage() {
                       Agent Performance (Tasks)
                     </div>
                     {agentPerfData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={200}>
-                        <BarChart data={agentPerfData} barSize={20}>
-                          <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
-                          <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
+                      /* Horizontal bars: agent names as category labels stay readable
+                         at any count — vertical bars squeezed them on the x-axis. */
+                      <ResponsiveContainer width="100%" height={Math.max(200, agentPerfData.length * 26)}>
+                        <BarChart data={agentPerfData} barSize={14} layout="vertical">
+                          <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
+                          <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
                           <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
