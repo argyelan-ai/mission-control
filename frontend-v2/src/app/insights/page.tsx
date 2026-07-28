@@ -330,13 +330,15 @@ export default function InsightsPage() {
                       Agent Performance (Tasks)
                     </div>
                     {agentPerfData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={200}>
-                        <BarChart data={agentPerfData} barSize={20}>
-                          <XAxis dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} />
-                          <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
+                      /* Horizontal bars: agent names as category labels stay readable
+                         at any count — vertical bars squeezed them on the x-axis. */
+                      <ResponsiveContainer width="100%" height={Math.max(200, agentPerfData.length * 26)}>
+                        <BarChart data={agentPerfData} barSize={14} layout="vertical">
+                          <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
+                          <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
                           <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
+                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
