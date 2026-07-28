@@ -727,7 +727,7 @@ clean** (F12).
 
 | # | Item | Status |
 |---|---|---|
-| 1 | **Instrumentation**: per context-loss event, did `mc recover` happen before the first write? | ⚠️ **re-scoped — see F13.** The numerator is already recorded durably; the *denominator* (restarts with no recovery) is recorded nowhere, and there is no cheap honest proxy. Needs a decision, not just code. |
+| 1 | **Instrumentation**: per context-loss event, did `mc recover` happen before the first write? | ✅ **answered without building anything — §10.1.** The data already existed; it was queried instead of instrumented. Verdict: the gate is not justified, the question is now collectible, **re-run the query after real fleet activity**. |
 | 2 | **`mc thread`** — `GET /agent/me/thread` in `agent_scoped.py` + CLI verb + tests (§5.1, §5.6) | ✅ **shipped** — `747e4a32`, `a2a3ce91`, `5f05c909` |
 | 3 | delete `get_last_checkpoint` (`task_context_builder.py:809`) + its re-export (`dispatch.py:604`) | ✅ **shipped** — `9647c88d` |
 | — | Hermes, the gate, the valve, JSONL rotation | **Not now.** #1 decides the first three; rotation is an unrelated ticket. |
@@ -885,6 +885,67 @@ merge.
 
 **Not yet deployed.** Fleet agents are working; per the standing rule no rebuild happens
 while they are. Deploy is the operator's call.
+
+### 10.1 The measurement, actually run
+
+F13 concluded that item #1 needed an operator decision. The operator's answer was to look at
+the existing data first — so it was queried read-only against the live DB on 2026-07-28,
+before writing any instrumentation. **It turned out to be answerable without building
+anything.**
+
+`activity_events`: **8292 rows, 2026-04-04 → 2026-07-28, never pruned.**
+
+| Event | Total | Last 60 d | Window |
+|---|---|---|---|
+| `task.agent_recovery` | 158 | 17 | 04-21 → 07-26 |
+| `task.stale_update_rejected` | 99 | 9 | 04-04 → 07-11 |
+| `task.missing_dispatch_attempt_id` | 122 | 0 | 04-15 → **05-18** |
+
+That third row is a confirmation, not a gap: emission was deliberately removed on
+**2026-05-18** (`agent_task_status.py:1439-1444`) and the data stops on exactly that day.
+
+**The core correlation** — of the 76 stale rejections carrying a `task_id`, did a recovery
+ever precede them on that task?
+
+| | n |
+|---|---|
+| **No prior recovery — wrote stale without ever recovering** | **55** (72 %) |
+| Recovered, and still wrote stale | 21 (28 %) |
+
+**Why this does not license the gate, stated plainly:**
+
+1. **The signal conflates two causes.** `stale_update_rejected` fires both when an agent lost
+   its context *and* when a task was legitimately re-dispatched after stop/requeue and the old
+   run wrote late — the guard's original purpose. Nothing in the event separates them.
+2. **The trail that would separate them is the one that was missing.** `task_attempt_audit`
+   only starts 2026-05-15, and only **10 of the 52** affected tasks have any audit row —
+   because recovery never wrote one (fixed in `cd301f9b`; the numbers above are the "before").
+3. **The volume is small and falling**: 9 stale rejections in 60 days, against a fleet the
+   operator confirms has been running only intermittently during development.
+4. **The guard covers one endpoint.** Writes via `mc comment` / `mc ask` / `mc msg` /
+   deliverables are invisible to it entirely (F13).
+
+**Verdict:** the data neither justifies the hard gate nor closes the question — but it is now
+*collectible*. With the audit trail fixed, a repeat of this exact query after a period of real
+fleet activity separates the two causes cleanly. **Re-run it then; build nothing before.**
+That is the whole of item #1, and it needs no code.
+
+### 10.2 The second defect, deliberately not fixed
+
+`task.missing_dispatch_attempt_id` is log-only and invisible to any query (F13). The obvious
+fix is one argument — `emit_event(..., severity="info")` — because Discord only pushes at
+`warning` and above (`services/activity.py:70-74`). The original author dropped the *record*
+in order to drop the *noise*; lowering the severity would have kept both goals.
+
+**It was still left alone**, for reasons that outweigh the tidiness:
+
+- `test_dispatch_attempt_guard_events.py` exists specifically to pin the current behaviour,
+  with a documented incident rationale. Changing it means reversing another engineer's
+  reasoned call in a file this work does not own.
+- The signal is ambiguous anyway: a missing header usually means the agent used raw `curl`
+  instead of `mc done` — a briefing problem, not necessarily context loss.
+
+The recipe is recorded here so whoever wants it does not have to re-derive it.
 
 ---
 
