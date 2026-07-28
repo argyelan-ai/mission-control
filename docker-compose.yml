@@ -110,6 +110,10 @@ services:
       TELEGRAM_REPORTS_CHAT_ID: ${TELEGRAM_REPORTS_CHAT_ID:-}
       # Jarvis Telegram-Inbound (ADR-061): mobiler Jarvis via Telegram Text/Voice.
       # Default aus → Verhalten unveraendert (nur Approval-URL-Buttons).
+      # Team-Chat: Telegram-Themen <-> MC-Threads (P2.2-P2.4). Ohne diese
+      # Zeile erreicht das Flag den Container nie — die .env allein reicht
+      # nicht, weil hier jede Telegram-Variable einzeln durchgereicht wird.
+      TELEGRAM_TEAM_CHAT_ENABLED: ${TELEGRAM_TEAM_CHAT_ENABLED:-false}
       JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
