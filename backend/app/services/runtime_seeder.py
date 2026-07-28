@@ -14,6 +14,17 @@ have zero effect on an already-seeded fleet. A stale value in runtimes.json
 (e.g. an old model name) is therefore harmless drift, not a bug: it only
 matters for a brand-new deploy's first-run seed. `model_identifier` stays the
 single runtime truth via the DB row, never via this file, after that point.
+DISPLAY NAMES are not read from the file for provider-backed cloud rows —
+they are DERIVED from `model_identifier` + provider label via
+`services/runtime_naming.derive_runtime_display_name`, the same rule the
+catalog bind uses. A fresh install therefore gets exactly the names an
+existing fleet has, and a stale hand-typed label in runtimes.json (the
+"Claude Opus 4.7 runs claude-opus-4-8" class of bug) cannot be seeded at all.
+Local/curated runtimes (vLLM, LM Studio, unsloth, omp, hermes) and rows whose
+`model_identifier` is still NULL keep the name from the file — there the human
+knows more than the rule. The file's names were brought in line with the rule
+anyway, so it reads truthfully.
+
 (No top-level comment key was added to runtimes.json itself — the file is a
 bare JSON array with no native comment syntax, and a dummy entry without an
 `id` would just log a "seed entry missing id" warning on every startup for no
@@ -28,6 +39,7 @@ from sqlalchemy import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.runtime import Runtime
+from app.services.runtime_naming import derive_runtime_display_name
 
 logger = logging.getLogger("mc.runtime_seeder")
 
@@ -60,13 +72,28 @@ async def seed_runtimes(session: AsyncSession) -> tuple[int, int]:
             skipped += 1
             continue
 
+        runtime_type = entry.get("runtime_type", "openai_compatible")
+        endpoint = entry.get("endpoint", "")
+        model_identifier = entry.get("model_identifier") or entry.get("lms_identifier")
+        # Provider-backed cloud rows get their name DERIVED (services/
+        # runtime_naming), so a fresh install and a catalog bind produce the
+        # identical label for the identical model — and a stale hand-typed name
+        # in runtimes.json can no longer leak into a new fleet. Local/curated
+        # rows and rows without a model_identifier return None here and keep the
+        # name from the file, where a human knows more than the rule.
+        display_name = (
+            derive_runtime_display_name(endpoint, model_identifier, runtime_type)
+            or entry.get("display_name")
+            or slug
+        )
+
         runtime = Runtime(
             slug=slug,
-            display_name=entry.get("display_name", slug),
-            runtime_type=entry.get("runtime_type", "openai_compatible"),
-            endpoint=entry.get("endpoint", ""),
+            display_name=display_name,
+            runtime_type=runtime_type,
+            endpoint=endpoint,
             healthcheck_path=entry.get("healthcheck_path"),
-            model_identifier=entry.get("model_identifier") or entry.get("lms_identifier"),
+            model_identifier=model_identifier,
             container_name=entry.get("container_name"),
             lms_identifier=entry.get("lms_identifier"),
             lms_cli_path=entry.get("lms_cli_path"),

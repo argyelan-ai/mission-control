@@ -150,7 +150,7 @@ token — you can ignore/discard it, the next step issues a fresh one.
 On the agent's detail page:
 
 1. **Runtime** section → pick the LLM runtime you set up in step 2 (e.g.
-   "Claude Sonnet 4.6 (Anthropic Pro/Max)" or your OpenAI-compatible
+   "Claude Sonnet 5 (Anthropic Pro/Max)" or your OpenAI-compatible
    runtime) → save. This is also what selects the Docker image
    (`mc-claude-agent` vs `mc-agent-base`) and, since the agent has no
    container yet, brings one up for the first time
