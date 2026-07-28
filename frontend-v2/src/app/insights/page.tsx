@@ -293,7 +293,7 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
                     label="Tasks completed"
-                    value={insights ? String(tasksDone) : "—"}
+                    value={insights?.analyzed_at ? String(tasksDone) : "—"}
                     sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={CheckCircle2}
                     color={C.online}
@@ -301,7 +301,7 @@ export default function InsightsPage() {
                   />
                   <KPICard
                     label="Failed"
-                    value={insights ? String(tasksFailed) : "—"}
+                    value={insights?.analyzed_at ? String(tasksFailed) : "—"}
                     sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={XCircle}
                     color={C.error}
@@ -342,7 +342,13 @@ export default function InsightsPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <EmptyChart message="No performance data" />
+                      <EmptyChart
+                        message={
+                          insights?.analyzed_at
+                            ? "No performance data"
+                            : "Analysis pending — first run after backend start takes a few minutes"
+                        }
+                      />
                     )}
                   </div>
 
