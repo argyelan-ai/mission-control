@@ -145,12 +145,16 @@ export default function InsightsPage() {
 
   const loading = loadingInsights || loadingCosts;
 
-  // Chart data derived from real data
-  const agentPerfData = insights?.agent_performance?.map((a) => ({
-    name: a.name,
-    done: a.done,
-    failed: a.failed,
-  })) ?? [];
+  // Chart data derived from real data. Performance only lists agents with
+  // activity in the window — all-zero rows added noise and made the panel
+  // grow past its cost twin.
+  const agentPerfData = insights?.agent_performance
+    ?.filter((a) => a.done > 0 || a.failed > 0)
+    .map((a) => ({
+      name: a.name,
+      done: a.done,
+      failed: a.failed,
+    })) ?? [];
 
   const agentCostData = costs?.agents?.map((a: CostAgentSummary) => ({
     name: a.agent_name,
@@ -158,6 +162,12 @@ export default function InsightsPage() {
     tokensIn: a.tokens_in,
     tokensOut: a.tokens_out,
   })) ?? [];
+
+  // Both side-by-side charts share one height so the panel row stays level.
+  const agentChartHeight = Math.max(
+    200,
+    Math.max(agentPerfData.length, agentCostData.length) * 26
+  );
 
   const failureData = Object.entries(insights?.failure_patterns?.patterns ?? {}).map(
     ([name, count]) => ({ name, value: count as number })
@@ -332,7 +342,7 @@ export default function InsightsPage() {
                     {agentPerfData.length > 0 ? (
                       /* Horizontal bars: agent names as category labels stay readable
                          at any count — vertical bars squeezed them on the x-axis. */
-                      <ResponsiveContainer width="100%" height={Math.max(200, agentPerfData.length * 26)}>
+                      <ResponsiveContainer width="100%" height={agentChartHeight}>
                         <BarChart data={agentPerfData} barSize={14} layout="vertical">
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
                           <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
@@ -357,8 +367,8 @@ export default function InsightsPage() {
                       Cost per agent (USD)
                     </div>
                     {agentCostData.length > 0 ? (
-                      <ResponsiveContainer width="100%" height={200}>
-                        <BarChart data={agentCostData} barSize={24} layout="vertical">
+                      <ResponsiveContainer width="100%" height={agentChartHeight}>
+                        <BarChart data={agentCostData} barSize={14} layout="vertical">
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} tickFormatter={(v) => `$${v}`} />
                           <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={60} />
                           <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`$${Number(v).toFixed(4)}`, "Cost"]} />
