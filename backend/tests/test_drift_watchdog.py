@@ -43,7 +43,9 @@ def _write_docker_stub(bin_dir: Path, *, md5sum_fails: bool) -> None:
     md5sum_fails=True reproduces "the container has no such file".
     """
     behaviour = "exit 1" if md5sum_fails else "echo 'deadbeef  /file'"
+    trace = bin_dir.parent / "docker-calls.log"
     stub = f"""#!/usr/bin/env bash
+echo "$*" >> "{trace}"
 case "$1" in
   info) exit 0 ;;
   ps)   echo "containerid123" ; exit 0 ;;
@@ -64,19 +66,65 @@ esac
     p.chmod(p.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _fake_home(tmp_path: Path) -> Path:
+    """Build the repo layout the script derives from $HOME.
+
+    The script computes REPO="${HOME}/Workspace/Projects/mission-control" and
+    bails out with `cd "$REPO" || exit 0` when it does not exist. On a
+    developer Mac that path is real, so the tests passed; in CI it is not, so
+    the script exited immediately having done nothing — and three of these
+    tests still went green, because a script that does nothing also returns 0.
+
+    Pointing HOME at a purpose-built tree makes every assertion here about the
+    script's actual behaviour rather than about the machine it runs on.
+    """
+    repo = tmp_path / "home" / "Workspace" / "Projects" / "mission-control"
+    for rel in (
+        "docker/shared/poll.sh",
+        "docker/mc-agent-base/recycler.sh",
+        "docker/mc-agent-base/entrypoint.sh",
+        "docker/mc-agent-base/start-claude.sh",
+        "docker/mc-agent-base/lib/turn-state.sh",
+        "docker/mc-claude-agent/recycler.sh",
+        "docker/mc-claude-agent/entrypoint.sh",
+        "scripts/build-agent-images.sh",
+        "docker-compose.yml",
+        "docker/docker-compose.agents.yml",
+        ".env",
+        "docker/.env.agents",
+    ):
+        p = repo / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("# fixture\n", encoding="utf-8")
+    (repo / "scripts" / "build-agent-images.sh").chmod(0o755)
+    return tmp_path / "home"
+
+
 def _run(tmp_path: Path, *, md5sum_fails: bool) -> subprocess.CompletedProcess:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     _write_docker_stub(bin_dir, md5sum_fails=md5sum_fails)
+    home = _fake_home(tmp_path)
     env = dict(os.environ)
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
-    return subprocess.run(
+    env["HOME"] = str(home)
+    proc = subprocess.run(
         ["bash", str(SCRIPT)],
         capture_output=True,
         text=True,
         env=env,
         timeout=120,
     )
+    # Guard the guard: the stub records every call, so an empty trace proves
+    # the script bailed before reaching the code under test and every
+    # assertion about it would be vacuous. This is exactly how the CI failure
+    # hid — three tests green against a script that never ran.
+    trace = tmp_path / "docker-calls.log"
+    assert trace.exists() and "md5sum" in trace.read_text(), (
+        "the watchdog never got as far as hashing a container file — the test "
+        "would be asserting nothing. Check the $HOME fixture layout."
+    )
+    return proc
 
 
 @pytest.mark.skipif(not SCRIPT.exists(), reason="watchdog script not present")
