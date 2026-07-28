@@ -2295,7 +2295,13 @@ REGISTRY: dict[str, CommandSpec] = {
         name="inbox",
         help="Neue Thread-Nachrichten abholen + pro Thread acken (Nudge+Pull, auf 📬-Weckruf)",
         endpoints=("GET /me/inbox", "POST /me/inbox/ack"),
-        scope="chat:write",  # backend require_agent (comm_v2-gated), keine spezielle Scope
+        # Verified 2026-07-28 (Card-verb-scope contract, PR card-verbs-by-scope):
+        # routers/agents.py "/agent/me/inbox" and "/agent/me/inbox/ack" both
+        # hang only on Depends(require_agent) — no require_scope. Was
+        # mislabeled "chat:write" (an approximation of what inbox is *for*,
+        # not what the endpoint checks); corrected so CARD.md's scope filter
+        # (agent_doc_constants.CANONICAL_VERB_SCOPES) can trust this field.
+        scope="",
         handler=_cmd_inbox,
         add_args=lambda p: None,
     ),
@@ -2379,7 +2385,11 @@ REGISTRY: dict[str, CommandSpec] = {
         name="recover",
         help="Aktuellen Task-Prompt nach Restart/Crash neu holen",
         endpoints=("GET /me/active-task-recovery",),
-        scope="tasks:read",
+        # Verified 2026-07-28: routers/agents.py "/agent/me/active-task-recovery"
+        # hangs only on Depends(require_agent) — no require_scope. Was
+        # mislabeled "tasks:read" (a plausible-looking but unverified guess);
+        # corrected for the CARD.md scope filter contract (see "inbox" above).
+        scope="",
         handler=_cmd_recover,
         add_args=_add_recover_args,
     ),
@@ -2387,7 +2397,13 @@ REGISTRY: dict[str, CommandSpec] = {
         name="me",
         help="Eigene Agent-Info (id, role, scopes, current_task, cli_skills/plugins)",
         endpoints=("GET /me",),
-        scope="heartbeat",  # jede Agent-Auth reicht; heartbeat ist der universellste Scope
+        # Verified 2026-07-28: routers/agent_scoped.py "/me" hangs only on
+        # Depends(require_agent) — docstring says explicitly "No scope
+        # requirement — any authenticated agent may look up itself." Was
+        # mislabeled "heartbeat" (a stand-in for "any auth suffices", not
+        # what the endpoint checks); corrected for the CARD.md scope filter
+        # contract (see "inbox" above).
+        scope="",
         handler=_cmd_me,
         add_args=_add_me_args,
     ),

@@ -23,6 +23,8 @@ from app.constants import (  # re-export — single source, do not duplicate
 
 __all__ = [
     "CANONICAL_VERBS",
+    "CANONICAL_VERB_SCOPES",
+    "filter_verbs_by_scopes",
     "FORBIDDEN_VERB_PATTERNS",
     "DOC_TOPICS",
     "DocTopicSpec",
@@ -79,6 +81,82 @@ CANONICAL_VERBS: dict[str, str] = {
     "file-answer": "Save a research result as a Vault note.",
     "docs": "Read a local reference doc — no network call, works offline.",
 }
+
+
+# ── Verb -> scope mapping ────────────────────────────────────────────────
+#
+# CARD.md.j2's '## Verbs' section is the single biggest block in the
+# Operating Card (2563 of 5106 worst-case bytes, measured 2026-07-28) and
+# used to render every CANONICAL_VERBS entry to every agent regardless of
+# what it may actually call. Each value here is the app.scopes.Scope the
+# backend's require_scope() demands on that verb's underlying endpoint
+# (traced through scripts/mc-cli/mc_cli/commands.py:REGISTRY ->
+# backend/app/routers/{agent_scoped,agent_task_status,agent_comments,
+# tasks,vault}.py); None means the endpoint only requires require_agent
+# (no scope check) and so the verb is a base verb, always shown.
+#
+# test_agent_docs_contract.py::test_canonical_verbs_are_registered keeps
+# CANONICAL_VERBS honest against the real REGISTRY; the sibling test in
+# test_card_verbs_by_scope.py::test_every_canonical_verb_has_a_scope_mapping
+# keeps this dict's keys in exact sync with CANONICAL_VERBS.
+CANONICAL_VERB_SCOPES: dict[str, str | None] = {
+    "ack": "tasks:write",
+    "done": "tasks:write",
+    "patch": "tasks:write",
+    "task-get": "tasks:read",
+    "vault-search": "vault:read",
+    "vault-related": "vault:read",
+    "vault-write": "vault:write",
+    "review": "tasks:write",
+    "approve": "tasks:write",
+    "reject": "tasks:write",
+    "finish": "tasks:write",
+    "blocked": "tasks:write",
+    "failed": "tasks:write",
+    "comment": "tasks:write",
+    "ask": "chat:write",
+    "msg": "chat:write",
+    "inbox": None,  # GET /agent/me/inbox — require_agent only (Nudge+Pull)
+    "checklist": "tasks:write",
+    "question": "tasks:help",
+    "help": "tasks:help",
+    "delegate": "tasks:create",
+    "deliverable": "tasks:write",
+    "deliverable-get": "tasks:read",
+    "telegram": "chat:write",
+    "verify": "chat:write",
+    "pdf": "tasks:write",
+    "memory": "memory:read",
+    "recover": None,  # GET /agent/me/active-task-recovery — require_agent only
+    "me": None,  # GET /agent/me — require_agent only, explicit self-lookup
+    "plugin-list": "agents:manage",
+    "plugin-show": "agents:manage",
+    "plugin-assign": "agents:manage",
+    "plugin-unassign": "agents:manage",
+    "worker-restart": "agents:manage",
+    "remember": "vault:write",
+    "file-answer": "vault:write",
+    "docs": None,  # local file read, no network call, works offline
+}
+
+
+def filter_verbs_by_scopes(scopes: list[str] | None) -> dict[str, str]:
+    """CANONICAL_VERBS, filtered to what the given effective scopes allow.
+
+    Mirrors the `_has(scope)` pattern in services/tools_md_builder.py:
+    scopes=None or scopes=[] means ALL_SCOPES (backward compat — an agent
+    row with no scopes column set never loses tools), and a verb whose
+    CANONICAL_VERB_SCOPES entry is None (base verb, no require_scope
+    beyond require_agent) is always included.
+    """
+    if not scopes:
+        return dict(CANONICAL_VERBS)
+    allowed = set(scopes)
+    return {
+        verb: desc
+        for verb, desc in CANONICAL_VERBS.items()
+        if CANONICAL_VERB_SCOPES.get(verb) is None or CANONICAL_VERB_SCOPES[verb] in allowed
+    }
 
 
 # ── Forbidden patterns ───────────────────────────────────────────────────

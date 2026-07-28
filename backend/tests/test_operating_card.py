@@ -114,6 +114,59 @@ def test_card_contains_core_safety_gates(role, is_lead):
     assert not missing, f"CARD.md missing safety markers {missing} (role={role}, is_lead={is_lead})"
 
 
+# ── (c2) Hard gates are named, not just marker-substring-present ────────
+#
+# The byte budget is a permanent pressure to cut something. SAFETY_MARKERS
+# above checks fragments (a heading could be reworded/merged and still
+# match a substring); this test pins the six gates by their exact bold
+# headline text, and — the actual point — makes it impossible to "solve"
+# a future budget overrun by quietly deleting one. If the budget is ever
+# too tight for all of these, the fix is trimming something re-derivable
+# (an L2 doc pointer, a verb description) — never a hard gate.
+HARD_GATE_NAMES = [
+    "**ACK first.**",
+    "**Never guess.**",
+    "**GitHub repos are ALWAYS `--private`.**",
+    "**Credentials live in the Vault, never inline.**",
+    "**5-Minute-Blocker Rule.**",
+    "**Deliverables only under `/deliverables/<task_id>/`.**",
+]
+
+# The inbox->msg gate (PR #187, incident 2026-07-28: FreeCode answered Mark
+# only on its own screen) only applies to comm_v2 agents — an agent without
+# an inbox would be taught a dead reference to a tool it doesn't have.
+COMM_V2_INBOX_GATE_NAME = "**Every `mc inbox` ends with `mc msg`.**"
+
+
+def _render_card_comm_v2(role: str, is_lead: bool, comm_v2: bool) -> str:
+    agent = _make_agent(role, is_lead=is_lead, harness="claude")
+    ctx = build_agent_context(agent, agents_on_board=[])
+    ctx["comm_v2"] = comm_v2
+    return render_agent_file("CARD.md.j2", ctx)
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("is_lead", [True, False])
+def test_card_names_every_hard_gate(role, is_lead):
+    card = _render_card_comm_v2(role, is_lead, comm_v2=False)
+    missing = [name for name in HARD_GATE_NAMES if name not in card]
+    assert not missing, f"CARD.md dropped hard gate(s) {missing} (role={role}, is_lead={is_lead})"
+    assert COMM_V2_INBOX_GATE_NAME not in card, (
+        "non-comm_v2 card must not teach the inbox->msg gate (dead tool reference)"
+    )
+
+
+@pytest.mark.parametrize("role", ROLES)
+@pytest.mark.parametrize("is_lead", [True, False])
+def test_card_names_the_comm_v2_inbox_gate(role, is_lead):
+    card = _render_card_comm_v2(role, is_lead, comm_v2=True)
+    missing = [name for name in HARD_GATE_NAMES if name not in card]
+    assert not missing, f"CARD.md dropped hard gate(s) {missing} (role={role}, is_lead={is_lead}, comm_v2=True)"
+    assert COMM_V2_INBOX_GATE_NAME in card, (
+        f"CARD.md dropped the comm_v2 inbox->msg gate (role={role}, is_lead={is_lead})"
+    )
+
+
 # ── (d) omp excludes the close example, claude includes it ──────────────
 
 def test_card_omp_harness_excludes_close_example():
