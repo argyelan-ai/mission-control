@@ -18,7 +18,11 @@ async def test_registry_lookup():
     a = get_adapter("hermes")
     assert isinstance(a, HermesAdapter)
     assert a.protocol == "openai"
-    assert get_adapter("openclaude") is None
+    # "openclaw" is the retired Phase-29 gateway runtime (ADR-039): a value
+    # that can never gain an adapter. It replaced "openclaude" here on
+    # 2026-07-28, when openclaude/omp were registered so every CLI type exists
+    # as a host agent too (see test_host_harness_catalog.py's invariant).
+    assert get_adapter("openclaw") is None
     assert get_adapter(None) is None
 
 
@@ -293,11 +297,18 @@ async def test_sync_host_agent_model_without_model_identifier_writes_no_pin(
 
 
 @pytest.mark.asyncio
-async def test_marked_for_sync_covers_claude_host_but_not_generic_harnesses(
+async def test_marked_for_sync_covers_host_agents_with_an_adapter_only(
     async_session,
 ):
-    """mark_agents_for_sync flags host agents only when their harness has an
-    adapter — claude now does, openclaude/omp still do not."""
+    """mark_agents_for_sync flags host agents exactly when their harness has an
+    adapter — the registry is the gate.
+
+    Rewritten 2026-07-28: this used to read "claude yes, openclaude/omp no".
+    openclaude/omp are registered now, and being flagged is CORRECT for them —
+    they are openai-protocol hosts whose agent.env must follow a model change
+    just like Boss's does. The negative case therefore moved to a harness that
+    genuinely has no adapter ("openclaw", the retired Phase-29 runtime).
+    """
     from app.services.runtime_propagation import mark_agents_for_sync
 
     rt = _mk_anthropic_rt(async_session)
@@ -305,19 +316,24 @@ async def test_marked_for_sync_covers_claude_host_but_not_generic_harnesses(
     await async_session.refresh(rt)
     boss = Agent(name="Boss", role="lead", agent_runtime="host",
                  harness="claude", runtime_id=rt.id, slug="boss")
-    other = Agent(name="Generic", role="dev", agent_runtime="host",
-                  harness="openclaude", runtime_id=rt.id, slug="generic")
+    generic = Agent(name="Generic", role="dev", agent_runtime="host",
+                    harness="openclaude", runtime_id=rt.id, slug="generic")
+    adapterless = Agent(name="Legacy", role="dev", agent_runtime="host",
+                        harness="openclaw", runtime_id=rt.id, slug="legacy")
     async_session.add(boss)
-    async_session.add(other)
+    async_session.add(generic)
+    async_session.add(adapterless)
     await async_session.commit()
 
     flagged = await mark_agents_for_sync(async_session, rt)
 
     await async_session.refresh(boss)
-    await async_session.refresh(other)
-    assert flagged == 1
+    await async_session.refresh(generic)
+    await async_session.refresh(adapterless)
+    assert flagged == 2
     assert boss.pending_runtime_sync is True
-    assert other.pending_runtime_sync is not True
+    assert generic.pending_runtime_sync is True
+    assert adapterless.pending_runtime_sync is not True
 
 
 def test_env_value_roundtrip_is_idempotent():

@@ -100,6 +100,87 @@ def _format_env_file(env: dict[str, str]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def omp_host_profile(slug: str) -> str:
+    """omp profile name for a host agent. One profile per agent, never the default.
+
+    The operator's own ``~/.omp`` config must stay untouched, and two host omp
+    agents must not share a models.yml — so the profile is namespaced by slug.
+    """
+    return f"mc-{slug}"
+
+
+def render_omp_host_models_yml(slug: str, env: dict[str, str], *, home: Path | None = None) -> str | None:
+    """Render omp's models.yml for a HOST omp agent from its runtime env.
+
+    WHY THIS EXISTS
+    ---------------
+    omp is the one generic-staged host harness that does NOT pick its model up
+    from OPENAI_BASE_URL/OPENAI_MODEL: it resolves models through its own
+    models.yml, which docker/omp-bridge/entrypoint.sh (§2) calls mandatory for
+    a self-served endpoint. The container renders that file at boot; nothing
+    rendered it on the host path, so a staged omp host agent would have booted
+    against whatever ``~/.omp`` config the operator happens to have — silently
+    ignoring the runtime the operator bound in MC.
+
+    Resolution rule (verified in-container, entrypoint.sh §2): with
+    ``OMP_PROFILE=<p>`` omp reads ``$HOME/.omp/profiles/<p>/agent/models.yml``
+    — a file at ``$PI_CODING_AGENT_DIR`` is ignored once a profile is set. So
+    the caller MUST also put ``OMP_PROFILE`` into agent.env (run.sh exports it).
+
+    Returns the written path, or None when the env has no usable binding
+    (mirrors the container's "no baked-in defaults" rule from ADR-054 — a
+    silent fallback to a stale model is the exact drift bug this prevents;
+    here we skip the file instead of hard-failing the whole staging run).
+    """
+    base_url = env.get("OPENAI_BASE_URL")
+    model = env.get("OPENAI_MODEL")
+    if not base_url or not model:
+        logger.warning(
+            "omp host agent %s: no OPENAI_BASE_URL/OPENAI_MODEL in its runtime env "
+            "— skipping models.yml (omp will fall back to its own config)",
+            slug,
+        )
+        return None
+
+    home = home or _home_host()
+    profiles_root = (home / ".omp" / "profiles").resolve()
+    models_dir = home / ".omp" / "profiles" / omp_host_profile(slug) / "agent"
+    resolved = models_dir.resolve()
+    # Same containment property the workspace staging enforces: a hostile slug
+    # must not be able to steer this write outside the omp profiles tree.
+    if profiles_root not in resolved.parents:
+        raise ValueError(
+            f"refusing to render omp models.yml outside {profiles_root}: {resolved}"
+        )
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    # Keyed endpoints (e.g. Ollama Cloud) get the api key; keyless local vLLM
+    # keeps `auth: none`. Same two shapes as the container entrypoint.
+    api_key = env.get("OPENAI_API_KEY")
+    auth_line = f"    apiKey: {api_key}" if api_key else "    auth: none"
+    context_window = env.get("OMP_CONTEXT_WINDOW", "262144")
+    max_tokens = env.get("OMP_MAX_TOKENS", "32768")
+
+    models_yml = (
+        "providers:\n"
+        "  mc-openai:\n"
+        "    name: MC OpenAI-compatible endpoint\n"
+        f"    baseUrl: {base_url}\n"
+        "    api: openai-completions\n"
+        f"{auth_line}\n"
+        "    models:\n"
+        f"      - id: {model}\n"
+        "        name: MC model\n"
+        "        reasoning: true\n"
+        f"        contextWindow: {context_window}\n"
+        f"        maxTokens: {max_tokens}\n"
+    )
+    models_path = models_dir / "models.yml"
+    # 0600 like agent.env — apiKey may be rendered inline above.
+    _write_owner_only_file(models_path, models_yml)
+    return str(models_path)
+
+
 @dataclass
 class HostStageResult:
     slug: str
@@ -112,6 +193,8 @@ class HostStageResult:
     # Only set for harness=="claude" — see stage_host_agent_files().
     mcp_config_path: str | None = None
     poll_script_path: str | None = None
+    # Only set for harness=="omp" — see render_omp_host_models_yml().
+    omp_models_path: str | None = None
 
 
 async def stage_host_agent_files(
@@ -168,6 +251,15 @@ async def stage_host_agent_files(
         "HOME": str(home),
     }
     env.update(runtime_env)
+    # omp needs its own models.yml to resolve the bound model at all (see
+    # render_omp_host_models_yml). OMP_PROFILE must land in agent.env BEFORE it
+    # is written — run.sh sources this file and exports everything in it, and
+    # without the profile omp would read a different models.yml than the one
+    # rendered here.
+    omp_models_path: str | None = None
+    if harness == "omp":
+        env["OMP_PROFILE"] = omp_host_profile(slug)
+        omp_models_path = render_omp_host_models_yml(slug, env, home=home)
     _write_owner_only_file(env_path, _format_env_file(env))
 
     # 2a. Isolated MCP config, native-claude harness only. The 'claude' CLI
@@ -257,6 +349,7 @@ async def stage_host_agent_files(
         launchctl_command=launchctl_command,
         mcp_config_path=mcp_config_path,
         poll_script_path=poll_script_path,
+        omp_models_path=omp_models_path,
     )
 
 

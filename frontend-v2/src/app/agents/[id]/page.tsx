@@ -616,21 +616,22 @@ function SkillsTab({ agentId }: { agentId: string }) {
 
 // ── Runtime Selection Section ─────────────────────────────────────────────
 // cli-bridge agents switch runtimes the "normal" way (container restart).
-// Host agents with a HostHarnessAdapter (currently only Hermes, ADR-060)
-// switch in place — same PATCH /agents/{id} endpoint, backend routes it to
-// the in-place path (services/agent_runtime_switch.py::_is_host_inplace).
-// Host agents WITHOUT an adapter (Boss, Jarvis) still show a locked badge —
-// managed via launchd on the host, no MC-side runtime concept.
+// Host agents with a HostHarnessAdapter (ADR-060/ADR-064) switch in place —
+// same PATCH /agents/{id} endpoint, backend routes it to the in-place path.
+// Host agents WITHOUT an adapter still show a locked badge — managed via
+// launchd on the host, no MC-side runtime concept.
 // Phase 30 dropped the `openclaw` runtime entirely (CHECK constraint on
 // agents.agent_runtime). Color map reused from RuntimePill (defined above).
 
 function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
   const qc = useQueryClient();
-  // ADR-060: "hermes" is the only host harness with an adapter today. Kept as
-  // a plain string compare (not the cli-bridge-facing `Harness` union) —
-  // mirrors RuntimeSwitchModal's `isHostInplace`.
-  const isHostInplace = agent.agent_runtime === "host" && agent.harness === "hermes";
-  const isSwitchable = agent.agent_runtime === "cli-bridge" || isHostInplace;
+  // Backend-derived (Agent.runtime_switchable). Never re-derive from harness:
+  // the old `harness === "hermes"` compare locked grok/kimi/claude host agents
+  // out of the picker for weeks after the backend learned to switch them.
+  const isSwitchable = agent.runtime_switchable;
+  // Host-inplace only steers UI details (no harness selector, in-place copy) —
+  // derived from the backend verdict, not from a harness allowlist.
+  const isHostInplace = agent.agent_runtime === "host" && isSwitchable;
 
   const { data: runtimesData } = useQuery({
     queryKey: ["runtimes"],
@@ -648,11 +649,13 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
     : "var(--color-border)";
 
   if (!isSwitchable) {
-    // Locked badge for host agents without a HostHarnessAdapter (Boss, Jarvis)
+    // Locked badge for agents the backend refuses to switch. The text is the
+    // backend's own reason (host_harness_adapter.runtime_switch_availability),
+    // never a hardcoded sentence — the previous literal named a model
+    // ("Boss = Opus 4.7") that had long since rotted.
     const reason =
-      agent.agent_runtime === "host"
-        ? "Host agent: runtime is controlled via launchd on the Mac (Boss = Opus 4.7)."
-        : "Runtime switch not supported for this agent type.";
+      agent.runtime_switch_blocked_reason ??
+      "Runtime switch is not supported for this agent.";
     return (
       <div
         className="rounded-xl p-4"

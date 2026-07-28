@@ -504,10 +504,18 @@ async def get_compat_matrix(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Harness x Provider matrix for the switch UI (ADR-056)."""
+    """Harness x Provider matrix for the switch UI (ADR-056).
+
+    `harnesses` is the cli-bridge-scoped list (HARNESSES). `host_harnesses` is
+    the HostHarnessAdapter registry, added so the agent wizard stops keeping
+    its own copy of it: that copy omitted `claude` entirely and assumed every
+    host harness is a singleton bridge, which would have blocked creating a
+    second claude host agent even though the backend allows it.
+    """
     from app.services.harness_compat import (
         HARNESSES, HARNESS_LABELS, incompat_reason, is_compatible, runtime_protocol,
     )
+    from app.services.host_harness_adapter import host_harness_catalog
     rows = (await session.execute(select(Runtime).where(Runtime.enabled == True))).scalars().all()  # noqa: E712
     runtimes = []
     for rt in rows:
@@ -522,6 +530,7 @@ async def get_compat_matrix(
         })
     return {
         "harnesses": [{"key": h, "label": HARNESS_LABELS[h]} for h in HARNESSES],
+        "host_harnesses": host_harness_catalog(),
         "runtimes": runtimes,
     }
 

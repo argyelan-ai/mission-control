@@ -108,7 +108,10 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
     );
   }
 
-  // host (Boss, claude binary) — runtime managed outside MC.
+  // Host agent with NO runtime bound — nothing for MC to display, so fall back
+  // to a muted scope chip. Note this is not a statement about switchability:
+  // an adapter-backed host agent WITH a runtime takes the coloured pill above
+  // and can be switched (Agent.runtime_switchable).
   if (agent.agent_runtime === "host") {
     const scope = "host";
     return (
@@ -119,7 +122,7 @@ export function RuntimePill({ agent, variant = "default" }: Props) {
           color: "var(--color-text-muted)",
           border: `1px solid ${C.textDim}47`,
         }}
-        title={`Runtime wird ausserhalb MC verwaltet (${scope})`}
+        title={`No runtime bound — managed outside Mission Control (${scope})`}
       >
         {agent.model?.split("/").pop() ?? "—"}
         <span className="text-[9px] uppercase tracking-wide">{scope}</span>

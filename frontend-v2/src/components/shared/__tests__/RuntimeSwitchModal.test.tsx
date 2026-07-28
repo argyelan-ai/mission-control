@@ -21,6 +21,13 @@ const mkCompatMatrix = (overrides: Partial<CompatMatrix> = {}): CompatMatrix => 
     { key: "openclaude", label: "OpenClaude" },
     { key: "omp", label: "omp" },
   ],
+  // Host-harness registry (backend host_harness_catalog). The switch modal
+  // does not render it — the agent wizard does — but the response shape is
+  // shared, so the fixture carries it.
+  host_harnesses: [
+    { key: "hermes", label: "Hermes", protocol: "openai", singleton: true, singleton_slug: "hermes", supports_bootstrap: true },
+    { key: "claude", label: "Claude Code", protocol: "anthropic", singleton: false, singleton_slug: null, supports_bootstrap: false },
+  ],
   runtimes: [
     {
       slug: "qwen-general",
@@ -48,6 +55,11 @@ const mkAgent = (overrides: Partial<Agent> = {}): Agent =>
     is_board_lead: false,
     context_tokens: 0,
     context_max: 200_000,
+    // Backend-derived switch eligibility (Agent.runtime_switchable). The modal
+    // reads this instead of re-deriving `harness === "hermes"`, so every
+    // fixture has to state what the API would have said.
+    runtime_switchable: true,
+    runtime_switch_blocked_reason: null,
     ...overrides,
   }) as Agent;
 
@@ -356,13 +368,18 @@ describe("RuntimeSwitchModal", () => {
   });
 
   describe("host in-place switch (ADR-060)", () => {
-    // Hermes (agent_runtime: "host", harness: "hermes") owns a
-    // HostHarnessAdapter and switches in place — the backend's
-    // `_is_host_inplace()` bypasses the single_instance hard-block for it
-    // (see agent_runtime_switch.py). The frontend must mirror that: enable
-    // the picker/submit and show an in-place hint instead of the D-10 lock
-    // banner, even though the agent's *current* runtime row (the Hermes
+    // A host agent that owns a HostHarnessAdapter switches in place — the
+    // backend's `_is_host_inplace()` bypasses the single_instance hard-block
+    // for it (see agent_runtime_switch.py). The frontend must mirror that:
+    // enable the picker/submit and show an in-place hint instead of the D-10
+    // lock banner, even though the agent's *current* runtime row (the Hermes
     // runtime itself) is single_instance=true.
+    //
+    // Which host harnesses qualify is the BACKEND's answer
+    // (`agent.runtime_switchable`). The modal used to hardcode
+    // `harness === "hermes"`, which locked grok/kimi/claude host agents out of
+    // the picker after their adapters were registered — the tests below pin
+    // that the harness string is no longer part of the decision.
     it("enables the runtime picker for host+hermes agents and shows the in-place hint", async () => {
       vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(
         mkPreview({
@@ -419,6 +436,80 @@ describe("RuntimeSwitchModal", () => {
       await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
       await userEvent.click(screen.getByRole("button", { name: /switch/i }));
       await waitFor(() => expect(onConfirm).toHaveBeenCalledWith({ force_when_in_progress: false }));
+    });
+
+    // The regression that motivated this change: Boss runs the "claude" host
+    // harness, which has had a HostHarnessAdapter since 2026-07-25. Under the
+    // old `harness === "hermes"` rule the modal treated it as a normal
+    // container switch and offered the (inapplicable) cli-bridge harness
+    // selector. Keyed off runtime_switchable, any adapter-backed host harness
+    // gets the in-place path.
+    it.each(["claude", "grok", "kimi"])(
+      "treats a switchable host agent on harness '%s' as in-place, not just hermes",
+      async (harness) => {
+        vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+        const agent = mkAgent({
+          agent_runtime: "host",
+          harness: harness as Agent["harness"],
+          runtime_switchable: true,
+          runtime_switch_blocked_reason: null,
+        });
+        renderWithQuery(
+          <RuntimeSwitchModal
+            open
+            onClose={() => {}}
+            agent={agent}
+            targetRuntimeId="rt-new"
+            onConfirm={async () => null}
+          />,
+        );
+        await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+        expect(screen.getByTestId("host-inplace-hint")).toBeInTheDocument();
+        // Host harnesses live outside the cli-bridge compat matrix, so the
+        // harness selector must stay hidden for them.
+        expect(screen.queryByLabelText("Harness")).not.toBeInTheDocument();
+        expect(screen.getByRole("button", { name: /switch/i })).toBeEnabled();
+      },
+    );
+
+    // Positive control for the two assertions above — without it, a renamed
+    // label or hint would make them pass vacuously.
+    it("shows the harness selector and no in-place hint for a cli-bridge agent", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={mkAgent()}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+      expect(screen.getByLabelText("Harness")).toBeInTheDocument();
+      expect(screen.queryByTestId("host-inplace-hint")).not.toBeInTheDocument();
+    });
+
+    it("does not take the in-place path for a host agent the backend blocked", async () => {
+      vi.spyOn(api.agents, "previewRuntimeSwitch").mockResolvedValue(mkPreview());
+      const agent = mkAgent({
+        agent_runtime: "host",
+        harness: "openclaw" as Agent["harness"],
+        runtime_switchable: false,
+        runtime_switch_blocked_reason:
+          "Host agent with harness 'openclaw' has no host adapter.",
+      });
+      renderWithQuery(
+        <RuntimeSwitchModal
+          open
+          onClose={() => {}}
+          agent={agent}
+          targetRuntimeId="rt-new"
+          onConfirm={async () => null}
+        />,
+      );
+      await waitFor(() => expect(screen.getByText("Qwen 3.6")).toBeInTheDocument());
+      expect(screen.queryByTestId("host-inplace-hint")).not.toBeInTheDocument();
     });
 
     it("still hard-blocks a plain cli-bridge single_instance switch (regression)", async () => {

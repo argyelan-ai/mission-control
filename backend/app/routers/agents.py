@@ -81,14 +81,19 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode="after")
     def _host_requires_runtime_id(self):
-        # Host agents can only get a runtime_id at create time — the PATCH
-        # switch path is cli-bridge-only (see update_agent()), and /provision
-        # 400s without one. Without this guard, creating a host agent without
-        # runtime_id is an unrecoverable dead-end (2026-07-10 host E2E test).
+        # A host agent must be BORN with a runtime binding because /provision
+        # 400s without one — creating it unbound is a dead end at provisioning
+        # time (2026-07-10 host E2E test).
+        #
+        # The original rationale ("a later switch is not supported") is stale:
+        # host agents whose harness owns a HostHarnessAdapter DO switch runtime
+        # afterwards, in place (see host_harness_adapter.
+        # runtime_switch_availability). The guard survives on the provisioning
+        # argument alone, not on a switchability claim.
         if self.agent_runtime == "host" and not self.runtime_id:
             raise ValueError(
-                "Host-Agents benoetigen eine runtime_id beim Erstellen "
-                "(nachtraeglicher Wechsel wird nicht unterstuetzt)"
+                "A host agent needs a runtime_id at creation time "
+                "(provisioning cannot run without a runtime binding)"
             )
         return self
 
@@ -1847,25 +1852,42 @@ async def provision_agent_on_gateway(
             # 2026-07-25); it has no bespoke bootstrap, and wizard-created
             # claude host agents must keep using the generic
             # stage_host_agent_files path below. Skipping the adapter here
-            # preserves that pre-existing behavior exactly.
+            # preserves that pre-existing behavior exactly — and now equally for
+            # openclaude/omp, which joined HOST_ADAPTERS for wizard visibility +
+            # runtime switching but are likewise generic-staged.
             if adapter is not None and not getattr(adapter, "supports_bootstrap", True):
                 adapter = None
             if adapter is not None:
-                # Singleton host bridges (hermes/grok) hardcode their config dir
-                # + plist to one slug — provisioning onto a different agent would
-                # overwrite the real singleton's agent.env with a foreign token
-                # (2026-07-12: creating "Dev" with harness=hermes clobbered the
-                # live Hermes). Reject with a clear 422 before any file is touched.
+                # Singleton host bridges (hermes/grok/kimi) hardcode their config
+                # dir + plist to one slug — provisioning onto a different agent
+                # would overwrite the real singleton's agent.env with a foreign
+                # token (2026-07-12: creating "Dev" with harness=hermes clobbered
+                # the live Hermes). Reject with a clear 422 before any file is
+                # touched. The alternatives named below are computed from the
+                # registry, not hardcoded: the previous text pointed at
+                # "openclaude or omp" back when those were the only non-registry
+                # host harnesses — they are registered adapters now, so a stale
+                # literal would have sent the operator somewhere else than the
+                # wizard actually offers.
                 singleton = getattr(adapter, "singleton_slug", None)
                 agent_slug = (agent.slug or agent.name or "").lower().replace(" ", "-")
                 if singleton and agent_slug != singleton:
+                    from app.services.host_harness_adapter import HOST_ADAPTERS
+
+                    generic = ", ".join(
+                        sorted(
+                            key
+                            for key, a in HOST_ADAPTERS.items()
+                            if getattr(a, "singleton_slug", None) is None
+                        )
+                    )
                     raise HTTPException(
                         status_code=422,
                         detail=(
-                            f"Der Harness '{harness}' ist eine Singleton-Host-Bridge "
-                            f"(fest an den Agent '{singleton}' gebunden) und kann nicht "
-                            f"auf '{agent.name}' provisioniert werden. Für einen generischen "
-                            f"Host-Agent 'openclaude' oder 'omp' als Harness wählen."
+                            f"Harness '{harness}' is a singleton host bridge, pinned "
+                            f"to the agent '{singleton}', and cannot be provisioned "
+                            f"onto '{agent.name}'. For a generic host agent pick one "
+                            f"of these harnesses instead: {generic}."
                         ),
                     )
                 if not is_compatible(harness, runtime):

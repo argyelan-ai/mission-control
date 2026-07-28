@@ -18,7 +18,12 @@ from app.models.runtime import Runtime
 @runtime_checkable
 class HostHarnessAdapter(Protocol):
     harness: str
-    protocol: str  # "openai" | "anthropic"
+    # Human-readable name for the agent wizard's host-harness picker. Lives on
+    # the adapter so registering a host harness ships its UI label with it —
+    # the frontend used to keep its own HOST_HARNESS_LABELS/HOST_HARNESSES
+    # list, which is exactly how "claude" ended up invisible in the wizard.
+    label: str
+    protocol: str  # "openai" | "anthropic" | "grok" | "kimi"
     # A single-instance host bridge (hermes/grok) hardcodes its config dir +
     # plist to ONE slug; provisioning it onto any other agent would clobber the
     # real singleton. None = the adapter is safe for arbitrary agents.
@@ -65,6 +70,7 @@ class _SingletonEnvDirMixin:
 
 class HermesAdapter(_SingletonEnvDirMixin):
     harness = "hermes"
+    label = "Hermes"
     protocol = "openai"
     singleton_slug = "hermes"
     supports_bootstrap = True
@@ -105,6 +111,7 @@ class GrokAdapter(_SingletonEnvDirMixin):
     """
 
     harness = "grok"
+    label = "Grok Build"
     protocol = "grok"
     singleton_slug = "grok"
     supports_bootstrap = True
@@ -142,6 +149,7 @@ class KimiHostAdapter(_SingletonEnvDirMixin):
     """
 
     harness = "kimi"
+    label = "Kimi Code"
     protocol = "kimi"
     singleton_slug = "kimi"
     supports_bootstrap = True
@@ -191,6 +199,7 @@ class ClaudeHostAdapter:
     """
 
     harness = "claude"
+    label = "Claude Code"
     protocol = "anthropic"
     singleton_slug = None
     supports_bootstrap = False
@@ -240,18 +249,218 @@ class ClaudeHostAdapter:
         return await _host_agent_lifecycle(agent, "restart")
 
 
+class _GenericStagedHostAdapter:
+    """Shared body for host harnesses served by the GENERIC wizard staging path.
+
+    claude/openclaude/omp all run as a plain binary in a tmux session that
+    ``host_provisioning.stage_host_agent_files`` sets up (plist + run.sh +
+    agent.env + poll.sh). They differ only in binary and provider env, both of
+    which are already handled elsewhere (``_HARNESS_BINARY`` /
+    ``build_runtime_env``), so the adapter body is identical:
+
+      * ``supports_bootstrap = False`` — routers/agents.py::provision skips
+        non-bootstrap adapters and falls through to the generic staging path.
+        Inventing a bootstrap() here would REPLACE that working path.
+      * ``singleton_slug = None`` — arbitrarily many may exist. Only the
+        single-instance BRIDGES (hermes/grok/kimi) are pinned to one slug.
+      * ``env_dir`` = the agent slug (the default staging layout).
+
+    Being in HOST_ADAPTERS is what makes these harnesses (a) offered as host
+    harnesses in the agent wizard, (b) switchable in place, and (c) reached by
+    the runtime→agent model propagation. Before this, "openclaude"/"omp" host
+    agents were creatable in principle (host_provisioning._HARNESS_BINARY knew
+    them) but invisible in the wizard and permanently runtime-locked.
+    """
+
+    singleton_slug = None
+    supports_bootstrap = False
+
+    def env_dir(self, agent: Agent) -> str:
+        slug = (agent.slug or (agent.name or "").lower().replace(" ", "-")).strip()
+        if not slug:
+            raise ValueError(
+                f"{self.harness} host agent without slug/name "  # type: ignore[attr-defined]
+                f"— cannot locate its agent.env"
+            )
+        return slug
+
+    async def build_agent_env(self, agent, runtime, token, *, session):
+        # Mirrors what stage_host_agent_files writes: MC_* control plane plus
+        # whatever build_runtime_env decides for this harness. Not on a live
+        # path (no bootstrap) — it exists to satisfy the adapter contract with
+        # one description of the file's shape.
+        from app.config import settings
+        from app.routers.internal import build_runtime_env
+
+        env: dict[str, str] = {
+            "MC_AGENT_TOKEN": token,
+            "MC_API_URL": settings.mc_base_url.rstrip("/"),
+        }
+        env.update(await build_runtime_env(runtime, session, agent))
+        return env
+
+    async def bootstrap(self, session, agent, runtime):
+        raise NotImplementedError(
+            f"harness {self.harness!r} has no bespoke host bootstrap: it is "  # type: ignore[attr-defined]
+            f"staged by host_provisioning.stage_host_agent_files. Callers must "
+            f"check supports_bootstrap before calling this."
+        )
+
+    async def reload(self, agent):
+        from app.routers.cli_terminal import _host_agent_lifecycle
+        return await _host_agent_lifecycle(agent, "restart")
+
+
+class OpenClaudeHostAdapter(_GenericStagedHostAdapter):
+    """OpenClaude as a host harness (2026-07-28).
+
+    protocol "openai": build_runtime_env's openclaude branch emits
+    OPENAI_BASE_URL + OPENAI_MODEL, run.sh sources agent.env and exports both
+    into the process — the same contract the cli-bridge openclaude container
+    uses, so nothing harness-specific has to be staged.
+    """
+
+    harness = "openclaude"
+    label = "OpenClaude"
+    protocol = "openai"
+
+
+class OmpHostAdapter(_GenericStagedHostAdapter):
+    """omp as a host harness (2026-07-28).
+
+    protocol "openai": build_runtime_env's omp branch emits OPENAI_BASE_URL +
+    OPENAI_MODEL plus the omp sizing vars (OMP_CONTEXT_WINDOW / OMP_MAX_TOKENS,
+    and OMP_TURN_IDLE_TIMEOUT for slow local runtimes).
+
+    Unlike openclaude, omp does NOT resolve a served model from
+    OPENAI_BASE_URL — it needs its own models.yml (docker/omp-bridge/
+    entrypoint.sh §2 calls that file mandatory). The container renders it from
+    exactly these env vars; the host path renders the same file into a
+    per-agent omp PROFILE via host_provisioning.render_omp_host_models_yml, so
+    both worlds are fed by one runtime row. OMP_TURN_IDLE_TIMEOUT is inert on
+    the host (it belongs to docker/omp-bridge/bridge.py's watchdog, which has
+    no host counterpart) — harmless, and kept rather than special-cased so
+    build_runtime_env stays the one place that describes an omp binding.
+    """
+
+    harness = "omp"
+    label = "omp"
+    protocol = "openai"
+
+
 HOST_ADAPTERS: dict[str, "HostHarnessAdapter"] = {
     "hermes": HermesAdapter(),
     "grok": GrokAdapter(),
     "kimi": KimiHostAdapter(),
     "claude": ClaudeHostAdapter(),
+    "openclaude": OpenClaudeHostAdapter(),
+    "omp": OmpHostAdapter(),
 }
+
+# INVARIANT (asserted in tests/test_host_harness_catalog.py): every cli-bridge
+# harness in harness_compat.HARNESSES must also appear above, so any CLI type
+# can be created BOTH as a container and as a host agent. The reverse does not
+# hold — hermes/grok are host-only bridges with no cli-bridge form.
 
 
 def get_adapter(harness: str | None) -> "HostHarnessAdapter | None":
     if not harness:
         return None
     return HOST_ADAPTERS.get(harness)
+
+
+# ── Runtime-switch eligibility — THE single source of truth ────────────────
+#
+# Everything that needs to answer "can MC switch this agent's runtime?" MUST
+# call `runtime_switch_availability` (or the `is_host_inplace` shorthand):
+#
+#   * services/agent_runtime_switch.py — the switch endpoint's own guard.
+#   * models/agent.py — the derived `runtime_switchable` /
+#     `runtime_switch_blocked_reason` fields the API serialises.
+#   * frontend-v2 — reads those fields, NEVER re-derives the rule.
+#
+# The rule used to be re-implemented in the frontend against a hardcoded
+# `harness === "hermes"`, which silently locked every host harness added to
+# HOST_ADAPTERS afterwards (grok, kimi, claude/Boss) out of the UI even though
+# the backend had supported them for weeks. Adding a new host adapter must be
+# the ONLY edit needed to make that harness switchable end to end.
+
+def is_host_inplace(agent: Agent) -> bool:
+    """True when this is a host agent that owns a HostHarnessAdapter.
+
+    Such agents (ADR-064) switch runtime in place — the adapter re-renders
+    agent.env + reloads the single host session sequentially, so there is never
+    a parallel instance.
+    """
+    return (
+        getattr(agent, "agent_runtime", None) == "host"
+        and get_adapter(getattr(agent, "harness", None)) is not None
+    )
+
+
+def runtime_switch_availability(agent: Agent) -> tuple[bool, str | None]:
+    """Can MC switch this agent's runtime, and if not — why not (plain text)?
+
+    Returns ``(switchable, blocked_reason)``. ``blocked_reason`` is None exactly
+    when ``switchable`` is True, and is user-facing English otherwise (it is
+    both the API's `runtime_switch_blocked_reason` and the message of the
+    AgentNotSwitchableError the switch endpoint raises).
+    """
+    agent_runtime = getattr(agent, "agent_runtime", None)
+
+    if agent_runtime == "cli-bridge":
+        return True, None
+
+    if agent_runtime == "host":
+        if get_adapter(getattr(agent, "harness", None)) is not None:
+            return True, None
+        harness = getattr(agent, "harness", None) or "none"
+        supported = ", ".join(sorted(HOST_ADAPTERS))
+        return False, (
+            f"Host agent with harness '{harness}' has no host adapter, so its "
+            f"runtime is managed outside Mission Control (launchd on the Mac). "
+            f"Switchable are cli-bridge agents and host agents on one of these "
+            f"harnesses: {supported}."
+        )
+
+    return False, (
+        f"Runtime switch is not supported for agent runtime "
+        f"'{agent_runtime or 'unknown'}'. Only cli-bridge agents and host "
+        f"agents with a host adapter can pick a runtime in Mission Control."
+    )
+
+
+def host_harness_catalog() -> list[dict[str, Any]]:
+    """The host-harness registry, rendered for the agent-creation wizard.
+
+    Same principle as `runtime_switch_availability`: the registry answers,
+    the UI asks. The wizard previously carried its OWN list of host harnesses
+    (hermes/grok/kimi) plus its own protocol map — so `claude` never appeared
+    as a host harness at all, and every host harness was assumed to be a
+    singleton bridge. `claude` is deliberately NOT a singleton
+    (``singleton_slug is None``): host_provisioning.stage_host_agent_files
+    stages arbitrary claude host agents, so a second one is legitimate.
+
+    Keys of the returned dicts:
+      key            — the harness value written to agents.harness
+      label          — display name for the picker
+      protocol       — wire protocol, for filtering compatible runtimes
+      singleton      — True → at most ONE agent may hold this harness
+      singleton_slug — the slug that agent must have (None when not singleton)
+      supports_bootstrap — False → provisioning uses the generic host staging
+                           path rather than the adapter's own bootstrap()
+    """
+    return [
+        {
+            "key": key,
+            "label": getattr(adapter, "label", key),
+            "protocol": adapter.protocol,
+            "singleton": getattr(adapter, "singleton_slug", None) is not None,
+            "singleton_slug": getattr(adapter, "singleton_slug", None),
+            "supports_bootstrap": getattr(adapter, "supports_bootstrap", True),
+        }
+        for key, adapter in HOST_ADAPTERS.items()
+    ]
 
 
 async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: AsyncSession) -> None:
@@ -296,5 +505,22 @@ async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: Asyn
     # derive_harness(runtime) — that is what decides ANTHROPIC_MODEL vs
     # OPENAI_MODEL inside build_runtime_env.
     existing.update(await build_runtime_env(runtime, session, agent))
+
+    # omp reads its model from models.yml, not from OPENAI_* — rewriting only
+    # agent.env would leave a host omp agent pointed at the PREVIOUS runtime
+    # while MC reports the new one (exactly the drift this sync exists to
+    # prevent). OMP_PROFILE goes in before the write so a row staged before
+    # this existed gets it retro-fitted too.
+    is_host_omp = adapter is not None and getattr(adapter, "harness", None) == "omp"
+    if is_host_omp:
+        from app.services.host_provisioning import omp_host_profile
+
+        existing.setdefault("OMP_PROFILE", omp_host_profile(slug))
+
     env_path.parent.mkdir(parents=True, exist_ok=True)
     env_path.write_text(_format_env_file(existing))
+
+    if is_host_omp:
+        from app.services.host_provisioning import render_omp_host_models_yml
+
+        render_omp_host_models_yml(slug, existing)

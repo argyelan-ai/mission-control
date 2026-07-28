@@ -88,13 +88,16 @@ export function RuntimeSwitchModal({
   const [error, setError] = useState<string | null>(null);
   const [longSwitch, setLongSwitch] = useState(false);
   const [completed, setCompleted] = useState<RuntimeSwitchPreview | null>(null);
-  // ADR-060 — host agents with a HostHarnessAdapter (currently only Hermes)
-  // switch in place: same PATCH /agents/{id} endpoint, but the backend
-  // reloads a single host session instead of spinning up a parallel
-  // container. `agent.harness === "hermes"` is host-only and intentionally
-  // outside the cli-bridge-facing `Harness` union (see lib/types.ts) — never
-  // fed into the harness selector/compat-matrix below.
-  const isHostInplace = agent.agent_runtime === "host" && agent.harness === "hermes";
+  // ADR-060/ADR-064 — host agents with a HostHarnessAdapter switch in place:
+  // same PATCH /agents/{id} endpoint, but the backend reloads a single host
+  // session instead of spinning up a parallel container. Whether an adapter
+  // exists is the BACKEND's answer (`agent.runtime_switchable`, derived from
+  // host_harness_adapter.runtime_switch_availability) — the old hardcoded
+  // `harness === "hermes"` compare went stale the moment grok/kimi/claude
+  // adapters were registered. Host harness values stay outside the
+  // cli-bridge-facing `Harness` union, so they are never fed into the harness
+  // selector / compat matrix below — hence the `!isHostInplace` guards.
+  const isHostInplace = agent.agent_runtime === "host" && agent.runtime_switchable;
   const [selectedHarness, setSelectedHarness] = useState<Harness | undefined>(
     isHostInplace ? undefined : (agent.harness as Harness | undefined) ?? undefined,
   );

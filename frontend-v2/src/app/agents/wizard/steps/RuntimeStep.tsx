@@ -3,8 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
-import type { Harness, HostHarness } from "@/lib/types";
-import { HOST_HARNESS_LABELS, HOST_HARNESS_PROTOCOL } from "@/lib/types";
+import type { CompatMatrixHostHarness, Harness, HostHarness } from "@/lib/types";
 import type { WizardAgentRuntime, WizardStepProps } from "../types";
 import { initialWizardState } from "../types";
 import { ModelInput, wizardLabelClass } from "../shared";
@@ -16,16 +15,16 @@ const RUNTIMES: { key: WizardAgentRuntime; label: string; hint: string }[] = [
   { key: "manual", label: "Manual", hint: "No auto-provisioning" },
 ];
 
-// Host-only harnesses (ADR-064/066). The compat-matrix API is cli-bridge-scoped
-// (it iterates backend HARNESSES = claude/openclaude/omp), so host harnesses are
-// offered from this explicit list and filtered by the runtime's wire protocol
-// instead of compatible_harnesses. grok binds its own "grok" cloud runtime; a host
-// grok agent MUST pick harness=grok here because derive_harness() can't infer it.
-const HOST_HARNESSES: { key: HostHarness; label: string }[] = [
-  { key: "hermes", label: HOST_HARNESS_LABELS.hermes },
-  { key: "grok", label: HOST_HARNESS_LABELS.grok },
-  { key: "kimi", label: HOST_HARNESS_LABELS.kimi },
-];
+// Host harnesses come from the backend's HostHarnessAdapter registry, shipped
+// as `host_harnesses` on the compat matrix this step already fetches. The
+// matrix's `harnesses`/`compatible_harnesses` stay cli-bridge-scoped (backend
+// HARNESSES), so host harnesses are still filtered by wire protocol instead —
+// but the protocol now travels WITH the harness.
+//
+// The previous hardcoded list (hermes/grok/kimi + a local protocol map) was a
+// second truth: it never learned about the "claude" adapter, so a host Claude
+// agent — exactly what Boss is — could not be created through the wizard at
+// all, and every host harness was implicitly treated as a singleton bridge.
 
 export function RuntimeStep({ state, update }: WizardStepProps) {
   const isHost = state.agentRuntime === "host";
@@ -47,33 +46,49 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
     enabled: state.agentRuntime === "cli-bridge",
     refetchInterval: 30_000,
   });
-  // hermes/grok are SINGLETON host bridges — one hermes-bridge, one grok-bridge
-  // on the host, each hardcoded to its slug. Provisioning a second one would
-  // clobber the first's agent.env (2026-07-12 incident), so the backend now
-  // rejects it with a 422. Surface that here: disable a host harness whose
-  // singleton already exists, instead of letting the user build a doomed agent.
+  // SINGLETON host bridges (hermes/grok/kimi) hardcode their config dir + plist
+  // to one slug — provisioning a second one would clobber the first's agent.env
+  // (2026-07-12 incident) and the backend 422s it. Surface that here instead of
+  // letting the user build a doomed agent.
+  //
+  // Which harnesses that applies to is the BACKEND's answer (`singleton` on the
+  // registry entry). "claude" is deliberately NOT a singleton — arbitrary claude
+  // host agents are staged by host_provisioning — so the old blanket
+  // "host ⇒ singleton" rule would have blocked every new host Claude agent.
   const { data: existingAgents } = useQuery({
     queryKey: ["agents", "all-for-singleton-check"],
     queryFn: () => api.agents.list(undefined, true),
     enabled: isHost,
   });
-  const takenHostHarnesses = new Set(
+  const hostHarnesses: CompatMatrixHostHarness[] = matrix?.host_harnesses ?? [];
+  const usedHostHarnesses = new Set(
     (existingAgents ?? [])
       .filter((a) => a.agent_runtime === "host" && a.harness)
       .map((a) => a.harness as string),
   );
+  const isHostHarnessTaken = (h: CompatMatrixHostHarness) =>
+    h.singleton && usedHostHarnesses.has(h.key);
 
   const matrixBySlug = new Map((matrix?.runtimes ?? []).map((r) => [r.slug, r]));
+  const hostHarnessByKey = new Map(hostHarnesses.map((h) => [h.key as string, h]));
 
   // Whether a runtime (by matrix entry) is compatible with the chosen harness.
-  // Host harnesses compare wire protocol (hermes → openai, grok → grok); cli-bridge
-  // harnesses use the server-computed compatible_harnesses list.
+  // Host harnesses compare wire protocol — which now travels with the harness
+  // from the registry; cli-bridge harnesses use the server-computed
+  // compatible_harnesses list.
   function runtimeMatchesHarness(
     compatEntry: { protocol: string | null; compatible_harnesses: Harness[] } | undefined,
     h: Harness | HostHarness | null,
   ): boolean {
     if (!h) return true;
-    if (isHost) return compatEntry?.protocol === HOST_HARNESS_PROTOCOL[h as HostHarness];
+    if (isHost) {
+      const entry = hostHarnessByKey.get(h);
+      // Unknown host harness (matrix not loaded yet, or a legacy value with no
+      // adapter) — nothing to compare against, so claim nothing is compatible
+      // rather than silently accepting an unbindable provider.
+      if (!entry) return false;
+      return compatEntry?.protocol === entry.protocol;
+    }
     return compatEntry?.compatible_harnesses.includes(h as Harness) ?? false;
   }
 
@@ -131,9 +146,9 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
           <div>
             <label className={wizardLabelClass}>Harness (CLI)</label>
             <div className="flex gap-2">
-              {(isHost ? HOST_HARNESSES : matrix?.harnesses ?? []).map((h) => {
+              {(isHost ? hostHarnesses : matrix?.harnesses ?? []).map((h) => {
                 const active = state.harness === h.key;
-                const taken = isHost && takenHostHarnesses.has(h.key);
+                const taken = isHost && isHostHarnessTaken(h as CompatMatrixHostHarness);
                 return (
                   <button
                     key={h.key}
@@ -166,10 +181,11 @@ export function RuntimeStep({ state, update }: WizardStepProps) {
             )}
             {isHost && state.harness === "kimi" && (
               <p className="mt-1.5 text-[10px] text-[var(--color-text-muted)]">
-                Kimi Code spricht die Moonshot-Cloud über seine eigene OAuth-Datei-Session —
-                nur die <code className="font-mono">kimi-cloud</code>-Runtime ist kompatibel.
-                Nach dem Provisionieren einmalig <code className="font-mono">/login</code> im
-                Sessions-Terminal (Device-Code).
+                Kimi Code talks to the Moonshot cloud over its own file-based OAuth
+                session — only the <code className="font-mono">kimi-cloud</code> runtime
+                is compatible. After provisioning, run{" "}
+                <code className="font-mono">/login</code> once in the Sessions terminal
+                (device code).
               </p>
             )}
           </div>

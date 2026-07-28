@@ -24,4 +24,16 @@ async def test_unknown_host_harness_has_no_adapter():
     assert claude is not None
     assert claude.supports_bootstrap is False
     assert get_adapter("hermes") is not None
-    assert get_adapter("openclaude") is None  # genuinely unknown host harness
+    # 2026-07-28: openclaude/omp joined the registry for the same reason claude
+    # did (wizard visibility + runtime switching + model propagation), and for
+    # the same reason own NO bootstrap — provisioning stays on the generic
+    # host_provisioning staging path.
+    for generic in ("openclaude", "omp"):
+        adapter = get_adapter(generic)
+        assert adapter is not None, f"{generic} must be a registered host harness"
+        assert adapter.supports_bootstrap is False
+    # "openclaw" is the retired Phase-29 gateway runtime (ADR-039) — it can
+    # never come back, so it is the stable stand-in for a genuinely unknown
+    # harness. get_adapter must return None rather than guess.
+    assert get_adapter("openclaw") is None
+    assert get_adapter("nope") is None

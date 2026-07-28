@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import field_validator
+from pydantic import computed_field, field_validator
 from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Text, event, text, Uuid
 from sqlmodel import Column, Field, SQLModel
 
@@ -238,6 +238,36 @@ class Agent(SQLModel, table=True):
         default_factory=datetime.utcnow,
         sa_column=Column(DateTime(timezone=True), server_default=text("NOW()"), onupdate=datetime.utcnow),
     )
+
+    # ── Derived (NOT a column, no migration) ──────────────────────────────
+    # Whether MC may switch this agent's runtime, answered by the SAME
+    # function the switch endpoint guards with
+    # (services/host_harness_adapter.runtime_switch_availability). Declared as
+    # pydantic computed fields so EVERY serialisation of an Agent carries them
+    # — GET /agents (list), GET /agents/{id} (detail), the model_dump()-based
+    # POST/PATCH responses and the cli_terminal agent listings alike.
+    #
+    # This exists because the frontend used to re-derive the rule from a
+    # hardcoded `harness === "hermes"`, which left Boss/grok/kimi showing
+    # "RUNTIME LOCKED · HOST" long after the backend could switch them. The UI
+    # must READ these fields, never re-implement them.
+    #
+    # The import is function-local on purpose: host_harness_adapter imports
+    # this module at import time, so a module-level import would be circular.
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def runtime_switchable(self) -> bool:
+        from app.services.host_harness_adapter import runtime_switch_availability
+
+        return runtime_switch_availability(self)[0]
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def runtime_switch_blocked_reason(self) -> str | None:
+        from app.services.host_harness_adapter import runtime_switch_availability
+
+        return runtime_switch_availability(self)[1]
 
 
 @event.listens_for(Agent, "before_insert")
