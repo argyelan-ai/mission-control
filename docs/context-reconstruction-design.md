@@ -1,6 +1,6 @@
 # Context Reconstruction — Design & Handoff
 
-**Status:** Design (approved direction, Stage 1 not yet specced into a plan)
+**Status:** Stage 1 implemented — branch green (4402 passed), not deployed
 **Datum:** 2026-07-28
 **Branch:** `feat/context-reconstruction`
 **Scope:** Backend (`agent_scoped.py`), `mc` CLI, bridge adapters, `docker/shared/poll.sh`
@@ -860,13 +860,22 @@ is delivered either way. **Operator decision, not an implementation detail.**
 Branch `feat/context-reconstruction`. Order followed §9.2; the cursor-safety test was written
 and made to fail **before** the endpoint existed, per §9.3.
 
+*(SHAs are post-rebase onto `origin/main` after PR #181 merged.)*
+
 | Commit | What |
 |---|---|
-| `747e4a32` | `GET /agent/me/thread` + the three cursor-safety tests |
-| `a2a3ce91` | pagination, task resolution, authorization tests |
-| `5f05c909` | `mc thread` CLI verb + tests |
-| `9647c88d` | dead `get_last_checkpoint` removed |
-| `f2b07bf9` | `mc recover` now points at `mc thread` |
+| `c31009bd` | `GET /agent/me/thread` + the three cursor-safety tests |
+| `0d5c9e8c` | pagination, task resolution, authorization tests |
+| `aa04e882` | `mc thread` CLI verb + tests |
+| `f24ddf18` | dead `get_last_checkpoint` removed |
+| `00553022` | `mc recover` now points at `mc thread` |
+| `62f8b6d1` | pins the decision that reads are not comm_v2-gated |
+| `16fc0396` | **defect fix:** recovery now writes its attempt-id audit row |
+| `5b0167fb` | SOUL teaches the verb; a parked `waiting` task became readable |
+| `bc49dbb6` | **card refactor:** the verb table became a reference (§10.2) |
+| `5cdf87d2` | **character budget** on the thread read (§10.3) |
+
+Full suite green over the end state: **4402 passed, 23 skipped, 2 xfailed, 0 failed.**
 
 **Two decisions taken during implementation:**
 
@@ -930,7 +939,54 @@ ever precede them on that task?
 fleet activity separates the two causes cleanly. **Re-run it then; build nothing before.**
 That is the whole of item #1, and it needs no code.
 
-### 10.2 The second defect, deliberately not fixed
+### 10.2 The operating card was full — the verb table became a reference
+
+Adding `thread` to `CANONICAL_VERBS` broke `test_card_respects_byte_budget` for nine
+role/harness combinations. Verified rather than assumed: with `origin/main`'s version of the
+same file all 32 pass, with the new line 9 fail.
+
+The cause was not the wording. `CARD.md.j2` rendered **all 39 canonical verbs** into every
+agent's context on every turn — 2633 B of a 5120 B budget, **half the card** — leaving
+**six bytes** of headroom. The 40th verb broke it regardless of who added it.
+
+Meanwhile `mc docs tasks` already documents **37 of those 39 verbs** on demand, offline, no
+network call, and the card already carried a `mc docs <topic>` index. The inline table was
+duplicating a reference the card was already pointing at.
+
+Split applied — by kind, not by taste:
+
+| On the card | In `mc docs tasks` |
+|---|---|
+| the **task lifecycle**: state changes, talking, re-orienting (17 verbs) | **capability** verbs: vault, memory, telegram, pdf, verify, deliverable, delegate, plugins, help |
+
+An agent needs the lifecycle to work at all; it needs a capability only when the task calls
+for one, and can afford a lookup then. `done` and `patch` stay off the card although they are
+lifecycle: both are documented as "prefer `mc finish`", and showing them to every agent every
+turn advertises the path we do not want.
+
+**Card: 5114 → 3733 bytes.** Six bytes of headroom became ~1.4 KB, and the pilot's card
+teaches `mc thread` like any other verb.
+
+### 10.3 The thread read had no character budget — that was my defect
+
+Every other payload entering an agent's context here is bounded: dispatch 2000/2500/4000
+(`dispatch_message_builder.py:62-64`), memory 800, lessons 400, the waiting recap 1500,
+`mc_logs` 4000. The new endpoint had none — `limit` caps the message *count*, not their size,
+so 200 long messages were unbounded text. That is the same hazard F11 records for Hermes,
+whose auto-memory digests whatever it is shown, reproduced in the very design that documented
+it.
+
+`THREAD_READ_MAX_CHARS = 4000`, matched to `DISPATCH_HARD_CHARS` because it lands in the same
+place a dispatch prompt does. Three properties worth keeping:
+
+- **Trims from the old end.** A recovering agent needs the newest exchange, not the opening of
+  the task.
+- **Reports `budget_truncated`.** A partial history must never read as a complete one — an
+  agent acting confidently on half the story is worse than one that knows a piece is missing.
+- **A single oversized message is truncated, not dropped.** Dropping it would return an empty
+  page with no explanation.
+
+### 10.4 The second defect, deliberately not fixed
 
 `task.missing_dispatch_attempt_id` is log-only and invisible to any query (F13). The obvious
 fix is one argument — `emit_event(..., severity="info")` — because Discord only pushes at
