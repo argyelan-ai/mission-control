@@ -49,8 +49,10 @@ Updating later is `./install.sh --update`. Details in
 - **Knowledge & memory** — a Markdown vault as source of truth, hybrid FTS5 +
   vector search (Qdrant), per-agent lessons, daily LLM-distilled insights.
 - **Live terminals** — attach to any agent's tmux session from the browser.
-- **Integrations (all optional)** — Discord per-agent channels, Telegram
-  approvals + report delivery, voice agent (LiveKit + realtime speech API).
+- **Integrations (all optional)** — Slack team chat (Socket Mode, no public URL
+  needed, [setup guide](docs/setup/slack.md)), Discord per-agent channels,
+  Telegram approvals + report delivery, voice agent (LiveKit + realtime speech
+  API).
 - **Scope-based permissions** — 16 API scopes per agent, PBKDF2 agent tokens,
   JWT user auth with roles.
 
@@ -75,7 +77,7 @@ Updating later is `./install.sh --update`. Details in
 - **Live sessions** — real terminal into every agent, right in the browser
 - **Scope-based permissions** — 16 fine-grained API scopes per agent, PBKDF2 agent tokens
 - **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
-- **Discord & Telegram** — per-agent channels, notifications, approvals on your phone
+- **Slack, Discord & Telegram** — team chat with the agents, per-agent channels, notifications, approvals on your phone
 - **Voice assistant** — real-time spoken conversation with the fleet
 - **Office view** — a playful 3D visualization of who's working on what
 
@@ -238,6 +240,7 @@ sessions); host-level fleet extras need the manual install above.
 | Feature | How to configure it |
 |---|---|
 | Agent git workflow (repos, PRs, merges) | Settings → GitHub (in-app) or `GH_TOKEN`+`GITHUB_OWNER` in `.env` |
+| Slack team chat with the fleet | Settings → Slack (in-app), step-by-step: [docs/setup/slack.md](docs/setup/slack.md) |
 | Discord notifications + per-agent channels | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
 | Telegram approvals / reports | `TELEGRAM_*` tokens + chat IDs |
 | Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN` |

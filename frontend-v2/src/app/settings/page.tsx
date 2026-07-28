@@ -28,6 +28,7 @@ import {
   Play,
   ExternalLink,
   DollarSign,
+  MessageSquare,
   type LucideIcon,
 } from "lucide-react";
 import { api, setStoredUser } from "@/lib/api";
@@ -43,6 +44,7 @@ import { cn } from "@/lib/utils";
 import AppShell from "@/components/layout/AppShell";
 import { CredentialsTab } from "@/components/settings/CredentialsTab";
 import { CostPricesTab } from "@/components/settings/CostPricesTab";
+import { SlackTab } from "@/components/settings/SlackTab";
 import { StatusDot } from "@/components/shared/StatusDot";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -63,6 +65,7 @@ const SECTIONS: SettingsSection[] = [
   { id: "intelligence", label: "Intelligence", icon: Zap, adminOnly: true },
   { id: "apikeys", label: "API Keys", icon: Key, adminOnly: true },
   { id: "github", label: "GitHub", icon: Github, adminOnly: true },
+  { id: "slack", label: "Slack", icon: MessageSquare, adminOnly: true },
   { id: "credentials", label: "Credentials", icon: KeyRound, adminOnly: true },
   { id: "costs", label: "Costs", icon: DollarSign, adminOnly: true },
   { id: "users", label: "Users", icon: Users, adminOnly: true },
@@ -993,7 +996,13 @@ function IntelligenceSection() {
 
 // ── API Keys Section (Admin only) ─────────────────────────────────────────────
 
-function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void }) {
+function ApiKeysSection({
+  onNavigateToGithub,
+  onNavigateToSlack,
+}: {
+  onNavigateToGithub: () => void;
+  onNavigateToSlack: () => void;
+}) {
   const queryClient = useQueryClient();
   const [addingKey, setAddingKey] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
@@ -1044,9 +1053,16 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
   // GitHub credentials (github_owner / github_token) have their own dedicated
   // "GitHub" section (ADR-055) — keep them out of the generic API Keys list
   // so there is exactly one place to edit them (ADR-055-Review MINOR 3).
-  const nonGithubProviders = (providers ?? []).filter((tmpl) => tmpl.provider !== "github");
+  // Slack follows the same rule: both tokens belong to the Slack section,
+  // which explains what each one is for and can test them.
+  const nonGithubProviders = (providers ?? []).filter(
+    (tmpl) => tmpl.provider !== "github" && tmpl.provider !== "slack"
+  );
   const hasGithubSecret = (secrets ?? []).some(
     (s) => s.provider === "github" || s.key === "github_owner" || s.key === "github_token"
+  );
+  const hasSlackSecret = (secrets ?? []).some(
+    (s) => s.provider === "slack" || s.key === "slack_bot_token" || s.key === "slack_app_token"
   );
 
   return (
@@ -1082,6 +1098,32 @@ function ApiKeysSection({ onNavigateToGithub }: { onNavigateToGithub: () => void
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   Go to GitHub
+                  <ExternalLink size={12} />
+                </button>
+              </div>
+            </div>
+          )}
+          {hasSlackSecret && (
+            <div className="mc-card p-4" style={cardStyle}>
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <MessageSquare size={14} style={{ color: "var(--color-text-muted)" }} />
+                    <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
+                      Slack
+                    </span>
+                  </div>
+                  <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
+                    Slack tokens are managed in the Slack section, together with the
+                    connection test and the setup guide.
+                  </p>
+                </div>
+                <button
+                  onClick={onNavigateToSlack}
+                  className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
+                  style={{ backgroundColor: C.accentSubtle, color: C.accent }}
+                >
+                  Go to Slack
                   <ExternalLink size={12} />
                 </button>
               </div>
@@ -2149,9 +2191,13 @@ function SettingsContent() {
               {activeSection === "autonomy" && isAdmin && <AutonomySection />}
               {activeSection === "intelligence" && isAdmin && <IntelligenceSection />}
               {activeSection === "apikeys" && isAdmin && (
-                <ApiKeysSection onNavigateToGithub={() => setActiveSection("github")} />
+                <ApiKeysSection
+                  onNavigateToGithub={() => setActiveSection("github")}
+                  onNavigateToSlack={() => setActiveSection("slack")}
+                />
               )}
               {activeSection === "github" && isAdmin && <GithubSection />}
+              {activeSection === "slack" && isAdmin && <SlackTab />}
               {activeSection === "credentials" && isAdmin && <CredentialsTab />}
               {activeSection === "costs" && isAdmin && <CostPricesTab />}
               {activeSection === "users" && isAdmin && <UsersSection />}
