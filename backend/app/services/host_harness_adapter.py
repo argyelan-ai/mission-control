@@ -18,7 +18,12 @@ from app.models.runtime import Runtime
 @runtime_checkable
 class HostHarnessAdapter(Protocol):
     harness: str
-    protocol: str  # "openai" | "anthropic"
+    # Human-readable name for the agent wizard's host-harness picker. Lives on
+    # the adapter so registering a host harness ships its UI label with it —
+    # the frontend used to keep its own HOST_HARNESS_LABELS/HOST_HARNESSES
+    # list, which is exactly how "claude" ended up invisible in the wizard.
+    label: str
+    protocol: str  # "openai" | "anthropic" | "grok" | "kimi"
     # A single-instance host bridge (hermes/grok) hardcodes its config dir +
     # plist to ONE slug; provisioning it onto any other agent would clobber the
     # real singleton. None = the adapter is safe for arbitrary agents.
@@ -65,6 +70,7 @@ class _SingletonEnvDirMixin:
 
 class HermesAdapter(_SingletonEnvDirMixin):
     harness = "hermes"
+    label = "Hermes"
     protocol = "openai"
     singleton_slug = "hermes"
     supports_bootstrap = True
@@ -105,6 +111,7 @@ class GrokAdapter(_SingletonEnvDirMixin):
     """
 
     harness = "grok"
+    label = "Grok Build"
     protocol = "grok"
     singleton_slug = "grok"
     supports_bootstrap = True
@@ -142,6 +149,7 @@ class KimiHostAdapter(_SingletonEnvDirMixin):
     """
 
     harness = "kimi"
+    label = "Kimi Code"
     protocol = "kimi"
     singleton_slug = "kimi"
     supports_bootstrap = True
@@ -191,6 +199,7 @@ class ClaudeHostAdapter:
     """
 
     harness = "claude"
+    label = "Claude Code"
     protocol = "anthropic"
     singleton_slug = None
     supports_bootstrap = False
@@ -252,6 +261,100 @@ def get_adapter(harness: str | None) -> "HostHarnessAdapter | None":
     if not harness:
         return None
     return HOST_ADAPTERS.get(harness)
+
+
+# ── Runtime-switch eligibility — THE single source of truth ────────────────
+#
+# Everything that needs to answer "can MC switch this agent's runtime?" MUST
+# call `runtime_switch_availability` (or the `is_host_inplace` shorthand):
+#
+#   * services/agent_runtime_switch.py — the switch endpoint's own guard.
+#   * models/agent.py — the derived `runtime_switchable` /
+#     `runtime_switch_blocked_reason` fields the API serialises.
+#   * frontend-v2 — reads those fields, NEVER re-derives the rule.
+#
+# The rule used to be re-implemented in the frontend against a hardcoded
+# `harness === "hermes"`, which silently locked every host harness added to
+# HOST_ADAPTERS afterwards (grok, kimi, claude/Boss) out of the UI even though
+# the backend had supported them for weeks. Adding a new host adapter must be
+# the ONLY edit needed to make that harness switchable end to end.
+
+def is_host_inplace(agent: Agent) -> bool:
+    """True when this is a host agent that owns a HostHarnessAdapter.
+
+    Such agents (ADR-064) switch runtime in place — the adapter re-renders
+    agent.env + reloads the single host session sequentially, so there is never
+    a parallel instance.
+    """
+    return (
+        getattr(agent, "agent_runtime", None) == "host"
+        and get_adapter(getattr(agent, "harness", None)) is not None
+    )
+
+
+def runtime_switch_availability(agent: Agent) -> tuple[bool, str | None]:
+    """Can MC switch this agent's runtime, and if not — why not (plain text)?
+
+    Returns ``(switchable, blocked_reason)``. ``blocked_reason`` is None exactly
+    when ``switchable`` is True, and is user-facing English otherwise (it is
+    both the API's `runtime_switch_blocked_reason` and the message of the
+    AgentNotSwitchableError the switch endpoint raises).
+    """
+    agent_runtime = getattr(agent, "agent_runtime", None)
+
+    if agent_runtime == "cli-bridge":
+        return True, None
+
+    if agent_runtime == "host":
+        if get_adapter(getattr(agent, "harness", None)) is not None:
+            return True, None
+        harness = getattr(agent, "harness", None) or "none"
+        supported = ", ".join(sorted(HOST_ADAPTERS))
+        return False, (
+            f"Host agent with harness '{harness}' has no host adapter, so its "
+            f"runtime is managed outside Mission Control (launchd on the Mac). "
+            f"Switchable are cli-bridge agents and host agents on one of these "
+            f"harnesses: {supported}."
+        )
+
+    return False, (
+        f"Runtime switch is not supported for agent runtime "
+        f"'{agent_runtime or 'unknown'}'. Only cli-bridge agents and host "
+        f"agents with a host adapter can pick a runtime in Mission Control."
+    )
+
+
+def host_harness_catalog() -> list[dict[str, Any]]:
+    """The host-harness registry, rendered for the agent-creation wizard.
+
+    Same principle as `runtime_switch_availability`: the registry answers,
+    the UI asks. The wizard previously carried its OWN list of host harnesses
+    (hermes/grok/kimi) plus its own protocol map — so `claude` never appeared
+    as a host harness at all, and every host harness was assumed to be a
+    singleton bridge. `claude` is deliberately NOT a singleton
+    (``singleton_slug is None``): host_provisioning.stage_host_agent_files
+    stages arbitrary claude host agents, so a second one is legitimate.
+
+    Keys of the returned dicts:
+      key            — the harness value written to agents.harness
+      label          — display name for the picker
+      protocol       — wire protocol, for filtering compatible runtimes
+      singleton      — True → at most ONE agent may hold this harness
+      singleton_slug — the slug that agent must have (None when not singleton)
+      supports_bootstrap — False → provisioning uses the generic host staging
+                           path rather than the adapter's own bootstrap()
+    """
+    return [
+        {
+            "key": key,
+            "label": getattr(adapter, "label", key),
+            "protocol": adapter.protocol,
+            "singleton": getattr(adapter, "singleton_slug", None) is not None,
+            "singleton_slug": getattr(adapter, "singleton_slug", None),
+            "supports_bootstrap": getattr(adapter, "supports_bootstrap", True),
+        }
+        for key, adapter in HOST_ADAPTERS.items()
+    ]
 
 
 async def sync_host_agent_model(agent: Agent, runtime: Runtime, *, session: AsyncSession) -> None:

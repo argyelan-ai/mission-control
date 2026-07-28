@@ -185,9 +185,13 @@ async def test_host_agent_still_blocked_by_existing_whitelist(async_session):
         await switch_agent_runtime(async_session, agent, rt_a.id)
 
     msg = str(excinfo.value)
-    # Existing cli-bridge whitelist message — single_instance check must NOT
-    # have fired (it would say "single_instance" instead).
-    assert "Runtime-Switch nicht unterstuetzt" in msg
+    # The eligibility message (host agent, no HostHarnessAdapter) — the
+    # single_instance check must NOT have fired (it would say "single_instance"
+    # instead). Text moved to English when the rule was centralised in
+    # host_harness_adapter.runtime_switch_availability; the assertion still
+    # pins the same branch, only in the language the UI now renders.
+    assert "has no host adapter" in msg
+    assert "cli-bridge" in msg
     assert "single_instance" not in msg.lower()
 
 

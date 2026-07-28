@@ -3,7 +3,7 @@
 /**
  * BindAgentModal — Phase 15 T3.3.
  *
- * Lets the operator bind any cli-bridge agent to a runtime directly from the
+ * Lets the operator bind any switchable agent to a runtime directly from the
  * /runtimes page (instead of having to open AgentDetailPage). Re-uses
  * RuntimeSwitchModal for the actual confirm/preview/force flow — this
  * modal is a thin agent-picker on top.
@@ -44,11 +44,16 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
     return () => window.removeEventListener("keydown", handler);
   }, [open, onClose]);
 
+  // Which agents may be bound is the same question as "may this agent switch
+  // runtime?" — so it is the backend's answer (Agent.runtime_switchable), not
+  // a local `agent_runtime === "cli-bridge"` filter. That filter hid every
+  // adapter-backed HOST agent (Boss, Hermes, grok, kimi) from this picker even
+  // though the switch this modal performs would have succeeded for them.
   const { data: agents = [], isLoading } = useQuery({
-    queryKey: ["agents", "all-cli-bridge"],
+    queryKey: ["agents", "all-switchable"],
     queryFn: () => api.agents.list(undefined, true),
     enabled: open,
-    select: (rows) => rows.filter((a) => a.agent_runtime === "cli-bridge"),
+    select: (rows) => rows.filter((a) => a.runtime_switchable),
   });
 
   return (
@@ -104,12 +109,12 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                   {isLoading && (
                     <div className="flex items-center gap-2 p-3 text-[12px] text-[var(--color-text-muted)]">
                       <Loader2 size={12} className="animate-spin" />
-                      Loading cli-bridge agents…
+                      Loading agents…
                     </div>
                   )}
                   {!isLoading && agents.length === 0 && (
                     <div className="p-4 text-[12px] text-[var(--color-text-muted)] text-center">
-                      No cli-bridge agents available.
+                      No switchable agents available.
                     </div>
                   )}
                   <ul className="space-y-1">

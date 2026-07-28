@@ -81,14 +81,19 @@ class AgentCreate(BaseModel):
 
     @model_validator(mode="after")
     def _host_requires_runtime_id(self):
-        # Host agents can only get a runtime_id at create time — the PATCH
-        # switch path is cli-bridge-only (see update_agent()), and /provision
-        # 400s without one. Without this guard, creating a host agent without
-        # runtime_id is an unrecoverable dead-end (2026-07-10 host E2E test).
+        # A host agent must be BORN with a runtime binding because /provision
+        # 400s without one — creating it unbound is a dead end at provisioning
+        # time (2026-07-10 host E2E test).
+        #
+        # The original rationale ("a later switch is not supported") is stale:
+        # host agents whose harness owns a HostHarnessAdapter DO switch runtime
+        # afterwards, in place (see host_harness_adapter.
+        # runtime_switch_availability). The guard survives on the provisioning
+        # argument alone, not on a switchability claim.
         if self.agent_runtime == "host" and not self.runtime_id:
             raise ValueError(
-                "Host-Agents benoetigen eine runtime_id beim Erstellen "
-                "(nachtraeglicher Wechsel wird nicht unterstuetzt)"
+                "A host agent needs a runtime_id at creation time "
+                "(provisioning cannot run without a runtime binding)"
             )
         return self
 

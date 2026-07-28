@@ -367,31 +367,31 @@ async def validate_compatibility(
 
 
 def _is_host_inplace(agent: Agent) -> bool:
-    """True when this is a host agent that owns a HostHarnessAdapter.
+    """Thin alias of ``host_harness_adapter.is_host_inplace`` (see that module).
 
-    Such agents (currently only Hermes, ADR-064) can switch runtime in place —
-    the adapter re-renders agent.env + reloads the single host session
-    sequentially, so there is never a parallel instance.
+    Kept as a module-local name because the rest of this service (and its
+    tests) reference it; the RULE itself lives in host_harness_adapter so the
+    API's derived `runtime_switchable` field and this guard can never diverge.
     """
-    from app.services.host_harness_adapter import get_adapter
+    from app.services.host_harness_adapter import is_host_inplace
 
-    return (
-        getattr(agent, "agent_runtime", None) == "host"
-        and get_adapter(agent.harness) is not None
-    )
+    return is_host_inplace(agent)
 
 
 def _ensure_agent_switchable(agent: Agent) -> None:
-    rt = getattr(agent, "agent_runtime", None)
-    if rt == "cli-bridge":
+    """Raise unless ``agent`` is eligible for an MC-driven runtime switch.
+
+    The eligibility rule AND its plain-text reason both come from
+    host_harness_adapter.runtime_switch_availability — the same function that
+    feeds Agent.runtime_switchable / .runtime_switch_blocked_reason into the
+    API, so the UI can never disagree with this endpoint about who may switch.
+    """
+    from app.services.host_harness_adapter import runtime_switch_availability
+
+    switchable, reason = runtime_switch_availability(agent)
+    if switchable:
         return
-    # ADR-064: host agents with an adapter switch in place (sequential reload).
-    if _is_host_inplace(agent):
-        return
-    raise AgentNotSwitchableError(
-        f"Runtime-Switch nicht unterstuetzt fuer Agent-Typ '{rt}'. "
-        f"Nur 'cli-bridge' Agents koennen einen Runtime via MC waehlen."
-    )
+    raise AgentNotSwitchableError(reason or "Runtime switch is not supported for this agent.")
 
 
 # ── Lock helpers ──────────────────────────────────────────────────────────

@@ -585,11 +585,16 @@ export const HARNESS_LABELS: Record<Harness, string> = {
   kimi: "Kimi Code",
 };
 
-// Host-only harnesses (HostHarnessAdapter registry): hermes (ADR-064), grok
+// Harness values that exist ONLY in the host world: hermes (ADR-064), grok
 // (ADR-066), kimi (2026-07-24, boss-host pattern — kimi is ALSO a cli-bridge
 // harness; here it appears as its host form). Kept separate from the
-// cli-bridge `Harness` union + HARNESS_LABELS because this list feeds only
-// the agent wizard's `host` runtime path.
+// cli-bridge `Harness` union + HARNESS_LABELS so those stay cli-bridge-scoped.
+//
+// This is a TYPE for values read off existing agents — it is NOT the list of
+// harnesses a host agent may be created with. That list is the backend's
+// HostHarnessAdapter registry, delivered as CompatMatrix.host_harnesses, and
+// it also contains "claude" (which lives in `Harness`). The agent wizard reads
+// the registry; nothing should enumerate host harnesses from here.
 export type HostHarness = "hermes" | "grok" | "kimi";
 
 export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
@@ -598,14 +603,10 @@ export const HOST_HARNESS_LABELS: Record<HostHarness, string> = {
   kimi: "Kimi Code",
 };
 
-// Wire protocol each host harness speaks (mirrors backend HARNESS_PROTOCOLS) —
-// used by the wizard to filter compatible runtimes: hermes → OpenAI-protocol
-// providers, grok/kimi → their own fixed cloud runtimes (grok-cloud/kimi-cloud).
-export const HOST_HARNESS_PROTOCOL: Record<HostHarness, string> = {
-  hermes: "openai",
-  grok: "grok",
-  kimi: "kimi",
-};
+// NOTE: the wire protocol of a host harness is NOT mirrored here any more.
+// It arrives with the harness itself in CompatMatrix.host_harnesses (see
+// below) — the local copy was a second truth that could not follow a newly
+// registered adapter.
 
 export interface Agent {
   id: string;
@@ -668,6 +669,19 @@ export interface Agent {
   // intentionally outside the cli-bridge-facing `Harness` union so HARNESS_LABELS
   // stays cli-bridge-only. Labels for host harnesses live in HOST_HARNESS_LABELS.
   harness?: Harness | HostHarness | null;
+  // Derived by the backend (no DB column) from the SAME function the switch
+  // endpoint guards with — services/host_harness_adapter.py::
+  // runtime_switch_availability, surfaced as pydantic computed fields on the
+  // Agent model, so list AND detail responses carry them.
+  //
+  // READ THESE. Do not re-derive switchability in the UI: the old
+  // `agent_runtime === "host" && harness === "hermes"` rule silently locked
+  // every host harness registered after Hermes (grok, kimi, claude/Boss) out
+  // of the runtime picker even though the backend could switch them.
+  // `runtime_switch_blocked_reason` is user-facing English, non-null exactly
+  // when `runtime_switchable` is false.
+  runtime_switchable: boolean;
+  runtime_switch_blocked_reason: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -1928,13 +1942,35 @@ export interface CompatMatrixHarness {
 export interface CompatMatrixRuntime {
   slug: string;
   display_name: string;
-  protocol: "openai" | "anthropic" | null;
+  // Wire protocol from backend harness_compat.runtime_protocol(). Widened from
+  // the old "openai" | "anthropic" literal union: protocol-fixed host harnesses
+  // add their own values ("grok", "kimi", …), and a new one must not require a
+  // frontend type edit to be comparable.
+  protocol: string | null;
   compatible_harnesses: Harness[];
   reasons: Record<string, string>;
 }
 
+// One entry of the HostHarnessAdapter registry
+// (backend/app/services/host_harness_adapter.py::host_harness_catalog).
+// The wizard renders its host-harness picker from THIS, never from a local
+// list — the local list omitted "claude" and assumed every host harness is a
+// singleton bridge, which would have blocked a second claude host agent.
+export interface CompatMatrixHostHarness {
+  key: Harness | HostHarness;
+  label: string;
+  protocol: string;
+  // True → at most one agent may hold this harness, and its slug must equal
+  // `singleton_slug` (hermes/grok/kimi hardcode config dir + plist to one
+  // slug). False → arbitrarily many agents may use it (claude).
+  singleton: boolean;
+  singleton_slug: string | null;
+  supports_bootstrap: boolean;
+}
+
 export interface CompatMatrix {
   harnesses: CompatMatrixHarness[];
+  host_harnesses: CompatMatrixHostHarness[];
   runtimes: CompatMatrixRuntime[];
 }
 
