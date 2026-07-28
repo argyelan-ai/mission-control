@@ -1110,3 +1110,150 @@ def test_slug_derivation_avoids_duplicate_prefix():
     assert _derive_slug("grok", "grok-4.5") == "grok-4-5"
     assert _derive_slug("kimi", "k3-256k") == "kimi-k3-256k"
     assert _derive_slug("ollama-cloud", "glm-5.1") == "ollama-cloud-glm-5-1"
+
+
+# ── Naming + dedupe on bind (2026-07-28) ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_bind_derives_the_display_name_instead_of_the_raw_id(
+    auth_client, session, monkeypatch
+):
+    """`anthropic-claude-opus-5` was created with display_name "claude-opus-5" —
+    a raw id next to hand-written labels is exactly how the registry started
+    looking duplicated."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json=anthropic_body()))
+    patch_creds(monkeypatch, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-oauth-test"})
+    await anthropic_target(session)
+
+    resp = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "anthropic", "model_id": "claude-opus-5"},
+    )
+    assert resp.status_code == 201, resp.text
+    assert resp.json()["runtime"]["display_name"] == "Claude Opus 5 (Anthropic Pro/Max)"
+
+
+@pytest.mark.asyncio
+async def test_bind_derives_display_name_for_every_provider(
+    auth_client, session, monkeypatch
+):
+    """Not an Anthropic special case — ollama, grok and kimi bind the same way."""
+    monkeypatch.setattr(model_catalog, "read_grok_token", lambda: "grok-oauth")
+    monkeypatch.setattr(model_catalog, "read_kimi_token", lambda: "kimi-token")
+    patch_creds(monkeypatch, {"OPENAI_API_KEY": "sk-openai"})
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+
+    await add_runtime(
+        session, slug="ollama-cloud", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", model_identifier="glm-5.1",
+    )
+    await add_runtime(
+        session, slug="grok-cloud", runtime_type="grok",
+        endpoint="https://cli-chat-proxy.grok.com", model_identifier="grok-4.5",
+    )
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1", model_identifier="kimi-code/k3",
+    )
+
+    for provider_key, model_id, slug, name in [
+        ("openai:ollama-cloud", "glm-5.2", "ollama-cloud-glm-5-2", "GLM 5.2 (Ollama Cloud)"),
+        ("grok", "grok-5", "grok-5", "Grok 5 (xAI Cloud)"),
+        # No "Kimi" in the name: the id is `k3-256k` and the rule invents
+        # nothing — the vendor is already in the provider label.
+        ("kimi", "k3-256k", "kimi-k3-256k", "K3 256K (Moonshot Cloud)"),
+    ]:
+        resp = await auth_client.post(
+            "/api/v1/models/catalog/bind",
+            json={"provider_key": provider_key, "model_id": model_id},
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["slug"] == slug
+        assert body["runtime"]["display_name"] == name
+
+
+@pytest.mark.asyncio
+async def test_bind_does_not_duplicate_a_row_that_already_drives_the_model(
+    auth_client, session, monkeypatch
+):
+    """The dedupe guard: identity is (endpoint, model_identifier), not the slug.
+
+    The seeded row `anthropic-claude-opus` drives `claude-opus-4-8` under a slug
+    the rule would never derive. Binding that same model from the catalog must
+    return that row, not create `anthropic-claude-opus-4-8` beside it.
+    """
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json=anthropic_body()))
+    patch_creds(monkeypatch, {"CLAUDE_CODE_OAUTH_TOKEN": "sk-oauth-test"})
+    await anthropic_target(session)  # slug anthropic-claude-opus, claude-opus-4-8
+
+    resp = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "anthropic", "model_id": "claude-opus-4-8"},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["created"] is False
+    assert body["slug"] == "anthropic-claude-opus"
+
+    rows = (
+        await session.exec(
+            select(Runtime).where(Runtime.model_identifier == "claude-opus-4-8")
+        )
+    ).all()
+    assert len(rows) == 1, "a second row for the same model on the same endpoint"
+
+
+@pytest.mark.asyncio
+async def test_bind_dedupe_ignores_a_trailing_slash_on_the_endpoint(
+    auth_client, session, monkeypatch
+):
+    """`https://ollama.com/v1` and `https://ollama.com/v1/` are one endpoint."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+    patch_creds(monkeypatch, {"OPENAI_API_KEY": "sk-openai"})
+
+    await add_runtime(
+        session, slug="ollama-cloud", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", model_identifier="glm-5.1",
+    )
+    # A second row for the SAME model, written with a trailing slash.
+    await add_runtime(
+        session, slug="ollama-legacy", runtime_type="cloud",
+        endpoint="https://ollama.com/v1/", model_identifier="glm-5.2",
+    )
+
+    resp = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "openai:ollama-cloud", "model_id": "glm-5.2"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["created"] is False
+    assert resp.json()["slug"] == "ollama-legacy"
+
+
+@pytest.mark.asyncio
+async def test_bind_still_creates_a_row_for_the_same_model_on_another_endpoint(
+    auth_client, session, monkeypatch
+):
+    """The guard keys on endpoint AND model — `glm-5.2` at Ollama Cloud and
+    `glm-5.2` on a local vLLM are two different runtimes and must stay two rows."""
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+    patch_creds(monkeypatch, {"OPENAI_API_KEY": "sk-openai"})
+
+    await add_runtime(
+        session, slug="ollama-cloud", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", model_identifier="glm-5.1",
+    )
+    await add_runtime(
+        session, slug="local-vllm", runtime_type="vllm_docker",
+        endpoint="http://192.0.2.10:8000/v1", model_identifier="glm-5.2",
+    )
+
+    resp = await auth_client.post(
+        "/api/v1/models/catalog/bind",
+        json={"provider_key": "openai:ollama-cloud", "model_id": "glm-5.2"},
+    )
+    assert resp.status_code == 201
+    assert resp.json()["created"] is True
+    assert resp.json()["slug"] == "ollama-cloud-glm-5-2"
