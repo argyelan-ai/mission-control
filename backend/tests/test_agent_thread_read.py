@@ -282,3 +282,27 @@ async def test_limit_is_bounded(client: AsyncClient, async_session):
     board, agent, token, task, thread = await _board_agent_task(async_session)
     assert (await _thread(client, token, limit=0)).status_code == 422
     assert (await _thread(client, token, limit=201)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reading_is_not_comm_v2_gated(client: AsyncClient, async_session):
+    """GET /me/inbox blanks the payload for non-comm_v2 agents because
+    *delivery* is the piloted feature. Reading history is not delivery: the
+    thread fills up regardless of the flag (operator posts, mc msg), and
+    hiding it from an agent trying to recover would recreate exactly the gap
+    this endpoint closes. No gate — pinned here so it stays deliberate."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    agent.comm_v2 = False
+    async_session.add(agent)
+    await async_session.commit()
+
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="sichtbar auch ohne pilot")
+
+    body = (await _thread(client, token)).json()
+    assert [m["body"] for m in body["messages"]] == ["sichtbar auch ohne pilot"]
+
+    # …while the delivery path stays gated, unchanged.
+    inbox = await client.get("/api/v1/agent/me/inbox",
+                             headers={"Authorization": f"Bearer {token}"})
+    assert inbox.json()["messages"] == []
