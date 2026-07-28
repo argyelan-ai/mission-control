@@ -306,3 +306,22 @@ async def test_reading_is_not_comm_v2_gated(client: AsyncClient, async_session):
     inbox = await client.get("/api/v1/agent/me/inbox",
                              headers={"Authorization": f"Bearer {token}"})
     assert inbox.json()["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_agent_authored_messages_resolve_their_author(client: AsyncClient, async_session):
+    """The transcript is only useful if you can tell who said what — the
+    agent-sender branch (agent_map lookup) needs its own coverage, since every
+    other test here posts as the operator."""
+    board, agent, token, task, thread = await _board_agent_task(async_session)
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="frage vom operator")
+    await post_message(async_session, thread_id=thread.id, sender_type="agent",
+                       sender_id=agent.id, message_type="message",
+                       body="meine eigene antwort")
+
+    body = (await _thread(client, token)).json()
+    assert [m["author"]["display"] for m in body["messages"]] == ["Operator", agent.name]
+    assert [m["author"]["kind"] for m in body["messages"]] == ["user", "agent"]
+    # Delivery state is operator-side bookkeeping — never emitted here.
+    assert all("delivery" not in m for m in body["messages"])
