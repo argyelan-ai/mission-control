@@ -1757,11 +1757,19 @@ async def _resolve_thread_task_for_agent(
         if pointed is not None:
             return pointed
 
+    # `waiting` belongs in this fallback even though /me/poll excludes it from
+    # its own. Poll's exclusion is about claimability — a parked task must not
+    # re-park the agent (agents.py:2820-2828). Reading has no claim semantics,
+    # and a parked task is the strongest case for this verb: parking clears
+    # current_task_id while the task stays `waiting` and still assigned
+    # (task_runner.py:511-513), so without this the agent that asked a blocking
+    # question is the one agent who cannot read the answer to it. Ordering by
+    # updated_at keeps the agent's *current* work ahead of a parked one.
     return (
         await session.exec(
             select(Task)
             .where(Task.assigned_agent_id == agent.id)
-            .where(Task.status.in_(["in_progress", "blocked", "review"]))  # type: ignore[union-attr]
+            .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))  # type: ignore[union-attr]
             .order_by(Task.updated_at.desc())  # type: ignore[union-attr]
             .limit(1)
         )

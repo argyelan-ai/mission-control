@@ -325,3 +325,25 @@ async def test_agent_authored_messages_resolve_their_author(client: AsyncClient,
     assert [m["author"]["kind"] for m in body["messages"]] == ["user", "agent"]
     # Delivery state is operator-side bookkeeping — never emitted here.
     assert all("delivery" not in m for m in body["messages"])
+
+
+@pytest.mark.asyncio
+async def test_parked_waiting_task_is_readable(client: AsyncClient, async_session):
+    """A task parked in `waiting` is the single strongest case for this verb:
+    the agent asked a blocking question, got parked, and comes back wanting to
+    read the answer. Parking clears agent.current_task_id while the task stays
+    `waiting` and still assigned (task_runner.py:511-513), so the pointer
+    branch cannot find it — only the fallback can.
+
+    /me/poll excludes `waiting` from its fallback on purpose: including it
+    would re-park the agent. Reading has no claim semantics, so that reason
+    does not carry over here."""
+    board, agent, token, task, thread = await _board_agent_task(
+        async_session, status="waiting", set_current=False,
+    )
+    await post_message(async_session, thread_id=thread.id, sender_type="user",
+                       message_type="message", body="die antwort auf deine frage")
+
+    body = (await _thread(client, token)).json()
+    assert body["task_id"] == str(task.id)
+    assert [m["body"] for m in body["messages"]] == ["die antwort auf deine frage"]

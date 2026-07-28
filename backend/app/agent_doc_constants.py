@@ -60,6 +60,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "ask": "Ask a thread-native question — --blocking pauses on the answer.",
     "msg": "Post a plain message/status/decision on the task thread (no questions — use `mc ask`).",
     "inbox": "Pull new thread messages and ack them (on 📬 nudge).",
+    "thread": "Re-read your own task thread — read-only, acks nothing (`mc inbox` is what consumes).",
     "checklist": "Manage the task checklist (add/done/skip/list).",
     "question": "Ask the operator a clarifying question.",
     "help": "Ask another agent for help.",
