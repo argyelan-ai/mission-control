@@ -147,6 +147,93 @@ def write_operating_card(config_dir: Path, agent: Agent, context: dict) -> dict[
         return {"CARD.md": f"error: {e}"}
 
 
+HOST_LAUNCHER_TEMPLATE = "start-agent.sh.j2"
+
+
+def render_host_launcher_script(agent: Agent) -> dict[str, str]:
+    """Generates ``start-claude.sh`` for native-claude host agents (Boss
+    today) from ``agent.workspace_path`` — the exact same DB field
+    :func:`sync_host_agent_files` uses to write SOUL.md/CARD.md.
+
+    Fixes a 3-month drift (found 2026-07-28): docker/boss-host/start-claude.sh
+    hardcoded ``CONFIG_DIR=~/.mc/agents/boss-host/claude-config``, while sync
+    wrote to ``agent.workspace_path/claude-config``
+    (``~/.mc/workspaces/boss``). Boss kept reading a stale (29 Apr)
+    System-Prompt while every sync-config "succeeded" writing a file nobody
+    read. Deriving CONFIG_DIR from ``agent.workspace_path`` at render time
+    makes the two locations structurally unable to diverge again.
+
+    Only applies to ``harness == "claude"`` — the only launcher pattern that
+    needs this native-binary wrapper (``--append-system-prompt`` +
+    ``--strict-mcp-config``) today. Hermes runs a Python MCP bridge started
+    directly by launchd (``ai.hermes.gateway`` / ``com.mc.hermes-bridge``,
+    verified live 2026-07-28 — no ``start-claude.sh``-style script anywhere
+    under ``~/.mc``), so any other harness value is a clean no-op.
+
+    The rendered script is written to the conventional legacy launcher
+    directory ``AGENTS_DIR/{slug}-host/`` (documented in cli_terminal.py /
+    this module's docstrings as the on-disk convention for native-claude
+    host agents) — independent of ``agent.workspace_path``, which only holds
+    the claude-config bind. An existing script at that path is backed up to
+    ``start-claude.sh.bak`` before being overwritten (mirrors
+    compose_renderer.write_compose_agents' backup-before-write pattern).
+
+    Returns a per-file status dict in the same shape as
+    :func:`sync_host_agent_files` (``{"start-claude.sh": "..."}`` /
+    ``{"_error": "..."}`` / ``{"_skipped": "..."}``).
+    """
+    if getattr(agent, "agent_runtime", None) != "host":
+        return {"_skipped": "non-host runtime"}
+    if getattr(agent, "harness", None) != "claude":
+        return {"_skipped": f"harness={agent.harness!r} does not use the native-claude launcher"}
+    if not agent.workspace_path:
+        msg = f"host agent {agent.name} has no workspace_path set — cannot generate launcher"
+        logger.error("render_host_launcher_script(%s): %s", agent.name, msg)
+        return {"_error": msg}
+
+    slug = _agent_slug(agent)
+    launcher_dir = AGENTS_DIR / f"{slug}-host"
+    try:
+        launcher_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        msg = f"cannot create launcher dir {launcher_dir}: {e}"
+        logger.error("render_host_launcher_script(%s): %s", agent.name, msg)
+        return {"_error": msg}
+
+    config_dir = str(Path(agent.workspace_path) / "claude-config")
+    env_file = str(launcher_dir / "agent.env")
+
+    try:
+        rendered = render_agent_file(
+            HOST_LAUNCHER_TEMPLATE,
+            {
+                "slug": slug,
+                "config_dir": config_dir,
+                "env_file": env_file,
+            },
+        )
+    except Exception as e:
+        logger.error("render_host_launcher_script(%s) render error: %s", agent.name, e)
+        return {"_error": f"template render failed: {e}"}
+
+    target = launcher_dir / "start-claude.sh"
+    bak = target.with_suffix(target.suffix + ".bak")
+    tmp = target.with_suffix(target.suffix + ".tmp")
+    try:
+        if target.exists():
+            bak.write_text(target.read_text(encoding="utf-8"), encoding="utf-8")
+        tmp.write_text(rendered, encoding="utf-8")
+        os.replace(tmp, target)
+        os.chmod(target, 0o755)
+    except OSError as e:
+        msg = f"cannot write launcher {target}: {e}"
+        logger.error("render_host_launcher_script(%s): %s", agent.name, msg)
+        return {"_error": msg}
+
+    logger.info("render_host_launcher_script(%s) -> wrote %s (%d bytes)", agent.name, target, len(rendered))
+    return {"start-claude.sh": f"written ({len(rendered)} bytes)"}
+
+
 def _agent_slug(agent: Agent) -> str:
     """Slug used to look up the agent directory.
 
@@ -612,6 +699,15 @@ async def sync_host_agent_files(
     except Exception as e:
         logger.error("sync_host_agent_files(%s) CARD.md: %s", agent.name, e)
         results["CARD.md"] = f"error: {e}"
+
+    # 4d. start-claude.sh — generated native-claude launcher (harness=="claude"
+    # only; no-op for other harnesses, e.g. Hermes). See
+    # render_host_launcher_script() docstring for the bug this closes.
+    try:
+        results.update(render_host_launcher_script(agent))
+    except Exception as e:
+        logger.error("sync_host_agent_files(%s) start-claude.sh: %s", agent.name, e)
+        results["start-claude.sh"] = f"error: {e}"
 
     # 5. DB-Updates persist (SOUL.md/HEARTBEAT.md/MEMORY.md may have been updated)
     session.add(agent)

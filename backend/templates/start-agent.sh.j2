@@ -1,0 +1,106 @@
+#!/bin/bash
+# GENERATED FILE — do not hand-edit. Rendered by MC from DB state
+# (agent.workspace_path) via app.services.docker_agent_sync.render_host_launcher_script()
+# / backend/templates/start-agent.sh.j2. Hand-edits here are overwritten on
+# the next sync-config. Edit the .j2 template instead (ADR-006: DB -> Jinja2
+# templates -> output files, same pattern as docker-compose.agents.yml /
+# compose_renderer.py).
+#
+# fix/host-launcher-from-template (2026-07-28): this file used to be a
+# hand-maintained script (docker/boss-host/start-claude.sh) with CONFIG_DIR
+# hardcoded to ~/.mc/agents/{{ slug }}-host/claude-config. That path silently
+# diverged from agent.workspace_path (~/.mc/workspaces/{{ slug }}/claude-config)
+# — the location sync_host_agent_files() actually renders SOUL.md/CARD.md
+# into — so Boss read a System-Prompt three months stale (29 Apr) while MC
+# kept "successfully" syncing a file nobody read. Generating this script from
+# agent.workspace_path makes the two paths structurally unable to diverge.
+#
+# Host-Variante des {{ slug }}-Launchers. Startet das offizielle claude
+# binary mit OAuth-Login (aus macOS Keychain unter ~/.claude/) + CARD.md
+# (Fallback: SOUL.md) als --append-system-prompt.
+#
+# Modell: aus agent.env (ANTHROPIC_MODEL, gerendert aus
+# runtime.model_identifier — siehe unten). Direkter Anthropic-API-Call, KEIN
+# openclaude/LM-Studio-Detour wie im Container.
+
+set -eu
+
+CONFIG_DIR="{{ config_dir }}"
+CARD_FILE="$CONFIG_DIR/CARD.md"
+SOUL_FILE="$CONFIG_DIR/SOUL.md"
+# Context-Economy Stufe 2: CARD.md (<=5KB) ersetzt SOUL.md (~29KB) als
+# --append-system-prompt, aber nur fuer Agenten mit gesetztem Opt-in-Flag
+# (docker_agent_sync.write_operating_card schreibt/loescht die Datei je nach
+# agent.use_operating_card). -s statt -f: eine LEERE CARD.md (0 Byte) muss
+# wie "fehlt" behandelt werden, sonst startet der Agent ganz ohne
+# System-Prompt statt auf SOUL.md zurueckzufallen (matcht den -s-Check unten).
+[ -s "$CARD_FILE" ] || CARD_FILE="$SOUL_FILE"
+CLAUDE_BIN="$HOME/.local/bin/claude"
+# {{ slug }}-eigene MCP-Config — leer fuer jetzt, kann spaeter erweitert werden.
+# Wird mit --strict-mcp-config genutzt damit claude die persoenliche
+# ~/.claude.json des Operators (mit youtube-transcript etc.) NICHT als MCP-Quelle laedt.
+# Loest "1 MCP server failed" warning + Privacy/Security-Issue.
+MCP_CONFIG="$CONFIG_DIR/.mcp.json"
+[ -f "$MCP_CONFIG" ] || echo '{"mcpServers": {}}' > "$MCP_CONFIG"
+
+# agent.env defensiv sourcen — falls claude unabhängig vom entrypoint
+# (z.B. via tmux respawn-window) neugestartet wird, brauchen wir die
+# MC_API_URL + MC_AGENT_TOKEN env-Vars. Die unsets unten betreffen nur
+# ANTHROPIC/OPENAI Vars, nicht MC_*.
+ENV_FILE="{{ env_file }}"
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    . "$ENV_FILE"
+    set +a
+fi
+
+# Sicherstellen: Wir nutzen das ECHTE claude (nicht openclaude)
+if ! "$CLAUDE_BIN" --version 2>&1 | grep -q "Claude Code"; then
+    echo "FEHLER: $CLAUDE_BIN ist nicht das offizielle Claude Code Binary." >&2
+    exit 1
+fi
+
+# Container-Boss-Env-Contamination entfernen — diese Vars routen claude
+# zu LM Studio/Ollama statt api.anthropic.com:
+unset CLAUDE_CONFIG_DIR    # damit claude OAuth-Keychain unter ~/.claude/ findet
+unset ANTHROPIC_BASE_URL
+unset OPENAI_BASE_URL
+unset OPENAI_API_KEY
+unset OPENAI_MODEL
+unset CLAUDE_CODE_USE_OPENAI
+
+# ANTHROPIC_MODEL kommt aus agent.env (oben gesourct), das MC aus
+# runtime.model_identifier rendert — die einzige Wahrheit fuer das Modell
+# (docs/plans/2026-07-25-model-sanitation-and-catalog.md). Deshalb steht der
+# Wert hier bewusst NICHT: ein ins Skript eingebackenes Modell wuerde beim
+# naechsten Runtime-Wechsel veralten, waehrend agent.env korrekt neu
+# gerendert wird — genau die Divergenz, die dieser Generator beseitigt.
+# Darum ist ANTHROPIC_MODEL auch von den unsets oben ausgenommen.
+if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+    echo "[start-{{ slug }}] ANTHROPIC_MODEL=$ANTHROPIC_MODEL (aus agent.env)"
+else
+    # Kein Pin: das claude-CLI nimmt seinen Account-Default, der neuen
+    # Releases folgt. Ein hier hart gesetzter Wert veraltet dagegen still —
+    # genau der Vorfall, bei dem die Fleet auf einem alten opus stehenblieb,
+    # waehrend Anthropic laengst weiter war. Warnen statt raten.
+    echo "WARN: ANTHROPIC_MODEL fehlt in $ENV_FILE — {{ slug }} ist an keine Runtime mit model_identifier gebunden. Kein Pin gesetzt, claude nutzt seinen Account-Default." >&2
+fi
+
+# --dangerously-skip-permissions matcht aktuelles Container-Verhalten.
+# Whitelist wurde bewusst NICHT eingebaut (Operator-Vorgabe: "perfekt + sauber" =
+# kein Funktionsverlust gegenueber Container-Boss). Bei Bedarf spaeter
+# via --allowed-tools "Read,Grep,..." oder --permission-mode einschraenken.
+if [ -s "$CARD_FILE" ]; then
+    exec "$CLAUDE_BIN" \
+        --dangerously-skip-permissions \
+        --strict-mcp-config \
+        --mcp-config "$MCP_CONFIG" \
+        --append-system-prompt "$(cat "$CARD_FILE")"
+else
+    echo "WARN: $CARD_FILE leer oder fehlt — starte ohne system-prompt" >&2
+    exec "$CLAUDE_BIN" \
+        --dangerously-skip-permissions \
+        --strict-mcp-config \
+        --mcp-config "$MCP_CONFIG"
+fi
