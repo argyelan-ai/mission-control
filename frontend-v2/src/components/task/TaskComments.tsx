@@ -59,7 +59,7 @@ export function TaskComments({ task, boardId, agents }: TaskCommentsProps) {
               className="text-[10px] px-2 py-0.5 rounded-sm font-mono capitalize transition-colors cursor-pointer"
               style={{
                 backgroundColor: commentFilter === f ? C.accent : "var(--color-bg-surface)",
-                color: commentFilter === f ? C.textPrimary : C.textMuted,
+                color: commentFilter === f ? C.onAccent : C.textMuted,
                 border: `1px solid ${commentFilter === f ? C.borderAccent : C.border}`,
               }}
             >

@@ -817,8 +817,13 @@ function IntelligenceSection() {
             }}
           >
             <span
-              className="absolute top-0.5 w-5 h-5 rounded-full bg-white transition-transform"
-              style={{ left: config.enabled ? "calc(100% - 22px)" : "2px" }}
+              className="absolute top-0.5 w-5 h-5 rounded-full transition-transform"
+              style={{
+                left: config.enabled ? "calc(100% - 22px)" : "2px",
+                // On the bone accent track a white knob vanishes (~1.1:1) —
+                // dark knob on accent, light knob on the dark off-track.
+                backgroundColor: config.enabled ? C.onAccent : "#fff",
+              }}
             />
           </button>
         </div>
