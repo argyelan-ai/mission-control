@@ -454,10 +454,25 @@ async def test_the_same_worker_may_take_its_own_lock_back(redis_lock):
 @pytest.mark.asyncio
 async def test_losing_the_lock_closes_the_connection(redis_lock, monkeypatch):
     """If another worker took over, this socket must stop reading — otherwise
-    both process the same messages."""
+    both process the same messages.
+
+    Detection is now asynchronous. The renewal used to run inline after every
+    envelope, which made it exact but also meant it never ran while the channel
+    was quiet — and a quiet channel is the normal state of a team chat, so the
+    lock expired and the next message closed the socket instead of being read
+    (live failure, 2026-07-29). The renewal therefore moved to a companion
+    task, and the read loop stops as soon as that task reports the loss.
+
+    So the guarantee changed from "stops after exactly one more envelope" to
+    "stops promptly, well before the stream ends". That is what the lock is
+    for: no second reader processing the channel indefinitely. A handful of
+    envelopes during a genuine takeover is the price for a channel that keeps
+    working when nobody is talking.
+    """
     monkeypatch.setattr("app.services.slack_socket.LOCK_RENEW_INTERVAL", 0)
+    total = 200
     service, socket = make_service(
-        [event_envelope(envelope_id=f"env-{i}") for i in range(3)]
+        [event_envelope(envelope_id=f"env-{i}") for i in range(total)]
     )
     await service._acquire_lock()
     # Somebody else owns it now.
@@ -465,7 +480,11 @@ async def test_losing_the_lock_closes_the_connection(redis_lock, monkeypatch):
 
     await service._connect_once()
 
-    assert len(socket.sent) == 1  # stopped right after the first envelope
+    assert len(socket.sent) < total, "the reader never noticed it lost the lock"
+    assert len(socket.sent) < total // 4, (
+        f"took {len(socket.sent)} of {total} envelopes to notice — too slow to "
+        f"call it a guard against a second reader"
+    )
 
 
 @pytest.mark.asyncio
@@ -554,3 +573,102 @@ def test_the_websocket_library_is_a_declared_dependency():
 
     pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
     assert "websockets" in pyproject.read_text(encoding="utf-8")
+
+
+# ── The quiet-channel lock starvation (live failure, 2026-07-29) ──────────
+
+
+class SilentThenOneSocket:
+    """A socket that stays quiet for a while, then delivers one message.
+
+    This is what a team chat actually looks like: long silence, then somebody
+    types. The old renewal ran *inside* the read loop, so during the silence it
+    never ran at all — and the message that finally arrived woke the loop
+    straight into "lost the lock, closing".
+    """
+
+    def __init__(self, quiet_seconds: float, frame: str):
+        self._quiet = quiet_seconds
+        self._frame = frame
+        self._delivered = False
+        self.sent: list[dict] = []
+        self.closed = False
+
+    async def send(self, raw: str) -> None:
+        self.sent.append(json.loads(raw))
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._delivered:
+            raise StopAsyncIteration
+        await asyncio.sleep(self._quiet)
+        self._delivered = True
+        return self._frame
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        self.closed = True
+        return False
+
+
+@pytest.mark.asyncio
+async def test_an_expired_lock_is_reclaimed_not_surrendered(redis_lock):
+    """An expired lock means nobody holds it — not that somebody took it.
+
+    The renewal compared the stored owner against itself and treated *any*
+    mismatch as a takeover. An expired key reads as None, so the rightful
+    holder handed its socket to nobody and stopped reading.
+    """
+    service = SlackSocketModeService()
+    assert await service._acquire_lock() is True
+
+    await redis_lock.delete(LOCK_KEY)  # TTL lapsed while the channel was quiet
+
+    assert await service._renew_lock() is True, (
+        "an expired lock must be reclaimed — nobody else holds it"
+    )
+    assert await redis_lock.get(LOCK_KEY) == service._owner
+
+
+@pytest.mark.asyncio
+async def test_a_lock_taken_by_someone_else_is_still_surrendered(redis_lock):
+    """The reclaim must not swallow a genuine takeover — that would put two
+    readers on the same socket, which is what the lock exists to prevent."""
+    service = SlackSocketModeService()
+    await service._acquire_lock()
+
+    await redis_lock.set(LOCK_KEY, "another-worker")
+
+    assert await service._renew_lock() is False
+
+
+@pytest.mark.asyncio
+async def test_the_lock_is_renewed_while_the_channel_is_silent(redis_lock, monkeypatch):
+    """THE regression: renewal must not depend on inbound traffic.
+
+    The socket says nothing for well over a renewal interval. With the renewal
+    living inside the read loop, the lock's TTL ran out during that silence.
+    Here it must still be alive when the message finally lands.
+    """
+    # The silence MUST outlast the TTL — otherwise the lock survives on its own
+    # and the test passes even with the renewal ripped out. (It did, on the
+    # first attempt: 0.35s of quiet against a 1s TTL proved nothing.)
+    monkeypatch.setattr("app.services.slack_socket.LOCK_RENEW_INTERVAL", 0.05)
+    monkeypatch.setattr("app.services.slack_socket.LOCK_TTL", 1)
+
+    service = SlackSocketModeService()
+    socket = SilentThenOneSocket(1.4, event_envelope(envelope_id="env-quiet"))
+    await service._acquire_lock()
+
+    await service._pump(socket)
+
+    ttl = await redis_lock.ttl(LOCK_KEY)
+    assert ttl > 0, (
+        "the lock expired while the channel was quiet — the renewal is still "
+        "coupled to inbound traffic"
+    )
+    assert len(socket.sent) == 1, "the message that broke the silence was not acked"
