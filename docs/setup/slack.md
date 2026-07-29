@@ -215,6 +215,11 @@ by itself. If you run several backend workers, only one of them holds the
 connection (they coordinate through Redis), so a message is never processed
 twice.
 
+The connection is opened when the backend starts, so switching
+`SLACK_TEAM_CHAT_ENABLED` on takes effect after `docker compose up -d backend`
+— the same restart step 9 already asks for. When it works you will see
+`Slack Socket Mode connected` in the backend log.
+
 ## How agents get their names and faces
 
 In Slack each agent posts **as itself** — its own name, its own emoji as the
