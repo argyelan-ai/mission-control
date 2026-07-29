@@ -554,13 +554,25 @@ async def resolve_channel_id(reference: str) -> str | None:
 
     found: str | None = None
     cursor = ""
+    # Asking for private channels requires `groups:read`. The documented setup
+    # only grants `channels:*` (public), and Slack rejects the WHOLE call with
+    # `missing_scope` rather than returning the public half — so a single
+    # combined request resolves nothing, the channel gate sees an unknown
+    # channel, and every inbound message is dropped in silence. That is exactly
+    # what happened live on 2026-07-29.
+    #
+    # So: try both, fall back to public-only on missing_scope. Works with and
+    # without `groups:read`, and an operator who later adds private channels
+    # gets them without a code change.
+    types_attempts = ["public_channel,private_channel", "public_channel"]
+    attempt = 0
     try:
         async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
             for _ in range(10):  # bounded: a workspace listing must terminate
                 params = {
                     "limit": 1000,
                     "exclude_archived": "true",
-                    "types": "public_channel,private_channel",
+                    "types": types_attempts[attempt],
                 }
                 if cursor:
                     params["cursor"] = cursor
@@ -571,8 +583,17 @@ async def resolve_channel_id(reference: str) -> str | None:
                 )
                 body = response.json()
                 if not body.get("ok"):
+                    error = body.get("error")
+                    if error == "missing_scope" and attempt + 1 < len(types_attempts):
+                        attempt += 1
+                        cursor = ""
+                        log.info(
+                            "slack: no private-channel scope (groups:read) — "
+                            "listing public channels only"
+                        )
+                        continue
                     log.warning(
-                        "slack conversations.list failed — error=%s", body.get("error")
+                        "slack conversations.list failed — error=%s", error
                     )
                     return None
                 for channel in body.get("channels") or []:

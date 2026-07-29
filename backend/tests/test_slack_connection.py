@@ -64,13 +64,13 @@ def _stub_slack_api(monkeypatch, payload: dict):
 async def test_connection_ok_returns_workspace_and_bot(monkeypatch, session):
     await _set_secret("slack_bot_token", BOT_TOKEN)
     await _set_secret("slack_app_token", APP_TOKEN)
-    _stub_auth_test(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "mission-control"})
+    _stub_auth_test(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "team-chat"})
 
     result = await test_connection(session)
 
     assert result.connected is True
     assert result.team == "Acme HQ"
-    assert result.bot_user == "mission-control"
+    assert result.bot_user == "team-chat"
     assert result.socket_mode_ready is True
     assert result.error is None
     assert result.app_token_error is None
@@ -106,7 +106,7 @@ async def test_unknown_slack_error_is_passed_through(monkeypatch, session):
 @pytest.mark.asyncio
 async def test_missing_app_token_is_its_own_defect(monkeypatch, session):
     await _set_secret("slack_bot_token", BOT_TOKEN)
-    _stub_auth_test(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "mission-control"})
+    _stub_auth_test(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "team-chat"})
 
     result = await test_connection(session)
 
@@ -185,7 +185,7 @@ async def test_transport_error_is_reported_not_raised(monkeypatch, session):
 async def test_endpoint_returns_result_for_admin(monkeypatch, auth_client: AsyncClient):
     await _set_secret("slack_bot_token", BOT_TOKEN)
     await _set_secret("slack_app_token", APP_TOKEN)
-    _stub_slack_api(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "mission-control"})
+    _stub_slack_api(monkeypatch, {"ok": True, "team": "Acme HQ", "user": "team-chat"})
 
     resp = await auth_client.post("/api/v1/slack/test-connection")
 
@@ -193,7 +193,7 @@ async def test_endpoint_returns_result_for_admin(monkeypatch, auth_client: Async
     body = resp.json()
     assert body["connected"] is True
     assert body["team"] == "Acme HQ"
-    assert body["bot_user"] == "mission-control"
+    assert body["bot_user"] == "team-chat"
     assert body["socket_mode_ready"] is True
 
 
@@ -224,10 +224,10 @@ async def test_tokens_never_appear_in_response_or_logs(monkeypatch, auth_client:
     may carry a token — not on success, not on failure, not when swapped."""
     scenarios = [
         # (bot secret, app secret, slack payload)
-        (BOT_TOKEN, APP_TOKEN, {"ok": True, "team": "Acme HQ", "user": "mission-control"}),
+        (BOT_TOKEN, APP_TOKEN, {"ok": True, "team": "Acme HQ", "user": "team-chat"}),
         (BOT_TOKEN, APP_TOKEN, {"ok": False, "error": "invalid_auth"}),
         (APP_TOKEN, BOT_TOKEN, {"ok": False, "error": "invalid_auth"}),
-        (BOT_TOKEN, None, {"ok": True, "team": "Acme HQ", "user": "mission-control"}),
+        (BOT_TOKEN, None, {"ok": True, "team": "Acme HQ", "user": "team-chat"}),
     ]
 
     for bot, app_tok, payload in scenarios:
@@ -418,3 +418,77 @@ def test_slack_tokens_are_fixed_catalog_fields():
     assert app_tok["placeholder"] == "xapp-..."
     assert "Socket Mode" in app_tok["description"]
     assert "connections:write" in app_tok["description"]
+
+
+@pytest.mark.asyncio
+async def test_missing_private_scope_falls_back_to_public_channels(monkeypatch):
+    """The live failure of 2026-07-29, pinned.
+
+    resolve_channel_id asked for `public_channel,private_channel` in one call.
+    Private channels need `groups:read`, which the documented setup does not
+    grant — and Slack rejects the WHOLE request with `missing_scope` instead of
+    returning the public half. So the lookup returned None, the inbound channel
+    gate saw an unknown channel, and every message the operator typed was
+    dropped with only a warning in the log.
+
+    The operator's channel was public and the app was a member. Nothing was
+    misconfigured; the request simply asked for more than it needed.
+    """
+    async def fake_token(session=None):
+        return BOT_TOKEN
+
+    monkeypatch.setattr(slack_client, "get_bot_token", fake_token)
+    slack_client.invalidate_channel_id_cache()
+    seen: list[str] = []
+
+    async def fake_get(self, url, **kwargs):  # noqa: ANN001
+        types = kwargs.get("params", {}).get("types", "")
+        seen.append(types)
+        if "private_channel" in types:
+            return httpx.Response(
+                200,
+                json={"ok": False, "error": "missing_scope"},
+                request=httpx.Request("GET", url),
+            )
+        return httpx.Response(
+            200,
+            json={"ok": True, "channels": [{"id": "C-MC", "name": "team-chat"}]},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    assert await slack_client.resolve_channel_id("#team-chat") == "C-MC"
+    assert any("private_channel" in t for t in seen), "private channels were never tried"
+    assert any(t == "public_channel" for t in seen), (
+        "no public-only retry after missing_scope — this is the whole fix"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_real_error_is_not_retried_away(monkeypatch):
+    """Only missing_scope earns the fallback.
+
+    An invalid token or a rate limit must surface as a failure, not be masked
+    by a second request that fails the same way — otherwise every outage costs
+    two calls and reads like a scope problem in the log.
+    """
+    async def fake_token(session=None):
+        return BOT_TOKEN
+
+    monkeypatch.setattr(slack_client, "get_bot_token", fake_token)
+    slack_client.invalidate_channel_id_cache()
+    calls = {"n": 0}
+
+    async def fake_get(self, url, **kwargs):  # noqa: ANN001
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json={"ok": False, "error": "invalid_auth"},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    assert await slack_client.resolve_channel_id("#team-chat") is None
+    assert calls["n"] == 1, "invalid_auth must not trigger the public-only retry"
