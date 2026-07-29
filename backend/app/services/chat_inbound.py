@@ -9,7 +9,22 @@ channel shares is the routing decision, and it lives here:
       - unknown room             -> DON'T GUESS, ask back (the operator may
                                     have created the room by hand)
   * message came without a room  -> the general chat = DM thread with Boss
+      - unless the text names an agent (``@rex``) -> that agent's DM thread
       - no Boss agent            -> say so, don't drop it silently
+
+── Wer ist gemeint ───────────────────────────────────────────────────────
+Every route above ends in exactly ONE thread, and that is the whole
+addressing rule: a message is delivered to one conversation, never fanned out
+to the fleet. Without it a plain "hallo" in the channel would reach ten agents
+and produce ten answers.
+
+``@name`` is parsed out of the TEXT (``resolve_addressed_agent``), not read
+from a channel's mention payload. The agents are not users of any chat
+channel — MC's bot merely speaks under their names — so there is no real
+mention to read and no autocomplete to rely on. Matching is therefore
+deliberately tolerant (case, ``@`` or not, ``-`` vs ``_``) and, without a
+leading ``@``, restricted to the first word so that "ich habe rex gefragt"
+does not silently re-route.
 
 Plus the loop-protection contract for the write: an inbound message is stored
 as ``sender_type="user"`` with the outbound mirror suppressed, otherwise the
@@ -20,7 +35,8 @@ use ``INBOUND_MESSAGE_KWARGS`` so the rule exists exactly once.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import re
+from dataclasses import dataclass, field
 
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -58,28 +74,123 @@ class InboundRoute:
 
     Genau eines ist gesetzt: ``thread`` (dorthin schreiben) oder ``notice``
     (dem Operator im selben Raum antworten, nichts schreiben).
+
+    ``mentions`` traegt die im Text erkannten Adressaten mit — sie wandern in
+    ``Message.mentions``, damit im Thread sichtbar bleibt, wer gemeint war.
+    ``addressed_agent`` ist der Agent, an dem das Routing tatsaechlich haengt
+    (None = niemand namentlich adressiert).
     """
 
     thread: Thread | None = None
     notice: str | None = None
+    mentions: list[str] = field(default_factory=list)
+    addressed_agent: Agent | None = None
+
+
+# ── @name aus dem Text ────────────────────────────────────────────────────
+#
+# Ein Handle ist alles, was nach einem Agentennamen aussieht. Bewusst breit
+# gefasst (Punkte/Striche/Unterstriche erlaubt) und erst beim VERGLEICH
+# normalisiert — "@free-code", "@Free_Code" und "FreeCode:" sind derselbe Agent.
+_HANDLE_ANYWHERE = re.compile(r"@([A-Za-z][A-Za-z0-9._-]{0,63})")
+_LEADING_HANDLE = re.compile(r"^\s*([A-Za-z][A-Za-z0-9._-]{0,63})\s*[:,]?\s")
+
+
+def _fold(handle: str) -> str:
+    """Vergleichsform eines Namens: nur Buchstaben+Ziffern, klein.
+
+    Damit fallen Gross/Kleinschreibung, ``-`` vs ``_`` und ein angehaengtes
+    Satzzeichen aus dem Vergleich heraus — genau die Varianten, die ein Mensch
+    tippt, wenn ihm keine Autovervollstaendigung hilft.
+    """
+    return re.sub(r"[^a-z0-9]", "", (handle or "").lower())
+
+
+def parse_handles(text: str) -> tuple[list[str], list[str]]:
+    """(explizite ``@handles``, Kandidaten in Pruefreihenfolge).
+
+    Mit ``@`` zaehlt jedes Vorkommen, egal wo im Satz — das ist eine klare
+    Absicht und wird deshalb IMMER als Erwaehnung vermerkt. Ohne ``@`` zaehlt
+    nur das erste Wort ("Rex: bitte pruefen"); dieses Wort ist bloss ein
+    Kandidat und wird nur dann zur Erwaehnung, wenn wirklich ein Agent so
+    heisst — sonst stuende in jeder Nachricht ihr erstes Wort als Erwaehnung.
+    """
+    explicit = _HANDLE_ANYWHERE.findall(text or "")
+    if explicit:
+        return explicit, explicit
+    leading = _LEADING_HANDLE.match(text or "")
+    return [], ([leading.group(1)] if leading else [])
+
+
+async def resolve_addressed_agent(
+    session: AsyncSession, text: str | None
+) -> tuple[Agent | None, list[str]]:
+    """(gemeinter Agent, Erwaehnungen) — ohne Seiteneffekte.
+
+    Verglichen wird gegen Name UND Slug. Ein ``@handle``, zu dem kein Agent
+    existiert, faellt still durch: er bleibt als Erwaehnung stehen (damit die
+    Absicht im Thread sichtbar ist), aendert aber das Routing nicht — der
+    Allgemein-Chat bei Boss ist die richtige Adresse fuer einen Vertipper.
+    """
+    explicit, candidates = parse_handles(text or "")
+    if not candidates:
+        return None, []
+
+    agents = (await session.exec(select(Agent))).all()
+    by_key: dict[str, Agent] = {}
+    for agent in agents:
+        for key in (_fold(agent.slug or ""), _fold(agent.name or "")):
+            if key:
+                by_key.setdefault(key, agent)
+
+    for handle in candidates:
+        match = by_key.get(_fold(handle))
+        if match is not None:
+            mentions = explicit or [handle]
+            return match, mentions
+    return None, explicit
 
 
 async def route_inbound(
-    session: AsyncSession, adapter: ChatAdapter, room: ChatRoomRef | None
+    session: AsyncSession,
+    adapter: ChatAdapter,
+    room: ChatRoomRef | None,
+    *,
+    text: str | None = None,
 ) -> InboundRoute:
-    """Die Routing-Entscheidung — kanal-neutral, ohne Seiteneffekte."""
+    """Die Routing-Entscheidung — kanal-neutral, ohne Seiteneffekte.
+
+    ``text`` ist optional: ein Kanal, der ``@name`` unterstuetzt, reicht ihn
+    durch. Ohne ``text`` ist das Verhalten Byte fuer Byte das bisherige (so
+    ruft Telegram weiterhin auf) — kein Kanal aendert sich, weil ein anderer
+    dazukommt.
+    """
     if room is None:
+        addressed, handles = await resolve_addressed_agent(session, text)
+        if addressed is not None:
+            from app.services.messaging import ensure_dm_thread
+
+            thread = await ensure_dm_thread(session, addressed)
+            logger.info("inbound: @%s adressiert -> DM-Thread %s", addressed.name, thread.id)
+            return InboundRoute(
+                thread=thread, mentions=handles, addressed_agent=addressed
+            )
+
         thread = await general_chat_thread(session)
         if thread is None:
             logger.warning("Allgemein-Chat: Boss-Agent nicht gefunden — Nachricht verworfen")
-            return InboundRoute(notice=NO_BOSS_REPLY)
-        return InboundRoute(thread=thread)
+            return InboundRoute(notice=NO_BOSS_REPLY, mentions=handles)
+        return InboundRoute(thread=thread, mentions=handles)
 
     thread = await adapter.resolve_thread_for_room(session, room)
     if thread is None:
         logger.info("inbound: unbekannter Raum %s — Rueckfrage statt Raten", room)
         return InboundRoute(notice=UNKNOWN_ROOM_REPLY)
-    return InboundRoute(thread=thread)
+    # Im Aufgaben-Raum ist der zustaendige Agent gemeint — ohne dass ihn jemand
+    # ansprechen muss. Ein ``@name`` wird hier nur noch vermerkt, nicht geroutet:
+    # den Faden zu wechseln, weil jemand einen Namen erwaehnt, waere Raten.
+    _, handles = await resolve_addressed_agent(session, text)
+    return InboundRoute(thread=thread, mentions=handles)
 
 
 async def general_chat_thread(session: AsyncSession) -> Thread | None:

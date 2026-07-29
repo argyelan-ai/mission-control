@@ -230,3 +230,35 @@ async def test_unsupported_media_gets_reply(async_session, bot):
     assert await _messages(async_session, thread.id) == []
     reply = bot.send_message.await_args.args[0]
     assert "Text- und Sprachnachrichten" in reply
+
+
+# ── Telegram bleibt Telegram (Regressionsschutz zum Slack-Inbound) ────────
+#
+# ``chat_inbound.route_inbound`` hat fuer Slack ein optionales ``text``-
+# Argument bekommen (``@name``-Adressierung). Telegram reicht es NICHT durch —
+# hier steht schwarz auf weiss, dass sich dadurch nichts aendert: ein Name im
+# Text darf den Zielthread nicht verschieben.
+
+
+@pytest.mark.asyncio
+async def test_an_at_name_does_not_re_route_a_telegram_message(async_session, bot):
+    boss = await _boss(async_session)
+    rex = Agent(name="Rex", agent_runtime="host")
+    async_session.add(rex)
+    await async_session.commit()
+    await async_session.refresh(rex)
+
+    await ingest_inbound_message(
+        async_session,
+        {"chat": {"id": int(CHAT_ID)}, "text": "@rex schau mal drueber"},
+        bot=bot,
+    )
+
+    from app.services.messaging import ensure_dm_thread
+
+    boss_thread = await ensure_dm_thread(async_session, boss)
+    rex_thread = await ensure_dm_thread(async_session, rex)
+    assert [m.body for m in await _messages(async_session, boss_thread.id)] == [
+        "@rex schau mal drueber"
+    ]
+    assert await _messages(async_session, rex_thread.id) == []

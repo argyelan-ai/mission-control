@@ -24,6 +24,7 @@ key names, prefixes we detected as *wrong*, and Slack's own error codes.
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import asdict, dataclass
 
@@ -400,3 +401,194 @@ class SlackTransport:
         if code in ("invalid_auth", "token_revoked", "account_inactive"):
             invalidate_bot_token_cache()
         return SlackPostResult(ok=False, code=code, error=message)
+
+
+# ── Socket Mode: opening the connection ───────────────────────────────────
+#
+# `apps.connections.open` is the ONE call that uses the app-level token, and it
+# is a plain HTTPS POST that answers with a single-use `wss://` URL. Everything
+# after it is websocket traffic (services/slack_socket.py). Keeping the token
+# handling here means the socket service never sees a credential.
+
+
+@dataclass(frozen=True)
+class SlackSocketUrl:
+    """Outcome of one apps.connections.open. Carries no token material."""
+
+    url: str | None = None
+    code: str | None = None
+    error: str | None = None
+
+
+async def open_socket_connection(session: AsyncSession | None = None) -> SlackSocketUrl:
+    """Ask Slack for a Socket Mode websocket URL. Never raises.
+
+    The URL is single-use and short-lived: every (re)connect calls this again.
+    That is Slack's design, not a workaround — the URL doubles as the
+    authentication, which is why nothing downstream needs the token.
+    """
+    app_token = await get_app_token(session)
+    if not app_token:
+        return SlackSocketUrl(
+            code="no_app_token",
+            error=(
+                "No Slack app-level token stored. Add the xapp-… token (scope "
+                "connections:write) under Settings → Slack."
+            ),
+        )
+
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            response = await client.post(
+                f"{SLACK_API_BASE}/apps.connections.open",
+                headers={"Authorization": f"Bearer {app_token}"},
+            )
+        body = response.json()
+    except httpx.HTTPError as exc:
+        log.warning("slack apps.connections.open transport error: %s", type(exc).__name__)
+        return SlackSocketUrl(
+            code="transport_error",
+            error=f"could not reach Slack ({type(exc).__name__})",
+        )
+    except ValueError:
+        return SlackSocketUrl(code="bad_response", error="unreadable Slack response")
+
+    if body.get("ok") and body.get("url"):
+        return SlackSocketUrl(url=str(body["url"]))
+
+    code = str(body.get("error") or "unknown_error")
+    if code == "invalid_auth":
+        # Slack answers a bad app-level token with the same bare code as a bad
+        # bot token; without this the operator would go hunting in the wrong field.
+        message = (
+            "Slack rejected the app-level token (invalid_auth). It must start "
+            "with xapp- and carry the connections:write scope — Basic "
+            "Information → App-Level Tokens."
+        )
+        invalidate_app_token_cache()
+    else:
+        message = explain_slack_error(code)
+    log.warning("slack apps.connections.open failed — error=%s", code)
+    return SlackSocketUrl(code=code, error=message)
+
+
+# Same cache mechanics as the bot token, separate storage: the two tokens fail
+# independently and must never be able to mask each other.
+_app_token_cache: tuple[float, str | None] | None = None
+
+
+def invalidate_app_token_cache() -> None:
+    """Forget the cached app-level token (call after storing a new one)."""
+    global _app_token_cache
+    _app_token_cache = None
+
+
+async def get_app_token(session: AsyncSession | None = None) -> str | None:
+    """The stored app-level token, cached for `_TOKEN_CACHE_TTL` seconds.
+
+    Never raises: a database hiccup degrades to "no token", and the socket
+    service then simply does not connect.
+    """
+    global _app_token_cache
+    now = time.monotonic()
+    if _app_token_cache is not None and _app_token_cache[0] > now:
+        return _app_token_cache[1]
+
+    try:
+        if session is not None:
+            raw = await get_secret_plaintext_by_key(session, APP_TOKEN_KEY)
+        else:
+            from app.database import async_session_maker
+
+            async with async_session_maker() as own:
+                raw = await get_secret_plaintext_by_key(own, APP_TOKEN_KEY)
+    except Exception as exc:  # noqa: BLE001 — chat must never break on the DB
+        log.warning("slack credential lookup failed: %s", type(exc).__name__)
+        return None
+
+    value = raw.strip() if raw else None
+    _app_token_cache = (now + _TOKEN_CACHE_TTL, value or None)
+    return _app_token_cache[1]
+
+
+# ── Which channel is ours ─────────────────────────────────────────────────
+#
+# `SLACK_DEFAULT_CHANNEL` may be an ID (`C0123ABCD`) or a name (`#general`),
+# but an inbound event only ever carries the ID. Telegram has a hard chat_id
+# gate for the same reason (never answer strangers), so Slack needs one too —
+# and to have one when the operator configured a NAME, the name has to be
+# resolved once via conversations.list (scope `channels:read`, already in the
+# setup guide). The answer is cached: a channel does not change its id.
+
+_CHANNEL_ID = re.compile(r"^[CGD][A-Z0-9]{2,}$")
+_CHANNEL_ID_CACHE_TTL = 600.0
+
+# name (without '#') -> (expires_at, channel id or None)
+_channel_id_cache: dict[str, tuple[float, str | None]] = {}
+
+
+def invalidate_channel_id_cache() -> None:
+    _channel_id_cache.clear()
+
+
+async def resolve_channel_id(reference: str) -> str | None:
+    """Channel id for `#name` (or an id, passed straight through). None when
+    unknown. Never raises."""
+    ref = (reference or "").strip()
+    if not ref:
+        return None
+    if _CHANNEL_ID.match(ref):
+        return ref
+    name = ref.lstrip("#").strip().lower()
+    if not name:
+        return None
+
+    now = time.monotonic()
+    cached = _channel_id_cache.get(name)
+    if cached is not None and cached[0] > now:
+        return cached[1]
+
+    token = await get_bot_token()
+    if not token:
+        return None
+
+    found: str | None = None
+    cursor = ""
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            for _ in range(10):  # bounded: a workspace listing must terminate
+                params = {
+                    "limit": 1000,
+                    "exclude_archived": "true",
+                    "types": "public_channel,private_channel",
+                }
+                if cursor:
+                    params["cursor"] = cursor
+                response = await client.get(
+                    f"{SLACK_API_BASE}/conversations.list",
+                    headers={"Authorization": f"Bearer {token}"},
+                    params=params,
+                )
+                body = response.json()
+                if not body.get("ok"):
+                    log.warning(
+                        "slack conversations.list failed — error=%s", body.get("error")
+                    )
+                    return None
+                for channel in body.get("channels") or []:
+                    if str(channel.get("name", "")).lower() == name:
+                        found = str(channel.get("id"))
+                        break
+                if found:
+                    break
+                cursor = ((body.get("response_metadata") or {}).get("next_cursor") or "")
+                if not cursor:
+                    break
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("slack conversations.list transport error: %s", type(exc).__name__)
+        return None
+
+    _channel_id_cache[name] = (now + _CHANNEL_ID_CACHE_TTL, found)
+    if found is None:
+        log.warning("slack: no channel named #%s is visible to the app", name)
+    return found
