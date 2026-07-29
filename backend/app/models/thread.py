@@ -49,6 +49,11 @@ class Thread(SQLModel, table=True):
         # Produktionsverhalten (der Fehler aus PR #171). NULL ist im Sinne von
         # UNIQUE kein Wert: beliebig viele Threads bleiben ohne Thema.
         UniqueConstraint("telegram_topic_id", name="uq_threads_telegram_topic_id"),
+        # 1:1 Slack-Thread <-> MC-Thread, gleiche Begruendung wie oben (Modell
+        # und Migration 0170 muessen denselben Constraint tragen). Slack macht
+        # NULL nicht selbst eindeutig — mehrere ungemappte Threads bleiben also
+        # erlaubt, genau wie bei Telegram.
+        UniqueConstraint("slack_thread_ts", name="uq_threads_slack_thread_ts"),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
@@ -76,6 +81,13 @@ class Thread(SQLModel, table=True):
     telegram_topic_id: int | None = Field(
         default=None, sa_column=Column(BigInteger, nullable=True)
     )
+    # Slack-Thread (`thread_ts`, z.B. "1753699200.001900") dieses Threads im
+    # Standardkanal. NULL = noch keiner (lazy bei der ersten Nachricht angelegt).
+    # Der Allgemein-Chat (kind="dm") bekommt bewusst KEINEN eigenen Slack-Thread
+    # — er schreibt in den Kanal selbst, analog zum Telegram-Allgemein-Thema.
+    # Slack liefert die ts als String; sie sieht aus wie eine Zahl, ist aber
+    # keine (fuehrende/nachlaufende Nullen sind bedeutungstragend).
+    slack_thread_ts: str | None = Field(default=None, nullable=True)
     title: str | None = None
     summary: str | None = None
     summary_through_seq: int | None = None

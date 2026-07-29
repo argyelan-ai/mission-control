@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # Flotte lauffaehig bleibt, solange die Brücke nicht vollstaendig gebaut ist.
     telegram_team_chat_enabled: bool = False
 
+    # Slack Team-Chat (ADR-072). Bewusst dasselbe Paar wie bei Telegram:
+    # ein Schalter + ein Ziel. Die beiden Slack-TOKEN liegen dagegen NICHT
+    # hier, sondern verschluesselt in der `secrets`-Tabelle (System-Token,
+    # ADR-033) — siehe services/slack_client.py.
+    slack_team_chat_enabled: bool = False
+    # Standardkanal, in den der Team-Chat schreibt: Kanal-ID (C…) oder #name.
+    # Ein Kanal pro Projekt kommt spaeter; bis dahin landet jeder Thread als
+    # eigener Slack-Thread in diesem einen Kanal. Der Bot muss Mitglied sein
+    # (`/invite @Mission Control`), sonst antwortet Slack mit `not_in_channel`.
+    slack_default_channel: str = ""
+
     # ── Kanal-Schalter fuer den Team-Chat (ADR-072) ──────────────────────
     # Komma-Liste der aktiven Chat-Kanaele, z.B. "telegram", "slack" oder
     # "telegram,slack" (mehrere gleichzeitig sind ausdruecklich erlaubt).

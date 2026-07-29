@@ -115,13 +115,87 @@ Then press **Test connection**. It calls Slack's `auth.test` with the bot
 token and reports the workspace name, the bot name, and whether Socket Mode is
 ready. If something is wrong, it says what Slack said, in plain words.
 
-Finally, invite the bot into the channel you want to use:
+## 8. Create the channel and invite the bot
+
+Make the channel the fleet should talk in — `#mission-control` is a good
+default — and invite the bot into it:
 
 ```
 /invite @your-app-name
 ```
 
-A bot that is not a member of a channel can neither read nor post there.
+A bot that is not a member of a channel can neither read nor post there. This
+is the one step people skip, and the symptom is silence: tokens fine,
+connection test green, nothing arrives.
+
+## 9. Tell MC which channel to write into
+
+Two settings in `.env`, then `docker compose up -d backend`:
+
+```
+SLACK_TEAM_CHAT_ENABLED=true
+SLACK_DEFAULT_CHANNEL=#mission-control
+CHAT_CHANNELS=telegram,slack
+```
+
+| Setting | What it does |
+|---|---|
+| `SLACK_TEAM_CHAT_ENABLED` | The channel's own on/off switch. Off by default. |
+| `SLACK_DEFAULT_CHANNEL` | Where MC writes. A channel ID (`C0123ABCD`) or `#name`. |
+| `CHAT_CHANNELS` | Which channels may run at all. Empty = every channel whose own switch is on. `telegram,slack` runs both, `slack` silences Telegram without removing it. |
+
+These deliberately mirror the Telegram pair (`TELEGRAM_TEAM_CHAT_ENABLED` /
+`TELEGRAM_CHAT_ID`). Only the two *tokens* are secrets and live in the
+database; a channel name is not a secret and stays in `.env`.
+
+**What you will see.** Every MC conversation — a task, a side thread — opens
+its **own Slack thread** in that channel: a parent message named after the
+task (`#1a2b3c4d Slack anbinden`), and the whole conversation as replies
+underneath. The general chat with Boss speaks in the channel itself, not in a
+thread. One channel per project is the next step; today everything lands in
+this one channel.
+
+Quiet and loud work through threads: a routine update stays inside its thread,
+while a message that needs you (a question, an approval, `@Mark`) is
+broadcast back into the channel so it shows up in the channel list. Between
+23:00 and 07:00 everything stays quiet except messages marked critical.
+
+## How agents get their names and faces
+
+In Slack each agent posts **as itself** — its own name, its own emoji as the
+avatar. That is the whole reason for this channel: Telegram sends everything
+from one bot, so an agent's name could only ever be text in front of the
+message (`Rex: fertig`). Here Boss looks like Boss and Rex looks like Rex.
+
+The face is a Slack **emoji name** (`:mag:`), not an image. MC is self-hosted
+and usually has no address Slack could reach, so an uploaded or generated
+avatar would be a URL Slack cannot fetch. An emoji always works.
+
+MC picks the face itself, in this order:
+
+1. **The agent's emoji** (Agent → Edit → Emoji), if Slack knows it. `🔍`
+   becomes `:mag:`.
+2. **A colon code you type into that same field**, passed through unchanged —
+   `:mc-boss:` also works if it is a custom emoji in your workspace. This is
+   the manual override, and it needs no extra setting.
+3. **The agent's role**, so a new agent is recognisable straight away:
+
+   | Role | Face | | Role | Face |
+   |---|---|---|---|---|
+   | lead | :crown: 👑 | | researcher | :books: 📚 |
+   | orchestrator | :dart: 🎯 | | deployer | :rocket: 🚀 |
+   | developer | :zap: ⚡ | | writer | :writing_hand: ✍️ |
+   | reviewer | :mag: 🔍 | | tester | :test_tube: 🧪 |
+   | planner | :clipboard: 📋 | | | |
+
+4. **A stable face derived from the agent's slug** if the role is unknown —
+   different agents get different animals, and each keeps its own forever.
+
+Nothing ever posts nameless or faceless; the chain always ends somewhere.
+
+If every agent shows up under the same app name instead, the
+`chat:write.customize` scope is missing — see step 4, and remember to
+reinstall the app afterwards.
 
 ## It does not work
 
@@ -134,6 +208,9 @@ A bot that is not a member of a channel can neither read nor post there.
 | Agents never see messages in a channel | The bot was not invited to that channel (`/invite @your-app-name`), or `message.channels` is missing from the event subscriptions. |
 | Nothing arrives at all, no errors | Socket Mode is off. Step 2. |
 | `missing_scope` in an error message | A scope is missing. Compare with the list in step 4, then reinstall the app. |
+| `not_in_channel` in the backend log | The bot is not a member of the channel. Open it in Slack and run `/invite @your-app-name` (step 8). |
+| `channel_not_found` | `SLACK_DEFAULT_CHANNEL` points at something Slack does not know — or at a private channel the app was never invited to. |
+| Connection test is green, but nothing is posted | `SLACK_TEAM_CHAT_ENABLED` is still false, or `CHAT_CHANNELS` lists other channels but not `slack`. |
 
 The same connection check is available without the UI:
 

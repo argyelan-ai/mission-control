@@ -493,7 +493,10 @@ def test_catalog_reports_every_channel(monkeypatch, two_channels):
 
     catalog = {row["key"]: row for row in reg.chat_channel_catalog()}
 
-    assert set(catalog) == {"telegram", "dummy"}
+    # Deliberately a subset check, not an exact set: registering a channel must
+    # be the only edit needed (the promise of ADR-072), and an exact set makes
+    # THIS file the edit — as it did the moment Slack was registered.
+    assert {"telegram", "dummy"} <= set(catalog)
     assert catalog["dummy"]["selected"] is True
     assert catalog["telegram"]["selected"] is False
     assert set(catalog["dummy"]["capabilities"]) == {"sender_identity", "rooms"}
