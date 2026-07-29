@@ -285,6 +285,24 @@ async def test_an_unknown_name_falls_back_to_boss(async_session, adapter):
 
 
 @pytest.mark.asyncio
+async def test_an_archived_agent_cannot_be_addressed(async_session, adapter):
+    """It is not running, so it could never answer — the message would sit in a
+    dead DM thread. Boss is the honest destination."""
+    from datetime import datetime, timezone
+
+    boss = await _agent(async_session, "Boss", "boss")
+    await _agent(
+        async_session, "Rex", "rex", archived_at=datetime.now(tz=timezone.utc)
+    )
+
+    await _ingest(async_session, adapter, message_event(text="@rex bist du da?"))
+
+    stored = await _all_messages(async_session)
+    thread = (await async_session.exec(select(Thread).where(Thread.id == stored[0].thread_id))).one()
+    assert thread.agent_id == boss.id
+
+
+@pytest.mark.asyncio
 async def test_the_recognised_handle_is_recorded_on_the_message(async_session, adapter):
     await _agent(async_session, "Boss", "boss")
     await _agent(async_session, "Rex", "rex")

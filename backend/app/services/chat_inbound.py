@@ -127,16 +127,20 @@ async def resolve_addressed_agent(
 ) -> tuple[Agent | None, list[str]]:
     """(gemeinter Agent, Erwaehnungen) — ohne Seiteneffekte.
 
-    Verglichen wird gegen Name UND Slug. Ein ``@handle``, zu dem kein Agent
-    existiert, faellt still durch: er bleibt als Erwaehnung stehen (damit die
-    Absicht im Thread sichtbar ist), aendert aber das Routing nicht — der
-    Allgemein-Chat bei Boss ist die richtige Adresse fuer einen Vertipper.
+    Verglichen wird gegen Name UND Slug, und nur ARCHIVIERT-freie Agenten
+    zaehlen: ein archivierter Agent laeuft nicht und koennte nicht antworten —
+    die Nachricht landet dann bei Boss statt in einem toten DM-Thread. Ein
+    ``@handle``, zu dem kein Agent existiert, faellt genauso still durch: er
+    bleibt als Erwaehnung stehen (damit die Absicht im Thread sichtbar ist),
+    aendert aber das Routing nicht.
     """
     explicit, candidates = parse_handles(text or "")
     if not candidates:
         return None, []
 
-    agents = (await session.exec(select(Agent))).all()
+    agents = (
+        await session.exec(select(Agent).where(Agent.archived_at.is_(None)))
+    ).all()
     by_key: dict[str, Agent] = {}
     for agent in agents:
         for key in (_fold(agent.slug or ""), _fold(agent.name or "")):
