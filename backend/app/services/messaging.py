@@ -31,27 +31,20 @@ FINISH_NUDGE_BODY = "Du hast Fertigstellung signalisiert — bitte `mc finish` a
 BACKFILL_SEED_BODY = "Migration: bisheriger Verlauf liegt in den Kommentaren dieses Tasks."
 
 
-async def _maybe_mirror_to_telegram(session: AsyncSession, message) -> None:
-    """Best-effort outbound Telegram-Spiegel (P2.3). Inert, solange der
-    Team-Chat aus ist oder Telegram nicht konfiguriert ist. Wirft NIE — ein
-    Chat-Ausfall darf `post_message` und damit Agentenarbeit nicht blockieren.
+async def _maybe_mirror_to_chat(session: AsyncSession, message) -> None:
+    """Best-effort outbound Chat-Spiegel (P2.3, kanal-neutral seit ADR-072).
+
+    Spiegelt in JEDEN aktiven Kanal (``chat_adapter.sendable_chat_adapters()``
+    — Auswahl via CHAT_CHANNELS, Schalter + Zugangsdaten pro Kanal). Kein
+    aktiver Kanal = still nichts tun. Wirft NIE — ein Chat-Ausfall darf
+    `post_message` und damit Agentenarbeit nicht blockieren.
     """
-    from app.config import settings
-
-    if not getattr(settings, "telegram_team_chat_enabled", False):
-        return
-    if not (settings.telegram_bot_token and settings.telegram_chat_id):
-        return
     try:
-        from app.services import telegram_outbound
-        from app.services.telegram_bot import telegram_bot
-        from app.services.telegram_topics import TelegramForumClient
+        from app.services.chat_outbound import mirror_message_to_all
 
-        await telegram_outbound.mirror_message_to_telegram(
-            session, message, topic_client=TelegramForumClient(), bot=telegram_bot
-        )
+        await mirror_message_to_all(session, message)
     except Exception as e:  # noqa: BLE001 — Spiegel darf post_message nie kippen
-        logger.warning("telegram mirror hook failed: %s", e)
+        logger.warning("chat mirror hook failed: %s", e)
 
 
 async def _next_seq(session: AsyncSession, thread_id: uuid.UUID) -> int:
@@ -145,11 +138,15 @@ async def post_message(
 ) -> Message:
     """Post a message onto a thread, allocating its seq atomically.
 
-    When the Telegram team-chat is enabled (P2.3), the freshly posted message is
-    mirrored into its Telegram topic best-effort — failures are swallowed, never
-    raised. `mirror_to_telegram=False` suppresses that mirror; P2.4 sets it when
-    ingesting an inbound Telegram message so it doesn't bounce back to Telegram
-    (loop protection — see telegram_outbound module header).
+    The freshly posted message is mirrored into every ACTIVE chat channel
+    best-effort (ADR-072) — failures are swallowed, never raised.
+    `mirror_to_telegram=False` suppresses that mirror; the inbound path sets it
+    when ingesting a message that CAME from a chat channel, so it doesn't
+    bounce back (loop protection — see chat_outbound module header).
+
+    The parameter name still says "telegram" because it is part of this
+    function's published signature (callers + tests); it means "mirror into
+    the chat channels" and is channel-neutral since ADR-072.
     """
     if message_type not in MESSAGE_TYPES:
         raise ValueError(
@@ -176,7 +173,7 @@ async def post_message(
     await session.refresh(message)
 
     if mirror_to_telegram:
-        await _maybe_mirror_to_telegram(session, message)
+        await _maybe_mirror_to_chat(session, message)
 
     return message
 

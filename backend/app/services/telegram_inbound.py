@@ -5,6 +5,12 @@ zugehoerigen Thread abgelegt; die bestehende Nudge+Pull-Kette stellt sie den
 Beteiligten zu. Die Thema-Nummer (`message_thread_id`) bestimmt den Ziel-Thread —
 kein Raten, kein `@`.
 
+Seit ADR-072 macht dieses Modul nur noch das, was TELEGRAM ausmacht: das harte
+chat_id-Gate, das Auspacken des Telegram-Payloads (Text, Sprachnotiz, sonstige
+Medien) und die Telegram-Antwort. Die Routing-Entscheidung (bekannter Raum ->
+sein Thread, unbekannter Raum -> nachfragen statt raten, kein Raum ->
+Allgemein-Chat = DM mit Boss) liegt kanal-neutral in ``chat_inbound``.
+
 Routing:
   * `message_thread_id` gesetzt -> Thread via `threads.telegram_topic_id`.
       - gefunden   -> post_message in diesen Thread.
@@ -33,25 +39,19 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
-from app.models.agent import Agent
 from app.models.board import Project
 from app.models.task import Task
 from app.models.thread import Thread
-from app.services.messaging import ensure_dm_thread, post_message
+from app.services.chat_inbound import (  # noqa: F401 — BOSS_SLUG re-exported
+    BOSS_SLUG,
+    INBOUND_MESSAGE_KWARGS,
+    route_inbound,
+)
+from app.services.chat_telegram import TelegramChatAdapter
+from app.services.messaging import post_message
 
 logger = logging.getLogger("mc.telegram_inbound")
 
-# Der Allgemein-Chat ist der DM-Thread Mark <-> Boss. Boss traegt den stabilen
-# Slug "boss" (Fleet-Konvention, vgl. agent_lifecycle._SINGLETON_BRIDGE_SLUGS).
-BOSS_SLUG = "boss"
-
-_UNKNOWN_TOPIC_REPLY = (
-    "Zu welcher Aufgabe gehört dieses Thema? Ich kann es keiner laufenden Aufgabe "
-    "zuordnen — sag mir kurz die Aufgabe, dann verknüpfe ich es."
-)
-_NO_BOSS_REPLY = (
-    "Ich kann den Allgemein-Chat gerade niemandem zuordnen (kein Boss-Agent gefunden)."
-)
 _VOICE_FAILED_REPLY = (
     "Ich konnte die Sprachnachricht nicht verstehen — versuch's nochmal oder tipp's kurz."
 )
@@ -100,27 +100,19 @@ async def ingest_inbound_message(
         await _reply(bot, topic_id, _UNSUPPORTED_MEDIA_REPLY)
         return
 
-    if topic_id is None:
-        thread = await _general_chat_thread(session)
-        if thread is None:
-            logger.warning("Allgemein-Chat: Boss-Agent nicht gefunden — Nachricht verworfen")
-            await _reply(bot, None, _NO_BOSS_REPLY)
-            return
-    else:
-        thread = await _thread_for_topic(session, topic_id)
-        if thread is None:
-            # Mark legte das Thema evtl. von Hand an — nicht raten, nachfragen.
-            logger.info("inbound: unbekanntes Thema %s — Rueckfrage statt Raten", topic_id)
-            await _reply(bot, topic_id, _UNKNOWN_TOPIC_REPLY)
-            return
+    route = await route_inbound(session, TelegramChatAdapter(bot=bot), topic_id)
+    if route.thread is None:
+        # Kein Ziel: der neutrale Pfad hat den Grund (unbekannter Raum / kein
+        # Boss) bereits als Text formuliert — hier nur noch zustellen.
+        await _reply(bot, topic_id, route.notice or "")
+        return
+    thread = route.thread
 
     await post_message(
         session,
         thread_id=thread.id,
-        sender_type="user",
-        message_type="message",
         body=text,
-        mirror_to_telegram=False,  # Schleifenschutz (Sperre 2) — nie zurueckspiegeln
+        **INBOUND_MESSAGE_KWARGS,  # sender_type=user + Schleifenschutz (Sperre 2)
     )
     logger.info("inbound Telegram -> thread %s (topic=%s)", thread.id, topic_id)
 
@@ -202,10 +194,8 @@ async def _thread_for_topic(session: AsyncSession, topic_id: int) -> Thread | No
 
 
 async def _general_chat_thread(session: AsyncSession) -> Thread | None:
-    """Der Allgemein-Chat = DM-Thread mit Boss. None, wenn kein Boss existiert."""
-    boss = (
-        await session.exec(select(Agent).where(Agent.slug == BOSS_SLUG))
-    ).first()
-    if boss is None:
-        return None
-    return await ensure_dm_thread(session, boss)
+    """Der Allgemein-Chat = DM-Thread mit Boss. Kanal-neutral (jeder Kanal hat
+    genau einen Allgemein-Raum) — die Regel wohnt in ``chat_inbound``."""
+    from app.services.chat_inbound import general_chat_thread
+
+    return await general_chat_thread(session)

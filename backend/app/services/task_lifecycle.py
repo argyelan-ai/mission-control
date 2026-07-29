@@ -716,8 +716,9 @@ async def execute_review_decision(
             await session.commit()
             from app.verticals import hooks as vertical_hooks
             await vertical_hooks.run_task_done_hooks(session, task)
-            # Telegram-Thema auf `✓ …` (nur eigenes Ad-hoc-Thema, nie Projekt/Eltern).
-            from app.services.telegram_topics import handle_task_done
+            # Chat-Raum als erledigt markieren (kanal-neutral, ADR-072; Telegram:
+            # `✓ …` nur am eigenen Ad-hoc-Thema, nie Projekt/Eltern).
+            from app.services.chat_rooms import handle_task_done
             await handle_task_done(session, task)
 
         # Test handoff: dispatch a tester agent for user_test (if one exists)
@@ -882,8 +883,9 @@ async def system_finalize_task_done(
         await session.commit()
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_task_done_hooks(session, task)
-        # Telegram-Thema auf `✓ …` (nur eigenes Ad-hoc-Thema, nie Projekt/Eltern).
-        from app.services.telegram_topics import handle_task_done
+        # Chat-Raum als erledigt markieren (kanal-neutral, ADR-072; Telegram:
+        # `✓ …` nur am eigenen Ad-hoc-Thema, nie Projekt/Eltern).
+        from app.services.chat_rooms import handle_task_done
         await handle_task_done(session, task)
 
         await record_task_event(
