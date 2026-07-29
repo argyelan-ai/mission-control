@@ -134,7 +134,101 @@ def _telegram_harness() -> ChatHarness:
     )
 
 
+# ── Slack ─────────────────────────────────────────────────────────────────
+
+
+class _FakeSlackTransport:
+    """Stands in for ``slack_client.SlackTransport``. No network, no token.
+
+    Records exactly what Slack would have been asked for, including the
+    per-message identity (``username`` / ``icon_emoji``) that is the whole
+    point of this channel.
+    """
+
+    def __init__(self, sent: list[SentRecord]):
+        self._sent = sent
+        self.broken = False
+        self.calls: list[dict] = []
+        self._next_ts = 1_753_699_200
+
+    async def post_message(
+        self, *, channel, text, username=None, icon_emoji=None,
+        thread_ts=None, silent=True,
+    ):
+        from app.services.slack_client import SlackPostResult
+
+        self.calls.append(
+            {
+                "channel": channel, "text": text, "username": username,
+                "icon_emoji": icon_emoji, "thread_ts": thread_ts, "silent": silent,
+            }
+        )
+        if self.broken:
+            # Slack's own failure shape — never an exception (the transport
+            # swallows httpx errors), so this is what the adapter really sees.
+            return SlackPostResult(
+                ok=False, code="not_in_channel",
+                error="The bot is not a member of that channel (not_in_channel).",
+            )
+        self._next_ts += 1
+        self._sent.append(
+            SentRecord(room=thread_ts, text=text, silent=silent, sender_name=username)
+        )
+        # Every post has a ts; the one from a post WITHOUT thread_ts is what
+        # ensure_room stores as the room ref (that is how Slack threads work).
+        return SlackPostResult(ok=True, ts=f"{self._next_ts}.000100")
+
+
+class _StaticFaces:
+    """The TCK cares that identity ARRIVES, not which emoji it wears —
+    `test_chat_slack.py` tests the real resolver against the DB."""
+
+    async def face_for(self, sender):
+        return ":robot_face:"
+
+
+def _slack_harness() -> ChatHarness:
+    from app.services.chat_slack import SlackChatAdapter
+
+    sent: list[SentRecord] = []
+    transport = _FakeSlackTransport(sent)
+    adapter = SlackChatAdapter(transport=transport, faces=_StaticFaces())
+
+    def enable(monkeypatch):
+        from app.config import settings
+        from app.services import slack_client
+
+        monkeypatch.setattr(settings, "slack_team_chat_enabled", True, raising=False)
+        monkeypatch.setattr(settings, "slack_default_channel", "C-TEST", raising=False)
+        # A token the adapter's sync gate can see, without a DB read.
+        monkeypatch.setattr(
+            slack_client, "_token_cache", (float("inf"), "xoxb-TEST-token"), raising=False
+        )
+
+    async def bind_room(session, thread, room="1753699200.001900"):
+        thread.slack_thread_ts = room
+        session.add(thread)
+        await session.commit()
+        await session.refresh(thread)
+        return room
+
+    def break_transport():
+        transport.broken = True
+
+    return ChatHarness(
+        key="slack",
+        adapter=adapter,
+        sent=sent,
+        enable=enable,
+        bind_room=bind_room,
+        unknown_room="9999999999.999999",
+        break_transport=break_transport,
+        fakes={"transport": transport},
+    )
+
+
 #: key -> factory. One entry per registered ChatAdapter (enforced by the TCK).
 CHAT_HARNESS_FACTORIES: dict[str, Callable[[], ChatHarness]] = {
     "telegram": _telegram_harness,
+    "slack": _slack_harness,
 }

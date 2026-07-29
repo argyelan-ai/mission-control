@@ -24,6 +24,7 @@ key names, prefixes we detected as *wrong*, and Slack's own error codes.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import asdict, dataclass
 
 import httpx
@@ -65,7 +66,30 @@ _SLACK_ERROR_HINTS: dict[str, str] = {
         "scopes listed in the setup guide, then reinstall the app."
     ),
     "ratelimited": "Slack is rate-limiting this app (ratelimited). Try again in a minute.",
+    # Posting-specific. `not_in_channel` is the single most likely mistake after
+    # setup — the app is installed, the token is valid, the channel exists, and
+    # nothing arrives, because nobody invited the bot.
+    "not_in_channel": (
+        "The bot is not a member of that channel (not_in_channel). Open the "
+        "channel in Slack and run: /invite @Mission Control"
+    ),
+    "channel_not_found": (
+        "Slack does not know that channel (channel_not_found). Check "
+        "SLACK_DEFAULT_CHANNEL — use the channel ID (C…) or #channel-name, and "
+        "note that a private channel is invisible to the app until it is invited."
+    ),
+    "is_archived": "That channel is archived (is_archived). Pick a live channel.",
+    "msg_too_long": "Slack refused the message because it is too long (msg_too_long).",
 }
+
+
+def explain_slack_error(code: str) -> str:
+    """Slack's error code in words an operator can act on.
+
+    Unknown codes are passed through verbatim rather than swallowed — a code we
+    have never seen must still be readable in the log.
+    """
+    return _SLACK_ERROR_HINTS.get(code, f"Slack rejected the request: {code}")
 
 
 @dataclass
@@ -206,6 +230,173 @@ async def test_connection(session: AsyncSession) -> SlackConnectionResult:
         return result
 
     code = str(body.get("error") or "unknown_error")
-    result.error = _SLACK_ERROR_HINTS.get(code, f"Slack rejected the request: {code}")
+    result.error = explain_slack_error(code)
     log.warning("slack auth.test failed — error=%s", code)
     return result
+
+
+# ── Sending (ADR-072: the transport behind the Slack ChatAdapter) ─────────
+#
+# The team-chat adapter calls `SlackTransport` and nothing else; everything
+# that knows about tokens, HTTP and Slack's error vocabulary stays here.
+#
+# Why a token CACHE. `chat_adapter.ChatAdapter.send()` deliberately takes no DB
+# session (the neutral pipeline hands over a room + a message, not a
+# transaction), but Slack's bot token lives in the `secrets` table (ADR-033).
+# Opening a session per message would be a database round trip per chat line.
+# So the token is read once and kept for `_TOKEN_CACHE_TTL`; a token rotated in
+# Settings is picked up within a minute, and `invalidate_bot_token_cache()`
+# makes that immediate for callers that know they changed it.
+
+_TOKEN_CACHE_TTL = 60.0
+
+# (expires_at, token-or-None). None = never looked up.
+_token_cache: tuple[float, str | None] | None = None
+
+
+def invalidate_bot_token_cache() -> None:
+    """Forget the cached bot token (call after storing a new one)."""
+    global _token_cache
+    _token_cache = None
+
+
+def bot_token_looks_present() -> bool:
+    """Synchronous view of "is there a bot token at all?".
+
+    `ChatAdapter.is_configured()` is sync and is asked for every message, so it
+    cannot hit the database. Unknown (nothing looked up yet) counts as present:
+    the alternative — reporting "not configured" until the first send — would
+    mean the channel never sends a first message and never learns anything.
+    The first real send does the authoritative lookup and, if the token is
+    missing, flips this to False.
+    """
+    if _token_cache is None:
+        return True
+    return bool(_token_cache[1])
+
+
+async def get_bot_token(session: AsyncSession | None = None) -> str | None:
+    """The stored bot token, cached for `_TOKEN_CACHE_TTL` seconds.
+
+    Opens its own short-lived session when the caller has none. Never raises:
+    a database hiccup degrades to "no token" and the send reports it.
+    """
+    global _token_cache
+    now = time.monotonic()
+    if _token_cache is not None and _token_cache[0] > now:
+        return _token_cache[1]
+
+    try:
+        if session is not None:
+            raw = await get_secret_plaintext_by_key(session, BOT_TOKEN_KEY)
+        else:
+            from app.database import async_session_maker
+
+            async with async_session_maker() as own:
+                raw = await get_secret_plaintext_by_key(own, BOT_TOKEN_KEY)
+    except Exception as exc:  # noqa: BLE001 — chat must never break on the DB
+        # Deliberately does not say "token": the static guard in
+        # test_slack_connection.py flags any log line that mentions one, and
+        # that guard is worth more than a nicer word here.
+        log.warning("slack credential lookup failed: %s", type(exc).__name__)
+        return None
+
+    token = raw.strip() if raw else None
+    _token_cache = (now + _TOKEN_CACHE_TTL, token or None)
+    return _token_cache[1]
+
+
+@dataclass(frozen=True)
+class SlackPostResult:
+    """Outcome of one chat.postMessage. Carries no token material."""
+
+    ok: bool
+    # Slack's message timestamp — the id of the thread this message starts.
+    ts: str | None = None
+    # Slack's raw error code (for tests/logs) plus the operator-facing sentence.
+    code: str | None = None
+    error: str | None = None
+
+
+class SlackTransport:
+    """Thin `chat.postMessage` wrapper over httpx.
+
+    No `slack_sdk`: the rest of MC talks to Slack with plain httpx
+    (`_call_auth_test` above), and one dependency-free path is easier to keep
+    honest than two. Never raises — every failure comes back as
+    `SlackPostResult(ok=False, ...)`, because a chat outage must not break
+    agent work (ADR-072).
+    """
+
+    async def post_message(
+        self,
+        *,
+        channel: str,
+        text: str,
+        username: str | None = None,
+        icon_emoji: str | None = None,
+        thread_ts: str | None = None,
+        silent: bool = True,
+    ) -> SlackPostResult:
+        """Post one message.
+
+        `username` + `icon_emoji` are how an agent speaks under its own name and
+        face; both require the `chat:write.customize` scope (without it Slack
+        silently posts under the app's own identity — see docs/setup/slack.md).
+
+        `silent` is the ping decision the neutral pipeline already made. Slack
+        has no `disable_notification`; the equivalent lever is
+        `reply_broadcast` — a threaded reply stays inside its thread (quiet)
+        unless it is broadcast back into the channel (loud). Outside a thread
+        there is nothing to decide: the message lands in the channel either way.
+        """
+        token = await get_bot_token()
+        if not token:
+            return SlackPostResult(
+                ok=False,
+                code="no_token",
+                error=(
+                    "No Slack bot token stored. Add the Bot User OAuth Token "
+                    "(xoxb-…) under Settings → Slack."
+                ),
+            )
+
+        payload: dict = {"channel": channel, "text": text}
+        if username:
+            payload["username"] = username
+        if icon_emoji:
+            payload["icon_emoji"] = icon_emoji
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+            if not silent:
+                payload["reply_broadcast"] = True
+
+        try:
+            async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+                response = await client.post(
+                    f"{SLACK_API_BASE}/chat.postMessage",
+                    headers={"Authorization": f"Bearer {token}"},
+                    json=payload,
+                )
+            body = response.json()
+        except httpx.HTTPError as exc:
+            log.warning("slack chat.postMessage transport error: %s", type(exc).__name__)
+            return SlackPostResult(
+                ok=False,
+                code="transport_error",
+                error=f"could not reach Slack ({type(exc).__name__})",
+            )
+        except ValueError:
+            return SlackPostResult(
+                ok=False, code="bad_response", error="unreadable Slack response"
+            )
+
+        if body.get("ok"):
+            return SlackPostResult(ok=True, ts=body.get("ts"))
+
+        code = str(body.get("error") or "unknown_error")
+        message = explain_slack_error(code)
+        log.warning("slack chat.postMessage failed — error=%s: %s", code, message)
+        if code in ("invalid_auth", "token_revoked", "account_inactive"):
+            invalidate_bot_token_cache()
+        return SlackPostResult(ok=False, code=code, error=message)

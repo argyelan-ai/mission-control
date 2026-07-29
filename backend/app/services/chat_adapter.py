@@ -223,9 +223,13 @@ def _registry() -> dict[str, ChatAdapter]:
     settings and transport clients."""
     global _ADAPTERS
     if _ADAPTERS is None:
+        from app.services.chat_slack import SlackChatAdapter
         from app.services.chat_telegram import TelegramChatAdapter
 
-        _ADAPTERS = {"telegram": TelegramChatAdapter()}
+        _ADAPTERS = {
+            "telegram": TelegramChatAdapter(),
+            "slack": SlackChatAdapter(),
+        }
     return _ADAPTERS
 
 

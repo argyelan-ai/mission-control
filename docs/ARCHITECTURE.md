@@ -942,7 +942,7 @@ Alle ADRs in `docs/decisions/`:
 | tmux-Verhalten | `docker/mc-agent-base/entrypoint.sh` (`.tmux.conf` Write) | Rebuild |
 | Neuer Chat-Kanal (Slack, …) | `backend/app/services/chat_<kanal>.py` (implementiert `ChatAdapter`) + Eintrag in `chat_adapter._registry()` + Harness in `backend/tests/chat_harnesses.py` | ADR-072 — KEINE kanal-neutrale Datei anfassen; der TCK `tests/test_chat_adapter_tck.py` läuft automatisch mit und ist rot ohne Harness |
 | Chat-Regel (was wird gespiegelt, wie laut, Nachtruhe, Routing) | `backend/app/services/chat_outbound.py` bzw. `chat_inbound.py` | ADR-072 — nie in einem Adapter nachbauen; gilt sofort für alle Kanäle |
-| Chat-Kanal an-/abschalten | `.env` `CHAT_CHANNELS=` (Komma-Liste, mehrere erlaubt; leer = keine explizite Auswahl) + kanal-eigener Schalter (Telegram: `TELEGRAM_TEAM_CHAT_ENABLED`) | ADR-072 — kein aktiver Kanal ist ein stiller No-op, kein Code wird entfernt |
+| Chat-Kanal an-/abschalten | `.env` `CHAT_CHANNELS=` (Komma-Liste, mehrere erlaubt; leer = keine explizite Auswahl) + kanal-eigener Schalter (Telegram: `TELEGRAM_TEAM_CHAT_ENABLED`; Slack: `SLACK_TEAM_CHAT_ENABLED` + `SLACK_DEFAULT_CHANNEL`, Setup: `docs/setup/slack.md`) | ADR-072 — kein aktiver Kanal ist ein stiller No-op, kein Code wird entfernt |
 | Frontend-Page | `frontend-v2/src/app/{page}/page.tsx` | Ggf. `lib/api.ts` + types |
 | Browsebare Datei-Wurzel hinzufügen/ändern | `backend/app/services/fs_roots.py` (Registry, SSoT) | Nie `secrets`/Token-Config browsebar machen (ADR-040) |
 | Datei-Zugriff (list/stat/stream) | `backend/app/services/fs_service.py` (einziger Containment-Guard) | Nie an `fs_service` vorbei os.listdir/open |
