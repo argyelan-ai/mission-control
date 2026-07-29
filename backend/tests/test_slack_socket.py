@@ -292,8 +292,13 @@ async def test_a_failed_open_reports_why_and_does_not_connect(redis_lock):
 
 
 @pytest.mark.asyncio
-async def test_the_loop_reconnects_after_a_disconnect(redis_lock):
-    """Two connections in a row: the whole point of surviving a disconnect."""
+async def test_the_loop_reconnects_after_a_disconnect(redis_lock, monkeypatch):
+    """Two connections in a row: the whole point of surviving a disconnect.
+
+    HEALTHY_AFTER is zeroed because a fake connection lives microseconds; the
+    guard it normally provides has its own test below.
+    """
+    monkeypatch.setattr("app.services.slack_socket.HEALTHY_AFTER", 0.0)
     sockets = [
         FakeSocket([json.dumps({"type": "disconnect"})]),
         FakeSocket([event_envelope()]),
@@ -374,6 +379,43 @@ async def test_a_broken_slack_does_not_flood_the_log(redis_lock, monkeypatch, ca
 
     warnings = [r for r in caplog.records if r.levelname == "WARNING"]
     assert len(warnings) < attempts["n"], "every failure was logged loudly"
+
+
+@pytest.mark.asyncio
+async def test_a_connection_that_dies_instantly_is_not_treated_as_healthy(
+    redis_lock, monkeypatch
+):
+    """"Reconnect at once after a disconnect" is right for Slack's rotation and
+    catastrophic for a server that accepts and closes immediately — that would
+    be a hot loop hammering apps.connections.open. A connection has to have
+    LIVED to earn the fast path."""
+    sleeps: list[float] = []
+    real_sleep = asyncio.sleep
+    rounds = {"n": 0}
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+    async def open_url():
+        rounds["n"] += 1
+        if rounds["n"] >= 3:
+            service._running = False
+        return SlackSocketUrl(url="wss://slack.test/link")
+
+    service = SlackSocketModeService(
+        open_url=open_url,
+        connect=lambda _u: FakeSocket([]),  # opens, yields nothing, closes
+        handler=None,
+    )
+    service._running = True
+    await asyncio.wait_for(service._run_loop(), timeout=5)
+
+    assert service.connections == 3
+    assert sleeps, "a flapping connection was retried without any wait"
+    assert all(s > 0 for s in sleeps)
 
 
 # ── 4. One process, one socket ────────────────────────────────────────────

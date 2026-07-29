@@ -58,6 +58,10 @@ LOCK_RETRY_INTERVAL = 30
 
 BACKOFF_START = 1.0
 BACKOFF_MAX = 60.0
+# A connection must have lived at least this long to count as healthy. Slack's
+# own rotation happens after minutes; anything that dies inside seconds is a
+# fault and must go through the backoff, not the "reconnect at once" path.
+HEALTHY_AFTER = 5.0
 # After this many consecutive failures the warnings stop and only every
 # QUIET_EVERY-th failure is logged — a Slack outage must not fill the log.
 LOUD_FAILURES = 3
@@ -82,6 +86,9 @@ class SlackSocketModeService:
         self._handler = handler
         self._owner = uuid.uuid4().hex
         self._holds_lock = False
+        # Seconds the most recent connection stayed up — the loop uses it to
+        # tell Slack's normal rotation apart from a flapping connection.
+        self._last_connection_lasted = 0.0
         # Diagnostics — cheap, and the only way to see from outside that the
         # socket is actually alive rather than merely "started".
         self.connections = 0
@@ -148,15 +155,25 @@ class SlackSocketModeService:
                     await self._release_lock()
                 if not connected:
                     self._log_failure(failures, detail or "unknown")
+                elif self._last_connection_lasted < HEALTHY_AFTER:
+                    self._log_failure(
+                        failures,
+                        f"connection closed after "
+                        f"{self._last_connection_lasted:.1f}s",
+                    )
 
                 if not self._running:
                     break
-                if connected:
+                if connected and self._last_connection_lasted >= HEALTHY_AFTER:
                     # A connection that lived and then ended is Slack's normal
                     # rhythm — reconnect straight away, no backoff, no warning.
                     backoff, failures = BACKOFF_START, 0
                     await asyncio.sleep(0)
                     continue
+                # A connection that dies within seconds is NOT the normal rhythm.
+                # Without this the "reconnect at once" rule above would turn a
+                # server that accepts and instantly closes into a hot loop
+                # hammering apps.connections.open.
                 failures += 1
                 await asyncio.sleep(backoff * (0.5 + random.random()))
                 backoff = min(backoff * 2, BACKOFF_MAX)
@@ -184,16 +201,24 @@ class SlackSocketModeService:
                             (Slack's normal rhythm; reconnect at once).
         ``(False, why)``  — we never got in; the caller backs off.
         """
+        self._last_connection_lasted = 0.0
         result = await self._open_socket_url()
         if result.url is None:
             return False, result.error or result.code or "unknown"
 
         opened = False
-        async with self._open_socket(result.url) as socket:
-            opened = True
-            self.connections += 1
-            logger.info("Slack Socket Mode connected")
-            await self._pump(socket)
+        started = asyncio.get_running_loop().time()
+        try:
+            async with self._open_socket(result.url) as socket:
+                opened = True
+                self.connections += 1
+                logger.info("Slack Socket Mode connected")
+                await self._pump(socket)
+        finally:
+            if opened:
+                self._last_connection_lasted = (
+                    asyncio.get_running_loop().time() - started
+                )
         return opened, None
 
     async def _pump(self, socket) -> None:
