@@ -222,27 +222,55 @@ class SlackSocketModeService:
         return opened, None
 
     async def _pump(self, socket) -> None:
-        """Read envelopes until the socket ends. Renews the lock as it goes."""
-        renew_at = asyncio.get_running_loop().time() + LOCK_RENEW_INTERVAL
-        async for raw in socket:
-            try:
-                envelope = json.loads(raw)
-            except (TypeError, ValueError):
-                logger.warning("slack socket: unreadable frame ignored")
-                continue
+        """Read envelopes until the socket ends.
 
-            if not await self._handle_envelope(socket, envelope):
-                return  # Slack asked us to go away
-
-            now = asyncio.get_running_loop().time()
-            if now >= renew_at:
-                if not await self._renew_lock():
+        The lock is renewed by a companion task, NOT inline here. Inline
+        renewal only runs when a frame arrives, so a quiet channel let the lock
+        lapse — and the next message woke the loop straight into "lost the
+        lock, closing", dropping the very message that woke it (live, 2026-07-29).
+        A team chat is quiet most of the time; that made the failure the normal
+        case rather than an edge case.
+        """
+        renewer = asyncio.create_task(self._renew_lock_periodically())
+        try:
+            async for raw in socket:
+                if renewer.done():
+                    # The renewer only finishes by losing the lock to a real
+                    # second reader; stop reading so we do not double-process.
                     logger.warning(
                         "slack socket: lost the Redis lock — closing to avoid a "
                         "second reader"
                     )
                     return
-                renew_at = now + LOCK_RENEW_INTERVAL
+                try:
+                    envelope = json.loads(raw)
+                except (TypeError, ValueError):
+                    logger.warning("slack socket: unreadable frame ignored")
+                    continue
+
+                if not await self._handle_envelope(socket, envelope):
+                    return  # Slack asked us to go away
+
+                # Yield once so the renewer gets a turn between envelopes. Under
+                # a burst the read loop would otherwise never suspend, and a
+                # genuine takeover would be noticed only after the burst — the
+                # window in which two readers process the same messages.
+                await asyncio.sleep(0)
+        finally:
+            renewer.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewer
+
+    async def _renew_lock_periodically(self) -> None:
+        """Keep the lock alive on a timer, independent of inbound traffic.
+
+        Returns only when the lock is genuinely gone to another reader — the
+        read loop treats this task finishing as the signal to stop.
+        """
+        while True:
+            await asyncio.sleep(LOCK_RENEW_INTERVAL)
+            if not await self._renew_lock():
+                return
 
     async def _handle_envelope(self, socket, envelope: dict) -> bool:
         """Ack + dispatch one envelope. False = close the connection."""
@@ -342,7 +370,23 @@ class SlackSocketModeService:
 
             redis = await get_redis()
             current = await redis.get(LOCK_KEY)
-            if _as_text(current) != self._owner:
+            holder = _as_text(current)
+            if holder is None:
+                # Expired, not stolen. "Nobody holds it" is not a competitor —
+                # and the rightful holder handing the socket over to no one is
+                # how a quiet channel used to lose its reader (2026-07-29): the
+                # renewal only ran on traffic, so silence let the key lapse and
+                # the next message closed the socket instead of being read.
+                # Take it back; nx=True keeps a real second reader from doing
+                # the same in the same instant.
+                if await redis.set(LOCK_KEY, self._owner, nx=True, ex=LOCK_TTL):
+                    logger.info(
+                        "slack socket: lock had expired while idle — reclaimed it"
+                    )
+                    return True
+                # Someone else won the race in between: they are the reader now.
+                return False
+            if holder != self._owner:
                 return False
             await redis.set(LOCK_KEY, self._owner, ex=LOCK_TTL)
             return True
