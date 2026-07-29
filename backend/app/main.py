@@ -116,6 +116,7 @@ from app.services.runtime_schedule_service import runtime_schedule_service
 from app.services.runtime_watcher import runtime_watcher
 from app.services.task_runner import task_runner
 from app.services.loop_runner import loop_runner
+from app.services.slack_socket import slack_socket
 from app.services.telegram_bot import telegram_bot
 from app.services.watchdog import watchdog
 # Vault Memory (M.1 Read Foundation + M.2 Write Path) — services + router.
@@ -205,6 +206,11 @@ async def lifespan(app: FastAPI):
     # /runtimes page.
     await model_catalog_checker.start()
     await telegram_bot.start()
+    # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us —
+    # this opens the Socket Mode websocket outbound. Silently inert unless the
+    # Slack channel is switched on; one Redis lock keeps multi-worker setups
+    # from reading every message twice.
+    await slack_socket.start()
     # Defense-in-depth: agents that call `gh repo create` without --private
     # get auto-privatized every 5 min. Fail-safe for SOUL rule violations.
     import asyncio as _asyncio
@@ -416,6 +422,7 @@ async def lifespan(app: FastAPI):
             await _topic_purge_task
         except (_asyncio.CancelledError, Exception):
             pass
+    await slack_socket.stop()
     await telegram_bot.stop()
     await intelligence.stop()
     await file_indexer.stop()

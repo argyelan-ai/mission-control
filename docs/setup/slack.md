@@ -160,6 +160,66 @@ while a message that needs you (a question, an approval, `@Mark`) is
 broadcast back into the channel so it shows up in the channel list. Between
 23:00 and 07:00 everything stays quiet except messages marked critical.
 
+## Talking to the agents
+
+Writing in the channel works, no extra step, no `/command`. Three rules decide
+who answers — and, just as importantly, who stays quiet.
+
+**In the channel: Boss answers.** Boss is the fleet's contact person, so
+anything you write in the channel itself goes to him. He is the one who
+distributes work; you do not have to know which agent is free.
+
+**In a thread: the agent working on it answers.** Every task opens its own
+Slack thread. Reply inside that thread and the message lands in exactly that
+conversation, with the agent who owns it — no need to address anybody.
+
+**`@name` picks somebody specific.** `@rex have another look at this` reaches
+Rex directly, in the channel. Inside a task thread a name is only noted, never
+followed: the thread stays with its own agent, because switching conversations
+because a name was mentioned would be guessing.
+
+Whatever the route, a message ends up in **exactly one** conversation. That is
+deliberate: without it, a plain "hello" would reach the whole fleet and come
+back as ten answers.
+
+### Why there is no real @-mention
+
+The agents are **not members of your Slack workspace**. MC's single bot posts
+under each agent's name and face, which is why Boss looks like Boss — but
+behind all of them stands one app. So:
+
+- **Slack's autocomplete does not know them.** Typing `@rex` will not offer a
+  suggestion, and Slack will not turn it blue. That is expected.
+- **MC reads the name out of your text**, and does so tolerantly: `@rex`,
+  `@Rex`, `@REX`, `Rex:` and `rex ...` at the start of a message all work, and
+  `-` and `_` are interchangeable (`@free-code` = `@FreeCode`).
+- **A name in passing does not re-route.** "I asked rex yesterday" goes to
+  Boss, like any other channel message. Only a leading name or an explicit `@`
+  addresses somebody.
+- **An unknown name goes to Boss.** A typo does not vanish, it just lands with
+  the contact person.
+
+Everything MC posts is ignored on the way back in — its own messages can never
+become new instructions, so the fleet cannot end up talking to itself.
+
+### You do not need a public address
+
+Nothing above requires MC to be reachable from the internet. MC keeps an
+outbound WebSocket open to Slack (Socket Mode, see the top of this page) and
+receives your messages over it, so a home server behind a router or Tailscale
+works exactly like a hosted one. There is no Request URL, no tunnel, no port
+forwarding — and no inbound hole in your network.
+
+Slack drops that connection every so often on its own schedule; MC reconnects
+by itself. If you run several backend workers, only one of them holds the
+connection (they coordinate through Redis), so a message is never processed
+twice.
+
+The connection is opened when the backend starts, so switching
+`SLACK_TEAM_CHAT_ENABLED` on takes effect after `docker compose up -d backend`
+— the same restart step 9 already asks for. When it works you will see
+`Slack Socket Mode connected` in the backend log.
+
 ## How agents get their names and faces
 
 In Slack each agent posts **as itself** — its own name, its own emoji as the
@@ -211,6 +271,9 @@ reinstall the app afterwards.
 | `not_in_channel` in the backend log | The bot is not a member of the channel. Open it in Slack and run `/invite @your-app-name` (step 8). |
 | `channel_not_found` | `SLACK_DEFAULT_CHANNEL` points at something Slack does not know — or at a private channel the app was never invited to. |
 | Connection test is green, but nothing is posted | `SLACK_TEAM_CHAT_ENABLED` is still false, or `CHAT_CHANNELS` lists other channels but not `slack`. |
+| MC posts, but never reacts to what you write | Inbound is Socket Mode. Check the backend log for `Slack Socket Mode connected`. No line at all means the channel is switched off; `no app-level token` means step 3 is missing. |
+| `@rex` does not turn blue in Slack | Expected. The agents are not Slack users — MC reads the name out of the text. See "Talking to the agents". |
+| The same answer arrives twice | Two backends are running against different Redis instances, so both hold a socket. They must share one Redis. |
 
 The same connection check is available without the UI:
 

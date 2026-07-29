@@ -268,6 +268,137 @@ def test_service_never_formats_a_token_into_a_log_call():
             )
 
 
+# ── Socket Mode: opening the connection ─────────────────────────────────────
+#
+# `apps.connections.open` is the only call that uses the app-level token. It is
+# stubbed here exactly like auth.test above — no network, no real token.
+
+
+@pytest.fixture(autouse=True)
+def _clean_socket_caches():
+    slack_client.invalidate_app_token_cache()
+    slack_client.invalidate_channel_id_cache()
+    yield
+    slack_client.invalidate_app_token_cache()
+    slack_client.invalidate_channel_id_cache()
+
+
+@pytest.mark.asyncio
+async def test_socket_open_returns_the_websocket_url(monkeypatch, session):
+    await _set_secret("slack_app_token", APP_TOKEN)
+    calls: list = []
+    _stub_auth_test(monkeypatch, {"ok": True, "url": "wss://wss.slack.test/link/?ticket=x"},
+                    calls=calls)
+
+    result = await slack_client.open_socket_connection(session)
+
+    assert result.url == "wss://wss.slack.test/link/?ticket=x"
+    assert result.error is None
+    assert calls and calls[0][0].endswith("/apps.connections.open")
+
+
+@pytest.mark.asyncio
+async def test_socket_open_without_an_app_token_says_which_token(monkeypatch, session):
+    """The failure must point at the xapp- field, not at the bot token."""
+    result = await slack_client.open_socket_connection(session)
+
+    assert result.url is None
+    assert result.code == "no_app_token"
+    assert "app-level token" in result.error
+
+
+@pytest.mark.asyncio
+async def test_socket_open_explains_a_rejected_app_token(monkeypatch, session):
+    await _set_secret("slack_app_token", APP_TOKEN)
+    _stub_auth_test(monkeypatch, {"ok": False, "error": "invalid_auth"})
+
+    result = await slack_client.open_socket_connection(session)
+
+    assert result.url is None
+    assert "connections:write" in result.error
+    assert "xapp-" in result.error
+
+
+@pytest.mark.asyncio
+async def test_socket_open_survives_an_unreachable_slack(monkeypatch, session):
+    await _set_secret("slack_app_token", APP_TOKEN)
+
+    async def boom(self, url, **kwargs):  # noqa: ANN001
+        raise httpx.ConnectError("no route")
+
+    monkeypatch.setattr(httpx.AsyncClient, "post", boom)
+
+    result = await slack_client.open_socket_connection(session)
+
+    assert result.url is None
+    assert result.code == "transport_error"
+
+
+@pytest.mark.asyncio
+async def test_the_app_token_never_appears_in_a_result(monkeypatch, session):
+    await _set_secret("slack_app_token", APP_TOKEN)
+    _stub_auth_test(monkeypatch, {"ok": False, "error": "invalid_auth"})
+
+    result = await slack_client.open_socket_connection(session)
+
+    assert APP_TOKEN.split("-", 2)[-1] not in (result.error or "")
+
+
+# ── Which channel is ours ───────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_a_channel_id_needs_no_lookup(monkeypatch):
+    async def never(self, url, **kwargs):  # noqa: ANN001
+        raise AssertionError("no Slack call should happen for an id")
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", never)
+
+    assert await slack_client.resolve_channel_id("C0123ABCD") == "C0123ABCD"
+
+
+@pytest.mark.asyncio
+async def test_a_channel_name_is_resolved_and_then_cached(monkeypatch):
+    async def fake_token(session=None):
+        return BOT_TOKEN
+
+    monkeypatch.setattr(slack_client, "get_bot_token", fake_token)
+    calls = {"n": 0}
+
+    async def fake_get(self, url, **kwargs):  # noqa: ANN001
+        calls["n"] += 1
+        return httpx.Response(
+            200,
+            json={"ok": True, "channels": [{"id": "C-MC", "name": "team-chat"}]},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    assert await slack_client.resolve_channel_id("#team-chat") == "C-MC"
+    assert await slack_client.resolve_channel_id("#team-chat") == "C-MC"
+    assert calls["n"] == 1, "the channel id was looked up twice"
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_channel_name_resolves_to_nothing(monkeypatch):
+    async def fake_token(session=None):
+        return BOT_TOKEN
+
+    monkeypatch.setattr(slack_client, "get_bot_token", fake_token)
+
+    async def fake_get(self, url, **kwargs):  # noqa: ANN001
+        return httpx.Response(
+            200,
+            json={"ok": True, "channels": [{"id": "C-OTHER", "name": "random"}]},
+            request=httpx.Request("GET", url),
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    assert await slack_client.resolve_channel_id("#team-chat") is None
+
+
 # ── Secret catalog ──────────────────────────────────────────────────────────
 
 
