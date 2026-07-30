@@ -574,5 +574,17 @@
     "taglineTester": "Tests, E2E, bug reports — before the operator sees them.",
     "taglineInstaller": "Installs MCP servers, skills, and plugins.",
     "taglineHermes": "Morning briefings & scheduled routines."
+  },
+  "vault": {
+    "tabList": "List",
+    "tabGraph": "Graph",
+    "tabTrash": "Trash",
+    "knowledgeMemory": "Knowledge · Memory",
+    "taskBanner": "{count} notes + files for task",
+    "showAllNotes": "Show all notes",
+    "clearVoiceHighlight": "Clear voice highlight",
+    "dismiss": "dismiss",
+    "undated": "Undated",
+    "loadingMore": "loading more…"
   }
 }
