@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { NAV_GROUPS } from "./Sidebar";
+import { useTranslations } from "next-intl";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
@@ -192,6 +193,7 @@ export function MobileTabBar() {
  */
 export default function MobileNav() {
   const { open, setOpen } = useMobileNav();
+  const t = useTranslations("nav");
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
@@ -335,10 +337,11 @@ export default function MobileNav() {
                           color: "var(--color-p2-faint)",
                         }}
                       >
-                        {group.label}
+                        {t(group.labelKey)}
                       </div>
                       <ul>
-                        {items.map(({ href, label }) => {
+                        {items.map(({ href, labelKey }) => {
+                          const label = t(labelKey);
                           const isActive = isTabActive(pathname, href);
                           const showBadge = href === "/inbox" && hasPendingApprovals;
                           return (

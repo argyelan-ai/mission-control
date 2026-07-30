@@ -1,0 +1,42 @@
+{
+  "nav": {
+    "home": "Home",
+    "tasks": "Tasks",
+    "agents": "Agents",
+    "office": "Office",
+    "inbox": "Inbox",
+    "insights": "Insights",
+    "memory": "Memory",
+    "files": "Files",
+    "content": "Content",
+    "news": "News",
+    "bench": "Benchmark",
+    "repos": "Repos",
+    "skills": "Skills",
+    "runtimes": "Runtimes",
+    "sessions": "Sessions",
+    "loops": "Loops",
+    "schedule": "Schedule",
+    "settings": "Settings",
+    "groupOverview": "OVERVIEW",
+    "groupWork": "WORK",
+    "groupKnowledge": "KNOWLEDGE",
+    "groupStudio": "STUDIO",
+    "groupSystem": "SYSTEM",
+    "logout": "Log out"
+  },
+  "settingsProfile": {
+    "email": "Email",
+    "emailHint": "Email cannot be changed.",
+    "name": "Name",
+    "namePlaceholder": "Your full name",
+    "displayName": "Display Name",
+    "displayNamePlaceholder": "Optional: how you'd like to be addressed",
+    "timezone": "Timezone",
+    "role": "Role",
+    "language": "Language",
+    "languageHint": "Interface language. Takes effect immediately.",
+    "languageEn": "English",
+    "languageDe": "Deutsch"
+  }
+}
