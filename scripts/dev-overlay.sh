@@ -16,6 +16,8 @@ set -euo pipefail
 MODE="${1:?apply|collect|status}"; OVERLAY="${2:?path to overlay repo}"
 ROOT="$(git rev-parse --show-toplevel)"
 MANIFEST="$OVERLAY/overlay.manifest"
+# Build/editor artifacts never belong in either direction.
+RSYNC_OPTS=(-a --exclude __pycache__ --exclude '*.pyc' --exclude .DS_Store)
 [ -f "$MANIFEST" ] || { echo "no overlay.manifest in $OVERLAY" >&2; exit 1; }
 
 while IFS= read -r line; do
@@ -24,14 +26,14 @@ while IFS= read -r line; do
   case "$MODE" in
     apply)
       mkdir -p "$ROOT/$(dirname "$dst")"
-      rsync -a --delete "$OVERLAY/$src" "$ROOT/$(dirname "$dst")/" 2>/dev/null \
-        || rsync -a "$OVERLAY/$src" "$ROOT/$dst"
+      rsync "${RSYNC_OPTS[@]}" --delete "$OVERLAY/$src" "$ROOT/$(dirname "$dst")/" 2>/dev/null \
+        || rsync "${RSYNC_OPTS[@]}" "$OVERLAY/$src" "$ROOT/$dst"
       ;;
     collect)
       if [ -e "$ROOT/$dst" ]; then
         mkdir -p "$OVERLAY/$(dirname "$src")"
-        rsync -a --delete "$ROOT/$dst" "$OVERLAY/$(dirname "$src")/" 2>/dev/null \
-          || rsync -a "$ROOT/$dst" "$OVERLAY/$src"
+        rsync "${RSYNC_OPTS[@]}" --delete "$ROOT/$dst" "$OVERLAY/$(dirname "$src")/" 2>/dev/null \
+          || rsync "${RSYNC_OPTS[@]}" "$ROOT/$dst" "$OVERLAY/$src"
       fi
       ;;
     status)
