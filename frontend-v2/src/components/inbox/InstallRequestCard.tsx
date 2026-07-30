@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { Check, X, Package, Puzzle, Server } from "lucide-react";
 import { cn, timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -44,6 +45,7 @@ function parseActionType(actionType: string): {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export function InstallRequestCard({ approval, onResolve }: Props) {
+  const t = useTranslations("inbox");
   const payload = approval.payload as InstallApprovalPayload | null;
   const [isResolving, setIsResolving] = useState<"approve" | "reject" | null>(null);
   const [rejectReason, setRejectReason] = useState("");
@@ -52,7 +54,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
 
   const { operation, resourceType } = parseActionType(approval.action_type);
   const Icon = TYPE_ICON[resourceType] ?? Package;
-  const verbDE = operation === "install" ? "Installieren" : "Deinstallieren";
+  const verb = operation === "install" ? t("installVerb") : t("uninstallVerb");
   const accentColor = operation === "install" ? C.online : C.warning;
 
   async function resolve(status: "approved" | "rejected") {
@@ -91,7 +93,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
                 }}
               >
                 <Icon size={12} />
-                {verbDE} {resourceType}
+                {verb} {resourceType}
               </span>
 
               {approval.autonomy_level && (
@@ -110,18 +112,18 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
 
             {/* Resource name */}
             <p className="text-sm mt-2.5 leading-relaxed text-[var(--color-text-primary)]">
-              <span className="text-[var(--color-text-secondary)]">Boss schlaegt vor: </span>
-              <span className="font-semibold">{verbDE}</span>
+              <span className="text-[var(--color-text-secondary)]">{t("bossProposes")} </span>
+              <span className="font-semibold">{verb}</span>
             </p>
 
             {/* Agents */}
             <p className="mt-1 text-xs text-[var(--color-text-muted)]">
-              Target:{" "}
+              {t("target")}{" "}
               <span className="font-mono text-[var(--color-text-secondary)]">
                 {payload.target_agent_slug ?? payload.target_agent_id}
               </span>
               {" · "}
-              Requester:{" "}
+              {t("requester")}{" "}
               <span className="font-mono text-[var(--color-text-secondary)]">
                 {payload.requester_agent_slug ?? payload.requester_agent_id}
               </span>
@@ -137,7 +139,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             border: "1px solid var(--color-border)",
           }}
         >
-          <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">Paket</p>
+          <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">{t("packageLabel")}</p>
           <code className="text-[12px] text-[var(--color-text-primary)] font-mono font-semibold break-all">
             {payload.source ? `${payload.name}  ·  ${payload.source}` : payload.name}
           </code>
@@ -151,7 +153,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             border: "1px solid var(--color-border)",
           }}
         >
-          <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">Begruendung</p>
+          <p className="text-[10px] text-[var(--color-text-muted)] mb-0.5">{t("reasonLabel")}</p>
           <p className="text-[12px] text-[var(--color-text-primary)] whitespace-pre-wrap leading-relaxed">
             {payload.reason}
           </p>
@@ -166,7 +168,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
               border: "1px solid var(--color-border)",
             }}
           >
-            <p className="text-[10px] text-[var(--color-text-muted)] mb-1">Proposed Config</p>
+            <p className="text-[10px] text-[var(--color-text-muted)] mb-1">{t("proposedConfig")}</p>
             <pre className="text-[11px] text-[var(--color-text-secondary)] overflow-x-auto">
               {JSON.stringify(payload.proposed_config, null, 2)}
             </pre>
@@ -189,7 +191,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             }}
           >
             <Check size={13} />
-            {operation === "install" ? "Approve & install" : "Approve & uninstall"}
+            {operation === "install" ? t("approveInstall") : t("approveUninstall")}
           </button>
 
           <button
@@ -203,12 +205,12 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
             }}
           >
             <X size={13} />
-            Ablehnen
+            {t("reject")}
           </button>
 
           <input
             type="text"
-            placeholder="Ablehnungsgrund (optional)"
+            placeholder={t("rejectReasonPlaceholder")}
             value={rejectReason}
             onChange={(e) => setRejectReason(e.target.value)}
             className="flex-1 min-w-[180px] rounded-xl px-3 py-2 text-[11px] outline-none"

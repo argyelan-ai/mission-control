@@ -250,12 +250,13 @@ export function serviceStatusColor(status: string): string {
   }
 }
 
-export function getGreeting(): string {
+// Returns a `home.*` message key — translate with t() at the render site.
+export function getGreetingKey(): "greetingNight" | "greetingMorning" | "greetingAfternoon" | "greetingEvening" {
   const hour = new Date().getHours();
-  if (hour < 6) return "Good night";
-  if (hour < 12) return "Good morning";
-  if (hour < 18) return "Good afternoon";
-  return "Good evening";
+  if (hour < 6) return "greetingNight";
+  if (hour < 12) return "greetingMorning";
+  if (hour < 18) return "greetingAfternoon";
+  return "greetingEvening";
 }
 
 // Responsive bento grid

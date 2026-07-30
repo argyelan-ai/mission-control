@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Archive, ArchiveRestore, Trash2, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -84,6 +85,7 @@ export function AgentActions({
   /** Called after a successful hard delete (e.g. navigate away). */
   onDeleted?: () => void;
 }) {
+  const t = useTranslations("agents");
   const qc = useQueryClient();
   const [confirmDelete, setConfirmDelete] = useState(false);
   const isArchived = agent.archived_at != null;
@@ -96,7 +98,7 @@ export function AgentActions({
   const archiveMutation = useMutation({
     mutationFn: () => api.agents.archive(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} archived`);
+      notify.success(t("archivedNotify", { name: agent.name }));
       invalidate();
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -105,7 +107,7 @@ export function AgentActions({
   const restoreMutation = useMutation({
     mutationFn: () => api.agents.restore(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} restored`);
+      notify.success(t("restoredNotify", { name: agent.name }));
       invalidate();
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -114,7 +116,7 @@ export function AgentActions({
   const deleteMutation = useMutation({
     mutationFn: () => api.agents.delete(agent.id),
     onSuccess: () => {
-      notify.success(`${agent.name} deleted`);
+      notify.success(t("deletedNotify", { name: agent.name }));
       setConfirmDelete(false);
       invalidate();
       onDeleted?.();
@@ -130,27 +132,27 @@ export function AgentActions({
       {isArchived ? (
         <LifecycleButton
           icon={ArchiveRestore}
-          label="Restore"
+          label={t("restore")}
           color={C.online}
           onClick={() => restoreMutation.mutate()}
           loading={restoreMutation.isPending}
-          title="Restore agent — runtime is restarted"
+          title={t("restoreTitle")}
         />
       ) : (
         <LifecycleButton
           icon={Archive}
-          label="Archive"
+          label={t("archive")}
           color={C.warning}
           onClick={() => archiveMutation.mutate()}
           loading={archiveMutation.isPending}
-          title="Archive agent — stops the runtime, keeps DB + files"
+          title={t("archiveTitle")}
         />
       )}
 
       {confirmDelete && isArchived ? (
         <span className="flex items-center gap-2">
           <span className="text-[11px]" style={{ color: C.error }}>
-            Sure?
+            {t("sure")}
           </span>
           <button
             onClick={() => deleteMutation.mutate()}
@@ -159,23 +161,23 @@ export function AgentActions({
             style={{ backgroundColor: `${C.error}26`, color: C.error }}
           >
             {deleteMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-            Yes, delete
+            {t("yesDelete")}
           </button>
           <button
             onClick={() => setConfirmDelete(false)}
             className="text-[11px] px-2.5 py-1.5 max-sm:py-3 max-sm:min-h-touch rounded-lg cursor-pointer text-[var(--color-text-muted)]"
           >
-            Cancel
+            {t("cancel")}
           </button>
         </span>
       ) : (
         <LifecycleButton
           icon={Trash2}
-          label="Delete"
+          label={t("delete")}
           color={C.error}
           onClick={() => isArchived && setConfirmDelete(true)}
           disabled={!isArchived}
-          title={isArchived ? "Delete agent permanently" : "Archive first"}
+          title={isArchived ? t("deleteTitle") : t("archiveFirst")}
         />
       )}
     </div>
