@@ -6,6 +6,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Search, X, Pause, Play, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
@@ -32,6 +33,7 @@ export function JobsTable({
   onSnooze,
   onDuplicate,
 }: JobsTableProps) {
+  const t = useTranslations("schedule");
   const [search, setSearch] = useState("");
   const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -125,8 +127,8 @@ export function JobsTable({
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search jobs…"
-            aria-label="Search jobs"
+            placeholder={t("searchJobsPlaceholder")}
+            aria-label={t("searchJobs")}
             className="w-full rounded-lg py-2 pl-9 pr-9 text-sm"
             style={{
               border: `1px solid ${C.border}`,
@@ -140,7 +142,7 @@ export function JobsTable({
               onClick={() => setSearch("")}
               className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1"
               style={{ color: C.textDim }}
-              aria-label="Clear search"
+              aria-label={t("clearSearch")}
             >
               <X size={12} />
             </button>
@@ -150,7 +152,7 @@ export function JobsTable({
         {allTags.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-              Tags:
+              {t("tagsLabel")}
             </span>
             {allTags.map(([tag, count]) => {
               const active = activeTags.has(tag);
@@ -178,7 +180,7 @@ export function JobsTable({
                 className="text-[10px]"
                 style={{ color: C.textMuted }}
               >
-                clear
+                {t("clearFilter")}
               </button>
             )}
           </div>
@@ -199,21 +201,21 @@ export function JobsTable({
             }}
           >
             <span className="text-xs font-medium" style={{ color: C.textPrimary }}>
-              {selected.size} selected
+              {t("selectedCount", { count: selected.size })}
             </span>
             <div className="flex items-center gap-1.5">
               <BulkBtn onClick={bulkPause} icon={<Pause size={12} />}>
-                Pause all
+                {t("pauseAll")}
               </BulkBtn>
               <BulkBtn onClick={bulkEnable} icon={<Play size={12} />}>
-                Enable all
+                {t("enableAll")}
               </BulkBtn>
               <BulkBtn
                 onClick={bulkDelete}
                 icon={<Trash2 size={12} />}
                 danger
               >
-                Delete
+                {t("delete")}
               </BulkBtn>
               <button
                 type="button"
@@ -221,7 +223,7 @@ export function JobsTable({
                 className="ml-1 text-xs"
                 style={{ color: C.textSecondary }}
               >
-                cancel
+                {t("cancelLower")}
               </button>
             </div>
           </motion.div>
@@ -234,7 +236,7 @@ export function JobsTable({
         style={{ overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"
-        aria-label="Jobs table"
+        aria-label={t("jobsTable")}
       >
         <div style={{ minWidth: 640 }}>
           {/* Header */}
@@ -248,7 +250,7 @@ export function JobsTable({
               onChange={toggleSelectAllVisible}
               className="h-3.5 w-3.5 cursor-pointer"
               style={{ accentColor: C.accent }}
-              aria-label="Select all visible"
+              aria-label={t("selectAllVisible")}
             />
             <span></span>
             {/* Sticky "Name" header cell — opaque bg so row content doesn't bleed through.
@@ -257,12 +259,12 @@ export function JobsTable({
               className="sticky z-10"
               style={{ left: "72px", backgroundColor: C.bgSurface }}
             >
-              Name
+              {t("colName")}
             </span>
-            <span>Trigger</span>
-            <span>Next</span>
-            <span>Last</span>
-            <span>Agent</span>
+            <span>{t("colTrigger")}</span>
+            <span>{t("colNext")}</span>
+            <span>{t("colLast")}</span>
+            <span>{t("colAgent")}</span>
             <span></span>
           </div>
 
@@ -274,8 +276,8 @@ export function JobsTable({
                 style={{ borderColor: C.border, color: C.textDim }}
               >
                 {jobs.length === 0
-                  ? 'No jobs created yet — get started with "New job".'
-                  : "No matches for the current filters."}
+                  ? t("noJobsYet")
+                  : t("noMatches")}
               </div>
             ) : (
               filteredJobs.map((j) => (
@@ -301,9 +303,9 @@ export function JobsTable({
           Each onDelete is additionally gated per job by the parent dialog. */}
       <ConfirmDialog
         open={confirmBulkDelete}
-        title="Delete jobs"
-        body={`Delete ${selected.size} job(s)?`}
-        confirmLabel="Delete"
+        title={t("deleteJobs")}
+        body={t("deleteJobsConfirm", { count: selected.size })}
+        confirmLabel={t("delete")}
         onConfirm={runBulkDelete}
         onCancel={() => setConfirmBulkDelete(false)}
       />

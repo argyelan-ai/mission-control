@@ -17,7 +17,17 @@ vi.mock("next-intl", () => {
     return typeof cur === "string" ? cur : key;
   };
   return {
-    useTranslations: (ns?: string) => (key: string) => resolve(ns, key),
+    // Simple {var} interpolation — enough for tests to assert full labels like
+    // "Open task: <title>". ICU plural/select is NOT emulated here.
+    useTranslations: (ns?: string) => (key: string, values?: Record<string, unknown>) => {
+      let s = resolve(ns, key);
+      if (values) {
+        for (const [k, v] of Object.entries(values)) {
+          s = s.split(`{${k}}`).join(String(v));
+        }
+      }
+      return s;
+    },
     useLocale: () => "en",
     NextIntlClientProvider: ({ children }: { children: React.ReactNode }) => children,
   };

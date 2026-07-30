@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
 import { OrgChart } from "./OrgChart";
@@ -33,6 +34,7 @@ function clampZoom(v: number): number {
 }
 
 export default function OfficeView() {
+  const t = useTranslations("office");
   const [zoom, setZoom] = useState<number>(ZOOM_DEFAULT);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -80,9 +82,9 @@ export default function OfficeView() {
         {/* Header — title + zoom cluster (subtitle removed per operator's req) */}
         <header className="shrink-0 flex items-center justify-between gap-4 px-5 lg:px-7 pt-5 pb-4">
           <div>
-            <div className="label-sys mb-1.5">Fleet · Office</div>
+            <div className="label-sys mb-1.5">{t("fleetOffice")}</div>
             <h1 className="display text-[26px] font-semibold tracking-tight leading-tight" style={{ color: C.textPrimary }}>
-              Org Chart
+              {t("title")}
             </h1>
           </div>
           <ZoomCluster zoom={zoom} onIn={zoomIn} onOut={zoomOut} onReset={zoomReset} />
@@ -94,7 +96,7 @@ export default function OfficeView() {
             viewport rectangle) — the operator hit "hintergrund zu kurz" before. */}
         <div
           ref={panelRef}
-          className="relative flex-1 min-h-0 overflow-auto" tabIndex={0} role="region" aria-label="Org chart"
+          className="relative flex-1 min-h-0 overflow-auto" tabIndex={0} role="region" aria-label={t("title")}
         >
           {/* Glass-panel — min-h-full so it always covers viewport even when
               content is short; intrinsic height grows with the chart when
@@ -138,6 +140,7 @@ function ZoomCluster({
   onOut: () => void;
   onReset: () => void;
 }) {
+  const t = useTranslations("office");
   const pct = Math.round(zoom * 100);
   const atMax = zoom >= ZOOM_MAX - 0.001;
   const atMin = zoom <= ZOOM_MIN + 0.001;
@@ -153,8 +156,8 @@ function ZoomCluster({
       <ZoomButton
         onClick={onOut}
         disabled={atMin}
-        title="Zoom out (⌘−)"
-        aria-label="Zoom out"
+        title={t("zoomOutTitle")}
+        aria-label={t("zoomOut")}
       >
         <ZoomOut size={15} strokeWidth={2} />
       </ZoomButton>
@@ -162,7 +165,7 @@ function ZoomCluster({
       <button
         type="button"
         onClick={onReset}
-        title="Reset to 100% (⌘0)"
+        title={t("resetTitle")}
         className="px-2.5 min-w-[52px] text-[11.5px] font-mono tabular-nums rounded-sm transition-colors cursor-pointer"
         style={{
           color: zoom === ZOOM_DEFAULT ? C.textMuted : C.textSecondary,
@@ -179,8 +182,8 @@ function ZoomCluster({
       <ZoomButton
         onClick={onIn}
         disabled={atMax}
-        title="Zoom in (⌘+)"
-        aria-label="Zoom in"
+        title={t("zoomInTitle")}
+        aria-label={t("zoomIn")}
       >
         <ZoomIn size={15} strokeWidth={2} />
       </ZoomButton>
@@ -189,8 +192,8 @@ function ZoomCluster({
 
       <ZoomButton
         onClick={onReset}
-        title="Fit / 100% (⌘0)"
-        aria-label="Reset zoom"
+        title={t("fitTitle")}
+        aria-label={t("resetZoom")}
       >
         <Maximize2 size={14} strokeWidth={2} />
       </ZoomButton>

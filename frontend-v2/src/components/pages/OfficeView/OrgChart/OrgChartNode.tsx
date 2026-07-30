@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { Container, HardDrive, Radio, UserRound } from "lucide-react";
 import type { OrgNode, OrgRuntime, OrgStatus } from "./types";
 import { C, STATUS as STATUS_TOKENS } from "@/lib/colors";
@@ -31,6 +32,7 @@ interface OrgChartNodeProps {
 }
 
 export function OrgChartNode({ node }: OrgChartNodeProps) {
+  const t = useTranslations("office");
   const status = STATUS[node.status];
   const runtime = RUNTIME[node.runtime];
   const Icon = node.icon;
@@ -75,7 +77,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[10px] uppercase tracking-[0.2em] font-mono font-medium">
-                Operator
+                {t("tierOperator")}
               </span>
               <span className="h-px flex-1" style={{ background: C.borderSubtle }} />
               <StatusDot status={status} />
@@ -84,7 +86,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
               {node.name}
             </div>
             <div className="text-[13px] mt-1.5 leading-snug" style={{ color: C.textSecondary }}>
-              {node.tagline}
+              {t(node.taglineKey)}
             </div>
           </div>
         </div>
@@ -129,7 +131,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[10px] uppercase tracking-[0.18em] font-medium" style={{ color: `${C.accent}B3` }}>
-                Voice Layer
+                {t("tierVoice")}
               </span>
               <span className="h-px flex-1" style={{ background: C.borderSubtle }} />
               <StatusDot status={status} />
@@ -139,7 +141,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             </div>
             <RuntimeRow runtime={runtime} RuntimeIcon={RuntimeIcon} model={node.model} />
             <div className="text-[12px] mt-2 leading-snug" style={{ color: C.textSecondary }}>
-              {node.tagline}
+              {t(node.taglineKey)}
             </div>
           </div>
         </div>
@@ -188,7 +190,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-[10px] uppercase tracking-[0.2em] font-semibold" style={{ color: C.accent }}>
-                Lead Orchestrator
+                {t("roleLeadOrchestrator")}
               </span>
               <span className="h-px flex-1" style={{ background: C.borderAccent }} />
               <StatusDot status={status} />
@@ -198,7 +200,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             </div>
             <RuntimeRow runtime={runtime} RuntimeIcon={RuntimeIcon} model={node.model} />
             <div className="text-[13px] mt-2 leading-snug" style={{ color: C.textSecondary }}>
-              {node.tagline}
+              {t(node.taglineKey)}
             </div>
           </div>
         </div>
@@ -233,7 +235,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
             {node.name}
           </div>
           <div className="text-[10.5px] uppercase tracking-[0.1em] mt-0.5 font-mono">
-            {node.role}
+            {t(node.roleKey)}
           </div>
         </div>
         <StatusDot status={status} compact />
@@ -251,7 +253,7 @@ export function OrgChartNode({ node }: OrgChartNodeProps) {
       </div>
 
       <div className="mt-2 text-[11.5px] leading-snug line-clamp-2">
-        {node.tagline}
+        {t(node.taglineKey)}
       </div>
     </div>
   );

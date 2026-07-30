@@ -22,6 +22,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, AlertCircle, Trash2, X } from "lucide-react";
@@ -46,16 +47,17 @@ import type { Agent, Task, TaskChecklistItem, TaskEvent, TaskGitInfo, TaskStatus
 
 // ── Status vocabulary ────────────────────────────────────────────────────────
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  inbox: "Inbox",
-  in_progress: "In Progress",
-  review: "Review",
-  user_test: "User Test",
-  waiting: "Waiting",
-  done: "Done",
-  blocked: "Blocked",
-  failed: "Failed",
-  aborted: "Aborted",
+// Message keys in the tasks.* namespace — t() at the render site.
+const STATUS_LABEL_KEY: Record<TaskStatus, string> = {
+  inbox: "statusInbox",
+  in_progress: "statusInProgress",
+  review: "statusReview",
+  user_test: "statusUserTest",
+  waiting: "statusWaiting",
+  done: "statusDone",
+  blocked: "statusBlocked",
+  failed: "statusFailed",
+  aborted: "statusAborted",
 };
 
 const STATUS_ORDER: TaskStatus[] = [
@@ -184,6 +186,7 @@ function StatusMenu({
   onChange: (s: TaskStatus) => void;
   pending: boolean;
 }) {
+  const t = useTranslations("tasks");
   const color = LANE[status] ?? C.textMuted;
   // Portaled with fixed positioning + viewport clamp (see usePortalMenu) so
   // the menu can never run off the right edge on narrow (393px) viewports.
@@ -197,12 +200,12 @@ function StatusMenu({
         disabled={pending}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Status: ${STATUS_LABEL[status]} — change`}
+        aria-label={t("statusChange", { label: t(STATUS_LABEL_KEY[status]) })}
         className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium cursor-pointer transition-opacity hover:opacity-85"
         style={{ background: `${color}1F`, border: `1px solid ${color}55`, color }}
       >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: color }} />
-        {STATUS_LABEL[status]}
+        {t(STATUS_LABEL_KEY[status])}
         <ChevronDown size={10} style={{ color: C.textDim }} />
       </button>
       {open && pos && createPortal(
@@ -247,7 +250,7 @@ function StatusMenu({
                   }}
                 >
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c }} />
-                  {STATUS_LABEL[s]}
+                  {t(STATUS_LABEL_KEY[s])}
                   {active && <Check size={11} className="ml-auto" style={{ color: C.textDim }} />}
                 </button>
               );
@@ -271,6 +274,7 @@ function OverflowMenu({
   onDelete: () => void;
   deleteLoading: boolean;
 }) {
+  const t = useTranslations("tasks");
   const [confirm, setConfirm] = useState(false);
   // Portaled with fixed positioning + viewport clamp (see usePortalMenu);
   // right-aligned to the trigger like the old `right-0` dropdown.
@@ -287,7 +291,7 @@ function OverflowMenu({
         onClick={toggle}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label="More actions"
+        aria-label={t("moreActions")}
         className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
         style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
       >
@@ -323,12 +327,12 @@ function OverflowMenu({
                 onMouseLeave={(e) => ((e.currentTarget as HTMLElement).style.background = "transparent")}
               >
                 <Trash2 size={12} style={{ color: STATUS_TEXT.error }} />
-                Delete task
+                {t("deleteTask")}
               </button>
             ) : (
               <div className="px-3 py-2 space-y-2">
                 <div className="text-[11px]" style={{ color: C.textSecondary }}>
-                  {isActive ? "Agent is working on this task. Delete anyway?" : "Delete this task permanently?"}
+                  {isActive ? t("deleteWhileActive") : t("deleteConfirm")}
                 </div>
                 <div className="flex gap-1.5">
                   <button
@@ -337,7 +341,7 @@ function OverflowMenu({
                     className="px-2 py-1 rounded text-[10px] font-semibold cursor-pointer"
                     style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                   >
-                    {deleteLoading ? "…" : "Delete task"}
+                    {deleteLoading ? "…" : t("deleteTask")}
                   </button>
                   <button
                     onClick={() => {
@@ -347,7 +351,7 @@ function OverflowMenu({
                     className="px-2 py-1 rounded text-[10px] cursor-pointer"
                     style={{ color: C.textMuted }}
                   >
-                    Cancel
+                    {t("cancel")}
                   </button>
                 </div>
               </div>
@@ -473,6 +477,7 @@ export function TaskDetailBody({
   boardId: string;
   onClose: () => void;
 }) {
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("thread");
   const [checklistOpen, setChecklistOpen] = useState(false);
@@ -491,7 +496,7 @@ export function TaskDetailBody({
       qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
       qc.invalidateQueries({ queryKey: ["task", boardId, task.id] });
     },
-    onError: (e: Error) => notify.error(`Update failed: ${e.message}`),
+    onError: (e: Error) => notify.error(t("updateFailed", { msg: e.message })),
   });
 
   const deleteMutation = useMutation({
@@ -501,7 +506,7 @@ export function TaskDetailBody({
       qc.invalidateQueries({ queryKey: ["pipeline", boardId] });
       onClose();
     },
-    onError: (e: Error) => notify.error(`Delete failed: ${e.message}`),
+    onError: (e: Error) => notify.error(t("deleteFailed", { msg: e.message })),
   });
 
   // ── Queries ────────────────────────────────────────────────────────────────
@@ -571,47 +576,47 @@ export function TaskDetailBody({
   const creatorName = task.created_by_user_id
     ? task.created_by_user_id === currentUser?.id
       ? currentUser.name
-      : (usersList?.find((u) => u.id === task.created_by_user_id)?.name ?? "User")
+      : (usersList?.find((u) => u.id === task.created_by_user_id)?.name ?? t("userFallback"))
     : null;
 
   // ── Briefing fields ────────────────────────────────────────────────────────
 
   const briefingFields: { label: string; value: string | null | undefined }[] = task.intake_mode
     ? [
-        { label: "Type", value: task.request_kind },
-        { label: "Output", value: task.desired_output },
-        { label: "Out of scope", value: task.scope_out },
-        { label: "Risks", value: task.risk_notes },
-        { label: "Criteria", value: task.acceptance_criteria },
-        { label: "Browser", value: task.needs_browser ? "Yes" : null },
-        { label: "E2E test", value: task.e2e_test_required ? "Required" : null },
-        { label: "Credentials", value: task.requires_auth ? "Yes" : null },
-        { label: "Approval", value: task.approval_policy },
-        { label: "Autonomy", value: task.autonomy_level },
-        { label: "Links", value: task.reference_urls?.join(", ") || null },
-        { label: "Notes", value: task.reference_notes },
+        { label: t("briefType"), value: task.request_kind },
+        { label: t("briefOutput"), value: task.desired_output },
+        { label: t("briefOutOfScope"), value: task.scope_out },
+        { label: t("briefRisks"), value: task.risk_notes },
+        { label: t("briefCriteria"), value: task.acceptance_criteria },
+        { label: t("briefBrowser"), value: task.needs_browser ? t("yes") : null },
+        { label: t("briefE2E"), value: task.e2e_test_required ? t("required") : null },
+        { label: t("briefCredentials"), value: task.requires_auth ? t("yes") : null },
+        { label: t("briefApproval"), value: task.approval_policy },
+        { label: t("briefAutonomy"), value: task.autonomy_level },
+        { label: t("briefLinks"), value: task.reference_urls?.join(", ") || null },
+        { label: t("briefNotes"), value: task.reference_notes },
       ].filter((f) => f.value)
     : [];
 
   const checklistDone = checklist.filter((i) => i.status === "done").length;
-  const projectName = task.project_id ? (projects.find((p) => p.id === task.project_id)?.name ?? "Project") : "Ad-hoc";
+  const projectName = task.project_id ? (projects.find((p) => p.id === task.project_id)?.name ?? t("projectFallback")) : t("adHoc");
 
   const tabs: { key: typeof activeTab; label: string }[] = [
-    { key: "thread", label: "Thread" },
-    { key: "comments", label: "Comments" },
-    { key: "deliverables", label: "Deliverables" },
-    ...(task.workspace_path ? [{ key: "workspace" as const, label: "Workspace" }] : []),
-    ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: "E2E" }] : []),
-    ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: "Transcript" }] : []),
-    { key: "timeline", label: "Timeline" },
-    { key: "history", label: "History" },
+    { key: "thread", label: t("tabThread") },
+    { key: "comments", label: t("tabComments") },
+    { key: "deliverables", label: t("tabDeliverables") },
+    ...(task.workspace_path ? [{ key: "workspace" as const, label: t("tabWorkspace") }] : []),
+    ...(task.e2e_test_required || hasE2EResult ? [{ key: "e2e" as const, label: t("tabE2E") }] : []),
+    ...(task.spawn_session_key || task.dispatched_at ? [{ key: "transcript" as const, label: t("tabTranscript") }] : []),
+    { key: "timeline", label: t("tabTimeline") },
+    { key: "history", label: t("tabHistory") },
   ];
 
   return (
     <>
       {/* ── Header ── */}
       <div className="px-4 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-        <div className="label-sys label-sys--dim mb-1.5">Task · {task.id.slice(0, 8)}</div>
+        <div className="label-sys label-sys--dim mb-1.5">{t("taskLabel")} · {task.id.slice(0, 8)}</div>
         <div className="flex items-start gap-3">
           <h2 className="flex-1 min-w-0 text-[15px] font-semibold leading-snug" style={{ color: C.textPrimary }}>
             {task.title}
@@ -620,7 +625,7 @@ export function TaskDetailBody({
             <OverflowMenu isActive={isActive} onDelete={() => deleteMutation.mutate()} deleteLoading={deleteMutation.isPending} />
             <button
               onClick={onClose}
-              aria-label="Close task details"
+              aria-label={t("closeTaskDetails")}
               className="w-[30px] h-[30px] rounded-md flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
@@ -659,7 +664,7 @@ export function TaskDetailBody({
         {/* Description */}
         {task.description && (
           <Section>
-            <SectionLabel>Description</SectionLabel>
+            <SectionLabel>{t("description")}</SectionLabel>
             <TaskDescription description={task.description} />
           </Section>
         )}
@@ -667,7 +672,7 @@ export function TaskDetailBody({
         {/* Briefing */}
         {briefingFields.length > 0 && (
           <Section>
-            <SectionLabel>Briefing · {task.intake_mode}</SectionLabel>
+            <SectionLabel>{t("briefing")} · {task.intake_mode}</SectionLabel>
             <div className="space-y-1">
               {briefingFields.map((f) => (
                 <div key={f.label} className="text-xs">
@@ -681,14 +686,14 @@ export function TaskDetailBody({
 
         {/* Properties */}
         <Section>
-          <SectionLabel>Properties</SectionLabel>
+          <SectionLabel>{t("properties")}</SectionLabel>
           <div
             className="grid grid-cols-2 gap-px rounded-lg overflow-hidden"
             style={{ background: C.border, border: `1px solid ${C.border}` }}
           >
             <PropertyMenuCell
-              label="Assignee"
-              value={agent ? `${agent.emoji ?? ""} ${agent.name}`.trim() : "Unassigned"}
+              label={t("assignee")}
+              value={agent ? `${agent.emoji ?? ""} ${agent.name}`.trim() : t("unassigned")}
               options={agents.map((a) => ({
                 id: a.id,
                 label: `${a.emoji ?? ""} ${a.name}`.trim(),
@@ -697,17 +702,17 @@ export function TaskDetailBody({
               onSelect={(id) => id && updateMutation.mutate({ assigned_agent_id: id } as Partial<Task>)}
             />
             <PropertyMenuCell
-              label="Project"
+              label={t("projectFallback")}
               value={projectName}
               options={[
-                { id: null, label: "Ad-hoc (no project)", active: !task.project_id },
+                { id: null, label: t("adHocNoProject"), active: !task.project_id },
                 ...projects.map((p) => ({ id: p.id, label: p.name, active: p.id === task.project_id })),
               ]}
               onSelect={(id) => updateMutation.mutate({ project_id: id } as Partial<Task>)}
             />
             <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
               <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                Created by
+                {t("createdBy")}
               </span>
               <span className="text-xs" style={{ color: C.textPrimary }}>
                 {creatorName ?? "—"} · {timeAgo(task.created_at)}
@@ -715,7 +720,7 @@ export function TaskDetailBody({
             </div>
             <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
               <span className="block text-[9px] font-semibold uppercase tracking-[0.07em] mb-0.5" style={{ color: C.textDim }}>
-                Started
+                {t("started")}
               </span>
               <span className="text-xs" style={{ color: C.textPrimary }}>
                 {task.started_at ? timeAgo(task.started_at) : "—"}
@@ -727,12 +732,12 @@ export function TaskDetailBody({
         {/* Relations */}
         {(hierarchy?.parent || (hierarchy?.children?.length ?? 0) > 0 || (dependencies?.length ?? 0) > 0) && (
           <Section>
-            <SectionLabel>Relations</SectionLabel>
+            <SectionLabel>{t("relations")}</SectionLabel>
             <div className="space-y-2">
               {hierarchy?.parent && (
                 <div className="flex items-center gap-2 text-xs">
                   <span className="shrink-0" style={{ color: C.textMuted }}>
-                    Parent
+                    {t("parent")}
                   </span>
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: LANE[hierarchy.parent.status] ?? C.textMuted }} />
                   <span className="truncate" style={{ color: C.textSecondary }} title={hierarchy.parent.title}>
@@ -748,9 +753,9 @@ export function TaskDetailBody({
                     className="flex items-center gap-2 w-full text-left cursor-pointer text-xs"
                     style={{ color: C.textMuted }}
                   >
-                    <span>Subtasks</span>
+                    <span>{t("subtasks")}</span>
                     <span className="font-mono text-[10px]" style={{ color: C.textDim }}>
-                      {hierarchy!.children.filter((c: { status: string }) => c.status === "done").length}/{hierarchy!.children.length} done
+                      {t("doneOfTotal", { done: hierarchy!.children.filter((c: { status: string }) => c.status === "done").length, total: hierarchy!.children.length })}
                     </span>
                     <ChevronRight
                       size={10}
@@ -785,7 +790,7 @@ export function TaskDetailBody({
               {(dependencies?.length ?? 0) > 0 && (
                 <div>
                   <div className="text-xs mb-1" style={{ color: C.textMuted }}>
-                    Depends on
+                    {t("dependsOn")}
                   </div>
                   <div className="flex flex-col gap-1">
                     {dependencies!.map((dep) => (
@@ -814,7 +819,7 @@ export function TaskDetailBody({
               className="w-full flex items-center gap-2 cursor-pointer"
             >
               <span className="text-[10px] font-semibold uppercase tracking-[0.07em]" style={{ color: C.textDim }}>
-                Checklist
+                {t("checklist")}
               </span>
               <span className="flex-1 max-w-[96px] h-[3px] rounded-full overflow-hidden" style={{ backgroundColor: C.bgHover }}>
                 <span
@@ -872,7 +877,7 @@ export function TaskDetailBody({
 
         {/* References (ADR-053) */}
         <Section>
-          <SectionLabel>References</SectionLabel>
+          <SectionLabel>{t("references")}</SectionLabel>
           <TaskReferences taskId={task.id} />
         </Section>
 
