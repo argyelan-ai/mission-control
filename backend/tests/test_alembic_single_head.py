@@ -21,7 +21,23 @@ from pathlib import Path
 VERSIONS = Path(__file__).resolve().parents[1] / "alembic" / "versions"
 
 _REV = re.compile(r'^revision(?::\s*str)?\s*=\s*["\'](.+?)["\']', re.M)
-_DOWN = re.compile(r'^down_revision(?::\s*[^=]+)?\s*=\s*["\']?(.+?)["\']?\s*$', re.M)
+_DOWN = re.compile(r"^down_revision(?::\s*[^=]+)?\s*=\s*(.+?)\s*$", re.M)
+_IDS = re.compile(r'["\']([^"\']+)["\']')
+
+
+def _parents(raw: str) -> set[str]:
+    """Every parent named by a `down_revision`, single or tuple.
+
+    A merge revision legitimately has two: `down_revision = ("a", "b")`. An
+    earlier version of this file matched the quotes as part of one string
+    pattern, so a tuple came out as the single bogus parent
+    `("a", "b")` — which made `test_every_parent_exists` fail on a perfectly
+    valid merge point, and would have pushed the next person to weaken the
+    test rather than fix the chain. Pull the quoted ids out instead.
+    """
+    if raw.strip() in ("None", ""):
+        return set()
+    return set(_IDS.findall(raw))
 
 
 def _chain() -> tuple[set[str], set[str]]:
@@ -34,8 +50,8 @@ def _chain() -> tuple[set[str], set[str]]:
             continue
         revs.add(r.group(1))
         d = _DOWN.search(text)
-        if d and d.group(1) not in ("None", ""):
-            downs.add(d.group(1))
+        if d:
+            downs |= _parents(d.group(1))
     return revs, downs
 
 
@@ -56,7 +72,20 @@ def test_exactly_one_head() -> None:
 
 
 def test_every_parent_exists() -> None:
-    """A typo'd down_revision is the other way to break `upgrade head`."""
+    """A typo'd down_revision is the other way to break `upgrade head`.
+
+    Happened for real on 2026-07-30: #194 renamed a revision id and left the
+    merge point pointing at the old one. Two heads plus a parent that does not
+    exist — `alembic upgrade head` dead for every fresh install, while an
+    already-migrated database carried on and hid it.
+    """
     revs, downs = _chain()
     missing = sorted(downs - revs)
     assert not missing, f"down_revision points at unknown revisions: {missing}"
+
+
+def test_a_merge_revision_is_read_as_two_parents() -> None:
+    """The parser must understand tuples, or it condemns valid merge points."""
+    assert _parents('("a", "b")') == {"a", "b"}
+    assert _parents('"single"') == {"single"}
+    assert _parents("None") == set()
