@@ -320,5 +320,20 @@
     "disconnected": "getrennt",
     "agentsBack": "Agenten",
     "selectAgent": "Agent auswählen"
+  },
+  "shell": {
+    "searchPlaceholder": "Suchen oder Befehl...",
+    "noResults": "Keine Treffer",
+    "navigation": "Navigation",
+    "actions": "Aktionen",
+    "newTask": "Neue Aufgabe",
+    "approveAll": "Alle Freigaben genehmigen",
+    "openCommandPalette": "Befehlspalette öffnen",
+    "newBoard": "Neues Board",
+    "newBoardHeading": "NEUES BOARD",
+    "close": "Schliessen",
+    "boardNamePlaceholder": "Board-Name",
+    "creating": "ERSTELLE…",
+    "createBoard": "BOARD ERSTELLEN"
   }
 }
