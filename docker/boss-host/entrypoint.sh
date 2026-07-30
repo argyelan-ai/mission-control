@@ -21,7 +21,22 @@ set -eu
 
 SESSION="boss-host"
 BASE="$HOME/.mc/agents/boss-host"
-REPO="${MC_REPO_PATH:-$HOME/Workspace/Projects/mission-control}"
+
+# Stabiler Agent-Checkout statt Operator-Checkout (Problemklasse "haengt am
+# zufaelligen Branch", 3. Inkarnation 2026-07-30): poll.sh, Adapter-Libs und
+# Boss' Arbeitsverzeichnis kommen aus einem dedizierten, auf origin/main
+# gepinnten Checkout (~/.mc/checkouts/mission-control, konfigurierbar via
+# MC_CHECKOUT_PATH/MC_CHECKOUT_REF) — nie aus dem Checkout, in dem der
+# Operator gerade entwickelt. Bootstrap-Henne/Ei: beim allerersten Start
+# existiert der Checkout noch nicht, darum liegt ensure-checkout.sh im
+# Operator-Checkout (MC_REPO_PATH) und rendert/klont den stabilen.
+ENSURE="${MC_REPO_PATH:-$HOME/Workspace/Projects/mission-control}/docker/shared/ensure-checkout.sh"
+if [ -x "$ENSURE" ] || [ -f "$ENSURE" ]; then
+    REPO="$(bash "$ENSURE")"
+else
+    # Aeltere Installation ohne ensure-checkout.sh: alter Pfad als Fallback.
+    REPO="${MC_REPO_PATH:-$HOME/Workspace/Projects/mission-control}"
+fi
 POLL_SH="$REPO/docker/shared/poll.sh"
 LOG_DIR="$BASE/logs"
 TMUX_SOCKET="$BASE/.tmux.sock"
@@ -81,8 +96,11 @@ set -g default-terminal "xterm-256color"
 TMUX_EOF
 
 start_tmux() {
-    # Window 0: claude in Auto-Restart-Loop (KEIN tee — destroys PTY)
-    tmux -S "$TMUX_SOCKET" -f "$TMUX_CONF" new-session -d -s "$SESSION" -n "claude" \
+    # Window 0: claude in Auto-Restart-Loop (KEIN tee — destroys PTY).
+    # -c "$REPO": claude startet IM stabilen Checkout (statt cwd / oder dem
+    # Operator-Checkout) — Statusline zeigt main, relative Pfade treffen den
+    # deployten Code-Stand.
+    tmux -S "$TMUX_SOCKET" -f "$TMUX_CONF" new-session -d -s "$SESSION" -n "claude" -c "$REPO" \
         "while true; do $BASE/start-claude.sh; echo '[entrypoint] claude exited, restart in 5s...'; sleep 5; done"
 
     # mouse on → Sessions web terminal scrolls output, not input history (matches
@@ -90,7 +108,7 @@ start_tmux() {
     tmux -S "$TMUX_SOCKET" set-option -t "$SESSION" mouse on 2>/dev/null || true
 
     # Window 1: geteilter poll.sh (docker/shared/poll.sh) in Auto-Restart-Loop (kein tee)
-    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:1" -n "poll" \
+    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:1" -n "poll" -c "$REPO" \
         "while true; do bash '$POLL_SH'; echo '[entrypoint] poll.sh exited, restart in 5s...'; sleep 5; done"
 
     # tmux-natives Pane-Logging (PTY bleibt erhalten)
@@ -105,14 +123,14 @@ start_tmux
 
 # Einzelnes Fenster nachstarten (fuer Watchdog — Window-weise statt Session-weise)
 restart_poll_window() {
-    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:1" -n "poll" \
+    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:1" -n "poll" -c "$REPO" \
         "while true; do bash '$POLL_SH'; echo '[entrypoint] poll.sh exited, restart in 5s...'; sleep 5; done"
     tmux -S "$TMUX_SOCKET" pipe-pane -o -t "$SESSION:1" "cat >> $LOG_DIR/poll.log"
     echo "[watchdog] poll window (1) neugestartet"
 }
 
 restart_claude_window() {
-    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:0" -n "claude" \
+    tmux -S "$TMUX_SOCKET" new-window -t "$SESSION:0" -n "claude" -c "$REPO" \
         "while true; do $BASE/start-claude.sh; echo '[entrypoint] claude exited, restart in 5s...'; sleep 5; done"
     tmux -S "$TMUX_SOCKET" pipe-pane -o -t "$SESSION:0" "cat >> $LOG_DIR/claude.log"
     echo "[watchdog] claude window (0) neugestartet"
