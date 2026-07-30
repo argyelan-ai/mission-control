@@ -129,6 +129,12 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}
       JARVIS_STT_MODEL: ${JARVIS_STT_MODEL:-gpt-4o-mini-transcribe}
+      # Local/self-hosted STT endpoint (scripts/stt-server). Every backend env
+      # var must be mapped HERE explicitly — the setting existed in config.py
+      # first and silently never reached the container (found live 2026-07-30:
+      # printenv came back empty while the unit tests were all green).
+      STT_BASE_URL: ${STT_BASE_URL:-}
+      STT_MODEL: ${STT_MODEL:-}
       # Jarvis Intelligence (ADR-062): frontier delegation (ask_frontier) + the
       # daily morning briefing job. Empty model → jarvis_core default (gpt-5.5).
       # ask_frontier is off by default (per-request cost); the briefing job has
