@@ -919,17 +919,24 @@ def _cmd_ask(args, client, cfg):
 
 
 def _cmd_msg(args, client, cfg):
-    """mc msg — plain non-question message on the current task thread (Task 8).
+    """mc msg — plain non-question message on a thread (Task 8).
 
-    Posts status/decision/progress notes onto the task thread. Questions
-    carry awaiting-semantics and go through `mc ask` instead — this
-    endpoint deliberately rejects message_type="question".
-    No board_id noetig: haengt am aktuellen Task des Agents.
+    Posts status/decision/progress notes. Questions carry awaiting-semantics
+    and go through `mc ask` instead — both endpoints reject
+    message_type="question".
+
+    Without `--thread` this posts on the current task's thread; with no active
+    task the backend falls back to the agent's DM thread (the general chat), so
+    a message addressed there can be answered. `--thread <id>` — the id printed
+    in every `mc inbox` footer — targets one conversation explicitly, which is
+    what to use when a reply must land in a thread other than the current task.
     """
+    if getattr(args, "thread", None):
+        path = f"/api/v1/agent/threads/{args.thread}/messages"
+    else:
+        path = "/api/v1/agent/tasks/current/messages"
     resp = client.request(
-        "POST",
-        "/api/v1/agent/tasks/current/messages",
-        body={"body": args.text, "message_type": args.type},
+        "POST", path, body={"body": args.text, "message_type": args.type}
     )
     _emit(resp)
     return 0
@@ -941,6 +948,11 @@ def _add_msg_args(p):
         "--type", dest="type", default="message",
         choices=("message", "status", "decision"),
         help="Nachrichtentyp (default: message). Fragen -> `mc ask` statt `mc msg`.",
+    )
+    p.add_argument(
+        "--thread", dest="thread", default=None,
+        help="Thread-ID (aus dem `mc inbox`-Footer) — Antwort geht in genau "
+             "diesen Thread statt in den des aktuellen Tasks.",
     )
 
 
@@ -2285,8 +2297,11 @@ REGISTRY: dict[str, CommandSpec] = {
     ),
     "msg": CommandSpec(
         name="msg",
-        help="Nachricht (message/status/decision) auf den Task-Thread posten — keine Fragen (siehe `mc ask`)",
-        endpoints=("POST /tasks/current/messages",),
+        help="Nachricht (message/status/decision) in einen Thread posten — keine Fragen (siehe `mc ask`)",
+        endpoints=(
+            "POST /tasks/current/messages",
+            "POST /threads/{thread_id}/messages",
+        ),
         scope="chat:write",  # backend require_scope(Scope.CHAT_WRITE)
         handler=_cmd_msg,
         add_args=_add_msg_args,

@@ -86,6 +86,7 @@ from app.models.chat import ChatMessage
 from app.models.memory import BoardMemory
 from app.models.task import Task, TaskComment
 from app.services.activity import emit_event
+from app.services.thread_scope import thread_agent_may_write_to
 from app.utils import utcnow
 
 # ─────────────────────────────────────────────────────────────────────
@@ -1477,39 +1478,110 @@ class MessageResponse(BaseModel):
     your_status: str
 
 
+# Task states in which a task still BELONGS to its agent, even though
+# `current_task_id` may already have been released (task_lifecycle clears it on
+# `blocked` and on leaving `in_progress`). `done`/`failed` are absent on
+# purpose: a finished task is no longer the conversation the agent is in.
+_OWNED_TASK_STATUSES = ("inbox", "in_progress", "review", "blocked", "waiting", "user_test")
+
+
+async def _resolve_message_target(session: AsyncSession, agent: Agent):
+    """Where does a `mc msg` without an explicit thread belong?
+
+    Returns ``(thread, task | None)``. Order matters, and it is not the obvious
+    one: `current_task_id` is NOT a reliable "is this agent working" signal —
+    `task_lifecycle` releases it while the task is still assigned (on `blocked`,
+    and on any exit from `in_progress`, e.g. into `review`). Falling back to the
+    DM thread on that signal alone would drop a follow-up note about a task
+    silently into the general chat, where nobody is reading that conversation.
+    So an owned task wins over the DM even without `current_task_id`, and only
+    an agent with no owned task at all is treated as "in conversation".
+
+    Raises 409 when nothing fits, and when several owned tasks make the target
+    ambiguous — a guess would put the message in the wrong conversation, and
+    the refusal names the way out.
+    """
+    from app.models.thread import Thread
+    from app.services.messaging import ensure_task_thread
+
+    current_task = (
+        await session.get(Task, agent.current_task_id)
+        if agent.current_task_id
+        else None
+    )
+    if current_task is not None:
+        return await ensure_task_thread(session, current_task), current_task
+
+    owned = list(
+        (
+            await session.exec(
+                select(Task).where(
+                    Task.assigned_agent_id == agent.id,
+                    Task.status.in_(_OWNED_TASK_STATUSES),  # type: ignore[union-attr]
+                )
+            )
+        ).all()
+    )
+    if len(owned) == 1:
+        return await ensure_task_thread(session, owned[0]), owned[0]
+    if len(owned) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"{len(owned)} offene Tasks — Ziel ist mehrdeutig. Nutze "
+                "`mc msg --thread <id>` mit der Thread-ID aus `mc inbox`."
+            ),
+        )
+
+    # No task in hand: the agent is holding a conversation, so its DM thread is
+    # where a reply belongs. Looked up, never created — a reply presupposes a
+    # conversation, and creating one here would produce a monologue nobody
+    # reads. `.first()` mirrors ensure_dm_thread, which tolerates a duplicate
+    # rather than raising.
+    dm = (
+        await session.exec(
+            select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+        )
+    ).first()
+    if dm is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
+        )
+    return dm, None
+
+
 @router.post("/tasks/current/messages", status_code=status.HTTP_201_CREATED)
 async def agent_post_message(
     payload: MessageCreate,
     session: AsyncSession = Depends(get_session),
     agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
 ):
-    """Agent posts a plain message on its active task thread (§3.3).
+    """Agent posts a plain message on the thread it is currently in (§3.3).
+
+    Usually that is its active task's thread. With no task in hand the agent is
+    holding a conversation rather than filing a work note, and the message goes
+    to its DM thread — that fallback is the fix for a live bug (2026-07-29):
+    addressed in the general chat, the agent received the message and acked it,
+    then hit 409 here and had nowhere to put an answer. Kept server-side on
+    purpose: every agent already types `mc msg "…"`, and a bug of ours must not
+    cost thirteen agent cards a new flag. See `_resolve_message_target` for why
+    `current_task_id` alone is not the deciding signal.
 
     The first inbound Message on a dispatched task claims it via the shared
     ACK handshake (same effect as the legacy first-comment ACK) — no other
     lifecycle side-effects. Delivery to peers/operator rides the poll path.
     """
-    from app.services.messaging import ensure_task_thread, post_message
+    from app.services.messaging import post_message
     from app.services.task_lifecycle import apply_ack_handshake
 
-    current_task_id = agent.current_task_id
-    if not current_task_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
-        )
-    current_task = await session.get(Task, current_task_id)
-    if not current_task:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Kein aktiver Task — message nur aus aktiver Arbeit heraus moeglich.",
-        )
+    thread, task = await _resolve_message_target(session, agent)
 
     # First inbound agent Message ACKs the task (idempotent). Non-committing —
     # the post_message commit below persists the handshake mutations too.
-    apply_ack_handshake(session, current_task, agent)
+    if task is not None:
+        apply_ack_handshake(session, task, agent)
 
-    thread = await ensure_task_thread(session, current_task)
     message = await post_message(
         session,
         thread_id=thread.id,
@@ -1520,15 +1592,118 @@ async def agent_post_message(
         reply_to=payload.reply_to,
     )
 
-    await session.refresh(current_task)
+    if task is not None:
+        await session.refresh(task)
+        logger.info(
+            "Message: %s posts on task %s (type=%s, status=%s)",
+            agent.name, task.id, payload.message_type, task.status,
+        )
+    else:
+        logger.info("Message: %s posts on its DM thread %s", agent.name, thread.id)
+    return MessageResponse(
+        message_id=message.id,
+        thread_id=thread.id,
+        # A DM has no task, so there is no task status to report. `your_status`
+        # is documented as the TASK status everywhere else in this module — the
+        # agent's own status would be a different vocabulary in the same field,
+        # so say plainly that no task is involved instead.
+        your_status=(task.status if task is not None else "no_task"),
+    )
+
+
+# ── Reply into a named thread ─────────────────────────────────────────────
+#
+# The endpoint above can only ever write into the thread of the agent's ACTIVE
+# TASK. That left the general chat (`kind="dm"`) one-way: MC delivered Mark's
+# message and the agent acked it, then had nowhere to put an answer — 409
+# without a task, and the wrong thread with one. Measured live on 2026-07-29
+# (thread 8015c75e: five operator messages, zero agent replies, while
+# `last_acked_seq=5` proved delivery had worked all along). The agent that
+# wanted to answer fell back to the old board chat, which is why the reply
+# surfaced on Telegram after a question asked in Slack.
+#
+# This endpoint takes the thread as an argument instead of inferring it, and
+# authorises it with the very rule that governs delivery (`thread_scope`): an
+# agent may answer exactly where it may listen. Nothing downstream changes —
+# `post_message` mirrors into every active chat channel, so the reply travels
+# back over Slack without this handler knowing that Slack exists.
+
+
+@router.post("/threads/{thread_id}/messages", status_code=status.HTTP_201_CREATED)
+async def agent_post_thread_message(
+    thread_id: uuid.UUID,
+    payload: MessageCreate,
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.CHAT_WRITE)),
+):
+    """Agent posts into one of its own threads (a task thread or its DM thread).
+
+    404 covers both "no such thread" and "not yours" on purpose — an agent must
+    not be able to probe for conversations it has no part in.
+    """
+    from app.models.thread import Message as ThreadMessage
+    from app.services.messaging import answer_clears_awaiting, post_message
+    from app.services.task_lifecycle import apply_ack_handshake
+
+    thread = await thread_agent_may_write_to(session, agent, thread_id)
+    if thread is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Thread nicht gefunden oder nicht deiner.",
+        )
+
+    # A reply must stay inside its own thread. `answer_clears_awaiting` matches
+    # on message id alone, so without this guard a note in the DM thread could
+    # clear the `awaiting` flag of a BLOCKING question on a task thread — the
+    # task would then sit in `waiting` with no open question, and nothing would
+    # ever resume it (the resume path lives on the operator side).
+    if payload.reply_to is not None:
+        parent = await session.get(ThreadMessage, payload.reply_to)
+        if parent is None or parent.thread_id != thread.id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="reply_to zeigt auf eine Nachricht aus einem anderen Thread.",
+            )
+
+    # A task thread reached this way must ACK its dispatch exactly like
+    # /tasks/current/messages does — otherwise an agent that answers via
+    # `--thread` looks unresponsive and the monitor reassigns a task it is
+    # already working on.
+    task = (
+        await session.get(Task, thread.task_id) if thread.task_id is not None else None
+    )
+    if task is not None:
+        apply_ack_handshake(session, task, agent)
+
+    message = await post_message(
+        session,
+        thread_id=thread.id,
+        sender_type="agent",
+        sender_id=agent.id,
+        message_type=payload.message_type,
+        body=payload.body,
+        reply_to=payload.reply_to,
+    )
+
+    # An answer to a pending question clears its awaiting flag, so a question
+    # does not stay "waiting" forever once it has been answered. (The task
+    # endpoint does not do this — the operator path in routers/tasks does. Here
+    # the agent may be answering in a thread nobody else will touch.)
+    if payload.reply_to is not None:
+        await answer_clears_awaiting(session, message)
+        await session.commit()
+
     logger.info(
-        "Message: %s posts on task %s (type=%s, status=%s)",
-        agent.name, current_task.id, payload.message_type, current_task.status,
+        "Message: %s posts on thread %s (kind=%s, type=%s)",
+        agent.name, thread.id, thread.kind, payload.message_type,
     )
     return MessageResponse(
         message_id=message.id,
         thread_id=thread.id,
-        your_status=current_task.status,
+        # Same vocabulary as the task endpoint: the TASK status, or "no_task"
+        # when the thread has none (a DM). Never the agent's own status — that
+        # would be a second vocabulary in one field.
+        your_status=(task.status if task is not None else "no_task"),
     )
 
 

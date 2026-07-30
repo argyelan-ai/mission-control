@@ -16,6 +16,7 @@ from app.models.agent import Agent, AgentMetrics
 from app.models.task import Task
 from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
+from app.services import thread_scope
 from app.services.sse import make_sse_response
 from app.utils import utcnow
 from app.services.template_renderer import render_all_agent_files, render_agent_file, build_agent_context
@@ -2525,50 +2526,12 @@ async def _upsert_cursor(
     await session.execute(stmt)
 
 
-# Task statuses whose task-thread messages are eligible for delivery — mirror
-# the comment path's active set so the message and comment views stay aligned.
-# `waiting` MUST be in this list (live pilot finding 2026-07-20): a task
-# parked on a blocking ask is the one state that exists BECAUSE a message
-# (the answer) is expected — without it, anything posted to the thread while
-# the task waits (status updates, "moment, noch was" operator notes, the
-# answer itself if the resume ever decouples from posting) is silently
-# withheld from the agent until the status flips.
-_MESSAGE_ACTIVE_STATUSES = ["in_progress", "inbox", "review", "blocked", "done", "user_test", "waiting"]
-
-
-async def _message_threads_for_agent(agent: Agent, session: AsyncSession) -> list:
-    """Threads whose new messages this agent should receive.
-
-    W1 (Interaction Model 2.0): only the per-task Thread(kind="task") of the
-    agent's active tasks. Side threads / DMs arrive in a later wave.
-    """
-    from app.models.thread import Thread
-
-    active_res = await session.exec(
-        select(Task).where(
-            Task.assigned_agent_id == agent.id,
-            Task.status.in_(_MESSAGE_ACTIVE_STATUSES),  # type: ignore[union-attr]
-        )
-    )
-    tasks_by_thread = {
-        t.thread_id: t for t in active_res.all() if t.thread_id is not None
-    }
-    # DM-Thread des Agenten (Mark <-> Agent, ohne Task-Bezug). Zweiter
-    # Tupel-Eintrag ist None: kein Task, also auch kein done/failed-Fast-Forward
-    # — bei einem DM gibt es keine "abgeschlossene Historie", die man
-    # ueberspringen duerfte.
-    dm_res = await session.exec(
-        select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
-    )
-    dm_pairs = [(th, None) for th in dm_res.all()]
-    if not tasks_by_thread:
-        return dm_pairs
-    threads_res = await session.exec(
-        select(Thread).where(Thread.id.in_(tasks_by_thread.keys()))  # type: ignore[union-attr]
-    )
-    # (thread, task) pairs — _collect_new_messages braucht den Task-Status
-    # fuer die Erst-Cursor-Initialisierung (fast-forward bei done/failed).
-    return [(th, tasks_by_thread[th.id]) for th in threads_res.all()] + dm_pairs
+# The delivery scope moved to services/thread_scope so the REPLY path can be
+# authorised by the very same rule (an agent may answer exactly where it may
+# listen). These names stay as aliases — imports and tests elsewhere use them,
+# and re-binding beats hand-copying the rule into a second place.
+_MESSAGE_ACTIVE_STATUSES = thread_scope.MESSAGE_ACTIVE_STATUSES
+_message_threads_for_agent = thread_scope.message_threads_for_agent
 
 
 async def _get_or_create_thread_cursor(
