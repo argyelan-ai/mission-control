@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Activity, AlertTriangle, Clock, Heart } from "lucide-react";
@@ -62,6 +63,8 @@ function DayTimeline({
   runningJobs: Set<string>;
   onJobSelect: (id: string) => void;
 }) {
+  const t = useTranslations("schedule");
+  const locale = useLocale();
   const containerRef = useRef<HTMLDivElement>(null);
   const timedJobs = jobs.filter(
     (j) =>
@@ -82,8 +85,8 @@ function DayTimeline({
         style={{ borderColor: C.border }}
       >
         <p className="text-sm" style={{ color: C.textSecondary }}>
-          Today —{" "}
-          {new Date().toLocaleDateString("en-GB", {
+          {t("today")} —{" "}
+          {new Date().toLocaleDateString(locale === "de" ? "de-CH" : "en-GB", {
             weekday: "long",
             day: "numeric",
             month: "long",
@@ -171,7 +174,8 @@ function DayTimeline({
 
 // ── Week Calendar ─────────────────────────────────────────────────────────────
 
-const WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Message keys in the schedule.* namespace — t() at the render site.
+const WEEKDAY_LABEL_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"];
 
 function jobRunsOnDay(job: ScheduledJob, dayIndex: number): boolean {
   if (!job.enabled) return false;
@@ -192,6 +196,8 @@ function WeekCalendar({
   runningJobs: Set<string>;
   onJobSelect: (id: string) => void;
 }) {
+  const t = useTranslations("schedule");
+  const locale = useLocale();
   const today = new Date();
   const todayDow = (today.getDay() + 6) % 7;
   const weekStart = new Date(today);
@@ -207,14 +213,14 @@ function WeekCalendar({
         style={{ borderColor: C.border }}
       >
         <p className="text-sm" style={{ color: C.textSecondary }}>
-          This week —{" "}
-          {weekStart.toLocaleDateString("en-GB", {
+          {t("thisWeek")} —{" "}
+          {weekStart.toLocaleDateString(locale === "de" ? "de-CH" : "en-GB", {
             day: "numeric",
             month: "short",
           })}{" "}
-          to{" "}
+          {t("weekTo")}{" "}
           {new Date(weekStart.getTime() + 6 * 86400000).toLocaleDateString(
-            "en-GB",
+            locale === "de" ? "de-CH" : "en-GB",
             { day: "numeric", month: "short" }
           )}
         </p>
@@ -224,7 +230,8 @@ function WeekCalendar({
           className="grid grid-cols-7 gap-px min-h-full min-w-[560px]"
           style={{ background: C.borderSubtle }}
         >
-          {WEEKDAY_LABELS.map((label, dayIdx) => {
+          {WEEKDAY_LABEL_KEYS.map((labelKey, dayIdx) => {
+            const label = t(labelKey);
             const dayDate = new Date(weekStart.getTime() + dayIdx * 86400000);
             const isToday = dayIdx === todayDow;
             const dayJobs = timedJobs
@@ -306,6 +313,7 @@ function WeekCalendar({
 // ── Health Tab ────────────────────────────────────────────────────────────────
 
 function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
+  const t = useTranslations("schedule");
   const unreliable = useMemo(() => {
     return [...jobs]
       .filter(
@@ -323,13 +331,13 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
     <div className="flex flex-col gap-4 px-6 py-5 overflow-y-auto">
       <ScheduleHeatmap
         data={[]}
-        title="Job Activity (30 days)"
+        title={t("jobActivity30d")}
       />
       <p
         className="text-[11px] -mt-2"
         style={{ color: C.textMuted }}
       >
-        Select a job for detailed heatmap data.
+        {t("selectJobHeatmap")}
       </p>
 
       <GlassCard className="p-5">
@@ -342,7 +350,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
             className="text-sm font-medium"
             style={{ color: C.textPrimary }}
           >
-            Top unreliable jobs
+            {t("topUnreliable")}
           </h3>
         </div>
         {unreliable.length === 0 ? (
@@ -350,7 +358,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
             className="text-xs py-6 text-center"
             style={{ color: C.textMuted }}
           >
-            All jobs healthy — no errors detected.
+            {t("allHealthy")}
           </p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -383,7 +391,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                       className="text-[10px] mt-0.5"
                       style={{ color: C.textMuted }}
                     >
-                      Last run {timeAgo(j.last_run_at)}
+                      {t("lastRun", { ago: timeAgo(j.last_run_at) })}
                     </div>
                   )}
                 </div>
@@ -394,7 +402,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                     color: C.error,
                   }}
                 >
-                  {j.consecutive_failures ?? 0}× errors
+                  {t("errorsCount", { count: j.consecutive_failures ?? 0 })}
                 </div>
               </div>
             ))}
@@ -408,6 +416,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function SchedulePage() {
+  const t = useTranslations("schedule");
   const qc = useQueryClient();
   const activeBoardId = useAppStore((s) => s.activeBoardId);
   const [activeTab, setActiveTab] = useState<Tab>("overview");
@@ -531,10 +540,10 @@ export default function SchedulePage() {
   };
 
   const tabs: { id: Tab; label: string; icon: typeof Activity }[] = [
-    { id: "overview", label: "Overview", icon: Activity },
-    { id: "day", label: "Today", icon: Clock },
-    { id: "week", label: "Week", icon: Clock },
-    { id: "health", label: "Health", icon: Heart },
+    { id: "overview", label: t("tabOverview"), icon: Activity },
+    { id: "day", label: t("today"), icon: Clock },
+    { id: "week", label: t("tabWeek"), icon: Clock },
+    { id: "health", label: t("tabHealth"), icon: Heart },
   ];
 
   return (
@@ -549,12 +558,12 @@ export default function SchedulePage() {
             style={{ color: C.accent }}
           />
           <div>
-            <div className="label-sys mb-1">Operations · Schedule</div>
+            <div className="label-sys mb-1">{t("operationsSchedule")}</div>
             <h1
               className="display text-xl font-semibold"
               style={{ color: C.textPrimary }}
             >
-              Schedule
+              {t("title")}
             </h1>
           </div>
           {/* tab-strip: mobile horizontal scroll + edge-fade (MOBILE-SPEC M17) */}
@@ -662,9 +671,9 @@ export default function SchedulePage() {
         {/* v3 dialogs — replace native confirm()/prompt() (panel register rule 3) */}
         <ConfirmDialog
           open={deleteQueue.length > 0}
-          title="Delete job"
-          body={deleteQueue[0] ? `Delete "${deleteQueue[0].name}"?` : undefined}
-          confirmLabel="Delete"
+          title={t("deleteJob")}
+          body={deleteQueue[0] ? t("deleteJobConfirm", { name: deleteQueue[0].name }) : undefined}
+          confirmLabel={t("delete")}
           loading={deleteMutation.isPending}
           onConfirm={() => {
             const job = deleteQueue[0];
@@ -677,17 +686,17 @@ export default function SchedulePage() {
         />
         <PromptDialog
           open={snoozeTargetId !== null}
-          title="Snooze job"
-          inputLabel="Snooze for how many hours?"
+          title={t("snoozeJob")}
+          inputLabel={t("snoozeHours")}
           placeholder="1"
           defaultValue="1"
-          confirmLabel="Snooze"
+          confirmLabel={t("snooze")}
           danger={false}
           loading={snoozeMutation.isPending}
           validate={(value) => {
             const hours = Number(value);
             if (!Number.isFinite(hours) || hours <= 0)
-              return "Enter a number greater than 0.";
+              return t("snoozeValidation");
             return null;
           }}
           onConfirm={(value) => {
