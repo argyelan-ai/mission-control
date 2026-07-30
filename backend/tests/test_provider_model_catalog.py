@@ -905,6 +905,34 @@ async def test_bound_flag_reflects_existing_runtime_rows(session, monkeypatch, f
     assert anthropic["new_count"] == 1
 
 
+
+@pytest.mark.asyncio
+async def test_bound_matches_provider_prefixed_runtime_rows(session, monkeypatch, fake_redis, tmp_path):
+    """kimi-cloud carries "kimi-code/k3" while the catalog reports bare "k3".
+
+    The prefix is a provider namespace, not part of the model — a plain string
+    compare called every kimi model "new" although the runtime was bound the
+    whole time (live-gate find, 2026-07-30).
+    """
+    use_fake_redis(monkeypatch, fake_redis)
+    monkeypatch.setattr(model_catalog.settings, "home_host", str(tmp_path))
+    write_kimi_config(tmp_path)  # 4 models from CLI config, no token needed
+    mock_httpx(monkeypatch, lambda r: httpx.Response(200, json={"data": []}))
+    await add_runtime(
+        session, slug="kimi-cloud", runtime_type="kimi",
+        endpoint="https://api.kimi.com/coding/v1",
+        model_identifier="kimi-code/k3",
+    )
+
+    providers = await model_catalog.build_catalog(session)
+    kimi = next(p for p in providers if p["protocol"] == "kimi")
+    by_id = {m["id"]: m for m in kimi["models"]}
+    assert by_id["k3"]["bound"] is True, (
+        "prefixed runtime row kimi-code/k3 must bind the bare catalog id k3"
+    )
+    assert by_id["k3-256k"]["bound"] is False
+
+
 @pytest.mark.asyncio
 async def test_disabled_runtimes_do_not_create_providers(session):
     await add_runtime(
