@@ -38,5 +38,23 @@
     "languageHint": "Sprache der Oberfläche. Gilt sofort.",
     "languageEn": "English",
     "languageDe": "Deutsch"
+  },
+  "home": {
+    "consoleOverview": "Konsole · Übersicht",
+    "greetingNight": "Gute Nacht",
+    "greetingMorning": "Guten Morgen",
+    "greetingAfternoon": "Guten Tag",
+    "greetingEvening": "Guten Abend",
+    "noBoardSelected": "Kein Board ausgewählt",
+    "contextAlert": "{name}: Kontext {pct}%",
+    "systemHealth": "Systemstatus",
+    "checks": "{count} Checks",
+    "events": "Events",
+    "all": "Alle",
+    "showAllActivity": "Alle Aktivitäten anzeigen",
+    "activityHistory": "Aktivitätsverlauf",
+    "activityHistoryTitle": "Aktivitätsverlauf",
+    "close": "Schliessen",
+    "noActivity": "Keine Aktivität"
   }
 }
