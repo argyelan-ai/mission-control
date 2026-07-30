@@ -3,6 +3,7 @@
 import { useQuery, useQueries, useQueryClient, useMutation } from "@tanstack/react-query";
 import AppShell from "@/components/layout/AppShell";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { CheckCircle, Inbox, Clock } from "lucide-react";
 import { api } from "@/lib/api";
 import { useApprovalStream } from "@/lib/sse";
@@ -16,6 +17,7 @@ import { Pill } from "@/components/shared/Pill";
 import type { Approval, Task, Agent } from "@/lib/types";
 
 export default function InboxPage() {
+  const t = useTranslations("inbox");
   const qc = useQueryClient();
   const { activeBoardId } = useAppStore();
 
@@ -66,9 +68,9 @@ export default function InboxPage() {
       qc.invalidateQueries({ queryKey: ["approvals"] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["review-tasks"] });
-      notify.success(status === "approved" ? "Approved" : "Rejected");
+      notify.success(status === "approved" ? t("approvedNotify") : t("rejectedNotify"));
     },
-    onError: () => notify.error("Failed to resolve approval"),
+    onError: () => notify.error(t("resolveFailed")),
   });
 
   const reviewMutation = useMutation({
@@ -85,9 +87,9 @@ export default function InboxPage() {
       qc.invalidateQueries({ queryKey: ["review-tasks"] });
       qc.invalidateQueries({ queryKey: ["tasks"] });
       qc.invalidateQueries({ queryKey: ["pipeline"] });
-      notify.success("Review decision saved");
+      notify.success(t("reviewSaved"));
     },
-    onError: () => notify.error("Failed to save review decision"),
+    onError: () => notify.error(t("reviewSaveFailed")),
   });
 
   // ── Derived Data ─────────────────────────────────────────────────────────────
@@ -114,9 +116,9 @@ export default function InboxPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <div className="label-sys mb-2">Approvals · Inbox</div>
+          <div className="label-sys mb-2">{t("approvalsInbox")}</div>
           <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
-            Inbox
+            {t("title")}
           </h1>
           {totalCount > 0 && (
             <p className="text-[13px] mt-1">
@@ -128,13 +130,13 @@ export default function InboxPage() {
               >
                 {totalCount}
               </span>
-              <span className="text-[var(--color-text-secondary)]"> pending</span>
+              <span className="text-[var(--color-text-secondary)]"> {t("pending")}</span>
             </p>
           )}
         </div>
         {totalCount > 0 && (
           <Pill color={C.warning} size="md">
-            {totalCount} open
+            {t("openCount", { count: totalCount })}
           </Pill>
         )}
       </div>
@@ -147,7 +149,7 @@ export default function InboxPage() {
               <Inbox size={14} />
             </span>
             <span className="text-[11px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
-              Tasks for review ({reviews.length})
+              {t("tasksForReview", { count: reviews.length })}
             </span>
           </div>
           <div className="flex flex-col gap-3">
@@ -178,7 +180,7 @@ export default function InboxPage() {
               <Clock size={14} />
             </span>
             <span className="text-[11px] uppercase tracking-wider font-semibold text-[var(--color-text-muted)]">
-              Approvals ({pendingApprovals.length})
+              {t("approvalsCount", { count: pendingApprovals.length })}
             </span>
           </div>
           <div className="flex flex-col gap-3">
@@ -207,9 +209,7 @@ export default function InboxPage() {
           <GlassCard className="px-4 py-3 flex items-center gap-2.5">
             <span className="text-base">&#9203;</span>
             <span className="text-[12px] text-[var(--color-text-muted)]">
-              {waitingForReview === 1
-                ? "1 task still awaiting review"
-                : `${waitingForReview} tasks still awaiting review`}
+              {t("awaitingReview", { count: waitingForReview })}
             </span>
           </GlassCard>
         </motion.div>
@@ -238,10 +238,10 @@ export default function InboxPage() {
             </div>
             <div>
               <p className="text-sm font-medium text-[var(--color-text-secondary)]">
-                All clear
+                {t("allClear")}
               </p>
               <p className="text-[12px] text-[var(--color-text-muted)] mt-1">
-                No open approvals or reviews
+                {t("noOpenItems")}
               </p>
             </div>
           </GlassCard>

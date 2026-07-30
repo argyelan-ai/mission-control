@@ -5,6 +5,7 @@
  */
 
 import { useMemo } from "react";
+import { useTranslations } from "next-intl";
 import { Plus, Activity, Zap, Clock, AlertTriangle } from "lucide-react";
 import { motion } from "framer-motion";
 import { KPICard } from "@/components/shared/KPICard";
@@ -16,12 +17,14 @@ interface ScheduleHeaderProps {
   onNewJob: () => void;
 }
 
-function formatNextRun(iso: string | null): string {
+type Translate = (key: string, values?: Record<string, string | number>) => string;
+
+function formatNextRun(iso: string | null, t: Translate): string {
   if (!iso) return "—";
   const target = new Date(iso);
   const now = new Date();
   const diffMs = target.getTime() - now.getTime();
-  if (diffMs <= 0) return "now";
+  if (diffMs <= 0) return t("nrNow");
 
   const diffMin = Math.floor(diffMs / 60000);
   const sameDay =
@@ -31,8 +34,8 @@ function formatNextRun(iso: string | null): string {
   const hh = String(target.getHours()).padStart(2, "0");
   const mm = String(target.getMinutes()).padStart(2, "0");
 
-  if (diffMin < 60) return `in ${diffMin}m`;
-  if (sameDay) return `today ${hh}:${mm}`;
+  if (diffMin < 60) return t("inM", { count: diffMin });
+  if (sameDay) return t("todayAt", { time: `${hh}:${mm}` });
 
   const tomorrow = new Date(now);
   tomorrow.setDate(tomorrow.getDate() + 1);
@@ -40,10 +43,10 @@ function formatNextRun(iso: string | null): string {
     target.getFullYear() === tomorrow.getFullYear() &&
     target.getMonth() === tomorrow.getMonth() &&
     target.getDate() === tomorrow.getDate();
-  if (isTomorrow) return `tomorrow ${hh}:${mm}`;
+  if (isTomorrow) return t("tomorrowAt", { time: `${hh}:${mm}` });
 
   const diffH = Math.round(diffMin / 60);
-  if (diffH < 48) return `in ${diffH}h`;
+  if (diffH < 48) return t("inH", { count: diffH });
 
   const dd = String(target.getDate()).padStart(2, "0");
   const mo = String(target.getMonth() + 1).padStart(2, "0");
@@ -51,6 +54,7 @@ function formatNextRun(iso: string | null): string {
 }
 
 export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
+  const t = useTranslations("schedule");
   const stats = useMemo(() => {
     const enabled = jobs.filter((j) => j.enabled);
     const running = jobs.filter(
@@ -75,10 +79,10 @@ export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
     return {
       enabled: enabled.length,
       running: running.length,
-      nextRun: formatNextRun(nextRun),
+      nextRun: formatNextRun(nextRun, t),
       failed: failed7d.length,
     };
-  }, [jobs]);
+  }, [jobs, t]);
 
   return (
     <motion.div
@@ -88,7 +92,7 @@ export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
     >
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <p className="text-sm" style={{ color: C.textMuted }}>
-          Scheduled jobs — cron, intervals, custom weekdays.
+          {t("headerHint")}
         </p>
         <button
           type="button"
@@ -100,25 +104,25 @@ export function ScheduleHeader({ jobs, onNewJob }: ScheduleHeaderProps) {
           }}
         >
           <Plus size={16} />
-          New job
+          {t("newJob")}
         </button>
       </div>
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <KPICard
-          label="Active Jobs"
+          label={t("activeJobs")}
           value={stats.enabled}
           icon={Activity}
         />
         <KPICard
-          label="Running now"
+          label={t("runningNow")}
           value={stats.running}
           icon={Zap}
           trend={stats.running > 0 ? "up" : undefined}
         />
-        <KPICard label="Next run" value={stats.nextRun} icon={Clock} />
+        <KPICard label={t("nextRun")} value={stats.nextRun} icon={Clock} />
         <KPICard
-          label="Errors (7d)"
+          label={t("errors7d")}
           value={stats.failed}
           icon={AlertTriangle}
           trend={stats.failed > 0 ? "down" : undefined}

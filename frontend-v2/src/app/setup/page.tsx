@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { Check, ExternalLink, Loader2, Rocket } from "lucide-react";
 import { AUTH_TOKEN_KEY, api } from "@/lib/api";
@@ -35,6 +36,7 @@ const inputStyle = {
 } as const;
 
 export default function SetupWizardPage() {
+  const t = useTranslations("setup");
   const router = useRouter();
   const [step, setStep] = useState<2 | 3 | 4>(2);
 
@@ -87,7 +89,7 @@ export default function SetupWizardPage() {
       setKeySaved(true);
       setStep(3);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to save.");
+      setError(err instanceof Error ? err.message : t("saveFailed"));
     } finally {
       setSaving(false);
     }
@@ -104,7 +106,7 @@ export default function SetupWizardPage() {
       setGithubSaved(true);
       setStep(4);
     } catch (err) {
-      setGithubError(err instanceof Error ? err.message : "Failed to save.");
+      setGithubError(err instanceof Error ? err.message : t("saveFailed"));
     } finally {
       setGithubSaving(false);
     }
@@ -126,17 +128,17 @@ export default function SetupWizardPage() {
       }
       setSeeded(true);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create demo board.");
+      setError(err instanceof Error ? err.message : t("demoBoardFailed"));
     } finally {
       setSeeding(false);
     }
   }
 
   const steps = [
-    { n: 1, label: "Admin", done: true },
-    { n: 2, label: "Provider Key", done: keySaved || step > 2 },
-    { n: 3, label: "Connect GitHub", done: githubSaved || githubSkipped || step > 3 },
-    { n: 4, label: "Get Started", done: false },
+    { n: 1, label: t("stepAdmin"), done: true },
+    { n: 2, label: t("stepProviderKey"), done: keySaved || step > 2 },
+    { n: 3, label: t("stepGithub"), done: githubSaved || githubSkipped || step > 3 },
+    { n: 4, label: t("stepGetStarted"), done: false },
   ];
 
   return (
@@ -191,16 +193,15 @@ export default function SetupWizardPage() {
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  Connect an LLM provider
+                  {t("connectProvider")}
                 </h2>
                 <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-                  Agents need a model. The key is stored encrypted in the
-                  secrets vault — changeable later under Settings → API Keys.
+                  {t("connectProviderHint")}
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <label className="label-sys" htmlFor="provider">Provider</label>
+                <label className="label-sys" htmlFor="provider">{t("provider")}</label>
                 <select
                   id="provider"
                   value={selected}
@@ -222,7 +223,7 @@ export default function SetupWizardPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="label-sys" htmlFor="key">Key</label>
+                <label className="label-sys" htmlFor="key">{t("keyLabel")}</label>
                 <input
                   id="key"
                   type="password"
@@ -257,14 +258,14 @@ export default function SetupWizardPage() {
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {saving && <Loader2 className="animate-spin" size={14} />}
-                  Save & continue
+                  {t("saveContinue")}
                 </button>
                 <button
                   onClick={() => setStep(3)}
                   className="text-sm px-3 py-2.5 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  Skip
+                  {t("skip")}
                 </button>
               </div>
             </>
@@ -274,17 +275,15 @@ export default function SetupWizardPage() {
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  Connect GitHub
+                  {t("stepGithub")}
                 </h2>
                 <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-                  Lets agents create a private repo per project, branch per task, and
-                  open pull requests on their own. Changeable later under Settings →
-                  GitHub.
+                  {t("githubHint")}
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <label className="label-sys" htmlFor="gh-owner">Owner</label>
+                <label className="label-sys" htmlFor="gh-owner">{t("owner")}</label>
                 <input
                   id="gh-owner"
                   value={githubOwner}
@@ -298,7 +297,7 @@ export default function SetupWizardPage() {
               </div>
 
               <div className="space-y-1.5">
-                <label className="label-sys" htmlFor="gh-token">Personal access token</label>
+                <label className="label-sys" htmlFor="gh-token">{t("pat")}</label>
                 <input
                   id="gh-token"
                   type="password"
@@ -333,18 +332,18 @@ export default function SetupWizardPage() {
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
                 >
                   {githubSaving && <Loader2 className="animate-spin" size={14} />}
-                  Save & continue
+                  {t("saveContinue")}
                 </button>
                 <button
                   onClick={() => { setGithubSkipped(true); setStep(4); }}
                   className="text-sm px-3 py-2.5 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  Skip for now
+                  {t("skipForNow")}
                 </button>
               </div>
               <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                You can connect later in Settings → GitHub.
+                {t("connectLater")}
               </p>
             </>
           )}
@@ -353,11 +352,10 @@ export default function SetupWizardPage() {
             <>
               <div>
                 <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  Ready to get started
+                  {t("readyToStart")}
                 </h2>
                 <p className="text-sm mt-1" style={{ color: "var(--color-text-secondary)" }}>
-                  Optional: a demo board shows the pipeline with sample tasks
-                  before your first agent is provisioned.
+                  {t("readyHint")}
                 </p>
               </div>
 
@@ -374,10 +372,10 @@ export default function SetupWizardPage() {
                 {seeding && <Loader2 className="animate-spin" size={14} />}
                 {seeded ? (
                   <>
-                    <Check size={14} /> Demo board created
+                    <Check size={14} /> {t("demoBoardCreated")}
                   </>
                 ) : (
-                  "Create demo board (8 sample tasks)"
+                  t("createDemoBoard")
                 )}
               </button>
 
@@ -392,7 +390,7 @@ export default function SetupWizardPage() {
                   background: "var(--color-bg-surface)",
                 }}
               >
-                Guide: provision your first agent <ExternalLink size={13} />
+                {t("firstAgentGuide")} <ExternalLink size={13} />
               </a>
 
               {error && (
@@ -413,14 +411,14 @@ export default function SetupWizardPage() {
                 className="w-full text-[var(--color-on-accent)] font-medium text-sm rounded-lg px-4 py-2.5 flex items-center justify-center gap-2 cursor-pointer transition-all duration-200"
                 style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
               >
-                <Rocket size={14} /> Go to command center
+                <Rocket size={14} /> {t("goToCommandCenter")}
               </button>
             </>
           )}
         </div>
 
         <p className="text-center text-xs mt-4" style={{ color: "var(--color-text-muted)" }}>
-          Everything here can be changed later under Settings.
+          {t("changeableLater")}
         </p>
       </motion.div>
     </main>
