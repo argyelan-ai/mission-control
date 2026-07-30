@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     jarvis_text_model: str = "gpt-4o-mini"
     # Transcription-Modell fuer Telegram-Sprachnotizen (ogg/opus direkt).
     jarvis_stt_model: str = "gpt-4o-mini-transcribe"
+    # Lokaler/eigener STT-Endpoint (OpenAI-kompatibel, z.B. Parakeet v3 via
+    # scripts/stt-server auf dem Host). Gesetzt -> Sprachnachrichten werden
+    # HIER transkribiert statt in der OpenAI-Cloud, und es ist KEIN
+    # openai_api_key noetig. Beispiel: http://host.docker.internal:8585/v1
+    stt_base_url: str = ""
+    # Modellname fuer den stt_base_url-Endpoint (der Server entscheidet, was
+    # er damit tut; leer -> jarvis_stt_model). Nur relevant mit stt_base_url.
+    stt_model: str = ""
     # Jarvis-Agent PBKDF2-Token — der Brain fuehrt Tool-Calls ueber den
     # agent-scoped API-Pfad aus (kein Auth-Bypass), derselbe Token wie der
     # voice_worker. Leer → Inbound bleibt inaktiv.

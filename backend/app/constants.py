@@ -19,7 +19,7 @@ REFLECTION_REQUIRED_FIELDS: list[str] = [
     "Was wurde gemacht",         # What was done (fact)
     "Was hat funktioniert",      # What worked (success signals)
     "Was war unklar",            # What was unclear / gaps
-    "Lesson fuer Agent-Memory",  # Lesson — what should be different next time
+    "Lesson für Agent-Memory",   # Lesson — what should be different next time
 ]
 
 # Minimum character count for a reflection comment. Below this we reject
@@ -40,9 +40,9 @@ REFLECTION_CHARTER: list[str] = [
     "Ehrend, nicht besserwisserisch — verweise auf andere Agents als "
     "Co-Kollegen. Keine Blame-Kultur.",
     "Team-Artefakt, nicht Tagebuch — die Lesson muss ein Kollege in drei "
-    "Monaten lesen und anwenden koennen.",
-    "Luecken benennen — wenn etwas unklar bleibt, dann explizit im "
-    "'Was unklar'-Feld. Keine plausibel klingenden Fuellmaterial-Saetze.",
-    "Persoenliche Stimme, gemeinsame Struktur — alle halten sich an die "
+    "Monaten lesen und anwenden können.",
+    "Lücken benennen — wenn etwas unklar bleibt, dann explizit im "
+    "'Was unklar'-Feld. Keine plausibel klingenden Füllmaterial-Sätze.",
+    "Persönliche Stimme, gemeinsame Struktur — alle halten sich an die "
     "vier Felder, aber jeder klingt wie sich selbst.",
 ]

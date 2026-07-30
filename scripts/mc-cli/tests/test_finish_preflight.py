@@ -438,7 +438,7 @@ def test_finish_normalizes_english_headers_before_post():
     post = next(c for c in client.calls if c["method"] == "POST")
     content = post["body"]["content"]
     assert "## Was wurde gemacht" in content
-    assert "## Lesson fuer Agent-Memory" in content
+    assert "## Lesson für Agent-Memory" in content
     assert "What was done" not in content
 
 
