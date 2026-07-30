@@ -259,9 +259,15 @@ extract_turn_error() {
 }
 
 # Hash der letzten 20 sichtbaren Zeilen (fuer activity-stagnation detection).
-# Debian-base hat kein `shasum` (BSD/macOS-spezifisch) — sha1sum ist portable
-# und auf jeder Linux-Distro vorhanden. Gleicher Output-Format ($hash  -).
+# Portabel ueber beide Welten: Debian-Container haben nur `sha1sum`, macOS-Hosts
+# (Boss/kimi-host) nur `shasum`. Ein fehlendes Kommando hier ist KEIN
+# Schoenheitsfehler: unter `set -e` beendet es poll.sh, der Entrypoint startet
+# neu, und der frische State re-dispatcht den aktiven Task mit /clear — alle
+# ~14s (Vorfall 2026-07-30, Boss' /clear-Spam). Gleicher Output ($hash  -).
+_turn_sha1() {
+    if command -v sha1sum >/dev/null 2>&1; then sha1sum; else shasum -a 1; fi
+}
 turn_activity_hash() {
     local session="${1:?session name required}"
-    tmux capture-pane -t "${session}:0" -p 2>/dev/null | tail -20 | sha1sum | awk '{print $1}'
+    tmux capture-pane -t "${session}:0" -p 2>/dev/null | tail -20 | _turn_sha1 | awk '{print $1}'
 }
