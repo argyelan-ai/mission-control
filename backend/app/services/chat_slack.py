@@ -250,6 +250,62 @@ class SlackFaces:
         return face
 
 
+# ── Markdown -> mrkdwn ────────────────────────────────────────────────────
+#
+# Agents write Markdown — MC's whole comment culture is Markdown, and that is
+# correct. Slack renders its own dialect (mrkdwn): single *bold*, _italic_,
+# <url|label> links, and it shows standard Markdown literally. The operator
+# saw every heading of Boss's replies wrapped in raw asterisks (2026-07-30).
+# The translation is THIS adapter's job (ADR-072: channel quirks live in the
+# channel module) — teaching thirteen agents a per-channel dialect would be
+# the drift machine all over again.
+#
+# Code is the sacred exception: anything inside backticks or fences passes
+# through untouched — a transformed code sample is worse than an ugly one.
+
+_CODE_SPLIT = re.compile(r"(```.*?```|`[^`\n]*`)", re.S)
+_MD_BOLD = re.compile(r"\*\*(.+?)\*\*", re.S)
+_MD_BOLD_U = re.compile(r"__(.+?)__", re.S)
+_MD_ITALIC = re.compile(r"(?<![*\w])\*([^*\n]+?)\*(?![*\w])")
+_MD_STRIKE = re.compile(r"~~(.+?)~~", re.S)
+_MD_HEADING = re.compile(r"^#{1,6}\s+(.+?)\s*$", re.M)
+_MD_LINK = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+# Placeholder that survives the italic pass: `*` may not appear in it, and it
+# must be unlikely in real prose. NUL is both.
+_BOLD_TOKEN = "\x00B\x00"
+
+
+def _prose_to_mrkdwn(text: str) -> str:
+    # Bold first, via a token: `**laut**` must not be re-read as italic once
+    # its asterisks are single. Then italic, then the token resolves to
+    # Slack's single-asterisk bold.
+    text = _MD_BOLD.sub(lambda m: f"{_BOLD_TOKEN}{m.group(1)}{_BOLD_TOKEN}", text)
+    text = _MD_BOLD_U.sub(lambda m: f"{_BOLD_TOKEN}{m.group(1)}{_BOLD_TOKEN}", text)
+    text = _MD_ITALIC.sub(lambda m: f"_{m.group(1)}_", text)
+    text = text.replace(_BOLD_TOKEN, "*")
+    text = _MD_HEADING.sub(lambda m: f"*{m.group(1)}*", text)
+    text = _MD_STRIKE.sub(lambda m: f"~{m.group(1)}~", text)
+    text = _MD_LINK.sub(lambda m: f"<{m.group(2)}|{m.group(1)}>", text)
+    return text
+
+
+def markdown_to_mrkdwn(text: str | None) -> str:
+    """Markdown as agents write it -> mrkdwn as Slack renders it.
+
+    Deliberately narrow: bold, italic, headings, strikethrough, links — the
+    constructs MC's comment format actually uses. Anything exotic passes
+    through unchanged; wrongly transforming is worse than not transforming.
+    """
+    if not text:
+        return ""
+    parts = _CODE_SPLIT.split(text)
+    # Odd indices are the captured code segments — untouchable.
+    return "".join(
+        part if i % 2 else _prose_to_mrkdwn(part) for i, part in enumerate(parts)
+    )
+
+
 # ── Adapter ───────────────────────────────────────────────────────────────
 
 
@@ -421,7 +477,7 @@ class SlackChatAdapter(BaseChatAdapter):
         try:
             result = await self._transport().post_message(
                 channel=channel,
-                text=message.body,
+                text=markdown_to_mrkdwn(message.body),
                 username=username,
                 icon_emoji=icon,
                 thread_ts=(str(room) if room else None),

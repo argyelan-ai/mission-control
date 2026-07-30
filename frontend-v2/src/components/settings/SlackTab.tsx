@@ -27,6 +27,7 @@ const BOT_SCOPES = [
   { scope: "users:read", purpose: "resolve who wrote a message" },
   { scope: "reactions:write", purpose: "acknowledge a task with an emoji" },
   { scope: "files:write", purpose: "upload logs and screenshots" },
+  { scope: "files:read", purpose: "download voice messages for transcription" },
 ];
 
 const SCOPE_LIST = BOT_SCOPES.map((s) => s.scope).join(", ");
@@ -209,7 +210,7 @@ function SetupGuide() {
 
             <GuideStep n={4} title="Add the bot token scopes">
               Under <em>OAuth &amp; Permissions → Bot Token Scopes</em>, add all
-              eleven scopes. Copy them instead of typing them:
+              {" "}{BOT_SCOPES.length} scopes. Copy them instead of typing them:
               <div
                 className="mt-2 rounded-lg p-3 flex items-start gap-3"
                 style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
@@ -244,6 +245,13 @@ function SetupGuide() {
                 posts under the same app name, so the team chat reads like one voice
                 instead of your fleet. It is easy to miss because everything else
                 still works.
+              </p>
+              <p className="text-xs mt-2" style={{ color: STATUS_TEXT.warning }}>
+                After adding or changing scopes, Slack requires a{" "}
+                <strong>reinstall</strong>: a banner appears at the top of the OAuth
+                page — click <em>Reinstall to workspace</em>. Until then the new
+                scope silently does not apply (voice messages, for example, come
+                back as a login page instead of audio).
               </p>
             </GuideStep>
 
