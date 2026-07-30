@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 interface VaultEmptyStateProps {
   query?: string;
   scope?: string;
@@ -7,6 +9,7 @@ interface VaultEmptyStateProps {
 }
 
 export function VaultEmptyState({ query, scope, isError }: VaultEmptyStateProps) {
+  const t = useTranslations("vault");
   return (
     <div
       className="flex flex-col items-center justify-center py-24 px-6 text-center"
@@ -22,20 +25,22 @@ export function VaultEmptyState({ query, scope, isError }: VaultEmptyStateProps)
         style={{ color: "var(--color-text-secondary)" }}
       >
         {isError
-          ? "vault unreachable"
+          ? t("vaultUnreachable")
           : query
-          ? `no notes matching "${query}"`
-          : `no notes${scope ? ` in ${scope}` : ""}`}
+          ? t("noNotesMatching", { query })
+          : scope
+          ? t("noNotesInScope", { scope })
+          : t("noNotes")}
       </div>
       <div
         className="text-sm max-w-xs"
         style={{ color: "var(--color-text-muted)" }}
       >
         {isError
-          ? "The vault index may still be building. Check backend logs."
+          ? t("vaultUnreachableHint")
           : query
-          ? "Try a broader search term or remove filters."
-          : "Notes added by agents will appear here."}
+          ? t("noNotesMatchingHint")
+          : t("noNotesHint")}
       </div>
     </div>
   );

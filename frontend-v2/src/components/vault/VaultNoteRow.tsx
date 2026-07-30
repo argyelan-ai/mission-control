@@ -23,6 +23,7 @@
  */
 
 import { useMemo } from "react";
+import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import type { VaultNote } from "@/lib/types";
 import { colorForAgent } from "./agentColors";
@@ -272,7 +273,11 @@ interface VaultNoteRowProps {
 }
 
 export function VaultNoteRow({ note, selected, onSelect }: VaultNoteRowProps) {
-  const title = useMemo(() => titleFromNote(note), [note]);
+  const t = useTranslations("vault");
+  const rawTitle = useMemo(() => titleFromNote(note), [note]);
+  // titleFromNote returns the sentinel "Untitled" for UUID-only stems —
+  // translate it here (the helper stays a pure module function).
+  const title = rawTitle === "Untitled" ? t("untitled") : rawTitle;
   const excerpt = useMemo(() => excerptFromContent(note.content), [note.content]);
   const tags = useMemo(() => parseTags(note.tags), [note.tags]);
   const agentColor = colorForAgent(note.agent);

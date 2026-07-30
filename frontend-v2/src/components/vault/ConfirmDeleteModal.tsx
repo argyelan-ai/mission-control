@@ -14,6 +14,7 @@
  */
 
 import { useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Trash2, X } from "lucide-react";
@@ -38,6 +39,7 @@ export function ConfirmDeleteModal({
   onClose,
   onDeleted,
 }: ConfirmDeleteModalProps) {
+  const t = useTranslations("vault");
   const queryClient = useQueryClient();
   const open = path != null;
 
@@ -103,7 +105,7 @@ export function ConfirmDeleteModal({
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
-            aria-label="Confirm note deletion"
+            aria-label={t("confirmNoteDeletion")}
           >
             {/* Header */}
             <div
@@ -129,7 +131,7 @@ export function ConfirmDeleteModal({
                       color: "var(--color-text-muted)",
                     }}
                   >
-                    Move note to trash
+                    {t("moveToTrash")}
                   </div>
                   <div
                     className="truncate"
@@ -149,7 +151,7 @@ export function ConfirmDeleteModal({
                 type="button"
                 onClick={onClose}
                 disabled={deleteMutation.isPending}
-                aria-label="Cancel"
+                aria-label={t("cancel")}
                 className="shrink-0 rounded p-1"
                 style={{
                   color: "var(--color-text-muted)",
@@ -172,7 +174,7 @@ export function ConfirmDeleteModal({
                   color: "var(--color-text-secondary)",
                 }}
               >
-                The file will be moved to the vault trash
+                {t("trashExplainer1")}{" "}
                 (<code
                   className="font-mono"
                   style={{
@@ -184,9 +186,8 @@ export function ConfirmDeleteModal({
                   }}
                 >
                   ~/.mc/vault/_trash/
-                </code>).
-                The search index and graph update automatically. You can move
-                the file back manually if you need it again.
+                </code>).{" "}
+                {t("trashExplainer2")}
               </p>
 
               {/* Back-refs warning */}
@@ -199,7 +200,7 @@ export function ConfirmDeleteModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  Checking wikilinks…
+                  {t("checkingWikilinks")}
                 </div>
               ) : refCount > 0 ? (
                 <div
@@ -222,9 +223,7 @@ export function ConfirmDeleteModal({
                         marginBottom: "3px",
                       }}
                     >
-                      {refCount === 1
-                        ? "1 other note links here"
-                        : `${refCount} other notes link here`}
+                      {t("backrefsCount", { count: refCount })}
                     </div>
                     <ul
                       className="space-y-0.5"
@@ -245,7 +244,7 @@ export function ConfirmDeleteModal({
                           className="font-mono"
                           style={{ color: "var(--color-text-muted)", opacity: 0.7 }}
                         >
-                          + {refCount - 4} more
+                          {t("plusMore", { count: refCount - 4 })}
                         </li>
                       )}
                     </ul>
@@ -256,7 +255,7 @@ export function ConfirmDeleteModal({
                         marginTop: "6px",
                       }}
                     >
-                      These wikilinks will point to nothing after deletion.
+                      {t("danglingWarning")}
                     </div>
                   </div>
                 </div>
@@ -269,7 +268,7 @@ export function ConfirmDeleteModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  No wikilinks to this note.
+                  {t("noWikilinks")}
                 </div>
               )}
 
@@ -284,8 +283,8 @@ export function ConfirmDeleteModal({
                     color: STATUS_TEXT.error,
                   }}
                 >
-                  Delete failed:{" "}
-                  {(deleteMutation.error as Error)?.message ?? "Unknown error"}
+                  {t("deleteFailedPrefix")}{" "}
+                  {(deleteMutation.error as Error)?.message ?? t("unknownError")}
                 </div>
               )}
             </div>
@@ -310,7 +309,7 @@ export function ConfirmDeleteModal({
                   opacity: deleteMutation.isPending ? 0.5 : 1,
                 }}
               >
-                Cancel
+                {t("cancel")}
               </button>
               <button
                 type="button"
@@ -334,12 +333,12 @@ export function ConfirmDeleteModal({
                       className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
                       style={{ borderColor: STATUS_TEXT.error, borderTopColor: "transparent" }}
                     />
-                    Deleting…
+                    {t("deleting")}
                   </>
                 ) : (
                   <>
                     <Trash2 size={12} />
-                    Move to trash
+                    {t("moveToTrashShort")}
                   </>
                 )}
               </button>

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
+import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import {
   CheckCircle, XCircle, AlertTriangle, ShieldAlert,
@@ -26,29 +27,30 @@ const INSTALL_ACTION_TYPES = new Set([
 
 // ── Approval Type Config ─────────────────────────────────────────────────────
 
-const APPROVAL_TYPE_CONFIG: Record<string, { label: string; color: string; icon: typeof AlertTriangle }> = {
+// labelKey resolves via t() at the render site (inbox.* namespace).
+const APPROVAL_TYPE_CONFIG: Record<string, { labelKey: string; color: string; icon: typeof AlertTriangle }> = {
   blocker_decision: {
-    label: "Blocker",
+    labelKey: "typeBlocker",
     color: C.error,
     icon: AlertTriangle,
   },
   visual_review: {
-    label: "Visual Review",
+    labelKey: "typeVisualReview",
     color: C.accent,
     icon: ImageIcon,
   },
   dispatch_escalation: {
-    label: "Agent not responding",
+    labelKey: "typeDispatchEscalation",
     color: C.warning,
     icon: AlertTriangle,
   },
   recovery_failed: {
-    label: "Recovery failed",
+    labelKey: "typeRecoveryFailed",
     color: C.error,
     icon: ShieldAlert,
   },
   clarification_question: {
-    label: "Clarification",
+    labelKey: "typeClarification",
     color: C.accent,
     icon: HelpCircle,
   },
@@ -60,13 +62,13 @@ const AUTONOMY_COLORS: Record<string, string> = {
   L3: C.error,
 };
 
-const BLOCKER_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-  missing_info: { label: "Missing info", color: C.warning },
-  technical_problem: { label: "Technical problem", color: C.error },
-  decision_needed: { label: "Decision needed", color: C.accent },
-  permission_needed: { label: "Permission missing", color: C.warning },
-  dependency_blocked: { label: "Dependency", color: C.textMuted },
-  other: { label: "Other", color: C.textMuted },
+const BLOCKER_TYPE_LABELS: Record<string, { labelKey: string; color: string }> = {
+  missing_info: { labelKey: "blockerMissingInfo", color: C.warning },
+  technical_problem: { labelKey: "blockerTechnical", color: C.error },
+  decision_needed: { labelKey: "blockerDecision", color: C.accent },
+  permission_needed: { labelKey: "blockerPermission", color: C.warning },
+  dependency_blocked: { labelKey: "blockerDependency", color: C.textMuted },
+  other: { labelKey: "blockerOther", color: C.textMuted },
 };
 
 // ── Approval Card ────────────────────────────────────────────────────────────
@@ -78,6 +80,7 @@ interface ApprovalCardProps {
 }
 
 export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps) {
+  const t = useTranslations("inbox");
   const [note, setNote] = useState("");
 
   // Dispatch install/uninstall variants to dedicated card
@@ -99,7 +102,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
   const isBlocker = approval.action_type === "blocker_decision";
   const typeConfig = APPROVAL_TYPE_CONFIG[approval.action_type];
-  const label = typeConfig?.label ?? approval.action_type;
+  const label = typeConfig ? t(typeConfig.labelKey) : approval.action_type;
   const badgeColor = typeConfig?.color ?? C.textDim;
   const BadgeIcon = typeConfig?.icon ?? AlertTriangle;
 
@@ -140,7 +143,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
 
               {approval.confidence !== null && approval.confidence !== undefined && (
                 <span className="text-[10px] text-[var(--color-text-muted)]">
-                  {Math.round((approval.confidence) * 100)}% confidence
+                  {t("confidencePct", { pct: Math.round((approval.confidence) * 100) })}
                 </span>
               )}
 
@@ -176,7 +179,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                     </p>
                   )}
                   <span className="inline-block text-[10px] px-2 py-0.5 rounded font-medium" style={{ backgroundColor: `${blockerType.color}18`, color: blockerType.color, border: `1px solid ${blockerType.color}30` }}>
-                    {blockerType.label}
+                    {t(blockerType.labelKey)}
                   </span>
                   {p.description && (
                     <div className="text-[12px] prose-comment text-[var(--color-text-primary)]">
@@ -247,7 +250,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                         className="block w-44 h-28 rounded-xl overflow-hidden transition-all hover:ring-2 hover:ring-[var(--color-accent)]/30"
                         style={{ border: "1px solid var(--color-border)" }}
                       >
-                        <img src={src} alt={`Screenshot ${i + 1}`} className="w-full h-full object-cover" />
+                        <img src={src} alt={t("screenshotAlt", { num: i + 1 })} className="w-full h-full object-cover" />
                       </a>
                     ))}
                   </div>
@@ -259,7 +262,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                       className="inline-flex items-center gap-1.5 text-sm transition-colors"
                       style={{ color: "var(--color-accent-light)" }}
                     >
-                      <ExternalLink size={13} /> Open preview
+                      <ExternalLink size={13} /> {t("openPreview")}
                     </a>
                   )}
                 </div>
@@ -274,7 +277,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
             <textarea
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="Instruction for the agent..."
+              placeholder={t("agentInstructionPlaceholder")}
               rows={2}
               className="w-full px-3 py-2.5 rounded-xl text-[12px] outline-none resize-none"
               style={{
@@ -301,7 +304,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               border: `1px solid ${C.online}40`,
             }}
           >
-            <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? "Reply" : isBlocker ? "Unblock" : "Approve"}
+            <CheckCircle size={13} /> {approval.action_type === "clarification_question" ? t("reply") : isBlocker ? t("unblock") : t("approve")}
           </button>
           {approval.action_type !== "clarification_question" && (
             <button
@@ -314,7 +317,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
                 border: `1px solid ${C.error}40`,
               }}
             >
-              <XCircle size={13} /> {isBlocker ? "Cancel task" : "Reject"}
+              <XCircle size={13} /> {isBlocker ? t("cancelTask") : t("reject")}
             </button>
           )}
         </div>
