@@ -9,18 +9,19 @@ import type { LucideIcon } from "lucide-react";
 
 export type OrgRuntime = "human" | "voice" | "host" | "docker";
 
-export type OrgRole =
-  | "Operator"            // the operator — human at top
-  | "Voice Assistant"     // Jarvis
-  | "Lead Orchestrator"   // Boss
-  | "Developer"
-  | "Reviewer"
-  | "Content"
-  | "Research"
-  | "Deploy"
-  | "QA"
-  | "Plugins"
-  | "Autonomous";
+// Message keys in the office.* namespace — t() at the render site.
+export type OrgRoleKey =
+  | "roleOperator"
+  | "roleVoiceAssistant"
+  | "roleLeadOrchestrator"
+  | "roleDeveloper"
+  | "roleReviewer"
+  | "roleContent"
+  | "roleResearch"
+  | "roleDeploy"
+  | "roleQA"
+  | "rolePlugins"
+  | "roleAutonomous";
 
 export type OrgStatus = "online" | "working" | "offline" | "warning" | "error";
 
@@ -31,8 +32,8 @@ export interface OrgNode {
   id: string;
   /** Display name. */
   name: string;
-  /** Human-readable role label shown on the card. */
-  role: OrgRole;
+  /** Message key (office.*) for the role label shown on the card. */
+  roleKey: OrgRoleKey;
   /** Runtime environment the agent lives in. */
   runtime: OrgRuntime;
   /** Currently presumed status (static for v1; live data later). */
@@ -41,8 +42,8 @@ export interface OrgNode {
   model?: string;
   /** Lucide icon component that visually communicates the role. */
   icon: LucideIcon;
-  /** One-sentence tagline shown on the card from the user's perspective. */
-  tagline: string;
+  /** Message key (office.*) for the one-sentence tagline on the card. */
+  taglineKey: string;
   /** Visual tier — drives card variant (sizing, glow, position). */
   tier: OrgTier;
   /** Parent id — null for the root (the operator). */

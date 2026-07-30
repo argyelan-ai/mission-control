@@ -17,7 +17,7 @@ const OfficeView = dynamic(() => import("@/components/pages/OfficeView"), {
         fontSize: 14,
       }}
     >
-      Loading 3D Office…
+      Loading…
     </div>
   ),
 });
