@@ -215,6 +215,26 @@
     "archive": "Archivieren",
     "sessionResetDone": "{name}: Session zurückgesetzt",
     "sessionResetFailed": "Reset von {name} fehlgeschlagen",
-    "archivedNotify": "{name} archiviert"
+    "archivedNotify": "{name} archiviert",
+    "lessons": "{count, plural, one {# Lektion} other {# Lektionen}}",
+    "noModel": "Kein Modell",
+    "contextLabel": "Kontext",
+    "restore": "Wiederherstellen",
+    "restoreTitle": "Agent wiederherstellen — Runtime wird neu gestartet",
+    "archiveTitle": "Agent archivieren — stoppt die Runtime, DB + Dateien bleiben",
+    "restoredNotify": "{name} wiederhergestellt",
+    "deletedNotify": "{name} gelöscht",
+    "sure": "Sicher?",
+    "yesDelete": "Ja, löschen",
+    "delete": "Löschen",
+    "deleteTitle": "Agent endgültig löschen",
+    "archiveFirst": "Zuerst archivieren",
+    "filterAll": "Alle",
+    "filterOnline": "Online",
+    "filterBusy": "Busy",
+    "filterIdle": "Idle",
+    "filterOffline": "Offline",
+    "filterError": "Fehler",
+    "noAgentsFoundPlain": "Keine Agenten gefunden"
   }
 }
