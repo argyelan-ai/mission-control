@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { Download, Trash2, X, Loader2 } from "lucide-react";
@@ -29,6 +31,7 @@ function basename(sub: string): string {
  * delete opens a confirm dialog and is gated on the root being writable.
  */
 export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps) {
+  const tr = useTranslations("files");
   const [downloading, setDownloading] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
 
@@ -75,7 +78,7 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           className="px-2 text-sm tabular-nums whitespace-nowrap"
           style={{ color: C.textSecondary }}
         >
-          {selected.size} selected
+          {tr("selectedCount", { count: selected.size })}
         </span>
 
         <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
@@ -91,13 +94,13 @@ export function FilesActionBar({ root, selected, onClear }: FilesActionBarProps)
           {downloading
             ? <Loader2 size={15} className="animate-spin" />
             : <Download size={15} />}
-          Download
+          {tr("download")}
         </button>
 
         <button
           onClick={() => { if (canDelete) setDeleteOpen(true); }}
           disabled={!canDelete}
-          title={canDelete ? undefined : "This area is read-only — delete not available"}
+          title={canDelete ? undefined : tr("readOnlyArea")}
           aria-disabled={!canDelete}
           className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium transition-colors ${canDelete ? "cursor-pointer" : "cursor-not-allowed opacity-60"}`}
           style={{ color: STATUS_TEXT.error }}

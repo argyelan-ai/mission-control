@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronRight, ChevronUp, ChevronDown, Loader2, AlertCircle, FolderOpen } from "lucide-react";
@@ -54,6 +56,7 @@ export function FilesBrowser({
   root, subpath, onNavigate, onSelectFile, selectedSubpath,
   selected, onToggleSelect, onToggleSelectAll, view = "list", headerActions,
 }: FilesBrowserProps) {
+  const tr = useTranslations("files");
   const { data, isLoading, isError } = useQuery({
     queryKey: ["files-list", root.key, subpath],
     queryFn: () => api.files.list(root.key, subpath || undefined),
@@ -130,12 +133,12 @@ export function FilesBrowser({
       ) : isError || !data ? (
         <div className="flex items-center gap-2 px-4 py-12 justify-center">
           <AlertCircle size={16} style={{ color: C.error }} />
-          <span className="text-sm" style={{ color: C.textMuted }}>Failed to load directory</span>
+          <span className="text-sm" style={{ color: C.textMuted }}>{tr("loadDirFailed")}</span>
         </div>
       ) : entries.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 py-16">
           <FolderOpen size={28} style={{ color: C.textDim }} />
-          <p className="text-sm" style={{ color: C.textMuted }}>This folder is empty</p>
+          <p className="text-sm" style={{ color: C.textMuted }}>{tr("folderEmpty")}</p>
         </div>
       ) : view === "grid" ? (
         <FileGrid
@@ -165,15 +168,15 @@ export function FilesBrowser({
                   type="checkbox"
                   checked={allSelected}
                   disabled={fileSubpaths.length === 0}
-                  aria-label="Select all files"
+                  aria-label={tr("selectAllFiles")}
                   onChange={(e) => onToggleSelectAll(fileSubpaths, e.target.checked)}
                   className="cursor-pointer disabled:cursor-not-allowed"
                   style={{ accentColor: C.accent }}
                 />
               </th>
-              <SortHeader label="Name" col="name" sort={sort} onToggle={toggleSort} align="left" />
-              <SortHeader label="Size" col="size" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
-              <SortHeader label="Modified" col="mtime" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label={tr("colName")} col="name" sort={sort} onToggle={toggleSort} align="left" />
+              <SortHeader label={tr("colSize")} col="size" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
+              <SortHeader label={tr("colModified")} col="mtime" sort={sort} onToggle={toggleSort} align="right" className="hidden sm:table-cell" />
             </tr>
           </thead>
           <tbody>
@@ -437,6 +440,7 @@ function FileGrid({
   someSelected: boolean;
   onToggleSelectAll: (subpaths: string[], on: boolean) => void;
 }) {
+  const tr = useTranslations("files");
   const selectAllRef = useRef<HTMLInputElement | null>(null);
 
   return (
@@ -450,7 +454,7 @@ function FileGrid({
             }}
             type="checkbox"
             checked={allSelected}
-            aria-label="Select all files"
+            aria-label={tr("selectAllFiles")}
             onChange={(e) => onToggleSelectAll(fileSubpaths, e.target.checked)}
             className="cursor-pointer"
             style={{ accentColor: C.accent }}

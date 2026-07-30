@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2, AlertTriangle } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -31,6 +33,7 @@ function basename(trashId: string): string {
 export function PurgeTrashDialog({
   open, trashIds, onClose, onDone,
 }: PurgeTrashDialogProps) {
+  const tr = useTranslations("files");
   const qc = useQueryClient();
 
   const mutation = useMutation({
@@ -39,11 +42,11 @@ export function PurgeTrashDialog({
       qc.invalidateQueries({ queryKey: ["files-trash"] });
       qc.invalidateQueries({ queryKey: ["files-list"] });
       qc.invalidateQueries({ queryKey: ["files-roots"] });
-      notify.success(`${res.purged.length} deleted permanently`);
+      notify.success(tr("purgedCount", { count: res.purged.length }));
       onDone();
     },
     onError: () => {
-      notify.error("Failed to empty trash");
+      notify.error(tr("emptyTrashFailed"));
     },
   });
 
@@ -57,7 +60,7 @@ export function PurgeTrashDialog({
           className="text-base font-semibold"
           style={{ color: C.textPrimary }}
         >
-          Empty trash permanently?
+          {tr("emptyTrashConfirm")}
         </h2>
       </div>
 
@@ -73,8 +76,7 @@ export function PurgeTrashDialog({
         >
           <AlertTriangle size={15} className="shrink-0 mt-px" />
           <span>
-            Irreversible — these files will be permanently deleted and CANNOT
-            be restored.
+            {tr("purgeIrreversible")}
           </span>
         </div>
       </div>
@@ -109,7 +111,7 @@ export function PurgeTrashDialog({
           onMouseEnter={(e) => { if (!mutation.isPending) e.currentTarget.style.background = C.bgHover; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
-          Cancel
+          {tr("cancel")}
         </button>
         <button
           onClick={() => mutation.mutate()}
@@ -120,7 +122,7 @@ export function PurgeTrashDialog({
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />
             : <Trash2 size={15} />}
-          Delete permanently
+          {tr("deletePermanently")}
         </button>
       </div>
     </ResponsiveModal>

@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { C } from "@/lib/colors";
 import type { FsRoot } from "@/lib/types";
 
@@ -51,22 +53,23 @@ function FilterSelect({
  *  the agent that produced the file, and the root it lives in. All three
  *  are optional and independent (backend ANDs whichever are set). */
 export function FilesSearchFilters({ filters, onChange, roots, agents }: FilesSearchFiltersProps) {
+  const tr = useTranslations("files");
   return (
     <div className="flex items-center gap-2 flex-wrap mb-3">
       <FilterSelect
-        label="Type"
+        label={tr("filterType")}
         value={filters.type ?? ""}
         onChange={(v) => onChange({ type: v || undefined })}
         options={TYPES.map((t) => ({ value: t, label: t }))}
       />
       <FilterSelect
-        label="Agent"
+        label={tr("filterAgent")}
         value={filters.agent ?? ""}
         onChange={(v) => onChange({ agent: v || undefined })}
         options={agents.map((a) => ({ value: a, label: a }))}
       />
       <FilterSelect
-        label="Root"
+        label={tr("filterRoot")}
         value={filters.root ?? ""}
         onChange={(v) => onChange({ root: v || undefined })}
         options={roots.map((r) => ({ value: r.key, label: r.label }))}

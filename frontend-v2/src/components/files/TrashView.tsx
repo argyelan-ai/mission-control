@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -38,6 +40,7 @@ function formatDeletedAt(iso: string): string {
 }
 
 export function TrashView() {
+  const tr = useTranslations("files");
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [purgeOpen, setPurgeOpen] = useState(false);
@@ -64,10 +67,10 @@ export function TrashView() {
       invalidateAfterMutation();
       setSelected(new Set());
       notify.success(
-        `${res.restored.length} restored${res.skipped.length ? ` · ${res.skipped.length} skipped` : ""}`,
+        tr("restoredCount", { count: res.restored.length }) + (res.skipped.length ? ` · ${tr("skippedCount", { count: res.skipped.length })}` : ""),
       );
     },
-    onError: () => notify.error("Restore failed"),
+    onError: () => notify.error(tr("restoreFailed")),
   });
 
   function toggle(id: string, on: boolean) {
@@ -111,7 +114,7 @@ export function TrashView() {
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16">
         <Trash2 size={28} style={{ color: C.textDim }} />
-        <p className="text-sm" style={{ color: C.textMuted }}>Trash is empty</p>
+        <p className="text-sm" style={{ color: C.textMuted }}>{tr("trashEmpty")}</p>
       </div>
     );
   }
@@ -128,7 +131,7 @@ export function TrashView() {
             }}
             type="checkbox"
             checked={allSelected}
-            aria-label="Select all files in trash"
+            aria-label={tr("selectAllTrash")}
             onChange={(e) => toggleAll(e.target.checked)}
             className="cursor-pointer"
             style={{ accentColor: C.accent }}
@@ -146,7 +149,7 @@ export function TrashView() {
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
           <Trash2 size={15} />
-          Empty trash
+          {tr("emptyTrash")}
         </button>
       </div>
 
@@ -185,7 +188,7 @@ export function TrashView() {
                   <input
                     type="checkbox"
                     checked={checked}
-                    aria-label={`Select ${entry.name}`}
+                    aria-label={tr("selectFile", { name: entry.name })}
                     onChange={(e) => toggle(entry.trash_id, e.target.checked)}
                     className="cursor-pointer shrink-0"
                     style={{ accentColor: C.accent }}
@@ -209,7 +212,7 @@ export function TrashView() {
                     onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
                   >
                     <RotateCcw size={14} />
-                    <span className="hidden sm:inline">Restore</span>
+                    <span className="hidden sm:inline">{tr("restore")}</span>
                   </button>
                 </div>
               );
@@ -233,7 +236,7 @@ export function TrashView() {
           }}
         >
           <span className="px-2 text-sm tabular-nums whitespace-nowrap" style={{ color: C.textSecondary }}>
-            {selected.size} selected
+            {tr("selectedCount", { count: selected.size })}
           </span>
           <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
           <button
@@ -247,7 +250,7 @@ export function TrashView() {
             {restore.isPending
               ? <Loader2 size={15} className="animate-spin" />
               : <RotateCcw size={15} />}
-            Restore
+            {tr("restore")}
           </button>
           <div className="w-px h-5 mx-0.5" style={{ background: C.border }} />
           <button
@@ -258,7 +261,7 @@ export function TrashView() {
             onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; e.currentTarget.style.color = C.textMuted; }}
           >
             <X size={15} />
-            Cancel
+            {tr("cancel")}
           </button>
         </motion.div>
       )}
