@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -54,16 +55,18 @@ function formatPercent(rate: number | null | undefined): string {
   return `${(rate * 100).toFixed(0)}%`;
 }
 
-function scheduleLabel(job: ScheduledJob): string {
+type Translate = (key: string, values?: Record<string, string | number>) => string;
+
+function scheduleLabel(job: ScheduledJob, t: Translate): string {
   if (job.schedule_cron) return `cron ${job.schedule_cron}`;
   if (job.schedule_type === "daily" && job.schedule_time)
-    return `daily ${job.schedule_time}`;
+    return t("schedDaily", { time: job.schedule_time });
   if (job.schedule_type === "weekdays" && job.schedule_time)
-    return `Mon–Fri ${job.schedule_time}`;
+    return t("schedWeekdays", { time: job.schedule_time });
   if (job.schedule_type === "interval" && job.schedule_interval_hours)
-    return `every ${job.schedule_interval_hours}h`;
+    return t("schedEvery", { count: job.schedule_interval_hours });
   if (job.schedule_type === "weekly_custom" && job.schedule_weekdays)
-    return `weekdays ${job.schedule_weekdays.join(",")} ${job.schedule_time ?? ""}`;
+    return t("schedWeeklyCustom", { days: job.schedule_weekdays.join(","), time: job.schedule_time ?? "" });
   return "—";
 }
 
@@ -101,6 +104,9 @@ function RunStatusIcon({ status }: { status: string }) {
 }
 
 export default function ScheduleJobDetailPage() {
+  const t = useTranslations("schedule");
+  const locale = useLocale();
+  const dateLocale = locale === "de" ? "de-CH" : "en-GB";
   const router = useRouter();
   const qc = useQueryClient();
   const params = useParams<{ jobId: string }>();
@@ -167,7 +173,7 @@ export default function ScheduleJobDetailPage() {
         <div className="flex flex-col items-center justify-center h-full gap-3">
           <Loader2 size={20} className="animate-spin" style={{ color: C.accent }} />
           <p className="text-sm" style={{ color: C.textMuted }}>
-            Loading job…
+            {t("loadingJob")}
           </p>
         </div>
       </AppShell>
@@ -181,16 +187,16 @@ export default function ScheduleJobDetailPage() {
         <div
           className="px-6 py-3 flex-shrink-0"
         >
-          <div className="label-sys mb-1">Operations · Schedule</div>
+          <div className="label-sys mb-1">{t("operationsSchedule")}</div>
           <div className="flex items-center gap-3">
             <Link
               href="/schedule"
-              aria-label="Back to schedule"
+              aria-label={t("backToSchedule")}
               className="flex items-center gap-1.5 text-xs px-2 py-1 rounded transition-colors shrink-0"
               style={{ color: C.textMuted }}
             >
               <ArrowLeft size={13} />
-              <span className="max-sm:hidden">Schedule</span>
+              <span className="max-sm:hidden">{t("title")}</span>
             </Link>
             <span className="max-sm:hidden" style={{ color: C.textMuted }}>/</span>
             {/* h2 intentionally — this is a sub-page breadcrumb, h1 already in AppShell nav */}
@@ -212,7 +218,7 @@ export default function ScheduleJobDetailPage() {
             </button>
             <button
               onClick={() => setEditOpen(true)}
-              aria-label="Edit job"
+              aria-label={t("editJob")}
               className="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs transition-colors cursor-pointer shrink-0"
               style={{
                 color: C.textSecondary,
@@ -220,7 +226,7 @@ export default function ScheduleJobDetailPage() {
               }}
             >
               <Pencil size={12} />
-              <span className="max-sm:hidden">Edit</span>
+              <span className="max-sm:hidden">{t("edit")}</span>
             </button>
           </div>
         </div>
@@ -237,19 +243,19 @@ export default function ScheduleJobDetailPage() {
           {/* KPI Cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <KPICard
-              label="Success Rate (7d)"
+              label={t("successRate7d")}
               value={formatPercent(stats?.success_rate_7d)}
             />
             <KPICard
-              label="Avg. Duration"
+              label={t("avgDuration")}
               value={formatMs(stats?.avg_duration_ms ?? 0)}
             />
             <KPICard
-              label="P95 Duration"
+              label={t("p95Duration")}
               value={formatMs(stats?.p95_duration_ms ?? 0)}
             />
             <KPICard
-              label="Runs (30d)"
+              label={t("runs30d")}
               value={stats?.total_runs_30d ?? 0}
             />
           </div>
@@ -261,7 +267,7 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Runs (30 days)
+                {t("runs30days")}
               </h2>
               <div style={{ width: "100%", height: 220 }}>
                 <ResponsiveContainer width="100%" height="100%">
@@ -310,15 +316,15 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Configuration
+                {t("configuration")}
               </h2>
               <dl className="flex flex-col gap-3 text-xs">
-                <ConfigRow label="Trigger" value={scheduleLabel(job)} />
+                <ConfigRow label={t("colTrigger")} value={scheduleLabel(job, t)} />
                 <ConfigRow
-                  label="Next run"
+                  label={t("nextRun")}
                   value={
                     job.next_run_at
-                      ? new Date(job.next_run_at).toLocaleString("de-CH", {
+                      ? new Date(job.next_run_at).toLocaleString(dateLocale, {
                           weekday: "short",
                           day: "2-digit",
                           month: "2-digit",
@@ -329,7 +335,7 @@ export default function ScheduleJobDetailPage() {
                   }
                 />
                 <ConfigRow
-                  label="Last status"
+                  label={t("lastStatus")}
                   value={job.last_run_status ?? "—"}
                   valueColor={
                     job.last_run_status === "failed"
@@ -340,30 +346,30 @@ export default function ScheduleJobDetailPage() {
                   }
                 />
                 <ConfigRow
-                  label="Retry"
+                  label={t("retryLabel")}
                   value={
                     job.retry_max > 0
                       ? `${job.retry_max}× / ${job.retry_delay_minutes}min`
-                      : "none"
+                      : t("noneLower")
                   }
                 />
                 <ConfigRow
-                  label="Skip Review"
-                  value={job.task_skip_review ? "yes" : "no"}
+                  label={t("skipReviewLabel")}
+                  value={job.task_skip_review ? t("yesLower") : t("noLower")}
                 />
-                <ConfigRow label="Board" value={board?.name ?? "—"} />
-                <ConfigRow label="Action" value={job.action_type} />
+                <ConfigRow label={t("boardLabel")} value={board?.name ?? "—"} />
+                <ConfigRow label={t("actionLabel")} value={job.action_type} />
                 {job.consecutive_failures && job.consecutive_failures > 0 ? (
                   <ConfigRow
-                    label="Consecutive failures"
+                    label={t("consecutiveFailsLabel")}
                     value={String(job.consecutive_failures)}
                     valueColor={STATUS_TEXT.error}
                   />
                 ) : null}
                 {job.snoozed_until ? (
                   <ConfigRow
-                    label="Snoozed until"
-                    value={new Date(job.snoozed_until).toLocaleString("de-CH")}
+                    label={t("snoozedUntilLabel")}
+                    value={new Date(job.snoozed_until).toLocaleString(dateLocale)}
                   />
                 ) : null}
               </dl>
@@ -377,14 +383,14 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Run History
+                {t("runHistory")}
               </h2>
               {runs.length === 0 ? (
                 <p
                   className="text-xs py-6 text-center"
                   style={{ color: C.textMuted }}
                 >
-                  No runs yet.
+                  {t("noRunsYet")}
                 </p>
               ) : (
                 <div className="flex flex-col max-h-[400px] overflow-y-auto">
@@ -400,14 +406,14 @@ export default function ScheduleJobDetailPage() {
                 className="text-sm font-medium mb-3"
                 style={{ color: C.textPrimary }}
               >
-                Created Tasks
+                {t("createdTasksHeading")}
               </h2>
               {createdTasks.length === 0 ? (
                 <p
                   className="text-xs py-6 text-center"
                   style={{ color: C.textMuted }}
                 >
-                  This job hasn&apos;t created any tasks yet.
+                  {t("noCreatedTasks")}
                 </p>
               ) : (
                 <div className="flex flex-col gap-1.5 max-h-[400px] overflow-y-auto">
@@ -478,6 +484,7 @@ function ConfigRow({
 }
 
 function RunRow({ run }: { run: ScheduledJobRun }) {
+  const t = useTranslations("schedule");
   const duration =
     run.finished_at != null
       ? new Date(run.finished_at).getTime() - new Date(run.started_at).getTime()
@@ -496,7 +503,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
         {timeAgo(run.started_at)}
         {run.retry_attempt > 0 && (
           <span className="ml-1.5" style={{ color: C.textMuted }}>
-            (retry {run.retry_attempt})
+            {t("retryAttempt", { count: run.retry_attempt })}
           </span>
         )}
       </span>
@@ -520,7 +527,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
       {run.task_id && (
         <Link
           href={`/tasks/${run.task_id}`}
-          title="Go to task"
+          title={t("goToTask")}
           className="flex-shrink-0 p-1 rounded transition-colors"
           style={{ color: C.textMuted }}
         >
