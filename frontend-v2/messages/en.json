@@ -38,5 +38,17 @@
     "languageHint": "Interface language. Takes effect immediately.",
     "languageEn": "English",
     "languageDe": "Deutsch"
+  },
+  "vault": {
+    "tabList": "List",
+    "tabGraph": "Graph",
+    "tabTrash": "Trash",
+    "knowledgeMemory": "Knowledge · Memory",
+    "taskBanner": "{count} notes + files for task",
+    "showAllNotes": "Show all notes",
+    "clearVoiceHighlight": "Clear voice highlight",
+    "dismiss": "dismiss",
+    "undated": "Undated",
+    "loadingMore": "loading more…"
   }
 }

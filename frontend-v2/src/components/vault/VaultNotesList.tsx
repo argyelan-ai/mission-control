@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useCallback } from "react";
+import { useTranslations } from "next-intl";
 import type { VaultNote } from "@/lib/types";
 import { VaultNoteRow, MonthMarker, parseDateFromNote } from "./VaultNoteRow";
 import { VaultEmptyState } from "./VaultEmptyState";
@@ -51,6 +52,7 @@ export function VaultNotesList({
   isFetchingNextPage,
   onLoadMore,
 }: VaultNotesListProps) {
+  const t = useTranslations("vault");
   const observerRef = useRef<IntersectionObserver | null>(null);
 
   // Infinite scroll sentinel
@@ -143,7 +145,7 @@ export function VaultNotesList({
     <div className="flex flex-col">
       {groups.map(({ label, notes: groupNotes }) => (
         <div key={label}>
-          <MonthMarker label={label} />
+          <MonthMarker label={label === "Undated" ? t("undated") : label} />
           <div>
             {groupNotes.map((note) => (
               <VaultNoteRow
@@ -169,7 +171,7 @@ export function VaultNotesList({
                 color: "var(--color-text-muted)",
               }}
             >
-              loading more…
+              {t("loadingMore")}
             </span>
           )}
         </div>

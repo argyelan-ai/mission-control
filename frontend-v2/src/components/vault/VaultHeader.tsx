@@ -7,6 +7,7 @@
  */
 
 import type { ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 
 interface VaultHeaderProps {
@@ -19,10 +20,11 @@ interface VaultHeaderProps {
 }
 
 export function VaultHeader({ noteCount, agentCount, actions }: VaultHeaderProps) {
+  const t = useTranslations("vault");
   return (
     <div className="flex items-start justify-between mb-8">
       <div>
-        <div className="label-sys mb-2">Knowledge · Memory</div>
+        <div className="label-sys mb-2">{t("knowledgeMemory")}</div>
 
         {/* Title with blinking cursor */}
         <h1

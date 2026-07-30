@@ -38,5 +38,17 @@
     "languageHint": "Sprache der Oberfläche. Gilt sofort.",
     "languageEn": "English",
     "languageDe": "Deutsch"
+  },
+  "vault": {
+    "tabList": "Liste",
+    "tabGraph": "Graph",
+    "tabTrash": "Papierkorb",
+    "knowledgeMemory": "Wissen · Memory",
+    "taskBanner": "{count} Notes + Files zu Task",
+    "showAllNotes": "Alle Notes anzeigen",
+    "clearVoiceHighlight": "Voice-Highlight entfernen",
+    "dismiss": "ausblenden",
+    "undated": "Ohne Datum",
+    "loadingMore": "lade weitere…"
   }
 }
