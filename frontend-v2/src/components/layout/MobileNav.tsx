@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { NAV_GROUPS } from "./Sidebar";
-import { channelFor } from "./channel";
 import { clearToken, api } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useAppStore } from "@/lib/store";
@@ -196,7 +195,6 @@ export default function MobileNav() {
   const pathname = usePathname();
   const router = useRouter();
   const { currentUser, activeBoardId, setActiveBoardId } = useAppStore();
-  const { ch } = channelFor(pathname);
 
   const { data: approvals } = useQuery<Approval[]>({
     queryKey: ["approvals-badge"],
@@ -227,7 +225,7 @@ export default function MobileNav() {
 
   return (
     <>
-      {/* Top bar — Wordmark links, CH-Kennung + Voice rechts. pt-island hält
+      {/* Top bar — Wordmark links (Home-Link), Voice rechts. pt-island hält
           Inhalt unter der Dynamic Island; opak statt backdrop-blur (kein iOS Jank). */}
       <header
         className="fixed top-0 left-0 right-0 z-40 flex items-end justify-between px-4 md:hidden pt-island"
@@ -255,20 +253,6 @@ export default function MobileNav() {
         </Link>
 
         <div className="flex items-center gap-2">
-          <span
-            aria-hidden
-            style={{
-              ...MONO,
-              color: "var(--color-p2-amb)",
-              border: "1px solid var(--color-p2-amb-d)",
-              padding: "3px 7px",
-              fontSize: "10px",
-              fontWeight: 700,
-              letterSpacing: "0.08em",
-            }}
-          >
-            {ch}
-          </span>
           <VoiceButton size={40} variant="header" />
         </div>
       </header>

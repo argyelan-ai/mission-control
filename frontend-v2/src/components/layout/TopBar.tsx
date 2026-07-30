@@ -5,19 +5,19 @@ import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
-import { channelFor } from "./channel";
+import { pageNameFor } from "./channel";
 
 /**
  * TopBar — P2 „SIGNAL" desktop chrome (ui-redesign-v3).
- * Slim instrument strip above the content column: brand + channel id (CH) +
- * page name left, board / agents / local clock right. Display-only — board
+ * Slim instrument strip above the content column: page name left, board /
+ * agents / local clock right. Display-only — board
  * switching stays in the WorkspaceSwitcher rail, palette stays on ⌘K.
  */
 
 export default function TopBar() {
   const pathname = usePathname();
   const { activeBoardId, boards } = useAppStore();
-  const { ch, page } = channelFor(pathname);
+  const page = pageNameFor(pathname);
 
   const { data: metrics } = useQuery({
     queryKey: ["system-metrics"],
@@ -48,31 +48,7 @@ export default function TopBar() {
         color: "var(--color-p2-dim)",
       }}
     >
-      <span
-        style={{
-          fontFamily: "var(--font-p2-display)",
-          fontWeight: 700,
-          fontSize: "12.5px",
-          color: "var(--color-p2-txt)",
-          letterSpacing: "0.02em",
-        }}
-      >
-        MC<span style={{ color: "var(--color-p2-amb)" }}>/</span>OS
-      </span>
-      <span
-        className="ml-4"
-        style={{
-          color: "var(--color-p2-amb)",
-          border: "1px solid var(--color-p2-amb-d)",
-          padding: "2px 7px",
-          fontSize: "10px",
-          fontWeight: 700,
-          letterSpacing: "0.08em",
-        }}
-      >
-        {ch}
-      </span>
-      <span className="ml-3" style={{ letterSpacing: "0.1em" }}>
+      <span style={{ letterSpacing: "0.1em", color: "var(--color-p2-txt)" }}>
         {page}
       </span>
 
