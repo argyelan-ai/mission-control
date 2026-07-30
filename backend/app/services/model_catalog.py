@@ -515,8 +515,9 @@ def read_grok_token() -> str:
             data = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         raise _CredentialUnavailable(
-            f"Grok-OAuth ({path}) ist aus dem Backend-Container nicht lesbar — "
-            f"docker-compose mountet nur ~/.grok/logs und ~/.grok/sessions. "
+            f"Grok-OAuth ({path}) ist aus dem Backend-Container nicht lesbar. "
+            f"Erwartet wird der Verzeichnis-Mount ~/.grok:ro (ein Einzeldatei-"
+            f"Mount stirbt bei Groks atomarer Token-Rotation — Inode-Bind). "
             f"Katalog kommt aus dem Manifest. ({exc.__class__.__name__})"
         ) from exc
     # Keyed by "<issuer>::<client_id>"; the bearer lives in the "key" field.
@@ -801,11 +802,20 @@ async def build_catalog(session: AsyncSession, *, force: bool = False) -> list[d
     cockpit already makes; the 15-minute cache keeps it off the hot path.
     """
     targets = await build_provider_targets(session)
-    bound_ids = {
-        (rt.model_identifier or "").strip()
-        for rt in (await session.exec(select(Runtime))).all()
-        if rt.model_identifier
-    }
+    # Runtime rows carry the model id in BOTH spellings: bare ("k3",
+    # "claude-opus-5") and provider-prefixed ("kimi-code/k3",
+    # "Qwen/Qwen3.6-35B-A3B-FP8" — the prefix is the vendor/provider namespace,
+    # not part of the model). Catalog adapters normalise to the bare form, so a
+    # plain string compare called every kimi model "new" although kimi-cloud
+    # was bound the whole time (live-gate find, 2026-07-30). Index both forms.
+    bound_ids: set[str] = set()
+    for rt in (await session.exec(select(Runtime))).all():
+        mid = (rt.model_identifier or "").strip()
+        if not mid:
+            continue
+        bound_ids.add(mid)
+        if "/" in mid:
+            bound_ids.add(mid.rsplit("/", 1)[-1])
 
     providers = []
     for target in targets:
