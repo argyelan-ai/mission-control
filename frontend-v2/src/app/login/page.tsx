@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import { Loader2, Eye, EyeOff } from "lucide-react";
 import { AUTH_TOKEN_KEY, api, setStoredUser } from "@/lib/api";
@@ -16,6 +17,7 @@ const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 type Mode = "loading" | "login" | "register";
 
 export default function LoginPage() {
+  const t = useTranslations("login");
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("loading");
   const [email, setEmail] = useState("");
@@ -54,15 +56,15 @@ export default function LoginPage() {
 
     if (mode === "register") {
       if (!name.trim()) {
-        setError("Name is required.");
+        setError(t("nameRequired"));
         return;
       }
       if (password.length < 6) {
-        setError("Password must be at least 6 characters.");
+        setError(t("passwordMin"));
         return;
       }
       if (password !== confirmPassword) {
-        setError("Passwords do not match.");
+        setError(t("passwordsMismatch"));
         return;
       }
     }
@@ -82,7 +84,7 @@ export default function LoginPage() {
       router.replace(mode === "register" ? "/setup" : "/");
     } catch (err) {
       const msg =
-        err instanceof Error ? err.message : "Connection failed.";
+        err instanceof Error ? err.message : t("connectionFailed");
       setError(msg.replace(/^"/, "").replace(/"$/, ""));
       setLoading(false);
     }
@@ -131,7 +133,7 @@ export default function LoginPage() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         >
-          <div className="label-sys label-sys--accent">Console · Access</div>
+          <div className="label-sys label-sys--accent">{t("consoleAccess")}</div>
           <h1
             className="display mt-4"
             style={{
@@ -149,7 +151,7 @@ export default function LoginPage() {
             className="mt-5 max-w-sm text-[15px] leading-relaxed"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            The control room for your agent fleet. One signal, no noise.
+            {t("tagline")}
           </p>
         </motion.div>
 
@@ -187,7 +189,7 @@ export default function LoginPage() {
         >
           {/* Mobile-Wordmark (Desktop hat die Brand-Zone links) */}
           <div className="md:hidden mb-8">
-            <div className="label-sys label-sys--accent mb-3">Console · Access</div>
+            <div className="label-sys label-sys--accent mb-3">{t("consoleAccess")}</div>
             <h1
               className="display"
               style={{
@@ -204,7 +206,7 @@ export default function LoginPage() {
           </div>
 
           <p className="label-sys mb-4">
-            {isRegister ? "Create the first admin account" : "Sign in"}
+            {isRegister ? t("createFirstAdmin") : t("signIn")}
           </p>
 
           {/* Card */}
@@ -223,7 +225,7 @@ export default function LoginPage() {
             {isRegister && (
               <div className="space-y-1.5">
                 <label htmlFor="name" className="label-sys">
-                  Name
+                  {t("name")}
                 </label>
                 <input
                   ref={nameRef}
@@ -232,7 +234,7 @@ export default function LoginPage() {
                   autoComplete="name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  placeholder="Your name"
+                  placeholder={t("yourName")}
                   className={inputClasses}
                   style={inputStyle}
                   onFocus={(e) =>
@@ -248,7 +250,7 @@ export default function LoginPage() {
             {/* Email */}
             <div className="space-y-1.5">
               <label htmlFor="email" className="label-sys">
-                Email
+                {t("email")}
               </label>
               <input
                 ref={emailRef}
@@ -272,7 +274,7 @@ export default function LoginPage() {
             {/* Password */}
             <div className="space-y-1.5">
               <label htmlFor="password" className="label-sys">
-                Password
+                {t("password")}
               </label>
               <div className="relative">
                 <input
@@ -283,7 +285,7 @@ export default function LoginPage() {
                   }
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder={isRegister ? "Min. 6 characters" : "Password"}
+                  placeholder={isRegister ? t("min6Chars") : t("password")}
                   className={`${inputClasses} pr-10 font-mono`}
                   style={inputStyle}
                   onFocus={(e) =>
@@ -299,7 +301,7 @@ export default function LoginPage() {
                   className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
                   style={{ color: "var(--color-text-muted)" }}
                   tabIndex={-1}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-label={showPassword ? t("hidePassword") : t("showPassword")}
                 >
                   {showPassword ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
@@ -310,7 +312,7 @@ export default function LoginPage() {
             {isRegister && (
               <div className="space-y-1.5">
                 <label htmlFor="confirm" className="label-sys">
-                  Repeat password
+                  {t("repeatPassword")}
                 </label>
                 <input
                   id="confirm"
@@ -318,7 +320,7 @@ export default function LoginPage() {
                   autoComplete="new-password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repeat password"
+                  placeholder={t("repeatPassword")}
                   className={`${inputClasses} font-mono`}
                   style={inputStyle}
                   onFocus={(e) =>
@@ -359,10 +361,10 @@ export default function LoginPage() {
             >
               {loading && <Loader2 className="animate-spin" size={14} />}
               {loading
-                ? "Signing in…"
+                ? t("signingIn")
                 : isRegister
-                  ? "Create admin"
-                  : "Sign in"}
+                  ? t("createAdmin")
+                  : t("signIn")}
             </button>
           </motion.form>
 
@@ -374,7 +376,7 @@ export default function LoginPage() {
               className="text-center text-xs mt-4"
               style={{ color: "var(--color-text-muted)" }}
             >
-              The first user automatically becomes the admin.
+              {t("firstUserAdmin")}
             </motion.p>
           )}
         </motion.div>
