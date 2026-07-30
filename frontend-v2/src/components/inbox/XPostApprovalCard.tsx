@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { CheckCircle, Send, XCircle } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -103,6 +104,7 @@ interface Props {
 }
 
 export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
+  const t = useTranslations("inbox");
   const payload = (approval.payload ?? {}) as unknown as XPostApprovalPayload;
   const text = payload.text ?? "";
   const over = text.length > MAX_TWEET_LENGTH;
@@ -132,7 +134,7 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
           </span>
           {payload.requester_agent_name && (
             <span className="text-[10px] text-[var(--color-text-muted)]">
-              from {payload.requester_agent_name}
+              {t("fromAgent", { name: payload.requester_agent_name })}
             </span>
           )}
           <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
@@ -193,7 +195,7 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
               border: `1px solid ${C.online}40`,
             }}
           >
-            <CheckCircle size={13} /> Approve &amp; post
+            <CheckCircle size={13} /> {t("approvePost")}
           </button>
           <button
             onClick={() => onResolve("rejected")}
@@ -205,7 +207,7 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
               border: `1px solid ${C.error}40`,
             }}
           >
-            <XCircle size={13} /> Reject
+            <XCircle size={13} /> {t("reject")}
           </button>
         </div>
       </GlassCard>
