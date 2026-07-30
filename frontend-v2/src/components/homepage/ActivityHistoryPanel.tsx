@@ -9,6 +9,7 @@ import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -17,6 +18,7 @@ import { timeAgo } from "@/lib/utils";
 import { C } from "./colors";
 
 export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
+  const t = useTranslations("home");
   const { activeBoardId } = useAppStore();
   const { data: events = [] } = useQuery({
     queryKey: ["activity", "full-history"],
@@ -64,8 +66,8 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, var(--color-bg-hover), transparent)" }} />
 
         <div className="flex items-center justify-between px-5 py-3.5 shrink-0" style={{ borderBottom: `1px solid ${C.border}` }}>
-          <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>Activity History</span>
-          <button onClick={onClose} aria-label="Close" className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
+          <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>{t("activityHistoryTitle")}</span>
+          <button onClick={onClose} aria-label={t("close")} className="cursor-pointer hover:opacity-80 transition-opacity" style={{ color: C.textMuted }}>
             <X size={16} />
           </button>
         </div>
@@ -73,7 +75,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
         <div className="flex-1 overflow-y-auto p-4">
           {events.length === 0 ? (
             <div className="flex items-center justify-center h-full">
-              <span className="text-sm" style={{ color: C.textMuted }}>No activity</span>
+              <span className="text-sm" style={{ color: C.textMuted }}>{t("noActivity")}</span>
             </div>
           ) : (
             <div className="flex flex-col gap-2">
