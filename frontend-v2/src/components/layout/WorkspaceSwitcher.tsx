@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { Plus, X } from "lucide-react";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
@@ -16,6 +17,7 @@ const BOARD_ICONS = ENTITY_ICON_KEYS.slice(0, 12);
 const MONO = { fontFamily: "var(--font-p2-mono)" };
 
 export default function WorkspaceSwitcher() {
+  const t = useTranslations("shell");
   const { boards, activeBoardId, setActiveBoardId, setBoards } = useAppStore();
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("");
@@ -133,7 +135,7 @@ export default function WorkspaceSwitcher() {
         onClick={() => setShowCreate(true)}
         whileHover={{ scale: 1.08 }}
         whileTap={{ scale: 0.92 }}
-        title="New board"
+        title={t("newBoard")}
         className="w-11 h-11 rounded-md flex items-center justify-center opacity-30 hover:opacity-80 transition-all cursor-pointer mt-1"
         style={{
           background: "var(--color-p2-inset)",
@@ -176,13 +178,13 @@ export default function WorkspaceSwitcher() {
                   color: "var(--color-p2-txt)",
                 }}
               >
-                NEW BOARD
+                {t("newBoardHeading")}
               </span>
               <button
                 onClick={() => setShowCreate(false)}
                 className="transition-colors cursor-pointer"
                 style={{ color: "var(--color-p2-dim)" }}
-                aria-label="Close"
+                aria-label={t("close")}
               >
                 <X size={14} />
               </button>
@@ -194,7 +196,7 @@ export default function WorkspaceSwitcher() {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && handleCreate()}
-                placeholder="Board name"
+                placeholder={t("boardNamePlaceholder")}
                 className="w-full px-3 py-2 text-sm transition-all"
                 style={{
                   ...MONO,
@@ -269,7 +271,7 @@ export default function WorkspaceSwitcher() {
                   color: P2.inv,
                 }}
               >
-                {createMutation.isPending ? "CREATING…" : "CREATE BOARD"}
+                {createMutation.isPending ? t("creating") : t("createBoard")}
               </button>
             </div>
           </motion.div>
