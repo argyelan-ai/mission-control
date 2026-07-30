@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
@@ -37,6 +39,7 @@ function useDebounced<T>(value: T, delay: number): T {
 }
 
 export default function FilesPage() {
+  const tr = useTranslations("files");
   const [activeRootKey, setActiveRootKey] = useState<string | null>(null);
   const [subpath, setSubpath] = useState("");
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
@@ -187,12 +190,12 @@ export default function FilesPage() {
         {/* Header */}
         <div className="flex items-end justify-between mb-6 gap-4">
           <div>
-            <div className="label-sys mb-2">Storage · Files</div>
+            <div className="label-sys mb-2">{tr("storageFiles")}</div>
             <h1 className="display text-2xl font-semibold" style={{ color: C.textPrimary }}>
-              Files
+              {tr("title")}
             </h1>
             <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-              Search deliverables, workspaces, vault, and more
+              {tr("subtitle")}
             </p>
           </div>
           <button
@@ -200,11 +203,11 @@ export default function FilesPage() {
             disabled={reindex.isPending}
             className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg cursor-pointer disabled:opacity-60"
             style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textSecondary }}
-            title="Rescan the file index now — makes freshly written files searchable without waiting for the 10-min auto-walk"
-            aria-label="Reindex files"
+            title={tr("reindexHint")}
+            aria-label={tr("reindexFiles")}
           >
             <RefreshCw size={14} className={reindex.isPending ? "animate-spin" : ""} style={{ color: C.accent }} />
-            {reindex.isPending ? "Reindexing…" : "Reindex"}
+            {reindex.isPending ? tr("reindexing") : tr("reindex")}
           </button>
         </div>
 
@@ -215,8 +218,8 @@ export default function FilesPage() {
             type="text"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search files…"
-            aria-label="Search files"
+            placeholder={tr("searchFilesPlaceholder")}
+            aria-label={tr("searchFiles")}
             className="w-full pl-9 pr-9 py-2.5 text-sm rounded-xl outline-none"
             style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textPrimary }}
             onFocus={(e) => (e.currentTarget.style.borderColor = C.borderAccent)}
@@ -227,7 +230,7 @@ export default function FilesPage() {
               onClick={() => setQuery("")}
               className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
               style={{ color: C.textMuted }}
-              aria-label="Clear search"
+              aria-label={tr("clearSearch")}
             >
               <X size={15} />
             </button>
@@ -349,6 +352,7 @@ function SearchResults({
   roots: FsRoot[];
   onOpen: (r: FsSearchResult) => void;
 }) {
+  const tr = useTranslations("files");
   const rootLabel = (key: string) => roots.find((r) => r.key === key)?.label ?? key;
 
   if (loading) {
@@ -363,7 +367,7 @@ function SearchResults({
     return (
       <div className="flex flex-col items-center justify-center gap-2 py-16">
         <Search size={28} style={{ color: C.textDim }} />
-        <p className="text-sm" style={{ color: C.textMuted }}>No results</p>
+        <p className="text-sm" style={{ color: C.textMuted }}>{tr("noResults")}</p>
       </div>
     );
   }
@@ -372,7 +376,7 @@ function SearchResults({
     <div className="rounded-2xl overflow-hidden" style={{ background: "var(--color-bg-surface)", border: `1px solid ${C.border}` }}>
       <div className="px-4 py-3" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: C.textSecondary }}>
-          {results.length} results
+          {tr("resultsCount", { count: results.length })}
         </span>
       </div>
       <div className="divide-y" style={{ borderColor: C.borderSubtle }}>

@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Trash2 } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -31,6 +33,7 @@ function basename(sub: string): string {
 export function DeleteFilesDialog({
   open, root, subpaths, onClose, onDone,
 }: DeleteFilesDialogProps) {
+  const tr = useTranslations("files");
   const qc = useQueryClient();
 
   const mutation = useMutation({
@@ -40,13 +43,13 @@ export function DeleteFilesDialog({
       qc.invalidateQueries({ queryKey: ["files-roots"] });
       notify.success(
         res.skipped.length
-          ? `${res.trashed.length} moved to trash · ${res.skipped.length} skipped`
-          : `${res.trashed.length} moved to trash`,
+          ? `${tr("movedToTrash", { count: res.trashed.length })} · ${tr("skippedCount", { count: res.skipped.length })}`
+          : tr("movedToTrash", { count: res.trashed.length }),
       );
       onDone();
     },
     onError: () => {
-      notify.error("Delete failed");
+      notify.error(tr("deleteFailed"));
     },
   });
 
@@ -60,7 +63,7 @@ export function DeleteFilesDialog({
           className="text-base font-semibold"
           style={{ color: C.textPrimary }}
         >
-          Delete {count} file{count === 1 ? "" : "s"}?
+          {tr("deleteFilesConfirm", { count })}
         </h2>
       </div>
 
@@ -107,7 +110,7 @@ export function DeleteFilesDialog({
           onMouseEnter={(e) => { if (!mutation.isPending) e.currentTarget.style.background = C.bgHover; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
-          Cancel
+          {tr("cancel")}
         </button>
         <button
           onClick={() => mutation.mutate()}
@@ -118,7 +121,7 @@ export function DeleteFilesDialog({
           {mutation.isPending
             ? <Loader2 size={15} className="animate-spin" />
             : <Trash2 size={15} />}
-          Delete
+          {tr("delete")}
         </button>
       </div>
     </ResponsiveModal>

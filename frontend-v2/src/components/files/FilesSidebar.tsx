@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { FolderOpen, Trash2, type LucideIcon } from "lucide-react";
 import * as Icons from "lucide-react";
 import type { FsRoot } from "@/lib/types";
@@ -61,9 +63,10 @@ function SidebarEntry({
  *  a horizontally-scrollable row on narrow viewports. Trash sits below a
  *  divider so it reads as a separate, less-frequent destination. */
 export function FilesSidebar({ roots, activeKey, onSelect }: FilesSidebarProps) {
+  const tr = useTranslations("files");
   return (
     <nav
-      aria-label="File roots"
+      aria-label={tr("fileRoots")}
       className="flex md:flex-col gap-1 overflow-x-auto md:overflow-visible pb-1 md:pb-0 md:w-56 shrink-0 tab-strip"
     >
       {roots.map((r) => (
@@ -82,7 +85,7 @@ export function FilesSidebar({ roots, activeKey, onSelect }: FilesSidebarProps) 
 
       <SidebarEntry
         icon={Trash2}
-        label="Trash"
+        label={tr("trashLabel")}
         active={activeKey === TRASH_KEY}
         onClick={() => onSelect(TRASH_KEY)}
       />

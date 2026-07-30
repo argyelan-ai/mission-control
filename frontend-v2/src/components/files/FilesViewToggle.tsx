@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { LayoutGrid, List } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { ViewMode } from "./FilesBrowser";
@@ -10,12 +12,13 @@ export function FilesViewToggle({
   view: ViewMode;
   onChange: (v: ViewMode) => void;
 }) {
+  const tr = useTranslations("files");
   return (
     <div
       className="inline-flex items-center rounded-lg overflow-hidden shrink-0"
       style={{ border: `1px solid ${C.border}` }}
       role="group"
-      aria-label="View mode"
+      aria-label={tr("viewMode")}
     >
       {(["list", "grid"] as const).map((v) => {
         const Icon = v === "list" ? List : LayoutGrid;
@@ -25,8 +28,8 @@ export function FilesViewToggle({
             key={v}
             onClick={() => onChange(v)}
             aria-pressed={active}
-            aria-label={v === "list" ? "List view" : "Grid view"}
-            title={v === "list" ? "List view" : "Grid view"}
+            aria-label={v === "list" ? tr("listView") : tr("gridView")}
+            title={v === "list" ? tr("listView") : tr("gridView")}
             className="flex items-center justify-center w-8 h-8 cursor-pointer transition-colors"
             style={{ background: active ? C.accentSubtle : "transparent", color: active ? C.accent : C.textMuted }}
           >
