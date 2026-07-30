@@ -10,6 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import AppShell from "@/components/layout/AppShell";
@@ -36,10 +37,11 @@ import { C } from "@/lib/colors";
 
 type VaultView = "list" | "graph" | "trash";
 
-const TAB_LABELS: Record<VaultView, string> = {
-  list: "List",
-  graph: "Graph",
-  trash: "Trash",
+// Message keys in the vault.* namespace — t() at the render site.
+const TAB_LABEL_KEYS: Record<VaultView, string> = {
+  list: "tabList",
+  graph: "tabGraph",
+  trash: "tabTrash",
 };
 
 function VaultViewTabs({
@@ -51,6 +53,7 @@ function VaultViewTabs({
   onChange: (next: VaultView) => void;
   trashCount: number;
 }) {
+  const t = useTranslations("vault");
   return (
     <div className="flex items-center gap-1 mb-5 border-b border-white/5">
       {(["list", "graph", "trash"] as const).map((v) => {
@@ -65,7 +68,7 @@ function VaultViewTabs({
                 : "text-[var(--color-text-muted)] border-transparent hover:text-[var(--color-text-primary)]"
             }`}
           >
-            {TAB_LABELS[v]}
+            {t(TAB_LABEL_KEYS[v])}
             {v === "trash" && trashCount > 0 && (
               <span
                 className="font-mono rounded-full px-1.5"
@@ -90,6 +93,7 @@ function VaultViewTabs({
 // ── VaultMemoryPage ───────────────────────────────────────────────────────────
 
 export default function VaultMemoryPage() {
+  const t = useTranslations("vault");
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -460,7 +464,7 @@ export default function VaultMemoryPage() {
                 className="text-xs truncate"
                 style={{ color: "var(--color-text-body)" }}
               >
-                {taskRelatedData?.count ?? 0} Notes + Files zu Task{" "}
+                {t("taskBanner", { count: taskRelatedData?.count ?? 0 })}{" "}
                 <span className="font-mono opacity-70">{urlTask?.slice(0, 8)}</span>
               </span>
             </div>
@@ -473,7 +477,7 @@ export default function VaultMemoryPage() {
               className="text-xs px-2 py-1 rounded hover:bg-[var(--color-bg-hover)] shrink-0"
               style={{ color: "var(--color-text-muted)" }}
             >
-              Alle Notes anzeigen
+              {t("showAllNotes")}
             </button>
           </div>
         )}
@@ -507,7 +511,7 @@ export default function VaultMemoryPage() {
             <button
               type="button"
               onClick={clearVoiceHighlight}
-              aria-label="Clear voice highlight"
+              aria-label={t("clearVoiceHighlight")}
               className="ml-auto font-mono"
               style={{
                 fontSize: "11px",
@@ -524,7 +528,7 @@ export default function VaultMemoryPage() {
                 ((e.currentTarget as HTMLButtonElement).style.color = "var(--color-text-muted)")
               }
             >
-              dismiss ×
+              {t("dismiss")} ×
             </button>
           </div>
         )}

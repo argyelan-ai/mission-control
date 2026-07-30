@@ -15,6 +15,7 @@ import {
   CheckCheck,
   Search,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -43,6 +44,8 @@ const kbdStyle = {
 } as const;
 
 export default function CommandPalette() {
+  const t = useTranslations("shell");
+  const tNav = useTranslations("nav");
   const router = useRouter();
   const qc = useQueryClient();
   const { commandPaletteOpen, setCommandPaletteOpen, activeBoardId } =
@@ -127,7 +130,7 @@ export default function CommandPalette() {
                 />
                 <Command.Input
                   autoFocus
-                  placeholder="Search or command..."
+                  placeholder={t("searchPlaceholder")}
                   className="flex-1 py-3.5 bg-transparent font-mono text-[13px] outline-none"
                   style={{
                     color: "var(--color-text-primary)",
@@ -148,19 +151,19 @@ export default function CommandPalette() {
                   className="py-8 text-center text-sm"
                   style={{ color: "var(--color-text-muted)" }}
                 >
-                  No results
+                  {t("noResults")}
                 </Command.Empty>
 
                 {/* Navigation */}
-                <Command.Group heading="Navigation" className={groupClass}>
+                <Command.Group heading={t("navigation")} className={groupClass}>
                   {[
-                    { icon: Home, label: "Home", href: "/" },
-                    { icon: FolderKanban, label: "Tasks", href: "/tasks" },
-                    { icon: Bot, label: "Agents", href: "/agents" },
-                    { icon: Inbox, label: "Inbox", href: "/inbox" },
+                    { icon: Home, label: tNav("home"), href: "/" },
+                    { icon: FolderKanban, label: tNav("tasks"), href: "/tasks" },
+                    { icon: Bot, label: tNav("agents"), href: "/agents" },
+                    { icon: Inbox, label: tNav("inbox"), href: "/inbox" },
                     {
                       icon: Settings,
-                      label: "Settings",
+                      label: tNav("settings"),
                       href: "/settings",
                     },
                   ].map(({ icon: Icon, label, href }) => (
@@ -180,7 +183,7 @@ export default function CommandPalette() {
                 </Command.Group>
 
                 {/* Quick Actions */}
-                <Command.Group heading="Actions" className={groupClass}>
+                <Command.Group heading={t("actions")} className={groupClass}>
                   <Command.Item
                     value="new task"
                     onSelect={() => navigate("/tasks")}
@@ -190,7 +193,7 @@ export default function CommandPalette() {
                       size={15}
                       style={{ color: "var(--color-info)" }}
                     />
-                    New Task
+                    {t("newTask")}
                     <kbd
                       className={`ml-auto ${kbdClass}`}
                       style={kbdStyle}
@@ -207,7 +210,7 @@ export default function CommandPalette() {
                       size={15}
                       style={{ color: "var(--color-online)" }}
                     />
-                    Approve all approvals
+                    {t("approveAll")}
                     <kbd
                       className={`ml-auto ${kbdClass}`}
                       style={kbdStyle}
@@ -219,7 +222,7 @@ export default function CommandPalette() {
 
                 {/* Agents */}
                 {agents && agents.length > 0 && (
-                  <Command.Group heading="Agents" className={groupClass}>
+                  <Command.Group heading={tNav("agents")} className={groupClass}>
                     {agents.map((agent) => (
                       <Command.Item
                         key={agent.id}
