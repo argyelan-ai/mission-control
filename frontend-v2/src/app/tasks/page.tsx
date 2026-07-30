@@ -20,6 +20,7 @@ import {
   Brain,
 } from "lucide-react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -78,6 +79,7 @@ function TagManager({
   // iOS-safe scroll lock while popover is open (M4)
   useBodyScrollLock(true);
 
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
   const ref = useRef<HTMLDivElement>(null);
   const [newTagName, setNewTagName] = useState("");
@@ -137,7 +139,7 @@ function TagManager({
       className="absolute top-full left-0 mt-1 w-56 rounded-md shadow-xl z-50 overflow-hidden"
       role="dialog"
       aria-modal="true"
-      aria-label="Manage tags"
+      aria-label={t("manageTags")}
       style={{
         backgroundColor: C.bgBase,
         border: `1px solid ${C.border}`,
@@ -148,7 +150,7 @@ function TagManager({
       <div className="max-h-48 overflow-y-auto py-1">
         {allTags.length === 0 && (
           <div className="px-3 py-2 text-xs" style={{ color: C.textMuted }}>
-            No tags yet
+            {t("noTagsYet")}
           </div>
         )}
         {allTags.map((tag) => (
@@ -181,9 +183,9 @@ function TagManager({
               if (e.key === "Enter") handleCreate();
               if (e.key === "Escape") onClose();
             }}
-            placeholder="New tag..."
+            placeholder={t("newTagPlaceholder")}
             autoFocus
-            aria-label="Create new tag"
+            aria-label={t("createNewTag")}
             className="flex-1 text-xs px-2 py-1 rounded-sm outline-none min-w-0"
             style={{
               backgroundColor: C.bgSurface,
@@ -214,16 +216,18 @@ function TagManager({
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 
-const STATUS_CONFIG: Record<TaskStatus, { color: string; label: string }> = {
-  inbox: { color: LANE.inbox, label: "Inbox" },
-  in_progress: { color: LANE.in_progress, label: "Active" },
-  review: { color: LANE.review, label: "Review" },
-  user_test: { color: LANE.user_test, label: "User Test" },
-  waiting: { color: LANE.waiting, label: "Waiting" },
-  done: { color: LANE.done, label: "Done" },
-  blocked: { color: LANE.blocked, label: "Blocked" },
-  failed: { color: LANE.failed, label: "Failed" },
-  aborted: { color: LANE.aborted, label: "Aborted" },
+// labelKey resolves via t() at the render site (tasks.* namespace) — never
+// store translated strings in module constants.
+const STATUS_CONFIG: Record<TaskStatus, { color: string; labelKey: string }> = {
+  inbox: { color: LANE.inbox, labelKey: "statusInbox" },
+  in_progress: { color: LANE.in_progress, labelKey: "statusActive" },
+  review: { color: LANE.review, labelKey: "statusReview" },
+  user_test: { color: LANE.user_test, labelKey: "statusUserTest" },
+  waiting: { color: LANE.waiting, labelKey: "statusWaiting" },
+  done: { color: LANE.done, labelKey: "statusDone" },
+  blocked: { color: LANE.blocked, labelKey: "statusBlocked" },
+  failed: { color: LANE.failed, labelKey: "statusFailed" },
+  aborted: { color: LANE.aborted, labelKey: "statusAborted" },
 };
 
 function TaskStatusDot({ status }: { status: TaskStatus }) {
@@ -265,6 +269,7 @@ function TaskRow({
   boardId: string;
   onClick: () => void;
 }) {
+  const t = useTranslations("tasks");
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const qc = useQueryClient();
   const [showDoneWarning, setShowDoneWarning] = useState(false);
@@ -315,7 +320,7 @@ function TaskRow({
         <button
           type="button"
           onClick={onClick}
-          aria-label={`Open task: ${task.title}`}
+          aria-label={t("openTask", { title: task.title })}
           className="flex-1 text-sm truncate flex items-center gap-1 min-w-0 text-left cursor-pointer after:absolute after:inset-0 after:content-['']"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
@@ -356,7 +361,7 @@ function TaskRow({
           {isStale && (
             <span
               className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1.5 py-0.5 rounded-sm"
-              title={`No activity for ${staleMins} minutes`}
+              title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
                 backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
@@ -374,7 +379,7 @@ function TaskRow({
             href={`/memory?task=${task.id}`}
             onClick={(e) => e.stopPropagation()}
             className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-            title="Vault: all notes + files for this task"
+            title={t("vaultLink")}
             style={{ color: C.textMuted }}
           >
             <Brain size={12} />
@@ -384,7 +389,7 @@ function TaskRow({
               onClick={handleDispatch}
               disabled={dispatchMutation.isPending}
               className="p-1 rounded-sm transition-colors opacity-0 group-hover:opacity-100 hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-              title={isDone ? "Task already done — dispatch again?" : "Dispatch task"}
+              title={isDone ? t("taskAlreadyDoneDispatch") : t("dispatchTask")}
               style={{ color: isDone ? C.warning : C.accent }}
             >
               <Send size={12} />
@@ -405,10 +410,10 @@ function TaskRow({
         >
           <div className="flex items-center gap-1.5 mb-2 font-medium" style={{ color: C.warning }}>
             <AlertTriangle size={12} />
-            Task already done
+            {t("taskAlreadyDone")}
           </div>
           <p className="mb-2" style={{ color: C.textSecondary }}>
-            Dispatch again anyway?
+            {t("dispatchAgainConfirm")}
           </p>
           <div className="flex gap-2">
             <button
@@ -417,14 +422,14 @@ function TaskRow({
               className="px-2 py-1 rounded text-[11px] font-medium cursor-pointer"
               style={{ backgroundColor: `${C.warning}1F`, color: C.warning }}
             >
-              Yes, dispatch
+              {t("yesDispatch")}
             </button>
             <button
               onClick={(e) => { e.stopPropagation(); setShowDoneWarning(false); }}
               className="px-2 py-1 rounded text-[11px] cursor-pointer"
               style={{ color: C.textMuted }}
             >
-              Cancel
+              {t("cancel")}
             </button>
           </div>
         </div>
@@ -452,6 +457,7 @@ function PhaseSection({
   onTaskClick: (task: Task) => void;
   repoUrl?: string | null;
 }) {
+  const t = useTranslations("tasks");
   const [collapsed, setCollapsed] = useState(phase.status === "done");
   const qc = useQueryClient();
 
@@ -521,7 +527,7 @@ function PhaseSection({
             </span>
           )}
           <Pill color={STATUS_CONFIG[phase.status].color} size="sm">
-            {STATUS_CONFIG[phase.status].label}
+            {t(STATUS_CONFIG[phase.status].labelKey)}
           </Pill>
         </div>
       </button>
@@ -541,7 +547,7 @@ function PhaseSection({
             >
               {subtasks.length === 0 && (
                 <div className="py-2 px-3 text-xs" style={{ color: C.textMuted }}>
-                  No subtasks
+                  {t("noSubtasks")}
                 </div>
               )}
               {subtasks.map((task) => (
@@ -568,8 +574,8 @@ function PhaseSection({
                 >
                   <Play size={11} fill="currentColor" />
                   {phase.status === "review"
-                    ? "Finish phase & start next"
-                    : "Start phase"}
+                    ? t("finishPhaseStartNext")
+                    : t("startPhase")}
                 </button>
               )}
             </div>
@@ -593,6 +599,7 @@ function RevisionSection({
   boardId: string;
   projectId: string;
 }) {
+  const t = useTranslations("tasks");
   const [showForm, setShowForm] = useState(false);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -624,7 +631,7 @@ function RevisionSection({
     <div className="mt-6 border-t pt-4" style={{ borderColor: C.border }}>
       <div className="flex items-center justify-between mb-3">
         <h3 className="label-sys flex items-center gap-2">
-          Revisions
+          {t("revisions")}
           {revisions.length > 0 && (
             <span
               className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm"
@@ -639,7 +646,7 @@ function RevisionSection({
           className="text-xs transition-colors cursor-pointer"
           style={{ color: C.textMuted }}
         >
-          {showForm ? "Cancel" : "+ New"}
+          {showForm ? t("cancel") : t("plusNew")}
         </button>
       </div>
 
@@ -651,20 +658,20 @@ function RevisionSection({
         >
           <input
             type="text"
-            placeholder="What should change?"
+            placeholder={t("revisionTitlePlaceholder")}
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            aria-label="Revision title"
+            aria-label={t("revisionTitle")}
             className="w-full bg-transparent rounded-sm px-2 py-1.5 text-sm focus:outline-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
             autoFocus
           />
           <textarea
-            placeholder="Details (optional)"
+            placeholder={t("detailsOptional")}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={2}
-            aria-label="Revision description"
+            aria-label={t("revisionDescription")}
             className="w-full bg-transparent rounded-sm px-2 py-1.5 text-sm focus:outline-none resize-none"
             style={{ border: `1px solid ${C.border}`, color: C.textPrimary }}
           />
@@ -672,7 +679,7 @@ function RevisionSection({
             <select
               value={priority}
               onChange={(e) => setPriority(e.target.value)}
-              aria-label="Select priority"
+              aria-label={t("selectPriority")}
               className="rounded-sm px-2 py-1 text-xs cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
@@ -680,15 +687,15 @@ function RevisionSection({
                 color: C.textSecondary,
               }}
             >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="critical">Critical</option>
+              <option value="low">{t("priorityLow")}</option>
+              <option value="medium">{t("priorityMedium")}</option>
+              <option value="high">{t("priorityHigh")}</option>
+              <option value="critical">{t("priorityCritical")}</option>
             </select>
             <select
               value={assignedAgent}
               onChange={(e) => setAssignedAgent(e.target.value)}
-              aria-label="Assign agent"
+              aria-label={t("assignAgent")}
               className="rounded-sm px-2 py-1 text-xs flex-1 cursor-pointer"
               style={{
                 backgroundColor: C.bgDeep,
@@ -696,7 +703,7 @@ function RevisionSection({
                 color: C.textSecondary,
               }}
             >
-              <option value="">Assign agent...</option>
+              <option value="">{t("assignAgentPlaceholder")}</option>
               {agents.map((a) => (
                 <option key={a.id} value={a.id}>
                   {a.emoji} {a.name}
@@ -712,7 +719,7 @@ function RevisionSection({
                 color: C.accentHover,
               }}
             >
-              {createRevision.isPending ? "..." : "Create"}
+              {createRevision.isPending ? "..." : t("create")}
             </button>
           </div>
         </div>
@@ -721,7 +728,7 @@ function RevisionSection({
       {/* Revision list */}
       {revisions.length === 0 && !showForm && (
         <p className="text-xs italic" style={{ color: C.textMuted }}>
-          No revisions
+          {t("noRevisions")}
         </p>
       )}
       <div className="space-y-1">
@@ -747,7 +754,7 @@ function RevisionSection({
                 </span>
               )}
               <Pill color={STATUS_CONFIG[rev.status].color} size="sm">
-                {STATUS_CONFIG[rev.status].label}
+                {t(STATUS_CONFIG[rev.status].labelKey)}
               </Pill>
             </div>
           );
@@ -774,6 +781,7 @@ function ProjectDetail({
   tags: Tag[];
   onTaskClick: (task: Task) => void;
 }) {
+  const t = useTranslations("tasks");
   const [showTagManager, setShowTagManager] = useState(false);
 
   const regularTasks = useMemo(
@@ -818,7 +826,7 @@ function ProjectDetail({
             className="mx-auto mb-3 opacity-20"
             style={{ color: C.textMuted }}
           />
-          <div className="label-sys">Projekt auswaehlen</div>
+          <div className="label-sys">{t("selectProject")}</div>
         </div>
       </div>
     );
@@ -871,7 +879,7 @@ function ProjectDetail({
               onClick={() => setShowTagManager(!showTagManager)}
               className="w-5 h-5 rounded-sm flex items-center justify-center transition-colors hover:bg-[var(--color-bg-hover)] cursor-pointer"
               style={{ color: C.textMuted }}
-              title="Manage tags"
+              title={t("manageTags")}
             >
               <Plus size={13} />
             </button>
@@ -921,7 +929,7 @@ function ProjectDetail({
             className="text-sm text-center py-8"
             style={{ color: C.textMuted }}
           >
-            No tasks in this project
+            {t("noTasksInProject")}
           </div>
         )}
 
@@ -944,7 +952,7 @@ function ProjectDetail({
           <div className="space-y-1">
             {phases.length > 0 && (
               <div className="label-sys px-3 py-1 mb-1 mt-3">
-                Weitere Tasks
+                {t("moreTasks")}
               </div>
             )}
             {standaloneWithProject.map((task) => (
@@ -980,6 +988,7 @@ function ProjectDetail({
 // empty state. Mobile keeps the stack navigation (list → detail).
 
 function TasksPageContent() {
+  const t = useTranslations("tasks");
   const { activeBoardId } = useAppStore();
   const qc = useQueryClient();
   const router = useRouter();
@@ -1106,7 +1115,7 @@ function TasksPageContent() {
     return (
       <div className="flex items-center justify-center h-full">
         <div className="text-sm" style={{ color: C.textMuted }}>
-          No board selected
+          {t("noBoardSelected")}
         </div>
       </div>
     );
@@ -1152,7 +1161,7 @@ function TasksPageContent() {
               }}
             >
               <ChevronRight size={14} className="rotate-180" style={{ color: C.textMuted }} />
-              Tasks
+              {t("title")}
             </button>
             <span className="text-sm truncate" style={{ color: C.textPrimary }}>
               {selectedTask?.title ?? projectView?.name ?? ""}
@@ -1181,16 +1190,16 @@ function TasksPageContent() {
                 className="text-[11px] font-mono px-2 py-1 rounded-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                 style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
               >
-                ← All tasks
+                ← {t("allTasks")}
               </button>
               <span className="label-sys label-sys--dim">
-                Project view
+                {t("projectView")}
               </span>
               <span className="ml-auto flex items-center gap-2">
                 {confirmDeleteProject ? (
                   <>
                     <span className="text-[11px]" style={{ color: C.warning }}>
-                      Delete project? Tasks stay (become ad-hoc).
+                      {t("deleteProjectConfirm")}
                     </span>
                     <button
                       onClick={() => deleteProjectMutation.mutate(projectView.id)}
@@ -1198,21 +1207,21 @@ function TasksPageContent() {
                       className="px-2 py-1 rounded-sm text-[11px] font-semibold cursor-pointer"
                       style={{ backgroundColor: `${C.error}26`, color: STATUS_TEXT.error }}
                     >
-                      {deleteProjectMutation.isPending ? "…" : "Delete project"}
+                      {deleteProjectMutation.isPending ? "…" : t("deleteProject")}
                     </button>
                     <button
                       onClick={() => setConfirmDeleteProject(false)}
                       className="px-2 py-1 rounded text-[11px] cursor-pointer"
                       style={{ color: C.textMuted }}
                     >
-                      Cancel
+                      {t("cancel")}
                     </button>
                   </>
                 ) : (
                   <button
                     onClick={() => setConfirmDeleteProject(true)}
-                    aria-label="Delete project"
-                    title="Delete project"
+                    aria-label={t("deleteProject")}
+                    title={t("deleteProject")}
                     className="p-1.5 rounded-sm cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
                     style={{ color: C.textMuted }}
                   >
@@ -1233,12 +1242,12 @@ function TasksPageContent() {
         ) : (
           <div className="flex-1 hidden md:flex items-center justify-center">
             <div className="text-center px-10 py-12">
-              <div className="label-sys label-sys--dim mb-3">Task · Detail</div>
+              <div className="label-sys label-sys--dim mb-3">{t("taskDetail")}</div>
               <div className="text-sm" style={{ color: C.textSecondary }}>
-                Select a task from the list
+                {t("selectTaskFromList")}
               </div>
               <div className="text-[11px] font-mono mt-2" style={{ color: C.textDim }}>
-                Group by project to reach the phase view of a project
+                {t("groupByProjectHint")}
               </div>
             </div>
           </div>

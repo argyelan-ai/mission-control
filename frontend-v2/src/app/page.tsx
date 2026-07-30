@@ -2,8 +2,10 @@
 
 import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useLocale, useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { format } from "date-fns";
+import { de } from "date-fns/locale";
 import { AlertTriangle } from "lucide-react";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
@@ -14,7 +16,7 @@ import PipelineView from "@/components/pipeline/PipelineView";
 import AppShell from "@/components/layout/AppShell";
 import { SystemHealthSection } from "@/components/homepage/SystemHealthSection";
 import { ActivityHistoryPanel } from "@/components/homepage/ActivityHistoryPanel";
-import { C, sectionVariants, getGreeting, bentoMediaStyles } from "@/components/homepage/colors";
+import { C, sectionVariants, getGreetingKey, bentoMediaStyles } from "@/components/homepage/colors";
 
 export default function Page() {
   return (
@@ -27,9 +29,12 @@ export default function Page() {
 
 function HomePage() {
   const qc = useQueryClient();
+  const t = useTranslations("home");
+  const locale = useLocale();
+  const dateLocale = locale === "de" ? de : undefined;
   const { activeBoardId, currentUser } = useAppStore();
   const [showActivityPanel, setShowActivityPanel] = useState(false);
-  const greeting = useMemo(getGreeting, []);
+  const greeting = t(useMemo(getGreetingKey, []));
 
   // ── Queries ────────────────────────────────────────────────────────────────
   const { data: systemStatus, isLoading: statusLoading } = useQuery({
@@ -70,7 +75,7 @@ function HomePage() {
   const alerts = (agents ?? [])
     .filter((a) => a.context_max && a.context_tokens / a.context_max >= 0.9)
     .map((a) => ({
-      label: `${a.name}: Context ${Math.round((a.context_tokens / a.context_max) * 100)}%`,
+      label: t("contextAlert", { name: a.name, pct: Math.round((a.context_tokens / a.context_max) * 100) }),
       color: C.error,
       href: `/agents/${a.id}`,
     }));
@@ -80,7 +85,7 @@ function HomePage() {
       <div className="flex items-center justify-center h-full">
         <div className="text-center space-y-2">
           <div className="text-lg font-semibold" style={{ color: C.textPrimary }}>{greeting}, {displayName}</div>
-          <div className="text-sm" style={{ color: C.textMuted }}>No board selected</div>
+          <div className="text-sm" style={{ color: C.textMuted }}>{t("noBoardSelected")}</div>
         </div>
       </div>
     );
@@ -92,8 +97,8 @@ function HomePage() {
           Mobile: kompakte einzeilige Variante (Datum in der Meta-Zeile). */}
       <motion.div custom={0} variants={sectionVariants} initial="hidden" animate="visible">
         <div className="label-sys mb-2 flex items-center justify-between gap-3">
-          <span>Console · Overview</span>
-          <span className="sm:hidden">{format(new Date(), "EEE, d. MMM")}</span>
+          <span>{t("consoleOverview")}</span>
+          <span className="sm:hidden">{format(new Date(), "EEE, d. MMM", { locale: dateLocale })}</span>
         </div>
         <div className="flex items-center justify-between gap-3">
           <h1
@@ -103,7 +108,7 @@ function HomePage() {
             {greeting}, {displayName}
           </h1>
           <div className="flex items-center gap-3 shrink-0">
-            <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy")}</span>
+            <span className="label-sys hidden sm:block">{format(new Date(), "EEE, d. MMM yyyy", { locale: dateLocale })}</span>
             <CreateTaskModal activeBoardId={activeBoardId} agents={agents} />
           </div>
         </div>
