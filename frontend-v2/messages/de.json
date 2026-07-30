@@ -297,5 +297,28 @@
     "rejectReasonPlaceholder": "Ablehnungsgrund (optional)",
     "fromAgent": "von {name}",
     "approvePost": "Genehmigen & posten"
+  },
+  "sessions": {
+    "title": "Agent-Terminals",
+    "terminal": "Terminal",
+    "agentBrowser": "Agent-Browser",
+    "backendConnectionFailed": "Verbindung zum Backend fehlgeschlagen",
+    "noAgentsFound": "Keine Agenten gefunden",
+    "startSession": "Session starten",
+    "stopSession": "Session stoppen",
+    "restartSession": "Session neu starten",
+    "startedNotify": "Session gestartet",
+    "stoppedNotify": "Session gestoppt",
+    "restartedNotify": "Session neu gestartet",
+    "startFailed": "Start fehlgeschlagen: {msg}",
+    "stopFailed": "Stop fehlgeschlagen: {msg}",
+    "restartFailed": "Neustart fehlgeschlagen: {msg}",
+    "runtimeSwitchedRebuilt": "Runtime gewechselt — Container neu gebaut",
+    "runtimeSwitchedRestarted": "Runtime gewechselt — Container neugestartet",
+    "sessionIs": "Session ist",
+    "connected": "verbunden",
+    "disconnected": "getrennt",
+    "agentsBack": "Agenten",
+    "selectAgent": "Agent auswählen"
   }
 }

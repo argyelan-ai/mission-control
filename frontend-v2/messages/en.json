@@ -297,5 +297,28 @@
     "rejectReasonPlaceholder": "Rejection reason (optional)",
     "fromAgent": "from {name}",
     "approvePost": "Approve & post"
+  },
+  "sessions": {
+    "title": "Agent Terminals",
+    "terminal": "Terminal",
+    "agentBrowser": "Agent browser",
+    "backendConnectionFailed": "Connection to backend failed",
+    "noAgentsFound": "No agents found",
+    "startSession": "Start session",
+    "stopSession": "Stop session",
+    "restartSession": "Restart session",
+    "startedNotify": "Session started",
+    "stoppedNotify": "Session stopped",
+    "restartedNotify": "Session restarted",
+    "startFailed": "Start failed: {msg}",
+    "stopFailed": "Stop failed: {msg}",
+    "restartFailed": "Restart failed: {msg}",
+    "runtimeSwitchedRebuilt": "Runtime switched — container rebuilt",
+    "runtimeSwitchedRestarted": "Runtime switched — container restarted",
+    "sessionIs": "Session is",
+    "connected": "connected",
+    "disconnected": "disconnected",
+    "agentsBack": "Agents",
+    "selectAgent": "Select an agent"
   }
 }
