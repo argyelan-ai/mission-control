@@ -1,5 +1,7 @@
 "use client";
 
+import { useTranslations } from "next-intl";
+
 import { useState } from "react";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery } from "@tanstack/react-query";
@@ -96,6 +98,7 @@ const tooltipStyle = {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function InsightsPage() {
+  const tr = useTranslations("insights");
   const [days, setDays] = useState(30);
   const [activeTab, setActiveTab] = useState<"overview" | "cost" | "performance" | "reports">("overview");
 
@@ -213,10 +216,10 @@ export default function InsightsPage() {
   }
 
   const tabs = [
-    { id: "overview", label: "Overview" },
-    { id: "cost", label: "Cost" },
-    { id: "performance", label: "Performance" },
-    { id: "reports", label: "AI Reports" },
+    { id: "overview", label: tr("tabOverview") },
+    { id: "cost", label: tr("tabCost") },
+    { id: "performance", label: tr("tabPerformance") },
+    { id: "reports", label: tr("tabReports") },
   ] as const;
 
   return (
@@ -224,7 +227,7 @@ export default function InsightsPage() {
       <div className="max-w-6xl mx-auto">
         {/* Header — v3: .label-sys Micro-Label, Clash Display Titel, Akzent-Messmarke */}
         <div className="mb-6">
-          <div className="label-sys mb-2">Performance · Cost · Token Usage · AI Analysis</div>
+          <div className="label-sys mb-2">{tr("headerLabel")}</div>
           <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
             <h1
               className="display text-2xl sm:text-[34px] font-semibold leading-[1.05]"
@@ -235,14 +238,14 @@ export default function InsightsPage() {
             <div className="flex items-center gap-3 shrink-0">
               {insights?.analyzed_at && (
                 <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                  Analyzed {timeAgo(insights.analyzed_at)}
+                  {tr("analyzedAgo", { ago: timeAgo(insights.analyzed_at) })}
                 </span>
               )}
               <div className="relative">
                 <select
                   value={days}
                   onChange={(e) => setDays(Number(e.target.value))}
-                  aria-label="Select time range"
+                  aria-label={tr("selectTimeRange")}
                   className="appearance-none pl-3 pr-8 py-1.5 font-mono text-[11px] rounded-md cursor-pointer"
                   style={{
                     background: "var(--color-bg-surface)",
@@ -250,9 +253,9 @@ export default function InsightsPage() {
                     color: "var(--color-text-secondary)",
                   }}
                 >
-                  <option value={7}>7 days</option>
-                  <option value={30}>30 days</option>
-                  <option value={90}>90 days</option>
+                  <option value={7}>{tr("days7")}</option>
+                  <option value={30}>{tr("days30")}</option>
+                  <option value={90}>{tr("days90")}</option>
                 </select>
                 <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
               </div>
@@ -302,7 +305,7 @@ export default function InsightsPage() {
                 {/* KPI row */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
                   <KPICard
-                    label="Tasks completed"
+                    label={tr("kpiTasksCompleted")}
                     value={insights?.analyzed_at ? String(tasksDone) : "—"}
                     sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={CheckCircle2}
@@ -310,7 +313,7 @@ export default function InsightsPage() {
                     hero
                   />
                   <KPICard
-                    label="Failed"
+                    label={tr("kpiFailed")}
                     value={insights?.analyzed_at ? String(tasksFailed) : "—"}
                     sub={`last ${intelConfig?.analysis_window_days ?? 7} days`}
                     icon={XCircle}
@@ -325,10 +328,10 @@ export default function InsightsPage() {
                     color={C.accent}
                   />
                   <KPICard
-                    label="Anomalies"
+                    label={tr("kpiAnomalies")}
                     value={String(insights?.anomalies?.length ?? 0)}
                     icon={AlertTriangle}
-                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? "Warnings active" : "All normal"}
+                    sub={insights?.anomalies?.some((a: IntelligenceAnomaly) => a.severity === "warning") ? tr("warningsActive") : tr("allNormal")}
                     color={insights?.anomalies?.length ? C.warning : C.online}
                   />
                 </div>
@@ -337,7 +340,7 @@ export default function InsightsPage() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                     <div className="label-sys mb-4">
-                      Agent Performance (Tasks)
+                      {tr("agentPerfTasks")}
                     </div>
                     {agentPerfData.length > 0 ? (
                       /* Horizontal bars: agent names as category labels stay readable
@@ -347,16 +350,16 @@ export default function InsightsPage() {
                           <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} allowDecimals={false} />
                           <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
-                          <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[0, 2, 2, 0]} />
+                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={`${C.online}B3`} radius={[0, 0, 0, 0]} />
+                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={`${C.error}B3`} radius={[0, 2, 2, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
                       <EmptyChart
                         message={
                           insights?.analyzed_at
-                            ? "No performance data"
-                            : "Analysis pending — first run after backend start takes a few minutes"
+                            ? tr("noPerfData")
+                            : tr("analysisPending")
                         }
                       />
                     )}
@@ -364,7 +367,7 @@ export default function InsightsPage() {
 
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                     <div className="label-sys mb-4">
-                      Cost per agent (USD)
+                      {tr("costPerAgent")}
                     </div>
                     {agentCostData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={agentChartHeight}>
@@ -376,7 +379,7 @@ export default function InsightsPage() {
                         </BarChart>
                       </ResponsiveContainer>
                     ) : (
-                      <EmptyChart message="No costs recorded yet" />
+                      <EmptyChart message={tr("noCostsYet")} />
                     )}
                   </div>
                 </div>
@@ -384,7 +387,7 @@ export default function InsightsPage() {
                 {/* Anomalies */}
                 {(insights?.anomalies?.length ?? 0) > 0 && (
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="label-sys mb-3">Anomalies</div>
+                    <div className="label-sys mb-3">{tr("kpiAnomalies")}</div>
                     <div className="space-y-2">
                       {insights!.anomalies.map((a: IntelligenceAnomaly, i: number) => (
                         <div
@@ -419,9 +422,9 @@ export default function InsightsPage() {
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 {/* Totals */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-5">
-                  <KPICard label="Total cost" value={costs ? fmtUsd(costs.total_cost_usd) : "—"} sub={`last ${days} days`} icon={DollarSign} color={C.accent} />
-                  <KPICard label="Input Tokens" value={costs ? fmtK(costs.total_tokens_in) : "—"} sub="Prompt tokens" icon={TrendingUp} />
-                  <KPICard label="Output Tokens" value={costs ? fmtK(costs.total_tokens_out) : "—"} sub="Completion tokens" icon={Zap} />
+                  <KPICard label={tr("kpiTotalCost")} value={costs ? fmtUsd(costs.total_cost_usd) : "—"} sub={tr("lastNDays", { days })} icon={DollarSign} color={C.accent} />
+                  <KPICard label={tr("kpiInputTokens")} value={costs ? fmtK(costs.total_tokens_in) : "—"} sub={tr("promptTokens")} icon={TrendingUp} />
+                  <KPICard label={tr("kpiOutputTokens")} value={costs ? fmtK(costs.total_tokens_out) : "—"} sub={tr("completionTokens")} icon={Zap} />
                 </div>
 
                 {/* Agent table */}
@@ -440,7 +443,7 @@ export default function InsightsPage() {
                     <table className="w-full" style={{ minWidth: 640 }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
-                          {["Agent", "Input Tokens", "Output Tokens", "Events", "Cost USD"].map((h) => (
+                          {[tr("thAgent"), tr("kpiInputTokens"), tr("kpiOutputTokens"), tr("thEvents"), tr("thCostUsd")].map((h) => (
                             <th key={h} className="label-sys px-5 py-2.5 text-left">
                               {h}
                             </th>
@@ -491,7 +494,7 @@ export default function InsightsPage() {
                     <table className="w-full" style={{ minWidth: 640 }}>
                       <thead>
                         <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
-                          {["Session", "Agent", "Input", "Output", "Cost", "Last"].map((h) => (
+                          {[tr("thSession"), tr("thAgent"), tr("thInput"), tr("thOutput"), tr("tabCost"), tr("thLast")].map((h) => (
                             <th key={h} className="label-sys px-5 py-2.5 text-left">{h}</th>
                           ))}
                         </tr>
@@ -525,16 +528,16 @@ export default function InsightsPage() {
                 {/* ── Cache hit rate KPI + harness split counter ── */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4 mb-4">
                   <KPICard
-                    label="Cache hit rate"
+                    label={tr("cacheHitRate")}
                     value={cacheHitPct !== null ? `${cacheHitPct}%` : "—"}
                     sub="cache_read / (cache_read + input)"
                     icon={TrendingUp}
                     color={cacheHitPct !== null && cacheHitPct > 40 ? C.online : C.accent}
                   />
                   <KPICard
-                    label="Harness-Split"
+                    label={tr("harnessSplit")}
                     value={harnessData.length > 0 ? `${harnessData.length} types` : "—"}
-                    sub={harnessData.map((h) => h.name).join(", ") || "No data"}
+                    sub={harnessData.map((h) => h.name).join(", ") || tr("noData")}
                     icon={BarChart3}
                   />
                 </div>
@@ -562,8 +565,8 @@ export default function InsightsPage() {
                         <thead>
                           <tr style={{ borderBottom: `1px solid ${IN_borderSubtle}` }}>
                             {[
-                              "Model", "Harness", "Input", "Output",
-                              "Cache-R", "Cache-W", "Events", "Cost USD",
+                              tr("thModel"), tr("thHarness"), tr("thInput"), tr("thOutput"),
+                              "Cache-R", "Cache-W", tr("thEvents"), tr("thCostUsd"),
                             ].map((h) => (
                               <th
                                 key={h}
@@ -660,10 +663,10 @@ export default function InsightsPage() {
                   <div
                     className="label-sys mb-4"
                   >
-                    Cost per day (USD)
+                    {tr("costPerDay")}
                   </div>
                   {(timeseries?.length ?? 0) === 0 ? (
-                    <EmptyChart message="No time series data" />
+                    <EmptyChart message={tr("noTimeSeries")} />
                   ) : (
                     <ResponsiveContainer width="100%" height={200}>
                       <AreaChart
@@ -701,7 +704,7 @@ export default function InsightsPage() {
                         <Area
                           type="monotone"
                           dataKey="cost_usd"
-                          name="Cost"
+                          name={tr("chartCost")}
                           stroke={C.accent}
                           strokeWidth={1.5}
                           fill="url(#costGradient)"
@@ -784,7 +787,7 @@ export default function InsightsPage() {
                       Harness split (by cost)
                     </div>
                     {harnessData.length === 0 ? (
-                      <EmptyChart message="No harness data" />
+                      <EmptyChart message={tr("noHarnessData")} />
                     ) : (
                       <ResponsiveContainer width="100%" height={200}>
                         <PieChart>
@@ -819,7 +822,7 @@ export default function InsightsPage() {
               <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }}>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="label-sys mb-4">Done vs. Failed</div>
+                    <div className="label-sys mb-4">{tr("doneVsFailed")}</div>
                     {agentPerfData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <BarChart data={agentPerfData}>
@@ -827,15 +830,15 @@ export default function InsightsPage() {
                           <YAxis tick={CHART_TICK} axisLine={false} tickLine={false} width={30} />
                           <Tooltip contentStyle={tooltipStyle} cursor={{ fill: C.accentSubtle }} />
                           <Legend wrapperStyle={LEGEND_STYLE} />
-                          <Bar dataKey="done" name="Done" stackId="a" fill={`${C.online}B3`} />
-                          <Bar dataKey="failed" name="Failed" stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
+                          <Bar dataKey="done" name={tr("chartDone")} stackId="a" fill={`${C.online}B3`} />
+                          <Bar dataKey="failed" name={tr("chartFailed")} stackId="a" fill={`${C.error}B3`} radius={[2, 2, 0, 0]} />
                         </BarChart>
                       </ResponsiveContainer>
-                    ) : <EmptyChart message="No data" />}
+                    ) : <EmptyChart message={tr("noData")} />}
                   </div>
 
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
-                    <div className="label-sys mb-4">Failure patterns</div>
+                    <div className="label-sys mb-4">{tr("failurePatterns")}</div>
                     {failureData.length > 0 ? (
                       <ResponsiveContainer width="100%" height={240}>
                         <PieChart>
@@ -848,7 +851,7 @@ export default function InsightsPage() {
                           <Legend wrapperStyle={LEGEND_STYLE} />
                         </PieChart>
                       </ResponsiveContainer>
-                    ) : <EmptyChart message="No failure patterns" />}
+                    ) : <EmptyChart message={tr("noFailurePatterns")} />}
                   </div>
                 </div>
 
@@ -856,7 +859,7 @@ export default function InsightsPage() {
                 {insights?.task_durations?.per_agent && (
                   <div className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                     <div className="label-sys mb-4">
-                      Ø Task duration per agent (minutes)
+                      {tr("avgTaskDuration")}
                     </div>
                     <ResponsiveContainer width="100%" height={200}>
                       <BarChart
@@ -865,7 +868,7 @@ export default function InsightsPage() {
                       >
                         <XAxis type="number" tick={CHART_TICK} axisLine={false} tickLine={false} unit="min" />
                         <YAxis type="category" dataKey="name" tick={CHART_TICK} axisLine={false} tickLine={false} width={80} />
-                        <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, "Ø duration"]} />
+                        <Tooltip contentStyle={tooltipStyle} formatter={(v) => [`${v} min`, tr("avgDuration")]} />
                         <Bar dataKey="mins" fill={`${C.chart.ram}B3`} radius={[0, 2, 2, 0]} />
                       </BarChart>
                     </ResponsiveContainer>
@@ -885,7 +888,7 @@ export default function InsightsPage() {
                   <div className="flex flex-col items-center justify-center py-20 gap-3">
                     <BarChart3 size={32} style={{ color: "var(--color-text-muted)" }} />
                     <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                      No AI analyses yet. The intelligence service runs daily.
+                      {tr("noAiReports")}
                     </p>
                   </div>
                 ) : (
