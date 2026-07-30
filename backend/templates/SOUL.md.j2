@@ -13,6 +13,8 @@
 {% if language != "en" %}
 ## Language
 Always respond to your operator ({{ operator_name }}) in **{{ language }}** — task comments, reports, questions, deliverable summaries. Code, commit messages, and identifiers stay English.
+
+**Write that language properly, with its own letters** — `schön`, `für`, `größer`, never transliterated to `schoen`/`fuer`/`groesser`. Everything from your keystrokes to the operator's chat is UTF-8 end to end; accents and umlauts survive it intact. (The curl caveat further down is about quotes, newlines and markdown breaking *inline JSON* — it is not about letters, and it does not apply at all to `mc` verbs, which encode the body for you.)
 {% endif %}
 
 ## How you exist and work (MANDATORY — read this first)

@@ -47,6 +47,44 @@ def _emit(data) -> None:
     print(json.dumps(data, indent=2, default=str))
 
 
+def resolve_text_arg(value: str | None, *, verb: str) -> str:
+    """Text from an argument, or from stdin when it is `-` (or absent).
+
+    One convention for every verb that takes prose. It used to be three
+    convention*s*: `mc telegram` read stdin on `-`, `mc pdf --file -` did too,
+    and `mc msg`/`mc ask` did not — they took the dash literally. On
+    2026-07-30 an agent answered the operator with a heredoc:
+
+        mc msg - << 'EOF'
+        <a long, carefully written reply>
+        EOF
+
+    …and MC stored a message whose entire body was "-". The API answered 201
+    with a message id, so from the agent's side it looked like it had spoken.
+    It had not. The operator saw a bare dash.
+
+    The agent was not being careless — it had `mc msg --help` open and still
+    trusted the convention it had seen work elsewhere in the same tool. An
+    inconsistent CLI earns exactly that mistake, so the fix belongs here and
+    not in anybody's instructions.
+
+    A lone `-` with nothing piped in is a usage error, never an empty post:
+    silently sending "" would repeat the original bug in a quieter voice.
+    """
+    if value not in (None, "", "-"):
+        return value.strip()
+    if sys.stdin.isatty():
+        raise UsageError(
+            f"Kein Text. Nutze `mc {verb} \"<text>\"` oder pipe/heredoc via `-`."
+        )
+    text = sys.stdin.read().strip()
+    if not text:
+        raise UsageError(
+            f"Leerer Text von stdin. Nutze `mc {verb} \"<text>\"` oder pipe/heredoc via `-`."
+        )
+    return text
+
+
 def _patch_status(client: Client, cfg: Config, status: str, **extra) -> int:
     board_id, task_id = cfg.require_task_context()
     body = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
@@ -901,11 +939,12 @@ def _cmd_ask(args, client, cfg):
     No board_id noetig: haengt am aktuellen Task des Agents.
     """
     options = [o.strip() for o in args.options.split(",")] if args.options else None
+    question = resolve_text_arg(args.question, verb="ask")
     resp = client.request(
         "POST",
         "/api/v1/agent/tasks/current/ask",
         body={
-            "question": args.question,
+            "question": question,
             "blocking": args.blocking,
             "to": args.to,
             "priority": args.priority,
@@ -931,19 +970,24 @@ def _cmd_msg(args, client, cfg):
     in every `mc inbox` footer — targets one conversation explicitly, which is
     what to use when a reply must land in a thread other than the current task.
     """
+    text = resolve_text_arg(args.text, verb="msg")
     if getattr(args, "thread", None):
         path = f"/api/v1/agent/threads/{args.thread}/messages"
     else:
         path = "/api/v1/agent/tasks/current/messages"
     resp = client.request(
-        "POST", path, body={"body": args.text, "message_type": args.type}
+        "POST", path, body={"body": text, "message_type": args.type}
     )
     _emit(resp)
     return 0
 
 
 def _add_msg_args(p):
-    p.add_argument("text")
+    p.add_argument(
+        "text",
+        help="Nachrichtentext, oder '-' um ihn von stdin zu lesen "
+             "(Heredoc/Pipe — fuer lange oder mehrzeilige Texte).",
+    )
     p.add_argument(
         "--type", dest="type", default="message",
         choices=("message", "status", "decision"),
@@ -999,7 +1043,10 @@ def _cmd_inbox(args, client, cfg):
 
 
 def _add_ask_args(p):
-    p.add_argument("question")
+    p.add_argument(
+        "question",
+        help="Fragetext, oder '-' um ihn von stdin zu lesen (Heredoc/Pipe).",
+    )
     p.add_argument(
         "--blocking", action="store_true",
         help="Task-Status -> waiting (Session pausiert bis Antwort statt weiterzuarbeiten)",
@@ -1567,16 +1614,9 @@ def _cmd_telegram(args, client, cfg):
     poll.sh beim Dispatch gesetzt) und schickt sie als `task_id` mit — damit das
     Backend das Report-Sent-Flag auf dem korrekten Task setzen kann.
     """
-    if args.text in (None, "", "-"):
-        # stdin lesen (ermoeglicht heredoc + pipes)
-        import sys as _sys
-        text = _sys.stdin.read().strip()
-        if not text:
-            raise UsageError(
-                "Kein Text. Nutze: `mc telegram \"<message>\"` oder pipe via stdin."
-            )
-    else:
-        text = args.text.strip()
+    # Same convention as every other prose verb (resolve_text_arg) — this one
+    # had it first, hand-rolled; sharing it is what stops the two drifting.
+    text = resolve_text_arg(args.text, verb="telegram")
 
     body: dict = {"text": text}
     photo_id = getattr(args, "photo", None)
