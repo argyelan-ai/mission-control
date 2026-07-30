@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef } from "react";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 
 interface VaultSearchProps {
@@ -9,6 +10,7 @@ interface VaultSearchProps {
 }
 
 export function VaultSearch({ value, onChange }: VaultSearchProps) {
+  const t = useTranslations("vault");
   const inputRef = useRef<HTMLInputElement>(null);
 
   return (
@@ -26,7 +28,7 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
         type="text"
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        placeholder="what did sparky learn about rate limits?"
+        placeholder={t("searchPlaceholder")}
         className="w-full pl-9 pr-16 py-3.5 text-[15px] rounded-xl outline-none transition-colors"
         style={{
           background: "var(--color-bg-deep)",
@@ -47,7 +49,7 @@ export function VaultSearch({ value, onChange }: VaultSearchProps) {
             inputRef.current?.blur();
           }
         }}
-        aria-label="Search vault notes"
+        aria-label={t("searchVaultNotes")}
       />
 
       {/* Return hint */}

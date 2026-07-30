@@ -49,6 +49,17 @@
     "clearVoiceHighlight": "Voice-Highlight entfernen",
     "dismiss": "ausblenden",
     "undated": "Ohne Datum",
-    "loadingMore": "lade weitere…"
+    "loadingMore": "lade weitere…",
+    "searchPlaceholder": "was hat sparky über rate limits gelernt?",
+    "searchVaultNotes": "Vault-Notizen durchsuchen",
+    "vaultUnreachable": "vault nicht erreichbar",
+    "noNotesMatching": "keine Notizen zu \"{query}\"",
+    "noNotesInScope": "keine Notizen in {scope}",
+    "noNotes": "keine Notizen",
+    "vaultUnreachableHint": "Der Vault-Index baut evtl. noch. Backend-Logs prüfen.",
+    "noNotesMatchingHint": "Breiteren Suchbegriff probieren oder Filter entfernen.",
+    "noNotesHint": "Von Agenten angelegte Notizen erscheinen hier.",
+    "removeFilter": "Filter {label} entfernen",
+    "untitled": "Ohne Titel"
   }
 }

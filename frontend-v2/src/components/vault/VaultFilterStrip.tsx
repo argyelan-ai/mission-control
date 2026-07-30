@@ -1,6 +1,7 @@
 "use client";
 
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { SlidersHorizontal, X } from "lucide-react";
 import type { VaultNoteType } from "@/lib/types";
 import type { VaultScope } from "@/hooks/useVaultSearch";
@@ -97,6 +98,7 @@ function ActivePill({
   label: string;
   onRemove: () => void;
 }) {
+  const t = useTranslations("vault");
   return (
     <span
       className="shrink-0 inline-flex items-center gap-1 font-mono text-[11px] pl-2 pr-1 py-0.5 rounded-md"
@@ -110,7 +112,7 @@ function ActivePill({
       <button
         type="button"
         onClick={onRemove}
-        aria-label={`Filter ${label} entfernen`}
+        aria-label={t("removeFilter", { label })}
         className="flex items-center justify-center rounded cursor-pointer min-h-touch min-w-touch -my-2 -mr-1 hover:opacity-70 transition-opacity"
         style={{ color: C.accent }}
       >
