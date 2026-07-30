@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -33,6 +34,7 @@ function RelatedNotesSection({
   excludePath: string;
   onSelectNote?: (path: string) => void;
 }) {
+  const t = useTranslations("vault");
   const { data, isLoading } = useQuery({
     queryKey: ["vault", "related", taskId],
     queryFn: () => api.vault.related(taskId),
@@ -66,7 +68,7 @@ function RelatedNotesSection({
             color: C.accent,
           }}
         >
-          verwandt · {others.length}
+          {t("related")} · {others.length}
         </span>
       </div>
       <ul className="space-y-1">
@@ -122,7 +124,7 @@ function RelatedNotesSection({
               paddingLeft: "1.5rem",
             }}
           >
-            … und {others.length - 8} weitere
+            {t("andMore", { count: others.length - 8 })}
           </li>
         )}
       </ul>
@@ -171,6 +173,7 @@ function PanelContent({
   onSelectNote?: (path: string) => void;
   onDeleted?: () => void;
 }) {
+  const t = useTranslations("vault");
   const { data, isLoading, isError } = useVaultNote(note.path);
   const agentColor = colorForAgent(note.agent);
   const tags = parseTags(note.tags);
@@ -189,7 +192,8 @@ function PanelContent({
   // fetch, then fall back to titleFromNote (which handles snippet + path).
   const fmTitle =
     typeof data?.frontmatter?.title === "string" ? data.frontmatter.title : null;
-  const title = fmTitle ?? titleFromNote(note);
+  const rawTitle = fmTitle ?? titleFromNote(note);
+  const title = rawTitle === "Untitled" ? t("untitled") : rawTitle;
 
   // Date resolution: detail frontmatter.date wins, then per-note fallback chain.
   const fmDate =
@@ -221,7 +225,7 @@ function PanelContent({
       setEditError(null);
     },
     onError: (err: Error) => {
-      setEditError(err.message || "Save failed");
+      setEditError(err.message || t("saveFailed"));
     },
   });
 
@@ -291,8 +295,8 @@ function PanelContent({
                   type="button"
                   onClick={cancelEdit}
                   disabled={saveMutation.isPending}
-                  aria-label="Cancel edit"
-                  title="Cancel (Esc)"
+                  aria-label={t("cancelEdit")}
+                  title={t("cancelEditTitle")}
                   className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
@@ -316,8 +320,8 @@ function PanelContent({
                   type="button"
                   onClick={handleSave}
                   disabled={saveMutation.isPending}
-                  aria-label="Save edit"
-                  title="Save (⌘S)"
+                  aria-label={t("saveEdit")}
+                  title={t("saveEditTitle")}
                   className="rounded p-1.5 transition-colors flex items-center gap-1.5 max-md:min-h-11 max-md:min-w-11 max-md:justify-center"
                   style={{
                     color: C.online,
@@ -341,8 +345,8 @@ function PanelContent({
                 <button
                   type="button"
                   onClick={startEdit}
-                  aria-label="Edit note"
-                  title="Edit"
+                  aria-label={t("editNote")}
+                  title={t("edit")}
                   className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
@@ -368,7 +372,7 @@ function PanelContent({
                 <button
                   type="button"
                   onClick={() => setConfirmOpen(true)}
-                  aria-label="Delete note"
+                  aria-label={t("deleteNote")}
                   className="rounded p-1.5 transition-colors max-md:min-h-11 max-md:min-w-11 max-md:flex max-md:items-center max-md:justify-center"
                   style={{
                     color: "var(--color-text-muted)",
@@ -387,7 +391,7 @@ function PanelContent({
                     (e.currentTarget as HTMLButtonElement).style.background =
                       "transparent";
                   }}
-                  title="Move note to trash"
+                  title={t("moveToTrash")}
                 >
                   <Trash2 size={14} />
                 </button>
@@ -451,7 +455,7 @@ function PanelContent({
             type="text"
             value={draftTitle}
             onChange={(e) => setDraftTitle(e.target.value)}
-            placeholder="Titel"
+            placeholder={t("titlePlaceholder")}
             className="w-full bg-transparent outline-none"
             style={{
               fontSize: "26px",
@@ -490,13 +494,13 @@ function PanelContent({
                 marginBottom: "4px",
               }}
             >
-              tags (komma-getrennt)
+              {t("tagsComma")}
             </label>
             <input
               type="text"
               value={draftTags}
               onChange={(e) => setDraftTags(e.target.value)}
-              placeholder="z.B. wikis, karpathy, vault"
+              placeholder={t("tagsPlaceholder")}
               className="w-full bg-transparent outline-none font-mono"
               style={{
                 fontSize: "12px",
@@ -577,14 +581,14 @@ function PanelContent({
             className="text-sm"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Failed to load note content.
+            {t("loadFailed")}
           </div>
         )}
         {isEditing ? (
           <textarea
             value={draftBody}
             onChange={(e) => setDraftBody(e.target.value)}
-            placeholder="Markdown body — frontmatter wird automatisch erhalten."
+            placeholder={t("bodyPlaceholder")}
             spellCheck={false}
             className="w-full h-full bg-transparent outline-none resize-none font-mono"
             style={{
@@ -680,6 +684,7 @@ function MobileOverlayPanel({
   onSelectNote?: (path: string) => void;
   onDeleted?: () => void;
 }) {
+  const t = useTranslations("vault");
   // Portal target is only available client-side; mount-gate avoids SSR mismatch.
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
@@ -710,7 +715,7 @@ function MobileOverlayPanel({
       style={{ background: "var(--color-bg-base)" }}
       role="dialog"
       aria-modal="true"
-      aria-label="Note detail"
+      aria-label={t("noteDetail")}
     >
       {/* Back button — safe-area top padding pushes it below the Dynamic Island. */}
       <div
@@ -724,12 +729,12 @@ function MobileOverlayPanel({
         <button
           onClick={onClose}
           type="button"
-          aria-label="Back to list"
+          aria-label={t("backToList")}
           className="flex items-center gap-1 cursor-pointer min-h-touch -ml-2 px-2 rounded-md"
           style={{ color: "var(--color-text-secondary)", background: "none", border: "none" }}
         >
           <ChevronLeft size={18} />
-          <span className="text-sm">back</span>
+          <span className="text-sm">{t("back")}</span>
         </button>
       </div>
 
@@ -765,6 +770,7 @@ export function VaultReadingPanel({
   isMobileOverlay = false,
   onDeleted,
 }: VaultReadingPanelProps) {
+  const t = useTranslations("vault");
   if (isMobileOverlay) {
     return (
       <AnimatePresence>
@@ -813,7 +819,7 @@ export function VaultReadingPanel({
               className="font-mono text-[11px] uppercase tracking-widest"
               style={{ color: "var(--color-text-muted)" }}
             >
-              select a note to read
+              {t("selectNoteToRead")}
             </p>
           </div>
         </motion.div>
