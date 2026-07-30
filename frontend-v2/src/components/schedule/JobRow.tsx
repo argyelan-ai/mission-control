@@ -9,6 +9,7 @@
  */
 
 import { useRouter } from "next/navigation";
+import { useLocale, useTranslations } from "next-intl";
 import {
   Play,
   Pencil,
@@ -22,7 +23,8 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import type { ScheduledJob } from "@/lib/types";
-import cronstrue from "cronstrue";
+// i18n build ships all cronstrue locales — needed for the German trigger text.
+import cronstrue from "cronstrue/i18n";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
@@ -56,52 +58,55 @@ function tagColor(tag: string): string {
   return TAG_COLORS[Math.abs(hash) % TAG_COLORS.length];
 }
 
-function describeTrigger(j: ScheduledJob): string {
+type Translate = (key: string, values?: Record<string, string | number>) => string;
+
+function describeTrigger(j: ScheduledJob, t: Translate, locale: string): string {
   if (j.schedule_cron) {
     try {
-      return cronstrue.toString(j.schedule_cron, { locale: "en" });
+      return cronstrue.toString(j.schedule_cron, { locale: locale === "de" ? "de" : "en" });
     } catch {
       return `Cron: ${j.schedule_cron}`;
     }
   }
-  if (j.schedule_type === "daily") return `Daily at ${j.schedule_time ?? "—"}`;
-  if (j.schedule_type === "weekdays") return `Mon–Fri at ${j.schedule_time ?? "—"}`;
+  if (j.schedule_type === "daily") return t("dailyAt", { time: j.schedule_time ?? "—" });
+  if (j.schedule_type === "weekdays") return t("weekdaysAt", { time: j.schedule_time ?? "—" });
   if (j.schedule_type === "interval") {
     const h = j.schedule_interval_hours ?? 0;
-    if (h === 1) return "Every hour";
-    return `Every ${h} hours`;
+    if (h === 1) return t("everyHour");
+    return t("everyHours", { count: h });
   }
   return "—";
 }
 
-function relativeTime(iso: string | null): string {
+function relativeTime(iso: string | null, t: Translate): string {
   if (!iso) return "—";
-  const t = new Date(iso).getTime();
-  const diff = Date.now() - t;
+  const ts = new Date(iso).getTime();
+  const diff = Date.now() - ts;
   if (diff < 0) {
     const mAhead = Math.floor(-diff / 60000);
-    if (mAhead < 60) return `in ${mAhead}m`;
+    if (mAhead < 60) return t("inM", { count: mAhead });
     const hAhead = Math.floor(mAhead / 60);
-    if (hAhead < 48) return `in ${hAhead}h`;
+    if (hAhead < 48) return t("inH", { count: hAhead });
     const dAhead = Math.floor(hAhead / 24);
-    return `in ${dAhead}d`;
+    return t("inD", { count: dAhead });
   }
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
+  if (mins < 1) return t("justNow");
+  if (mins < 60) return t("mAgo", { count: mins });
   const hours = Math.floor(mins / 60);
-  if (hours < 48) return `${hours}h ago`;
+  if (hours < 48) return t("hAgo", { count: hours });
   const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return t("dAgo", { count: days });
 }
 
 function StatusDot({ job }: { job: ScheduledJob }) {
+  const t = useTranslations("schedule");
   if (!job.enabled) {
     return (
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.borderActive }}
-        title="Paused"
+        title={t("paused")}
       />
     );
   }
@@ -113,7 +118,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.error }}
-        title="Last run failed"
+        title={t("lastRunFailed")}
       />
     );
   }
@@ -122,7 +127,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
       <span
         className="block h-2 w-2 rounded-full"
         style={{ background: C.online }}
-        title="Successful"
+        title={t("successful")}
       />
     );
   }
@@ -130,7 +135,7 @@ function StatusDot({ job }: { job: ScheduledJob }) {
     <span
       className="block h-2 w-2 rounded-full"
       style={{ background: C.textSecondary }}
-      title="Not run yet"
+      title={t("notRunYet")}
     />
   );
 }
@@ -146,6 +151,8 @@ export function JobRow({
   onSnooze,
   onDuplicate,
 }: JobRowProps) {
+  const t = useTranslations("schedule");
+  const locale = useLocale();
   const router = useRouter();
   const tags = job.tags ?? [];
   const visibleTags = tags.slice(0, 2);
@@ -169,7 +176,7 @@ export function JobRow({
         onChange={(e) => onSelectChange(e.target.checked)}
         className="h-3.5 w-3.5 cursor-pointer"
         style={{ accentColor: C.accent }}
-        aria-label={`Select ${job.name}`}
+        aria-label={t("selectJob", { name: job.name })}
       />
 
       <div className="flex items-center justify-center">
@@ -195,10 +202,10 @@ export function JobRow({
                 color: STATUS_TEXT.error,
                 border: `1px solid ${C.error}4D`,
               }}
-              title={`${failures} consecutive failed runs`}
+              title={t("consecutiveFails", { count: failures })}
             >
               <AlertTriangle size={9} />
-              {failures}x fail
+              {t("failsBadge", { count: failures })}
             </span>
           )}
           {snoozedUntil && (
@@ -209,9 +216,9 @@ export function JobRow({
                 color: C.warning,
                 border: `1px solid ${C.warning}4D`,
               }}
-              title={`Snoozed until ${new Date(snoozedUntil).toLocaleString("en-GB")}`}
+              title={t("snoozedUntil", { until: new Date(snoozedUntil).toLocaleString(locale === "de" ? "de-CH" : "en-GB") })}
             >
-              <EntityIcon value="💤" size={12} className="inline-block align-[-1px] mr-0.5" /> {new Date(snoozedUntil).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}
+              <EntityIcon value="💤" size={12} className="inline-block align-[-1px] mr-0.5" /> {new Date(snoozedUntil).toLocaleTimeString(locale === "de" ? "de-CH" : "en-GB", { hour: "2-digit", minute: "2-digit" })}
             </span>
           )}
         </span>
@@ -240,11 +247,11 @@ export function JobRow({
         )}
       </button>
 
-      <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }} title={describeTrigger(job)}>
-        {describeTrigger(job)}
+      <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }} title={describeTrigger(job, t, locale)}>
+        {describeTrigger(job, t, locale)}
       </div>
 
-      <div className="text-xs" style={{ color: C.textSecondary }}>{relativeTime(job.next_run_at)}</div>
+      <div className="text-xs" style={{ color: C.textSecondary }}>{relativeTime(job.next_run_at, t)}</div>
 
       <div className="flex items-center gap-1.5 text-xs" style={{ color: C.textSecondary }}>
         {job.last_run_status === "success" && (
@@ -253,7 +260,7 @@ export function JobRow({
         {job.last_run_status === "failed" && (
           <XCircle size={12} style={{ color: C.error }} />
         )}
-        <span>{relativeTime(job.last_run_at)}</span>
+        <span>{relativeTime(job.last_run_at, t)}</span>
       </div>
 
       <div className="min-w-0 truncate text-xs" style={{ color: C.textSecondary }}>
@@ -262,7 +269,7 @@ export function JobRow({
 
       <div className="flex items-center gap-1 opacity-0 transition group-hover:opacity-100 touch-visible-secondary">
         <IconBtn
-          title={job.enabled ? "Pause" : "Enable"}
+          title={job.enabled ? t("pause") : t("enable")}
           onClick={() => onToggleEnabled(job.id, !job.enabled)}
         >
           <span
@@ -272,19 +279,19 @@ export function JobRow({
             }}
           />
         </IconBtn>
-        <IconBtn title="Run now" onClick={() => onTrigger(job.id)}>
+        <IconBtn title={t("runNow")} onClick={() => onTrigger(job.id)}>
           <Play size={12} />
         </IconBtn>
-        <IconBtn title="Edit" onClick={() => onEdit(job)}>
+        <IconBtn title={t("edit")} onClick={() => onEdit(job)}>
           <Pencil size={12} />
         </IconBtn>
-        <IconBtn title="Duplicate" onClick={() => onDuplicate(job.id)}>
+        <IconBtn title={t("duplicate")} onClick={() => onDuplicate(job.id)}>
           <Copy size={12} />
         </IconBtn>
-        <IconBtn title="Snooze" onClick={() => onSnooze(job.id)}>
+        <IconBtn title={t("snooze")} onClick={() => onSnooze(job.id)}>
           <AlarmClockOff size={12} />
         </IconBtn>
-        <IconBtn title="Delete" danger onClick={() => onDelete(job.id)}>
+        <IconBtn title={t("delete")} danger onClick={() => onDelete(job.id)}>
           <Trash2 size={12} />
         </IconBtn>
       </div>
