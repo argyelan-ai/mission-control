@@ -63,6 +63,30 @@ pin to survive a fresh clone/deploy.
 > Dockerfile's default versions instead of the bumped manifest — so always
 > `git pull` the host checkout when you update the backend image.
 
+### Stable host-agent checkout
+
+Host agents (launchd-managed, e.g. a board lead running the native `claude`
+CLI) read shared scripts (`docker/shared/poll.sh`, adapter libs) and use a
+repo directory as their working directory. They must **not** read those from
+the checkout you develop in — whatever branch you happen to have checked out
+would silently become the agents' code version.
+
+`docker/shared/ensure-checkout.sh` maintains a dedicated checkout for them,
+pinned to a fixed ref and never used for development:
+
+| Env var | Default | Meaning |
+|---------|---------|---------|
+| `MC_CHECKOUT_PATH` | `~/.mc/checkouts/mission-control` | where the stable checkout lives |
+| `MC_CHECKOUT_REF` | `main` | branch/ref it is pinned to |
+
+The clone source is the `origin` remote of your own checkout (`MC_REPO_PATH`),
+so forks and private mirrors work without extra config. The host entrypoints
+(e.g. `docker/boss-host/entrypoint.sh`) call the script on every start: clone
+if missing, otherwise fetch + hard-reset to `origin/$MC_CHECKOUT_REF`
+(offline: keep the existing state and warn). If you deploy a new backend,
+restart the host agents (or wait for their next launchd restart) so they
+pick up the matching script versions.
+
 ## 2. Get LLM credentials into the vault
 
 Agent containers fetch their credentials from the backend at startup
