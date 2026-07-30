@@ -14,6 +14,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { Brain, Check, ChevronRight, Clock, Paperclip, Search, Send, X, Zap } from "lucide-react";
 import { api } from "@/lib/api";
@@ -36,16 +37,17 @@ const STATUS_ORDER: TaskStatus[] = [
   "done",
 ];
 
-const STATUS_LABEL: Record<TaskStatus, string> = {
-  inbox: "Inbox",
-  in_progress: "In Progress",
-  review: "Review",
-  user_test: "User Test",
-  waiting: "Waiting",
-  blocked: "Blocked",
-  failed: "Failed",
-  aborted: "Aborted",
-  done: "Done",
+// Message keys in the tasks.* namespace — t() at the render site.
+const STATUS_LABEL_KEY: Record<TaskStatus, string> = {
+  inbox: "statusInbox",
+  in_progress: "statusInProgress",
+  review: "statusReview",
+  user_test: "statusUserTest",
+  waiting: "statusWaiting",
+  blocked: "statusBlocked",
+  failed: "statusFailed",
+  aborted: "statusAborted",
+  done: "statusDone",
 };
 
 function StatusDot({ status }: { status: TaskStatus }) {
@@ -90,6 +92,7 @@ function ListRow({
   projectName: string | null;
   onClick: () => void;
 }) {
+  const t = useTranslations("tasks");
   const qc = useQueryClient();
   const agent = agents.find((a) => a.id === task.assigned_agent_id);
   const isDone = task.status === "done";
@@ -121,7 +124,7 @@ function ListRow({
         <button
           type="button"
           onClick={onClick}
-          aria-label={`Open task: ${task.title}`}
+          aria-label={t("openTask", { title: task.title })}
           className="flex-1 min-w-0 text-left text-[13px] truncate cursor-pointer after:absolute after:inset-0 after:content-[''] hover:opacity-90"
           style={{ color: isDone ? C.textMuted : C.textPrimary }}
         >
@@ -139,7 +142,7 @@ function ListRow({
           {isStale && (
             <span
               className="inline-flex items-center gap-0.5 text-[10px] font-medium px-1 py-0.5 rounded-sm"
-              title={`No activity for ${staleMins} minutes`}
+              title={t("noActivityFor", { mins: staleMins })}
               style={{
                 color: isCritical ? C.error : C.warning,
                 backgroundColor: isCritical ? `${C.error}1A` : `${C.warning}1A`,
@@ -154,7 +157,7 @@ function ListRow({
               className="text-[9px] px-1.5 py-px rounded-sm truncate max-w-[88px]"
               style={{ color: C.textDim, border: `1px solid ${C.border}` }}
             >
-              {projectName ?? "Ad-hoc"}
+              {projectName ?? t("adHoc")}
             </span>
           )}
           {agent && (
@@ -166,7 +169,7 @@ function ListRow({
             href={`/memory?task=${task.id}`}
             onClick={(e) => e.stopPropagation()}
             className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-            title="Vault: all notes and files for this task"
+            title={t("vaultLink")}
             style={{ color: C.textMuted }}
           >
             <Brain size={12} />
@@ -179,7 +182,7 @@ function ListRow({
               }}
               disabled={dispatchMutation.isPending}
               className="p-1 rounded-sm opacity-0 group-hover:opacity-100 transition-opacity hover:bg-[var(--color-bg-hover)] cursor-pointer touch-visible"
-              title="Dispatch task"
+              title={t("dispatchTask")}
               style={{ color: C.accent }}
             >
               <Send size={12} />
@@ -212,6 +215,7 @@ function GroupHeader({
   onOpenProject?: () => void;
   onOpenReferences?: () => void;
 }) {
+  const t = useTranslations("tasks");
   return (
     <div className="sticky top-0 z-[1] flex items-center gap-1.5 px-3 pt-3 pb-1 min-w-0" style={{ backgroundColor: C.bgBase }}>
       <button
@@ -233,7 +237,7 @@ function GroupHeader({
         </span>
       </button>
       {typeof progressPct === "number" && (
-        <span className="flex items-center gap-1 ml-1 shrink-0" title={`${progressPct}% done`}>
+        <span className="flex items-center gap-1 ml-1 shrink-0" title={t("pctDone", { pct: progressPct })}>
           {/* Segmented stepper (mockup pattern) — 5 blocks read faster than a hairline bar */}
           <span className="flex gap-[2px]">
             {[0, 1, 2, 3, 4].map((i) => (
@@ -257,8 +261,8 @@ function GroupHeader({
               onClick={onOpenReferences}
               className="p-1 rounded-sm cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
               style={{ color: C.textDim }}
-              title="Reference files for this project"
-              aria-label={`Reference files for ${label}`}
+              title={t("referenceFiles")}
+              aria-label={t("referenceFilesFor", { name: label })}
             >
               <Paperclip size={11} />
             </button>
@@ -269,9 +273,9 @@ function GroupHeader({
               onClick={onOpenProject}
               className="text-[10px] font-mono px-1.5 py-0.5 rounded-sm cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors whitespace-nowrap"
               style={{ color: C.textMuted }}
-              title="Open project view (phases)"
+              title={t("openProjectView")}
             >
-              Phases →
+              {t("phases")} →
             </button>
           )}
         </div>
@@ -314,6 +318,7 @@ export default function TaskListColumn({
   focusTaskId?: string | null;
   onFocusHandled?: () => void;
 }) {
+  const t = useTranslations("tasks");
   // First visit (nothing stored): project view, all groups collapsed —
   // a scannable project overview instead of a wall of status lanes.
   const [mode, setMode] = useState<TaskGroupMode>("project");
@@ -386,14 +391,14 @@ export default function TaskListColumn({
     if (mode === "status") {
       return STATUS_ORDER.map((s) => ({
         key: `status:${s}`,
-        label: STATUS_LABEL[s],
-        tasks: visible.filter((t) => t.status === s),
+        label: t(STATUS_LABEL_KEY[s]),
+        tasks: visible.filter((task) => task.status === s),
       })).filter((g) => g.tasks.length > 0);
     }
     // project mode: Ad-hoc first, then projects in list order, skip empty
     const adHoc: Group = {
       key: "proj:adhoc",
-      label: "Ad-hoc",
+      label: t("adHoc"),
       adHoc: true,
       tasks: visible.filter((t) => !t.project_id),
     };
@@ -410,7 +415,7 @@ export default function TaskListColumn({
       };
     });
     return [adHoc, ...rest].filter((g) => g.tasks.length > 0);
-  }, [mode, visible, projects, tasks]);
+  }, [mode, visible, projects, tasks, t]);
 
   // Project mode: everything starts collapsed (scannable project overview);
   // status mode: only done/aborted start collapsed.
@@ -470,13 +475,13 @@ export default function TaskListColumn({
     <div className="flex flex-col h-full min-h-0 min-w-0 w-full">
       {/* Header — v3: Micro-Label, Clash-Display-Titel, Akzent-Messmarke */}
       <div className="px-4 pt-4 pb-2 shrink-0">
-        <div className="label-sys mb-1.5">Console · Tasks</div>
+        <div className="label-sys mb-1.5">{t("consoleTasks")}</div>
         <div className="flex items-baseline gap-2">
           <h1 className="display text-[20px] font-semibold leading-tight" style={{ color: C.textPrimary }}>
-            Tasks
+            {t("title")}
           </h1>
           <span className="text-[11px] font-mono" style={{ color: C.textDim }}>
-            {openCount} open
+            {t("openCount", { count: openCount })}
           </span>
         </div>
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Instrumenten-Detail */}
@@ -495,8 +500,8 @@ export default function TaskListColumn({
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search tasks…"
-            aria-label="Search tasks"
+            placeholder={t("searchPlaceholder")}
+            aria-label={t("searchTasks")}
             className="w-full rounded-md pl-7 pr-2.5 py-1.5 text-xs outline-none transition-colors"
             style={{
               backgroundColor: C.bgDeep,
@@ -508,7 +513,7 @@ export default function TaskListColumn({
         <div className="flex items-center gap-1.5">
           <div
             role="tablist"
-            aria-label="Group tasks by"
+            aria-label={t("groupTasksBy")}
             className="flex rounded-md p-0.5"
             style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
           >
@@ -525,18 +530,18 @@ export default function TaskListColumn({
                     : { color: C.textMuted, border: "1px solid transparent" }
                 }
               >
-                {m === "status" ? "Status" : "Project"}
+                {m === "status" ? t("groupStatus") : t("groupProject")}
               </button>
             ))}
           </div>
           <select
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
-            aria-label="Filter by agent"
+            aria-label={t("filterByAgent")}
             className="text-[10.5px] rounded-md px-2 py-1.5 outline-none cursor-pointer min-w-0 flex-1"
             style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}`, color: agentFilter ? C.textPrimary : C.textMuted }}
           >
-            <option value="">All agents</option>
+            <option value="">{t("allAgents")}</option>
             {agents.map((a) => (
               <option key={a.id} value={a.id}>
                 {a.emoji ? <EntityIcon value={a.emoji} size={12} className="inline-block align-[-1px] mr-1" /> : null}
@@ -551,7 +556,7 @@ export default function TaskListColumn({
       <div className="flex-1 overflow-y-auto pb-4 px-1 min-h-0">
         {groups.length === 0 && (
           <div className="px-4 py-10 text-center label-sys">
-            {query || agentFilter ? "No tasks match the current filters." : "No tasks yet — create one with ⌘K or the + button."}
+            {query || agentFilter ? t("noTasksMatch") : t("noTasksYet")}
           </div>
         )}
         {groups.map((g) => {
@@ -593,7 +598,7 @@ export default function TaskListColumn({
                       className="w-full text-center text-[11px] font-mono py-2 rounded-md cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
                       style={{ color: C.textMuted }}
                     >
-                      Show {Math.min(DONE_PAGE, g.tasks.length - limit)} more
+                      {t("showMore", { count: Math.min(DONE_PAGE, g.tasks.length - limit) })}
                     </button>
                   )}
                 </div>
@@ -607,7 +612,7 @@ export default function TaskListColumn({
         open={referencesProjectId != null}
         onClose={() => setReferencesProjectId(null)}
         projectId={referencesProjectId ?? ""}
-        projectName={referencesProjectId ? (projectName.get(referencesProjectId) ?? "Project") : ""}
+        projectName={referencesProjectId ? (projectName.get(referencesProjectId) ?? t("projectFallback")) : ""}
       />
     </div>
   );
