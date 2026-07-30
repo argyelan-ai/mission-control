@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { LayoutGrid, List, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -18,13 +19,14 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 type ViewMode = "grid" | "list";
 type StatusFilter = "all" | "online" | "busy" | "idle" | "offline" | "error";
 
-const STATUS_OPTIONS: { value: StatusFilter; label: string }[] = [
-  { value: "all", label: "All" },
-  { value: "online", label: "Online" },
-  { value: "busy", label: "Busy" },
-  { value: "idle", label: "Idle" },
-  { value: "offline", label: "Offline" },
-  { value: "error", label: "Error" },
+// labelKey resolves via t() at the render site (agents.* namespace).
+const STATUS_OPTIONS: { value: StatusFilter; labelKey: string }[] = [
+  { value: "all", labelKey: "filterAll" },
+  { value: "online", labelKey: "filterOnline" },
+  { value: "busy", labelKey: "filterBusy" },
+  { value: "idle", labelKey: "filterIdle" },
+  { value: "offline", labelKey: "filterOffline" },
+  { value: "error", labelKey: "filterError" },
 ];
 
 interface AgentGridProps {
@@ -33,6 +35,7 @@ interface AgentGridProps {
 }
 
 export function AgentGrid({ agents, isLoading }: AgentGridProps) {
+  const t = useTranslations("agents");
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
@@ -70,7 +73,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
                   : "bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
               )}
             >
-              {opt.label}
+              {t(opt.labelKey)}
             </button>
           ))}
         </div>
@@ -106,7 +109,7 @@ export function AgentGrid({ agents, isLoading }: AgentGridProps) {
       {filteredAgents.length === 0 ? (
         <GlassCard className="py-16 text-center">
           <p className="text-sm text-[var(--color-text-muted)]">
-            No agents found
+            {t("noAgentsFoundPlain")}
           </p>
         </GlassCard>
       ) : viewMode === "grid" ? (
@@ -152,6 +155,7 @@ import Link from "next/link";
 import { contextPercent, contextColor, timeAgo } from "@/lib/utils";
 
 function AgentListRow({ agent }: { agent: Agent }) {
+  const t = useTranslations("agents");
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
 
@@ -180,7 +184,7 @@ function AgentListRow({ agent }: { agent: Agent }) {
               <StatusDot status={dotStatus} size="sm" pulse={dotStatus === "online"} />
             </div>
             <span className="text-[11px] text-[var(--color-text-muted)] font-mono truncate block">
-              {agent.model ? agent.model.split("/").pop() : "No model"}
+              {agent.model ? agent.model.split("/").pop() : t("noModel")}
             </span>
           </div>
 
@@ -209,10 +213,10 @@ function AgentListRow({ agent }: { agent: Agent }) {
             }
             size="sm"
           >
-            {agent.provision_status === "provisioned" ? "Live" :
-             agent.provision_status === "error" ? "Error" :
-             agent.provision_status === "provisioning" ? "Provisioning" :
-             "Local"}
+            {agent.provision_status === "provisioned" ? t("provLive") :
+             agent.provision_status === "error" ? t("provError") :
+             agent.provision_status === "provisioning" ? t("provProvisioning") :
+             t("provLocal")}
           </Pill>
         </div>
       </GlassCard>

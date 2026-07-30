@@ -5,6 +5,7 @@ import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
+import { useTranslations } from "next-intl";
 import {
   Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
   Layout, ChevronDown, Archive, MoreVertical,
@@ -75,6 +76,7 @@ function AssignBoardModal({
   boards: Board[];
   onClose: () => void;
 }) {
+  const t = useTranslations("agents");
   const [boardId, setBoardId] = useState(agent.board_id ?? "");
   const qc = useQueryClient();
 
@@ -91,7 +93,7 @@ function AssignBoardModal({
   async function handleAssign() {
     try {
       await api.agents.assignBoard(agent.id, boardId || null);
-      notify.success(`${agent.name} assigned to board`);
+      notify.success(t("assignedToBoard", { name: agent.name }));
       qc.invalidateQueries({ queryKey: ["agents"] });
       onClose();
     } catch (e: unknown) {
@@ -117,7 +119,7 @@ function AssignBoardModal({
           style={{ borderColor: CINEMA.borderSubtle }}
         >
           <h2 className="text-sm font-semibold text-[var(--color-text-primary)]">
-            <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name} — Assign board
+            <EntityIcon value={agent.emoji} size={14} className="inline-block align-[-2px] mr-1" />{agent.name} — {t("assignBoard")}
           </h2>
           <button onClick={onClose} className="cursor-pointer text-[var(--color-text-muted)]">
             <X size={16} />
@@ -131,7 +133,7 @@ function AssignBoardModal({
             className={`${inputClass} cursor-pointer`}
             style={selectStyle}
           >
-            <option value="">-- No board --</option>
+            <option value="">{t("noBoardOption")}</option>
             {boards.map((b) => (
               <option key={b.id} value={b.id}>{b.name}</option>
             ))}
@@ -139,14 +141,14 @@ function AssignBoardModal({
 
           <div className="flex justify-end gap-2">
             <button onClick={onClose} className={btnCancelClass}>
-              Cancel
+              {t("cancel")}
             </button>
             <button
               onClick={handleAssign}
               className="px-5 py-2.5 text-sm rounded-sm font-semibold cursor-pointer transition-all hover:brightness-110"
               style={btnPrimaryStyle}
             >
-              Assign
+              {t("assign")}
             </button>
           </div>
         </div>
@@ -162,6 +164,7 @@ function TemplatesTab({
 }: {
   onUseTemplate: (templateId: string) => void;
 }) {
+  const t = useTranslations("agents");
   const { data: templates, isLoading } = useQuery({
     queryKey: ["agent-templates"],
     queryFn: api.agentTemplates.list,
@@ -214,7 +217,7 @@ function TemplatesTab({
 
               {tmpl.default_model && (
                 <div className="text-[11px] font-mono text-[var(--color-text-muted)]">
-                  Model:{" "}
+                  {t("modelLabel")}{" "}
                   <span className="text-[var(--color-text-secondary)]">
                     {tmpl.default_model.split("/").pop()}
                   </span>
@@ -250,7 +253,7 @@ function TemplatesTab({
                   className="w-full text-xs px-3 py-2 rounded-xl font-medium cursor-pointer transition-all text-[var(--color-on-accent)]"
                   style={btnPrimaryStyle}
                 >
-                  Create agent
+                  {t("createAgent")}
                 </button>
               </div>
             </GlassCard>
@@ -259,7 +262,7 @@ function TemplatesTab({
 
         {!templates?.length && (
           <div className="col-span-3 py-12 text-center text-sm text-[var(--color-text-muted)]">
-            No templates found.
+            {t("noTemplatesFound")}
           </div>
         )}
       </div>
@@ -285,17 +288,19 @@ const DOT_STATUS = (status: string) => {
   }
 };
 
-const PROVISION_MAP: Record<string, { label: string; color: string }> = {
-  local: { label: "Local", color: C.textDim },
-  provisioning: { label: "Provisioning", color: C.warning },
-  provisioned: { label: "Live", color: C.online },
-  error: { label: "Error", color: C.error },
+// labelKey resolves via t() at the render site (agents.* namespace).
+const PROVISION_MAP: Record<string, { labelKey: string; color: string }> = {
+  local: { labelKey: "provLocal", color: C.textDim },
+  provisioning: { labelKey: "provProvisioning", color: C.warning },
+  provisioned: { labelKey: "provLive", color: C.online },
+  error: { labelKey: "provError", color: C.error },
 };
 
 function ContextBar({ pct }: { pct: number }) {
+  const t = useTranslations("agents");
   const color = pct >= 90 ? C.error : pct >= 70 ? C.warning : C.info;
   return (
-    <span className="flex items-center gap-1.5 shrink-0" title={`Context: ${pct}%`}>
+    <span className="flex items-center gap-1.5 shrink-0" title={t("contextPct", { pct })}>
       <span
         className="h-1 w-10 sm:w-14 rounded-full overflow-hidden"
         style={{ backgroundColor: "var(--color-bg-elevated)" }}
@@ -326,6 +331,7 @@ function AgentRosterRow({
   showAllAgents: boolean;
   onMenu: (a: Agent) => void;
 }) {
+  const t = useTranslations("agents");
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const prov = PROVISION_MAP[agent.provision_status] ?? PROVISION_MAP.local;
   const model = agent.model ? agent.model.split("/").pop() : null;
@@ -341,7 +347,7 @@ function AgentRosterRow({
       {/* Name + role = row link (covers the row via ::after) */}
       <Link
         href={`/agents/${agent.id}`}
-        aria-label={`Open agent: ${agent.name}`}
+        aria-label={t("openAgent", { name: agent.name })}
         className="min-w-0 flex-1 after:absolute after:inset-0 after:content-['']"
       >
         <span className="flex items-center gap-2 min-w-0">
@@ -352,7 +358,7 @@ function AgentRosterRow({
             {agent.name}
           </span>
           {agent.provision_status !== "provisioned" && (
-            <Pill color={prov.color} size="sm">{prov.label}</Pill>
+            <Pill color={prov.color} size="sm">{t(prov.labelKey)}</Pill>
           )}
           {agent.harness && (
             // "hermes" (ADR-060, host-only) has no HARNESS_LABELS entry — fall
@@ -379,7 +385,7 @@ function AgentRosterRow({
                 border: `1px solid ${boardName ? CINEMA.borderSubtle : `${C.warning}4D`}`,
               }}
             >
-              {boardName ?? "No board"}
+              {boardName ?? t("noBoard")}
             </span>
           )}
         </span>
@@ -409,7 +415,7 @@ function AgentRosterRow({
       <span
         className="text-[11px] tabular-nums w-9 text-right shrink-0 max-sm:hidden"
         style={{ color: "var(--color-text-secondary)" }}
-        title={`${agent.total_tasks_completed} tasks completed`}
+        title={t("tasksCompleted", { count: agent.total_tasks_completed })}
       >
         {agent.total_tasks_completed}
       </span>
@@ -417,7 +423,7 @@ function AgentRosterRow({
       {/* Actions — above the row overlay */}
       <button
         onClick={() => onMenu(agent)}
-        aria-label={`Actions for ${agent.name}`}
+        aria-label={t("actionsFor", { name: agent.name })}
         className="relative z-[1] flex items-center justify-center w-9 h-9 min-h-touch rounded-lg shrink-0 cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
         style={{ color: C.textMuted }}
       >
@@ -446,6 +452,7 @@ function AgentActionsSheet({
   onAssignBoard: (a: Agent) => void;
   onClose: () => void;
 }) {
+  const t = useTranslations("agents");
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is below.
   useEffect(() => {
@@ -475,7 +482,7 @@ function AgentActionsSheet({
       <motion.div
         role="dialog"
         aria-modal="true"
-        aria-label={`Actions: ${agent.name}`}
+        aria-label={t("actionsFor", { name: agent.name })}
         initial={{ opacity: 0, y: 32 }}
         animate={{ opacity: 1, y: 0 }}
         exit={{ opacity: 0, y: 32 }}
@@ -504,7 +511,7 @@ function AgentActionsSheet({
               <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textMuted }}>
                 <StatusDot status={dot} />
                 <span className="capitalize">{agent.status}</span>
-                <span>· Context {pct}%</span>
+                <span>· {t("contextPct", { pct })}</span>
                 {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at)}</span>}
               </div>
             </div>
@@ -522,13 +529,13 @@ function AgentActionsSheet({
           style={{ paddingBottom: "calc(env(safe-area-inset-bottom) + 0.5rem)" }}
         >
           <Link href={`/agents/${agent.id}`} className={itemCls} style={{ color: "var(--color-text-primary)" }}>
-            <Bot size={15} style={{ color: C.accent }} /> Open details
+            <Bot size={15} style={{ color: C.accent }} /> {t("openDetails")}
           </Link>
           <Link href={`/agents/${agent.id}?tab=config`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
-            <Settings size={15} /> Config
+            <Settings size={15} /> {t("config")}
           </Link>
           <Link href={`/agents/${agent.id}?tab=analytics`} className={itemCls} style={{ color: "var(--color-text-secondary)" }}>
-            <BarChart3 size={15} /> Analytics
+            <BarChart3 size={15} /> {t("analytics")}
           </Link>
           <button
             onClick={() => { onClose(); onReset(agent); }}
@@ -537,7 +544,7 @@ function AgentActionsSheet({
             style={{ color: "var(--color-text-secondary)" }}
           >
             {resettingId === agent.id ? <Loader2 size={15} className="animate-spin" /> : <RotateCcw size={15} />}
-            Session Reset
+            {t("sessionReset")}
           </button>
           {showAllAgents && (
             <button
@@ -545,7 +552,7 @@ function AgentActionsSheet({
               className={itemCls}
               style={{ color: "var(--color-text-secondary)" }}
             >
-              <Layout size={15} /> Assign board{boardName ? ` (${boardName})` : ""}
+              <Layout size={15} /> {t("assignBoard")}{boardName ? ` (${boardName})` : ""}
             </button>
           )}
           <button
@@ -553,7 +560,7 @@ function AgentActionsSheet({
             className={itemCls}
             style={{ color: C.warning }}
           >
-            <Archive size={15} /> Archive
+            <Archive size={15} /> {t("archive")}
           </button>
         </div>
       </motion.div>
@@ -564,6 +571,7 @@ function AgentActionsSheet({
 // ── Agents Page ─────────────────────────────────────────────────────────────
 
 export default function AgentsPage() {
+  const t = useTranslations("agents");
   const qc = useQueryClient();
   const { activeBoardId } = useAppStore();
 
@@ -622,10 +630,10 @@ export default function AgentsPage() {
     setResettingId(agent.id);
     try {
       await api.agents.reset(agent.id);
-      notify.success(`${agent.name} session reset`);
+      notify.success(t("sessionResetDone", { name: agent.name }));
       qc.invalidateQueries({ queryKey: ["agents"] });
     } catch {
-      notify.error(`Failed to reset ${agent.name}`);
+      notify.error(t("sessionResetFailed", { name: agent.name }));
     } finally {
       setResettingId(null);
     }
@@ -637,7 +645,7 @@ export default function AgentsPage() {
   const archiveMutation = useMutation({
     mutationFn: (agent: Agent) => api.agents.archive(agent.id),
     onSuccess: (_res, agent) => {
-      notify.success(`${agent.name} archived`);
+      notify.success(t("archivedNotify", { name: agent.name }));
       qc.invalidateQueries({ queryKey: ["agents"] });
     },
     onError: (e) => notify.error(extractDetail(e)),
@@ -655,12 +663,12 @@ export default function AgentsPage() {
         {/* Header */}
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="label-sys mb-2">Fleet · Agents</div>
+            <div className="label-sys mb-2">{t("fleetAgents")}</div>
             <h1 className="display text-2xl font-semibold text-[var(--color-text-primary)]">
-              Agents
+              {t("title")}
             </h1>
             <p className="text-[13px] text-[var(--color-text-secondary)] mt-1">
-              {onlineCount}/{totalCount} online
+              {t("onlineCount", { online: onlineCount, total: totalCount })}
             </p>
           </div>
 
@@ -671,7 +679,7 @@ export default function AgentsPage() {
               style={btnPrimaryStyle}
             >
               <Plus size={14} />
-              New agent
+              {t("newAgent")}
             </button>
           </div>
         </div>
@@ -696,7 +704,7 @@ export default function AgentsPage() {
           >
             <span className="flex items-center gap-2">
               <Bot size={14} />
-              Agents ({totalCount})
+              {t("title")} ({totalCount})
             </span>
           </button>
           <button
@@ -714,7 +722,7 @@ export default function AgentsPage() {
           >
             <span className="flex items-center gap-2">
               <Users size={14} />
-              Templates
+              {t("templates")}
             </span>
           </button>
         </div>
@@ -734,7 +742,7 @@ export default function AgentsPage() {
                 }}
               >
                 <Layout size={12} />
-                {showAllAgents ? "All Agents" : "This board only"}
+                {showAllAgents ? t("allAgents") : t("thisBoardOnly")}
                 <ChevronDown
                   size={12}
                   className="transition-transform"
@@ -743,7 +751,7 @@ export default function AgentsPage() {
               </button>
               {showAllAgents && (
                 <span className="text-[11px] text-[var(--color-text-muted)]">
-                  Registry view — shows all agents across all boards
+                  {t("registryViewHint")}
                 </span>
               )}
             </div>
@@ -782,8 +790,8 @@ export default function AgentsPage() {
               <GlassCard className="py-16 text-center">
                 <p className="text-sm text-[var(--color-text-muted)]">
                   {showAllAgents
-                    ? "No agents found."
-                    : "No agents configured for this board."}
+                    ? t("noAgentsFound")
+                    : t("noAgentsForBoard")}
                 </p>
               </GlassCard>
             )}
@@ -796,7 +804,7 @@ export default function AgentsPage() {
                 <div className="flex items-center gap-2 mb-2 px-1">
                   <Archive size={13} style={{ color: C.textMuted }} />
                   <h2 className="text-[11px] font-medium uppercase tracking-[0.05em]" style={{ color: C.textMuted }}>
-                    Archived ({archivedAgents.length})
+                    {t("archivedCount", { count: archivedAgents.length })}
                   </h2>
                 </div>
                 <div
@@ -818,7 +826,7 @@ export default function AgentsPage() {
                         </span>
                         {agent.archived_at && (
                           <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
-                            archived {timeAgo(agent.archived_at)}
+                            {t("archivedAgo", { ago: timeAgo(agent.archived_at) })}
                           </span>
                         )}
                       </Link>

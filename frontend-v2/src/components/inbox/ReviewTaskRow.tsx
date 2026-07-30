@@ -8,6 +8,7 @@ import {
   ExternalLink, MessageSquare, Pause, UserCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { useTranslations } from "next-intl";
 import { cn, timeAgo } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -37,6 +38,7 @@ export function ReviewTaskRow({
   onDecision,
   loading,
 }: ReviewTaskRowProps) {
+  const t = useTranslations("inbox");
   const [expanded, setExpanded] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
@@ -79,7 +81,7 @@ export function ReviewTaskRow({
                     border: `1px solid ${C.accent}40`,
                   }}
                 >
-                  <UserCheck size={10} /> Your review
+                  <UserCheck size={10} /> {t("yourReview")}
                 </span>
               )}
               <span
@@ -142,7 +144,7 @@ export function ReviewTaskRow({
               {comments && comments.length > 0 && (
                 <div className="mt-3 ml-5 flex flex-col gap-2">
                   <div className="text-[10px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
-                    History ({comments.length})
+                    {t("historyCount", { count: comments.length })}
                   </div>
                   {comments.map((c) => (
                     <CommentCard key={c.id} comment={c} agentMap={agentMap} />
@@ -152,7 +154,7 @@ export function ReviewTaskRow({
 
               {comments && comments.length === 0 && (
                 <div className="mt-3 ml-5 text-[11px] text-[var(--color-text-muted)]">
-                  No comments yet.
+                  {t("noCommentsYet")}
                 </div>
               )}
 
@@ -163,7 +165,7 @@ export function ReviewTaskRow({
                   className="inline-flex items-center gap-1 text-[11px] transition-colors"
                   style={{ color: C.accent }}
                 >
-                  <ExternalLink size={11} /> View in Tasks
+                  <ExternalLink size={11} /> {t("viewInTasks")}
                 </Link>
               </div>
             </motion.div>
@@ -190,9 +192,9 @@ export function ReviewTaskRow({
                   `${C.error}1A`,
               }}
             >
-              {task.review_decision === "approved" ? "Approved" :
-               task.review_decision === "hold" ? "On Hold" :
-               "Changes Requested"}
+              {task.review_decision === "approved" ? t("decisionApproved") :
+               task.review_decision === "hold" ? t("decisionHold") :
+               t("decisionChanges")}
             </div>
           )}
 
@@ -210,7 +212,7 @@ export function ReviewTaskRow({
                 border: `1px solid ${C.online}40`,
               }}
             >
-              <CheckCircle size={13} /> Approve
+              <CheckCircle size={13} /> {t("approve")}
             </button>
             <button
               onClick={() => {
@@ -225,7 +227,7 @@ export function ReviewTaskRow({
                 border: `1px solid ${C.error}40`,
               }}
             >
-              <XCircle size={13} /> Reject
+              <XCircle size={13} /> {t("reject")}
             </button>
             <button
               onClick={() => onDecision("hold", "On hold -- waiting for clarification")}
@@ -237,7 +239,7 @@ export function ReviewTaskRow({
                 border: `1px solid ${C.warning}40`,
               }}
             >
-              <Pause size={13} /> Hold
+              <Pause size={13} /> {t("hold")}
             </button>
           </div>
 
@@ -254,8 +256,8 @@ export function ReviewTaskRow({
                     setShowApproveInput(false);
                   }
                 }}
-                placeholder="Reason... (Enter to approve)"
-                aria-label="Approve comment"
+                placeholder={t("approveReasonPlaceholder")}
+                aria-label={t("approveComment")}
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{
                   backgroundColor: "var(--color-bg-surface)",
@@ -293,8 +295,8 @@ export function ReviewTaskRow({
                     setShowRejectInput(false);
                   }
                 }}
-                placeholder="Feedback for developer... (Enter to send)"
-                aria-label="Reject comment"
+                placeholder={t("rejectFeedbackPlaceholder")}
+                aria-label={t("rejectComment")}
                 className="flex-1 px-3 py-2 rounded-xl text-[12px] outline-none"
                 style={{
                   backgroundColor: "var(--color-bg-surface)",
