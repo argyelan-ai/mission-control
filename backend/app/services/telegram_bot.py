@@ -473,24 +473,18 @@ class TelegramBotService:
             )
 
     def _voice_transcriber(self):
-        """Async ``(audio_bytes) -> str | None`` bound to the shared jarvis_core
-        STT chain (`jarvis_stt_model`), or None when unavailable (no OpenAI key or
-        no jarvis_core mount). Reuses the exact voice path the Jarvis channel uses
-        — no second STT implementation."""
-        if not settings.openai_api_key:
-            return None
-        try:
-            from jarvis_core.brain import transcribe_audio
-        except Exception:  # noqa: BLE001 — the ./jarvis_core mount may be absent
+        """Async ``(audio_bytes) -> str | None`` bound to the shared STT chain,
+        or None when unavailable. The wiring lives in `voice_transcription`
+        since Slack voice arrived — one chain, imported by both channels, so
+        they cannot drift apart on how the operator's voice becomes text."""
+        from app.services.voice_transcription import get_voice_transcriber
+
+        transcriber = get_voice_transcriber()
+        if transcriber is None:
             return None
 
         async def _transcribe(audio: bytes) -> str | None:
-            return await transcribe_audio(
-                audio,
-                filename="voice.ogg",
-                api_key=settings.openai_api_key,
-                model=settings.jarvis_stt_model,
-            )
+            return await transcriber(audio, filename="voice.ogg")
 
         return _transcribe
 

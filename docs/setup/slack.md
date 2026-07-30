@@ -55,12 +55,12 @@ scope **`connections:write`**, and generate it. Copy the value, it starts with
 
 ## 4. Add the bot token scopes
 
-Open **OAuth & Permissions → Scopes → Bot Token Scopes** and add all eleven
+Open **OAuth & Permissions → Scopes → Bot Token Scopes** and add all twelve
 scopes. Copy this line rather than typing the scopes by hand, a typo here
 surfaces much later as a confusing permission error:
 
 ```
-chat:write, chat:write.customize, channels:read, channels:manage, channels:history, app_mentions:read, im:history, im:write, users:read, reactions:write, files:write
+chat:write, chat:write.customize, channels:read, channels:manage, channels:history, app_mentions:read, im:history, im:write, users:read, reactions:write, files:write, files:read
 ```
 
 What each one buys you:
@@ -78,10 +78,19 @@ What each one buys you:
 | `users:read` | Resolve who wrote a message |
 | `reactions:write` | Acknowledge a task with an emoji |
 | `files:write` | Upload logs and screenshots |
+| `files:read` | Download voice messages so they can be transcribed |
 
 **Do not skip `chat:write.customize`.** Without it Slack refuses the
 per-message username and icon, so every agent posts as the same app. The chat
 still works, which is exactly why the mistake goes unnoticed for days.
+
+**`files:read` is what makes voice messages work.** Record a voice clip in the
+team channel and MC transcribes it and hands the text to the agents, exactly
+as if you had typed it. Without the scope, Slack answers the file download
+with an HTML login page instead of audio — MC detects that and tells you in
+the channel rather than failing silently. After adding a scope, Slack requires
+you to **re-install the app** (banner at the top of the OAuth page) before it
+takes effect.
 
 ## 5. Subscribe to events
 

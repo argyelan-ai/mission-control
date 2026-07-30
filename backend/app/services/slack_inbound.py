@@ -149,27 +149,43 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
     if is_own_message(event):
         logger.debug("slack inbound: own/bot message ignored")
         return
-    subtype = event.get("subtype")
-    if subtype:
-        # Edits, deletions, joins, file shares, thread broadcasts of an edit …
-        # A plain message from a human has no subtype at all.
-        logger.debug("slack inbound: subtype %s ignored", subtype)
-        return
 
+    # The channel gate runs BEFORE any subtype handling on purpose: a voice
+    # message triggers a file download, and MC must not fetch bytes on behalf
+    # of channels it does not serve.
     channel = event.get("channel")
     if not await channel_is_ours(channel):
         logger.warning("slack inbound from unconfigured channel %s — ignored", channel)
-        return
-
-    text = normalise_slack_text(event.get("text"))
-    if not text:
-        logger.info("slack inbound: message without usable text — ignored")
         return
 
     if adapter is None:
         from app.services.chat_slack import SlackChatAdapter
 
         adapter = SlackChatAdapter()
+
+    subtype = event.get("subtype")
+    voice_note = None
+    if subtype == "file_share":
+        # A native Slack voice clip (or an uploaded audio file). Anything else
+        # shared — PDFs, images — stays ignored exactly as before.
+        voice_note = await _transcribe_voice(event, adapter)
+        if voice_note is None:
+            return
+    elif subtype:
+        # Edits, deletions, joins, thread broadcasts of an edit …
+        # A plain message from a human has no subtype at all.
+        logger.debug("slack inbound: subtype %s ignored", subtype)
+        return
+
+    caption = normalise_slack_text(event.get("text"))
+    if voice_note is not None:
+        # A caption typed alongside the clip belongs to the same utterance.
+        text = f"{caption}\n{voice_note}".strip() if caption else voice_note
+    else:
+        text = caption
+    if not text:
+        logger.info("slack inbound: message without usable text — ignored")
+        return
 
     room = room_for(event)
     route = await route_inbound(session, adapter, room, text=text)
@@ -194,6 +210,36 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
         room or "channel",
         route.addressed_agent.name if route.addressed_agent else "-",
     )
+
+
+async def _transcribe_voice(event: dict, adapter) -> str | None:
+    """Voice clip -> transcript, or None after everything reasonable was tried.
+
+    Two distinct "no" cases, deliberately handled differently:
+      * no audio file in the share (a PDF, an image) -> silent None, exactly
+        the old ignore behaviour;
+      * an audio file that could not be transcribed -> tell the operator IN
+        THE CHANNEL. He watches Slack, not the backend log — a voice message
+        that silently vanishes looks like being ignored, which is precisely
+        the failure mode this channel exists to end.
+    """
+    from app.services import slack_voice
+
+    if slack_voice.pick_audio_file(event) is None:
+        logger.debug("slack inbound: file_share without audio ignored")
+        return None
+
+    transcript = await slack_voice.transcribe_event_audio(event)
+    if transcript:
+        return transcript
+
+    await _reply(
+        adapter,
+        room_for(event),
+        "🎤 Deine Sprachnachricht ist angekommen, aber ich konnte sie nicht "
+        "transkribieren. Bitte einmal als Text senden.",
+    )
+    return None
 
 
 async def _reply(adapter, room, text: str) -> None:
