@@ -19,6 +19,7 @@
  */
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { RotateCcw, Trash2, X, AlertTriangle, ArchiveX } from "lucide-react";
@@ -65,6 +66,7 @@ function PurgeConfirmModal({
   isPurging: boolean;
   error: string | null;
 }) {
+  const t = useTranslations("vault");
   return (
     <AnimatePresence>
       {filename && (
@@ -111,7 +113,7 @@ function PurgeConfirmModal({
                     color: "var(--color-text-muted)",
                   }}
                 >
-                  Delete permanently
+                  {t("deletePermanently")}
                 </div>
                 <div
                   className="truncate"
@@ -141,8 +143,7 @@ function PurgeConfirmModal({
                   style={{ color: STATUS_TEXT.error, marginTop: "1px", flexShrink: 0 }}
                 />
                 <div style={{ fontSize: "12.5px", color: "var(--color-text-secondary)" }}>
-                  This file will be permanently removed from the trash. No
-                  restoration possible afterward (except via database backup).
+                  {t("purgeWarning")}
                 </div>
               </div>
               {error && (
@@ -178,7 +179,7 @@ function PurgeConfirmModal({
                   opacity: isPurging ? 0.5 : 1,
                 }}
               >
-                Cancel
+                {t("cancel")}
               </button>
               <button
                 onClick={onConfirm}
@@ -199,12 +200,12 @@ function PurgeConfirmModal({
                       className="inline-block w-3 h-3 rounded-full border-[1.5px] border-t-transparent animate-spin"
                       style={{ borderColor: STATUS_TEXT.error, borderTopColor: "transparent" }}
                     />
-                    Deleting…
+                    {t("deleting")}
                   </>
                 ) : (
                   <>
                     <Trash2 size={12} />
-                    Delete permanently
+                    {t("deletePermanently")}
                   </>
                 )}
               </button>
@@ -245,6 +246,7 @@ function TrashRow({
   restorePending: boolean;
   restorePendingFor: string | null;
 }) {
+  const t = useTranslations("vault");
   const trashedAt = parseTrashDate(item.trashed_at);
   const agentColor = colorForAgent(item.agent);
   const restorable = item.original_path != null;
@@ -428,11 +430,11 @@ function TrashRow({
           type="button"
           onClick={() => restorable && onRestore(item.trash_filename)}
           disabled={!restorable || isRestoring}
-          aria-label="Restore note"
+          aria-label={t("restoreNote")}
           title={
             restorable
-              ? "Restore note"
-              : "Original path unknown (legacy trash) — restore manually"
+              ? t("restoreNote")
+              : t("restoreManually")
           }
           className="rounded-md p-2 transition-colors"
           style={{
@@ -465,8 +467,8 @@ function TrashRow({
         <button
           type="button"
           onClick={() => onPurge(item.trash_filename, item.title)}
-          aria-label="Permanently delete"
-          title="Delete permanently"
+          aria-label={t("deletePermanently")}
+          title={t("deletePermanently")}
           className="rounded-md p-2 transition-colors"
           style={{
             color: "var(--color-text-muted)",
@@ -499,6 +501,7 @@ function TrashRow({
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export function VaultTrashPage() {
+  const t = useTranslations("vault");
   const queryClient = useQueryClient();
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ["vault", "trash"],
@@ -524,7 +527,7 @@ export function VaultTrashPage() {
     onError: (err: Error, filename) => {
       setRestoreErrors((prev) => ({
         ...prev,
-        [filename]: err.message || "Restore failed",
+        [filename]: err.message || t("restoreFailed"),
       }));
     },
   });
@@ -540,7 +543,7 @@ export function VaultTrashPage() {
       setPurgeError(null);
     },
     onError: (err: Error) => {
-      setPurgeError(err.message || "Permanent delete failed");
+      setPurgeError(err.message || t("permanentDeleteFailed"));
     },
   });
 
@@ -571,7 +574,7 @@ export function VaultTrashPage() {
           className="px-6 py-12 text-center"
           style={{ color: "var(--color-text-muted)", fontSize: "13.5px" }}
         >
-          Failed to load trash: {(error as Error)?.message}
+          {t("loadTrashFailed")} {(error as Error)?.message}
         </div>
       )}
 
@@ -594,7 +597,7 @@ export function VaultTrashPage() {
               color: "var(--color-text-secondary)",
             }}
           >
-            Trash is empty
+            {t("trashEmpty")}
           </div>
           <div
             style={{
@@ -604,8 +607,7 @@ export function VaultTrashPage() {
               lineHeight: 1.55,
             }}
           >
-            Deleted notes land here and can be restored before you
-            remove them permanently.
+            {t("trashEmptyHint")}
           </div>
         </div>
       )}
@@ -628,7 +630,7 @@ export function VaultTrashPage() {
                 color: "var(--color-text-secondary)",
               }}
             >
-              Trash · {data?.count ?? 0}
+              {t("tabTrash")} · {data?.count ?? 0}
             </span>
             <div
               className="flex-1 h-px"
