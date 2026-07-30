@@ -9,8 +9,10 @@
  */
 
 import { useMemo } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { Calendar, Clock, Repeat, Code2, Sliders } from "lucide-react";
-import cronstrue from "cronstrue";
+// i18n build ships all cronstrue locales — needed for the German description.
+import cronstrue from "cronstrue/i18n";
 import { C } from "@/lib/colors";
 
 export interface TriggerEditorValue {
@@ -44,19 +46,20 @@ type TriggerKind =
   | "cron"
   | "weekly_custom";
 
+// labelKey resolves via t() at the render site (schedule.* namespace).
 const KIND_OPTIONS: Array<{
   id: TriggerKind;
-  label: string;
+  labelKey: string;
   icon: typeof Calendar;
 }> = [
-  { id: "daily", label: "Daily", icon: Calendar },
-  { id: "weekdays", label: "Weekdays", icon: Clock },
-  { id: "interval", label: "Interval", icon: Repeat },
-  { id: "cron", label: "Cron", icon: Code2 },
-  { id: "weekly_custom", label: "Custom", icon: Sliders },
+  { id: "daily", labelKey: "kindDaily", icon: Calendar },
+  { id: "weekdays", labelKey: "kindWeekdays", icon: Clock },
+  { id: "interval", labelKey: "kindInterval", icon: Repeat },
+  { id: "cron", labelKey: "kindCron", icon: Code2 },
+  { id: "weekly_custom", labelKey: "kindCustom", icon: Sliders },
 ];
 
-const DAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAY_LABEL_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"];
 
 function deriveKind(t: string): TriggerKind {
   if (t === "weekly_custom") return "weekly_custom";
@@ -89,17 +92,19 @@ export function TriggerEditor(props: TriggerEditorProps) {
     firingPreview,
   } = props;
 
+  const t = useTranslations("schedule");
+  const locale = useLocale();
   const kind = deriveKind(schedule_type);
   const weekdays = schedule_weekdays ?? [];
 
   const cronDescription = useMemo(() => {
     if (kind !== "cron" || !schedule_cron) return null;
     try {
-      return cronstrue.toString(schedule_cron, { locale: "en" });
+      return cronstrue.toString(schedule_cron, { locale: locale === "de" ? "de" : "en" });
     } catch (e) {
-      return `Invalid: ${(e as Error).message}`;
+      return t("cronInvalid", { msg: (e as Error).message });
     }
-  }, [kind, schedule_cron]);
+  }, [kind, schedule_cron, locale, t]);
 
   const setKind = (next: TriggerKind) => {
     if (next === "daily") {
@@ -180,7 +185,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
               }}
             >
               <Icon size={12} />
-              {opt.label}
+              {t(opt.labelKey)}
             </button>
           );
         })}
@@ -188,7 +193,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {/* Per-kind body */}
       {kind === "daily" && (
-        <Field label="Time">
+        <Field label={t("timeLabel")}>
           <TimeInput
             value={schedule_time ?? ""}
             onChange={(v) => onChange({ schedule_time: v })}
@@ -198,20 +203,20 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {kind === "weekdays" && (
         <div className="flex flex-col gap-2">
-          <Field label="Time">
+          <Field label={t("timeLabel")}>
             <TimeInput
               value={schedule_time ?? ""}
               onChange={(v) => onChange({ schedule_time: v })}
             />
           </Field>
           <p className="text-[11px]" style={{ color: C.textMuted }}>
-            Runs Mon, Tue, Wed, Thu, Fri — weekends excluded.
+            {t("weekdaysHint")}
           </p>
         </div>
       )}
 
       {kind === "interval" && (
-        <Field label="Interval (hours)">
+        <Field label={t("intervalHours")}>
           <div className="flex items-center gap-2">
             <input
               type="number"
@@ -225,16 +230,16 @@ export function TriggerEditor(props: TriggerEditorProps) {
               }
               className="w-24 rounded-md px-2 py-1.5 text-sm"
               style={inputStyle}
-              aria-label="Interval in hours"
+              aria-label={t("intervalHours")}
             />
-            <span className="text-xs" style={{ color: C.textSecondary }}>hours</span>
+            <span className="text-xs" style={{ color: C.textSecondary }}>{t("hoursUnit")}</span>
           </div>
         </Field>
       )}
 
       {kind === "cron" && (
         <div className="flex flex-col gap-2">
-          <Field label="Cron expression">
+          <Field label={t("cronExpression")}>
             <input
               type="text"
               value={schedule_cron ?? ""}
@@ -242,7 +247,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
               placeholder="0 9 * * 1-5"
               className="w-full rounded-md px-2.5 py-1.5 font-mono text-sm"
               style={inputStyle}
-              aria-label="Cron expression"
+              aria-label={t("cronExpression")}
             />
           </Field>
           {cronDescription && (
@@ -259,7 +264,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
 
       {kind === "weekly_custom" && (
         <div className="flex flex-col gap-3">
-          <Field label="Time">
+          <Field label={t("timeLabel")}>
             <TimeInput
               value={schedule_time ?? ""}
               onChange={(v) => onChange({ schedule_time: v })}
@@ -267,10 +272,10 @@ export function TriggerEditor(props: TriggerEditorProps) {
           </Field>
           <div className="flex flex-col gap-1.5">
             <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-              Weekdays
+              {t("weekdaysLabel")}
             </span>
             <div className="flex flex-wrap gap-1.5">
-              {DAY_LABELS.map((lbl, i) => {
+              {DAY_LABEL_KEYS.map((lbl, i) => {
                 const active = weekdays.includes(i);
                 return (
                   <button
@@ -284,7 +289,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
                       color: active ? C.accent : C.textSecondary,
                     }}
                   >
-                    {lbl}
+                    {t(lbl)}
                   </button>
                 );
               })}
@@ -300,7 +305,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
           style={{ border: `1px solid ${C.borderSubtle}`, background: C.bgBase }}
         >
           <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-            Next {firingPreview.length} firings
+            {t("nextFirings", { count: firingPreview.length })}
           </span>
           <ul className="flex flex-col gap-0.5 text-[11px] font-mono" style={{ color: C.textSecondary }}>
             {firingPreview.slice(0, 5).map((iso) => (
@@ -313,14 +318,14 @@ export function TriggerEditor(props: TriggerEditorProps) {
       {/* Active range */}
       <div className="flex flex-col gap-1.5 pt-3" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
         <span className="text-[10px] uppercase tracking-wide" style={{ color: C.textDim }}>
-          Active only from … to (optional)
+          {t("activeRange")}
         </span>
         <div className="flex flex-wrap items-center gap-2">
           <DateInput
             value={start_date ?? ""}
             onChange={(v) => onChange({ start_date: v || null })}
           />
-          <span className="text-xs" style={{ color: C.textDim }}>to</span>
+          <span className="text-xs" style={{ color: C.textDim }}>{t("weekTo")}</span>
           <DateInput
             value={end_date ?? ""}
             onChange={(v) => onChange({ end_date: v || null })}
@@ -334,7 +339,7 @@ export function TriggerEditor(props: TriggerEditorProps) {
               className="text-[10px]"
               style={{ color: C.textMuted }}
             >
-              clear
+              {t("clearFilter")}
             </button>
           )}
         </div>
@@ -367,6 +372,7 @@ function TimeInput({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const t = useTranslations("schedule");
   return (
     <input
       type="time"
@@ -379,7 +385,7 @@ function TimeInput({
         color: C.textPrimary,
         colorScheme: "dark",
       }}
-      aria-label="Time"
+      aria-label={t("timeLabel")}
     />
   );
 }
@@ -391,6 +397,7 @@ function DateInput({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const t = useTranslations("schedule");
   return (
     <input
       type="date"
@@ -403,7 +410,7 @@ function DateInput({
         color: C.textPrimary,
         colorScheme: "dark",
       }}
-      aria-label="Date"
+      aria-label={t("dateLabel")}
     />
   );
 }
