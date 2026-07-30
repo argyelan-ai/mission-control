@@ -585,6 +585,17 @@
     "clearVoiceHighlight": "Clear voice highlight",
     "dismiss": "dismiss",
     "undated": "Undated",
-    "loadingMore": "loading more…"
+    "loadingMore": "loading more…",
+    "searchPlaceholder": "what did sparky learn about rate limits?",
+    "searchVaultNotes": "Search vault notes",
+    "vaultUnreachable": "vault unreachable",
+    "noNotesMatching": "no notes matching \"{query}\"",
+    "noNotesInScope": "no notes in {scope}",
+    "noNotes": "no notes",
+    "vaultUnreachableHint": "The vault index may still be building. Check backend logs.",
+    "noNotesMatchingHint": "Try a broader search term or remove filters.",
+    "noNotesHint": "Notes added by agents will appear here.",
+    "removeFilter": "Remove filter {label}",
+    "untitled": "Untitled"
   }
 }
