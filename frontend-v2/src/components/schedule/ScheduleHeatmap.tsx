@@ -7,6 +7,7 @@
  * use opacity-scaled accent color — the more runs, the brighter.
  */
 
+import { useTranslations } from "next-intl";
 import type { ScheduleHeatmapCell } from "@/lib/types";
 import { C } from "@/lib/colors";
 
@@ -15,12 +16,14 @@ interface ScheduleHeatmapProps {
   title?: string;
 }
 
-const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+// Message keys in the schedule.* namespace — t() at the render site.
+const WEEKDAY_KEYS = ["dayMon", "dayTue", "dayWed", "dayThu", "dayFri", "daySat", "daySun"];
 const HOUR_LABELS = [0, 6, 12, 18];
 // C.accent = "#EBE8DE" → RGB for use in rgba()
 const ACCENT = "235,232,222";
 
 export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
+  const t = useTranslations("schedule");
   // Build lookup map (weekday, hour) → count
   const map = new Map<string, number>();
   let max = 0;
@@ -44,7 +47,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-medium" style={{ color: C.textPrimary }}>{title}</h3>
           <span className="text-[10px]" style={{ color: C.textDim }}>
-            {max === 0 ? "No data" : `Max: ${max} run${max === 1 ? "" : "s"}`}
+            {max === 0 ? t("noData") : t("maxRuns", { count: max })}
           </span>
         </div>
       )}
@@ -52,13 +55,13 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
       <div className="flex gap-2">
         {/* Weekday labels */}
         <div className="grid grid-rows-7 gap-1 pt-5 text-[10px]" style={{ color: C.textDim }}>
-          {WEEKDAYS.map((d) => (
+          {WEEKDAY_KEYS.map((d) => (
             <div
               key={d}
               className="flex h-4 items-center justify-end"
               style={{ minHeight: "16px" }}
             >
-              {d}
+              {t(d)}
             </div>
           ))}
         </div>
@@ -93,7 +96,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
                 return (
                   <div
                     key={`${w}-${h}`}
-                    title={`${WEEKDAYS[w]} ${String(h).padStart(2, "0")}:00 — ${c} run${c === 1 ? "" : "s"}`}
+                    title={`${t(WEEKDAY_KEYS[w])} ${String(h).padStart(2, "0")}:00 — ${t("runsCount", { count: c })}`}
                     className="rounded-sm transition-colors"
                     style={{
                       gridColumn: h + 1,
@@ -117,7 +120,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
 
       {/* Legend */}
       <div className="flex items-center gap-2 text-[10px]" style={{ color: C.textDim }}>
-        <span>Low</span>
+        <span>{t("low")}</span>
         <div className="flex gap-0.5">
           {[0.15, 0.4, 0.65, 0.9].map((a) => (
             <span
@@ -127,7 +130,7 @@ export function ScheduleHeatmap({ data, title }: ScheduleHeatmapProps) {
             />
           ))}
         </div>
-        <span>High</span>
+        <span>{t("high")}</span>
       </div>
     </div>
   );
