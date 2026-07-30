@@ -75,6 +75,25 @@ def test_rule_handles_messages_on_finished_tasks():
     assert "already finished" in soul or "closed" in soul
 
 
+def test_reply_style_is_scannable_not_prose():
+    """Marks Wunsch 30.07.2026: Chat-Antworten scannbar — Bullets, fette
+    Lead-ins, kurze Zeilen — statt Fliesstext-Wand. Der Stil ist Teil der
+    Antwortregel: eine Antwort, die Mark nicht ueberfliegen kann, ist halb
+    verloren."""
+    soul = _soul().lower()
+    assert "scannable" in soul
+    assert "bullets" in soul
+    assert "wall of text" in soul
+
+
+def test_reply_style_separates_chat_from_report():
+    """Chat != Bericht: das Update/Evidence/Next-Geruest gehoert in
+    Task-Kommentare, nicht in Thread-Antworten."""
+    soul = _soul().lower()
+    assert "not a report" in soul
+    assert "update/evidence/next" in soul
+
+
 def test_operator_name_is_resolved_not_a_placeholder():
     """Die Regel nennt den Operator beim Namen — kein rohes {{ }} im Text."""
     soul = _soul(operator_name="Mark")
