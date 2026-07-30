@@ -74,6 +74,16 @@ def test_card_rule_asks_what_the_message_changes():
     assert "finished" in lowered or "closed" in lowered or "reopen" in lowered
 
 
+def test_card_rule_carries_the_scannable_style():
+    """Marks Wunsch 30.07.2026: laengere Chat-Antworten scannbar — Bullets +
+    fette Lead-ins statt Textwand. Kurzform in der Card (Byte-Budget), die
+    Vollform steht in der SOUL."""
+    lowered = _card().lower()
+    assert "scannable" in lowered
+    assert "bullets" in lowered
+    assert "wall of text" in lowered
+
+
 def test_card_rule_names_the_operator():
     """Die Regel selbst nennt den Operator beim Namen — kein rohes Jinja im Text.
 
