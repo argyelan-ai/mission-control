@@ -1,7 +1,8 @@
 "use client";
 
 import { Suspense, useState, useEffect } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { useTranslations, useLocale } from "next-intl";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -304,7 +305,48 @@ function SectionMotion({ children, sectionKey }: { children: React.ReactNode; se
 
 // ── Profile Section ───────────────────────────────────────────────────────────
 
+// UI language selector (i18n pattern page). Cookie-based: writes NEXT_LOCALE
+// and refreshes the server tree — no URL change, applies immediately.
+// Distinct from agent response language (per-agent `agents.language` field).
+function LanguageField() {
+  const t = useTranslations("settingsProfile");
+  const locale = useLocale();
+  const router = useRouter();
+
+  function switchLocale(next: string) {
+    document.cookie = `NEXT_LOCALE=${next}; path=/; max-age=31536000; samesite=lax`;
+    router.refresh();
+  }
+
+  return (
+    <div>
+      <FieldLabel>{t("language")}</FieldLabel>
+      <select
+        value={locale}
+        onChange={(e) => switchLocale(e.target.value)}
+        aria-label={t("language")}
+        className={inputBaseClasses}
+        style={{
+          backgroundColor: C.bgDeep,
+          borderWidth: 1,
+          borderStyle: "solid",
+          borderColor: "var(--color-border)",
+          color: "var(--color-text-primary)",
+          cursor: "pointer",
+        }}
+      >
+        <option value="en">{t("languageEn")}</option>
+        <option value="de">{t("languageDe")}</option>
+      </select>
+      <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
+        {t("languageHint")}
+      </p>
+    </div>
+  );
+}
+
 function ProfileSection() {
+  const t = useTranslations("settingsProfile");
   const { currentUser, setCurrentUser } = useAppStore();
   const [name, setName] = useState("");
   const [preferredName, setPreferredName] = useState("");
@@ -362,36 +404,39 @@ function ProfileSection() {
       <div className="mc-card p-6 space-y-5" style={cardStyle}>
         {/* Email (read-only) */}
         <div>
-          <FieldLabel>Email</FieldLabel>
-          <InputField value={profile?.email ?? ""} readOnly ariaLabel="Email (read-only)" />
+          <FieldLabel>{t("email")}</FieldLabel>
+          <InputField value={profile?.email ?? ""} readOnly ariaLabel={t("email")} />
           <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-            Email cannot be changed.
+            {t("emailHint")}
           </p>
         </div>
 
         {/* Name */}
         <div>
-          <FieldLabel>Name</FieldLabel>
+          <FieldLabel>{t("name")}</FieldLabel>
           <InputField
             value={name}
             onChange={setName}
-            placeholder="Your full name"
+            placeholder={t("namePlaceholder")}
           />
         </div>
 
         {/* Preferred Name */}
         <div>
-          <FieldLabel>Display Name</FieldLabel>
+          <FieldLabel>{t("displayName")}</FieldLabel>
           <InputField
             value={preferredName}
             onChange={setPreferredName}
-            placeholder="Optional: how you'd like to be addressed"
+            placeholder={t("displayNamePlaceholder")}
           />
         </div>
 
+        {/* UI language (i18n pattern) */}
+        <LanguageField />
+
         {/* Timezone */}
         <div>
-          <FieldLabel>Timezone</FieldLabel>
+          <FieldLabel>{t("timezone")}</FieldLabel>
           <select
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
@@ -422,7 +467,7 @@ function ProfileSection() {
 
         {/* Role (read-only display) */}
         <div>
-          <FieldLabel>Role</FieldLabel>
+          <FieldLabel>{t("role")}</FieldLabel>
           <div className="flex items-center gap-2">
             <span
               className="px-2.5 py-1 rounded-md text-xs font-medium uppercase tracking-wider"

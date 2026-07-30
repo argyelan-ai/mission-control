@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale, getMessages } from "next-intl/server";
 import "@/styles/globals.css";
 import { Providers } from "./providers";
 
@@ -24,14 +26,18 @@ export const viewport: Viewport = {
   // No maximumScale — pinch-zoom must stay enabled (WCAG 1.4.4 Resize Text).
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  // UI locale from the NEXT_LOCALE cookie (src/i18n/request.ts). The old
+  // hardcoded lang="de" predates i18n and was wrong for the English UI.
+  const locale = await getLocale();
+  const messages = await getMessages();
   return (
     <html
-      lang="de"
+      lang={locale}
       className="dark"
       style={{ colorScheme: "dark" }}
       suppressHydrationWarning
@@ -44,7 +50,9 @@ export default function RootLayout({
         <link rel="preload" href="/fonts/ClashDisplay-600.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body className="font-sans antialiased bg-[var(--color-bg-deep)] text-[var(--color-text-primary)] min-h-[100dvh] overflow-x-hidden">
-        <Providers>{children}</Providers>
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <Providers>{children}</Providers>
+        </NextIntlClientProvider>
       </body>
     </html>
   );

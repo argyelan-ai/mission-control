@@ -1,0 +1,42 @@
+{
+  "nav": {
+    "home": "Home",
+    "tasks": "Aufgaben",
+    "agents": "Agenten",
+    "office": "Office",
+    "inbox": "Eingang",
+    "insights": "Insights",
+    "memory": "Memory",
+    "files": "Dateien",
+    "content": "Content",
+    "news": "News",
+    "bench": "Benchmark",
+    "repos": "Repos",
+    "skills": "Skills",
+    "runtimes": "Runtimes",
+    "sessions": "Sessions",
+    "loops": "Loops",
+    "schedule": "Zeitplan",
+    "settings": "Einstellungen",
+    "groupOverview": "ÜBERSICHT",
+    "groupWork": "ARBEIT",
+    "groupKnowledge": "WISSEN",
+    "groupStudio": "STUDIO",
+    "groupSystem": "SYSTEM",
+    "logout": "Abmelden"
+  },
+  "settingsProfile": {
+    "email": "E-Mail",
+    "emailHint": "Die E-Mail-Adresse kann nicht geändert werden.",
+    "name": "Name",
+    "namePlaceholder": "Dein voller Name",
+    "displayName": "Anzeigename",
+    "displayNamePlaceholder": "Optional: wie du angesprochen werden möchtest",
+    "timezone": "Zeitzone",
+    "role": "Rolle",
+    "language": "Sprache",
+    "languageHint": "Sprache der Oberfläche. Gilt sofort.",
+    "languageEn": "English",
+    "languageDe": "Deutsch"
+  }
+}

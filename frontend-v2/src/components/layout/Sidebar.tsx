@@ -1,6 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -40,35 +41,37 @@ const _dot = _BRAND.lastIndexOf(".");
 const BRAND_MAIN = _dot > 0 ? _BRAND.slice(0, _dot) : _BRAND;
 const BRAND_ACCENT = _dot > 0 ? _BRAND.slice(_dot) : "";
 
-export type NavItem = { href: string; icon: LucideIcon; label: string };
+// label = English fallback; labelKey = message key in the "nav" namespace
+// (messages/en.json + de.json). Render sites translate via t(labelKey).
+export type NavItem = { href: string; icon: LucideIcon; label: string; labelKey: string };
 
 export const NAV_ITEMS: NavItem[] = [
-  { href: "/", icon: Home, label: "Home" },
-  { href: "/tasks", icon: FolderKanban, label: "Tasks" },
-  { href: "/agents", icon: Bot, label: "Agents" },
-  { href: "/office", icon: Building2, label: "Office" },
-  { href: "/inbox", icon: Inbox, label: "Inbox" },
-  { href: "/insights", icon: TrendingUp, label: "Insights" },
-  { href: "/memory", icon: Brain, label: "Memory" },
-  { href: "/files", icon: FolderOpen, label: "Files" },
+  { href: "/", icon: Home, label: "Home", labelKey: "home" },
+  { href: "/tasks", icon: FolderKanban, label: "Tasks", labelKey: "tasks" },
+  { href: "/agents", icon: Bot, label: "Agents", labelKey: "agents" },
+  { href: "/office", icon: Building2, label: "Office", labelKey: "office" },
+  { href: "/inbox", icon: Inbox, label: "Inbox", labelKey: "inbox" },
+  { href: "/insights", icon: TrendingUp, label: "Insights", labelKey: "insights" },
+  { href: "/memory", icon: Brain, label: "Memory", labelKey: "memory" },
+  { href: "/files", icon: FolderOpen, label: "Files", labelKey: "files" },
   // News-Studio vertical — stripped from the public-release build
   ...(VERTICALS.newsStudio
     ? [
-        { href: "/content", icon: PenLine, label: "Content" },
-        { href: "/news", icon: Newspaper, label: "News" },
+        { href: "/content", icon: PenLine, label: "Content", labelKey: "content" },
+        { href: "/news", icon: Newspaper, label: "News", labelKey: "news" },
       ]
     : []),
   // Benchmark-Studio vertical — strippable (flag flipped by release script)
   ...(VERTICALS.benchStudio
-    ? [{ href: "/bench", icon: FlaskConical, label: "Benchmark" }]
+    ? [{ href: "/bench", icon: FlaskConical, label: "Benchmark", labelKey: "bench" }]
     : []),
-  { href: "/repos", icon: FolderGit2, label: "Repos" },
-  { href: "/skills", icon: Puzzle, label: "Skills" },
-  { href: "/runtimes", icon: Server, label: "Runtimes" },
-  { href: "/sessions", icon: Terminal, label: "Sessions" },
-  { href: "/loops", icon: Repeat, label: "Loops" },
-  { href: "/schedule", icon: Calendar, label: "Schedule" },
-  { href: "/settings", icon: Settings, label: "Settings" },
+  { href: "/repos", icon: FolderGit2, label: "Repos", labelKey: "repos" },
+  { href: "/skills", icon: Puzzle, label: "Skills", labelKey: "skills" },
+  { href: "/runtimes", icon: Server, label: "Runtimes", labelKey: "runtimes" },
+  { href: "/sessions", icon: Terminal, label: "Sessions", labelKey: "sessions" },
+  { href: "/loops", icon: Repeat, label: "Loops", labelKey: "loops" },
+  { href: "/schedule", icon: Calendar, label: "Schedule", labelKey: "schedule" },
+  { href: "/settings", icon: Settings, label: "Settings", labelKey: "settings" },
 ];
 
 // P2: Gruppen priorisieren den Alltag (S5 aus 00-redesign-brief: Home/Tasks/
@@ -78,17 +81,18 @@ const _byHref = new Map(NAV_ITEMS.map((i) => [i.href, i]));
 const pick = (hrefs: string[]): NavItem[] =>
   hrefs.map((h) => _byHref.get(h)).filter((i): i is NavItem => !!i);
 
-export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  { label: "OVERVIEW", items: pick(["/", "/insights", "/office"]) },
-  { label: "WORK", items: pick(["/tasks", "/inbox", "/sessions", "/agents"]) },
-  { label: "KNOWLEDGE", items: pick(["/memory", "/files", "/repos", "/skills"]) },
-  { label: "STUDIO", items: pick(["/content", "/news", "/bench"]) },
-  { label: "SYSTEM", items: pick(["/runtimes", "/loops", "/schedule", "/settings"]) },
+export const NAV_GROUPS: { label: string; labelKey: string; items: NavItem[] }[] = [
+  { label: "OVERVIEW", labelKey: "groupOverview", items: pick(["/", "/insights", "/office"]) },
+  { label: "WORK", labelKey: "groupWork", items: pick(["/tasks", "/inbox", "/sessions", "/agents"]) },
+  { label: "KNOWLEDGE", labelKey: "groupKnowledge", items: pick(["/memory", "/files", "/repos", "/skills"]) },
+  { label: "STUDIO", labelKey: "groupStudio", items: pick(["/content", "/news", "/bench"]) },
+  { label: "SYSTEM", labelKey: "groupSystem", items: pick(["/runtimes", "/loops", "/schedule", "/settings"]) },
 ];
 
 const MONO = { fontFamily: "var(--font-p2-mono)" };
 
 export default function Sidebar() {
+  const t = useTranslations("nav");
   const pathname = usePathname();
   const router = useRouter();
   const { sidebarCollapsed, currentUser } = useAppStore();
@@ -182,7 +186,7 @@ export default function Sidebar() {
         {NAV_GROUPS.map((group) => {
           if (group.items.length === 0) return null;
           return (
-            <div key={group.label}>
+            <div key={t(group.labelKey)}>
               {!sidebarCollapsed && (
                 <div
                   className="px-4 pt-3 pb-1 select-none first:pt-1"
@@ -194,11 +198,12 @@ export default function Sidebar() {
                     color: "var(--color-p2-faint)",
                   }}
                 >
-                  {group.label}
+                  {t(group.labelKey)}
                 </div>
               )}
               <ul className={sidebarCollapsed ? "space-y-px px-1" : "space-y-px px-2"}>
-                {group.items.map(({ href, icon: Icon, label }) => {
+                {group.items.map(({ href, icon: Icon, labelKey }) => {
+                  const label = t(labelKey);
                   const isActive =
                     href === "/" ? pathname === "/" : pathname.startsWith(href);
                   const showBadge = href === "/inbox" && hasPendingApprovals;
@@ -312,7 +317,7 @@ export default function Sidebar() {
 
         <button
           onClick={handleLogout}
-          title="Logout"
+          title={t("logout")}
           className="flex items-center gap-2 w-full px-4 min-h-touch cursor-pointer"
           style={{
             ...MONO,
@@ -328,7 +333,7 @@ export default function Sidebar() {
             ((e.currentTarget as HTMLElement).style.color = "var(--color-p2-dim)")
           }
         >
-          {sidebarCollapsed ? <LogOut size={15} /> : <span>LOGOUT →</span>}
+          {sidebarCollapsed ? <LogOut size={15} /> : <span>{t("logout").toUpperCase()} →</span>}
         </button>
       </div>
     </motion.aside>
