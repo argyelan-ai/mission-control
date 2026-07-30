@@ -20,21 +20,45 @@ logger = logging.getLogger("mc.voice_transcription")
 
 def get_voice_transcriber():
     """Async ``(audio_bytes, filename) -> str | None``, or None when STT is
-    unavailable. Bound to the shared jarvis_core chain (`jarvis_stt_model`) —
-    the exact voice path the Jarvis channel uses, never a second STT stack.
+    unavailable. Bound to the shared jarvis_core chain — the exact voice path
+    the Jarvis channel uses, never a second STT stack.
+
+    Two configurations, same protocol:
+
+      * ``STT_BASE_URL`` set — an OpenAI-compatible server of the operator's
+        own (Parakeet v3 on the Mac Mini, see scripts/stt-server). His voice
+        never leaves the machine, and NO cloud key is required: demanding one
+        here would defeat the reason local STT exists. When both are
+        configured, local wins — the URL was set deliberately.
+      * otherwise — the OpenAI cloud with ``openai_api_key``, as before.
     """
     from app.config import settings
 
-    if not settings.openai_api_key:
+    local_url = (settings.stt_base_url or "").strip()
+    if not local_url and not settings.openai_api_key:
         return None
     try:
-        from jarvis_core.brain import transcribe_audio
+        from jarvis_core import brain
     except Exception:  # noqa: BLE001 — the ./jarvis_core mount may be absent
         return None
 
     async def _transcribe(audio: bytes, filename: str = "voice.ogg") -> str | None:
         try:
-            return await transcribe_audio(
+            # Called through the module (not a closure-bound name) so tests —
+            # and a hot-reloaded jarvis_core — see the current function.
+            if local_url:
+                return await brain.transcribe_audio(
+                    audio,
+                    filename=filename,
+                    # A local server does not check the key, but the OpenAI
+                    # client insists on one — any non-empty value satisfies it
+                    # without pretending a real credential exists.
+                    api_key=settings.openai_api_key or "local",
+                    model=(settings.stt_model or "").strip()
+                    or settings.jarvis_stt_model,
+                    base_url=local_url,
+                )
+            return await brain.transcribe_audio(
                 audio,
                 filename=filename,
                 api_key=settings.openai_api_key,

@@ -21,7 +21,7 @@ CANONICAL = (
     "## Was wurde gemacht\nFeature X gebaut und getestet.\n\n"
     "## Was hat funktioniert\nTDD-Loop lief sauber durch.\n\n"
     "## Was war unklar\nScope der Edge-Cases war offen.\n\n"
-    "## Lesson fuer Agent-Memory\nImmer zuerst die Vertraege pruefen.\n"
+    "## Lesson für Agent-Memory\nImmer zuerst die Vertraege pruefen.\n"
     "TASK_COMPLETE"
 )
 
@@ -71,7 +71,7 @@ def test_extract_canonical_unchanged():
     block = R.extract_reflection(CANONICAL)
     assert block is not None
     assert "## Was wurde gemacht" in block
-    assert "## Lesson fuer Agent-Memory" in block
+    assert "## Lesson für Agent-Memory" in block
     assert "TASK_COMPLETE" not in block
 
 
@@ -114,7 +114,7 @@ def test_extract_umlaut_fuer_variant():
         "TASK_COMPLETE"
     )
     block = R.extract_reflection(text)
-    assert "## Lesson fuer Agent-Memory" in block
+    assert "## Lesson für Agent-Memory" in block
 
 
 def test_extract_case_insensitive_and_trailing_colon():

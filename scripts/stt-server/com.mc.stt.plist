@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.mc.stt</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__DIR__/.venv/bin/python</string>
+        <string>__DIR__/server.py</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__DIR__</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- ffmpeg (Homebrew) + system tools; launchd's default PATH has neither. -->
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <!-- Restart on crash, but not in a tight loop if it cannot start. -->
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+    <key>StandardOutPath</key>
+    <string>__HOME__/.mc/logs/stt-server.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/.mc/logs/stt-server.log</string>
+</dict>
+</plist>

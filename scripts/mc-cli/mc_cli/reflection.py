@@ -35,7 +35,7 @@ REFLECTION_REQUIRED_FIELDS = [
     "Was wurde gemacht",
     "Was hat funktioniert",
     "Was war unklar",
-    "Lesson fuer Agent-Memory",
+    "Lesson für Agent-Memory",
 ]
 REFLECTION_MIN_CHARS = 80
 SENTINEL = "TASK_COMPLETE"
@@ -55,7 +55,7 @@ _ENGLISH_ALIASES = {
     "what was done": "Was wurde gemacht",
     "what worked": "Was hat funktioniert",
     "what was unclear": "Was war unklar",
-    "lesson for agent memory": "Lesson fuer Agent-Memory",
+    "lesson for agent memory": "Lesson für Agent-Memory",
 }
 
 
