@@ -26,7 +26,7 @@ REVISION_PATH = (
     pathlib.Path(__file__).parents[1]
     / "alembic"
     / "versions"
-    / "0168_merge_lmstudio_rows.py"
+    / "0169_merge_lmstudio_rows.py"
 )
 
 ENDPOINT = "http://192.0.2.10:1234/v1"
@@ -113,8 +113,8 @@ def test_revision_chains_onto_0167():
     engine = _make_engine([])
     with engine.connect() as conn:
         with _migration_bound_to(conn) as module:
-            assert module.revision == "0168_merge_lmstudio_rows"
-            assert module.down_revision == "0167_runtime_display_names"
+            assert module.revision == "0169_merge_lmstudio_rows"
+            assert module.down_revision == "0168_runtime_display_names"
 
 
 def test_merges_into_one_engine_row():
