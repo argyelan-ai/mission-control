@@ -5,6 +5,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { ActivityEvent, MetricsSnapshot, MetricsHistoryResponse, SystemStatus } from "@/lib/types";
@@ -13,6 +14,7 @@ import { C, latencyColor } from "./colors";
 import { SectionHeading, ServiceDot, SparklineChart } from "./primitives";
 
 function SystemActivityFeed() {
+  const t = useTranslations("home");
   const { activeBoardId } = useAppStore();
   const { data: events = [] } = useQuery({
     queryKey: ["activity", activeBoardId, "compact"],
@@ -24,7 +26,7 @@ function SystemActivityFeed() {
   if (events.length === 0) {
     return (
       <div className="flex items-center justify-center h-full">
-        <span className="text-[11px]" style={{ color: C.textMuted }}>No activity</span>
+        <span className="text-[11px]" style={{ color: C.textMuted }}>{t("noActivity")}</span>
       </div>
     );
   }
@@ -61,6 +63,7 @@ interface SystemHealthSectionProps {
 }
 
 export function SystemHealthSection({ status, loading, onOpenActivity }: SystemHealthSectionProps) {
+  const t = useTranslations("home");
   const { data: historyData } = useQuery({
     queryKey: ["system", "metrics-history"],
     queryFn: () => api.system.metricsHistory(),
@@ -70,7 +73,7 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
   if (loading || !status) {
     return (
       <div className="p-4 rounded-lg" style={{ background: C.bgSurface, border: `1px solid ${C.border}` }}>
-        <SectionHeading title="System Health" />
+        <SectionHeading title={t("systemHealth")} />
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {[0, 1, 2].map((i) => (
             <div key={i} className="h-8 rounded-sm animate-pulse" style={{ backgroundColor: C.bgElevated }} />
@@ -95,7 +98,7 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
 
   const dbDetail = database.latency_ms !== undefined ? `${database.latency_ms.toFixed(1)}ms` : database.error ?? database.status;
   const redisDetail = redis.latency_ms !== undefined ? `${redis.latency_ms.toFixed(1)}ms` : redis.error ?? redis.status;
-  const watchdogDetail = wd ? (wd.status === "running" ? `${wd.checks_total ?? 0} checks` : wd.status) : "unknown";
+  const watchdogDetail = wd ? (wd.status === "running" ? t("checks", { count: wd.checks_total ?? 0 }) : wd.status) : "unknown";
 
   const wdStatus = wd?.status === "running" ? "ok" : wd?.status ?? "unknown";
   const hasError = database.status === "error" || redis.status === "error" || wdStatus === "error";
@@ -109,20 +112,20 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
       <div className="flex items-center gap-4 mb-3 flex-wrap">
         <div className="flex items-center gap-2">
           <span className="w-2 h-2 shrink-0" style={{ backgroundColor: hasError ? C.error : C.online }} />
-          <span className="label-sys">System Health</span>
+          <span className="label-sys">{t("systemHealth")}</span>
         </div>
         <ServiceDot label="DB" status={database.status} detail={dbDetail} detailColor={database.latency_ms !== undefined ? latencyColor(database.latency_ms) : undefined} />
         <ServiceDot label="Redis" status={redis.status} detail={redisDetail} detailColor={redis.latency_ms !== undefined ? latencyColor(redis.latency_ms) : undefined} />
         <ServiceDot label="Watchdog" status={wdStatus} detail={watchdogDetail} />
         <div className="flex items-center gap-2 ml-auto">
-          <span className="label-sys">Events</span>
+          <span className="label-sys">{t("events")}</span>
           <button
             onClick={onOpenActivity}
-            aria-label="Show all activity"
+            aria-label={t("showAllActivity")}
             className="inline-flex items-center min-h-touch px-2 -my-2 text-[10px] font-mono uppercase tracking-[0.08em] hover:opacity-70 transition-opacity cursor-pointer"
             style={{ color: C.accent, background: "none", border: "none" }}
           >
-            All <span aria-hidden="true">→</span>
+            {t("all")} <span aria-hidden="true">→</span>
           </button>
         </div>
       </div>
@@ -138,7 +141,7 @@ export function SystemHealthSection({ status, loading, onOpenActivity }: SystemH
           style={{ borderColor: C.border, maxHeight: 80 }}
           tabIndex={0}
           role="region"
-          aria-label="Activity history"
+          aria-label={t("activityHistory")}
         >
           <SystemActivityFeed />
         </div>

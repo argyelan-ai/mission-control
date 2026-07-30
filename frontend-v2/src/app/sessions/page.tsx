@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import {
@@ -213,6 +214,7 @@ function useAgentTerminal(
 // ── Terminal Panel ────────────────────────────────────────────────────────────
 
 function TerminalPanel({ agent }: { agent: AgentWithState }) {
+  const t = useTranslations("sessions");
   if (!agentIsRunning(agent)) {
     const stateText = agent.agent_runtime === "host"
       ? (agent.session_running ? "running" : "idle")
@@ -220,7 +222,7 @@ function TerminalPanel({ agent }: { agent: AgentWithState }) {
     return (
       <div className="flex flex-col items-center justify-center flex-1 bg-[var(--color-bg-base)] gap-3 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
         <MonitorOff size={32} style={{ opacity: 0.3 }} />
-        <div>Session is <span className="font-mono">{stateText}</span></div>
+        <div>{t("sessionIs")} <span className="font-mono">{stateText}</span></div>
       </div>
     );
   }
@@ -228,6 +230,7 @@ function TerminalPanel({ agent }: { agent: AgentWithState }) {
 }
 
 function TerminalPanelRunning({ agent }: { agent: Agent }) {
+  const t = useTranslations("sessions");
   const termRef = useRef<HTMLDivElement>(null);
   const outerRef = useRef<HTMLDivElement>(null);
   const [term, setTerm] = useState<XTerm | null>(null);
@@ -285,7 +288,7 @@ function TerminalPanelRunning({ agent }: { agent: Agent }) {
               border: `1px solid ${connected ? `${C.online}33` : `${C.error}33`}`,
             }}
           >
-            {connected ? "connected" : "disconnected"}
+            {connected ? t("connected") : t("disconnected")}
           </span>
           <span className="text-[11px] font-mono truncate min-w-0" style={{ color: "var(--color-text-secondary)" }}>
             mc-agent-{agent.name}
@@ -359,6 +362,7 @@ function AgentList({
   onRestart: (id: string) => void;
   pendingId: string | null;
 }) {
+  const t = useTranslations("sessions");
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -372,7 +376,7 @@ function AgentList({
       <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
         <MonitorOff size={28} style={{ color: "var(--color-text-muted)", opacity: 0.3 }} />
         <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-          No agents found
+          {t("noAgentsFound")}
         </p>
       </div>
     );
@@ -419,7 +423,7 @@ function AgentList({
                     <button
                       onClick={(e) => { e.stopPropagation(); onRestart(agent.id); }}
                       disabled={isPending}
-                      title="Session neu starten"
+                      title={t("restartSession")}
                       className="flex items-center justify-center w-5 h-5 rounded transition-colors"
                       style={{
                         background: `${C.warning}14`,
@@ -433,7 +437,7 @@ function AgentList({
                     <button
                       onClick={(e) => { e.stopPropagation(); onStop(agent.id); }}
                       disabled={isPending}
-                      title="Session stoppen"
+                      title={t("stopSession")}
                       className="flex items-center justify-center w-5 h-5 rounded transition-colors"
                       style={{
                         background: `${C.error}14`,
@@ -449,7 +453,7 @@ function AgentList({
                   <button
                     onClick={(e) => { e.stopPropagation(); onStart(agent.id); }}
                     disabled={isPending}
-                    title="Session starten"
+                    title={t("startSession")}
                     className="flex items-center justify-center w-5 h-5 rounded transition-colors"
                     style={{
                       background: `${C.online}14`,
@@ -473,6 +477,7 @@ function AgentList({
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function SessionsPage() {
+  const t = useTranslations("sessions");
   const qc = useQueryClient();
   const [selected, setSelected] = useState<AgentWithState | null>(null);
   // Mobile (<md) stack navigation: which pane is visible. Desktop (≥md) ignores
@@ -516,13 +521,13 @@ export default function SessionsPage() {
         : api.agents.restartContainer(agentId),
     onMutate: (id) => setPendingId(id),
     onSuccess: (_data, agentId) => {
-      notify.success("Session neu gestartet");
+      notify.success(t("restartedNotify"));
       invalidate();
       // tmux PTY is new after restart — the terminal must remount,
       // otherwise the old WebSocket is stuck on a frozen buffer.
       setRestartTick((prev) => ({ ...prev, [agentId]: (prev[agentId] ?? 0) + 1 }));
     },
-    onError: (e: Error) => notify.error(`Restart fehlgeschlagen: ${e.message}`),
+    onError: (e: Error) => notify.error(t("restartFailed", { msg: e.message })),
     onSettled: () => setPendingId(null),
   });
 
@@ -532,8 +537,8 @@ export default function SessionsPage() {
         ? api.agents.startHost(agentId)
         : api.agents.startContainer(agentId),
     onMutate: (id) => setPendingId(id),
-    onSuccess: () => { notify.success("Session gestartet"); invalidate(); },
-    onError: (e: Error) => notify.error(`Start fehlgeschlagen: ${e.message}`),
+    onSuccess: () => { notify.success(t("startedNotify")); invalidate(); },
+    onError: (e: Error) => notify.error(t("startFailed", { msg: e.message })),
     onSettled: () => setPendingId(null),
   });
 
@@ -543,8 +548,8 @@ export default function SessionsPage() {
         ? api.agents.stopHost(agentId)
         : api.agents.stopContainer(agentId),
     onMutate: (id) => setPendingId(id),
-    onSuccess: () => { notify.success("Session gestoppt"); invalidate(); },
-    onError: (e: Error) => notify.error(`Stop fehlgeschlagen: ${e.message}`),
+    onSuccess: () => { notify.success(t("stoppedNotify")); invalidate(); },
+    onError: (e: Error) => notify.error(t("stopFailed", { msg: e.message })),
     onSettled: () => setPendingId(null),
   });
 
@@ -566,8 +571,8 @@ export default function SessionsPage() {
     invalidate();
     notify.success(
       payload.image_changed
-        ? "Runtime gewechselt — Container neu gebaut"
-        : "Runtime gewechselt — Container neugestartet",
+        ? t("runtimeSwitchedRebuilt")
+        : t("runtimeSwitchedRestarted"),
     );
   });
 
@@ -575,7 +580,7 @@ export default function SessionsPage() {
     <AppShell fullHeight>
       <div className="flex flex-col flex-1 overflow-hidden">
         {isError && (
-          <div className="text-red-400 text-xs p-4">Verbindung zum Backend fehlgeschlagen</div>
+          <div className="text-red-400 text-xs p-4">{t("backendConnectionFailed")}</div>
         )}
         {/* Page Header */}
         <div
@@ -584,7 +589,7 @@ export default function SessionsPage() {
         >
           <MonitorPlay size={18} style={{ color: "var(--color-text-secondary)" }} />
           <h1 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Agent Terminals
+            {t("title")}
           </h1>
           <span
             className="ml-1 text-[10px] px-2 py-0.5 rounded-full font-mono"
@@ -613,7 +618,7 @@ export default function SessionsPage() {
                   borderRight: mode === "terminal" ? `1px solid ${C.border}` : undefined,
                 }}
               >
-                {mode === "terminal" ? "Terminal" : "Agent browser"}
+                {mode === "terminal" ? t("terminal") : t("agentBrowser")}
               </button>
             ))}
           </div>
@@ -658,13 +663,13 @@ export default function SessionsPage() {
                   }}
                 >
                   <span style={{ fontSize: "16px" }}>←</span>
-                  <span>Agents</span>
+                  <span>{t("agentsBack")}</span>
                 </button>
                 <TerminalPanel key={`${selected.id}:${restartTick[selected.id] ?? 0}`} agent={selected} />
               </>
             ) : (
               <div className="hidden md:flex items-center justify-center flex-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                Select an agent
+                {t("selectAgent")}
               </div>
             )}
           </div>
