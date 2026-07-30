@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
@@ -17,18 +18,20 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 
 // ── Provision Badge ───────────────────────────────────────────────────────────
 
-const PROVISION_CONFIG: Record<string, { label: string; color: string }> = {
-  local: { label: "Local", color: C.textDim },
-  provisioning: { label: "Provisioning", color: C.warning },
-  provisioned: { label: "Live", color: C.online },
-  error: { label: "Error", color: C.error },
+// labelKey resolves via t() at the render site (agents.* namespace).
+const PROVISION_CONFIG: Record<string, { labelKey: string; color: string }> = {
+  local: { labelKey: "provLocal", color: C.textDim },
+  provisioning: { labelKey: "provProvisioning", color: C.warning },
+  provisioned: { labelKey: "provLive", color: C.online },
+  error: { labelKey: "provError", color: C.error },
 };
 
 function ProvisionBadge({ status }: { status: string }) {
+  const t = useTranslations("agents");
   const cfg = PROVISION_CONFIG[status] ?? PROVISION_CONFIG.local;
   return (
     <Pill color={cfg.color} size="sm">
-      {cfg.label}
+      {t(cfg.labelKey)}
     </Pill>
   );
 }
@@ -97,6 +100,7 @@ export function SkillBadges({ skills }: { skills: string[] }) {
 // ── Learning Badge ────────────────────────────────────────────────────────────
 
 function LearningBadge({ agentId }: { agentId: string }) {
+  const t = useTranslations("agents");
   const { data } = useQuery({
     queryKey: ["knowledge-stats", agentId],
     queryFn: () => api.knowledge.stats({ agent_id: agentId }),
@@ -112,7 +116,7 @@ function LearningBadge({ agentId }: { agentId: string }) {
       style={{ color: C.warning, backgroundColor: `${C.warning}1A` }}
     >
       <BookOpen size={10} />
-      {lessonCount} {lessonCount === 1 ? "Lesson" : "Lessons"}
+      {t("lessons", { count: lessonCount })}
     </span>
   );
 }
@@ -141,6 +145,7 @@ interface AgentCardProps {
 }
 
 export function AgentCard({ agent, className }: AgentCardProps) {
+  const t = useTranslations("agents");
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
@@ -188,7 +193,7 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             {/* Model + Runtime */}
             <div className="mt-3 flex items-center gap-2 flex-wrap">
               <span className="text-[11px] text-[var(--color-text-muted)] truncate font-mono">
-                {agent.model ? agent.model.split("/").pop() : "No model"}
+                {agent.model ? agent.model.split("/").pop() : t("noModel")}
               </span>
               <RuntimePill agent={agent} variant="compact" />
             </div>
@@ -196,7 +201,7 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             {/* Context token bar */}
             <div className="mt-3">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] text-[var(--color-text-muted)]">Context</span>
+                <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
                 <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
               </div>
               <div className="h-1 rounded-sm bg-[var(--color-bg-elevated)] overflow-hidden">

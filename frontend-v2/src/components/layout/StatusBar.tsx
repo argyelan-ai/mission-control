@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 
@@ -17,6 +18,7 @@ import { api } from "@/lib/api";
  * (online/error) — das ist die einzige Information hier, die einen Zustand hat.
  */
 export default function StatusBar() {
+  const t = useTranslations("shell");
   const { setCommandPaletteOpen, activeBoardId, boards } = useAppStore();
 
   const { data: status } = useQuery({
@@ -108,7 +110,7 @@ export default function StatusBar() {
         onClick={() => setCommandPaletteOpen(true)}
         className="flex items-center gap-1.5 cursor-pointer hover:opacity-70 transition-opacity uppercase"
         style={{ color: "var(--color-p2-txt)", letterSpacing: "0.05em", fontWeight: 700 }}
-        aria-label="Open command palette"
+        aria-label={t("openCommandPalette")}
       >
         <kbd
           className="px-1.5 py-0.5"
