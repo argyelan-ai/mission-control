@@ -39,6 +39,24 @@
     "languageEn": "English",
     "languageDe": "Deutsch"
   },
+  "home": {
+    "consoleOverview": "Console · Overview",
+    "greetingNight": "Good night",
+    "greetingMorning": "Good morning",
+    "greetingAfternoon": "Good afternoon",
+    "greetingEvening": "Good evening",
+    "noBoardSelected": "No board selected",
+    "contextAlert": "{name}: Context {pct}%",
+    "systemHealth": "System Health",
+    "checks": "{count} checks",
+    "events": "Events",
+    "all": "All",
+    "showAllActivity": "Show all activity",
+    "activityHistory": "Activity history",
+    "activityHistoryTitle": "Activity History",
+    "close": "Close",
+    "noActivity": "No activity"
+  },
   "tasks": {
     "title": "Tasks",
     "noBoardSelected": "No board selected",
