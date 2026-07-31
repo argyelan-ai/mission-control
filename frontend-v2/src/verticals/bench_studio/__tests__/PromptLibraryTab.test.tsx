@@ -63,17 +63,17 @@ describe("PromptLibraryTab", () => {
   it("filters by search", async () => {
     renderTab();
     await screen.findByText("Bouncing balls");
-    await userEvent.type(screen.getByPlaceholderText(/Suche/), "zzz");
+    await userEvent.type(screen.getByPlaceholderText(/Search/), "zzz");
     expect(screen.queryByText("Bouncing balls")).toBeNull();
   });
 
   it("creates a template via the editor", async () => {
     renderTab();
-    await userEvent.click(await screen.findByRole("button", { name: /Neues Template/ }));
-    await userEvent.type(screen.getByPlaceholderText("Titel"), "New");
-    await userEvent.type(screen.getByPlaceholderText(/Prompt-Text/), "body text");
+    await userEvent.click(await screen.findByRole("button", { name: /New Template/ }));
+    await userEvent.type(screen.getByPlaceholderText("Title"), "New");
+    await userEvent.type(screen.getByPlaceholderText(/Prompt text/), "body text");
     await userEvent.type(screen.getByPlaceholderText(/Tags/), "a, b");
-    await userEvent.click(screen.getByRole("button", { name: /Speichern/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
     await waitFor(() =>
       expect(benchApi.promptTemplates.create).toHaveBeenCalledWith({
         title: "New",
@@ -86,14 +86,14 @@ describe("PromptLibraryTab", () => {
   it("deletes a template with confirmation", async () => {
     renderTab();
     await screen.findByText("Bouncing balls");
-    await userEvent.click(screen.getByRole("button", { name: /Löschen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Delete/ }));
 
     // B2 dialog asks first — nothing deleted yet
     const dialog = await screen.findByRole("dialog");
-    expect(within(dialog).getByText(/wirklich löschen/)).toBeTruthy();
+    expect(within(dialog).getByText(/really delete template/i)).toBeTruthy();
     expect(benchApi.promptTemplates.remove).not.toHaveBeenCalled();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Löschen" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete" }));
     await waitFor(() =>
       expect(benchApi.promptTemplates.remove).toHaveBeenCalledWith("tpl-1")
     );
@@ -102,7 +102,7 @@ describe("PromptLibraryTab", () => {
   it("fires onStartChallenge with the template", async () => {
     const onStart = renderTab();
     await screen.findByText("Bouncing balls");
-    await userEvent.click(screen.getByRole("button", { name: /Challenge starten/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Start Challenge/ }));
     expect(onStart).toHaveBeenCalledWith(TPL);
   });
 
