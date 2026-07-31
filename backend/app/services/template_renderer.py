@@ -216,6 +216,9 @@ def build_agent_context(
         # _has(scope) pattern _generate_tools_md/tools_md_builder use for
         # TOOLS.md sections. scopes computed once above and reused here.
         "canonical_verbs": _canonical_verbs(_get_agent_scopes(agent)),
+        # The card inlines lifecycle verbs only (capability verbs live in
+        # `mc docs tasks`) — and still only those the scopes above allow.
+        "card_verbs": _card_verbs(_get_agent_scopes(agent)),
         "doc_topics": _doc_topics(),
     }
 
@@ -223,6 +226,11 @@ def build_agent_context(
 def _canonical_verbs(scopes: list[str] | None = None) -> dict:
     from app.agent_doc_constants import filter_verbs_by_scopes
     return filter_verbs_by_scopes(scopes)
+
+
+def _card_verbs(scopes: list[str] | None = None) -> tuple:
+    from app.agent_doc_constants import filter_card_verbs_by_scopes
+    return filter_card_verbs_by_scopes(scopes)
 
 
 def _doc_topics() -> dict:
