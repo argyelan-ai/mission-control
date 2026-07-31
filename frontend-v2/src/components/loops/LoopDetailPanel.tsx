@@ -2,6 +2,7 @@
 
 import ReactMarkdown from "react-markdown";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, ArrowUpRight, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
 import { SlideOverPanel } from "@/components/shared/SlideOverPanel";
@@ -21,11 +22,12 @@ interface LoopDetailPanelProps {
   actionPending?: boolean;
 }
 
-const BACKLOG_SOURCE_LABEL: Record<string, string> = {
-  markdown: "Markdown list",
-  project: "Project tasks",
-  tag: "Tag",
-  open_ended: "Open-ended",
+// i18n — resolved against "loops.detail.backlogSource" at the render site.
+const BACKLOG_SOURCE_LABEL_KEY: Record<string, string> = {
+  markdown: "markdown",
+  project: "project",
+  tag: "tag",
+  open_ended: "openEnded",
 };
 
 export function LoopDetailPanel({
@@ -38,6 +40,7 @@ export function LoopDetailPanel({
   onDelete,
   actionPending,
 }: LoopDetailPanelProps) {
+  const t = useTranslations("loops");
   const { data: loop, isLoading } = useQuery({
     queryKey: ["loop", loopId],
     queryFn: () => api.loops.get(loopId!),
@@ -45,11 +48,11 @@ export function LoopDetailPanel({
   });
 
   return (
-    <SlideOverPanel open={open} onClose={onClose} title={loop?.name ?? "Loop"} desktopWidth="480px">
+    <SlideOverPanel open={open} onClose={onClose} title={loop?.name ?? t("detail.loopFallbackTitle")} desktopWidth="480px">
       {isLoading && (
         <div className="flex items-center gap-2 px-5 py-6" style={{ color: C.textMuted }}>
           <Loader2 size={14} className="animate-spin" />
-          <span className="text-xs">Loading loop...</span>
+          <span className="text-xs">{t("detail.loading")}</span>
         </div>
       )}
 
@@ -65,20 +68,20 @@ export function LoopDetailPanel({
                 color: LOOP_STATUS_META[loop.status].textColor,
               }}
             >
-              {LOOP_STATUS_META[loop.status].label}
+              {t(`status.${LOOP_STATUS_META[loop.status].labelKey}`)}
             </span>
             <div className="flex items-center gap-1.5">
               {canStartLoop(loop.status) && (
-                <PanelActionButton icon={<Play size={12} />} label="Start" tone={C.accent} onClick={() => onStart(loop.id)} disabled={actionPending} />
+                <PanelActionButton icon={<Play size={12} />} label={t("detail.start")} tone={C.accent} onClick={() => onStart(loop.id)} disabled={actionPending} />
               )}
               {canPauseLoop(loop.status) && (
-                <PanelActionButton icon={<Pause size={12} />} label="Pause" tone={C.warning} onClick={() => onPause(loop.id)} disabled={actionPending} />
+                <PanelActionButton icon={<Pause size={12} />} label={t("detail.pause")} tone={C.warning} onClick={() => onPause(loop.id)} disabled={actionPending} />
               )}
               {canStopLoop(loop.status) && (
-                <PanelActionButton icon={<Square size={12} />} label="Stop" tone={C.error} onClick={() => onStop(loop.id)} disabled={actionPending} />
+                <PanelActionButton icon={<Square size={12} />} label={t("detail.stop")} tone={C.error} onClick={() => onStop(loop.id)} disabled={actionPending} />
               )}
               {isLoopInactive(loop.status) && (
-                <PanelActionButton icon={<Trash2 size={12} />} label="Delete" tone={C.textMuted} onClick={() => onDelete(loop.id)} disabled={actionPending} />
+                <PanelActionButton icon={<Trash2 size={12} />} label={t("detail.delete")} tone={C.textMuted} onClick={() => onDelete(loop.id)} disabled={actionPending} />
               )}
             </div>
           </div>
@@ -96,7 +99,7 @@ export function LoopDetailPanel({
           {/* Goal */}
           <section className="flex flex-col gap-2">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.textMuted }}>
-              Goal
+              {t("detail.goal")}
             </h3>
             <div
               className="prose prose-invert prose-sm max-w-none text-sm leading-relaxed"
@@ -109,35 +112,41 @@ export function LoopDetailPanel({
           {/* Configuration */}
           <section className="flex flex-col gap-2">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.textMuted }}>
-              Configuration
+              {t("detail.configuration")}
             </h3>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <ConfigRow
-                label="Backlog"
+                label={t("detail.backlog")}
                 value={
                   loop.backlog_source === "tag" && loop.backlog_tag
-                    ? `Tag: ${loop.backlog_tag}`
-                    : BACKLOG_SOURCE_LABEL[loop.backlog_source] ?? loop.backlog_source
+                    ? t("detail.backlogSource.tagValue", { tag: loop.backlog_tag })
+                    : t(`detail.backlogSource.${BACKLOG_SOURCE_LABEL_KEY[loop.backlog_source] ?? loop.backlog_source}`)
                 }
               />
-              <ConfigRow label="Max rounds" value={loop.max_rounds ? String(loop.max_rounds) : "Unlimited"} />
-              <ConfigRow label="Human gate every" value={loop.human_every_n_rounds > 0 ? `${loop.human_every_n_rounds} rounds` : "Never"} />
-              <ConfigRow label="Pause after" value={`${loop.pause_on_failed_rounds} failed rounds`} />
-              <ConfigRow label="Max duration" value={loop.max_duration_minutes ? `${loop.max_duration_minutes} min` : "No limit"} />
-              <ConfigRow label="Stop on empty backlog" value={loop.stop_on_backlog_empty ? "Yes" : "No"} />
-              <ConfigRow label="Telegram reports" value={loop.telegram_reports ? "On" : "Off"} />
-              {loop.budget_usd != null && <ConfigRow label="Budget" value={`$${loop.budget_usd}`} />}
-              {loop.budget_tokens != null && <ConfigRow label="Token budget" value={loop.budget_tokens.toLocaleString()} />}
+              <ConfigRow label={t("detail.maxRounds")} value={loop.max_rounds ? String(loop.max_rounds) : t("detail.unlimited")} />
+              <ConfigRow
+                label={t("detail.humanGateEvery")}
+                value={loop.human_every_n_rounds > 0 ? t("detail.roundsSuffix", { count: loop.human_every_n_rounds }) : t("detail.never")}
+              />
+              <ConfigRow label={t("detail.pauseAfter")} value={t("detail.failedRoundsSuffix", { count: loop.pause_on_failed_rounds })} />
+              <ConfigRow
+                label={t("detail.maxDuration")}
+                value={loop.max_duration_minutes ? t("detail.minutesSuffix", { count: loop.max_duration_minutes }) : t("detail.noLimit")}
+              />
+              <ConfigRow label={t("detail.stopOnEmptyBacklog")} value={loop.stop_on_backlog_empty ? t("detail.yes") : t("detail.no")} />
+              <ConfigRow label={t("detail.telegramReports")} value={loop.telegram_reports ? t("detail.on") : t("detail.off")} />
+              {loop.budget_usd != null && <ConfigRow label={t("detail.budget")} value={`$${loop.budget_usd}`} />}
+              {loop.budget_tokens != null && <ConfigRow label={t("detail.tokenBudget")} value={loop.budget_tokens.toLocaleString()} />}
             </div>
           </section>
 
           {/* Round history */}
           <section className="flex flex-col gap-2">
             <h3 className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.textMuted }}>
-              Rounds ({loop.rounds.length})
+              {t("detail.rounds", { count: loop.rounds.length })}
             </h3>
             {loop.rounds.length === 0 ? (
-              <p className="text-xs" style={{ color: C.textDim }}>No rounds yet.</p>
+              <p className="text-xs" style={{ color: C.textDim }}>{t("detail.noRoundsYet")}</p>
             ) : (
               <div className="flex flex-col gap-2">
                 {[...loop.rounds].reverse().map((round) => (
@@ -153,18 +162,19 @@ export function LoopDetailPanel({
 }
 
 function RoundCard({ round }: { round: LoopRound }) {
+  const t = useTranslations("loops");
   const outcomeMeta =
     round.outcome === "done"
-      ? { label: "Done", color: C.online }
+      ? { label: t("detail.outcomeDone"), color: C.online }
       : round.outcome === "failed"
-        ? { label: "Failed", color: C.error }
-        : { label: "In progress", color: C.accent };
+        ? { label: t("detail.outcomeFailed"), color: C.error }
+        : { label: t("detail.outcomeInProgress"), color: C.accent };
 
   return (
     <div className="flex flex-col gap-1.5 rounded-lg px-3 py-2.5" style={{ background: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium" style={{ color: C.textPrimary }}>
-          Round {round.round_no}
+          {t("detail.round", { number: round.round_no })}
         </span>
         <span
           className="inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide"
@@ -186,7 +196,7 @@ function RoundCard({ round }: { round: LoopRound }) {
           className="inline-flex items-center gap-1 text-[11px] w-fit"
           style={{ color: C.accent }}
         >
-          View task
+          {t("detail.viewTask")}
           <ArrowUpRight size={11} />
         </Link>
       )}

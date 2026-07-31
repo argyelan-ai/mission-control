@@ -14,6 +14,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Pencil, Plus, Server, Trash2, WifiOff, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Host, HostCreate, HostKind, HostMetrics } from "@/lib/types";
 import { useAppStore } from "@/lib/store";
@@ -43,15 +44,17 @@ function extractApiError(err: unknown): string {
   return msg;
 }
 
-const KIND_LABEL: Record<HostKind, string> = {
-  ssh: "SSH",
-  flask_wol: "Flask/WoL",
-  local: "Local",
+// labelKey pattern (docs/i18n.md): resolved via t() at the render site.
+const KIND_LABEL_KEY: Record<HostKind, string> = {
+  ssh: "kindSsh",
+  flask_wol: "kindFlaskWol",
+  local: "kindLocal",
 };
 
 // ── Host Metrics Bar ──────────────────────────────────────────────────────────
 
 function SingleHostMetricsBar({ host }: { host: Host }) {
+  const t = useTranslations("runtimes.hosts");
   const { data } = useQuery<HostMetrics>({
     queryKey: ["host-metrics", host.id],
     queryFn: () => api.hosts.metrics(host.id),
@@ -80,7 +83,7 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
           {host.display_name}
         </span>
         <span className="text-xs ml-auto" style={{ color: awake ? C.online : C.textMuted }}>
-          {awake ? "Awake" : "Sleeping"}
+          {awake ? t("awake") : t("sleeping")}
         </span>
       </div>
     );
@@ -94,7 +97,7 @@ function SingleHostMetricsBar({ host }: { host: Host }) {
       >
         <WifiOff size={13} style={{ color: C.textMuted }} />
         <span className="text-xs" style={{ color: C.textMuted }}>
-          {host.display_name} unreachable
+          {t("unreachable", { name: host.display_name })}
         </span>
       </div>
     );
@@ -282,6 +285,7 @@ function HostFormModal({
   host: Host | null;
   onClose: () => void;
 }) {
+  const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
   const [form, setForm] = useState<HostCreate>(host ? hostToForm(host) : EMPTY_FORM);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -349,11 +353,11 @@ function HostFormModal({
             style={{ borderColor: "var(--color-border)" }}
           >
             <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-              {host ? `Edit host — ${host.display_name}` : "Add host"}
+              {host ? t("editHostTitle", { name: host.display_name }) : t("addHostTitle")}
             </h2>
             <button
               onClick={onClose}
-              aria-label="Close"
+              aria-label={t("close")}
               className="p-1 rounded-md hover:bg-[var(--color-bg-hover)] cursor-pointer"
             >
               <X size={14} style={{ color: C.textMuted }} />
@@ -362,14 +366,14 @@ function HostFormModal({
 
           {/* Body */}
           <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-3">
-            <Field label="Slug" value={form.slug} onChange={(v) => set("slug", v)} placeholder="e.g. dgx-spark" mono />
-            <Field label="Display name" value={form.display_name} onChange={(v) => set("display_name", v)} placeholder="e.g. DGX Spark" />
+            <Field label={t("fieldSlug")} value={form.slug} onChange={(v) => set("slug", v)} placeholder={t("slugPlaceholder")} mono />
+            <Field label={t("fieldDisplayName")} value={form.display_name} onChange={(v) => set("display_name", v)} placeholder={t("displayNamePlaceholder")} />
 
             {/* Kind pills */}
             <div className="flex flex-col gap-1">
-              <span className="text-xs" style={{ color: C.textMuted }}>Type</span>
+              <span className="text-xs" style={{ color: C.textMuted }}>{t("fieldType")}</span>
               <div className="flex gap-1.5">
-                {(Object.keys(KIND_LABEL) as HostKind[]).map((k) => {
+                {(Object.keys(KIND_LABEL_KEY) as HostKind[]).map((k) => {
                   const active = form.kind === k;
                   return (
                     <button
@@ -383,7 +387,7 @@ function HostFormModal({
                         fontWeight: active ? 600 : 400,
                       }}
                     >
-                      {KIND_LABEL[k]}
+                      {t(KIND_LABEL_KEY[k])}
                     </button>
                   );
                 })}
@@ -392,16 +396,16 @@ function HostFormModal({
 
             {form.kind === "ssh" && (
               <>
-                <Field label="SSH Host" value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder="IP or hostname (e.g. 192.0.2.10)" mono />
-                <Field label="SSH User" value={form.ssh_user ?? ""} onChange={(v) => set("ssh_user", v)} mono />
-                <Field label="SSH Key Path" value={form.ssh_key_path ?? ""} onChange={(v) => set("ssh_key_path", v)} placeholder="/root/.ssh/id_ed25519" mono />
+                <Field label={t("fieldSshHost")} value={form.ssh_host ?? ""} onChange={(v) => set("ssh_host", v)} placeholder={t("sshHostPlaceholder")} mono />
+                <Field label={t("fieldSshUser")} value={form.ssh_user ?? ""} onChange={(v) => set("ssh_user", v)} mono />
+                <Field label={t("fieldSshKeyPath")} value={form.ssh_key_path ?? ""} onChange={(v) => set("ssh_key_path", v)} placeholder="/root/.ssh/id_ed25519" mono />
               </>
             )}
 
             {form.kind === "flask_wol" && (
               <>
-                <Field label="Control URL" value={form.control_url ?? ""} onChange={(v) => set("control_url", v)} placeholder="http://192.0.2.20:5555" mono />
-                <Field label="WoL MAC Address" value={form.wol_mac_address ?? ""} onChange={(v) => set("wol_mac_address", v)} placeholder="00:00:5E:00:53:01" mono />
+                <Field label={t("fieldControlUrl")} value={form.control_url ?? ""} onChange={(v) => set("control_url", v)} placeholder="http://192.0.2.20:5555" mono />
+                <Field label={t("fieldWolMac")} value={form.wol_mac_address ?? ""} onChange={(v) => set("wol_mac_address", v)} placeholder="00:00:5E:00:53:01" mono />
               </>
             )}
 
@@ -413,13 +417,13 @@ function HostFormModal({
                   onChange={(e) => set("power_managed", e.target.checked)}
                   style={{ accentColor: C.accent }}
                 />
-                Power-managed (box sleeps when idle)
+                {t("powerManaged")}
               </label>
             )}
 
             <div className="flex flex-col gap-1">
               <label htmlFor="host-field-notes" className="text-xs" style={{ color: C.textMuted }}>
-                Notes (GPU profile, quirks)
+                {t("fieldNotes")}
               </label>
               <textarea
                 id="host-field-notes"
@@ -442,7 +446,7 @@ function HostFormModal({
                 onChange={(e) => set("enabled", e.target.checked)}
                 style={{ accentColor: C.accent }}
               />
-              Enabled
+              {t("enabled")}
             </label>
 
             {errorMsg && (
@@ -472,7 +476,7 @@ function HostFormModal({
               className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
               style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
             >
-              Cancel
+              {t("cancel")}
             </button>
             <button
               onClick={() => saveMutation.mutate()}
@@ -485,7 +489,7 @@ function HostFormModal({
               }}
             >
               {saveMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-              {host ? "Save" : "Add"}
+              {host ? t("save") : t("add")}
             </button>
           </div>
         </motion.div>
@@ -511,6 +515,7 @@ function HostCard({
   onDelete: () => void;
   deletePending: boolean;
 }) {
+  const t = useTranslations("runtimes.hosts");
   return (
     <motion.div
       initial={{ opacity: 0, x: -4 }}
@@ -545,7 +550,7 @@ function HostCard({
                 letterSpacing: "0.06em",
               }}
             >
-              {KIND_LABEL[host.kind]}
+              {t(KIND_LABEL_KEY[host.kind])}
             </span>
           </div>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
@@ -554,11 +559,11 @@ function HostCard({
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs" style={{ color: host.enabled ? C.textMuted : C.textDim }}>
-              {host.enabled ? "Active" : "Disabled"}
+              {host.enabled ? t("active") : t("disabled")}
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs tabular-nums" style={{ color: boundCount > 0 ? C.textSecondary : C.textMuted }}>
-              {boundCount} Runtime{boundCount === 1 ? "" : "s"}
+              {boundCount} {boundCount === 1 ? t("runtimeSingular") : t("runtimePlural")}
             </span>
             {host.kind === "ssh" && host.ssh_host && (
               <>
@@ -584,8 +589,8 @@ function HostCard({
         <div className="flex items-center gap-1 shrink-0 self-end sm:self-auto">
           <button
             onClick={onEdit}
-            title="Edit"
-            aria-label={`Edit host ${host.display_name}`}
+            title={t("edit")}
+            aria-label={t("editHostAria", { name: host.display_name })}
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer"
             style={{
               background: C.borderSubtle,
@@ -598,8 +603,8 @@ function HostCard({
           <button
             onClick={onDelete}
             disabled={deletePending}
-            title="Delete"
-            aria-label={`Delete host ${host.display_name}`}
+            title={t("delete")}
+            aria-label={t("deleteHostAria", { name: host.display_name })}
             className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
             style={{
               background: `${C.error}14`,
@@ -618,6 +623,7 @@ function HostCard({
 // ── Hosts Section ─────────────────────────────────────────────────────────────
 
 export function HostsSection() {
+  const t = useTranslations("runtimes.hosts");
   const queryClient = useQueryClient();
   const currentUser = useAppStore((s) => s.currentUser);
   const isAdmin = currentUser?.role === "admin";
@@ -666,16 +672,16 @@ export function HostsSection() {
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>Hosts</h2>
+            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h2>
             <span
               className="text-xs px-1.5 py-px rounded"
               style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
             >
-              Registry
+              {t("registryBadge")}
             </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            Physical boxes running LLM runtimes
+            {t("subtitle")}
           </p>
         </div>
         {isAdmin && (
@@ -689,7 +695,7 @@ export function HostsSection() {
             }}
           >
             <Plus size={11} />
-            Host
+            {t("addHostButton")}
           </button>
         )}
       </div>
@@ -697,7 +703,7 @@ export function HostsSection() {
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
           <Loader2 size={13} className="animate-spin" />
-          <span className="text-xs">Loading hosts...</span>
+          <span className="text-xs">{t("loading")}</span>
         </div>
       )}
 
@@ -713,7 +719,7 @@ export function HostsSection() {
           <span>{feedback}</span>
           <button
             onClick={() => setFeedback(null)}
-            aria-label="Dismiss message"
+            aria-label={t("dismissMessage")}
             className="cursor-pointer shrink-0"
             style={{ color: STATUS_TEXT.error }}
           >
@@ -725,7 +731,7 @@ export function HostsSection() {
       {!isLoading && (hosts ?? []).length === 0 && (
         <div className="flex items-center gap-2 text-xs py-6 justify-center" style={{ color: C.textMuted }}>
           <Server size={13} />
-          No hosts registered — cloud runtimes don&apos;t need one.
+          {t("noHostsRegistered")}
         </div>
       )}
 

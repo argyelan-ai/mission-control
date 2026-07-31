@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Power } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 
@@ -14,6 +15,7 @@ import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
  * why). Only rendered for runtimes with autostart_supported=true.
  */
 export function AutostartToggle({ slug }: { slug: string }) {
+  const t = useTranslations("runtimes.autostart");
   const queryClient = useQueryClient();
 
   const { data: status, isLoading } = useQuery({
@@ -34,17 +36,17 @@ export function AutostartToggle({ slug }: { slug: string }) {
   const busy = isLoading || mutation.isPending;
 
   const title = unknown
-    ? "Host nicht erreichbar — Autostart-Status unbekannt"
+    ? t("titleUnknown")
     : enabled
-      ? "Autostart bei Boot: an — klicken zum Deaktivieren"
-      : "Autostart bei Boot: aus — klicken zum Aktivieren";
+      ? t("titleOn")
+      : t("titleOff");
 
   return (
     <button
       type="button"
       role="switch"
       aria-checked={enabled}
-      aria-label="Autostart bei Boot"
+      aria-label={t("ariaLabel")}
       title={title}
       disabled={unknown || busy}
       onClick={() => mutation.mutate(!enabled)}
@@ -62,7 +64,7 @@ export function AutostartToggle({ slug }: { slug: string }) {
       ) : (
         <Power size={10} />
       )}
-      {unknown ? "Autostart: unbekannt" : enabled ? "Autostart: an" : "Autostart: aus"}
+      {unknown ? t("statusUnknown") : enabled ? t("statusOn") : t("statusOff")}
     </button>
   );
 }

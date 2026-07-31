@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { Server, X, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -17,6 +18,7 @@ interface Props {
 const NAME_RE = /^[a-zA-Z0-9_-]+$/;
 
 export function MCPAddServerModal({ onClose, onSuccess }: Props) {
+  const t = useTranslations("skills.mcpAddModal");
   // iOS-safe scroll lock — always active while this component is mounted (M4)
   useBodyScrollLock(true);
 
@@ -54,7 +56,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         description: description.trim() || undefined,
       }),
     onSuccess: () => {
-      notify.success(`MCP server "${name}" added`);
+      notify.success(t("added", { name }));
       onSuccess();
     },
     onError: (e: Error) => notify.error(e.message),
@@ -86,7 +88,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           className="relative w-full mx-2 rounded-t-2xl rounded-b-none sm:mx-0 sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
           role="dialog"
           aria-modal="true"
-          aria-label="Add MCP server"
+          aria-label={t("title")}
           style={{
             maxWidth: "min(520px, 100%)",
             background: C.bgBase,
@@ -113,14 +115,14 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           </div>
           <div className="flex-1 min-w-0">
             <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              Add MCP server
+              {t("title")}
             </h2>
           </div>
           <button
             onClick={onClose}
             className="p-1.5 rounded-lg cursor-pointer"
             style={{ color: "var(--color-text-muted)" }}
-            aria-label="Close"
+            aria-label={t("close")}
           >
             <X size={16} />
           </button>
@@ -129,28 +131,28 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4 space-y-3">
           <label className="block text-xs">
-            <span style={{ color: "var(--color-text-muted)" }}>Name</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{t("name")}</span>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. filesystem"
+              placeholder={t("namePlaceholder")}
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
               style={{
                 border: `1px solid ${nameInvalid ? `${C.error}66` : "var(--color-border)"}`,
                 color: "var(--color-text-primary)",
               }}
-              aria-label="Name"
+              aria-label={t("name")}
             />
             {nameInvalid && (
               <span className="text-[11px]" style={{ color: C.error }}>
-                Only a-z, 0-9, _, - allowed
+                {t("nameInvalid")}
               </span>
             )}
           </label>
 
           <label className="block text-xs">
-            <span style={{ color: "var(--color-text-muted)" }}>Transport</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{t("transport")}</span>
             <select
               value={transport}
               onChange={(e) => setTransport(e.target.value as typeof transport)}
@@ -160,7 +162,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
                 border: "1px solid var(--color-border)",
                 color: "var(--color-text-primary)",
               }}
-              aria-label="Transport"
+              aria-label={t("transport")}
             >
               <option value="stdio">stdio</option>
               <option value="http">http</option>
@@ -171,27 +173,27 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
           {transport === "stdio" && (
             <>
               <label className="block text-xs">
-                <span style={{ color: "var(--color-text-muted)" }}>Command</span>
+                <span style={{ color: "var(--color-text-muted)" }}>{t("command")}</span>
                 <input
                   type="text"
                   value={command}
                   onChange={(e) => setCommand(e.target.value)}
-                  placeholder="e.g. uvx my-mcp-server"
+                  placeholder={t("commandPlaceholder")}
                   className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                   style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-                  aria-label="Command"
+                  aria-label={t("command")}
                 />
               </label>
               <label className="block text-xs">
-                <span style={{ color: "var(--color-text-muted)" }}>Args (comma-separated)</span>
+                <span style={{ color: "var(--color-text-muted)" }}>{t("args")}</span>
                 <input
                   type="text"
                   value={args}
                   onChange={(e) => setArgs(e.target.value)}
-                  placeholder="--port,8080,--verbose"
+                  placeholder={t("argsPlaceholder")}
                   className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                   style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-                  aria-label="Args"
+                  aria-label={t("args")}
                 />
               </label>
             </>
@@ -199,37 +201,37 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
 
           {transport !== "stdio" && (
             <label className="block text-xs">
-              <span style={{ color: "var(--color-text-muted)" }}>URL</span>
+              <span style={{ color: "var(--color-text-muted)" }}>{t("url")}</span>
               <input
                 type="text"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://example.com/mcp"
+                placeholder={t("urlPlaceholder")}
                 className="mt-1 w-full px-3 py-2 rounded-lg text-sm font-mono bg-transparent"
                 style={{
                   border: `1px solid ${urlInvalid ? `${C.error}66` : "var(--color-border)"}`,
                   color: "var(--color-text-primary)",
                 }}
-                aria-label="URL"
+                aria-label={t("url")}
               />
               {urlInvalid && (
                 <span className="text-[11px]" style={{ color: C.error }}>
-                  URL is required
+                  {t("urlInvalid")}
                 </span>
               )}
             </label>
           )}
 
           <label className="block text-xs">
-            <span style={{ color: "var(--color-text-muted)" }}>Description</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{t("description")}</span>
             <input
               type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Optional"
+              placeholder={t("descriptionPlaceholder")}
               className="mt-1 w-full px-3 py-2 rounded-lg text-sm bg-transparent"
               style={{ border: "1px solid var(--color-border)", color: "var(--color-text-primary)" }}
-              aria-label="Description"
+              aria-label={t("description")}
             />
           </label>
         </div>
@@ -244,7 +246,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
             style={{ color: "var(--color-text-muted)" }}
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             onClick={() => addMutation.mutate()}
@@ -257,7 +259,7 @@ export function MCPAddServerModal({ onClose, onSuccess }: Props) {
             }}
           >
             {addMutation.isPending && <Loader2 size={12} className="animate-spin" />}
-            Add
+            {t("add")}
           </button>
         </div>
         </motion.div>
