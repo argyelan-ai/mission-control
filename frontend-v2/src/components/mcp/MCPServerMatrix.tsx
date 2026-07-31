@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useQueryClient, useMutation } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Server, Globe, Zap, Trash2, Check, Info } from "lucide-react";
 import type { Agent, MCPServer } from "@/lib/types";
 import { api } from "@/lib/api";
@@ -28,6 +29,7 @@ export function MCPServerMatrix({
   showDeleteButton = false,
   onDeleteServer,
 }: Props) {
+  const t = useTranslations("skills.mcpMatrix");
   const qc = useQueryClient();
 
   const initial: Record<string, string[] | null> = Object.fromEntries(
@@ -55,7 +57,7 @@ export function MCPServerMatrix({
     onError: (_e, vars) => {
       // Roll back this agent's assignment to the saved snapshot
       setAssignments((s) => ({ ...s, [vars.agentId]: savedAssignments[vars.agentId] ?? null }));
-      notify.error("MCP assignment failed");
+      notify.error(t("assignFailed"));
     },
     onSuccess: (_data, vars) => {
       // Promote optimistic state to saved
@@ -86,10 +88,10 @@ export function MCPServerMatrix({
       >
         <Server className="mx-auto h-8 w-8" style={{ color: "var(--color-text-dim)" }} />
         <p className="mt-3 text-sm" style={{ color: "var(--color-text-muted)" }}>
-          No MCP servers installed
+          {t("noServers")}
         </p>
         <p className="mt-1 text-xs" style={{ color: "var(--color-text-dim)" }}>
-          Boss can submit install requests, or you can install via CLI.
+          {t("noServersHint")}
         </p>
       </div>
     );
@@ -105,7 +107,7 @@ export function MCPServerMatrix({
       } as React.CSSProperties}
       tabIndex={0}
       role="region"
-      aria-label="MCP server assignment"
+      aria-label={t("tableAria")}
     >
       <table className="w-full text-xs">
         <thead>
@@ -117,7 +119,7 @@ export function MCPServerMatrix({
                 color: "var(--color-text-muted)",
               }}
             >
-              MCP Server
+              {t("serverCol")}
             </th>
             {agents.map((a) => (
               <th
@@ -175,7 +177,7 @@ export function MCPServerMatrix({
                               onClick={() => setTooltipServer((cur) => (cur === s.name ? null : s.name))}
                               className="flex items-center cursor-pointer"
                               style={{ color: "var(--color-text-dim)" }}
-                              aria-label={`About ${s.name}`}
+                              aria-label={t("aboutServer", { name: s.name })}
                             >
                               <Info size={11} />
                             </button>
@@ -210,7 +212,7 @@ export function MCPServerMatrix({
                         onClick={() => onDeleteServer?.(s.name)}
                         className="p-1 rounded cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity shrink-0 touch-visible"
                         style={{ color: "var(--color-text-muted)" }}
-                        title={`Remove ${s.name}`}
+                        title={t("removeServer", { name: s.name })}
                       >
                         <Trash2 size={13} />
                       </button>
@@ -235,7 +237,11 @@ export function MCPServerMatrix({
                               : "var(--color-border)"
                           }`,
                         }}
-                        aria-label={`${enabled ? "Deactivate" : "Activate"} ${s.name} for ${a.name}`}
+                        aria-label={
+                          enabled
+                            ? t("deactivate", { name: s.name, agent: a.name })
+                            : t("activate", { name: s.name, agent: a.name })
+                        }
                       >
                         {enabled && <Check size={12} style={{ color: C.accent }} />}
                       </button>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -83,6 +84,7 @@ function MdContent({ content }: { content: string }) {
 
 // ── Skill Content Modal ────────────────────────────────────────────────────
 function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: () => void }) {
+  const t = useTranslations("skills");
   const qc = useQueryClient();
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [editContent, setEditContent] = useState("");
@@ -125,7 +127,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
         className="relative z-10 flex flex-col overflow-hidden rounded-none sm:rounded-2xl w-full h-dvh sm:w-[min(820px,95vw)] sm:h-[85vh]"
         role="dialog"
         aria-modal="true"
-        aria-label={`Skill: ${skillKey}`}
+        aria-label={t("modalAria", { key: skillKey })}
         style={{ background: C.bgBase,
           border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
         onClick={(e) => e.stopPropagation()}
@@ -149,17 +151,17 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
               <button onClick={() => { setEditContent(data?.content ?? ""); setDirty(false); setWriteTab("write"); setMode("edit"); }}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                 style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}>
-                <Pencil size={11} /> Edit
+                <Pencil size={11} /> {t("edit")}
               </button>
             )}
             {mode === "edit" && (
               <>
-                <button onClick={() => setMode("view")} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>Cancel</button>
+                <button onClick={() => setMode("view")} className="px-3 py-1.5 text-xs rounded-lg cursor-pointer" style={{ color: "var(--color-text-muted)" }}>{t("cancel")}</button>
                 <button onClick={() => saveMutation.mutate(editContent)} disabled={saveMutation.isPending || !dirty}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                   style={{ background: dirty ? `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` : "var(--color-bg-hover)",
                     color: dirty ? C.onAccent : "var(--color-text-muted)", cursor: !dirty ? "default" : "pointer" }}>
-                  {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> Saving...</> : <><Save size={11} /> Save</>}
+                  {saveMutation.isPending ? <><RefreshCw size={11} className="animate-spin" /> {t("saving")}</> : <><Save size={11} /> {t("save")}</>}
                 </button>
               </>
             )}
@@ -174,11 +176,11 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
           ) : error ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3">
               <FileText size={22} style={{ color: "var(--color-text-muted)" }} />
-              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No SKILL.md found</p>
+              <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{t("noSkillMd")}</p>
               <button onClick={() => { setEditContent("---\nname: " + skillKey + '\ndescription: ""\n---\n\n# ' + skillKey + "\n\n"); setDirty(true); setMode("edit"); }}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium cursor-pointer"
                 style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}>
-                <FileText size={13} /> Create new SKILL.md
+                <FileText size={13} /> {t("createSkillMd")}
               </button>
             </div>
           ) : mode === "view" ? (
@@ -191,11 +193,11 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
                     style={{ background: writeTab === tab ? "var(--color-bg-hover)" : "transparent",
                       color: writeTab === tab ? "var(--color-text-primary)" : "var(--color-text-muted)" }}>
-                    {tab === "write" ? <><Pencil size={11} /> Write</> : <><Eye size={11} /> Preview</>}
+                    {tab === "write" ? <><Pencil size={11} /> {t("write")}</> : <><Eye size={11} /> {t("preview")}</>}
                   </button>
                 ))}
                 {dirty && <span className="ml-auto text-[10px] font-mono px-2 py-0.5 rounded-sm"
-                  style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}>Unsaved</span>}
+                  style={{ background: `${C.warning}1A`, color: C.warning, border: `1px solid ${C.warning}33` }}>{t("unsaved")}</span>}
               </div>
               <div className="flex-1 overflow-hidden">
                 {writeTab === "write" ? (
@@ -203,10 +205,10 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
                     spellCheck={false} className="w-full h-full px-6 py-4 text-sm outline-none resize-none"
                     style={{ background: "transparent", color: "var(--color-text-body)",
                       fontFamily: 'ui-monospace, "Cascadia Code", "Fira Code", monospace', lineHeight: 1.7, fontSize: 13 }}
-                    placeholder="Enter markdown here..." />
+                    placeholder={t("mdPlaceholder")} />
                 ) : (
                   <div className="h-full overflow-y-auto px-6 py-5">
-                    {editContent.trim() ? <MdContent content={editContent} /> : <p className="text-sm italic" style={{ color: "var(--color-text-muted)" }}>No content yet.</p>}
+                    {editContent.trim() ? <MdContent content={editContent} /> : <p className="text-sm italic" style={{ color: "var(--color-text-muted)" }}>{t("noContent")}</p>}
                   </div>
                 )}
               </div>
@@ -219,7 +221,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
             <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
               className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-4 py-2 rounded-sm font-mono text-xs font-medium pointer-events-none"
               style={{ background: `${C.online}26`, border: `1px solid ${C.online}4D`, color: C.online }}>
-              <Check size={12} /> Saved
+              <Check size={12} /> {t("saved")}
             </motion.div>
           )}
         </AnimatePresence>
@@ -230,6 +232,7 @@ function SkillContentModal({ skillKey, onClose }: { skillKey: string; onClose: (
 
 // ── Skill Row ──────────────────────────────────────────────────────────────
 function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
+  const t = useTranslations("skills");
   const [expanded, setExpanded] = useState(false);
   const [showContent, setShowContent] = useState(false);
   const id = skill.key ?? skill.name;
@@ -253,7 +256,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
         <div className="flex items-center gap-2 shrink-0">
           <button onClick={(e) => { e.stopPropagation(); setShowContent(true); }}
             className="p-1 rounded transition-colors opacity-0 group-hover:opacity-100 cursor-pointer touch-visible"
-            style={{ color: "var(--color-text-muted)" }} title="Show SKILL.md">
+            style={{ color: "var(--color-text-muted)" }} title={t("showSkillMd")}>
             <FileText size={12} />
           </button>
           {skill.description && (
@@ -281,6 +284,7 @@ function SkillRow({ skill, isLast }: { skill: LocalSkill; isLast: boolean }) {
 
 // ── Category Group ─────────────────────────────────────────────────────────
 function CategoryGroup({ category, skills, index }: { category: string; skills: LocalSkill[]; index: number }) {
+  const t = useTranslations("skills");
   const [collapsed, setCollapsed] = useState(false);
   const meta = CATEGORY_META[category] ?? { icon: LayoutGrid, color: C.textSecondary };
   const CatIcon = meta.icon;
@@ -298,7 +302,7 @@ function CategoryGroup({ category, skills, index }: { category: string; skills: 
           <CatIcon size={14} style={{ color: meta.color }} />
         </div>
         <span className="text-sm font-semibold flex-1" style={{ color: "var(--color-text-primary)" }}>{category}</span>
-        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{skills.length} Skills</span>
+        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{t("skillCount", { count: skills.length })}</span>
         <ChevronDown size={13} className="transition-transform duration-200"
           style={{ color: "var(--color-text-muted)", transform: collapsed ? "rotate(-90deg)" : "rotate(0deg)" }} />
       </button>
@@ -316,6 +320,7 @@ function CategoryGroup({ category, skills, index }: { category: string; skills: 
 
 // ── Page ───────────────────────────────────────────────────────────────────
 export default function SkillsPage() {
+  const t = useTranslations("skills");
   const [activeTab, setActiveTab] = useState<"local" | "plugins" | "mcp" | "installer">("local");
   const [search, setSearch] = useState("");
   const [showAddMcpModal, setShowAddMcpModal] = useState(false);
@@ -371,9 +376,9 @@ export default function SkillsPage() {
       qc.invalidateQueries({ queryKey: ["mcp-servers"] });
       qc.invalidateQueries({ queryKey: ["agents"] });
       const affected = data.cleaned_agents.length;
-      notify.success(affected > 0 ? `Server removed. ${affected} agent(s) updated.` : "Server removed.");
+      notify.success(affected > 0 ? t("mcpRemovedWithAgents", { count: affected }) : t("mcpRemoved"));
     },
-    onError: (e: Error) => notify.error(e.message ?? "Failed to remove server"),
+    onError: (e: Error) => notify.error(e.message ?? t("mcpRemoveFailed")),
   });
 
   function handleMcpDelete(name: string) {
@@ -388,16 +393,16 @@ export default function SkillsPage() {
         <div className="flex items-start justify-between mb-6 gap-4">
           <div>
             <div className="label-sys mb-2">System · Skills</div>
-            <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>Skills</h1>
+            <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
             <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
-              Skills, CLI plugins, and MCP servers — local from ~/.mc/
+              {t("subtitle")}
             </p>
           </div>
           {activeTab === "local" && (
             <button onClick={() => refetch()}
               className="p-2 rounded-xl cursor-pointer transition-colors"
               style={{ background: SK.bg, border: `1px solid ${C.border}`, color: "var(--color-text-muted)" }}
-              title="Refresh">
+              title={t("refresh")}>
               <RefreshCw size={14} className={isRefetching ? "animate-spin" : ""} />
             </button>
           )}
@@ -407,11 +412,11 @@ export default function SkillsPage() {
         <div className="flex items-center gap-1 mb-5 p-1 rounded-xl tab-strip w-full md:w-fit"
           style={{ background: SK.bg, border: `1px solid ${C.border}` }}>
           {([
-            { id: "local",     label: "Skills",      icon: Zap,      count: installedSkills.length },
-            { id: "plugins",   label: "CLI Plugins",  icon: Package,  count: 0 },
-            { id: "mcp",       label: "MCP Servers",  icon: Server,   count: mcpServers?.length ?? 0 },
-            { id: "installer", label: "Installer",    icon: Terminal,  count: 0 },
-          ] as const).map(({ id, label, icon: Icon, count }) => (
+            { id: "local",     labelKey: "tabLocal",     icon: Zap,      count: installedSkills.length },
+            { id: "plugins",   labelKey: "tabPlugins",   icon: Package,  count: 0 },
+            { id: "mcp",       labelKey: "tabMcp",       icon: Server,   count: mcpServers?.length ?? 0 },
+            { id: "installer", labelKey: "tabInstaller", icon: Terminal,  count: 0 },
+          ] as const).map(({ id, labelKey, icon: Icon, count }) => (
             <button key={id}
               onClick={() => { setActiveTab(id); setSearch(""); }}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer transition-all whitespace-nowrap"
@@ -421,7 +426,7 @@ export default function SkillsPage() {
                 boxShadow: activeTab === id ? "0 1px 3px rgba(0,0,0,0.3)" : "none",
               }}>
               <Icon size={13} />
-              {label}
+              {t(labelKey)}
               {count > 0 && (
                 <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-sm"
                   style={{ background: activeTab === id ? C.accentSubtle : "var(--color-bg-elevated)",
@@ -440,8 +445,8 @@ export default function SkillsPage() {
             <div className="relative mb-5" style={{ maxWidth: 400 }}>
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" style={{ color: "var(--color-text-muted)" }} />
               <input type="text" value={search} onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search skills…"
-                aria-label="Search skills"
+                placeholder={t("searchPlaceholder")}
+                aria-label={t("searchAria")}
                 className="w-full pl-9 pr-3 py-2 text-sm rounded-xl outline-none"
                 style={{ background: SK.bg, border: `1px solid ${C.border}`, color: "var(--color-text-primary)" }} />
               {search && (
@@ -456,7 +461,7 @@ export default function SkillsPage() {
               <div className="flex flex-col items-center gap-2 py-8">
                 <p className="text-xs" style={{ color: C.error }}>{(skillsError as Error).message}</p>
                 <button onClick={() => qc.invalidateQueries({ queryKey: ["skills"] })}
-                  className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Try again</button>
+                  className="text-xs underline cursor-pointer" style={{ color: C.accent }}>{t("tryAgain")}</button>
               </div>
             ) : isLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -466,13 +471,13 @@ export default function SkillsPage() {
               <div className="flex flex-col items-center justify-center py-16 gap-2">
                 <Search size={28} style={{ color: "var(--color-text-muted)" }} />
                 <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>
-                  {search ? "No skills found." : "No skills in ~/.mc/skills/"}
+                  {search ? t("noResults") : t("empty")}
                 </p>
-                {search && <button onClick={() => setSearch("")} className="text-xs underline cursor-pointer" style={{ color: C.accent }}>Reset search</button>}
+                {search && <button onClick={() => setSearch("")} className="text-xs underline cursor-pointer" style={{ color: C.accent }}>{t("resetSearch")}</button>}
               </div>
             ) : (
               <div className="flex flex-col gap-3">
-                {search && <p className="text-xs px-1" style={{ color: "var(--color-text-muted)" }}>{filtered.length} of {installedSkills.length} skills</p>}
+                {search && <p className="text-xs px-1" style={{ color: "var(--color-text-muted)" }}>{t("searchCount", { filtered: filtered.length, total: installedSkills.length })}</p>}
                 {categoryOrder.map((cat, i) => (
                   <CategoryGroup key={cat} category={cat} skills={grouped[cat]} index={i} />
                 ))}
@@ -498,12 +503,12 @@ export default function SkillsPage() {
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                {mcpServers?.length ?? 0} MCP servers installed · {allAgents?.length ?? 0} agents
+                {t("mcpSummary", { servers: mcpServers?.length ?? 0, agents: allAgents?.length ?? 0 })}
               </p>
               <button onClick={() => setShowAddMcpModal(true)}
                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
                 style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}>
-                <Plus size={13} /> Add MCP server
+                <Plus size={13} /> {t("mcpAdd")}
               </button>
             </div>
             <MCPServerMatrix servers={mcpServers ?? []} agents={allAgents ?? []} showDeleteButton onDeleteServer={handleMcpDelete} />
@@ -519,13 +524,9 @@ export default function SkillsPage() {
         {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
         <ConfirmDialog
           open={mcpDeleteTarget !== null}
-          title="Remove MCP server"
-          body={
-            mcpDeleteTarget !== null
-              ? `Really remove MCP server "${mcpDeleteTarget}"? All agent assignments will be cleaned up.`
-              : undefined
-          }
-          confirmLabel="Remove"
+          title={t("mcpRemoveTitle")}
+          body={mcpDeleteTarget !== null ? t("mcpRemoveBody", { name: mcpDeleteTarget }) : undefined}
+          confirmLabel={t("mcpRemove")}
           loading={deleteMcpMutation.isPending}
           onConfirm={() => {
             if (mcpDeleteTarget === null) return;

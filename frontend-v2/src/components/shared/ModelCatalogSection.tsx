@@ -23,6 +23,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import {
   RotateCcw,
   Loader2,
@@ -52,45 +53,42 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface StatusChrome {
   /** Kurzlabel in der Kopfzeile. */
-  label: string;
+  labelKey: string;
   /** Erklärender Satz im Hinweisband (null = kein Band, alles in Ordnung). */
-  headline: string | null;
+  headlineKey: string | null;
   tone: "ok" | "warn" | "err";
   Icon: typeof AlertTriangle;
 }
 
+// labelKey pattern (docs/i18n.md): resolved via t() at the render site.
 const STATUS_CHROME: Record<ModelCatalogStatus, StatusChrome> = {
   ok: {
-    label: "live",
-    headline: null,
+    labelKey: "statusOkLabel",
+    headlineKey: null,
     tone: "ok",
     Icon: CheckCircle2,
   },
   manifest_fallback: {
-    label: "Manifest-Fallback",
-    headline:
-      "Live-Abfrage fehlgeschlagen, zeige bekannte Liste — sie kann veraltet sein.",
+    labelKey: "statusManifestFallbackLabel",
+    headlineKey: "statusManifestFallbackHeadline",
     tone: "warn",
     Icon: AlertTriangle,
   },
   cli_config: {
-    label: "aus CLI-Config",
-    headline:
-      "Live-Abfrage fehlgeschlagen — die Liste kommt aus der Config des CLI selbst (dieselbe Datei, die das Tool zur Modellwahl liest). Aktuell, aber nicht vom Anbieter bestätigt.",
+    labelKey: "statusCliConfigLabel",
+    headlineKey: "statusCliConfigHeadline",
     tone: "warn",
     Icon: FileCode2,
   },
   credential_missing: {
-    label: "Zugangsdaten fehlen",
-    headline:
-      "Die Zugangsdaten sind für das Backend nicht erreichbar — der Anbieter konnte nicht abgefragt werden. Das ist keine leere Modell-Liste.",
+    labelKey: "statusCredentialMissingLabel",
+    headlineKey: "statusCredentialMissingHeadline",
     tone: "err",
     Icon: KeyRound,
   },
   unreachable: {
-    label: "Runtime offline",
-    headline:
-      "Runtime offline — der Endpoint antwortet nicht. Ob es dort Modelle gibt, ist unbekannt.",
+    labelKey: "statusUnreachableLabel",
+    headlineKey: "statusUnreachableHeadline",
     tone: "err",
     Icon: PlugZap,
   },
@@ -119,6 +117,7 @@ function ModelRow({
   onBind: (model: ModelCatalogModel) => void;
   binding: boolean;
 }) {
+  const t = useTranslations("runtimes.modelCatalog");
   // cli_only: existiert nur im CLI selbst, der Provider-Endpoint lehnt es ab.
   // Es wird gezeigt (der Operator soll wissen, dass es das Modell gibt), aber
   // NICHT als „neu" beworben und nicht zum Anlegen angeboten — das Backend
@@ -152,7 +151,7 @@ function ModelRow({
               ? " · "
               : null}
             {model.context_window
-              ? `${Math.round(model.context_window / 1024)}k Kontext`
+              ? t("contextK", { n: Math.round(model.context_window / 1024) })
               : null}
           </div>
         )}
@@ -161,14 +160,11 @@ function ModelRow({
       {isCliOnly ? (
         <span
           data-testid="catalog-cli-only-badge"
-          title={
-            model.note ??
-            "Nur im CLI selbst wählbar — der HTTP-Endpoint des Anbieters kennt dieses Modell nicht. Als Runtime nicht anlegbar."
-          }
+          title={model.note ?? t("cliOnlyTitle")}
           className="shrink-0 inline-flex items-center gap-1 label-sys text-dim border border-subtle rounded-sm px-1.5 py-px"
         >
           <Terminal size={10} />
-          nur im CLI
+          {t("cliOnlyBadge")}
         </span>
       ) : isNew ? (
         <>
@@ -176,13 +172,13 @@ function ModelRow({
             data-testid="catalog-new-badge"
             className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
           >
-            neu
+            {t("newBadge")}
           </span>
           <button
             type="button"
             onClick={() => onBind(model)}
             disabled={binding}
-            title={`Runtime-Zeile für ${model.id} anlegen`}
+            title={t("createRuntimeRowTitle", { id: model.id })}
             className="shrink-0 inline-flex items-center gap-1 rounded-sm px-2 py-1 font-mono uppercase text-[10px] tracking-[0.12em] cursor-pointer transition-colors bg-accent-subtle border border-accent text-accent disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {binding ? (
@@ -190,12 +186,12 @@ function ModelRow({
             ) : (
               <Plus size={10} />
             )}
-            Als Runtime anlegen
+            {t("createAsRuntime")}
           </button>
         </>
       ) : (
-        <span className="shrink-0 label-sys" title="Es existiert bereits eine Runtime-Zeile für dieses Modell">
-          gebunden
+        <span className="shrink-0 label-sys" title={t("boundTitle")}>
+          {t("boundBadge")}
         </span>
       )}
     </li>
@@ -213,6 +209,7 @@ function ProviderGroup({
   onBind: (provider: ModelCatalogProvider, model: ModelCatalogModel) => void;
   bindingModelId: string | null;
 }) {
+  const t = useTranslations("runtimes.modelCatalog");
   const models = provider.models ?? [];
   const newCount = provider.new_count ?? models.filter((m) => !m.bound).length;
   const chrome = STATUS_CHROME[provider.status] ?? STATUS_CHROME.ok;
@@ -255,15 +252,15 @@ function ProviderGroup({
                   data-testid="catalog-new-count"
                   className="shrink-0 label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
                 >
-                  {newCount} neu
+                  {newCount} {t("newLabel")}
                 </span>
               )}
             </div>
             <div className="mt-0.5 flex items-center gap-1.5 text-[11px]">
               <chrome.Icon size={11} className={`shrink-0 ${TONE_TEXT[chrome.tone]}`} />
-              <span className={TONE_TEXT[chrome.tone]}>{chrome.label}</span>
+              <span className={TONE_TEXT[chrome.tone]}>{t(chrome.labelKey)}</span>
               <span className="text-dim">·</span>
-              <span className="text-muted">geprüft {timeAgo(provider.cached_at)}</span>
+              <span className="text-muted">{t("checked", { time: timeAgo(provider.cached_at) })}</span>
             </div>
           </div>
         </button>
@@ -279,14 +276,14 @@ function ProviderGroup({
       </div>
 
       {/* Ehrliches Status-Band — nennt Zustand UND Grund */}
-      {chrome.headline && (
+      {chrome.headlineKey && (
         <div
           data-testid="catalog-status-banner"
           className={`mx-3 mb-2.5 flex items-start gap-2 rounded-md border px-2.5 py-2 text-[11px] text-secondary ${TONE_BANNER[chrome.tone]}`}
         >
           <chrome.Icon size={12} className={`mt-px shrink-0 ${TONE_TEXT[chrome.tone]}`} />
           <div className="min-w-0">
-            <div>{chrome.headline}</div>
+            <div>{t(chrome.headlineKey)}</div>
             {provider.reason && (
               <div
                 data-testid="catalog-status-reason"
@@ -315,11 +312,11 @@ function ProviderGroup({
             </ul>
           ) : probeSucceeded ? (
             <div className="py-3 text-center text-[11px] text-muted">
-              Anbieter erreichbar — meldet aktuell keine Modelle.
+              {t("providerReachableNoModels")}
             </div>
           ) : (
             <div className="py-3 text-center text-[11px] text-muted">
-              Keine Liste verfügbar — siehe Hinweis oben.
+              {t("noListAvailable")}
             </div>
           )}
         </div>
@@ -336,6 +333,7 @@ interface PendingBind {
 }
 
 export function ModelCatalogSection() {
+  const t = useTranslations("runtimes.modelCatalog");
   const queryClient = useQueryClient();
   const addNotification = useNotificationStore((s) => s.addNotification);
   const [pending, setPending] = useState<PendingBind | null>(null);
@@ -354,7 +352,7 @@ export function ModelCatalogSection() {
     onError: (err: Error) =>
       addNotification({
         type: "error",
-        message: `Katalog-Refresh fehlgeschlagen: ${err.message}`,
+        message: t("refreshFailedToast", { message: err.message }),
         persistent: false,
       }),
   });
@@ -372,8 +370,8 @@ export function ModelCatalogSection() {
       addNotification({
         type: "success",
         message: res?.created === false
-          ? `Runtime für ${vars.model.id} bestand bereits${slug ? ` (${slug})` : ""}.`
-          : `Runtime angelegt: ${slug ?? vars.model.id} — jetzt im Runtime-Switch wählbar.`,
+          ? t("runtimeAlreadyExisted", { id: vars.model.id, slugSuffix: slug ? ` (${slug})` : "" })
+          : t("runtimeCreated", { name: slug ?? vars.model.id }),
         persistent: false,
       });
     },
@@ -383,8 +381,8 @@ export function ModelCatalogSection() {
       addNotification({
         type: "error",
         message: err.message.includes("409")
-          ? `Slug-Kollision: Es existiert bereits eine Runtime mit diesem Namen für ein anderes Modell. ${err.message}`
-          : `Anlegen fehlgeschlagen: ${err.message}`,
+          ? t("slugCollision", { message: err.message })
+          : t("createFailedToast", { message: err.message }),
         persistent: false,
       });
     },
@@ -419,19 +417,19 @@ export function ModelCatalogSection() {
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-primary">Modell-Katalog</h2>
-            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">Anbieter</span>
+            <h2 className="text-sm font-semibold text-primary">{t("title")}</h2>
+            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">{t("providersBadge")}</span>
             {totalNew > 0 && (
               <span
                 data-testid="catalog-total-new"
                 className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
               >
-                {totalNew} neu
+                {totalNew} {t("newLabel")}
               </span>
             )}
           </div>
           <p className="text-xs mt-0.5 text-muted">
-            Was es bei den Anbietern gibt · geprüft {timeAgo(newestCachedAt)}
+            {t("subtitle", { time: timeAgo(newestCachedAt) })}
           </p>
         </div>
         <button
@@ -445,27 +443,27 @@ export function ModelCatalogSection() {
           ) : (
             <RotateCcw size={11} />
           )}
-          Neu abfragen
+          {t("refreshNow")}
         </button>
       </div>
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2 text-muted">
           <Loader2 size={13} className="animate-spin" />
-          <span className="text-xs">Katalog wird geladen...</span>
+          <span className="text-xs">{t("loading")}</span>
         </div>
       )}
 
       {error && (
         <div className="flex items-center gap-2 text-xs px-4 py-3 rounded-xl border border-err bg-err-subtle text-err">
           <AlertCircle size={13} />
-          Modell-Katalog konnte nicht geladen werden.
+          {t("loadError")}
         </div>
       )}
 
       {!isLoading && !error && providers.length === 0 && (
         <div className="text-xs text-center py-10 text-muted">
-          Keine Anbieter konfiguriert.
+          {t("noProvidersConfigured")}
         </div>
       )}
 
@@ -485,21 +483,20 @@ export function ModelCatalogSection() {
       <ConfirmDialog
         open={!!pending}
         danger={false}
-        kicker="Runtime anlegen"
+        kicker={t("confirmKicker")}
         title={pending ? pending.model.id : ""}
-        confirmLabel="Anlegen"
+        confirmLabel={t("confirmCreate")}
         loading={bindMutation.isPending}
         body={
           pending ? (
             <div className="flex flex-col gap-2">
               <div>
-                Legt eine Runtime-Zeile für{" "}
-                <span className="font-mono text-primary">{pending.model.id}</span> bei{" "}
-                <span className="text-primary">{pending.provider.display_name}</span> an.
+                {t("confirmBodyBefore")}{" "}
+                <span className="font-mono text-primary">{pending.model.id}</span> {t("confirmBodyAt")}{" "}
+                <span className="text-primary">{pending.provider.display_name}</span>{t("confirmBodyAfter")}
               </div>
               <div className="text-muted">
-                Das startet nichts und schaltet keinen Agenten um — die Zeile steht
-                danach im normalen Runtime-Switch zur Auswahl.
+                {t("confirmBodyHint")}
               </div>
             </div>
           ) : null

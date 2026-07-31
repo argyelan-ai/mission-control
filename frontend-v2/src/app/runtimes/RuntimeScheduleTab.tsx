@@ -4,22 +4,24 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, ChevronDown, Loader2, Check, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { RuntimeSchedule, RuntimeScheduleCreate } from "@/lib/types";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
-const DAYS_LABEL: Record<string, string> = {
-  daily: "daily",
-  weekdays: "Mon–Fri",
-  weekends: "Sat–Sun",
+// labelKey pattern (docs/i18n.md): resolved via t() at the render site.
+const DAYS_BADGE_KEY: Record<string, string> = {
+  daily: "daysBadgeDaily",
+  weekdays: "daysBadgeWeekdays",
+  weekends: "daysBadgeWeekends",
 };
 
-const ACTION_LABEL: Record<string, string> = {
-  start: "Start",
-  stop: "Stop",
-  kv_reset: "KV Reset",
+const ACTION_BADGE_KEY: Record<string, string> = {
+  start: "actionBadgeStart",
+  stop: "actionBadgeStop",
+  kv_reset: "actionBadgeKvReset",
 };
 
 function ScheduleEntry({
@@ -31,6 +33,7 @@ function ScheduleEntry({
   runtimeId: string;
   isLmStudio: boolean;
 }) {
+  const t = useTranslations("runtimes.scheduleTab");
   const queryClient = useQueryClient();
   const [showRuns, setShowRuns] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -59,13 +62,13 @@ function ScheduleEntry({
     mutationFn: (data: Partial<RuntimeScheduleCreate>) =>
       api.runtimes.schedules.update(runtimeId, schedule.id, data),
     onSuccess: () => { setEditing(false); invalidate(); },
-    onError: () => setEditError("Save failed."),
+    onError: () => setEditError(t("saveFailed")),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => api.runtimes.schedules.delete(runtimeId, schedule.id),
     onSuccess: invalidate,
-    onError: () => setEditError("Delete failed."),
+    onError: () => setEditError(t("deleteFailed")),
   });
 
   useEffect(() => {
@@ -113,12 +116,12 @@ function ScheduleEntry({
             {schedule.name}
           </div>
           <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {DAYS_LABEL[schedule.days]} {schedule.time_of_day}
+            {t(DAYS_BADGE_KEY[schedule.days])} {schedule.time_of_day}
             {" · "}
             <span style={{ color: schedule.action === "kv_reset" ? C.warning : "inherit" }}>
-              {ACTION_LABEL[schedule.action]}
+              {t(ACTION_BADGE_KEY[schedule.action])}
             </span>
-            {schedule.unload_first && schedule.action !== "kv_reset" && " · unload-all"}
+            {schedule.unload_first && schedule.action !== "kv_reset" && ` · ${t("unloadAllBadge")}`}
           </div>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -153,7 +156,7 @@ function ScheduleEntry({
                 background: C.borderSubtle,
               }}
             >
-              {editing ? "Cancel" : "···"}
+              {editing ? t("cancel") : "···"}
             </button>
           </div>
         </div>
@@ -168,7 +171,7 @@ function ScheduleEntry({
           >
             {runs.length === 0 ? (
               <div className="px-3 py-2" style={{ color: C.textMuted }}>
-                No runs yet.
+                {t("noRunsYet")}
               </div>
             ) : (
               runs.map((run, i) => (
@@ -188,7 +191,7 @@ function ScheduleEntry({
                     })}
                   </span>
                   <span style={{ color: run.success ? C.online : C.error }}>
-                    {run.success ? "✓ OK" : `✗ ${run.message ?? "Error"}`}
+                    {run.success ? t("runOk") : t("runError", { message: run.message ?? t("errorFallback") })}
                   </span>
                 </div>
               ))
@@ -210,8 +213,8 @@ function ScheduleEntry({
             <input
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="Name"
-              aria-label="Schedule name"
+              placeholder={t("namePlaceholder")}
+              aria-label={t("scheduleNameAria")}
               className="text-xs px-2.5 py-1.5 rounded-lg w-full"
               style={inputStyle}
             />
@@ -219,19 +222,19 @@ function ScheduleEntry({
               <select
                 value={form.action}
                 onChange={(e) => setForm((f) => ({ ...f, action: e.target.value as "start" | "stop" | "kv_reset" }))}
-                aria-label="Action"
+                aria-label={t("actionAria")}
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
                 style={inputStyle}
               >
-                <option value="start">Start</option>
-                <option value="stop">Stop</option>
-                {isLmStudio && <option value="kv_reset">KV Reset (Smart Restart)</option>}
+                <option value="start">{t("actionOptionStart")}</option>
+                <option value="stop">{t("actionOptionStop")}</option>
+                {isLmStudio && <option value="kv_reset">{t("actionOptionKvReset")}</option>}
               </select>
               <input
                 type="time"
                 value={form.time_of_day}
                 onChange={(e) => setForm((f) => ({ ...f, time_of_day: e.target.value }))}
-                aria-label="Time"
+                aria-label={t("timeAria")}
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg"
                 style={inputStyle}
               />
@@ -240,13 +243,13 @@ function ScheduleEntry({
                 onChange={(e) =>
                   setForm((f) => ({ ...f, days: e.target.value as "daily" | "weekdays" | "weekends" }))
                 }
-                aria-label="Days of week"
+                aria-label={t("daysAria")}
                 className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
                 style={inputStyle}
               >
-                <option value="daily">Daily</option>
-                <option value="weekdays">Mon–Fri</option>
-                <option value="weekends">Sat–Sun</option>
+                <option value="daily">{t("daysOptionDaily")}</option>
+                <option value="weekdays">{t("daysOptionWeekdays")}</option>
+                <option value="weekends">{t("daysOptionWeekends")}</option>
               </select>
             </div>
             {isLmStudio && form.action === "start" && (
@@ -256,7 +259,7 @@ function ScheduleEntry({
                   checked={form.unload_first}
                   onChange={(e) => setForm((f) => ({ ...f, unload_first: e.target.checked }))}
                 />
-                Unload all models first
+                {t("unloadAllFirst")}
               </label>
             )}
             {editError && (
@@ -272,7 +275,7 @@ function ScheduleEntry({
                   color: C.textMuted,
                 }}
               >
-                {schedule.enabled ? "Disable" : "Enable"}
+                {schedule.enabled ? t("disable") : t("enable")}
               </button>
               <button
                 onClick={handleDelete}
@@ -283,7 +286,7 @@ function ScheduleEntry({
                   color: STATUS_TEXT.error,
                 }}
               >
-                Delete
+                {t("delete")}
               </button>
               <button
                 onClick={handleSave}
@@ -295,7 +298,7 @@ function ScheduleEntry({
                   color: C.accent,
                 }}
               >
-                {updateMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Save"}
+                {updateMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : t("save")}
               </button>
             </div>
           </div>
@@ -305,9 +308,9 @@ function ScheduleEntry({
       {/* v3 confirm — replaces native window.confirm() (panel register rule 3) */}
       <ConfirmDialog
         open={confirmDelete}
-        title="Delete schedule"
-        body={`Delete '${schedule.name}'?`}
-        confirmLabel="Delete"
+        title={t("deleteScheduleTitle")}
+        body={t("deleteScheduleBody", { name: schedule.name })}
+        confirmLabel={t("delete")}
         loading={deleteMutation.isPending}
         onConfirm={() =>
           deleteMutation.mutate(undefined, {
@@ -329,6 +332,7 @@ function AddScheduleForm({
   isLmStudio: boolean;
   onDone: () => void;
 }) {
+  const t = useTranslations("runtimes.scheduleTab");
   const queryClient = useQueryClient();
   const [form, setForm] = useState<RuntimeScheduleCreate>({
     name: "",
@@ -345,7 +349,7 @@ function AddScheduleForm({
       queryClient.invalidateQueries({ queryKey: ["runtime-schedules", runtimeId] });
       onDone();
     },
-    onError: () => setCreateError("Create failed."),
+    onError: () => setCreateError(t("createFailed")),
   });
 
   const inputStyle: React.CSSProperties = {
@@ -363,14 +367,14 @@ function AddScheduleForm({
       }}
     >
       <div className="text-xs font-medium" style={{ color: C.accent }}>
-        New Schedule
+        {t("newSchedule")}
       </div>
       <input
         value={form.name}
         onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-        placeholder="Name (e.g. Night pause)"
+        placeholder={t("nameExamplePlaceholder")}
         autoFocus
-        aria-label="Schedule name"
+        aria-label={t("scheduleNameAria")}
         className="text-xs px-2.5 py-1.5 rounded-lg w-full"
         style={inputStyle}
       />
@@ -378,19 +382,19 @@ function AddScheduleForm({
         <select
           value={form.action}
           onChange={(e) => setForm((f) => ({ ...f, action: e.target.value as "start" | "stop" | "kv_reset" }))}
-          aria-label="Action"
+          aria-label={t("actionAria")}
           className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
           style={inputStyle}
         >
-          <option value="start">Start</option>
-          <option value="stop">Stop</option>
-          {isLmStudio && <option value="kv_reset">KV Reset (Smart Restart)</option>}
+          <option value="start">{t("actionOptionStart")}</option>
+          <option value="stop">{t("actionOptionStop")}</option>
+          {isLmStudio && <option value="kv_reset">{t("actionOptionKvReset")}</option>}
         </select>
         <input
           type="time"
           value={form.time_of_day}
           onChange={(e) => setForm((f) => ({ ...f, time_of_day: e.target.value }))}
-          aria-label="Time"
+          aria-label={t("timeAria")}
           className="flex-1 text-xs px-2 py-1.5 rounded-lg"
           style={inputStyle}
         />
@@ -399,13 +403,13 @@ function AddScheduleForm({
           onChange={(e) =>
             setForm((f) => ({ ...f, days: e.target.value as "daily" | "weekdays" | "weekends" }))
           }
-          aria-label="Days of week"
+          aria-label={t("daysAria")}
           className="flex-1 text-xs px-2 py-1.5 rounded-lg cursor-pointer"
           style={inputStyle}
         >
-          <option value="daily">Daily</option>
-          <option value="weekdays">Mon–Fri</option>
-          <option value="weekends">Sat–Sun</option>
+          <option value="daily">{t("daysOptionDaily")}</option>
+          <option value="weekdays">{t("daysOptionWeekdays")}</option>
+          <option value="weekends">{t("daysOptionWeekends")}</option>
         </select>
       </div>
       {isLmStudio && form.action === "start" && (
@@ -415,7 +419,7 @@ function AddScheduleForm({
             checked={form.unload_first}
             onChange={(e) => setForm((f) => ({ ...f, unload_first: e.target.checked }))}
           />
-          Unload all models first
+          {t("unloadAllFirst")}
         </label>
       )}
       {createError && (
@@ -431,7 +435,7 @@ function AddScheduleForm({
             color: C.textMuted,
           }}
         >
-          Cancel
+          {t("cancel")}
         </button>
         <button
           onClick={() => createMutation.mutate()}
@@ -443,7 +447,7 @@ function AddScheduleForm({
             color: C.accent,
           }}
         >
-          {createMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : "Save"}
+          {createMutation.isPending ? <Loader2 size={10} className="animate-spin" /> : t("save")}
         </button>
       </div>
     </div>
@@ -457,6 +461,7 @@ export function RuntimeScheduleTab({
   runtimeId: string;
   runtimeType: string;
 }) {
+  const t = useTranslations("runtimes.scheduleTab");
   const [showForm, setShowForm] = useState(false);
   const isLmStudio = runtimeType === "lmstudio";
 
@@ -477,7 +482,7 @@ export function RuntimeScheduleTab({
   if (isError) {
     return (
       <div className="px-3 py-4 text-xs text-center" style={{ color: STATUS_TEXT.error }}>
-        Error loading schedules.
+        {t("loadError")}
       </div>
     );
   }
@@ -505,7 +510,7 @@ export function RuntimeScheduleTab({
             className="mx-3 mt-3 py-4 text-center text-xs rounded-lg"
             style={{ color: C.textMuted, border: `1px dashed ${C.border}` }}
           >
-            No schedules configured yet.
+            {t("noSchedulesYet")}
           </div>
         )
       )}
@@ -528,7 +533,7 @@ export function RuntimeScheduleTab({
           style={{ color: C.textMuted }}
         >
           <Plus size={11} />
-          Add schedule
+          {t("addSchedule")}
         </button>
       )}
     </div>

@@ -23,6 +23,7 @@ import {
   AlertCircle,
   X,
 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { CliToolStatus, CliUpdatePhase, CliUpdateProgress } from "@/lib/types";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
@@ -35,16 +36,17 @@ import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 // means no update is in flight. Only the three middle phases keep the poller hot.
 
 const RUNNING_PHASES: CliUpdatePhase[] = ["manifest", "build", "recreate"];
-const PHASE_STEPS: { key: CliUpdatePhase; label: string }[] = [
-  { key: "manifest", label: "Manifest" },
-  { key: "build", label: "Build" },
-  { key: "recreate", label: "Recreate" },
+// labelKey pattern (docs/i18n.md): resolved via t() at the render site.
+const PHASE_STEPS: { key: CliUpdatePhase; labelKey: string }[] = [
+  { key: "manifest", labelKey: "phaseManifest" },
+  { key: "build", labelKey: "phaseBuild" },
+  { key: "recreate", labelKey: "phaseRecreate" },
 ];
 // Host-Tools (grok): brew upgrade statt Image-Build, keine Recreate-Phase —
 // der Runner meldet die brew-Phase als "build".
-const HOST_PHASE_STEPS: { key: CliUpdatePhase; label: string }[] = [
-  { key: "manifest", label: "Manifest" },
-  { key: "build", label: "Brew" },
+const HOST_PHASE_STEPS: { key: CliUpdatePhase; labelKey: string }[] = [
+  { key: "manifest", labelKey: "phaseManifest" },
+  { key: "build", labelKey: "phaseBrew" },
 ];
 
 function isRunning(phase: CliUpdateProgress["phase"]): boolean {
@@ -54,10 +56,11 @@ function isRunning(phase: CliUpdateProgress["phase"]): boolean {
 // ── Agent pills ───────────────────────────────────────────────────────────────
 
 function AgentPills({ agents }: { agents: CliToolStatus["agents_affected"] }) {
+  const t = useTranslations("runtimes.cliTools");
   if (agents.length === 0) {
     return (
       <span className="text-[11px]" style={{ color: C.textMuted }}>
-        no agents bound
+        {t("noAgentsBound")}
       </span>
     );
   }
@@ -66,7 +69,7 @@ function AgentPills({ agents }: { agents: CliToolStatus["agents_affected"] }) {
       {agents.map((a) => (
         <span
           key={a.id}
-          title={a.busy ? "Agent busy — update follows after the task ends" : a.name}
+          title={a.busy ? t("agentBusyTitle") : a.name}
           className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px]"
           style={{
             backgroundColor: C.accentSubtle,
@@ -91,6 +94,7 @@ function CliToolCard({
   tool: CliToolStatus;
   onUpdate: (tool: CliToolStatus) => void;
 }) {
+  const t = useTranslations("runtimes.cliTools");
   const running = isRunning(tool.build_state as CliUpdateProgress["phase"]);
 
   return (
@@ -111,7 +115,7 @@ function CliToolCard({
           {tool.update_available && !running && (
             <button
               onClick={() => onUpdate(tool)}
-              title={`Update to ${tool.latest}`}
+              title={t("updateToTitle", { version: tool.latest ?? "" })}
               className="shrink-0 inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium cursor-pointer transition-colors"
               style={{
                 color: STATUS_TEXT.warning,
@@ -120,7 +124,7 @@ function CliToolCard({
               }}
             >
               <ArrowUpCircle size={10} />
-              Update {tool.latest}
+              {t("updateButton", { version: tool.latest ?? "" })}
             </button>
           )}
           {running && (
@@ -129,19 +133,19 @@ function CliToolCard({
               style={{ color: C.accent, border: `1px solid ${C.borderAccent}`, background: C.accentSubtle }}
             >
               <Loader2 size={10} className="animate-spin" />
-              Updating
+              {t("updating")}
             </span>
           )}
         </div>
-        <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }} title={tool.image ?? "Host-CLI (brew)"}>
-          {tool.image ?? "Host-CLI · brew"}
+        <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }} title={tool.image ?? t("hostCliBrewTitle")}>
+          {tool.image ?? t("hostCliBrew")}
         </div>
       </div>
 
       {/* Version row */}
       <div className="flex items-baseline gap-2">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-          Installed
+          {t("installed")}
         </span>
         <span className="text-xs font-mono tabular-nums" style={{ color: C.textPrimary }}>
           {tool.installed ?? "—"}
@@ -159,7 +163,7 @@ function CliToolCard({
       {/* Affected agents */}
       <div className="flex flex-col gap-1.5">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-          Affected
+          {t("affected")}
         </span>
         <AgentPills agents={tool.agents_affected} />
       </div>
@@ -174,8 +178,9 @@ function PhaseTrack({
   steps = PHASE_STEPS,
 }: {
   phase: CliUpdateProgress["phase"];
-  steps?: { key: CliUpdatePhase; label: string }[];
+  steps?: { key: CliUpdatePhase; labelKey: string }[];
 }) {
+  const t = useTranslations("runtimes.cliTools");
   const activeIdx = steps.findIndex((s) => s.key === phase);
   // done/failed count all running phases as passed
   const terminal = phase === "done" || phase === "failed";
@@ -200,7 +205,7 @@ function PhaseTrack({
               {isActive && phase !== "done" && phase !== "failed" && (
                 <Loader2 size={11} className="animate-spin" />
               )}
-              {step.label}
+              {t(step.labelKey)}
             </span>
             {i < steps.length - 1 && (
               <span style={{ color: C.textDim }}>·</span>
@@ -225,6 +230,7 @@ function UpdateModal({
   progress: CliUpdateProgress | undefined;
   onClose: () => void;
 }) {
+  const t = useTranslations("runtimes.cliTools");
   const addNotification = useNotificationStore((s) => s.addNotification);
   const [step, setStep] = useState<ModalStep>("confirm");
   useBodyScrollLock(true);
@@ -246,9 +252,9 @@ function UpdateModal({
       // wechseln, damit der Operator den laufenden Lauf mitverfolgt.
       if (err.message.includes("409")) {
         setStep("running");
-        addNotification({ type: "warning", message: "An update is already running — showing the active run.", persistent: false });
+        addNotification({ type: "warning", message: t("updateAlreadyRunning"), persistent: false });
       } else {
-        addNotification({ type: "error", message: `Update failed: ${err.message}`, persistent: false });
+        addNotification({ type: "error", message: t("updateFailedToast", { message: err.message }), persistent: false });
       }
     },
   });
@@ -271,7 +277,7 @@ function UpdateModal({
         onClick={onClose}
         role="dialog"
         aria-modal="true"
-        aria-label={`Update CLI tool ${tool.tool}`}
+        aria-label={t("updateCliToolAria", { tool: tool.tool })}
       >
         <motion.div
           initial={{ opacity: 0, y: 32 }}
@@ -290,15 +296,15 @@ function UpdateModal({
           <div className="flex items-center justify-between p-5 border-b shrink-0" style={{ borderColor: C.border }}>
             <div className="min-w-0">
               <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-                Update {tool.tool}
+                {t("updateModalTitle", { tool: tool.tool })}
               </h2>
               <div className="text-[11px] font-mono truncate mt-0.5" style={{ color: C.textMuted }}>
-                {tool.image ?? "Host-CLI · brew"}
+                {tool.image ?? t("hostCliBrew")}
               </div>
             </div>
             <button
               onClick={onClose}
-              aria-label="Close"
+              aria-label={t("close")}
               className="p-1 rounded-md cursor-pointer hover:bg-[var(--color-bg-hover)]"
               style={{ color: C.textMuted }}
             >
@@ -323,12 +329,12 @@ function UpdateModal({
                 {/* Affected agents */}
                 <div className="flex flex-col gap-1.5">
                   <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-                    Affected agents
+                    {t("affectedAgents")}
                   </span>
                   <AgentPills agents={tool.agents_affected} />
                   {busyAgents.length > 0 && (
                     <span className="text-[11px]" style={{ color: STATUS_TEXT.warning }}>
-                      {busyAgents.length} agent(s) busy — they update when their task ends.
+                      {t("busyAgentsHint", { count: busyAgents.length })}
                     </span>
                   )}
                 </div>
@@ -340,15 +346,10 @@ function UpdateModal({
                 >
                   {tool.host ? (
                     <>
-                      Host CLI: the update runs as <span className="font-mono">brew upgrade</span> on
-                      the Mac. Running sessions keep the old binary until the next session
-                      restart.
+                      {t("hostCliHintBefore")} <span className="font-mono">brew upgrade</span>{t("hostCliHintAfter")}
                     </>
                   ) : (
-                    <>
-                      Note: The manifest change (pinned version) must be committed afterwards,
-                      otherwise the version reverts on the next rebuild.
-                    </>
+                    <>{t("manifestCommitHint")}</>
                   )}
                 </div>
 
@@ -358,7 +359,7 @@ function UpdateModal({
                     className="text-xs px-3 py-1.5 rounded-lg cursor-pointer transition-colors"
                     style={{ color: C.textSecondary, border: `1px solid ${C.border}`, background: "transparent" }}
                   >
-                    Cancel
+                    {t("cancel")}
                   </button>
                   <button
                     onClick={() => updateMutation.mutate()}
@@ -367,7 +368,7 @@ function UpdateModal({
                     style={{ color: C.textPrimary, background: C.accent }}
                   >
                     {updateMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <ArrowUpCircle size={12} />}
-                    Update now
+                    {t("updateNow")}
                   </button>
                 </div>
               </div>
@@ -380,14 +381,13 @@ function UpdateModal({
                   <div className="flex items-center gap-2 text-sm" style={{ color: C.online }}>
                     <CheckCircle2 size={16} />
                     <span>
-                      Update complete
-                      {progress?.to_version ? ` — now on ${progress.to_version}` : ""}.
+                      {progress?.to_version ? t("updateCompleteWithVersion", { version: progress.to_version }) : t("updateComplete")}
                     </span>
                   </div>
                 ) : isFailed ? (
                   <div className="flex items-center gap-2 text-sm" style={{ color: STATUS_TEXT.error }}>
                     <AlertCircle size={16} />
-                    <span>Update failed.</span>
+                    <span>{t("updateFailed")}</span>
                   </div>
                 ) : (
                   <PhaseTrack phase={phase} steps={tool.host ? HOST_PHASE_STEPS : PHASE_STEPS} />
@@ -408,7 +408,7 @@ function UpdateModal({
                 {progress?.log_tail && (
                   <div className="flex flex-col gap-1.5">
                     <span className="text-[10px] uppercase tracking-wider" style={{ color: C.textDim, letterSpacing: "0.06em" }}>
-                      Log
+                      {t("log")}
                     </span>
                     <pre
                       className="text-[11px] font-mono rounded-lg p-3 overflow-x-auto"
@@ -436,7 +436,7 @@ function UpdateModal({
                       background: isDone || isFailed ? C.borderSubtle : "transparent",
                     }}
                   >
-                    {isDone || isFailed ? "Close" : "Keep running in background"}
+                    {isDone || isFailed ? t("close") : t("keepRunningInBackground")}
                   </button>
                 </div>
               </div>
@@ -451,6 +451,7 @@ function UpdateModal({
 // ── Section ───────────────────────────────────────────────────────────────────
 
 export function CliToolsSection() {
+  const t = useTranslations("runtimes.cliTools");
   const queryClient = useQueryClient();
   const addNotification = useNotificationStore((s) => s.addNotification);
   const [modalTool, setModalTool] = useState<string | null>(null);
@@ -477,7 +478,7 @@ export function CliToolsSection() {
       queryClient.setQueryData(["cli-tools"], res);
     },
     onError: (err: Error) =>
-      addNotification({ type: "error", message: `Check failed: ${err.message}`, persistent: false }),
+      addNotification({ type: "error", message: t("checkFailedToast", { message: err.message }), persistent: false }),
   });
 
   // When a run reaches a terminal phase, refresh the tool list once (versions
@@ -492,8 +493,8 @@ export function CliToolsSection() {
   }, [progress?.phase, progress?.tool, progress?.updated_at, queryClient]);
 
   const tools = data?.tools ?? [];
-  const checkedAt = tools.find((t) => t.checked_at)?.checked_at ?? null;
-  const openTool = modalTool ? tools.find((t) => t.tool === modalTool) ?? null : null;
+  const checkedAt = tools.find((tool) => tool.checked_at)?.checked_at ?? null;
+  const openTool = modalTool ? tools.find((tool) => tool.tool === modalTool) ?? null : null;
 
   return (
     <div className="mt-8">
@@ -510,17 +511,17 @@ export function CliToolsSection() {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-              CLI-Tools
+              {t("title")}
             </h2>
             <span
               className="text-xs px-1.5 py-px rounded"
               style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
             >
-              Fleet
+              {t("fleetBadge")}
             </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            Pinned agent tools · checked {timeAgo(checkedAt)}
+            {t("subtitle", { time: timeAgo(checkedAt) })}
           </p>
         </div>
         <button
@@ -530,14 +531,14 @@ export function CliToolsSection() {
           style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}`, background: C.borderSubtle }}
         >
           {checkMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
-          Check now
+          {t("checkNow")}
         </button>
       </div>
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
           <Loader2 size={13} className="animate-spin" />
-          <span className="text-xs">Loading CLI tools...</span>
+          <span className="text-xs">{t("loading")}</span>
         </div>
       )}
 
@@ -547,20 +548,20 @@ export function CliToolsSection() {
           style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
         >
           <AlertCircle size={13} />
-          CLI tools could not be loaded.
+          {t("loadError")}
         </div>
       )}
 
       {!isLoading && !error && tools.length === 0 && (
         <div className="text-xs text-center py-10" style={{ color: C.textMuted }}>
-          No CLI tools configured.
+          {t("noToolsConfigured")}
         </div>
       )}
 
       {tools.length > 0 && (
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
           {tools.map((tool) => (
-            <CliToolCard key={tool.tool} tool={tool} onUpdate={(t) => setModalTool(t.tool)} />
+            <CliToolCard key={tool.tool} tool={tool} onUpdate={(tl) => setModalTool(tl.tool)} />
           ))}
         </div>
       )}

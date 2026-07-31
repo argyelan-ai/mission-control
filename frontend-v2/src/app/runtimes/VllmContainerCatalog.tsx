@@ -3,12 +3,14 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Loader2, Plus, X } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { VllmContainer } from "@/lib/types";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
 import { C, STATUS_TEXT } from "@/lib/colors";
 
 function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onAdd: () => void }) {
+  const t = useTranslations("runtimes.vllmCatalog");
   return (
     <div
       className="flex items-center gap-3 px-4 py-3 rounded-xl"
@@ -24,7 +26,7 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
           </span>
         </div>
         <div className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-          {container.endpoint || "Endpoint not detected"}
+          {container.endpoint || t("endpointNotDetected")}
         </div>
       </div>
       <button
@@ -37,7 +39,7 @@ function VllmContainerCard({ container, onAdd }: { container: VllmContainer; onA
         }}
       >
         <Plus size={11} />
-        Add
+        {t("add")}
       </button>
     </div>
   );
@@ -54,6 +56,7 @@ function AddVllmModal({
   onClose: () => void;
   onAdded: () => void;
 }) {
+  const t = useTranslations("runtimes.vllmCatalog");
   const [displayName, setDisplayName] = useState(container.container_name);
   const [endpoint, setEndpoint] = useState(container.endpoint);
   const [roleTags, setRoleTags] = useState<string[]>([]);
@@ -68,18 +71,18 @@ function AddVllmModal({
         role_tags: roleTags,
       }),
     onSuccess: onAdded,
-    onError: (e: Error) => setError(e.message || "Failed to add"),
+    onError: (e: Error) => setError(e.message || t("addFailed")),
   });
 
   const toggleTag = (tag: string) => {
-    setRoleTags((prev) => (prev.includes(tag) ? prev.filter((t) => t !== tag) : [...prev, tag]));
+    setRoleTags((prev) => (prev.includes(tag) ? prev.filter((rt) => rt !== tag) : [...prev, tag]));
   };
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (!endpoint.trim()) {
-      setError("Endpoint must not be empty");
+      setError(t("endpointRequired"));
       return;
     }
     addMutation.mutate();
@@ -92,33 +95,33 @@ function AddVllmModal({
   };
 
   return (
-    <ResponsiveModal open onClose={onClose} aria-label="Add vLLM Runtime" className="sm:max-w-md">
+    <ResponsiveModal open onClose={onClose} aria-label={t("modalTitle")} className="sm:max-w-md">
       <form
         onSubmit={submit}
         className="w-full p-5 overflow-y-auto"
       >
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-            Add vLLM Runtime
+            {t("modalTitle")}
           </h3>
           <button
             type="button"
             onClick={onClose}
             className="p-1 rounded cursor-pointer"
             style={{ color: C.textMuted }}
-            aria-label="Close"
+            aria-label={t("close")}
           >
             <X size={14} />
           </button>
         </div>
 
         <div className="text-xs mb-3" style={{ color: C.textMuted }}>
-          Container: <span style={{ color: C.textPrimary }}>{container.container_name}</span>
+          {t("container")} <span style={{ color: C.textPrimary }}>{container.container_name}</span>
         </div>
 
         <label className="block mb-3">
           <span className="text-xs block mb-1" style={{ color: C.textMuted }}>
-            Display name
+            {t("displayName")}
           </span>
           <input
             type="text"
@@ -131,7 +134,7 @@ function AddVllmModal({
 
         <label className="block mb-3">
           <span className="text-xs block mb-1" style={{ color: C.textMuted }}>
-            Endpoint
+            {t("endpoint")}
           </span>
           <input
             type="text"
@@ -145,7 +148,7 @@ function AddVllmModal({
 
         <div className="mb-4">
           <span className="text-xs block mb-2" style={{ color: C.textMuted }}>
-            Role tags (optional)
+            {t("roleTagsOptional")}
           </span>
           <div className="flex flex-wrap gap-1.5">
             {VLLM_TAG_OPTIONS.map((tag) => {
@@ -189,7 +192,7 @@ function AddVllmModal({
             className="text-xs px-3 py-1.5 rounded-lg cursor-pointer"
             style={{ color: C.textMuted, border: `1px solid ${C.borderSubtle}` }}
           >
-            Cancel
+            {t("cancel")}
           </button>
           <button
             type="submit"
@@ -203,7 +206,7 @@ function AddVllmModal({
             }}
           >
             {addMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-            Add
+            {t("add")}
           </button>
         </div>
       </form>
@@ -212,6 +215,7 @@ function AddVllmModal({
 }
 
 export function VllmContainerCatalog() {
+  const t = useTranslations("runtimes.vllmCatalog");
   const queryClient = useQueryClient();
   const [open, setOpen] = useState<VllmContainer | null>(null);
 
@@ -231,7 +235,7 @@ export function VllmContainerCatalog() {
           className="text-xs font-medium tracking-wider uppercase"
           style={{ color: C.textMuted, letterSpacing: "0.07em", fontSize: "10px" }}
         >
-          Discovered
+          {t("discovered")}
         </span>
         <div className="flex-1 h-px" style={{ background: C.border }} />
       </div>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -43,13 +44,14 @@ import { EntityIcon } from "@/components/shared/EntityIcon";
 
 type Tab = "overview" | "skills" | "config" | "memory" | "local-memory" | "mcp";
 
-const TABS: { key: Tab; label: string; icon: typeof Activity }[] = [
-  { key: "overview", label: "Overview", icon: Settings },
-  { key: "skills", label: "Skills", icon: Wrench },
-  { key: "mcp", label: "MCP", icon: Server },
-  { key: "config", label: "Config", icon: FileText },
-  { key: "memory", label: "Memory", icon: Brain },
-  { key: "local-memory", label: "Local Memory", icon: FolderArchive },
+// labelKey pattern (docs/i18n.md): resolved via t() at the render site.
+const TABS: { key: Tab; labelKey: string; icon: typeof Activity }[] = [
+  { key: "overview", labelKey: "detail.tabOverview", icon: Settings },
+  { key: "skills", labelKey: "detail.tabSkills", icon: Wrench },
+  { key: "mcp", labelKey: "detail.tabMcp", icon: Server },
+  { key: "config", labelKey: "detail.tabConfig", icon: FileText },
+  { key: "memory", labelKey: "detail.tabMemory", icon: Brain },
+  { key: "local-memory", labelKey: "detail.tabLocalMemory", icon: FolderArchive },
 ];
 
 const CONFIG_FILES = [
@@ -81,11 +83,11 @@ function agentStatusToDot(status: string): DotStatus {
   }
 }
 
-const PROVISION_CONFIG: Record<string, { label: string; color: string }> = {
-  local: { label: "Local", color: C.textDim },
-  provisioning: { label: "Provisioning", color: C.warning },
-  provisioned: { label: "Live", color: C.online },
-  error: { label: "Error", color: C.error },
+const PROVISION_CONFIG: Record<string, { labelKey: string; color: string }> = {
+  local: { labelKey: "provLocal", color: C.textDim },
+  provisioning: { labelKey: "provProvisioning", color: C.warning },
+  provisioned: { labelKey: "provLive", color: C.online },
+  error: { labelKey: "provError", color: C.error },
 };
 
 // RuntimePill + RUNTIME_TYPE_COLOR are imported from
@@ -93,12 +95,12 @@ const PROVISION_CONFIG: Record<string, { label: string; color: string }> = {
 
 // ── Skills Editor (embedded) ────────────────────────────────────────────────
 
-const SKILL_STATUS_CONFIG: Record<string, { color: string; label: string; icon: typeof CheckCircle }> = {
-  ready: { color: C.online, label: "Ready", icon: CheckCircle },
-  missing_bin: { color: C.warning, label: "Binary missing", icon: AlertTriangle },
-  missing_env: { color: C.warning, label: "Config missing", icon: Key },
-  disabled: { color: C.textDim, label: "Disabled", icon: PowerOff },
-  not_installed: { color: C.error, label: "Not installed", icon: XCircle },
+const SKILL_STATUS_CONFIG: Record<string, { color: string; labelKey: string; icon: typeof CheckCircle }> = {
+  ready: { color: C.online, labelKey: "detail.skillReady", icon: CheckCircle },
+  missing_bin: { color: C.warning, labelKey: "detail.skillMissingBin", icon: AlertTriangle },
+  missing_env: { color: C.warning, labelKey: "detail.skillMissingEnv", icon: Key },
+  disabled: { color: C.textDim, labelKey: "detail.skillDisabled", icon: PowerOff },
+  not_installed: { color: C.error, labelKey: "detail.skillNotInstalled", icon: XCircle },
 };
 
 function SkillStatusIcon({ status }: { status: string }) {
@@ -118,13 +120,14 @@ function SkillRow({
   pendingChange?: "add" | "remove";
   onToggle?: (key: string) => void;
 }) {
+  const t = useTranslations("agents");
   const qc = useQueryClient();
   const cfg = SKILL_STATUS_CONFIG[skill.status] ?? SKILL_STATUS_CONFIG.not_installed;
 
   const installMutation = useMutation({
     mutationFn: (installId: string) => api.skills.install(skill.key, installId),
     onSuccess: () => {
-      notify.success(`Installing ${skill.name}...`);
+      notify.success(t("detail.installing", { name: skill.name }));
       qc.invalidateQueries({ queryKey: ["openclaw-skills"] });
     },
     onError: (e: Error) => notify.error(e.message),
@@ -133,7 +136,7 @@ function SkillRow({
   const toggleMutation = useMutation({
     mutationFn: (enabled: boolean) => api.skills.update(skill.key, { enabled }),
     onSuccess: (_, enabled) => {
-      notify.success(`${skill.name} ${enabled ? "enabled" : "disabled"}`);
+      notify.success(enabled ? t("detail.skillEnabledNotify", { name: skill.name }) : t("detail.skillDisabledNotify", { name: skill.name }));
       qc.invalidateQueries({ queryKey: ["openclaw-skills"] });
     },
     onError: (e: Error) => notify.error(e.message),
@@ -179,7 +182,7 @@ function SkillRow({
               {skill.name}
             </span>
             <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-mono shrink-0" style={{ color: cfg.color, backgroundColor: `${cfg.color}18` }}>
-              {cfg.label}
+              {t(cfg.labelKey)}
             </span>
             {pendingChange && (
               <span
@@ -189,7 +192,7 @@ function SkillRow({
                   backgroundColor: pendingChange === "add" ? `${C.online}18` : `${C.error}18`,
                 }}
               >
-                {pendingChange === "add" ? "+ New" : "- Removed"}
+                {pendingChange === "add" ? t("detail.pendingNew") : t("detail.pendingRemoved")}
               </span>
             )}
             {skill.source !== "bundled" && (
@@ -232,7 +235,7 @@ function SkillRow({
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}
-            title="Disable skill"
+            title={t("detail.disableSkill")}
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <PowerOff size={11} />}
           </button>
@@ -244,10 +247,10 @@ function SkillRow({
             disabled={toggleMutation.isPending}
             className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg cursor-pointer transition-colors"
             style={{ color: C.online, backgroundColor: `${C.online}1F` }}
-            title="Enable skill"
+            title={t("detail.enableSkill")}
           >
             {toggleMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <Power size={11} />}
-            Enable
+            {t("detail.enable")}
           </button>
         )}
 
@@ -258,7 +261,7 @@ function SkillRow({
             rel="noopener noreferrer"
             className="p-1 rounded transition-colors"
             style={{ color: "var(--color-text-muted)" }}
-            title="Homepage"
+            title={t("detail.homepage")}
           >
             <ExternalLink size={12} />
           </a>
@@ -284,9 +287,7 @@ function SkillRow({
             {pendingChange === "remove" && <Undo2 size={11} />}
             {pendingChange === "add" && <Undo2 size={11} />}
             {!isActive && !pendingChange && <Plus size={11} />}
-            {pendingChange === "remove" ? "Undo" :
-             pendingChange === "add" ? "Undo" :
-             isActive ? "Remove" : "Add"}
+            {pendingChange ? t("detail.undo") : isActive ? t("detail.remove") : t("detail.add")}
           </button>
         )}
       </div>
@@ -340,6 +341,7 @@ function HostSkillsView({
   agentRuntime: string;
   data: AgentSkillsResponse | undefined;
 }) {
+  const t = useTranslations("agents.detail");
   const [search, setSearch] = useState("");
 
   const customSkills: CustomSkill[] = data?.custom_skills ?? [];
@@ -373,14 +375,14 @@ function HostSkillsView({
         <Server size={15} className="shrink-0 mt-0.5" style={{ color: C.textSecondary }} />
         <div className="min-w-0">
           <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Host agent — Skills via filesystem
+            {t("hostBannerTitle")}
           </div>
           <p className="text-xs mt-1 leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
-            {agentName} runs via launchd on the Mac ({agentRuntime}) and reads Skills + CLI plugins
-            directly from the shared cache <code className="font-mono" style={{ color: "var(--color-text-secondary)" }}>~/.mc/skills</code>.
-            This assignment is read-only — manage it on the{" "}
+            {t("hostBannerBody", { name: agentName, runtime: agentRuntime })}{" "}
+            <code className="font-mono" style={{ color: "var(--color-text-secondary)" }}>~/.mc/skills</code>.
+            {" "}{t("hostBannerReadonly")}{" "}
             <Link href="/skills" className="underline" style={{ color: C.accent }}>
-              Skills page
+              {t("skillsPageLink")}
             </Link>.
           </p>
         </div>
@@ -392,7 +394,7 @@ function HostSkillsView({
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search skills & plugins..."
+          placeholder={t("searchSkillsPlugins")}
           className="flex-1 bg-transparent text-sm outline-none text-[var(--color-text-primary)]"
         />
       </GlassCard>
@@ -401,8 +403,8 @@ function HostSkillsView({
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Box size={13} style={{ color: C.accent }} />
-          <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>Custom Skills</h2>
-          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activeSkills.length} active</span>
+          <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>{t("customSkills")}</h2>
+          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{t("activeCount", { count: activeSkills.length })}</span>
         </div>
         <div className="space-y-1.5">
           {fSkills.map((s) => (
@@ -411,8 +413,8 @@ function HostSkillsView({
           {fSkills.length === 0 && (
             <div className="text-xs text-center py-5 flex items-center justify-center gap-2" style={{ color: "var(--color-text-muted)" }}>
               {loading
-                ? <><Loader2 size={12} className="animate-spin" /> Loading…</>
-                : search ? "No skills found" : "No custom skills active"}
+                ? <><Loader2 size={12} className="animate-spin" /> {t("loadingEllipsis")}</>
+                : search ? t("noSkillsFound") : t("noCustomActive")}
             </div>
           )}
         </div>
@@ -422,8 +424,8 @@ function HostSkillsView({
       <div className="space-y-2">
         <div className="flex items-center gap-2">
           <Package size={13} style={{ color: C.online }} />
-          <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>CLI Plugins</h2>
-          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{activePlugins.length} active</span>
+          <h2 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>{t("cliPlugins")}</h2>
+          <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>{t("activeCount", { count: activePlugins.length })}</span>
         </div>
         <div className="space-y-1.5">
           {fPlugins.map((p) => (
@@ -432,8 +434,8 @@ function HostSkillsView({
           {fPlugins.length === 0 && (
             <div className="text-xs text-center py-5 flex items-center justify-center gap-2" style={{ color: "var(--color-text-muted)" }}>
               {loading
-                ? <><Loader2 size={12} className="animate-spin" /> Loading…</>
-                : search ? "No plugins found" : "No CLI plugins active"}
+                ? <><Loader2 size={12} className="animate-spin" /> {t("loadingEllipsis")}</>
+                : search ? t("noPluginsFound") : t("noCliActive")}
             </div>
           )}
         </div>
@@ -443,6 +445,7 @@ function HostSkillsView({
 }
 
 function SkillsTab({ agentId }: { agentId: string }) {
+  const t = useTranslations("agents.detail");
   const [search, setSearch] = useState("");
   const [draftCliPlugins, setDraftCliPlugins] = useState<Set<string> | null>(null);
   const qc = useQueryClient();
@@ -471,7 +474,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
       qc.invalidateQueries({ queryKey: ["agent-skills", agentId] });
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
       qc.invalidateQueries({ queryKey: ["agents"] });
-      notify.success("Skills saved");
+      notify.success(t("skillsSaved"));
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -536,9 +539,9 @@ function SkillsTab({ agentId }: { agentId: string }) {
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">CLI Plugins</h2>
+            <h2 className="text-sm font-medium text-[var(--color-text-primary)]">{t("cliPlugins")}</h2>
             <span className="text-xs text-[var(--color-text-muted)]">
-              {savedCliPlugins?.length ?? 0} active / {cliPlugins.length} available
+              {t("activeOfAvailable", { active: savedCliPlugins?.length ?? 0, total: cliPlugins.length })}
             </span>
           </div>
           {cliDirty && (
@@ -547,14 +550,14 @@ function SkillsTab({ agentId }: { agentId: string }) {
                 {cliAdded.size > 0 && `+${cliAdded.size}`}
                 {cliAdded.size > 0 && cliRemoved.size > 0 && " / "}
                 {cliRemoved.size > 0 && `-${cliRemoved.size}`}
-                {" "}Change{(cliAdded.size + cliRemoved.size) !== 1 ? "s" : ""}
+                {" "}{t("changes", { count: cliAdded.size + cliRemoved.size })}
               </span>
               <button
                 onClick={() => setDraftCliPlugins(null)}
                 className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer"
                 style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}
               >
-                <Undo2 size={12} /> Discard
+                <Undo2 size={12} /> {t("discard")}
               </button>
               <button
                 onClick={handleCliSave}
@@ -563,7 +566,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
                 style={{ backgroundColor: C.accent, color: C.onAccent }}
               >
                 {setAgentSkillsMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-                Save
+                {t("save")}
               </button>
             </div>
           )}
@@ -575,7 +578,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search plugins..."
+            placeholder={t("searchPlugins")}
             className="flex-1 bg-transparent text-sm outline-none text-[var(--color-text-primary)]"
           />
         </GlassCard>
@@ -586,7 +589,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
             style={{ backgroundColor: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
           >
             <Save size={13} />
-            Unsaved changes
+            {t("unsavedChanges")}
           </div>
         )}
 
@@ -600,7 +603,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
               })}
             {cliPluginRows.length === 0 && (
               <div className="text-xs text-center py-6 text-[var(--color-text-muted)]">
-                No CLI plugins found in cache
+                {t("noCliInCache")}
               </div>
             )}
           </AnimatePresence>
@@ -624,6 +627,7 @@ function SkillsTab({ agentId }: { agentId: string }) {
 // agents.agent_runtime). Color map reused from RuntimePill (defined above).
 
 function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: string }) {
+  const t = useTranslations("agents.detail");
   const qc = useQueryClient();
   // Backend-derived (Agent.runtime_switchable). Never re-derive from harness:
   // the old `harness === "hermes"` compare locked grok/kimi/claude host agents
@@ -654,8 +658,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
     // never a hardcoded sentence — the previous literal named a model
     // ("Boss = Opus 4.7") that had long since rotted.
     const reason =
-      agent.runtime_switch_blocked_reason ??
-      "Runtime switch is not supported for this agent.";
+      agent.runtime_switch_blocked_reason ?? t("runtimeSwitchUnsupported");
     return (
       <div
         className="rounded-xl p-4"
@@ -715,9 +718,9 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
                 color: "var(--color-text-primary)",
               }}
             >
-              <option value="">— Fallback (docker-compose env) —</option>
+              <option value="">{t("fallbackOption")}</option>
               {runtimesData?.runtimes.map((r) => {
-                const compatHint = r.enabled ? "" : " · disabled";
+                const compatHint = r.enabled ? "" : ` · ${t("runtimeDisabled")}`;
                 return (
                   <option key={r.id} value={r.id} disabled={!r.enabled}>
                     {r.display_name} · {r.runtime_type}
@@ -729,16 +732,11 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {isHostInplace ? (
-                <>
-                  In-place switch — no parallel container. The runtime binding is
-                  rewritten and the host session restarts briefly (short session
-                  restart, current work is lost).
-                </>
+                <>{t("inplaceHint")}</>
               ) : (
                 <>
-                  Switching triggers <code className="font-mono">docker restart</code>{" "}
-                  (~5s) — for cross-image switches, a container rebuild (~30–90s).
-                  Compatibility check + warnings appear in the confirm modal.
+                  {t("dockerHintBefore")} <code className="font-mono">docker restart</code>{" "}
+                  {t("dockerHintAfter")}
                 </>
               )}
             </div>
@@ -757,7 +755,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
               style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               <RotateCcw size={12} />
-              Switch…
+              {t("switchButton")}
             </button>
           </div>
         </div>
@@ -780,8 +778,8 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
           qc.invalidateQueries({ queryKey: ["runtime-switch-preview", agentId] });
           notify.success(
             res._switch?.image_switched
-              ? `Runtime switched — image rebuilt (${Math.round((res._switch?.duration_ms ?? 0) / 1000)}s)`
-              : "Runtime switched",
+              ? t("switchedRebuilt", { s: Math.round((res._switch?.duration_ms ?? 0) / 1000) })
+              : t("switched"),
           );
           return res._switch ?? null;
         }}
@@ -803,6 +801,7 @@ function ConfigTab({
   config: Record<string, string | null> | undefined;
   syncConfigMutation: ReturnType<typeof useMutation<unknown, Error>>;
 }) {
+  const t = useTranslations("agents.detail");
   const [activeFile, setActiveFile] = useState("tools_md");
   const [editedContent, setEditedContent] = useState("");
   const [isDirty, setIsDirty] = useState(false);
@@ -823,19 +822,19 @@ function ConfigTab({
       api.agents.update(agentId, { secret_id } as Partial<Agent>),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
-      notify.success("API key saved");
+      notify.success(t("apiKeySaved"));
     },
-    onError: (e: Error) => notify.error(`Failed to save: ${e.message}`),
+    onError: (e: Error) => notify.error(t("saveFailedMsg", { msg: e.message })),
   });
 
   const applyRestartMutation = useMutation({
     mutationFn: () => api.agents.syncConfig(agentId, { restart: true }),
     onSuccess: (result) => {
-      const restartStatus = result.restart?.status ?? "no restart";
-      notify.success(`Config synced + ${restartStatus}`);
+      const restartStatus = result.restart?.status ?? t("noRestart");
+      notify.success(t("configSyncedPlus", { status: restartStatus }));
       qc.invalidateQueries({ queryKey: ["agent", agentId] });
     },
-    onError: (e: Error) => notify.error(`Sync failed: ${e.message}`),
+    onError: (e: Error) => notify.error(t("syncFailedMsg", { msg: e.message })),
   });
 
   const handleSecretChange = (newValue: string) => {
@@ -860,10 +859,10 @@ function ConfigTab({
       if (result.warnings.length > 0) {
         result.warnings.forEach((w) => notify.warning(w));
       } else {
-        notify.success(`${activeFile} saved${result.gateway_sync ? " & synced to gateway" : ""}`);
+        notify.success(result.gateway_sync ? t("fileSavedSynced", { file: activeFile }) : t("fileSaved", { file: activeFile }));
       }
     },
-    onError: () => notify.error("Failed to save config"),
+    onError: () => notify.error(t("configSaveFailed")),
   });
 
   const handleFileChange = (fileKey: string) => {
@@ -917,7 +916,7 @@ function ConfigTab({
               ))}
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
-              From Settings → API Keys. Written to the container's .env on Apply and loaded on openclaude start.
+              {t("apiKeyHint")}
             </div>
           </div>
           <div className="flex flex-col gap-2 pt-[22px]">
@@ -936,7 +935,7 @@ function ConfigTab({
                 color: "var(--color-text-secondary)",
               }}
             >
-              {updateSecretMutation.isPending ? "Saving…" : "Save"}
+              {updateSecretMutation.isPending ? t("savingEllipsis") : t("save")}
             </button>
             <button
               onClick={handleSaveAndApply}
@@ -949,7 +948,7 @@ function ConfigTab({
               ) : (
                 <RotateCcw size={12} />
               )}
-              Apply & Restart
+              {t("applyRestart")}
             </button>
           </div>
         </div>
@@ -985,7 +984,7 @@ function ConfigTab({
                 className="ml-2 px-1.5 py-0.5 rounded text-[10px]"
                 style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}
               >
-                readonly
+                {t("readonly")}
               </span>
             )}
           </span>
@@ -997,7 +996,7 @@ function ConfigTab({
               style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {saveConfigMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : <Save size={12} />}
-              Save & Sync
+              {t("saveSync")}
             </button>
           )}
         </div>
@@ -1029,14 +1028,14 @@ function ConfigTab({
             opacity: isReadonly ? 0.7 : 1,
             cursor: isReadonly ? "default" : "text",
           }}
-          placeholder={`${activeFileConfig?.label} content...`}
+          placeholder={t("filePlaceholder", { file: activeFileConfig?.label ?? "" })}
           spellCheck={false}
         />
 
         {isReadonly && (
           <div className="flex items-center justify-between mt-1">
             <span className="text-xs text-[var(--color-text-muted)]">
-              Auto-generated -- shows operator context for this agent
+              {t("autoGenerated")}
             </span>
             <button
               onClick={() => (syncConfigMutation as { mutate: () => void }).mutate()}
@@ -1044,7 +1043,7 @@ function ConfigTab({
               className="text-xs px-2 py-1 rounded-lg cursor-pointer"
               style={{ color: "var(--color-text-secondary)", backgroundColor: "var(--color-bg-elevated)", border: "1px solid var(--color-border)" }}
             >
-              {syncConfigMutation.isPending ? "..." : "Regenerate"}
+              {syncConfigMutation.isPending ? "..." : t("regenerate")}
             </button>
           </div>
         )}
@@ -1057,6 +1056,7 @@ function ConfigTab({
 // ── Memory Tab ───────────────────────────────────────────────────────────────
 
 function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
+  const t = useTranslations("agents.detail");
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
   const [confirmClear, setConfirmClear] = useState(false);
@@ -1074,16 +1074,16 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
       setIsEditing(false);
-      notify.success("Memory saved & pushed to gateway");
+      notify.success(t("memorySaved"));
     },
-    onError: () => notify.error("Failed to save"),
+    onError: () => notify.error(t("memorySaveFailed")),
   });
 
   const clearMutation = useMutation({
     mutationFn: () => api.agents.config.update(agentId, "memory_md", ""),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent-config", agentId] });
-      notify.success("Memory cleared");
+      notify.success(t("memoryCleared"));
     },
     onSettled: () => setConfirmClear(false),
   });
@@ -1101,7 +1101,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
       <GlassCard className="flex flex-col min-h-[400px]">
         <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
           <span className="text-sm font-medium text-[var(--color-text-primary)]">
-            Edit MEMORY.md
+            {t("editMemory")}
           </span>
           <div className="flex gap-2">
             <button
@@ -1109,7 +1109,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-elevated)" }}
             >
-              Cancel
+              {t("cancel")}
             </button>
             <button
               onClick={() => saveMutation.mutate(editContent)}
@@ -1117,7 +1117,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
               style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
-              {saveMutation.isPending ? "Saving..." : "Save & Sync"}
+              {saveMutation.isPending ? t("savingDots") : t("saveSync")}
             </button>
           </div>
         </div>
@@ -1137,7 +1137,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
     <GlassCard className="flex flex-col">
       <div className="flex items-center justify-between p-4 border-b border-[var(--color-border)]">
         <span className="text-sm font-medium text-[var(--color-text-primary)]">
-          Personal knowledge
+          {t("personalKnowledge")}
         </span>
         <div className="flex gap-2">
           {memory && (
@@ -1146,7 +1146,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: C.error, backgroundColor: `${C.error}14` }}
             >
-              Delete
+              {t("delete")}
             </button>
           )}
           <button
@@ -1154,12 +1154,12 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
             className="px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer"
             style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-primary)", border: "1px solid var(--color-border)" }}
           >
-            Edit
+            {t("edit")}
           </button>
         </div>
       </div>
 
-      <div className="flex-1 overflow-auto p-6" tabIndex={0} role="region" aria-label="Agent memory content">
+      <div className="flex-1 overflow-auto p-6" tabIndex={0} role="region" aria-label={t("memoryAria")}>
         {memory ? (
           <div className="prose prose-invert max-w-none text-sm" style={{ color: "var(--color-text-primary)" }}>
             <ReactMarkdown>{memory}</ReactMarkdown>
@@ -1168,10 +1168,10 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
           <div className="flex flex-col items-center justify-center py-12 gap-3">
             <Brain size={36} className="text-[var(--color-text-muted)] opacity-30" />
             <p className="text-sm text-[var(--color-text-muted)]">
-              {agentName} hasn't saved any insights yet.
+              {t("noInsights", { name: agentName })}
             </p>
             <p className="text-xs text-center max-w-xs text-[var(--color-text-muted)]">
-              Agents update their memory via{" "}
+              {t("memoryUpdateHint")}{" "}
               <code className="px-1 rounded" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
                 PATCH /api/v1/agent/me/memory
               </code>
@@ -1181,7 +1181,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
               className="mt-2 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ backgroundColor: "var(--color-bg-elevated)", color: "var(--color-text-secondary)", border: "1px solid var(--color-border)" }}
             >
-              Fill in manually
+              {t("fillManually")}
             </button>
           </div>
         )}
@@ -1189,9 +1189,9 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
     </GlassCard>
     <ConfirmDialog
       open={confirmClear}
-      kicker="Memory"
-      title="Really delete memory?"
-      confirmLabel="Delete"
+      kicker={t("memoryKicker")}
+      title={t("memoryClearTitle")}
+      confirmLabel={t("delete")}
       loading={clearMutation.isPending}
       onConfirm={() => clearMutation.mutate()}
       onCancel={() => setConfirmClear(false)}
@@ -1203,6 +1203,7 @@ function MemoryTab({ agentId, agentName }: { agentId: string; agentName: string 
 // ── MCP Tab ───────────────────────────────────────────────────────────────────
 
 function AgentMcpTab({ agent }: { agent: Agent }) {
+  const t = useTranslations("agents.detail");
   const { data: servers, isLoading } = useQuery({
     queryKey: ["mcp-servers"],
     queryFn: () => api.mcpServers.list(),
@@ -1220,7 +1221,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
   return (
     <div className="space-y-4">
       <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-        MCP server assignment for {agent.name}. Disable servers this agent doesn't need.
+        {t("mcpHint", { name: agent.name })}
       </p>
       <MCPServerMatrix servers={servers ?? []} agents={[agent]} />
     </div>
@@ -1236,6 +1237,7 @@ function AgentMcpTab({ agent }: { agent: Agent }) {
 // pushed him toward python3 urllib instead of the mc CLI).
 
 function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: string }) {
+  const t = useTranslations("agents.detail");
   const qc = useQueryClient();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [confirmDeleteFile, setConfirmDeleteFile] = useState<string | null>(null);
@@ -1249,11 +1251,11 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
   const deleteMutation = useMutation({
     mutationFn: (filename: string) => api.agents.localMemory.delete(agentId, filename),
     onSuccess: (_, filename) => {
-      notify.success(`${filename} deleted`);
+      notify.success(t("fileDeleted", { file: filename }));
       qc.invalidateQueries({ queryKey: ["agent-local-memory", agentId] });
     },
     onError: (err: unknown) => {
-      const msg = err instanceof Error ? err.message : "Delete failed";
+      const msg = err instanceof Error ? err.message : t("deleteFailed");
       notify.error(msg);
     },
     onSettled: () => setConfirmDeleteFile(null),
@@ -1274,7 +1276,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
           <AlertTriangle size={16} style={{ color: C.error }} />
           <div>
             <p className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-              Failed to load
+              {t("loadFailed")}
             </p>
             <p className="text-xs mt-1">{error instanceof Error ? error.message : String(error)}</p>
           </div>
@@ -1295,15 +1297,14 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
             {data?.directory ?? "—"}
           </p>
           <p className="text-xs mt-1" style={{ color: "var(--color-text-secondary)" }}>
-            Claude local memory files for {agentName}. Read by the agent on every
-            turn — wrong lessons here permanently distort behavior.
+            {t("localMemoryHint", { name: agentName })}
           </p>
         </div>
         <button
           onClick={() => qc.invalidateQueries({ queryKey: ["agent-local-memory", agentId] })}
           className="p-1.5 rounded-lg cursor-pointer transition-colors"
           style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}
-          title="Reload"
+          title={t("reload")}
         >
           <RefreshCw size={14} />
         </button>
@@ -1313,8 +1314,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
         <GlassCard className="p-4">
           <div className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-secondary)" }}>
             <WifiOff size={14} />
-            Container not running (state: {containerState ?? "unknown"}). Start the container
-            to see the files.
+            {t("containerNotRunning", { state: containerState ?? "unknown" })}
           </div>
         </GlassCard>
       )}
@@ -1322,7 +1322,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
       {isRunning && files.length === 0 && (
         <GlassCard className="p-6">
           <div className="text-center text-xs" style={{ color: "var(--color-text-muted)" }}>
-            No .md files in the memory directory.
+            {t("noMdFiles")}
           </div>
         </GlassCard>
       )}
@@ -1346,7 +1346,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 <span className="text-sm font-mono">{file.name}</span>
                 <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
                   {file.size.toLocaleString()} B
-                  {file.truncated && " (truncated)"}
+                  {file.truncated && ` ${t("truncated")}`}
                 </span>
               </button>
               <button
@@ -1358,7 +1358,7 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                   border: `1px solid ${C.error}33`,
                   color: C.error,
                 }}
-                title="Delete file"
+                title={t("deleteFile")}
               >
                 <Trash2 size={13} />
               </button>
@@ -1369,9 +1369,9 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
                 style={{ color: "var(--color-text-secondary)", maxHeight: "400px", overflowY: "auto" }}
                 tabIndex={0}
                 role="region"
-                aria-label="File content"
+                aria-label={t("fileContentAria")}
               >
-                {file.content || "(empty)"}
+                {file.content || t("emptyFile")}
               </pre>
             )}
           </GlassCard>
@@ -1379,10 +1379,10 @@ function LocalMemoryTab({ agentId, agentName }: { agentId: string; agentName: st
       })}
       <ConfirmDialog
         open={confirmDeleteFile !== null}
-        kicker="Local Memory"
-        title={`Really delete "${confirmDeleteFile}"?`}
-        body="This action cannot be undone."
-        confirmLabel="Delete"
+        kicker={t("localMemoryKicker")}
+        title={t("deleteFileConfirm", { file: confirmDeleteFile ?? "" })}
+        body={t("cannotUndo")}
+        confirmLabel={t("delete")}
         loading={deleteMutation.isPending}
         onConfirm={() => { if (confirmDeleteFile) deleteMutation.mutate(confirmDeleteFile); }}
         onCancel={() => setConfirmDeleteFile(null)}
@@ -1404,6 +1404,7 @@ function OverviewTab({
   config: Record<string, string | null> | undefined;
   setActiveTab: (tab: Tab) => void;
 }) {
+  const t = useTranslations("agents.detail");
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
 
   const { data: activity } = useQuery({
@@ -1447,25 +1448,25 @@ function OverviewTab({
       {/* KPI Row */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <GlassCard className="p-4">
-          <span className="text-[11px] text-[var(--color-text-muted)]">Tasks Completed</span>
+          <span className="text-[11px] text-[var(--color-text-muted)]">{t("kpiTasksCompleted")}</span>
           <div className="text-2xl font-bold tracking-tight mt-1" style={{ color: C.online }}>
             {agent.total_tasks_completed}
           </div>
         </GlassCard>
         <GlassCard className="p-4">
-          <span className="text-[11px] text-[var(--color-text-muted)]">Compactions</span>
+          <span className="text-[11px] text-[var(--color-text-muted)]">{t("kpiCompactions")}</span>
           <div className="text-2xl font-bold tracking-tight mt-1 text-[var(--color-text-primary)]">
             {agent.total_compactions}
           </div>
         </GlassCard>
         <GlassCard className="p-4">
-          <span className="text-[11px] text-[var(--color-text-muted)]">Session Messages</span>
+          <span className="text-[11px] text-[var(--color-text-muted)]">{t("kpiSessionMessages")}</span>
           <div className="text-2xl font-bold tracking-tight mt-1 text-[var(--color-text-primary)]">
             {agent.session_message_count}
           </div>
         </GlassCard>
         <GlassCard className="p-4">
-          <span className="text-[11px] text-[var(--color-text-muted)]">Run State</span>
+          <span className="text-[11px] text-[var(--color-text-muted)]">{t("kpiRunState")}</span>
           <div className="mt-2">
             <span
               className="text-xs font-medium px-2 py-0.5 rounded-sm font-mono"
@@ -1483,23 +1484,23 @@ function OverviewTab({
           {/* Health */}
           <GlassCard className="p-4 space-y-3">
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">
-              Health
+              {t("health")}
             </h2>
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-[var(--color-text-muted)]">Last Seen</span>
+                <span className="text-[11px] text-[var(--color-text-muted)]">{t("lastSeen")}</span>
                 <div className="flex items-center gap-1.5">
                   <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: seenColor }} />
                   <span className="text-[12px] font-mono" style={{ color: seenColor }}>
-                    {seenMins !== null ? `${seenMins}m ago` : "never"}
+                    {seenMins !== null ? t("minsAgo", { mins: seenMins }) : t("never")}
                   </span>
                 </div>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-[11px] text-[var(--color-text-muted)]">Runtime</span>
+                <span className="text-[11px] text-[var(--color-text-muted)]">{t("runtime")}</span>
                 <RuntimePill agent={agent} />
               </div>
-              <InfoRow label="Agent Type" value={agent.agent_runtime ?? "manual"} />
+              <InfoRow label={t("agentType")} value={agent.agent_runtime ?? "manual"} />
               {agent.discord_channel_name && (
                 <InfoRow label="Discord" value={`#${agent.discord_channel_name}`} />
               )}
@@ -1510,23 +1511,23 @@ function OverviewTab({
           <GlassCard className="p-4 space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">
-                Skills
+                {t("skills")}
               </h2>
               <button
                 onClick={() => setActiveTab("skills")}
                 className="text-[10px] cursor-pointer"
                 style={{ color: C.accent }}
               >
-                Manage
+                {t("manage")}
               </button>
             </div>
             {displaySkills.length > 0 ? (
               <SkillBadges skills={displaySkills} />
             ) : (
               <div className="text-xs text-[var(--color-text-muted)]">
-                No skills assigned —{" "}
+                {t("noSkillsAssigned")}{" "}
                 <button onClick={() => setActiveTab("skills")} className="underline cursor-pointer" style={{ color: C.accent }}>
-                  Add skills
+                  {t("addSkills")}
                 </button>
               </div>
             )}
@@ -1536,7 +1537,7 @@ function OverviewTab({
           {agent.scopes.length > 0 && (
             <GlassCard className="p-4 space-y-3">
               <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">
-                Scopes
+                {t("scopes")}
               </h2>
               <div className="flex flex-wrap gap-1">
                 {agent.scopes.map((scope) => (
@@ -1549,10 +1550,10 @@ function OverviewTab({
           {/* Cron Jobs */}
           <GlassCard className="p-4 space-y-3">
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">
-              Cron Jobs
+              {t("cronJobs")}
             </h2>
             {agentJobs.length === 0 ? (
-              <span className="text-xs text-[var(--color-text-muted)]">No active triggers</span>
+              <span className="text-xs text-[var(--color-text-muted)]">{t("noTriggers")}</span>
             ) : (
               <div className="space-y-1">
                 {agentJobs.map((job: ScheduledJob) => {
@@ -1574,7 +1575,7 @@ function OverviewTab({
                       </span>
                       {!job.enabled && (
                         <span className="text-[10px] px-1 rounded text-[var(--color-text-muted)]" style={{ backgroundColor: "var(--color-bg-elevated)" }}>
-                          off
+                          {t("off")}
                         </span>
                       )}
                     </div>
@@ -1609,21 +1610,21 @@ function OverviewTab({
               className="text-[12px] font-mono leading-relaxed max-h-[400px] overflow-y-auto whitespace-pre-wrap rounded-xl p-4"
               tabIndex={0}
               role="region"
-              aria-label="Config file content"
+              aria-label={t("configFileAria")}
               style={{
                 backgroundColor: "var(--color-bg-surface)",
                 color: "var(--color-text-body)",
                 border: "1px solid var(--color-border-subtle)",
               }}
             >
-              {configContent || <span className="text-[var(--color-text-muted)]">No content</span>}
+              {configContent || <span className="text-[var(--color-text-muted)]">{t("noContent")}</span>}
             </div>
           </GlassCard>
 
           {/* Activity Feed */}
           <GlassCard className="p-4 space-y-3">
             <h2 className="text-[11px] uppercase tracking-wider text-[var(--color-text-muted)] font-semibold">
-              Activity
+              {t("activity")}
             </h2>
             {activity && activity.length > 0 ? (
               <div className="space-y-0.5">
@@ -1649,7 +1650,7 @@ function OverviewTab({
                 ))}
               </div>
             ) : (
-              <div className="text-xs text-[var(--color-text-muted)]">No events yet</div>
+              <div className="text-xs text-[var(--color-text-muted)]">{t("noEvents")}</div>
             )}
           </GlassCard>
         </div>
@@ -1709,6 +1710,7 @@ function ActionButton({
 // ── Agent Detail Page ────────────────────────────────────────────────────────
 
 export default function AgentDetailPage() {
+  const t = useTranslations("agents");
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
@@ -1744,7 +1746,7 @@ export default function AgentDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agents"] });
-      notify.success("Agent updated");
+      notify.success(t("detail.agentUpdated"));
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -1752,41 +1754,41 @@ export default function AgentDetailPage() {
   const resetMutation = useMutation({
     mutationFn: () => api.agents.reset(id),
     onSuccess: () => {
-      notify.success("Agent reset");
+      notify.success(t("detail.agentReset"));
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: () => notify.error("Reset failed"),
+    onError: () => notify.error(t("detail.resetFailed")),
   });
 
   const restartWorkerMutation = useMutation({
     mutationFn: () => api.agents.restartWorker(id),
     onSuccess: () => {
-      notify.success("Worker restarted");
+      notify.success(t("detail.workerRestarted"));
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: () => notify.error("Worker restart failed"),
+    onError: () => notify.error(t("detail.workerRestartFailed")),
   });
 
   const forceRecreateMutation = useMutation({
     mutationFn: ({ force }: { force: boolean }) => api.agents.forceRecreateContainer(id, force),
     onSuccess: (result) => {
       notify.success(
-        `Container recreated in ${result.duration_seconds}s (state: ${result.state})`,
+        t("detail.containerRecreated", { s: result.duration_seconds, state: result.state }),
       );
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agent-local-memory", id] });
     },
-    onError: (e: Error) => notify.error(`Force recreate failed: ${e.message}`),
+    onError: (e: Error) => notify.error(t("detail.forceRecreateFailed", { msg: e.message })),
     onSettled: () => setConfirmRecreate(false),
   });
 
   const provisionMutation = useMutation<unknown, Error>({
     mutationFn: () => api.agents.provisionCli(id),
     onSuccess: () => {
-      notify.success("Agent provisioned");
+      notify.success(t("detail.provisioned"));
       qc.invalidateQueries({ queryKey: ["agent", id] });
     },
-    onError: (e: Error) => notify.error(`Provisioning failed: ${e.message}`),
+    onError: (e: Error) => notify.error(t("detail.provisionFailedMsg", { msg: e.message })),
   });
 
   // Host-helper health: the Provision button silently failed with a generic
@@ -1816,8 +1818,8 @@ export default function AgentDetailPage() {
 
   const syncConfigMutation = useMutation({
     mutationFn: () => api.agents.syncConfig(id),
-    onSuccess: () => notify.success("Config synced to gateway"),
-    onError: (e: Error) => notify.error(`Sync failed: ${e.message}`),
+    onSuccess: () => notify.success(t("detail.configSyncedGateway")),
+    onError: (e: Error) => notify.error(t("detail.syncFailedMsg", { msg: e.message })),
   });
 
   const setupCoordMutation = useMutation({
@@ -1825,9 +1827,9 @@ export default function AgentDetailPage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["agent", id] });
       qc.invalidateQueries({ queryKey: ["agent-config", id] });
-      notify.success("Agents reconfigured -- templates + USER.md + MEMORY.md pushed");
+      notify.success(t("detail.reconfigured"));
     },
-    onError: () => notify.error("Failed to reconfigure"),
+    onError: () => notify.error(t("detail.reconfigureFailed")),
   });
 
   if (!agent) {
@@ -1854,7 +1856,7 @@ export default function AgentDetailPage() {
           href="/agents"
           className="inline-flex items-center gap-1.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
         >
-          <ArrowLeft size={14} /> All Agents
+          <ArrowLeft size={14} /> {t("allAgents")}
         </Link>
 
         {/* Agent Header */}
@@ -1890,14 +1892,14 @@ export default function AgentDetailPage() {
                   {agent.role && (
                     <span className="text-sm text-[var(--color-text-secondary)]">-- {agent.role}</span>
                   )}
-                  <Pill color={provCfg.color} size="sm">{provCfg.label}</Pill>
+                  <Pill color={provCfg.color} size="sm">{t(provCfg.labelKey)}</Pill>
                   {agent.operational_mode === "paused" && (
-                    <Pill color={C.warning} size="sm">Paused</Pill>
+                    <Pill color={C.warning} size="sm">{t("detail.paused")}</Pill>
                   )}
                   <div className="flex items-center gap-1.5 ml-auto">
                     <StatusDot status={dotStatus} pulse={dotStatus === "online" || dotStatus === "busy"} />
                     <span className="text-sm capitalize text-[var(--color-text-secondary)]">
-                      {agent.status === "restarting" ? "Restarting..." : agent.status}
+                      {agent.status === "restarting" ? t("detail.restarting") : agent.status}
                     </span>
                   </div>
                 </div>
@@ -1921,13 +1923,13 @@ export default function AgentDetailPage() {
                       ))}
                     </select>
                   </span>
-                  <span>Last seen: {timeAgo(agent.last_seen_at)}</span>
+                  <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at) })}</span>
                 </div>
 
                 {/* Context bar */}
                 <div className="mt-4 max-w-sm">
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] text-[var(--color-text-muted)]">Context</span>
+                    <span className="text-[10px] text-[var(--color-text-muted)]">{t("contextLabel")}</span>
                     <span className="text-[10px] text-[var(--color-text-muted)]">{pct}%</span>
                   </div>
                   <div className="h-1.5 rounded-full bg-[var(--color-bg-elevated)] overflow-hidden">
@@ -1954,7 +1956,7 @@ export default function AgentDetailPage() {
                 }}
               >
                 <span className="font-medium" style={{ color: C.warning }}>
-                  Provisioning failed:
+                  {t("detail.provisioningFailed")}
                 </span>{" "}
                 {provisionFailure.title}
               </div>
@@ -1968,16 +1970,16 @@ export default function AgentDetailPage() {
               {isCliBridge ? (
                 <ActionButton
                   icon={RotateCcw}
-                  label="Restart Worker"
+                  label={t("detail.restartWorker")}
                   color={C.warning}
                   onClick={() => restartWorkerMutation.mutate()}
                   loading={restartWorkerMutation.isPending}
-                  title="Restart worker session"
+                  title={t("detail.restartWorkerTitle")}
                 />
               ) : (
                 <ActionButton
                   icon={RotateCcw}
-                  label="Reset"
+                  label={t("detail.reset")}
                   color={C.warning}
                   onClick={() => resetMutation.mutate()}
                   loading={resetMutation.isPending}
@@ -1987,39 +1989,39 @@ export default function AgentDetailPage() {
               {isCliBridge && (
                 <ActionButton
                   icon={RefreshCw}
-                  label="Force-Recreate"
+                  label={t("detail.forceRecreate")}
                   color={C.error}
                   onClick={() => setConfirmRecreate(true)}
                   loading={forceRecreateMutation.isPending}
-                  title="Recreate container (pulls current image)"
+                  title={t("detail.forceRecreateTitle")}
                 />
               )}
 
               {/* Pause / Resume */}
               <ActionButton
                 icon={agent.operational_mode === "paused" ? Play : Pause}
-                label={agent.operational_mode === "paused" ? "Resume" : "Pause"}
+                label={agent.operational_mode === "paused" ? t("detail.resume") : t("detail.pause")}
                 color={agent.operational_mode === "paused" ? C.online : C.warning}
                 onClick={() => {
                   const newMode = agent.operational_mode === "paused" ? "active" : "paused";
                   updateAgentMutation.mutate({ operational_mode: newMode } as Partial<Pick<Agent, "name" | "model" | "role" | "heartbeat_config" | "operational_mode">>);
                 }}
                 loading={updateAgentMutation.isPending}
-                title={agent.operational_mode === "paused" ? "Resume agent" : "Pause agent"}
+                title={agent.operational_mode === "paused" ? t("detail.resumeTitle") : t("detail.pauseTitle")}
               />
 
               {isCliBridge && agent.provision_status === "local" && (
                 <>
                   <ActionButton
                     icon={Cloud}
-                    label="Provision"
+                    label={t("detail.provision")}
                     color={C.online}
                     onClick={() => provisionMutation.mutate()}
                     loading={provisionMutation.isPending}
                     disabled={bridgeDown}
                     title={
                       bridgeDown
-                        ? "cli-bridge helper not reachable — start it on the host: python3 scripts/cli-bridge.py"
+                        ? t("detail.bridgeDownTitle")
                         : undefined
                     }
                   />
@@ -2031,13 +2033,13 @@ export default function AgentDetailPage() {
                         border: `1px solid ${C.warning}33`,
                         color: C.warning,
                       }}
-                      title="Start the host helper, then Provision becomes available: python3 scripts/cli-bridge.py"
+                      title={t("detail.bridgeOfflineTitle")}
                     >
                       <span
                         className="w-1.5 h-1.5 rounded-full shrink-0"
                         style={{ backgroundColor: C.warning }}
                       />
-                      bridge offline
+                      {t("detail.bridgeOffline")}
                     </span>
                   )}
                 </>
@@ -2047,7 +2049,7 @@ export default function AgentDetailPage() {
                 <>
                   <ActionButton
                     icon={Cloud}
-                    label="Sync Config"
+                    label={t("detail.syncConfig")}
                     color={C.accent}
                     onClick={() => syncConfigMutation.mutate()}
                     loading={syncConfigMutation.isPending}
@@ -2055,11 +2057,11 @@ export default function AgentDetailPage() {
                   {agent.is_board_lead && (
                     <ActionButton
                       icon={Settings}
-                      label="Reconfigure"
+                      label={t("detail.reconfigure")}
                       color={C.textDim}
                       onClick={() => setupCoordMutation.mutate()}
                       loading={setupCoordMutation.isPending}
-                      title="Regenerate templates + push to worker"
+                      title={t("detail.reconfigureTitle")}
                     />
                   )}
                 </>
@@ -2093,7 +2095,7 @@ export default function AgentDetailPage() {
               )}
             >
               <tab.icon size={14} />
-              {tab.label}
+              {t(tab.labelKey)}
               {activeTab === tab.key && (
                 <motion.div
                   layoutId="agent-tab-indicator"
@@ -2126,23 +2128,19 @@ export default function AgentDetailPage() {
 
         <ConfirmDialog
           open={confirmRecreate}
-          kicker="Force-Recreate"
-          title={`Fully recreate container ${agent.name}?`}
+          kicker={t("detail.forceRecreate")}
+          title={t("detail.recreateTitle", { name: agent.name })}
           body={
             <>
-              <p>
-                This pulls the current Docker image (~30-90s). The running worker
-                session will be terminated.
-              </p>
+              <p>{t("detail.recreateBody")}</p>
               {agent.current_task_id && (
                 <p className="font-medium" style={{ color: C.warning }}>
-                  Warning: the agent is currently working on a task — the run will
-                  be aborted. Confirm to continue anyway (force=true).
+                  {t("detail.recreateWarn")}
                 </p>
               )}
             </>
           }
-          confirmLabel="Force-Recreate"
+          confirmLabel={t("detail.forceRecreate")}
           loading={forceRecreateMutation.isPending}
           onConfirm={() => forceRecreateMutation.mutate({ force: !!agent.current_task_id })}
           onCancel={() => setConfirmRecreate(false)}

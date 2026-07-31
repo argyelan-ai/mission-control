@@ -15,6 +15,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { ArrowRight, X, Loader2 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { Agent, Runtime } from "@/lib/types";
 import { RuntimeSwitchModal } from "@/components/shared/RuntimeSwitchModal";
@@ -29,6 +30,7 @@ interface Props {
 }
 
 export function BindAgentModal({ open, onClose, runtime }: Props) {
+  const t = useTranslations("runtimes.bindAgentModal");
   const [pickedAgent, setPickedAgent] = useState<Agent | null>(null);
 
   // iOS-safe scroll lock (M4)
@@ -91,10 +93,10 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                 >
                   <div>
                     <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                      Bind agent
+                      {t("title")}
                     </h2>
                     <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                      Target runtime: <span className="font-mono">{runtime.display_name}</span>
+                      {t("targetRuntime")} <span className="font-mono">{runtime.display_name}</span>
                     </div>
                   </div>
                   <button
@@ -109,12 +111,12 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                   {isLoading && (
                     <div className="flex items-center gap-2 p-3 text-[12px] text-[var(--color-text-muted)]">
                       <Loader2 size={12} className="animate-spin" />
-                      Loading agents…
+                      {t("loadingAgents")}
                     </div>
                   )}
                   {!isLoading && agents.length === 0 && (
                     <div className="p-4 text-[12px] text-[var(--color-text-muted)] text-center">
-                      No switchable agents available.
+                      {t("noSwitchable")}
                     </div>
                   )}
                   <ul className="space-y-1">
@@ -147,7 +149,7 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                             </div>
                             {alreadyBound ? (
                               <span className="text-[10px] font-mono shrink-0" style={{ color: C.online }}>
-                                bound
+                                {t("bound")}
                               </span>
                             ) : (
                               <ArrowRight size={13} style={{ color: "var(--color-text-muted)" }} />
@@ -167,11 +169,11 @@ export function BindAgentModal({ open, onClose, runtime }: Props) {
                     paddingBottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
                   }}
                 >
-                  Tip: you can also control runtime switches per agent in the{" "}
+                  {t("tipBefore")}{" "}
                   <Link href="/agents" className="underline hover:text-[var(--color-text-secondary)]">
-                    Agents section
+                    {t("tipLink")}
                   </Link>
-                  .
+                  {t("tipAfter")}
                 </div>
             </motion.div>
           </motion.div>

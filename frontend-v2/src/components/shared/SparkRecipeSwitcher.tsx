@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Loader2, ChevronDown, Check, X, AlertCircle } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
 
@@ -28,6 +29,7 @@ export function SparkRecipeSwitcher({
   runtimeId: string;
   onSwitched?: () => void;
 }) {
+  const t = useTranslations("runtimes.recipe");
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [confirmRecipe, setConfirmRecipe] = useState<string | null>(null);
@@ -112,7 +114,7 @@ export function SparkRecipeSwitcher({
       onSwitched?.();
     },
     onError: (err: Error) => {
-      setStatusMsg(`Switch failed: ${err.message}`);
+      setStatusMsg(t("switchFailed", { message: err.message }));
       setConfirmRecipe(null);
     },
   });
@@ -138,7 +140,7 @@ export function SparkRecipeSwitcher({
         ref={buttonRef}
         onClick={() => setOpen((v) => !v)}
         disabled={switchMutation.isPending}
-        title={`Active recipe: ${currentRecipe ?? "—"}`}
+        title={t("activeRecipe", { recipe: currentRecipe ?? "—" })}
         style={{
           display: "flex",
           alignItems: "center",
@@ -155,7 +157,7 @@ export function SparkRecipeSwitcher({
         }}
       >
         <span className="truncate font-mono text-[10px]">
-          {currentRecipe ?? "no recipe"}
+          {currentRecipe ?? t("noRecipe")}
         </span>
         {switchMutation.isPending ? (
           <Loader2 size={11} className="animate-spin shrink-0" />
@@ -196,7 +198,7 @@ export function SparkRecipeSwitcher({
                 className="flex items-center gap-2 px-3 py-2 text-xs"
                 style={{ color: "var(--color-text-muted)" }}
               >
-                <Loader2 size={12} className="animate-spin" /> Loading recipes via SSH…
+                <Loader2 size={12} className="animate-spin" /> {t("loadingViaSsh")}
               </div>
             )}
             {listQuery.isError && (
@@ -204,7 +206,7 @@ export function SparkRecipeSwitcher({
                 className="flex items-center gap-2 px-3 py-2 text-xs"
                 style={{ color: C.error }}
               >
-                <AlertCircle size={12} /> Could not reach sparkrun on the Spark host.
+                <AlertCircle size={12} /> {t("unreachable")}
               </div>
             )}
             {listQuery.data?.recipes.length === 0 && (
@@ -212,7 +214,7 @@ export function SparkRecipeSwitcher({
                 className="px-3 py-2 text-xs"
                 style={{ color: "var(--color-text-muted)" }}
               >
-                No recipes returned by sparkrun list.
+                {t("noRecipesReturned")}
               </div>
             )}
             {listQuery.data?.recipes.map((r) => {
@@ -228,7 +230,7 @@ export function SparkRecipeSwitcher({
                   key={r.name}
                   title={
                     isDisabled
-                      ? `Needs ${gpuHint ?? "more GPUs/nodes"} — cannot run solo on this host`
+                      ? t("needsMoreTitle", { gpuHint: gpuHint ?? t("moreGpusNodes") })
                       : undefined
                   }
                   style={{
@@ -311,7 +313,7 @@ export function SparkRecipeSwitcher({
                       className="text-[10px]"
                       style={{ color: C.warning, marginTop: "2px" }}
                     >
-                      Needs {gpuHint ?? "more GPUs/nodes"} — cannot run solo
+                      {t("needsMoreShort", { gpuHint: gpuHint ?? t("moreGpusNodes") })}
                     </span>
                   )}
                   {isConfirm && (
@@ -332,7 +334,7 @@ export function SparkRecipeSwitcher({
                           cursor: "pointer",
                         }}
                       >
-                        Confirm switch
+                        {t("confirmSwitch")}
                       </button>
                       <button
                         onClick={(e) => {
@@ -352,13 +354,13 @@ export function SparkRecipeSwitcher({
                           gap: "3px",
                         }}
                       >
-                        <X size={10} /> Cancel
+                        <X size={10} /> {t("cancel")}
                       </button>
                       <span
                         className="text-[10px]"
                         style={{ color: "var(--color-text-muted)" }}
                       >
-                        Warmup ~5 min after switch.
+                        {t("warmupNotice")}
                       </span>
                     </div>
                   )}

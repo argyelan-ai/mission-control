@@ -86,12 +86,12 @@ describe("ModelCatalogSection", () => {
     const newRow = rows.find((r) => r.dataset.bound === "false")!;
     const boundRow = rows.find((r) => r.dataset.bound === "true")!;
 
-    expect(within(newRow).getByTestId("catalog-new-badge")).toHaveTextContent("neu");
-    expect(within(newRow).getByRole("button", { name: /Als Runtime anlegen/ })).toBeInTheDocument();
+    expect(within(newRow).getByTestId("catalog-new-badge")).toHaveTextContent("new");
+    expect(within(newRow).getByRole("button", { name: /Create as runtime/ })).toBeInTheDocument();
 
     expect(within(boundRow).queryByTestId("catalog-new-badge")).not.toBeInTheDocument();
-    expect(within(boundRow).queryByRole("button", { name: /Als Runtime anlegen/ })).not.toBeInTheDocument();
-    expect(within(boundRow).getByText("gebunden")).toBeInTheDocument();
+    expect(within(boundRow).queryByRole("button", { name: /Create as runtime/ })).not.toBeInTheDocument();
+    expect(within(boundRow).getByText("bound")).toBeInTheDocument();
   });
 
   it("shows the new_count badge in the group header", async () => {
@@ -106,11 +106,11 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     await waitFor(() =>
-      expect(screen.getByTestId("catalog-new-count")).toHaveTextContent("2 neu"),
+      expect(screen.getByTestId("catalog-new-count")).toHaveTextContent("2 new"),
     );
   });
 
-  it("calls api.modelCatalog.bind after confirming 'Als Runtime anlegen'", async () => {
+  it("calls api.modelCatalog.bind after confirming 'Create as runtime'", async () => {
     vi.spyOn(api.modelCatalog, "list").mockResolvedValue(mkList([mkProvider()]));
     const bindSpy = vi
       .spyOn(api.modelCatalog, "bind")
@@ -118,12 +118,12 @@ describe("ModelCatalogSection", () => {
 
     renderSection();
 
-    const btn = await screen.findByRole("button", { name: /Als Runtime anlegen/ });
+    const btn = await screen.findByRole("button", { name: /Create as runtime/ });
     await userEvent.click(btn);
 
     // B2-ConfirmDialog statt window.confirm
     await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
-    await userEvent.click(screen.getByRole("button", { name: /^Anlegen$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Create$/ }));
 
     await waitFor(() =>
       expect(bindSpy).toHaveBeenCalledWith("anthropic", "claude-opus-5"),
@@ -150,8 +150,8 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     const banner = await screen.findByTestId("catalog-status-banner");
-    expect(banner).toHaveTextContent(/Live-Abfrage fehlgeschlagen/);
-    expect(banner).toHaveTextContent(/bekannte Liste/);
+    expect(banner).toHaveTextContent(/Live query failed/);
+    expect(banner).toHaveTextContent(/known list/);
     expect(screen.getByTestId("catalog-status-reason")).toHaveTextContent(
       "HTTP 500 from /v1/models",
     );
@@ -174,13 +174,13 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     const banner = await screen.findByTestId("catalog-status-banner");
-    expect(banner).toHaveTextContent(/Zugangsdaten/);
-    expect(banner).toHaveTextContent(/nicht erreichbar/);
+    expect(banner).toHaveTextContent(/credentials/i);
+    expect(banner).toHaveTextContent(/not reachable/);
     expect(screen.getByTestId("catalog-status-reason")).toHaveTextContent(
       "auth.json not mounted into the container",
     );
-    // Keine "keine Modelle"-Aussage, obwohl die Liste leer ist
-    expect(screen.queryByText(/meldet aktuell keine Modelle/)).not.toBeInTheDocument();
+    // No "no models" claim, even though the list is empty
+    expect(screen.queryByText(/currently reports no models/)).not.toBeInTheDocument();
   });
 
   it("status unreachable: says 'Runtime offline', never 'keine Modelle'", async () => {
@@ -201,7 +201,7 @@ describe("ModelCatalogSection", () => {
 
     const banner = await screen.findByTestId("catalog-status-banner");
     expect(banner).toHaveTextContent(/Runtime offline/);
-    expect(screen.queryByText(/meldet aktuell keine Modelle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/currently reports no models/)).not.toBeInTheDocument();
     expect(screen.getByTestId("catalog-provider")).toHaveAttribute("data-status", "unreachable");
   });
 
@@ -222,18 +222,18 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     const banner = await screen.findByTestId("catalog-status-banner");
-    expect(banner).toHaveTextContent(/Config des CLI/);
-    // Darf sich NICHT als bestätigte Live-Abfrage ausgeben …
-    expect(banner).toHaveTextContent(/nicht vom Anbieter bestätigt/);
-    // … und nicht als veraltetes Handmanifest verleumdet werden.
-    expect(banner).not.toHaveTextContent(/bekannte Liste/);
+    expect(banner).toHaveTextContent(/CLI's own config/);
+    // Must NOT present itself as a confirmed live query …
+    expect(banner).toHaveTextContent(/not confirmed by the provider/);
+    // … and not be maligned as a stale hand manifest.
+    expect(banner).not.toHaveTextContent(/known list/);
     expect(screen.getByTestId("catalog-provider")).toHaveAttribute(
       "data-status",
       "cli_config",
     );
-    // Modelle sind echt da — der Leerzustand darf nicht greifen.
+    // Models are genuinely present — the empty state must not kick in.
     expect(screen.getByText("k3")).toBeInTheDocument();
-    expect(screen.queryByText(/meldet aktuell keine Modelle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/currently reports no models/)).not.toBeInTheDocument();
   });
 
   it("cli_only model: shown, explained, and NOT offered as bindable", async () => {
@@ -258,23 +258,23 @@ describe("ModelCatalogSection", () => {
     );
     renderSection();
 
-    // Gruppe bleibt zu: cli_only zählt nicht als „neu", also gibt es hier
-    // nichts, wofür die Seite unaufgefordert aufklappen müsste.
+    // Group stays closed: cli_only doesn't count as "new", so there's
+    // nothing here that would need the page to auto-expand.
     const header = await screen.findByRole("button", { name: /Grok \(CLI-Proxy\)/ });
     expect(screen.queryByTestId("catalog-new-count")).not.toBeInTheDocument();
     await userEvent.click(header);
 
-    // Aufgeklappt sichtbar — der Operator soll wissen, dass es das Modell gibt.
+    // Visible once expanded — the operator should know the model exists.
     await waitFor(() => expect(screen.getByText("composer-2.5-fast")).toBeInTheDocument());
     const badge = screen.getByTestId("catalog-cli-only-badge");
-    expect(badge).toHaveTextContent(/nur im CLI/);
+    expect(badge).toHaveTextContent(/CLI only/);
     expect(badge).toHaveAttribute("title", "Vom Endpoint abgelehnt (HTTP 400).");
 
-    // Aber weder als „neu" beworben noch anlegbar — ein Angebot, das dann
-    // scheitert, wäre schlechter als gar keins.
+    // But neither advertised as "new" nor creatable — an option that would
+    // then fail is worse than not offering one at all.
     expect(screen.queryByTestId("catalog-new-badge")).not.toBeInTheDocument();
     expect(
-      screen.queryByRole("button", { name: /Als Runtime anlegen/ }),
+      screen.queryByRole("button", { name: /Create as runtime/ }),
     ).not.toBeInTheDocument();
     expect(bind).not.toHaveBeenCalled();
   });
@@ -284,7 +284,7 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     await waitFor(() =>
-      expect(screen.getByText(/Keine Anbieter konfiguriert/)).toBeInTheDocument(),
+      expect(screen.getByText(/No providers configured/)).toBeInTheDocument(),
     );
   });
 
@@ -293,7 +293,7 @@ describe("ModelCatalogSection", () => {
     renderSection();
 
     await waitFor(() =>
-      expect(screen.getByText(/konnte nicht geladen werden/)).toBeInTheDocument(),
+      expect(screen.getByText(/could not be loaded/)).toBeInTheDocument(),
     );
   });
 });

@@ -68,7 +68,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
     expect(toggle).not.toBeDisabled();
   });
 
-  it("shows disabled 'unbekannt' state when the host is unreachable", async () => {
+  it("shows disabled 'unknown' state when the host is unreachable", async () => {
     vi.spyOn(api.runtimes.db, "autostartStatus").mockResolvedValue({
       slug: "spark-vllm",
       flag_path: "/home/mcuser/scripts/vllm-autostart.enabled",
@@ -80,7 +80,7 @@ describe("AutostartToggle (via RuntimeCard)", () => {
 
     const toggle = await screen.findByRole("switch", { name: /autostart/i });
     await waitFor(() => expect(toggle).toBeDisabled());
-    expect(toggle).toHaveAttribute("title", expect.stringMatching(/nicht erreichbar/i));
+    expect(toggle).toHaveAttribute("title", expect.stringMatching(/unreachable/i));
   });
 
   it("clicking the toggle calls setAutostart with the flipped value and reflects the confirmed state", async () => {
