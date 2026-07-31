@@ -88,7 +88,7 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     vi.clearAllMocks();
   });
 
-  it("shows Stoppen on a running challenge and calls stop", async () => {
+  it("shows Stop on a running challenge and calls stop", async () => {
     const running = makeChallenge({ status: "generating" });
     vi.mocked(benchApi.challenges.get).mockResolvedValue(running);
     vi.mocked(benchApi.challenges.stop).mockResolvedValue(
@@ -96,14 +96,14 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     );
 
     renderDetail();
-    const stopBtn = await screen.findByRole("button", { name: /Stoppen/ });
+    const stopBtn = await screen.findByRole("button", { name: /Stop/ });
     await userEvent.click(stopBtn);
     await waitFor(() => {
       expect(benchApi.challenges.stop).toHaveBeenCalledWith("ch-1");
     });
     // Running challenges cannot be archived or deleted:
-    expect(screen.queryByRole("button", { name: /Archivieren/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /Challenge löschen/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Archive/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Delete challenge/ })).toBeNull();
   });
 
   it("archives a finished challenge", async () => {
@@ -114,8 +114,8 @@ describe("ChallengeDetail — stop / archive / delete", () => {
 
     renderDetail();
     // No stop button on finished challenges:
-    expect(screen.queryByRole("button", { name: /Stoppen/ })).toBeNull();
-    const archiveBtn = await screen.findByRole("button", { name: /Archivieren/ });
+    expect(screen.queryByRole("button", { name: /Stop/ })).toBeNull();
+    const archiveBtn = await screen.findByRole("button", { name: /Archive/ });
     await userEvent.click(archiveBtn);
     await waitFor(() => {
       expect(benchApi.challenges.archive).toHaveBeenCalledWith("ch-1");
@@ -129,7 +129,7 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     vi.mocked(benchApi.challenges.unarchive).mockResolvedValue(makeChallenge());
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Entarchivieren/ });
+    const btn = await screen.findByRole("button", { name: /Unarchive/ });
     await userEvent.click(btn);
     await waitFor(() => {
       expect(benchApi.challenges.unarchive).toHaveBeenCalledWith("ch-1");
@@ -142,13 +142,13 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     const onBack = vi.fn();
 
     renderDetail(onBack);
-    const trashBtn = await screen.findByRole("button", { name: /Challenge löschen/ });
+    const trashBtn = await screen.findByRole("button", { name: /Delete challenge/ });
     await userEvent.click(trashBtn);
     // Nothing deleted yet — the confirm dialog is up:
     expect(benchApi.challenges.remove).not.toHaveBeenCalled();
-    expect(await screen.findByText("Challenge löschen?")).toBeTruthy();
+    expect(await screen.findByText("Delete challenge?")).toBeTruthy();
 
-    await userEvent.click(screen.getByRole("button", { name: /^Löschen$/ }));
+    await userEvent.click(screen.getByRole("button", { name: /^Delete$/ }));
     await waitFor(() => {
       expect(benchApi.challenges.remove).toHaveBeenCalledWith("ch-1");
       expect(onBack).toHaveBeenCalled();
@@ -159,9 +159,9 @@ describe("ChallengeDetail — stop / archive / delete", () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(makeChallenge({ status: "failed" }));
 
     renderDetail();
-    await userEvent.click(await screen.findByRole("button", { name: /Challenge löschen/ }));
-    await screen.findByText("Challenge löschen?");
-    await userEvent.click(screen.getByRole("button", { name: /Abbrechen/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Delete challenge/ }));
+    await screen.findByText("Delete challenge?");
+    await userEvent.click(screen.getByRole("button", { name: /Cancel/ }));
     expect(benchApi.challenges.remove).not.toHaveBeenCalled();
   });
 });
@@ -220,7 +220,7 @@ describe("ChallengeDetail — edit + recompose", () => {
     vi.clearAllMocks();
   });
 
-  it("'Video neu erstellen' calls recompose when 2 recordings exist", async () => {
+  it("'Recreate video' calls recompose when 2 recordings exist", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         entries: [
@@ -232,7 +232,7 @@ describe("ChallengeDetail — edit + recompose", () => {
     vi.mocked(benchApi.challenges.recompose).mockResolvedValue({ ok: true });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Video neu erstellen/ });
+    const btn = await screen.findByRole("button", { name: /Recreate video/ });
     await userEvent.click(btn);
     await waitFor(() => {
       expect(benchApi.challenges.recompose).toHaveBeenCalledWith("ch-1");
@@ -244,15 +244,15 @@ describe("ChallengeDetail — edit + recompose", () => {
       makeChallenge({ entries: [makeEntry({ video_path: null })] })
     );
     renderDetail();
-    await screen.findByRole("button", { name: /Challenge bearbeiten/ });
-    expect(screen.queryByRole("button", { name: /Video neu erstellen/ })).toBeNull();
+    await screen.findByRole("button", { name: /Edit challenge/ });
+    expect(screen.queryByRole("button", { name: /Recreate video/ })).toBeNull();
   });
 
   // Single-video-branding (2026-07-13): the backend now composes a branded
   // solo frame from just 1 recording, for "single" mode AND for a
   // side_by_side run that degraded to 1 survivor — so the button must show
   // for both, not just the 2-entry side_by_side case.
-  it("'Video neu erstellen' calls recompose for a single-mode challenge with 1 recording", async () => {
+  it("'Recreate video' calls recompose for a single-mode challenge with 1 recording", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         mode: "single",
@@ -262,7 +262,7 @@ describe("ChallengeDetail — edit + recompose", () => {
     vi.mocked(benchApi.challenges.recompose).mockResolvedValue({ ok: true });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Video neu erstellen/ });
+    const btn = await screen.findByRole("button", { name: /Recreate video/ });
     await userEvent.click(btn);
     await waitFor(() => {
       expect(benchApi.challenges.recompose).toHaveBeenCalledWith("ch-1");
@@ -280,10 +280,10 @@ describe("ChallengeDetail — edit + recompose", () => {
       })
     );
     renderDetail();
-    await screen.findByRole("button", { name: /Video neu erstellen/ });
+    await screen.findByRole("button", { name: /Recreate video/ });
   });
 
-  it("labels the composed video 'Benchmark-Video' for single mode, 'Grid-Video' for side_by_side", async () => {
+  it("labels the composed video 'Benchmark Video' for single mode, 'Grid Video' for side_by_side", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({
         mode: "single",
@@ -292,8 +292,8 @@ describe("ChallengeDetail — edit + recompose", () => {
       })
     );
     renderDetail();
-    await screen.findByText("Benchmark-Video");
-    expect(screen.queryByText("Grid-Video")).toBeNull();
+    await screen.findByText("Benchmark Video");
+    expect(screen.queryByText("Grid Video")).toBeNull();
   });
 
   it("edit dialog saves title and changed entry fields only", async () => {
@@ -309,21 +309,21 @@ describe("ChallengeDetail — edit + recompose", () => {
     vi.mocked(benchApi.entries.update).mockResolvedValue(makeEntry());
 
     renderDetail();
-    await userEvent.click(await screen.findByRole("button", { name: /Challenge bearbeiten/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /Edit challenge/ }));
 
     // Change the title:
-    const titleInput = await screen.findByRole("textbox", { name: /Titel/ });
+    const titleInput = await screen.findByRole("textbox", { name: /Title/ });
     await userEvent.clear(titleInput);
     await userEvent.type(titleInput, "Better Title");
 
     // Change entry 1's label + tag; leave entry 2 untouched:
-    const labelInput = screen.getByRole("textbox", { name: /Modell-Name 1/ });
+    const labelInput = screen.getByRole("textbox", { name: /Model name 1/ });
     await userEvent.clear(labelInput);
     await userEvent.type(labelInput, "Qwen 3.6 35B A3B");
     const tagInput = screen.getByRole("textbox", { name: /^Tag 1$/ });
     await userEvent.type(tagInput, "OMP · DGX SPARK");
 
-    await userEvent.click(screen.getByRole("button", { name: /Speichern/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Save/ }));
 
     await waitFor(() => {
       expect(benchApi.challenges.update).toHaveBeenCalledWith("ch-1", {
@@ -359,7 +359,7 @@ describe("ChallengeDetail — grid video spinner", () => {
     );
 
     renderDetail();
-    expect(await screen.findByText("Video wird zusammengesetzt…")).toBeTruthy();
+    expect(await screen.findByText("Composing video…")).toBeTruthy();
     // The stale video must NOT be rendered while composing:
     expect(screen.queryByText("/shared-deliverables/bench-x/grid-old.mp4")).toBeNull();
   });
@@ -369,7 +369,7 @@ describe("ChallengeDetail — grid video spinner", () => {
       makeChallenge({ status: "rendering", entries: [makeEntry()] })
     );
     renderDetail();
-    expect(await screen.findByText("Aufnahmen werden gerendert…")).toBeTruthy();
+    expect(await screen.findByText("Rendering recordings…")).toBeTruthy();
   });
 
   it("shows the composed video once review is reached", async () => {
@@ -384,7 +384,7 @@ describe("ChallengeDetail — grid video spinner", () => {
     expect(
       await screen.findByText("/shared-deliverables/bench-x/grid-abc123.mp4")
     ).toBeTruthy();
-    expect(screen.queryByText("Video wird zusammengesetzt…")).toBeNull();
+    expect(screen.queryByText("Composing video…")).toBeNull();
   });
 
   it("shows a per-entry spinner while an entry is still generating", async () => {
@@ -398,12 +398,12 @@ describe("ChallengeDetail — grid video spinner", () => {
       })
     );
     renderDetail();
-    expect(await screen.findByText("Wird generiert…")).toBeTruthy();
-    expect(await screen.findByText("Wartet…")).toBeTruthy();
+    expect(await screen.findByText("Generating…")).toBeTruthy();
+    expect(await screen.findByText("Waiting…")).toBeTruthy();
   });
 });
 
-// ── "Öffnen" button (view rendered artifact as a real page) ───────────────
+// ── "Open" button (view rendered artifact as a real page) ───────────────
 //
 // Click-based, not a plain <a href>: the URL carries a short-lived,
 // resource-scoped view-token (never the operator's session JWT — that would
@@ -417,7 +417,7 @@ describe("ChallengeDetail — grid video spinner", () => {
 // redirected via tab.location.href (standard "open blank, fill in later"
 // pattern) — a naive `await mint(); window.open(url)` gets silently blocked.
 
-describe("ChallengeDetail — Öffnen button", () => {
+describe("ChallengeDetail — Open button", () => {
   let fakeTab: { location: { href: string }; close: ReturnType<typeof vi.fn>; closed: boolean };
 
   beforeEach(() => {
@@ -438,7 +438,7 @@ describe("ChallengeDetail — Öffnen button", () => {
     });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    const btn = await screen.findByRole("button", { name: /Open/ });
     await userEvent.click(btn);
 
     // Blank tab opened right away — valid windowFeatures token only:
@@ -474,7 +474,7 @@ describe("ChallengeDetail — Öffnen button", () => {
     });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    const btn = await screen.findByRole("button", { name: /Open/ });
     await userEvent.click(btn);
 
     await waitFor(() => {
@@ -495,7 +495,7 @@ describe("ChallengeDetail — Öffnen button", () => {
     vi.mocked(benchApi.entries.viewToken).mockRejectedValue(new Error("boom"));
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Öffnen/ });
+    const btn = await screen.findByRole("button", { name: /Open/ });
     await userEvent.click(btn);
 
     await waitFor(() => {
@@ -505,14 +505,14 @@ describe("ChallengeDetail — Öffnen button", () => {
     expect(fakeTab.location.href).toBe("");
   });
 
-  it("does not render 'Öffnen' when the entry has no artifact yet", async () => {
+  it("does not render 'Open' when the entry has no artifact yet", async () => {
     vi.mocked(benchApi.challenges.get).mockResolvedValue(
       makeChallenge({ entries: [makeEntry({ id: "e-1", artifact_path: null })] })
     );
 
     renderDetail();
     await screen.findByText("Qwen 3.6");
-    expect(screen.queryByRole("button", { name: /Öffnen/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open/ })).toBeNull();
   });
 });
 
@@ -539,7 +539,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     vi.mocked(benchApi.entries.rerender).mockResolvedValue({ ok: true });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    const btn = await screen.findByRole("button", { name: /rerender Qwen 3.6/i });
     await userEvent.click(btn);
 
     await waitFor(() => {
@@ -556,7 +556,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     );
     renderDetail();
     await screen.findByText("Qwen 3.6");
-    expect(screen.queryByRole("button", { name: /neu rendern/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /rerender/i })).toBeNull();
   });
 
   it("hides Rerender while the entry is still generating (no settled status)", async () => {
@@ -574,8 +574,8 @@ describe("ChallengeDetail — per-entry rerender", () => {
       })
     );
     renderDetail();
-    await screen.findByText("Wird generiert…");
-    expect(screen.queryByRole("button", { name: /neu rendern/ })).toBeNull();
+    await screen.findByText("Generating…");
+    expect(screen.queryByRole("button", { name: /rerender/i })).toBeNull();
   });
 
   it("shows Rerender for a failed entry that still has a recorded artifact", async () => {
@@ -594,7 +594,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
       })
     );
     renderDetail();
-    expect(await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: /rerender Qwen 3.6/i })).toBeTruthy();
   });
 
   it("shows the in-button spinner once the challenge flips to rendering after the click", async () => {
@@ -611,7 +611,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     vi.mocked(benchApi.entries.rerender).mockResolvedValue({ ok: true });
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    const btn = await screen.findByRole("button", { name: /rerender Qwen 3.6/i });
     await userEvent.click(btn);
 
     await waitFor(() => {
@@ -620,7 +620,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     // Once the poll picks up 'rendering', the button carries a spinner and
     // is disabled — consistent with the existing isRunning convention.
     await waitFor(() => {
-      const rerenderBtn = screen.getByRole("button", { name: /Qwen 3.6 neu rendern/ });
+      const rerenderBtn = screen.getByRole("button", { name: /rerender Qwen 3.6/i });
       expect(rerenderBtn).toBeDisabled();
     });
   });
@@ -645,7 +645,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     );
 
     renderDetail();
-    const btn = await screen.findByRole("button", { name: /Qwen 3.6 neu rendern/ });
+    const btn = await screen.findByRole("button", { name: /rerender Qwen 3.6/i });
     await userEvent.click(btn);
 
     await waitFor(() => {
@@ -655,7 +655,7 @@ describe("ChallengeDetail — per-entry rerender", () => {
     });
     // Challenge status never left 'review' — the button must not stay
     // spinning after a rejected request.
-    expect(screen.getByRole("button", { name: /Qwen 3.6 neu rendern/ })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: /rerender Qwen 3.6/i })).not.toBeDisabled();
   });
 });
 
@@ -669,7 +669,7 @@ describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
       makeChallenge({ status: "review", actions: [] })
     );
     renderDetail();
-    await screen.findByRole("button", { name: /Draft erstellen/ });
+    await screen.findByRole("button", { name: /Create Draft/ });
     expect(screen.queryByRole("button", { name: "Publish" })).toBeNull();
   });
 
@@ -702,7 +702,7 @@ describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
       expect(request).toHaveBeenCalledWith("/api/v1/catalog/ch-1/publish", { method: "POST" });
     });
     await waitFor(() => {
-      expect(notify.success).toHaveBeenCalledWith("Publish gestartet");
+      expect(notify.success).toHaveBeenCalledWith("Publish started");
     });
   });
 
@@ -761,8 +761,11 @@ describe("ChallengeDetail — extension-point actions (ADR-044)", () => {
     expect(within(dialog).getByText("Wirklich vom Katalog entfernen?")).toBeTruthy();
     expect(request).not.toHaveBeenCalled();
 
-    // Cancel keeps the action unfired
-    await userEvent.click(within(dialog).getByRole("button", { name: "Abbrechen" }));
+    // Cancel keeps the action unfired — the dialog's X close icon shares the
+    // same "Cancel" accessible name (ConfirmDialog, shared component), so
+    // disambiguate by picking the footer button (last in DOM order).
+    const cancelButtons = within(dialog).getAllByRole("button", { name: "Cancel" });
+    await userEvent.click(cancelButtons[cancelButtons.length - 1]);
     expect(request).not.toHaveBeenCalled();
 
     // Re-open and confirm → fires

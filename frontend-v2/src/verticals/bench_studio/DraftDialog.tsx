@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -20,6 +21,8 @@ export function DraftDialog({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useTranslations("bench.draftDialog");
+  const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [text, setText] = useState("");
   const [speedLabels, setSpeedLabels] = useState(false);
@@ -42,26 +45,26 @@ export function DraftDialog({
         include_speed_labels: speedLabels,
       }),
     onSuccess: (res) => {
-      notify.success("Draft in der Inbox — warte auf Freigabe");
+      notify.success(t("notifyCreated"));
       res.warnings.forEach((w) => notify.info(w));
       qc.invalidateQueries({ queryKey: ["bench-challenge", challenge.id] });
       qc.invalidateQueries({ queryKey: ["bench-challenges"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
       onClose();
     },
-    onError: () => notify.error("Draft konnte nicht erstellt werden"),
+    onError: () => notify.error(t("notifyFailed")),
   });
 
   const disabled = text.trim().length === 0 || text.length > MAX || mutation.isPending;
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label="Draft erstellen">
+    <ResponsiveModal open={open} onClose={onClose} aria-label={t("ariaLabel")}>
       <div
         className="flex flex-col gap-4 p-5 rounded-xl w-full"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
       >
         <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          X-Post Draft — {challenge.title}
+          {t("title", { title: challenge.title })}
         </h3>
 
         <div className="flex flex-col gap-1.5">
@@ -69,7 +72,7 @@ export function DraftDialog({
             value={text}
             onChange={(e) => setText(e.target.value)}
             rows={4}
-            placeholder="Tweet-Text …"
+            placeholder={t("textPlaceholder")}
             className="w-full rounded-lg p-3 text-sm resize-none outline-none"
             style={{
               backgroundColor: C.bgDeep,
@@ -88,7 +91,7 @@ export function DraftDialog({
             checked={speedLabels}
             onChange={(e) => setSpeedLabels(e.target.checked)}
           />
-          Speed-Labels ins Grid einblenden (z. B. &quot;DeepSeek · 42 s · 87 tok/s&quot;)
+          {t("speedLabelsCheckbox")}
         </label>
 
         <div className="flex justify-end gap-2">
@@ -97,7 +100,7 @@ export function DraftDialog({
             className="px-3 py-1.5 rounded-lg text-sm"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            Abbrechen
+            {tCommon("cancel")}
           </button>
           <button
             onClick={() => mutation.mutate()}
@@ -105,7 +108,7 @@ export function DraftDialog({
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            Draft erstellen
+            {t("createDraft")}
           </button>
         </div>
       </div>

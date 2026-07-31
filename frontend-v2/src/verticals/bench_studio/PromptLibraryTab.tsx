@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Pencil, Play, Plus, Trash2 } from "lucide-react";
 import { C } from "@/lib/colors";
 import { notify } from "@/lib/notify";
@@ -16,6 +17,8 @@ export function PromptLibraryTab({
 }: {
   onStartChallenge: (tpl: PromptTemplate) => void;
 }) {
+  const t = useTranslations("bench.promptLibrary");
+  const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -36,10 +39,10 @@ export function PromptLibraryTab({
   const removeMutation = useMutation({
     mutationFn: (id: string) => benchApi.promptTemplates.remove(id),
     onSuccess: () => {
-      notify.success("Template gelöscht");
+      notify.success(t("notifyTemplateDeleted"));
       qc.invalidateQueries({ queryKey: ["prompt-templates"] });
     },
-    onError: () => notify.error("Löschen fehlgeschlagen"),
+    onError: () => notify.error(t("notifyDeleteFailed")),
   });
 
   const allTags = useMemo(
@@ -72,7 +75,7 @@ export function PromptLibraryTab({
         <input
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Suche …"
+          placeholder={t("searchPlaceholder")}
           className="flex-1 rounded-lg p-2.5 text-sm outline-none"
           style={{
             backgroundColor: C.bgDeep,
@@ -88,7 +91,7 @@ export function PromptLibraryTab({
           className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium shrink-0"
           style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
         >
-          <Plus size={14} /> Neues Template
+          <Plus size={14} /> {t("newTemplate")}
         </button>
       </div>
 
@@ -116,7 +119,7 @@ export function PromptLibraryTab({
           className="py-12 text-center text-sm rounded-xl"
           style={{ color: C.textSecondary, backgroundColor: C.bgSurface, border: `1px solid ${C.borderSubtle}` }}
         >
-          Keine Templates gefunden.
+          {t("noTemplatesFound")}
         </div>
       )}
 
@@ -137,25 +140,25 @@ export function PromptLibraryTab({
               <div className="flex items-center gap-3 shrink-0">
                 <button
                   onClick={() => onStartChallenge(tpl)}
-                  aria-label="Challenge starten"
+                  aria-label={t("startChallenge")}
                   className="flex items-center gap-1 text-xs font-medium"
                   style={{ color: C.accent }}
                 >
-                  <Play size={12} /> Challenge starten
+                  <Play size={12} /> {t("startChallenge")}
                 </button>
                 <button
                   onClick={() => {
                     setEditing(tpl);
                     setEditorOpen(true);
                   }}
-                  aria-label="Bearbeiten"
+                  aria-label={t("editAria")}
                   style={{ color: C.textSecondary }}
                 >
                   <Pencil size={13} />
                 </button>
                 <button
                   onClick={() => setDeleteTarget(tpl)}
-                  aria-label="Löschen"
+                  aria-label={t("deleteAria")}
                   style={{ color: C.textMuted }}
                 >
                   <Trash2 size={13} />
@@ -173,7 +176,7 @@ export function PromptLibraryTab({
               ))}
               {usage.length > 0 && (
                 <span className="text-xs ml-auto" style={{ color: C.textMuted }}>
-                  {usage.length}× verwendet — zuletzt „{usage[0].title}"
+                  {t("usageCount", { count: usage.length, title: usage[0].title })}
                 </span>
               )}
             </div>
@@ -188,11 +191,11 @@ export function PromptLibraryTab({
       />
       <ConfirmDialog
         open={deleteTarget !== null}
-        kicker="Template löschen"
+        kicker={t("deleteConfirmKicker")}
         title={deleteTarget?.title ?? ""}
-        body={<>Template „{deleteTarget?.title}" wirklich löschen?</>}
-        confirmLabel="Löschen"
-        cancelLabel="Abbrechen"
+        body={<>{t("deleteConfirmBody", { title: deleteTarget?.title ?? "" })}</>}
+        confirmLabel={tCommon("delete")}
+        cancelLabel={tCommon("cancel")}
         loading={removeMutation.isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
@@ -213,6 +216,8 @@ function TemplateEditor({
   onClose: () => void;
   editing: PromptTemplate | null;
 }) {
+  const t = useTranslations("bench.promptLibrary");
+  const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [title, setTitle] = useState(editing?.title ?? "");
   const [body, setBody] = useState(editing?.body ?? "");
@@ -239,11 +244,11 @@ function TemplateEditor({
         : benchApi.promptTemplates.create(payload);
     },
     onSuccess: () => {
-      notify.success(editing ? "Template aktualisiert" : "Template erstellt");
+      notify.success(editing ? t("notifyTemplateUpdated") : t("notifyTemplateCreated"));
       qc.invalidateQueries({ queryKey: ["prompt-templates"] });
       onClose();
     },
-    onError: () => notify.error("Speichern fehlgeschlagen"),
+    onError: () => notify.error(t("notifySaveFailed")),
   });
 
   const inputStyle = {
@@ -253,18 +258,18 @@ function TemplateEditor({
   } as const;
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label="Template-Editor">
+    <ResponsiveModal open={open} onClose={onClose} aria-label={editing ? t("editorTitleEdit") : t("editorTitleNew")}>
       <div
         className="flex flex-col gap-3 p-5 rounded-xl w-full"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
       >
         <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          {editing ? "Template bearbeiten" : "Neues Template"}
+          {editing ? t("editorTitleEdit") : t("editorTitleNew")}
         </h3>
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Titel"
+          placeholder={t("titlePlaceholder")}
           className="rounded-lg p-2.5 text-sm outline-none"
           style={inputStyle}
         />
@@ -272,14 +277,14 @@ function TemplateEditor({
           value={body}
           onChange={(e) => setBody(e.target.value)}
           rows={6}
-          placeholder="Prompt-Text …"
+          placeholder={t("bodyPlaceholder")}
           className="rounded-lg p-3 text-sm resize-none outline-none"
           style={inputStyle}
         />
         <input
           value={tags}
           onChange={(e) => setTags(e.target.value)}
-          placeholder="Tags (kommagetrennt)"
+          placeholder={t("tagsPlaceholder")}
           className="rounded-lg p-2.5 text-sm outline-none"
           style={inputStyle}
         />
@@ -289,7 +294,7 @@ function TemplateEditor({
             className="px-3 py-1.5 rounded-lg text-sm"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            Abbrechen
+            {tCommon("cancel")}
           </button>
           <button
             onClick={() => mutation.mutate()}
@@ -297,7 +302,7 @@ function TemplateEditor({
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            Speichern
+            {tCommon("save")}
           </button>
         </div>
       </div>
