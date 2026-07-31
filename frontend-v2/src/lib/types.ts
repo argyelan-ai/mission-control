@@ -1686,6 +1686,11 @@ export interface Runtime {
    *  uses this purely as a UX hint (disabled state + lock icon). */
   single_instance?: boolean;
   provider: string;
+  /** Vendor group for the UI ("Anthropic Pro/Max", "Ollama Cloud", …),
+   *  derived server-side from the endpoint — same rule as the list order and
+   *  the model catalog. null = no recognised vendor (local vLLM, LM Studio,
+   *  unsloth). Never re-derive this client-side. */
+  provider_label?: string | null;
   endpoint: string;
   healthcheck_path: string;
   container_name: string | null;
