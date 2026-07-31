@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations, useLocale } from "next-intl";
 import {
   Plus,
   Trash2,
@@ -114,6 +115,7 @@ function PriceRow({
   onEdit: () => void;
   onDelete: () => void;
 }) {
+  const t = useTranslations("settings.costs");
   return (
     <tr
       style={{ borderBottom: `1px solid ${C.borderSubtle}` }}
@@ -170,7 +172,7 @@ function PriceRow({
         <div className="flex items-center gap-1">
           <button
             onClick={onEdit}
-            aria-label={`Edit price for ${price.model_pattern}`}
+            aria-label={t("editAria", { pattern: price.model_pattern })}
             className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
             style={{
               color: "var(--color-text-secondary)",
@@ -178,11 +180,11 @@ function PriceRow({
               minWidth: 32,
             }}
           >
-            Edit
+            {t("edit")}
           </button>
           <button
             onClick={onDelete}
-            aria-label={`Delete price for ${price.model_pattern}`}
+            aria-label={t("deleteAria", { pattern: price.model_pattern })}
             className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
             style={{ color: C.error, minHeight: 32, minWidth: 32 }}
           >
@@ -218,6 +220,7 @@ function AddPriceForm({
   onCancel: () => void;
   isLoading: boolean;
 }) {
+  const t = useTranslations("settings.costs");
   const [form, setForm] = useState<ModelPriceCreate>({ ...EMPTY_FORM, ...initial });
 
   const update = (patch: Partial<ModelPriceCreate>) =>
@@ -232,7 +235,7 @@ function AddPriceForm({
         className="text-xs font-semibold uppercase tracking-wider mb-2"
         style={{ color: C.accent }}
       >
-        {initial?.model_pattern ? "Edit Price" : "New Price"}
+        {initial?.model_pattern ? t("editTitle") : t("newTitle")}
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div>
@@ -240,13 +243,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Model Pattern
+            {t("modelPattern")}
           </label>
           <TextInput
             value={form.model_pattern}
             onChange={(v) => update({ model_pattern: v })}
-            placeholder="claude-sonnet-4-* or exact"
-            ariaLabel="Model pattern"
+            placeholder={t("modelPatternPlaceholder")}
+            ariaLabel={t("modelPattern")}
           />
         </div>
         <div>
@@ -254,13 +257,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Note (optional)
+            {t("noteOptional")}
           </label>
           <TextInput
             value={form.note ?? ""}
             onChange={(v) => update({ note: v || null })}
-            placeholder="e.g. local / flat rate"
-            ariaLabel="Note"
+            placeholder={t("notePlaceholder")}
+            ariaLabel={t("note")}
           />
         </div>
       </div>
@@ -295,12 +298,12 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Priority
+            {t("priority")}
           </label>
           <InputNumber
             value={form.priority}
             onChange={(v) => update({ priority: Math.round(v) })}
-            ariaLabel="Priority (higher = more specific)"
+            ariaLabel={t("priorityAria")}
             step="1"
           />
         </div>
@@ -309,13 +312,13 @@ function AddPriceForm({
             className="text-xs font-medium block mb-1"
             style={{ color: "var(--color-text-secondary)" }}
           >
-            Valid From
+            {t("validFrom")}
           </label>
           <input
             type="date"
             value={form.valid_from.slice(0, 10)}
             onChange={(e) => update({ valid_from: e.target.value + "T00:00:00Z" })}
-            aria-label="Valid from (date)"
+            aria-label={t("validFromAria")}
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -332,7 +335,7 @@ function AddPriceForm({
         <button
           onClick={() => onSave(form)}
           disabled={!form.model_pattern || isLoading}
-          aria-label="Save price"
+          aria-label={t("saveAria")}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-[var(--color-on-accent)] cursor-pointer transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`,
@@ -340,11 +343,11 @@ function AddPriceForm({
           }}
         >
           {isLoading ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-          Save
+          {t("save")}
         </button>
         <button
           onClick={onCancel}
-          aria-label="Cancel"
+          aria-label={t("cancel")}
           className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm cursor-pointer"
           style={{
             color: "var(--color-text-muted)",
@@ -352,7 +355,7 @@ function AddPriceForm({
             minHeight: 44,
           }}
         >
-          <X size={14} /> Cancel
+          <X size={14} /> {t("cancel")}
         </button>
       </div>
     </div>
@@ -362,6 +365,10 @@ function AddPriceForm({
 // ── Main component ────────────────────────────────────────────────────────
 
 export function CostPricesTab() {
+  const t = useTranslations("settings.costs");
+  const locale = useLocale();
+  // Same convention as the schedule pages: de renders Swiss number formatting.
+  const numberLocale = locale === "de" ? "de-CH" : "en-GB";
   const qc = useQueryClient();
   const [showAddForm, setShowAddForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -435,15 +442,15 @@ export function CostPricesTab() {
         >
           <div>
             <div className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              Model Price Table
+              {t("title")}
             </div>
             <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-              USD / 1M tokens. Glob pattern: the more specific pattern (higher priority) wins.
+              {t("subtitle")}
             </div>
           </div>
           <button
             onClick={() => setShowAddForm(!showAddForm)}
-            aria-label={showAddForm ? "Close form" : "Add new price"}
+            aria-label={showAddForm ? t("closeFormAria") : t("addAria")}
             className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer transition-all duration-200"
             style={{
               background: showAddForm
@@ -455,7 +462,7 @@ export function CostPricesTab() {
             }}
           >
             {showAddForm ? <X size={12} /> : <Plus size={12} />}
-            {showAddForm ? "Cancel" : "Add"}
+            {showAddForm ? t("cancel") : t("add")}
           </button>
         </div>
 
@@ -484,7 +491,7 @@ export function CostPricesTab() {
             className="px-5 py-10 text-center text-sm"
             style={{ color: "var(--color-text-muted)" }}
           >
-            No prices configured yet.
+            {t("empty")}
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -492,14 +499,14 @@ export function CostPricesTab() {
               <thead>
                 <tr style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                   {[
-                    "Pattern",
-                    "Input $/M",
-                    "Output $/M",
-                    "Cache-R $/M",
-                    "Cache-W $/M",
-                    "Prio",
-                    "From",
-                    "Note",
+                    t("headerPattern"),
+                    t("headerInput"),
+                    t("headerOutput"),
+                    t("headerCacheR"),
+                    t("headerCacheW"),
+                    t("headerPrio"),
+                    t("headerFrom"),
+                    t("headerNote"),
                     "",
                   ].map((h, i) => (
                     <th
@@ -556,7 +563,7 @@ export function CostPricesTab() {
                 className="text-sm font-semibold"
                 style={{ color: "var(--color-text-primary)" }}
               >
-                Detected Models Without a Price
+                {t("unmatchedTitle")}
               </span>
               <span
                 className="text-[10px] px-1.5 py-0.5 rounded tabular-nums"
@@ -566,8 +573,7 @@ export function CostPricesTab() {
               </span>
             </div>
             <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-              These models have events but no matching price entry, so costs are calculated as
-              NULL.
+              {t("unmatchedHint")}
             </p>
           </div>
           <div className="divide-y" style={{ borderColor: C.borderSubtle }}>
@@ -584,13 +590,15 @@ export function CostPricesTab() {
                     {m.model}
                   </code>
                   <div className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    {m.event_count.toLocaleString("de-CH")} events ·{" "}
-                    {m.total_input_tokens.toLocaleString("de-CH")} input tokens
+                    {t("unmatchedStats", {
+                      events: m.event_count.toLocaleString(numberLocale),
+                      tokens: m.total_input_tokens.toLocaleString(numberLocale),
+                    })}
                   </div>
                 </div>
                 <button
                   onClick={() => handleAddFromUnmatched(m)}
-                  aria-label={`Create price for ${m.model}`}
+                  aria-label={t("createPriceAria", { model: m.model })}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium cursor-pointer shrink-0"
                   style={{
                     backgroundColor: C.accentSubtle,
@@ -598,7 +606,7 @@ export function CostPricesTab() {
                     minHeight: 36,
                   }}
                 >
-                  <Plus size={12} /> Create Price
+                  <Plus size={12} /> {t("createPrice")}
                 </button>
               </div>
             ))}
@@ -613,21 +621,21 @@ export function CostPricesTab() {
       >
         <div>
           <div className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Recompute Costs
+            {t("recomputeTitle")}
           </div>
           <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-            Recalculate cost_usd for all events with the current price table (after price changes).
+            {t("recomputeHint")}
           </p>
           {recomputeResult !== null && (
             <p className="text-xs mt-1" style={{ color: C.online }}>
-              {recomputeResult.toLocaleString("de-CH")} events updated.
+              {t("recomputeUpdated", { count: recomputeResult.toLocaleString(numberLocale) })}
             </p>
           )}
         </div>
         <button
           onClick={() => setConfirmRecompute(true)}
           disabled={recomputeMutation.isPending}
-          aria-label="Recompute costs"
+          aria-label={t("recomputeAria")}
           className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           style={{
             backgroundColor: "transparent",
@@ -644,23 +652,19 @@ export function CostPricesTab() {
             <RefreshCw size={14} />
           )}
           {recomputeMutation.isPending
-            ? "Computing..."
+            ? t("computing")
             : recomputeResult !== null
-            ? "Done"
-            : "Recompute Now"}
+            ? t("done")
+            : t("recomputeNow")}
         </button>
       </div>
 
       {/* v3 confirms — replace native window.confirm() (panel register rule 3) */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title="Delete price"
-        body={
-          deleteTarget
-            ? `Really delete the price for "${deleteTarget.model_pattern}"?`
-            : undefined
-        }
-        confirmLabel="Delete"
+        title={t("deleteTitle")}
+        body={deleteTarget ? t("deleteBody", { pattern: deleteTarget.model_pattern }) : undefined}
+        confirmLabel={t("delete")}
         loading={deleteMutation.isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
@@ -672,9 +676,9 @@ export function CostPricesTab() {
       />
       <ConfirmDialog
         open={confirmRecompute}
-        title="Recompute costs"
-        body="Recompute all event costs with the current price table?"
-        confirmLabel="Recompute"
+        title={t("recomputeConfirmTitle")}
+        body={t("recomputeConfirmBody")}
+        confirmLabel={t("recomputeConfirm")}
         danger={false}
         loading={recomputeMutation.isPending}
         onConfirm={() =>

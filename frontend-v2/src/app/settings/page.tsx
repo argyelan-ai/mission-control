@@ -52,42 +52,44 @@ import { C, STATUS_TEXT } from "@/lib/colors";
 
 // ── Section Registry ──────────────────────────────────────────────────────────
 
+// labelKey pattern (docs/i18n.md): keys resolve via t() at the render site —
+// never store translated strings in module constants.
 interface SettingsSection {
   id: string;
-  label: string;
+  labelKey: string;
   icon: LucideIcon;
   adminOnly?: boolean;
 }
 
 const SECTIONS: SettingsSection[] = [
-  { id: "profile", label: "Profile", icon: User },
-  { id: "security", label: "Security", icon: Shield },
-  { id: "autonomy", label: "Autonomy", icon: SlidersHorizontal, adminOnly: true },
-  { id: "intelligence", label: "Intelligence", icon: Zap, adminOnly: true },
-  { id: "apikeys", label: "API Keys", icon: Key, adminOnly: true },
-  { id: "github", label: "GitHub", icon: Github, adminOnly: true },
-  { id: "slack", label: "Slack", icon: MessageSquare, adminOnly: true },
-  { id: "credentials", label: "Credentials", icon: KeyRound, adminOnly: true },
-  { id: "costs", label: "Costs", icon: DollarSign, adminOnly: true },
-  { id: "users", label: "Users", icon: Users, adminOnly: true },
-  { id: "shortcuts", label: "Shortcuts", icon: Keyboard },
-  { id: "about", label: "About", icon: Info },
+  { id: "profile", labelKey: "sections.profile", icon: User },
+  { id: "security", labelKey: "sections.security", icon: Shield },
+  { id: "autonomy", labelKey: "sections.autonomy", icon: SlidersHorizontal, adminOnly: true },
+  { id: "intelligence", labelKey: "sections.intelligence", icon: Zap, adminOnly: true },
+  { id: "apikeys", labelKey: "sections.apikeys", icon: Key, adminOnly: true },
+  { id: "github", labelKey: "sections.github", icon: Github, adminOnly: true },
+  { id: "slack", labelKey: "sections.slack", icon: MessageSquare, adminOnly: true },
+  { id: "credentials", labelKey: "sections.credentials", icon: KeyRound, adminOnly: true },
+  { id: "costs", labelKey: "sections.costs", icon: DollarSign, adminOnly: true },
+  { id: "users", labelKey: "sections.users", icon: Users, adminOnly: true },
+  { id: "shortcuts", labelKey: "sections.shortcuts", icon: Keyboard },
+  { id: "about", labelKey: "sections.about", icon: Info },
 ];
 
 // ── Keyboard shortcuts reference ──────────────────────────────────────────────
 
 const SHORTCUTS = [
-  { keys: ["Cmd", "K"], description: "Open command palette" },
-  { keys: ["Cmd", "B"], description: "Collapse/expand sidebar" },
-  { keys: ["Cmd", "N"], description: "New task" },
-  { keys: ["Cmd", "Shift", "A"], description: "Approve all approvals" },
-  { keys: ["Esc"], description: "Close dialog/palette" },
-  { keys: ["?"], description: "Help (command palette)" },
-  { keys: ["g", "h"], description: "Go to Home" },
-  { keys: ["g", "t"], description: "Go to Tasks" },
-  { keys: ["g", "a"], description: "Go to Agents" },
-  { keys: ["g", "i"], description: "Go to Inbox" },
-  { keys: ["g", "s"], description: "Go to Settings" },
+  { keys: ["Cmd", "K"], descKey: "shortcuts.items.commandPalette" },
+  { keys: ["Cmd", "B"], descKey: "shortcuts.items.sidebar" },
+  { keys: ["Cmd", "N"], descKey: "shortcuts.items.newTask" },
+  { keys: ["Cmd", "Shift", "A"], descKey: "shortcuts.items.approveAll" },
+  { keys: ["Esc"], descKey: "shortcuts.items.closeDialog" },
+  { keys: ["?"], descKey: "shortcuts.items.help" },
+  { keys: ["g", "h"], descKey: "shortcuts.items.goHome" },
+  { keys: ["g", "t"], descKey: "shortcuts.items.goTasks" },
+  { keys: ["g", "a"], descKey: "shortcuts.items.goAgents" },
+  { keys: ["g", "i"], descKey: "shortcuts.items.goInbox" },
+  { keys: ["g", "s"], descKey: "shortcuts.items.goSettings" },
 ];
 
 // ── Timezones ─────────────────────────────────────────────────────────────────
@@ -118,24 +120,26 @@ const TIMEZONES = [
 
 // ── Autonomy Labels ───────────────────────────────────────────────────────────
 
-const AUTONOMY_LABELS: Record<string, { label: string; desc: string }> = {
-  deploy: { label: "Deploy", desc: "Vercel/Cloudflare deployments" },
-  external_post: { label: "External Post", desc: "Social media, emails" },
-  config_change: { label: "Config Change", desc: "Change system configuration" },
-  browser_action: { label: "Browser Action", desc: "Visit websites" },
-  visual_review: { label: "Visual Review", desc: "Screenshot comparisons" },
-  blocker_decision: { label: "Blocker Decision", desc: "Escalate blocked tasks" },
-  question: { label: "Question", desc: "Questions to the operator" },
-  code_change: { label: "Code Change", desc: "Write/change code" },
-  mark_done: { label: "Mark Done", desc: "Mark tasks as done" },
-  dispatch_escalation: { label: "Dispatch Escalation", desc: "Agent not responding" },
-  recovery_failed: { label: "Recovery Failed", desc: "Automatic recovery failed" },
-};
+// Action ids with catalog entries under settings.autonomy.actions.* — unknown
+// backend actions fall back to their raw id instead of a missing-key path.
+const KNOWN_AUTONOMY_ACTIONS = new Set([
+  "deploy",
+  "external_post",
+  "config_change",
+  "browser_action",
+  "visual_review",
+  "blocker_decision",
+  "question",
+  "code_change",
+  "mark_done",
+  "dispatch_escalation",
+  "recovery_failed",
+]);
 
 const LEVEL_OPTIONS = [
-  { value: "L1", label: "Auto", color: C.online },
-  { value: "L2", label: "Notify", color: C.warning },
-  { value: "L3", label: "Approve", color: C.error },
+  { value: "L1", labelKey: "autonomy.levels.L1", color: C.online },
+  { value: "L2", labelKey: "autonomy.levels.L2", color: C.warning },
+  { value: "L3", labelKey: "autonomy.levels.L3", color: C.error },
 ];
 
 // ── Shared Components ─────────────────────────────────────────────────────────
@@ -240,7 +244,7 @@ function SaveButton({
   loading,
   disabled,
   success,
-  label = "Save",
+  label,
 }: {
   onClick: () => void;
   loading: boolean;
@@ -248,6 +252,7 @@ function SaveButton({
   success?: boolean;
   label?: string;
 }) {
+  const t = useTranslations("settings");
   return (
     <button
       onClick={onClick}
@@ -266,7 +271,7 @@ function SaveButton({
       ) : (
         <Save size={14} />
       )}
-      {success ? "Saved" : label}
+      {success ? t("saved") : label ?? t("save")}
     </button>
   );
 }
@@ -397,7 +402,7 @@ function ProfileSection() {
 
   return (
     <SectionMotion sectionKey="profile">
-      <SectionHeader title="Profile" description="Your personal information." />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       {error && <ErrorBanner message={error} />}
 
@@ -440,7 +445,7 @@ function ProfileSection() {
           <select
             value={timezone}
             onChange={(e) => setTimezone(e.target.value)}
-            aria-label="Select timezone"
+            aria-label={t("timezoneAria")}
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -480,7 +485,7 @@ function ProfileSection() {
               {currentUser?.role ?? "viewer"}
             </span>
             <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-              Can only be changed by an admin.
+              {t("roleHint")}
             </span>
           </div>
         </div>
@@ -502,6 +507,7 @@ function ProfileSection() {
 // ── Security Section ──────────────────────────────────────────────────────────
 
 function SecuritySection() {
+  const t = useTranslations("settings.security");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -532,11 +538,11 @@ function SecuritySection() {
   function handleSubmit() {
     setError("");
     if (newPassword.length < 6) {
-      setError("New password must be at least 6 characters long.");
+      setError(t("tooShort"));
       return;
     }
     if (newPassword !== confirmPassword) {
-      setError("Passwords do not match.");
+      setError(t("mismatch"));
       return;
     }
     mutation.mutate();
@@ -549,10 +555,7 @@ function SecuritySection() {
 
   return (
     <SectionMotion sectionKey="security">
-      <SectionHeader
-        title="Security"
-        description="Change your password and manage security settings."
-      />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       {error && <ErrorBanner message={error} />}
 
@@ -561,16 +564,16 @@ function SecuritySection() {
           className="text-sm font-medium"
           style={{ color: "var(--color-text-primary)" }}
         >
-          Change Password
+          {t("changePassword")}
         </h3>
 
         <div>
-          <FieldLabel>Current Password</FieldLabel>
+          <FieldLabel>{t("currentPassword")}</FieldLabel>
           <InputField
             type={showCurrent ? "text" : "password"}
             value={currentPassword}
             onChange={setCurrentPassword}
-            placeholder="Your current password"
+            placeholder={t("currentPasswordPlaceholder")}
             rightElement={
               <button
                 type="button"
@@ -585,12 +588,12 @@ function SecuritySection() {
         </div>
 
         <div>
-          <FieldLabel>New Password</FieldLabel>
+          <FieldLabel>{t("newPassword")}</FieldLabel>
           <InputField
             type={showNew ? "text" : "password"}
             value={newPassword}
             onChange={setNewPassword}
-            placeholder="Min. 6 characters"
+            placeholder={t("newPasswordPlaceholder")}
             rightElement={
               <button
                 type="button"
@@ -605,16 +608,16 @@ function SecuritySection() {
         </div>
 
         <div>
-          <FieldLabel>Confirm New Password</FieldLabel>
+          <FieldLabel>{t("confirmPassword")}</FieldLabel>
           <InputField
             type="password"
             value={confirmPassword}
             onChange={setConfirmPassword}
-            placeholder="Enter again"
+            placeholder={t("confirmPasswordPlaceholder")}
           />
           {confirmPassword && newPassword !== confirmPassword && (
             <p className="text-xs mt-1" style={{ color: C.error }}>
-              Passwords do not match.
+              {t("mismatch")}
             </p>
           )}
         </div>
@@ -624,7 +627,7 @@ function SecuritySection() {
           loading={mutation.isPending}
           disabled={!canSubmit}
           success={success}
-          label="Change Password"
+          label={t("changePassword")}
         />
       </div>
     </SectionMotion>
@@ -634,6 +637,7 @@ function SecuritySection() {
 // ── Autonomy Section (Admin only) ─────────────────────────────────────────────
 
 function AutonomySection() {
+  const t = useTranslations("settings");
   const qc = useQueryClient();
 
   const { data: config } = useQuery({
@@ -659,8 +663,8 @@ function AutonomySection() {
   return (
     <SectionMotion sectionKey="autonomy">
       <SectionHeader
-        title="Autonomy Levels"
-        description="Decide for each action whether agents act autonomously (L1), notify you (L2), or wait for approval (L3)."
+        title={t("autonomy.title")}
+        description={t("autonomy.description")}
       />
 
       <div className="mc-card p-4 sm:p-6" style={cardStyle}>
@@ -672,10 +676,10 @@ function AutonomySection() {
             color: "var(--color-text-muted)",
           }}
         >
-          <span className="text-xs font-medium uppercase tracking-wide">Action</span>
+          <span className="text-xs font-medium uppercase tracking-wide">{t("autonomy.action")}</span>
           {LEVEL_OPTIONS.map((opt) => (
             <span key={opt.value} className="text-xs font-medium text-center" style={{ color: opt.color }}>
-              {opt.label}
+              {t(opt.labelKey)}
             </span>
           ))}
         </div>
@@ -683,7 +687,12 @@ function AutonomySection() {
         {/* Action Rows */}
         <div className="flex flex-col gap-1.5">
           {Object.keys(defaults).map((action) => {
-            const meta = AUTONOMY_LABELS[action] ?? { label: action, desc: "" };
+            const meta = KNOWN_AUTONOMY_ACTIONS.has(action)
+              ? {
+                  label: t(`autonomy.actions.${action}.label`),
+                  desc: t(`autonomy.actions.${action}.desc`),
+                }
+              : { label: action, desc: "" };
             const current = levels[action] ?? defaults[action] ?? "L3";
             const isDefault = !levels[action] || levels[action] === defaults[action];
 
@@ -704,7 +713,7 @@ function AutonomySection() {
                     </span>
                     {!isDefault && (
                       <span className="text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
-                        custom
+                        {t("autonomy.custom")}
                       </span>
                     )}
                   </div>
@@ -727,7 +736,7 @@ function AutonomySection() {
                           }}
                         >
                           {isActive && <Check size={11} />}
-                          <span>{opt.label}</span>
+                          <span>{t(opt.labelKey)}</span>
                         </button>
                       );
                     })}
@@ -744,7 +753,7 @@ function AutonomySection() {
                       {meta.label}
                       {!isDefault && (
                         <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded" style={{ color: C.accent, backgroundColor: C.accentSubtle }}>
-                          custom
+                          {t("autonomy.custom")}
                         </span>
                       )}
                     </div>
@@ -778,7 +787,7 @@ function AutonomySection() {
         </div>
 
         <div className="mt-4 text-xs" style={{ color: "var(--color-text-muted)" }}>
-          L1 = Auto | L2 = Notify | L3 = Approve
+          {t("autonomy.legend")}
         </div>
       </div>
     </SectionMotion>
@@ -788,6 +797,7 @@ function AutonomySection() {
 // ── Intelligence Section (Admin only) ─────────────────────────────────────────
 
 function IntelligenceSection() {
+  const t = useTranslations("settings.intelligence");
   const queryClient = useQueryClient();
   const [config, setConfig] = useState<IntelligenceConfig | null>(null);
   const [success, setSuccess] = useState(false);
@@ -838,10 +848,7 @@ function IntelligenceSection() {
 
   return (
     <SectionMotion sectionKey="intelligence">
-      <SectionHeader
-        title="Intelligence Service"
-        description="Configuration for automatic analysis and LLM distillation."
-      />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       {error && <ErrorBanner message={error} />}
 
@@ -850,10 +857,10 @@ function IntelligenceSection() {
         <div className="mc-card p-5 flex items-center justify-between" style={cardStyle}>
           <div>
             <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-              Service Active
+              {t("serviceActive")}
             </span>
             <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-              Run periodic analysis in the background.
+              {t("serviceActiveHint")}
             </p>
           </div>
           <button
@@ -879,20 +886,20 @@ function IntelligenceSection() {
         {/* Analyse */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Analysis
+            {t("analysis")}
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <FieldLabel>Analysis Interval (seconds)</FieldLabel>
+              <FieldLabel>{t("interval")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.interval_seconds)}
                 onChange={(v) => update({ interval_seconds: Math.max(60, parseInt(v) || 60) })}
               />
-              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>Min. 60s</p>
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{t("intervalHint")}</p>
             </div>
             <div>
-              <FieldLabel>Analysis Window (days)</FieldLabel>
+              <FieldLabel>{t("window")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.analysis_window_days)}
@@ -905,10 +912,10 @@ function IntelligenceSection() {
         {/* Ollama / LLM */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Ollama / LLM
+            {t("ollama")}
           </h3>
           <div>
-            <FieldLabel>Model</FieldLabel>
+            <FieldLabel>{t("model")}</FieldLabel>
             <InputField
               value={config.ollama_model}
               onChange={(v) => update({ ollama_model: v })}
@@ -917,7 +924,7 @@ function IntelligenceSection() {
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <FieldLabel>Temperature</FieldLabel>
+              <FieldLabel>{t("temperature")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.temperature)}
@@ -926,26 +933,26 @@ function IntelligenceSection() {
                   if (!isNaN(n)) update({ temperature: Math.min(1, Math.max(0, n)) });
                 }}
               />
-              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>0.0 - 1.0</p>
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{t("temperatureHint")}</p>
             </div>
             <div>
-              <FieldLabel>Max Tokens</FieldLabel>
+              <FieldLabel>{t("maxTokens")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.max_tokens)}
                 onChange={(v) => update({ max_tokens: Math.min(8192, Math.max(100, parseInt(v) || 100)) })}
               />
-              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>100 - 8192</p>
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{t("maxTokensHint")}</p>
             </div>
           </div>
           <div>
-            <FieldLabel>System Prompt</FieldLabel>
+            <FieldLabel>{t("systemPrompt")}</FieldLabel>
             <textarea
-              aria-label="System prompt"
+              aria-label={t("systemPromptAria")}
               value={config.system_prompt}
               onChange={(e) => update({ system_prompt: e.target.value })}
               rows={6}
-              placeholder="Leave empty for default prompt"
+              placeholder={t("systemPromptPlaceholder")}
               className={cn(inputBaseClasses, "resize-y")}
               style={{
                 backgroundColor: C.bgDeep,
@@ -962,7 +969,7 @@ function IntelligenceSection() {
               }}
             />
             <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
-              Leave empty for default prompt. Analysis data is appended automatically.
+              {t("systemPromptHint")}
             </p>
           </div>
         </div>
@@ -970,11 +977,11 @@ function IntelligenceSection() {
         {/* Schwellenwerte */}
         <div className="mc-card p-5 space-y-4" style={cardStyle}>
           <h3 className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Thresholds
+            {t("thresholds")}
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
-              <FieldLabel>Outlier Multiplier</FieldLabel>
+              <FieldLabel>{t("outlierMultiplier")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.outlier_multiplier)}
@@ -983,10 +990,10 @@ function IntelligenceSection() {
                   if (!isNaN(n) && n > 1) update({ outlier_multiplier: n });
                 }}
               />
-              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>&gt;1.0x</p>
+              <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>{t("outlierHint")}</p>
             </div>
             <div>
-              <FieldLabel>Success Rate Min. (%)</FieldLabel>
+              <FieldLabel>{t("successRateMin")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.success_rate_threshold)}
@@ -997,7 +1004,7 @@ function IntelligenceSection() {
               />
             </div>
             <div>
-              <FieldLabel>Failure Max.</FieldLabel>
+              <FieldLabel>{t("failureMax")}</FieldLabel>
               <InputField
                 type="number"
                 value={String(config.failure_count_threshold)}
@@ -1031,7 +1038,7 @@ function IntelligenceSection() {
             ) : (
               <Play size={14} />
             )}
-            {triggerSuccess ? "Analysis started" : "Analyze Now"}
+            {triggerSuccess ? t("analysisStarted") : t("analyzeNow")}
           </button>
         </div>
       </div>
@@ -1048,6 +1055,8 @@ function ApiKeysSection({
   onNavigateToGithub: () => void;
   onNavigateToSlack: () => void;
 }) {
+  const t = useTranslations("settings.apikeys");
+  const tRoot = useTranslations("settings");
   const queryClient = useQueryClient();
   const [addingKey, setAddingKey] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
@@ -1112,10 +1121,7 @@ function ApiKeysSection({
 
   return (
     <SectionMotion sectionKey="apikeys">
-      <SectionHeader
-        title="API Keys"
-        description="API keys for AI providers and integrations. All keys are stored encrypted. See /runtimes for provider health (LM Studio / Ollama / vLLM / Anthropic live status)."
-      />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       {isLoading ? (
         <div className="flex items-center justify-center py-12">
@@ -1134,7 +1140,7 @@ function ApiKeysSection({
                     </span>
                   </div>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    GitHub credentials are managed in the GitHub section.
+                    {t("githubManagedHint")}
                   </p>
                 </div>
                 <button
@@ -1142,7 +1148,7 @@ function ApiKeysSection({
                   className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
-                  Go to GitHub
+                  {t("goToGithub")}
                   <ExternalLink size={12} />
                 </button>
               </div>
@@ -1159,8 +1165,7 @@ function ApiKeysSection({
                     </span>
                   </div>
                   <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                    Slack tokens are managed in the Slack section, together with the
-                    connection test and the setup guide.
+                    {t("slackManagedHint")}
                   </p>
                 </div>
                 <button
@@ -1168,7 +1173,7 @@ function ApiKeysSection({
                   className="flex items-center gap-1.5 shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium cursor-pointer transition-colors"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
-                  Go to Slack
+                  {t("goToSlack")}
                   <ExternalLink size={12} />
                 </button>
               </div>
@@ -1204,7 +1209,7 @@ function ApiKeysSection({
                           color: isSet ? C.online : "var(--color-text-muted)",
                         }}
                       >
-                        {isSet ? "Set" : "Not set"}
+                        {isSet ? t("set") : t("notSet")}
                       </span>
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
@@ -1232,7 +1237,7 @@ function ApiKeysSection({
                           className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                           style={{ color: "var(--color-text-secondary)" }}
                         >
-                          {isEditing ? "Cancel" : "Change"}
+                          {isEditing ? t("cancel") : t("change")}
                         </button>
                         <button
                           onClick={() => setDeleteTarget(tmpl)}
@@ -1257,7 +1262,7 @@ function ApiKeysSection({
                         }}
                       >
                         {isAdding ? <X size={12} /> : <Plus size={12} />}
-                        {isAdding ? "Cancel" : "Add"}
+                        {isAdding ? t("cancel") : t("add")}
                       </button>
                     )}
                   </div>
@@ -1306,7 +1311,7 @@ function ApiKeysSection({
                       {createMutation.isPending ? (
                         <Loader2 size={12} className="animate-spin" />
                       ) : (
-                        "Save"
+                        tRoot("save")
                       )}
                     </button>
                   </div>
@@ -1322,7 +1327,7 @@ function ApiKeysSection({
                       type={showValue === tmpl.key ? "text" : "password"}
                       value={editValue}
                       onChange={setEditValue}
-                      placeholder="New value..."
+                      placeholder={t("newValuePlaceholder")}
                       rightElement={
                         <button
                           type="button"
@@ -1349,7 +1354,7 @@ function ApiKeysSection({
                       {updateMutation.isPending ? (
                         <Loader2 size={12} className="animate-spin" />
                       ) : (
-                        "Update"
+                        t("update")
                       )}
                     </button>
                   </div>
@@ -1363,9 +1368,9 @@ function ApiKeysSection({
       {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title="Delete API key"
-        body={deleteTarget ? `Really delete ${deleteTarget.label}?` : undefined}
-        confirmLabel="Delete"
+        title={t("deleteTitle")}
+        body={deleteTarget ? t("deleteBody", { label: deleteTarget.label }) : undefined}
+        confirmLabel={t("delete")}
         loading={deleteMutation.isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
@@ -1394,6 +1399,8 @@ function GithubSourceBadge({ source }: { source: "vault" | "env" | null }) {
 }
 
 function GithubSection() {
+  const t = useTranslations("settings.github");
+  const tRoot = useTranslations("settings");
   const queryClient = useQueryClient();
   const [owner, setOwner] = useState("");
   const [ownerTouched, setOwnerTouched] = useState(false);
@@ -1419,12 +1426,12 @@ function GithubSection() {
       setOwnerTouched(false);
       setProbeResult(null);
       setSaveError(null);
-      setSaveMessage("Saved.");
+      setSaveMessage(t("savedMsg"));
       await queryClient.invalidateQueries({ queryKey: ["github-status"] });
     },
     onError: (err) => {
       setSaveMessage(null);
-      setSaveError(err instanceof Error ? err.message : "Failed to save.");
+      setSaveError(err instanceof Error ? err.message : t("saveFailed"));
     },
   });
 
@@ -1441,7 +1448,7 @@ function GithubSection() {
     if (token.trim()) payload.token = token.trim();
 
     if (Object.keys(payload).length === 0) {
-      setSaveMessage("Nothing changed.");
+      setSaveMessage(t("nothingChanged"));
       return;
     }
     saveMutation.mutate(payload);
@@ -1466,7 +1473,7 @@ function GithubSection() {
         owner_type: null,
         rate_limit_remaining: null,
         rate_limit_total: null,
-        error: err instanceof Error ? err.message : "Test connection failed.",
+        error: err instanceof Error ? err.message : t("testFailed"),
       });
     } finally {
       setProbing(false);
@@ -1479,26 +1486,21 @@ function GithubSection() {
     connected === true ? "online" : connected === false ? "error" : "idle";
   const statusLabel =
     connected === true
-      ? "Connected"
+      ? t("statusConnected")
       : connected === false
-      ? "Connection failed"
+      ? t("statusFailed")
       : effective?.configured
-      ? "Not tested"
-      : "Not connected";
+      ? t("statusNotTested")
+      : t("statusNotConnected");
 
   return (
     <SectionMotion sectionKey="github">
-      <SectionHeader
-        title="GitHub"
-        description="Connect a GitHub owner + token so agents can create repos, branch per task, and open pull requests."
-      />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       <p className="text-sm mb-4" style={{ color: "var(--color-text-secondary)" }}>
-        Once connected, MC can create a private repo per project and a branch per task,
-        agents open PRs directly from their workspace, and each repo can carry its own
-        working rules that are included in every dispatch. Manage the registry under{" "}
+        {t("introBefore")}{" "}
         <Link href="/repos" className="underline" style={{ color: C.accent }}>
-          Repos
+          {t("introLink")}
         </Link>
         .
       </p>
@@ -1520,7 +1522,7 @@ function GithubSection() {
             </div>
 
             <div className="flex items-center gap-2 text-xs">
-              <span style={{ color: "var(--color-text-muted)" }}>Owner</span>
+              <span style={{ color: "var(--color-text-muted)" }}>{t("owner")}</span>
               <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>
                 {effective?.owner ?? "—"}
               </span>
@@ -1528,9 +1530,9 @@ function GithubSection() {
             </div>
 
             <div className="flex items-center gap-2 text-xs">
-              <span style={{ color: "var(--color-text-muted)" }}>Token</span>
+              <span style={{ color: "var(--color-text-muted)" }}>{t("token")}</span>
               <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>
-                {effective?.token_set ? "Set ••••" : "Not set"}
+                {effective?.token_set ? t("tokenSet") : t("tokenNotSet")}
               </span>
               <GithubSourceBadge source={effective?.token_source ?? null} />
             </div>
@@ -1538,14 +1540,14 @@ function GithubSection() {
             {connected !== null && (
               <div className="pt-2 mt-1 space-y-1 text-xs" style={{ borderTop: `1px solid ${C.borderSubtle}`, color: "var(--color-text-muted)" }}>
                 {effective?.login && (
-                  <div>authenticated as <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.login}</span></div>
+                  <div>{t("authenticatedAs")} <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.login}</span></div>
                 )}
                 {effective?.owner_type && (
-                  <div>owner type <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.owner_type}</span></div>
+                  <div>{t("ownerType")} <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>{effective.owner_type}</span></div>
                 )}
                 {effective?.rate_limit_total != null && (
                   <div>
-                    rate limit{" "}
+                    {t("rateLimit")}{" "}
                     <span className="font-mono" style={{ color: "var(--color-text-secondary)" }}>
                       {effective.rate_limit_remaining}/{effective.rate_limit_total}
                     </span>
@@ -1566,29 +1568,29 @@ function GithubSection() {
               className="mt-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 transition-all"
               style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-secondary)" }}
             >
-              {probing ? "Testing (up to 15s)…" : "Test connection"}
+              {probing ? t("testing") : t("testConnection")}
             </button>
           </div>
 
           {/* Form */}
           <div className="mc-card p-4 space-y-3" style={cardStyle}>
             <div>
-              <FieldLabel>Owner</FieldLabel>
+              <FieldLabel>{t("owner")}</FieldLabel>
               <InputField
                 value={owner}
                 onChange={(v) => { setOwner(v); setOwnerTouched(true); }}
-                placeholder="your-github-user-or-org"
-                ariaLabel="GitHub owner"
+                placeholder={t("ownerPlaceholder")}
+                ariaLabel={t("ownerAria")}
               />
             </div>
             <div>
-              <FieldLabel>Token</FieldLabel>
+              <FieldLabel>{t("token")}</FieldLabel>
               <InputField
                 type="password"
                 value={token}
                 onChange={setToken}
-                placeholder={status?.token_set ? "unchanged — paste to rotate" : "ghp_..."}
-                ariaLabel="GitHub token"
+                placeholder={status?.token_set ? t("tokenPlaceholderRotate") : "ghp_..."}
+                ariaLabel={t("tokenAria")}
               />
             </div>
 
@@ -1609,7 +1611,7 @@ function GithubSection() {
               className="text-xs px-3 py-2 rounded-lg font-medium cursor-pointer disabled:opacity-40 text-[var(--color-on-accent)]"
               style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})` }}
             >
-              {saveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : "Save"}
+              {saveMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : tRoot("save")}
             </button>
           </div>
         </div>
@@ -1621,6 +1623,7 @@ function GithubSection() {
 // ── Users Section (Admin only) ────────────────────────────────────────────────
 
 function UsersSection() {
+  const t = useTranslations("settings.users");
   const queryClient = useQueryClient();
   const [showCreateForm, setShowCreateForm] = useState(false);
 
@@ -1631,10 +1634,7 @@ function UsersSection() {
 
   return (
     <SectionMotion sectionKey="users">
-      <SectionHeader
-        title="Manage Users"
-        description="Create users, assign roles, and manage accounts."
-      />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       {/* Create button */}
       <div className="flex justify-end mb-4">
@@ -1651,11 +1651,11 @@ function UsersSection() {
         >
           {showCreateForm ? (
             <>
-              <X size={12} /> Cancel
+              <X size={12} /> {t("cancel")}
             </>
           ) : (
             <>
-              <Plus size={12} /> New User
+              <Plus size={12} /> {t("newUser")}
             </>
           )}
         </button>
@@ -1696,6 +1696,7 @@ function UsersSection() {
 // ── Create User Form ──────────────────────────────────────────────────────────
 
 function CreateUserForm({ onCreated }: { onCreated: () => void }) {
+  const t = useTranslations("settings.users");
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -1720,31 +1721,31 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <FieldLabel>Name</FieldLabel>
-          <InputField value={name} onChange={setName} placeholder="Name" />
+          <FieldLabel>{t("name")}</FieldLabel>
+          <InputField value={name} onChange={setName} placeholder={t("namePlaceholder")} />
         </div>
         <div>
-          <FieldLabel>Email</FieldLabel>
-          <InputField value={email} onChange={setEmail} placeholder="user@example.com" />
+          <FieldLabel>{t("email")}</FieldLabel>
+          <InputField value={email} onChange={setEmail} placeholder={t("emailPlaceholder")} />
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <FieldLabel>Password</FieldLabel>
+          <FieldLabel>{t("password")}</FieldLabel>
           <InputField
             type="password"
             value={password}
             onChange={setPassword}
-            placeholder="Min. 6 characters"
+            placeholder={t("passwordPlaceholder")}
           />
         </div>
         <div>
-          <FieldLabel>Role</FieldLabel>
+          <FieldLabel>{t("role")}</FieldLabel>
           <select
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            aria-label="Select role"
+            aria-label={t("roleAria")}
             className={inputBaseClasses}
             style={{
               backgroundColor: C.bgDeep,
@@ -1761,9 +1762,9 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
               e.currentTarget.style.borderColor = "var(--color-border)";
             }}
           >
-            <option value="admin">Admin</option>
-            <option value="operator">Operator</option>
-            <option value="viewer">Viewer</option>
+            <option value="admin">{t("roleAdmin")}</option>
+            <option value="operator">{t("roleOperator")}</option>
+            <option value="viewer">{t("roleViewer")}</option>
           </select>
         </div>
       </div>
@@ -1772,7 +1773,7 @@ function CreateUserForm({ onCreated }: { onCreated: () => void }) {
         onClick={() => mutation.mutate()}
         loading={mutation.isPending}
         disabled={!email.trim() || !name.trim() || password.length < 6}
-        label="Create User"
+        label={t("createUser")}
       />
     </div>
   );
@@ -1787,6 +1788,7 @@ function UserRow({
   user: AuthUser & { is_active: boolean; has_password: boolean; created_at: string };
   onUpdated: () => void;
 }) {
+  const t = useTranslations("settings.users");
   const currentUser = useAppStore((s) => s.currentUser);
   const isSelf = currentUser?.id === user.id;
   const [editing, setEditing] = useState(false);
@@ -1849,7 +1851,7 @@ function UserRow({
                   color: "var(--color-text-muted)",
                 }}
               >
-                You
+                {t("you")}
               </span>
             )}
             {!user.is_active && (
@@ -1860,7 +1862,7 @@ function UserRow({
                   color: C.error,
                 }}
               >
-                Deactivated
+                {t("deactivated")}
               </span>
             )}
             {/* Role badge — inline with name */}
@@ -1873,7 +1875,7 @@ function UserRow({
               </span>
             ) : (
               <select
-                aria-label="Change role"
+                aria-label={t("roleChangeAria")}
                 value={role}
                 onChange={(e) => setRole(e.target.value)}
                 className="rounded px-2 py-1 text-xs outline-none cursor-pointer"
@@ -1883,9 +1885,9 @@ function UserRow({
                   color: "var(--color-text-primary)",
                 }}
               >
-                <option value="admin">Admin</option>
-                <option value="operator">Operator</option>
-                <option value="viewer">Viewer</option>
+                <option value="admin">{t("roleAdmin")}</option>
+                <option value="operator">{t("roleOperator")}</option>
+                <option value="viewer">{t("roleViewer")}</option>
               </select>
             )}
           </div>
@@ -1909,7 +1911,7 @@ function UserRow({
                 {updateMutation.isPending ? (
                   <Loader2 size={12} className="animate-spin" />
                 ) : (
-                  "Save"
+                  t("save")
                 )}
               </button>
               <button
@@ -1921,7 +1923,7 @@ function UserRow({
                 className="px-2 py-1 rounded text-xs cursor-pointer"
                 style={{ color: "var(--color-text-muted)" }}
               >
-                Cancel
+                {t("cancel")}
               </button>
             </>
           ) : (
@@ -1931,7 +1933,7 @@ function UserRow({
                 className="px-2 py-1 rounded text-xs cursor-pointer transition-colors"
                 style={{ color: "var(--color-text-secondary)" }}
               >
-                Edit
+                {t("edit")}
               </button>
               <button
                 onClick={() =>
@@ -1942,7 +1944,7 @@ function UserRow({
                   color: user.is_active ? C.error : C.online,
                 }}
               >
-                {user.is_active ? "Deactivate" : "Activate"}
+                {user.is_active ? t("deactivate") : t("activate")}
               </button>
             </>
           )}
@@ -1962,6 +1964,7 @@ function UserRow({
 // ── Shortcuts Section ─────────────────────────────────────────────────────────
 
 function ShortcutsSection() {
+  const t = useTranslations("settings");
   const stagger = {
     initial: { opacity: 0, y: 8 },
     animate: (i: number) => ({
@@ -1974,15 +1977,15 @@ function ShortcutsSection() {
   return (
     <SectionMotion sectionKey="shortcuts">
       <SectionHeader
-        title="Keyboard Shortcuts"
-        description="Vim-style chord shortcuts: press g followed by a letter"
+        title={t("shortcuts.title")}
+        description={t("shortcuts.description")}
       />
 
       <div className="mc-card p-6" style={cardStyle}>
         <div className="space-y-1">
           {SHORTCUTS.map((shortcut, i) => (
             <motion.div
-              key={shortcut.description}
+              key={shortcut.descKey}
               custom={i}
               initial="initial"
               animate="animate"
@@ -1994,7 +1997,7 @@ function ShortcutsSection() {
               }}
             >
               <span className="text-sm" style={{ color: "var(--color-text-body)" }}>
-                {shortcut.description}
+                {t(shortcut.descKey)}
               </span>
               <div className="flex items-center gap-1">
                 {shortcut.keys.map((key, j) => (
@@ -2032,6 +2035,7 @@ function ShortcutsSection() {
 // ── About Section ─────────────────────────────────────────────────────────────
 
 function AboutSection() {
+  const t = useTranslations("settings.about");
   const { data: version } = useQuery({
     queryKey: ["system-version"],
     queryFn: api.system.version,
@@ -2039,7 +2043,7 @@ function AboutSection() {
   });
   return (
     <SectionMotion sectionKey="about">
-      <SectionHeader title="About" description="System information and links." />
+      <SectionHeader title={t("title")} description={t("description")} />
 
       <div className="space-y-6">
         {/* System info */}
@@ -2048,13 +2052,13 @@ function AboutSection() {
             className="text-sm font-semibold mb-6"
             style={{ color: "var(--color-text-primary)" }}
           >
-            System
+            {t("system")}
           </h3>
           <div className="space-y-4">
             {[
-              { label: "Version", value: version?.current ?? "…" },
-              { label: "Frontend", value: "Next.js 15 + TypeScript + Tailwind v4" },
-              { label: "Backend", value: "FastAPI + PostgreSQL + Redis" },
+              { label: t("version"), value: version?.current ?? "…" },
+              { label: t("frontend"), value: "Next.js 15 + TypeScript + Tailwind v4" },
+              { label: t("backend"), value: "FastAPI + PostgreSQL + Redis" },
             ].map(({ label, value }) => (
               <div key={label} className="flex items-center justify-between">
                 <span className="text-sm" style={{ color: "var(--color-text-secondary)" }}>
@@ -2068,7 +2072,7 @@ function AboutSection() {
             {version?.update_available && version.release_url && (
               <div className="flex items-center justify-between pt-2" style={{ borderTop: "1px solid var(--color-border)" }}>
                 <span className="text-sm" style={{ color: "var(--color-warning)" }}>
-                  Update available: {version.latest}
+                  {t("updateAvailable", { version: version.latest ?? "" })}
                 </span>
                 <a
                   href={version.release_url}
@@ -2077,7 +2081,7 @@ function AboutSection() {
                   className="text-sm font-mono hover:underline"
                   style={{ color: "var(--color-accent)" }}
                 >
-                  Release-Notes →
+                  {t("releaseNotes")}
                 </a>
               </div>
             )}
@@ -2090,7 +2094,7 @@ function AboutSection() {
             className="text-sm font-semibold mb-4"
             style={{ color: "var(--color-text-primary)" }}
           >
-            Links
+            {t("links")}
           </h3>
           <div className="space-y-2">
             <a
@@ -2117,7 +2121,7 @@ function AboutSection() {
           className="text-center py-4 text-xs"
           style={{ color: "var(--color-text-muted)" }}
         >
-          Built with care by the Operator & Claude
+          {t("credits")}
         </div>
       </div>
     </SectionMotion>
@@ -2127,6 +2131,7 @@ function AboutSection() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 function SettingsContent() {
+  const t = useTranslations("settings");
   // Deep-link support: /settings?section=github lets other pages link
   // straight into a section (e.g. the /repos onboarding banner).
   const searchParams = useSearchParams();
@@ -2154,10 +2159,11 @@ function SettingsContent() {
         transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
         className="shrink-0 px-4 py-4 md:px-6"
       >
+        {/* label-sys stays untranslated: P2 mono instrument code (round-6 decision) */}
         <div className="label-sys mb-2">System · Settings</div>
-        <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>Settings</h1>
+        <h1 className="display text-2xl font-semibold" style={{ color: "var(--color-text-primary)" }}>{t("title")}</h1>
         <p className="text-[13px] mt-1" style={{ color: "var(--color-text-secondary)" }}>
-          Profile, security, system configuration
+          {t("subtitle")}
         </p>
         {/* Messmarke: 1px-Linie mit Akzent-Segment — Header-Trenner */}
         <div className="relative mt-4 h-px" style={{ backgroundColor: C.border }}>
@@ -2219,7 +2225,7 @@ function SettingsContent() {
                         color: isActive ? C.accent : undefined,
                       }}
                     />
-                    <span className="whitespace-nowrap">{section.label}</span>
+                    <span className="whitespace-nowrap">{t(section.labelKey)}</span>
                   </button>
                 </li>
               );

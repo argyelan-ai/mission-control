@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_doc_constants import CANONICAL_VERB_SCOPES, CANONICAL_VERBS
+from app.agent_doc_constants import CANONICAL_VERB_SCOPES, CANONICAL_VERBS, CARD_VERBS
 from app.models.agent import Agent
 from app.scopes import ALL_SCOPES, Scope
 from app.services.template_renderer import build_agent_context, render_agent_file
@@ -134,36 +134,48 @@ def test_developer_agent_does_not_see_plugin_admin_verbs():
     assert not present, f"developer card leaks board-lead-only verbs: {present}"
 
 
-def test_board_lead_sees_plugin_admin_verbs():
-    """A board lead (ALL_SCOPES via orchestrator/lead defaults) keeps the
-    admin verbs — the filter must not over-remove."""
-    agent = _make_agent(scopes=ALL_SCOPES, is_board_lead=True, role="orchestrator")
-    card = _card(agent)
-    verbs = _verbs_section(card)
-    missing = {v for v in PLUGIN_ADMIN_VERBS if f"`{v}`" not in verbs}
-    assert not missing, f"board-lead card is missing admin verbs it may call: {missing}"
+def test_plugin_admin_verbs_are_off_every_card_but_still_documented():
+    """Since CARD_VERBS (2026-07-31) the card inlines lifecycle verbs only,
+    so the admin verbs are off *every* card — a board lead's included. That
+    is a relocation, not a removal: this test fails if they vanish from
+    `mc docs tasks` too, which would genuinely take them away from the lead."""
+    from app.services.reference_docs_builder import generate_reference_docs
+
+    lead = _make_agent(scopes=ALL_SCOPES, is_board_lead=True, role="orchestrator")
+    verbs = _verbs_section(_card(lead))
+    on_card = {v for v in PLUGIN_ADMIN_VERBS if f"`{v}`" in verbs}
+    assert not on_card, f"capability verbs are back on the card: {on_card}"
+
+    reference = generate_reference_docs(build_agent_context(lead, agents_on_board=[]))["tasks"]
+    missing = {v for v in PLUGIN_ADMIN_VERBS if v not in reference}
+    assert not missing, f"admin verbs left the card AND the reference — lost entirely: {missing}"
 
 
-def test_empty_scopes_is_backward_compatible_and_sees_every_verb():
+def test_empty_scopes_is_backward_compatible_and_sees_every_card_verb():
     """scopes=[] in the DB means ALL_SCOPES (get_agent_effective_scopes) —
     an agent provisioned before this feature must not silently lose verbs
-    on its next sync-config."""
+    on its next sync-config. Bounded to CARD_VERBS since the card stopped
+    inlining capability verbs; the rest are asserted in the test above."""
     agent = _make_agent(scopes=[])
-    card = _card(agent)
-    verbs = _verbs_section(card)
-    missing = [v for v in CANONICAL_VERBS if f"`{v}`" not in verbs]
+    verbs = _verbs_section(_card(agent))
+    missing = [v for v in CARD_VERBS if f"`{v}`" not in verbs]
     assert not missing, f"scopes=[] card is missing verbs (backward-compat break): {missing}"
 
 
-def test_developer_card_is_smaller_than_board_lead_card():
-    """The measured effect: fewer verbs -> fewer bytes."""
+def test_a_role_without_tasks_write_gets_a_shorter_verb_list():
+    """The scope filter must still bite after the CARD_VERBS narrowing.
+
+    Developer and board lead now render the *same* 17 lifecycle verbs, so
+    comparing those two would prove nothing (the lead's card stays larger
+    only because of its lead-only prose sections). Planner is the honest
+    probe: no tasks:write, so every state-moving verb must drop out."""
     from app.scopes import get_default_scopes, AgentRole
 
-    dev = _make_agent(scopes=get_default_scopes(AgentRole.DEVELOPER))
-    lead = _make_agent(scopes=ALL_SCOPES, is_board_lead=True, role="orchestrator")
-    dev_size = len(_card(dev).encode("utf-8"))
-    lead_size = len(_card(lead).encode("utf-8"))
-    assert dev_size < lead_size, f"developer card ({dev_size}B) is not smaller than lead card ({lead_size}B)"
+    planner = _make_agent(scopes=get_default_scopes(AgentRole.PLANNER), role="planner")
+    verbs = _verbs_section(_card(planner))
+    assert "`ack`" not in verbs, "planner has no tasks:write but still sees `ack`"
+    assert "`thread`" in verbs, "planner has tasks:read and must keep `thread`"
+    assert "`docs`" in verbs, "base verbs must survive every filter"
 
 
 # ── Generic guarantee: nobody loses a verb their scopes allow ────────────
@@ -180,7 +192,10 @@ def test_agent_with_exactly_one_scope_sees_every_verb_gated_by_it(scope):
     card = _card(agent)
     verbs = _verbs_section(card)
 
-    expected = {v for v, s in CANONICAL_VERB_SCOPES.items() if s is None or s == scope}
+    expected = {
+        v for v in CARD_VERBS
+        if CANONICAL_VERB_SCOPES[v] is None or CANONICAL_VERB_SCOPES[v] == scope
+    }
     missing = {v for v in expected if f"`{v}`" not in verbs}
     assert not missing, f"agent with only scope={scope!r} lost verb(s) it may call: {missing}"
 

@@ -189,3 +189,49 @@ async def test_get_runtime_unknown_returns_404(async_session, auth_client):
         resp = await auth_client.get("/api/v1/runtimes/no-such-runtime")
 
     assert resp.status_code == 404
+
+@pytest.mark.asyncio
+async def test_get_runtimes_groups_by_provider(async_session, auth_client):
+    """Same-provider runtimes come back together, whatever ui_order says.
+
+    Catalogue-bound rows are created with the default ui_order 999, so sorting
+    by that alone scattered the list: the two Anthropic models sat apart and the
+    Ollama ones did too (operator report, 2026-07-31). Provider membership is
+    derived from the endpoint, so a newly bound model files itself next to its
+    siblings without anyone maintaining ui_order.
+    """
+    rows = [
+        ("anthropic-opus", "https://api.anthropic.com/v1/messages", 7),
+        ("ollama-glm-51", "https://ollama.com/v1", 6),
+        ("anthropic-opus-5", "https://api.anthropic.com/v1/messages", 999),
+        ("ollama-glm-52", "https://ollama.com/v1", 999),
+        ("local-vllm", "http://192.0.2.10:8000/v1", 3),
+    ]
+    for slug, endpoint, order in rows:
+        async_session.add(Runtime(
+            slug=slug, display_name=slug, runtime_type="openai_compatible",
+            endpoint=endpoint, ui_order=order, enabled=True,
+        ))
+    await async_session.commit()
+
+    with patch(
+        "app.services.runtime_manager.get_runtime_state",
+        side_effect=_stub_state,
+    ):
+        resp = await auth_client.get("/api/v1/runtimes")
+
+    assert resp.status_code == 200, resp.text
+    slugs = [r["slug"] for r in resp.json()["runtimes"]]
+
+    def block(prefix):
+        idx = [i for i, s in enumerate(slugs) if s.startswith(prefix)]
+        return idx
+
+    anthropic, ollama = block("anthropic-"), block("ollama-")
+    assert len(anthropic) == 2 and len(ollama) == 2
+    # Contiguous: no foreign slug wedged between siblings.
+    assert anthropic == list(range(anthropic[0], anthropic[0] + 2)), slugs
+    assert ollama == list(range(ollama[0], ollama[0] + 2)), slugs
+    # The unknown local endpoint keeps its curated order and sorts after the
+    # recognised cloud providers — where it sat before.
+    assert slugs.index("local-vllm") > max(anthropic + ollama), slugs
