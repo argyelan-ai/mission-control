@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Github, Loader2, Lock, Search, Globe2 } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -37,6 +38,7 @@ function extractErrorDetail(err: unknown): string | null {
  * dialog is open (each fetch is a live `gh repo list` call).
  */
 export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
+  const t = useTranslations("repos.import");
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [imported, setImported] = useState<Set<string>>(new Set());
@@ -62,10 +64,10 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
     onSuccess: (repo) => {
       setImported((prev) => new Set(prev).add(repo.full_name));
       queryClient.invalidateQueries({ queryKey: ["repos"] });
-      notify.success(`${repo.full_name} imported`);
+      notify.success(t("importedToast", { name: repo.full_name }));
     },
     onError: (err) => {
-      setErrorMsg(err instanceof Error ? err.message : "Import failed");
+      setErrorMsg(err instanceof Error ? err.message : t("importFailed"));
     },
   });
 
@@ -83,10 +85,10 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
     <ResponsiveModal open={open} onClose={handleClose} aria-labelledby="import-repo-title">
       <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <h2 id="import-repo-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          Import repo
+          {t("title")}
         </h2>
         <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-          Add an existing GitHub repo to the MC registry.
+          {t("subtitle")}
         </p>
       </div>
 
@@ -100,8 +102,8 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
             autoFocus
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search repos..."
-            aria-label="Search repos"
+            placeholder={t("searchPlaceholder")}
+            aria-label={t("searchAria")}
             className="flex-1 bg-transparent text-sm outline-none"
             style={{ color: C.textPrimary }}
           />
@@ -111,7 +113,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
       <div className="px-5 py-3 overflow-y-auto flex-1" style={{ maxHeight: "50vh" }}>
         {isLoading && (
           <div className="flex items-center gap-2 py-6 justify-center text-xs" style={{ color: C.textMuted }}>
-            <Loader2 size={13} className="animate-spin" /> Loading GitHub repos...
+            <Loader2 size={13} className="animate-spin" /> {t("loading")}
           </div>
         )}
 
@@ -122,13 +124,13 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
           >
             <div className="flex items-center gap-2" style={{ color: C.textPrimary }}>
               <Github size={13} style={{ color: C.accent }} />
-              GitHub is not connected yet.
+              {t("notConnectedTitle")}
             </div>
             <p style={{ color: C.textMuted }}>
-              Connect a GitHub owner + token to list and import repos.
+              {t("notConnectedHint")}
             </p>
             <Link href="/settings?section=github" className="w-fit font-medium" style={{ color: C.accent }}>
-              Connect GitHub →
+              {t("connectGithub")}
             </Link>
           </div>
         ) : error ? (
@@ -136,7 +138,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
             className="text-xs px-3 py-2 rounded-lg"
             style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
           >
-            <p>Could not load GitHub repos.</p>
+            <p>{t("loadError")}</p>
             {extractErrorDetail(error) && (
               <p className="mt-1 opacity-80">{extractErrorDetail(error)}</p>
             )}
@@ -146,8 +148,8 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
         {!isLoading && !error && filtered.length === 0 && (
           <div className="text-xs text-center py-6" style={{ color: C.textMuted }}>
             {candidates?.length === 0
-              ? "All repos are already registered."
-              : `No results for "${search}"`}
+              ? t("allRegistered")
+              : t("noResultsFor", { search })}
           </div>
         )}
 
@@ -179,13 +181,13 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
                   )}
                   {c.pushed_at && (
                     <p className="text-[10px] mt-0.5" style={{ color: C.textDim }}>
-                      Last pushed {timeAgo(c.pushed_at)}
+                      {t("lastPushed", { ago: timeAgo(c.pushed_at) })}
                     </p>
                   )}
                 </div>
                 {isImported ? (
                   <span className="inline-flex items-center gap-1 text-xs shrink-0" style={{ color: C.online }}>
-                    <CheckCircle2 size={12} /> Imported
+                    <CheckCircle2 size={12} /> {t("imported")}
                   </span>
                 ) : (
                   <button
@@ -194,7 +196,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
                     className="text-xs px-2.5 py-1 rounded-md cursor-pointer disabled:opacity-50 shrink-0 transition-all"
                     style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
                   >
-                    {isPending ? <Loader2 size={11} className="animate-spin" /> : "Import"}
+                    {isPending ? <Loader2 size={11} className="animate-spin" /> : t("import")}
                   </button>
                 )}
               </li>
@@ -221,7 +223,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
           className="px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
           style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
         >
-          Close
+          {t("close")}
         </button>
       </div>
     </ResponsiveModal>
