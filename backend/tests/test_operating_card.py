@@ -30,13 +30,18 @@ MC_CLI_PATH = REPO_ROOT / "scripts" / "mc-cli"
 if str(MC_CLI_PATH) not in sys.path:
     sys.path.insert(0, str(MC_CLI_PATH))
 
-# 5.5KB. Was 5120 (5KB) until the comm_v2 inbox-reply gate landed: the card's
-# worst case (orchestrator + board lead + claude harness) already sat at 5099
-# bytes, so the 303-byte gate did not fit. The gate closes a live one-way-chat
-# bug (see test_card_inbox_reply_rule.py / PR #181) and is as load-bearing as
-# "ACK first" — the budget exists for context economy against the ~29KB SOUL,
-# and 5.4KB still keeps that 5x saving. Do not spend the new headroom casually.
-CARD_BYTE_BUDGET = 5632  # 5.5KB
+# 5KB. Briefly 5632 (PR #187): the comm_v2 inbox-reply gate needed 303 bytes
+# the card did not have, because its worst case already sat at 5099. Two later
+# changes gave the space back — PR #195 filters verbs by the agent's scopes,
+# and CARD_VERBS (2026-07-31) stopped inlining capability verbs entirely,
+# pointing at `mc docs tasks` instead. Worst case is now 4323 bytes
+# (orchestrator + board lead + claude + comm_v2, measured over the full matrix
+# below), so the original 5KB guard fits again with ~800 bytes of headroom.
+#
+# Restored deliberately rather than left at 5.5KB: a budget the card sits
+# 1.3KB under is not a guard, it is a comment. The gate #187 needed is fully
+# intact — test_card_inbox_reply_rule.py still pins it.
+CARD_BYTE_BUDGET = 5120  # 5KB
 
 ROLES = ["orchestrator", "reviewer", "researcher", "deployer", "tester", "writer", "designer", "developer"]
 

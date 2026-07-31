@@ -24,7 +24,9 @@ from app.constants import (  # re-export — single source, do not duplicate
 __all__ = [
     "CANONICAL_VERBS",
     "CANONICAL_VERB_SCOPES",
+    "CARD_VERBS",
     "filter_verbs_by_scopes",
+    "filter_card_verbs_by_scopes",
     "FORBIDDEN_VERB_PATTERNS",
     "DOC_TOPICS",
     "DocTopicSpec",
@@ -42,6 +44,14 @@ __all__ = [
 # test_agent_docs_contract.py::test_canonical_verbs_are_registered verifies
 # every key here is still a real REGISTRY entry — CI catches drift in
 # either direction (new verb undocumented, or documented verb removed).
+#
+# These descriptions render onto EVERY Operating Card, including agents
+# without comm_v2 — so a description must not name a comm_v2-only tool
+# (`mc inbox`, `mc msg`, `mc ask`) even as a contrast, or it becomes a
+# dangling pointer for the agents that do not have it. Draw those contrasts
+# in the comm_v2-gated SOUL blocks instead, where the tool exists. Guarded
+# by test_card_inbox_reply_rule.py::test_card_rule_is_absent_without_comm_v2;
+# `thread` tripped it exactly this way on 2026-07-31.
 CANONICAL_VERBS: dict[str, str] = {
     "ack": "Confirm dispatch (status -> in_progress) — always your first call.",
     "done": "Set status -> done directly — for the mandatory close, prefer `mc finish`.",
@@ -60,6 +70,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "ask": "Ask a thread-native question — --blocking pauses on the answer.",
     "msg": "Post a plain message/status/decision on the task thread (no questions — use `mc ask`).",
     "inbox": "Pull new thread messages and ack them (on 📬 nudge).",
+    "thread": "Re-read your own task thread — read-only, consumes nothing.",
     "checklist": "Manage the task checklist (add/done/skip/list).",
     "question": "Ask the operator a clarifying question.",
     "help": "Ask another agent for help.",
@@ -117,6 +128,7 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "ask": "chat:write",
     "msg": "chat:write",
     "inbox": None,  # GET /agent/me/inbox — require_agent only (Nudge+Pull)
+    "thread": "tasks:read",  # GET /agent/me/thread — require_scope(TASKS_READ)
     "checklist": "tasks:write",
     "question": "tasks:help",
     "help": "tasks:help",
@@ -157,6 +169,59 @@ def filter_verbs_by_scopes(scopes: list[str] | None) -> dict[str, str]:
         for verb, desc in CANONICAL_VERBS.items()
         if CANONICAL_VERB_SCOPES.get(verb) is None or CANONICAL_VERB_SCOPES[verb] in allowed
     }
+
+
+# ── Which verbs the operating card carries inline ────────────────────────
+#
+# CARD.md is injected into the agent's context on every turn; `mc docs tasks`
+# is fetched only when needed (offline, no network call) and already documents
+# 37 of these verbs. Rendering the full table on the card duplicated that
+# reference at ~2.5 KB — half of the card's 5120-byte budget — and left six
+# bytes of headroom, so the next verb anyone added broke the budget test.
+#
+# The split is by kind, not by taste: the card carries the **task lifecycle**
+# (anything that moves task state, plus talking and re-orienting), while
+# **capability** verbs (vault, memory, telegram, pdf, verify, deliverable,
+# delegate, plugins, …) live in `mc docs tasks`. An agent needs the lifecycle
+# to work at all; it needs a capability only when the task calls for one, and
+# then it can afford a lookup.
+#
+# `done` and `patch` are deliberately off the card even though they are
+# lifecycle: both are documented as "prefer `mc finish`", and putting them
+# in front of every agent on every turn advertises the path we do not want.
+CARD_VERBS: tuple[str, ...] = (
+    "ack",
+    "task-get",
+    "checklist",
+    "comment",
+    "finish",
+    "review",
+    "approve",
+    "reject",
+    "blocked",
+    "failed",
+    "ask",
+    "msg",
+    "inbox",
+    "thread",
+    "recover",
+    "me",
+    "docs",
+)
+
+
+def filter_card_verbs_by_scopes(scopes: list[str] | None) -> tuple[str, ...]:
+    """CARD_VERBS, intersected with what the given effective scopes allow.
+
+    Two independent reasons a verb may be off the card, and both must hold
+    for it to appear: it is lifecycle (CARD_VERBS) *and* the agent's scopes
+    let it call the endpoint (filter_verbs_by_scopes). The intersection is
+    not cosmetic — CARD.md.j2 renders `canonical_verbs[verb]`, and
+    canonical_verbs is itself scope-filtered, so a card verb the agent may
+    not call would raise an undefined-key error at render time.
+    """
+    allowed = filter_verbs_by_scopes(scopes)
+    return tuple(verb for verb in CARD_VERBS if verb in allowed)
 
 
 # ── Forbidden patterns ───────────────────────────────────────────────────
