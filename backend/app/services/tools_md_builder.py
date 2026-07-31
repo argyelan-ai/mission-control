@@ -294,7 +294,7 @@ than actually finished.""")
             parts.append(f"""## Register deliverable (result artifact)
 Register results as a deliverable — visible in the MC UI.
 
-> **Note:** `mc deliverable`, `mc pdf`, and `mc telegram` resolve your current task automatically.
+> **Note:** `mc deliverable`, `mc pdf`, and `mc report` resolve your current task automatically.
 > You don't need to provide a task ID — the backend finds it via spawn_session_key.
 
 ```bash
@@ -773,14 +773,14 @@ console.log(path);
 EOF
 # Read the path from the output (~/.dev-browser/tmp/deploy-check.png)
 
-# Send the screenshot to the operator via Telegram (via mc verify for URLs, or mc deliverable+telegram)
+# Report the screenshot to the operator (via mc verify for URLs, or mc deliverable+report)
 # For live URLs: the visual verification service takes a screenshot + metrics + posts automatically
 mc verify --url https://APP_NAME.your-domain.com --caption "Deploy check: APP_NAME.your-domain.com — [OK/issues]"
 
 # Or for a local screenshot: register as a deliverable (type=screenshot) first,
-# then attach to Telegram with --photo
+# then attach it to the report with --photo
 mc deliverable --type screenshot --title "Deploy check" --path "~/.dev-browser/tmp/deploy-check.png"
-mc telegram "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <deliverable-id>
+mc report "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <deliverable-id>
 ```
 
 ### Workflow summary
@@ -790,7 +790,7 @@ mc telegram "Deploy check: APP_NAME.your-domain.com — [OK/issues]" --photo <de
 4. vercel domains add → link domain
 5. Security check (HTTPS, headers, sensitive paths)
 6. Visual check (screenshot + vision analysis)
-7. Screenshot + report to the operator via Telegram
+7. Screenshot + report to the operator
 8. Record deploy (POST /api/v1/agent/deploy/record)
 """
 
@@ -1437,7 +1437,7 @@ Rules:
         "**If you're unsure** → `mc blocked --blocker-type <type> --question \"What do you need?\"`:\n"
         "```bash\n"
         "mc blocked --blocker-type missing_info --question \"Which tone of voice? formal or casual?\"\n"
-        "# Task status → blocked, the operator gets a Telegram question, you wait for an answer\n"
+        "# Task status → blocked, the operator is notified with your question, you wait for an answer\n"
         "```\n"
         "Valid blocker_type: `missing_info` | `technical_problem` | `decision_needed` | "
         "`permission_needed` | `dependency_blocked` | `other`."
@@ -1446,24 +1446,24 @@ Rules:
     # Chat-write: reporting flow with concrete file examples
     if _has(Scope.CHAT_WRITE):
         flow_blocks.append(
-            "### Flow 2 — report to the operator via Telegram\n\n"
+            "### Flow 2 — report to the operator\n\n"
             "```bash\n"
-            "# Simple text report (Markdown supported)\n"
-            "mc telegram \"**Status** — weather research done. 3 sources cross-validated, details in the deliverable.\"\n"
+            "# Simple text report (Markdown supported) — lands on the operator's configured reports channel\n"
+            "mc report \"**Status** — weather research done. 3 sources cross-validated, details in the deliverable.\"\n"
             "\n"
             "# With an image — --photo takes a DELIVERABLE-UUID (type=screenshot), NOT a file path.\n"
             "# Register the file as a deliverable first, then attach it by ID — max 10 MB\n"
             "mc deliverable --type screenshot --title \"Frontend mockup v2\" --path /deliverables/$TASK_ID/mockup-v2.png\n"
             "# → response contains the deliverable id\n"
-            "mc telegram \"Frontend mockup v2\" --photo <deliverable-uuid>\n"
+            "mc report \"Frontend mockup v2\" --photo <deliverable-uuid>\n"
             "\n"
             "# With a document (PDF, Word, Excel, ZIP) — --file also takes a DELIVERABLE-UUID — max 50 MB\n"
             "# (mc deliverable and mc pdf both return the id in their response)\n"
-            "mc telegram \"Weather report week 17\" --file <deliverable-uuid>\n"
+            "mc report \"Weather report week 17\" --file <deliverable-uuid>\n"
             "\n"
             "# Visual verification (screenshot + metrics of a live URL)\n"
             "mc verify --url https://example.your-domain.com --caption \"Landing page deploy verified\"\n"
-            "# → sidecar takes a Playwright screenshot + LCP/CLS and posts to Telegram automatically\n"
+            "# → sidecar takes a Playwright screenshot + LCP/CLS and reports to the operator automatically\n"
             "```"
         )
 
@@ -1490,11 +1490,11 @@ Rules:
             "\n"
             "# If the operator wants a PDF instead of Markdown: render it via the mc-playwright sidecar\n"
             "mc pdf /deliverables/$TASK_ID/report.md --title \"Weather Report Week 17\"\n"
-            "# → /shared-deliverables/$TASK_ID/weather-report-week-17.pdf (for the Telegram attachment)\n"
+            "# → /shared-deliverables/$TASK_ID/weather-report-week-17.pdf (for the report attachment)\n"
             "\n"
             "# Save intermediate progress (so a container restart → task recovery has context)\n"
             "# `mc checkpoint` no longer exists — the checklist IS the recovery state now.\n"
-            "mc comment progress \"Update — research done, PDF generated, starting Telegram send\"\n"
+            "mc comment progress \"Update — research done, PDF generated, sending the operator report next\"\n"
             "\n"
             "# Maintain the checklist for multi-step tasks\n"
             "mc checklist add \"Research complete\"\n"
@@ -1507,10 +1507,10 @@ Rules:
         flow_blocks.append(
             "### Flow 4 — orchestrate a multi-phase task (delegate + wait for callback)\n\n"
             "```bash\n"
-            "# Parent task is \"Create a weather report with Telegram delivery\" → three phases:\n"
+            "# Parent task is \"Create a weather report with operator delivery\" → three phases:\n"
             "#   1. Research (Researcher)\n"
             "#   2. Content writing + brand skill (Shakespeare)\n"
-            "#   3. PDF + Telegram (FreeCode)\n"
+            "#   3. PDF + operator report (FreeCode)\n"
             "\n"
             "# Delegate phase 1 — atomic: creates a subtask + no longer blocks the parent\n"
             "mc delegate \"Research: 7-day weather Zurich\" \\\n"
@@ -1528,7 +1528,7 @@ Rules:
             "  --description \"Use research deliverable <uuid> from phase 1. Skill: client-brand-skill. Formal address, primary color #005850.\"\n"
             "\n"
             "# Once all phases are done: status → review, final report to the operator\n"
-            "mc telegram \"Multi-phase weather report complete. See deliverables.\" --file /shared-deliverables/$TASK_ID/final.pdf\n"
+            "mc report \"Multi-phase weather report complete. See deliverables.\" --file /shared-deliverables/$TASK_ID/final.pdf\n"
             "mc done\n"
             "```"
         )

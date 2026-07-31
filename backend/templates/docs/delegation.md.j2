@@ -28,15 +28,16 @@ mc delegate "..." --to <agent> --description "..." --no-callback
 separate calls — that produces false-positive operator approvals and skips
 the callback link. Always `mc delegate`.
 
-## Telegram boundary in the subtask brief
+## Report boundary in the subtask brief
 
-`mc telegram` does NOT belong in the worker's acceptance criteria — the
-dispatcher sends the final report. The backend enforces this with 422
-"Subtask cannot send Telegram". In the `--description`, write explicitly:
-> "No `mc telegram` — I ({{ operator_name }}'s orchestrator) consolidate after
+`mc report` does NOT belong in the worker's acceptance criteria — the
+dispatcher sends the final report. The backend enforces this with a 422
+(subtasks cannot send the operator report). In the `--description`, write
+explicitly:
+> "No `mc report` — I ({{ operator_name }}'s orchestrator) consolidate after
 > your `mc finish` and send the final report with file attachment."
 
-Exception: `autonomous_telegram=true` in the brief for long-running watch tasks.
+Exception: `autonomous_report=true` in the brief for long-running watch tasks.
 
 ## No busy-waiting
 

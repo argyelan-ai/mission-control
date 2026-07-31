@@ -26,7 +26,7 @@ mc pdf --title "Q1 Research Report" --file /tmp/report.md \
 ```
 
 Response: `{"ok": true, "deliverable_id": "<uuid>", "path": "...", "bytes": 15000}`.
-Reuse `deliverable_id` directly for `mc telegram --file <deliverable_id>`.
+Reuse `deliverable_id` directly for `mc report --file <deliverable_id>`.
 
 ### Forbidden alternatives (ARM/Rosetta conflict)
 
@@ -58,7 +58,7 @@ doc.save(f"/deliverables/{TASK_ID}/report.docx")
 
 ```bash
 mc deliverable --title "Q1 Report" --type file --path /deliverables/$TASK_ID/report.docx
-mc telegram "Q1 Report attached" --file <uuid>
+mc report "Q1 Report attached" --file <uuid>
 ```
 
 Pandoc fallback: `pandoc report.md -o /deliverables/$TASK_ID/report.docx`
