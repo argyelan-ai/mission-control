@@ -6,8 +6,8 @@ pin the new boundary:
 
 | # | Scenario                                       | Behavior                   |
 |---|------------------------------------------------|----------------------------|
-| 1 | Subtask + autonomous_telegram=False            | mc telegram → 422 (guard)  |
-| 2 | Subtask + autonomous_telegram=True              | mc telegram → 200          |
+| 1 | Subtask + autonomous_report=False            | mc telegram → 422 (guard)  |
+| 2 | Subtask + autonomous_report=True              | mc telegram → 200          |
 | 3 | Standalone task (parent_task_id IS NULL)        | mc telegram → 200          |
 | 4 | Parent task itself (parent IS NULL, has subs)   | mc telegram → 200          |
 """
@@ -57,7 +57,7 @@ async def _setup_subtask(*, autonomous: bool):
             id=subtask_id, board_id=board_id, title="Subtask",
             status="in_progress", assigned_agent_id=agent_id,
             parent_task_id=parent_id,
-            autonomous_telegram=autonomous,
+            autonomous_report=autonomous,
         ))
         await s.commit()
 
@@ -96,7 +96,7 @@ async def _setup_standalone(*, role: str = "researcher"):
 
 
 # ────────────────────────────────────────────────────────────────────
-# 1. Subtask + autonomous_telegram=False → 422
+# 1. Subtask + autonomous_report=False → 422
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio
@@ -114,11 +114,11 @@ async def test_subtask_send_telegram_blocked_by_default(client, fake_redis):
     assert r.status_code == 422, r.text
     body = r.json()
     assert "Subtask sendet kein Telegram" in body["detail"]
-    assert "autonomous_telegram=true" in body["detail"]
+    assert "autonomous_report=true" in body["detail"]
 
 
 # ────────────────────────────────────────────────────────────────────
-# 2. Subtask + autonomous_telegram=True → 200
+# 2. Subtask + autonomous_report=True → 200
 # ────────────────────────────────────────────────────────────────────
 
 @pytest.mark.asyncio

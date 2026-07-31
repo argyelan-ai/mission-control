@@ -543,3 +543,43 @@ async def test_a_non_message_event_is_ignored(async_session, adapter):
     await _ingest(async_session, adapter, message_event(type="app_mention"))
 
     assert await _all_messages(async_session) == []
+
+
+# ── The reports channel is also ours ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_an_answer_in_the_reports_channel_reaches_boss(
+    async_session, adapter, monkeypatch
+):
+    """The operator answers a report right where he read it — #mc-reports.
+    A single-valued gate silently discarded such messages (the exact failure
+    mode of 2026-07-29's channel gate). Both configured channels are ours;
+    a reports-channel root message routes to Boss like any channel root."""
+    boss = await _agent(async_session, "Boss", "boss")
+    monkeypatch.setattr(settings, "slack_reports_channel", "C-REPORTS", raising=False)
+
+    await _ingest(
+        async_session, adapter, message_event(text="danke, passt", channel="C-REPORTS")
+    )
+
+    thread = (
+        await async_session.exec(
+            select(Thread).where(Thread.kind == "dm", Thread.agent_id == boss.id)
+        )
+    ).first()
+    assert thread is not None
+    assert [m.body for m in await _messages(async_session, thread.id)] == ["danke, passt"]
+
+
+@pytest.mark.asyncio
+async def test_a_foreign_channel_is_still_foreign(async_session, adapter, monkeypatch):
+    """Widening the gate to two channels must not widen it to everything."""
+    await _agent(async_session, "Boss", "boss")
+    monkeypatch.setattr(settings, "slack_reports_channel", "C-REPORTS", raising=False)
+
+    await _ingest(
+        async_session, adapter, message_event(text="fremd", channel="C-SOMEWHERE-ELSE")
+    )
+
+    assert await _all_messages(async_session) == []

@@ -134,7 +134,7 @@ async def test_happy_path_telegram_then_done(client, fake_redis):
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
-        assert t.report_sent_to_telegram is True
+        assert t.report_sent_to_operator is True
 
     # Reflection needed before done
     await _add_reflection_comment(data["task_id"], data["agent_id"])
@@ -187,7 +187,7 @@ async def test_gate_blocks_done_when_required_and_not_sent(client, fake_redis):
             headers={"Authorization": f"Bearer {data['token']}"},
         )
     assert r.status_code == 422, r.text
-    assert "mc telegram" in r.json()["detail"]
+    assert "mc report" in r.json()["detail"]
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -247,7 +247,7 @@ async def test_multiple_telegram_calls_idempotent(client, fake_redis):
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
-        assert t.report_sent_to_telegram is True
+        assert t.report_sent_to_operator is True
 
     # Service was called 3x (no early return when the flag is already set)
     assert mock_reports.send.await_count == 3
@@ -293,7 +293,7 @@ async def test_failed_triggers_auto_draft(client, fake_redis):
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
-        assert t.report_sent_to_telegram is True
+        assert t.report_sent_to_operator is True
         assert t.status == "failed"
 
 
@@ -366,7 +366,7 @@ async def test_failed_with_unconfigured_bot_still_transitions(client, fake_redis
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
         assert t.status == "failed"
-        assert t.report_sent_to_telegram is False  # Flag NOT set
+        assert t.report_sent_to_operator is False  # Flag NOT set
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -476,7 +476,7 @@ provision_status="provisioned",
             headers={"Authorization": f"Bearer {rex_token}"},
         )
     assert r.status_code == 422
-    assert "mc telegram" in r.json()["detail"]
+    assert "mc report" in r.json()["detail"]
 
 
 # ────────────────────────────────────────────────────────────────────
@@ -555,7 +555,7 @@ async def test_worker_without_current_task_id_can_set_flag_via_task_id(client, f
     # Flag must be set even without current_task_id
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, task_id)
-        assert t.report_sent_to_telegram is True
+        assert t.report_sent_to_operator is True
 
 
 @pytest.mark.asyncio
@@ -652,7 +652,7 @@ provision_status="provisioned",
         )
 
     assert r.status_code == 422, r.text
-    assert "mc telegram" in r.json()["detail"]
+    assert "mc report" in r.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -707,15 +707,15 @@ async def test_atomic_claim_update_prevents_double_send():
             id=task_id, board_id=board_id, title="Race Task",
             status="in_progress", assigned_agent_id=agent_id,
             report_back_required=True,
-            report_sent_to_telegram=False,
+            report_sent_to_operator=False,
         ))
         await s.commit()
 
         # First claim — should result in rowcount=1
         r1 = await s.exec(
             _sa_update(Task)
-            .where(Task.id == task_id, Task.report_sent_to_telegram == False)  # noqa: E712
-            .values(report_sent_to_telegram=True)
+            .where(Task.id == task_id, Task.report_sent_to_operator == False)  # noqa: E712
+            .values(report_sent_to_operator=True)
         )
         await s.commit()
         assert r1.rowcount == 1, "Erster Claim muss erfolgreich sein"
@@ -723,8 +723,8 @@ async def test_atomic_claim_update_prevents_double_send():
         # Second claim (simulates a parallel request) — should result in rowcount=0
         r2 = await s.exec(
             _sa_update(Task)
-            .where(Task.id == task_id, Task.report_sent_to_telegram == False)  # noqa: E712
-            .values(report_sent_to_telegram=True)
+            .where(Task.id == task_id, Task.report_sent_to_operator == False)  # noqa: E712
+            .values(report_sent_to_operator=True)
         )
         await s.commit()
         assert r2.rowcount == 0, (
@@ -760,7 +760,7 @@ async def test_telegram_send_http_exception_rolls_back_claim(client, fake_redis)
     from app.models.task import Task
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         t = await s.get(Task, data["task_id"])
-        assert t.report_sent_to_telegram is False, (
+        assert t.report_sent_to_operator is False, (
             "Flag muss bei Exception zurueckgerollt werden — sonst kann Agent nie retryen"
         )
 

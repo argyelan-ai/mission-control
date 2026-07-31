@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     # eigener Slack-Thread in diesem einen Kanal. Der Bot muss Mitglied sein
     # (`/invite @Mission Control`), sonst antwortet Slack mit `not_in_channel`.
     slack_default_channel: str = ""
+    # Reports-Kanal (#mc-reports): Kanal-ID (C…) oder #name. Leer = der
+    # Slack-Reports-Backend ist aus und Reports laufen weiter nur ueber den
+    # Telegram-Reports-Bot. Bewusst ein EIGENER Kanal, nicht der Team-Chat:
+    # Reports sind Abschluss-Artefakte, kein Gespraech (services/
+    # operator_reports.py). Der Bot muss Mitglied sein.
+    slack_reports_channel: str = ""
 
     # ── Kanal-Schalter fuer den Team-Chat (ADR-072) ──────────────────────
     # Komma-Liste der aktiven Chat-Kanaele, z.B. "telegram", "slack" oder

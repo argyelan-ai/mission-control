@@ -114,7 +114,7 @@ async def test_round_completion_sends_telegram_report(fake_redis):
 @pytest.mark.asyncio
 async def test_telegram_reports_opt_out_skips_send(fake_redis):
     board = await _mk_board()
-    loop = await _mk_loop(board, max_rounds=1, telegram_reports=False)
+    loop = await _mk_loop(board, max_rounds=1, operator_reports=False)
     await _tick(fake_redis)
     fresh = await _get_loop(loop.id)
     await _set_task_status(fresh.current_task_id, "done")
@@ -320,7 +320,7 @@ async def test_router_accepts_tag_source_with_backlog_tag(auth_client: AsyncClie
     })
     assert r.status_code == 201
     assert r.json()["backlog_tag"] == "polish"
-    assert r.json()["telegram_reports"] is True
+    assert r.json()["operator_reports"] is True
 
 
 @pytest.mark.asyncio

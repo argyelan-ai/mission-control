@@ -45,7 +45,7 @@ class LoopCreate(BaseModel):
     budget_tokens: int | None = None
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool = True
-    telegram_reports: bool = True
+    operator_reports: bool = True
 
 
 class LoopUpdate(BaseModel):
@@ -61,7 +61,7 @@ class LoopUpdate(BaseModel):
     budget_tokens: int | None = None
     max_duration_minutes: int | None = None
     stop_on_backlog_empty: bool | None = None
-    telegram_reports: bool | None = None
+    operator_reports: bool | None = None
 
 
 @router.get("/loops")
