@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useTranslations } from "next-intl";
 import { AlertTriangle, Loader2, Pause, Play, Square, Trash2 } from "lucide-react";
 import { C } from "@/lib/colors";
 import type { Loop } from "@/lib/types";
@@ -17,6 +18,7 @@ interface LoopCardProps {
 }
 
 export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, actionPending }: LoopCardProps) {
+  const t = useTranslations("loops");
   const meta = LOOP_STATUS_META[loop.status];
   const roundNo = loop.current_round_no ?? loop.rounds_completed;
   const hasMax = typeof loop.max_rounds === "number" && loop.max_rounds > 0;
@@ -50,7 +52,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
                 aria-hidden
               />
             )}
-            {meta.label}
+            {t(`status.${meta.labelKey}`)}
           </span>
         </div>
 
@@ -62,7 +64,9 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
 
         <div className="flex items-center gap-2">
           <span className="text-[11px] font-mono shrink-0" style={{ color: C.textMuted }}>
-            {hasMax ? `Round ${roundNo} of ${loop.max_rounds}` : `Round ${roundNo} · open-ended`}
+            {hasMax
+              ? t("card.roundOf", { round: roundNo, max: loop.max_rounds! })
+              : t("card.roundOpenEnded", { round: roundNo })}
           </span>
           {hasMax && (
             <div className="flex-1 h-1 rounded-full overflow-hidden" style={{ background: C.border }}>
@@ -77,7 +81,10 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
         {loop.consecutive_failed_rounds > 0 && (
           <div className="flex items-center gap-1.5 text-[11px]" style={{ color: C.warning }}>
             <AlertTriangle size={11} />
-            {loop.consecutive_failed_rounds} failed round{loop.consecutive_failed_rounds === 1 ? "" : "s"} in a row
+            {t(
+              loop.consecutive_failed_rounds === 1 ? "card.failedRoundSingular" : "card.failedRoundsPlural",
+              { count: loop.consecutive_failed_rounds }
+            )}
           </div>
         )}
       </button>
@@ -86,7 +93,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
         <div className="flex items-center gap-1.5 pt-2 flex-1">
           {canStartLoop(loop.status) && (
             <ActionButton
-              label="Start"
+              label={t("card.start")}
               icon={<Play size={12} />}
               onClick={onStart}
               disabled={actionPending}
@@ -95,7 +102,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
           )}
           {canPauseLoop(loop.status) && (
             <ActionButton
-              label="Pause"
+              label={t("card.pause")}
               icon={<Pause size={12} />}
               onClick={onPause}
               disabled={actionPending}
@@ -104,7 +111,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
           )}
           {canStopLoop(loop.status) && (
             <ActionButton
-              label="Stop"
+              label={t("card.stop")}
               icon={<Square size={12} />}
               onClick={onStop}
               disabled={actionPending}
@@ -116,7 +123,7 @@ export function LoopCard({ loop, onOpen, onStart, onPause, onStop, onDelete, act
         {isLoopInactive(loop.status) && (
           <button
             type="button"
-            aria-label={`Delete ${loop.name}`}
+            aria-label={t("card.deleteAria", { name: loop.name })}
             onClick={onDelete}
             disabled={actionPending}
             className="flex items-center justify-center rounded-md p-1.5 mt-2 cursor-pointer transition-colors disabled:opacity-50"

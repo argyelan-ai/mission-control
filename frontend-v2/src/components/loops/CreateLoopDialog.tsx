@@ -9,6 +9,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ChevronDown, ChevronRight, Loader2, Settings2 } from "lucide-react";
@@ -63,6 +64,7 @@ function defaultForm(boardId: string): FormState {
 }
 
 export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogProps) {
+  const t = useTranslations("loops.create");
   const qc = useQueryClient();
   const activeBoardId = useAppStore((s) => s.activeBoardId);
   const [form, setForm] = useState<FormState>(() => defaultForm(activeBoardId ?? ""));
@@ -96,22 +98,22 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
       onCreated(loop);
       onClose();
     },
-    onError: (e) => setError(e instanceof Error ? e.message : "Failed to create loop"),
+    onError: (e) => setError(e instanceof Error ? e.message : t("errorCreateFailed")),
   });
 
   const handleSubmit = () => {
     setError(null);
-    if (!form.name.trim()) return setError("Name is required.");
-    if (!form.boardId) return setError("Board is required.");
-    if (!form.goal.trim()) return setError("Goal is required.");
+    if (!form.name.trim()) return setError(t("errorNameRequired"));
+    if (!form.boardId) return setError(t("errorBoardRequired"));
+    if (!form.goal.trim()) return setError(t("errorGoalRequired"));
     if (form.backlogSource === "markdown" && !form.backlogMd.trim()) {
-      return setError("Markdown backlog is required when backlog source is a Markdown list.");
+      return setError(t("errorBacklogMarkdownRequired"));
     }
     if (form.backlogSource === "project" && !form.projectId) {
-      return setError("Choose a project to pull the backlog from.");
+      return setError(t("errorProjectRequired"));
     }
     if (form.backlogSource === "tag" && !form.backlogTag.trim()) {
-      return setError("Enter a tag to pull the backlog from.");
+      return setError(t("errorTagRequired"));
     }
 
     const payload: LoopCreate = {
@@ -141,33 +143,33 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
     <ResponsiveModal open={open} onClose={onClose} aria-labelledby="create-loop-title">
       <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <h2 id="create-loop-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          New loop
+          {t("title")}
         </h2>
         <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-          Define a goal and a backlog — the loop runs rounds until it's done or needs you.
+          {t("subtitle")}
         </p>
       </div>
 
       <div className="flex flex-col gap-4 px-5 py-4 overflow-y-auto">
-        <Label text="Name *">
+        <Label text={t("name")}>
           <input
             type="text"
             value={form.name}
             onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-            placeholder="Nightly polish loop"
+            placeholder={t("namePlaceholder")}
             className={inputCls}
             style={inputStyle}
           />
         </Label>
 
-        <Label text="Board *">
+        <Label text={t("board")}>
           <select
             value={form.boardId}
             onChange={(e) => setForm((p) => ({ ...p, boardId: e.target.value, projectId: "" }))}
             className={inputCls}
             style={inputStyle}
           >
-            <option value="">— choose a board —</option>
+            <option value="">{t("chooseBoard")}</option>
             {boards.map((b: Board) => (
               <option key={b.id} value={b.id}>
                 {b.name}
@@ -176,38 +178,38 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
           </select>
         </Label>
 
-        <Label text="Goal *">
+        <Label text={t("goal")}>
           <textarea
             value={form.goal}
             onChange={(e) => setForm((p) => ({ ...p, goal: e.target.value }))}
             rows={3}
-            placeholder="Drive down open bugs on the report engine until the backlog is empty."
+            placeholder={t("goalPlaceholder")}
             className="w-full resize-none rounded-md px-3 py-2 text-sm outline-none"
             style={inputStyle}
           />
         </Label>
 
-        <Label text="Backlog source *">
+        <Label text={t("backlogSourceLabel")}>
           <select
             value={form.backlogSource}
             onChange={(e) => setForm((p) => ({ ...p, backlogSource: e.target.value as LoopBacklogSource }))}
             className={inputCls}
             style={inputStyle}
           >
-            <option value="markdown">Markdown list</option>
-            <option value="project">Project tasks</option>
-            <option value="tag">Tag</option>
-            <option value="open_ended">Open-ended</option>
+            <option value="markdown">{t("backlogSourceMarkdown")}</option>
+            <option value="project">{t("backlogSourceProject")}</option>
+            <option value="tag">{t("backlogSourceTag")}</option>
+            <option value="open_ended">{t("backlogSourceOpenEnded")}</option>
           </select>
         </Label>
 
         {form.backlogSource === "markdown" && (
-          <Label text="Backlog (Markdown) *">
+          <Label text={t("backlogMarkdown")}>
             <textarea
               value={form.backlogMd}
               onChange={(e) => setForm((p) => ({ ...p, backlogMd: e.target.value }))}
               rows={5}
-              placeholder={"- Fix flaky test in checkout flow\n- Tighten empty states on /reports\n- Add retry to webhook delivery"}
+              placeholder={t("backlogMarkdownPlaceholder")}
               className="w-full resize-none rounded-md px-3 py-2 text-sm font-mono outline-none"
               style={inputStyle}
             />
@@ -215,7 +217,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
         )}
 
         {form.backlogSource === "project" && (
-          <Label text="Project *">
+          <Label text={t("project")}>
             <select
               value={form.projectId}
               onChange={(e) => setForm((p) => ({ ...p, projectId: e.target.value }))}
@@ -223,7 +225,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
               style={inputStyle}
               disabled={!form.boardId}
             >
-              <option value="">— choose a project —</option>
+              <option value="">{t("chooseProject")}</option>
               {projects.map((proj) => (
                 <option key={proj.id} value={proj.id}>
                   {proj.name}
@@ -234,12 +236,12 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
         )}
 
         {form.backlogSource === "tag" && (
-          <Label text="Tag *">
+          <Label text={t("tag")}>
             <input
               type="text"
               value={form.backlogTag}
               onChange={(e) => setForm((p) => ({ ...p, backlogTag: e.target.value }))}
-              placeholder="polish"
+              placeholder={t("tagPlaceholder")}
               className={inputCls}
               style={inputStyle}
             />
@@ -259,7 +261,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
           >
             {advancedExpanded ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
             <Settings2 size={12} />
-            Advanced
+            {t("advanced")}
           </button>
           <AnimatePresence initial={false}>
             {advancedExpanded && (
@@ -272,7 +274,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
               >
                 <div className="flex flex-col gap-3 pt-2">
                   <div className="grid grid-cols-2 gap-3">
-                    <Label text="Max rounds">
+                    <Label text={t("maxRounds")}>
                       <input
                         type="number"
                         min={1}
@@ -282,30 +284,30 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Budget (USD, optional)">
+                    <Label text={t("budgetUsd")}>
                       <input
                         type="number"
                         min={0}
                         step="0.5"
-                        placeholder="e.g. 5"
+                        placeholder={t("budgetUsdPlaceholder")}
                         value={form.budgetUsd}
                         onChange={(e) => setForm((p) => ({ ...p, budgetUsd: e.target.value }))}
                         className={inputCls}
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Budget (tokens, optional)">
+                    <Label text={t("budgetTokens")}>
                       <input
                         type="number"
                         min={0}
-                        placeholder="e.g. 500000"
+                        placeholder={t("budgetTokensPlaceholder")}
                         value={form.budgetTokens}
                         onChange={(e) => setForm((p) => ({ ...p, budgetTokens: e.target.value }))}
                         className={inputCls}
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Pause after failed rounds">
+                    <Label text={t("pauseAfterFailedRounds")}>
                       <input
                         type="number"
                         min={1}
@@ -317,7 +319,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Human gate every N rounds (0 = never)">
+                    <Label text={t("humanGateEvery")}>
                       <input
                         type="number"
                         min={0}
@@ -329,13 +331,13 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                         style={inputStyle}
                       />
                     </Label>
-                    <Label text="Max duration (minutes, optional)">
+                    <Label text={t("maxDuration")}>
                       <input
                         type="number"
                         min={1}
                         value={form.maxDurationMinutes}
                         onChange={(e) => setForm((p) => ({ ...p, maxDurationMinutes: e.target.value }))}
-                        placeholder="No limit"
+                        placeholder={t("noLimit")}
                         className={inputCls}
                         style={inputStyle}
                       />
@@ -349,7 +351,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                       className="h-3.5 w-3.5 cursor-pointer"
                       style={{ accentColor: C.accent }}
                     />
-                    Stop when the backlog is empty
+                    {t("stopOnEmptyBacklog")}
                   </label>
                   <label className="flex cursor-pointer items-center gap-2 text-sm" style={{ color: C.textSecondary }}>
                     <input
@@ -359,7 +361,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
                       className="h-3.5 w-3.5 cursor-pointer"
                       style={{ accentColor: C.accent }}
                     />
-                    Send a Telegram report after every round
+                    {t("telegramReports")}
                   </label>
                 </div>
               </motion.div>
@@ -389,7 +391,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
           className="rounded-md px-3 py-1.5 text-sm cursor-pointer transition"
           style={{ border: `1px solid ${C.borderActive}`, color: C.textSecondary }}
         >
-          Cancel
+          {t("cancel")}
         </button>
         <button
           type="button"
@@ -399,7 +401,7 @@ export function CreateLoopDialog({ open, onClose, onCreated }: CreateLoopDialogP
           style={{ background: C.accent, color: C.textPrimary }}
         >
           {createMutation.isPending && <Loader2 size={14} className="animate-spin" />}
-          Create loop
+          {t("createLoop")}
         </button>
       </div>
     </ResponsiveModal>
