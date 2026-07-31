@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -50,6 +51,7 @@ function DeleteRepoDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const t = useTranslations("repos.detail");
   const queryClient = useQueryClient();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -57,7 +59,7 @@ function DeleteRepoDialog({
     mutationFn: () => api.repos.remove(repo.id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["repos"] });
-      notify.success(`${repo.full_name} removed`);
+      notify.success(t("removedToast", { name: repo.full_name }));
       onDeleted();
     },
     // 409 = projects still linked — show the backend text instead of failing silently
@@ -68,13 +70,13 @@ function DeleteRepoDialog({
     <ResponsiveModal open={open} onClose={onClose} aria-labelledby="delete-repo-title">
       <div className="px-5 pt-4 pb-3 shrink-0" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
         <h2 id="delete-repo-title" className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          Delete {repo.full_name}?
+          {t("deleteTitle", { name: repo.full_name })}
         </h2>
       </div>
 
       <div className="px-5 py-3">
         <p className="text-xs" style={{ color: C.textSecondary }}>
-          Removes only the MC registry — GitHub is untouched.
+          {t("deleteBody")}
         </p>
         {errorMsg && (
           <div
@@ -96,7 +98,7 @@ function DeleteRepoDialog({
           className="px-3.5 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
           style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
         >
-          Cancel
+          {t("cancel")}
         </button>
         <button
           onClick={() => { setErrorMsg(null); deleteMutation.mutate(); }}
@@ -105,7 +107,7 @@ function DeleteRepoDialog({
           style={{ background: C.error, color: C.textPrimary }}
         >
           {deleteMutation.isPending ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
-          Delete
+          {t("delete")}
         </button>
       </div>
     </ResponsiveModal>
@@ -115,6 +117,7 @@ function DeleteRepoDialog({
 // ── Project link picker ───────────────────────────────────────────────────────
 
 function LinkProjectPicker({ repo, onClose }: { repo: Repo; onClose: () => void }) {
+  const t = useTranslations("repos.detail.picker");
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
 
@@ -141,7 +144,7 @@ function LinkProjectPicker({ repo, onClose }: { repo: Repo; onClose: () => void 
       queryClient.invalidateQueries({ queryKey: ["repo", repo.id] });
       queryClient.invalidateQueries({ queryKey: ["repos"] });
     },
-    onError: () => notify.error("Link failed"),
+    onError: () => notify.error(t("linkFailed")),
   });
 
   const isLoading = projectQueries.some((q) => q.isLoading);
@@ -157,24 +160,24 @@ function LinkProjectPicker({ repo, onClose }: { repo: Repo; onClose: () => void 
           autoFocus
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search projects..."
-          aria-label="Search projects"
+          placeholder={t("searchPlaceholder")}
+          aria-label={t("searchAria")}
           className="flex-1 bg-transparent text-xs outline-none"
           style={{ color: C.textPrimary }}
         />
-        <button onClick={onClose} aria-label="Close" className="cursor-pointer">
+        <button onClick={onClose} aria-label={t("closeAria")} className="cursor-pointer">
           <X size={12} style={{ color: C.textMuted }} />
         </button>
       </div>
       <div className="max-h-[180px] overflow-y-auto">
         {isLoading && (
           <div className="flex items-center gap-2 px-3 py-3 text-xs" style={{ color: C.textMuted }}>
-            <Loader2 size={11} className="animate-spin" /> Loading projects...
+            <Loader2 size={11} className="animate-spin" /> {t("loading")}
           </div>
         )}
         {!isLoading && candidates.length === 0 && (
           <div className="px-3 py-3 text-xs" style={{ color: C.textMuted }}>
-            No project found
+            {t("noneFound")}
           </div>
         )}
         {candidates.map((p) => (
@@ -206,6 +209,7 @@ export function RepoDetailPanel({
   open: boolean;
   onClose: () => void;
 }) {
+  const t = useTranslations("repos.detail");
   const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [rulesMd, setRulesMd] = useState("");
@@ -241,36 +245,36 @@ export function RepoDetailPanel({
       setSavedMsg(true);
       setTimeout(() => setSavedMsg(false), 2500);
     },
-    onError: () => notify.error("Save failed"),
+    onError: () => notify.error(t("saveFailed")),
   });
 
   const syncMutation = useMutation({
     mutationFn: () => api.repos.sync(repo!.id),
-    onSuccess: () => { invalidate(); notify.success("Metadata synced"); },
-    onError: () => notify.error("Sync failed"),
+    onSuccess: () => { invalidate(); notify.success(t("syncSuccess")); },
+    onError: () => notify.error(t("syncFailed")),
   });
 
   const archiveMutation = useMutation({
     mutationFn: () => api.repos.update(repo!.id, { is_active: !repo!.is_active }),
     onSuccess: () => invalidate(),
-    onError: () => notify.error("Action failed"),
+    onError: () => notify.error(t("actionFailed")),
   });
 
   const unlinkMutation = useMutation({
     mutationFn: (projectId: string) => api.repos.unlinkProject(repo!.id, projectId),
     onSuccess: () => invalidate(),
-    onError: () => notify.error("Unlink failed"),
+    onError: () => notify.error(t("unlinkFailed")),
   });
 
   const isDirty = !!repo && (description !== (repo.description ?? "") || rulesMd !== (repo.rules_md ?? ""));
 
   return (
     <>
-      <SlideOverPanel open={open} onClose={onClose} title={repo?.full_name ?? "Repo"} desktopWidth="480px">
+      <SlideOverPanel open={open} onClose={onClose} title={repo?.full_name ?? t("repoFallbackTitle")} desktopWidth="480px">
         {!repo ? (
           <div className="flex items-center gap-2 p-5" style={{ color: C.textMuted }}>
             <Loader2 size={13} className="animate-spin" />
-            <span className="text-xs">Loading repo...</span>
+            <span className="text-xs">{t("loading")}</span>
           </div>
         ) : (
           <div className="p-5 flex flex-col gap-5">
@@ -285,7 +289,7 @@ export function RepoDetailPanel({
                   style={{ color: C.accent }}
                 >
                   <ExternalLink size={11} />
-                  Open on GitHub
+                  {t("openOnGithub")}
                 </a>
                 <button
                   onClick={() => syncMutation.mutate()}
@@ -296,21 +300,23 @@ export function RepoDetailPanel({
                   {syncMutation.isPending
                     ? <Loader2 size={11} className="animate-spin" />
                     : <RefreshCw size={11} />}
-                  Sync
+                  {t("sync")}
                 </button>
               </div>
               <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-xs" style={{ color: C.textMuted }}>
-                <span>Visibility</span>
+                <span>{t("visibility")}</span>
                 <span style={{ color: C.textSecondary }}>{repo.visibility}</span>
-                <span>Branch</span>
+                <span>{t("branch")}</span>
                 <span className="font-mono" style={{ color: C.textSecondary }}>{repo.default_branch}</span>
-                <span>Source</span>
-                <span style={{ color: C.textSecondary }}>{repo.source === "imported" ? "Imported" : "MC"}</span>
-                <span>Created</span>
-                <span style={{ color: C.textSecondary }}>{timeAgo(repo.created_at)}</span>
-                <span>Last synced</span>
+                <span>{t("source")}</span>
                 <span style={{ color: C.textSecondary }}>
-                  {repo.last_synced_at ? timeAgo(repo.last_synced_at) : "never"}
+                  {repo.source === "imported" ? t("sourceImported") : t("sourceMc")}
+                </span>
+                <span>{t("created")}</span>
+                <span style={{ color: C.textSecondary }}>{timeAgo(repo.created_at)}</span>
+                <span>{t("lastSynced")}</span>
+                <span style={{ color: C.textSecondary }}>
+                  {repo.last_synced_at ? timeAgo(repo.last_synced_at) : t("never")}
                 </span>
               </div>
             </div>
@@ -318,7 +324,7 @@ export function RepoDetailPanel({
             {/* Description */}
             <div className="flex flex-col gap-1">
               <label htmlFor="repo-description" className="text-xs" style={{ color: C.textMuted }}>
-                Description
+                {t("description")}
               </label>
               <textarea
                 id="repo-description"
@@ -333,17 +339,17 @@ export function RepoDetailPanel({
             {/* Rules editor */}
             <div className="flex flex-col gap-1">
               <label htmlFor="repo-rules" className="text-xs font-medium" style={{ color: C.textSecondary }}>
-                Working rules (Markdown)
+                {t("rulesLabel")}
               </label>
               <p className="text-xs mb-1" style={{ color: C.textDim }}>
-                These rules are included in every agent dispatch for this repo.
+                {t("rulesHint")}
               </p>
               <textarea
                 id="repo-rules"
                 value={rulesMd}
                 onChange={(e) => setRulesMd(e.target.value)}
                 rows={12}
-                placeholder={"# Working rules\n\n- Branch convention...\n- Commit style...\n- Review requirements..."}
+                placeholder={t("rulesPlaceholder")}
                 className="text-xs font-mono px-3 py-2 rounded-lg outline-none resize-y leading-relaxed"
                 style={{ background: C.bgDeep, border: `1px solid ${C.border}`, color: C.textPrimary }}
               />
@@ -355,10 +361,10 @@ export function RepoDetailPanel({
                   style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
                 >
                   {saveMutation.isPending && <Loader2 size={11} className="animate-spin" />}
-                  Save
+                  {t("save")}
                 </button>
                 {savedMsg && (
-                  <span className="text-xs" style={{ color: C.online }}>Saved</span>
+                  <span className="text-xs" style={{ color: C.online }}>{t("saved")}</span>
                 )}
               </div>
             </div>
@@ -367,7 +373,7 @@ export function RepoDetailPanel({
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-medium" style={{ color: C.textSecondary }}>
-                  Linked projects
+                  {t("linkedProjects")}
                 </span>
                 <button
                   onClick={() => setPickerOpen((v) => !v)}
@@ -375,11 +381,11 @@ export function RepoDetailPanel({
                   style={{ color: C.accent }}
                 >
                   <Link2 size={11} />
-                  Link
+                  {t("link")}
                 </button>
               </div>
               {repo.linked_projects.length === 0 && !pickerOpen && (
-                <span className="text-xs" style={{ color: C.textDim }}>No projects linked</span>
+                <span className="text-xs" style={{ color: C.textDim }}>{t("noProjectsLinked")}</span>
               )}
               <div className="flex flex-col gap-1.5">
                 {repo.linked_projects.map((p) => (
@@ -395,8 +401,8 @@ export function RepoDetailPanel({
                     <button
                       onClick={() => unlinkMutation.mutate(p.id)}
                       disabled={unlinkMutation.isPending}
-                      title="Unlink"
-                      aria-label={`Unlink ${p.name}`}
+                      title={t("unlink")}
+                      aria-label={t("unlinkAria", { name: p.name })}
                       className="shrink-0 cursor-pointer disabled:opacity-50"
                       style={{ color: C.textMuted }}
                     >
@@ -422,7 +428,7 @@ export function RepoDetailPanel({
                 {archiveMutation.isPending
                   ? <Loader2 size={11} className="animate-spin" />
                   : repo.is_active ? <Archive size={11} /> : <ArchiveRestore size={11} />}
-                {repo.is_active ? "Archive" : "Reactivate"}
+                {repo.is_active ? t("archive") : t("reactivate")}
               </button>
               <button
                 onClick={() => setDeleteOpen(true)}
@@ -430,7 +436,7 @@ export function RepoDetailPanel({
                 style={{ background: `${C.error}14`, border: `1px solid ${C.error}33`, color: STATUS_TEXT.error }}
               >
                 <Trash2 size={11} />
-                Delete
+                {t("delete")}
               </button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Save, Undo2, Loader2, Check, Zap } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent } from "@/lib/types";
@@ -19,6 +20,7 @@ interface SkillAssignment {
 }
 
 export function SkillMatrix() {
+  const t = useTranslations("skills.skillMatrix");
   const qc = useQueryClient();
   const [dirty, setDirty] = useState<SkillAssignment>({});
   const [saving, setSaving] = useState(false);
@@ -89,9 +91,9 @@ export function SkillMatrix() {
     onSuccess: () => {
       setDirty({});
       qc.invalidateQueries({ queryKey: ["agents-all"] });
-      notify.success("Skills saved");
+      notify.success(t("saved"));
     },
-    onError: () => notify.error("Failed to save"),
+    onError: () => notify.error(t("saveFailed")),
   });
 
   function handleSave() {
@@ -102,7 +104,7 @@ export function SkillMatrix() {
   if (skillsLoading || agentsLoading) {
     return (
       <div className="flex items-center gap-2 text-xs py-8" style={{ color: "var(--color-text-muted)" }}>
-        <Loader2 size={12} className="animate-spin" /> Loading skills + agents...
+        <Loader2 size={12} className="animate-spin" /> {t("loading")}
       </div>
     );
   }
@@ -111,9 +113,9 @@ export function SkillMatrix() {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-2">
         <Zap size={24} style={{ color: "var(--color-text-muted)" }} />
-        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>No custom skills found.</p>
+        <p className="text-sm" style={{ color: "var(--color-text-muted)" }}>{t("noSkills")}</p>
         <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-          Skills leben in <code style={{ color: C.info }}>~/.openclaw/skills/</code>
+          {t("skillsLiveIn")} <code style={{ color: C.info }}>~/.openclaw/skills/</code>
         </p>
       </div>
     );
@@ -126,7 +128,7 @@ export function SkillMatrix() {
         <div className="flex items-center gap-2">
           <Zap size={14} style={{ color: C.accent }} />
           <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-            Custom Skills ({skills.length})
+            {t("customSkillsCount", { count: skills.length })}
           </span>
           <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
             ~/.openclaw/skills/
@@ -140,7 +142,7 @@ export function SkillMatrix() {
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs cursor-pointer"
               style={{ color: "var(--color-text-muted)" }}
             >
-              <Undo2 size={11} /> Reset
+              <Undo2 size={11} /> {t("reset")}
             </button>
             <button
               onClick={handleSave}
@@ -153,7 +155,7 @@ export function SkillMatrix() {
               }}
             >
               {saving ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
-              Save
+              {t("save")}
             </button>
           </div>
         )}
@@ -165,7 +167,7 @@ export function SkillMatrix() {
         style={{ border: "1px solid var(--color-border)", overscrollBehaviorX: "contain" } as React.CSSProperties}
         tabIndex={0}
         role="region"
-        aria-label="Skill team assignments"
+        aria-label={t("tableAria")}
       >
         <table className="w-full text-xs">
           <thead>
@@ -175,7 +177,7 @@ export function SkillMatrix() {
                 className="sticky left-0 z-10 text-left px-3 py-2.5 font-semibold"
                 style={{ color: "var(--color-text-muted)", minWidth: 180, backgroundColor: C.bgElevated }}
               >
-                Skill
+                {t("skillCol")}
               </th>
               {agents.map((agent) => {
                 const state = getState(agent.id);
@@ -185,7 +187,7 @@ export function SkillMatrix() {
                     <button
                       onClick={() => toggleAll(agent.id)}
                       className="cursor-pointer hover:underline"
-                      title={allEnabled ? "Disable all" : "Enable all"}
+                      title={allEnabled ? t("disableAll") : t("enableAll")}
                     >
                       {agent.name}
                     </button>

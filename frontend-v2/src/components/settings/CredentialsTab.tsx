@@ -4,16 +4,18 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Plus, Pencil, Trash2, Eye, EyeOff, KeyRound, FileText, X } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import type { Credential } from "@/lib/types";
 import { C } from "@/lib/colors";
 
+// labelKey pattern: resolved via t() at the render site (docs/i18n.md)
 const TYPE_CONFIG = {
-  login: { label: "Login", icon: KeyRound, color: C.accent },
-  token: { label: "Token", icon: KeyRound, color: C.warning },
-  custom: { label: "Free text", icon: FileText, color: C.textSecondary },
+  login: { labelKey: "types.login", icon: KeyRound, color: C.accent },
+  token: { labelKey: "types.token", icon: KeyRound, color: C.warning },
+  custom: { labelKey: "types.custom", icon: FileText, color: C.textSecondary },
 };
 
 type CredentialType = "login" | "token" | "custom";
@@ -24,6 +26,7 @@ interface ModalState {
 }
 
 export function CredentialsTab() {
+  const t = useTranslations("settings.credentials");
   const qc = useQueryClient();
   const [modal, setModal] = useState<ModalState>({ open: false, editing: null });
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -57,20 +60,20 @@ export function CredentialsTab() {
 
   const createMut = useMutation({
     mutationFn: (data: Parameters<typeof api.credentials.create>[0]) => api.credentials.create(data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success("Credential created"); closeModal(); },
-    onError: () => notify.error("Failed to create credential"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success(t("created")); closeModal(); },
+    onError: () => notify.error(t("createFailed")),
   });
 
   const updateMut = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Parameters<typeof api.credentials.update>[1] }) => api.credentials.update(id, data),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success("Credential updated"); closeModal(); },
-    onError: () => notify.error("Failed to update credential"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success(t("updated")); closeModal(); },
+    onError: () => notify.error(t("updateFailed")),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => api.credentials.delete(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success("Credential deleted"); setDeleteConfirm(null); },
-    onError: () => notify.error("Failed to delete credential"),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["credentials"] }); notify.success(t("deleted")); setDeleteConfirm(null); },
+    onError: () => notify.error(t("deleteFailed")),
   });
 
   const openCreate = () => {
@@ -133,9 +136,9 @@ export function CredentialsTab() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>Credentials Vault</h3>
+          <h3 className="text-sm font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h3>
           <p className="text-[11px] mt-0.5" style={{ color: C.textMuted }}>
-            Encrypted credentials for agent tasks
+            {t("subtitle")}
           </p>
         </div>
         <button
@@ -144,16 +147,16 @@ export function CredentialsTab() {
           style={{ color: C.accent, border: `1px solid ${C.borderAccent}`, backgroundColor: C.accentSubtle }}
         >
           <Plus size={12} />
-          New
+          {t("new")}
         </button>
       </div>
 
       {/* List */}
       {isLoading ? (
-        <div className="text-[11px] py-8 text-center" style={{ color: C.textMuted }}>Loading...</div>
+        <div className="text-[11px] py-8 text-center" style={{ color: C.textMuted }}>{t("loading")}</div>
       ) : !credentials?.length ? (
         <div className="text-[11px] py-8 text-center" style={{ color: C.textMuted }}>
-          No credentials saved yet
+          {t("empty")}
         </div>
       ) : (
         <div className="flex flex-col gap-2">
@@ -171,26 +174,26 @@ export function CredentialsTab() {
                   <div className="flex items-center gap-2">
                     <span className="text-[12px] font-medium truncate" style={{ color: C.textPrimary }}>{c.name}</span>
                     <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-sm" style={{ color: cfg.color, border: `1px solid ${cfg.color}33`, backgroundColor: `${cfg.color}11` }}>
-                      {cfg.label}
+                      {t(cfg.labelKey)}
                     </span>
                   </div>
                   <div className="text-[10px] mt-0.5 truncate" style={{ color: C.textMuted }}>
                     {c.credential_type === "login" && c.data_masked.username ? `${c.data_masked.username} · ${c.data_masked.password}` : ""}
                     {c.credential_type === "token" ? c.data_masked.token : ""}
-                    {c.credential_type === "custom" ? `(Free text, ${c.data_masked.content?.length ?? 0} characters)` : ""}
+                    {c.credential_type === "custom" ? t("customSummary", { count: c.data_masked.content?.length ?? 0 }) : ""}
                     {c.url ? ` · ${c.url}` : ""}
                   </div>
                 </div>
                 <div className="flex items-center gap-1">
-                  <button onClick={() => openEdit(c)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label="Edit credential">
+                  <button onClick={() => openEdit(c)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label={t("editAria")}>
                     <Pencil size={12} style={{ color: C.textMuted }} />
                   </button>
                   {deleteConfirm === c.id ? (
                     <button onClick={() => deleteMut.mutate(c.id)} className="px-2 py-1 rounded-lg text-[10px] font-medium cursor-pointer" style={{ color: C.error, backgroundColor: `${C.error}22` }}>
-                      Really?
+                      {t("reallyDelete")}
                     </button>
                   ) : (
-                    <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label="Delete credential">
+                    <button onClick={() => setDeleteConfirm(c.id)} className="p-1.5 rounded-lg cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors" aria-label={t("deleteAria")}>
                       <Trash2 size={12} style={{ color: C.textMuted }} />
                     </button>
                   )}
@@ -219,26 +222,26 @@ export function CredentialsTab() {
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
               role="dialog"
               aria-modal="true"
-              aria-label={modal.editing ? "Edit credential" : "New credential"}
+              aria-label={modal.editing ? t("editTitle") : t("newTitle")}
               className="relative w-full sm:max-w-md rounded-t-2xl rounded-b-none sm:rounded-2xl overflow-hidden max-h-[92dvh] sm:max-h-[88vh] flex flex-col"
               style={{ background: C.bgElevated, border: `1px solid ${C.border}`, boxShadow: "0 4px 24px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.3)" }}
             >
               <div className="flex items-center justify-between px-5 py-3.5" style={{ borderBottom: `1px solid ${C.borderSubtle}` }}>
                 <span className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-                  {modal.editing ? "Edit Credential" : "New Credential"}
+                  {modal.editing ? t("editTitle") : t("newTitle")}
                 </span>
-                <button onClick={closeModal} className="cursor-pointer hover:opacity-80" style={{ color: C.textMuted }} aria-label="Close modal"><X size={16} /></button>
+                <button onClick={closeModal} className="cursor-pointer hover:opacity-80" style={{ color: C.textMuted }} aria-label={t("closeAria")}><X size={16} /></button>
               </div>
 
               <div className="p-5 flex flex-col gap-3 overflow-y-auto">
                 {/* Name */}
                 <label className="flex flex-col gap-1">
-                  <span className="text-[10px]" style={{ color: C.textMuted }}>Name</span>
+                  <span className="text-[10px]" style={{ color: C.textMuted }}>{t("name")}</span>
                   <input
                     autoFocus
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    placeholder="e.g. Vercel Account"
+                    placeholder={t("namePlaceholder")}
                     className="w-full text-[12px] px-3 py-2 rounded-xl outline-none"
                     style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.bgDeep }}
                   />
@@ -246,22 +249,22 @@ export function CredentialsTab() {
 
                 {/* Type selector */}
                 <div className="flex items-center gap-2">
-                  <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>Type:</span>
-                  {(["login", "token", "custom"] as CredentialType[]).map((t) => {
-                    const cfg = TYPE_CONFIG[t];
+                  <span className="text-[10px] shrink-0" style={{ color: C.textMuted }}>{t("type")}</span>
+                  {(["login", "token", "custom"] as CredentialType[]).map((ct) => {
+                    const cfg = TYPE_CONFIG[ct];
                     return (
                       <button
-                        key={t}
+                        key={ct}
                         type="button"
-                        onClick={() => setCredType(t)}
+                        onClick={() => setCredType(ct)}
                         className="px-2.5 py-1 text-[11px] font-mono font-medium rounded-sm cursor-pointer transition-all"
                         style={{
-                          backgroundColor: credType === t ? `${cfg.color}22` : "transparent",
-                          color: credType === t ? cfg.color : C.textMuted,
-                          border: `1px solid ${credType === t ? `${cfg.color}66` : C.border}`,
+                          backgroundColor: credType === ct ? `${cfg.color}22` : "transparent",
+                          color: credType === ct ? cfg.color : C.textMuted,
+                          border: `1px solid ${credType === ct ? `${cfg.color}66` : C.border}`,
                         }}
                       >
-                        {cfg.label}
+                        {t(cfg.labelKey)}
                       </button>
                     );
                   })}
@@ -271,23 +274,23 @@ export function CredentialsTab() {
                 {credType === "login" && (
                   <>
                     <label className="flex flex-col gap-1">
-                      <span className="text-[10px]" style={{ color: C.textMuted }}>Username</span>
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>{t("username")}</span>
                       <input
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
-                        placeholder="Username"
+                        placeholder={t("usernamePlaceholder")}
                         className="w-full text-[12px] px-3 py-2 rounded-xl outline-none"
                         style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.bgDeep }}
                       />
                     </label>
                     <label className="flex flex-col gap-1">
-                      <span className="text-[10px]" style={{ color: C.textMuted }}>Password</span>
+                      <span className="text-[10px]" style={{ color: C.textMuted }}>{t("password")}</span>
                       <div className="relative">
                         <input
                           type={showPassword ? "text" : "password"}
                           value={password}
                           onChange={(e) => setPassword(e.target.value)}
-                          placeholder={modal.editing ? "New password (leave empty to keep)" : "Password"}
+                          placeholder={modal.editing ? t("passwordKeepPlaceholder") : t("passwordPlaceholder")}
                           className="w-full text-[12px] px-3 py-2 rounded-xl outline-none pr-10"
                           style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.bgDeep }}
                         />
@@ -296,7 +299,7 @@ export function CredentialsTab() {
                           onClick={() => setShowPassword(!showPassword)}
                           className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer"
                           style={{ color: C.textMuted }}
-                          aria-label={showPassword ? "Hide password" : "Show password"}
+                          aria-label={showPassword ? t("hidePassword") : t("showPassword")}
                         >
                           {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                         </button>
@@ -307,13 +310,13 @@ export function CredentialsTab() {
 
                 {credType === "token" && (
                   <label className="flex flex-col gap-1">
-                    <span className="text-[10px]" style={{ color: C.textMuted }}>Token / API Key</span>
+                    <span className="text-[10px]" style={{ color: C.textMuted }}>{t("tokenLabel")}</span>
                     <div className="relative">
                       <input
                         type={showPassword ? "text" : "password"}
                         value={token}
                         onChange={(e) => setToken(e.target.value)}
-                        placeholder={modal.editing ? "New token (leave empty to keep)" : "Token / API Key"}
+                        placeholder={modal.editing ? t("tokenKeepPlaceholder") : t("tokenPlaceholder")}
                         className="w-full text-[12px] px-3 py-2 rounded-xl outline-none pr-10"
                         style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.bgDeep }}
                       />
@@ -322,7 +325,7 @@ export function CredentialsTab() {
                         onClick={() => setShowPassword(!showPassword)}
                         className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer"
                         style={{ color: C.textMuted }}
-                        aria-label={showPassword ? "Hide token" : "Show token"}
+                        aria-label={showPassword ? t("hideToken") : t("showToken")}
                       >
                         {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                       </button>
@@ -332,11 +335,11 @@ export function CredentialsTab() {
 
                 {credType === "custom" && (
                   <label className="flex flex-col gap-1">
-                    <span className="text-[10px]" style={{ color: C.textMuted }}>Content</span>
+                    <span className="text-[10px]" style={{ color: C.textMuted }}>{t("contentLabel")}</span>
                     <textarea
                       value={content}
                       onChange={(e) => setContent(e.target.value)}
-                      placeholder={modal.editing ? "New content (leave empty to keep)" : "SSH key, connection string, etc."}
+                      placeholder={modal.editing ? t("contentKeepPlaceholder") : t("contentPlaceholder")}
                       rows={4}
                       className="w-full text-[12px] px-3 py-2 rounded-xl outline-none resize-none font-mono"
                       style={{ border: `1px solid ${C.border}`, color: C.textPrimary, backgroundColor: C.bgDeep }}
@@ -346,7 +349,7 @@ export function CredentialsTab() {
 
                 {/* URL */}
                 <label className="flex flex-col gap-1">
-                  <span className="text-[10px]" style={{ color: C.textMuted }}>URL (optional)</span>
+                  <span className="text-[10px]" style={{ color: C.textMuted }}>{t("urlLabel")}</span>
                   <input
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
@@ -358,11 +361,11 @@ export function CredentialsTab() {
 
                 {/* Notes */}
                 <label className="flex flex-col gap-1">
-                  <span className="text-[10px]" style={{ color: C.textMuted }}>Notes (not encrypted)</span>
+                  <span className="text-[10px]" style={{ color: C.textMuted }}>{t("notesLabel")}</span>
                   <input
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
-                    placeholder="Notes (optional)"
+                    placeholder={t("notesPlaceholder")}
                     className="w-full text-[12px] px-3 py-2 rounded-xl outline-none"
                     style={{ border: `1px solid ${C.border}`, color: C.textMuted, backgroundColor: C.bgDeep }}
                   />
@@ -371,7 +374,7 @@ export function CredentialsTab() {
 
               <div className="flex items-center justify-end gap-2 px-5 py-3.5" style={{ borderTop: `1px solid ${C.borderSubtle}` }}>
                 <button onClick={closeModal} className="px-3.5 py-1.5 text-[11px] rounded-lg cursor-pointer" style={{ color: C.textMuted, border: `1px solid ${C.border}` }}>
-                  Cancel
+                  {t("cancel")}
                 </button>
                 <button
                   onClick={handleSubmit}
@@ -379,7 +382,7 @@ export function CredentialsTab() {
                   className="px-3.5 py-1.5 text-[11px] font-semibold rounded-lg cursor-pointer transition-all disabled:opacity-30"
                   style={{ background: `linear-gradient(135deg, ${C.accent}, ${C.accentHover})`, color: C.onAccent }}
                 >
-                  {createMut.isPending || updateMut.isPending ? "..." : modal.editing ? "Save" : "Create"}
+                  {createMut.isPending || updateMut.isPending ? "..." : modal.editing ? t("save") : t("create")}
                 </button>
               </div>
             </motion.div>

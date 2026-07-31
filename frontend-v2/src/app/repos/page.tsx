@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -24,6 +25,7 @@ import { ImportRepoDialog } from "./ImportRepoDialog";
 // ── Visibility Badge ──────────────────────────────────────────────────────────
 
 function VisibilityBadge({ visibility }: { visibility: Repo["visibility"] }) {
+  const t = useTranslations("repos");
   const isPrivate = visibility === "private";
   const Icon = isPrivate ? Lock : Globe2;
   return (
@@ -39,7 +41,7 @@ function VisibilityBadge({ visibility }: { visibility: Repo["visibility"] }) {
       }}
     >
       <Icon size={9} />
-      {isPrivate ? "Private" : "Public"}
+      {isPrivate ? t("private") : t("public")}
     </span>
   );
 }
@@ -47,6 +49,7 @@ function VisibilityBadge({ visibility }: { visibility: Repo["visibility"] }) {
 // ── Repo Card ──────────────────────────────────────────────────────────────────
 
 function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
+  const t = useTranslations("repos");
   const projects = repo.linked_projects;
   const shownProjects = projects.slice(0, 3);
   const restCount = projects.length - shownProjects.length;
@@ -87,7 +90,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
                   letterSpacing: "0.06em",
                 }}
               >
-                Archived
+                {t("archived")}
               </span>
             )}
           </div>
@@ -103,13 +106,13 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
             </span>
             <span style={{ color: C.borderSubtle }}>·</span>
             {repo.rules_md ? (
-              <span className="text-xs" style={{ color: C.accent }}>Rules ✓</span>
+              <span className="text-xs" style={{ color: C.accent }}>{t("rulesSet")}</span>
             ) : (
-              <span className="text-xs" style={{ color: C.textDim }}>No rules</span>
+              <span className="text-xs" style={{ color: C.textDim }}>{t("noRules")}</span>
             )}
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs" style={{ color: C.textDim }}>
-              {repo.last_synced_at ? `Synced ${timeAgo(repo.last_synced_at)}` : "Never synced"}
+              {repo.last_synced_at ? t("synced", { ago: timeAgo(repo.last_synced_at) }) : t("neverSynced")}
             </span>
           </div>
           {shownProjects.length > 0 && (
@@ -141,6 +144,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
 // ── GitHub onboarding banner ───────────────────────────────────────────────────
 
 function GithubOnboardingBanner() {
+  const t = useTranslations("repos");
   return (
     <div
       className="flex items-center justify-between gap-3 px-4 py-3 mb-4 rounded-xl"
@@ -149,8 +153,7 @@ function GithubOnboardingBanner() {
       <div className="flex items-center gap-3 min-w-0">
         <Github size={16} style={{ color: C.accent }} className="shrink-0" />
         <p className="text-xs min-w-0" style={{ color: C.textSecondary }}>
-          GitHub is not connected — the registry works locally, but importing and
-          creating repos needs a GitHub owner + token.
+          {t("githubBanner")}
         </p>
       </div>
       <Link
@@ -158,7 +161,7 @@ function GithubOnboardingBanner() {
         className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg transition-all cursor-pointer shrink-0"
         style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
       >
-        Connect GitHub
+        {t("connectGithub")}
       </Link>
     </div>
   );
@@ -167,6 +170,7 @@ function GithubOnboardingBanner() {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 
 export default function ReposPage() {
+  const t = useTranslations("repos");
   const [includeInactive, setIncludeInactive] = useState(false);
   const [selectedRepoId, setSelectedRepoId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -192,10 +196,10 @@ export default function ReposPage() {
           <div>
             <div className="label-sys mb-2">Code · Repos</div>
             <h1 className="display text-xl font-semibold" style={{ color: C.textPrimary }}>
-              Repos
+              {t("title")}
             </h1>
             <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
-              GitHub repos and their working rules for agents
+              {t("subtitle")}
             </p>
           </div>
           <button
@@ -208,7 +212,7 @@ export default function ReposPage() {
             }}
           >
             <Plus size={11} />
-            Import repo
+            {t("importRepo")}
           </button>
         </div>
 
@@ -225,13 +229,13 @@ export default function ReposPage() {
             onChange={(e) => setIncludeInactive(e.target.checked)}
             style={{ accentColor: C.accent }}
           />
-          Show archived repos
+          {t("showArchived")}
         </label>
 
         {isLoading && (
           <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
             <Loader2 size={13} className="animate-spin" />
-            <span className="text-xs">Loading repos...</span>
+            <span className="text-xs">{t("loading")}</span>
           </div>
         )}
 
@@ -243,10 +247,10 @@ export default function ReposPage() {
             <FolderGit2 size={28} style={{ color: C.textDim }} />
             <div>
               <p className="text-sm font-medium" style={{ color: C.textSecondary }}>
-                No repos registered yet
+                {t("emptyTitle")}
               </p>
               <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-                Import an existing GitHub repo to assign working rules.
+                {t("emptyHint")}
               </p>
             </div>
             <button
@@ -259,7 +263,7 @@ export default function ReposPage() {
               }}
             >
               <Plus size={11} />
-              Import repo
+              {t("importRepo")}
             </button>
           </div>
         )}
