@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { X, Loader2, AlertCircle, CheckCircle2 } from "lucide-react";
+import { useTranslations } from "next-intl";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { api } from "@/lib/api";
 import { C, STATUS_TEXT } from "@/lib/colors";
@@ -56,6 +57,7 @@ interface Props {
 }
 
 export function AddRuntimeModal({ open, onClose }: Props) {
+  const t = useTranslations("runtimes.addModal");
   const queryClient = useQueryClient();
   const [url, setUrl] = useState("");
   const [probe, setProbe] = useState<ProbeEndpointResult | null>(null);
@@ -126,9 +128,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           if (msg.includes("409") || msg.includes("existiert bereits")) {
-            throw new Error(
-              'Key already exists (possibly from a previous attempt) — select it under "Existing key".',
-            );
+            throw new Error(t("keyAlreadyExists"));
           }
           throw err;
         }
@@ -202,10 +202,10 @@ export function AddRuntimeModal({ open, onClose }: Props) {
             >
               <div>
                 <h2 className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>
-                  Add runtime
+                  {t("title")}
                 </h2>
                 <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                  Paste a base URL — MC probes it and detects the engine + models.
+                  {t("subtitle")}
                 </div>
               </div>
               <button
@@ -220,7 +220,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
               {/* Step 1: URL + Probe */}
               <div>
                 <label className="text-[11px] font-medium block mb-1.5" style={{ color: C.textMuted }}>
-                  Endpoint URL
+                  {t("endpointUrl")}
                 </label>
                 <div className="flex gap-2">
                   <input
@@ -248,7 +248,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                     {probeMutation.isPending ? (
                       <Loader2 size={12} className="animate-spin" />
                     ) : null}
-                    Probe
+                    {t("probe")}
                   </button>
                 </div>
               </div>
@@ -260,7 +260,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                   style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
                 >
                   <AlertCircle size={13} className="shrink-0" />
-                  {probe.error ?? "Endpoint unreachable."}
+                  {probe.error ?? t("endpointUnreachable")}
                 </div>
               )}
 
@@ -270,18 +270,18 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                   <div className="flex items-center gap-2 text-xs px-3 py-2.5 rounded-lg" style={{ color: STATUS_TEXT.info, background: `${C.info}0F`, border: `1px solid ${C.info}26` }}>
                     <CheckCircle2 size={13} className="shrink-0" style={{ color: C.online }} />
                     <span>
-                      Detected{" "}
+                      {t("detectedPrefix")}{" "}
                       <span className="font-semibold" style={{ color: C.textPrimary }}>
-                        {probe.detected_type ? TYPE_LABEL[probe.detected_type] ?? probe.detected_type : "unknown"}
+                        {probe.detected_type ? TYPE_LABEL[probe.detected_type] ?? probe.detected_type : t("unknownType")}
                       </span>
                       {" · "}
-                      {probe.models.length} model{probe.models.length === 1 ? "" : "s"}
+                      {t("modelsCount", { count: probe.models.length })}
                     </span>
                   </div>
 
                   <div>
                     <label className="text-[11px] font-medium block mb-1.5" style={{ color: C.textMuted }}>
-                      Model
+                      {t("model")}
                     </label>
                     <select
                       value={model ?? ""}
@@ -303,13 +303,13 @@ export function AddRuntimeModal({ open, onClose }: Props) {
 
                   <div>
                     <label className="text-[11px] font-medium block mb-1.5" style={{ color: C.textMuted }}>
-                      Display name
+                      {t("displayName")}
                     </label>
                     <input
                       type="text"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
-                      placeholder="Name this runtime"
+                      placeholder={t("displayNamePlaceholder")}
                       className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
                       style={{
                         backgroundColor: C.bgSurface,
@@ -325,20 +325,20 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       style={{ color: STATUS_TEXT.warning, background: `${C.warning}0F`, border: `1px solid ${C.warning}26` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
-                      Endpoint requires an API key
+                      {t("requiresApiKey")}
                     </div>
                   )}
 
                   <div>
                     <label className="text-[11px] font-medium block mb-1.5" style={{ color: C.textMuted }}>
-                      API-Key (optional)
+                      {t("apiKeyOptional")}
                     </label>
                     <div className="flex gap-3 mb-2">
                       {(
                         [
-                          { value: "none", label: "No key" },
-                          { value: "existing", label: "Existing key" },
-                          { value: "new", label: "New key" },
+                          { value: "none", label: t("keyModeNone") },
+                          { value: "existing", label: t("keyModeExisting") },
+                          { value: "new", label: t("keyModeNew") },
                         ] as { value: KeyMode; label: string }[]
                       ).map((opt) => (
                         <label key={opt.value} className="flex items-center gap-1.5 text-[12px] cursor-pointer" style={{ color: C.textSecondary }}>
@@ -370,7 +370,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                           color: C.textPrimary,
                         }}
                       >
-                        <option value="">— select —</option>
+                        <option value="">{t("selectPlaceholder")}</option>
                         {(secretsQuery.data ?? []).map((s) => (
                           <option key={s.id} value={s.id}>
                             {(s.label ?? s.key)} · {s.value_masked}
@@ -383,7 +383,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       <div className="space-y-2">
                         <input
                           type="text"
-                          aria-label="Name"
+                          aria-label={t("secretNameAria")}
                           value={newSecretName}
                           onChange={(e) => setNewSecretName(e.target.value)}
                           placeholder={`${secretKeyify(name)}_api_key`}
@@ -396,15 +396,15 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                         />
                         {newSecretKeyInvalid && (
                           <div className="text-[11px]" style={{ color: STATUS_TEXT.error }}>
-                            Lowercase letters, numbers and _ only
+                            {t("secretKeyInvalid")}
                           </div>
                         )}
                         <input
                           type="password"
-                          aria-label="Value"
+                          aria-label={t("secretValueAria")}
                           value={newSecretValue}
                           onChange={(e) => setNewSecretValue(e.target.value)}
-                          placeholder="API key value"
+                          placeholder={t("secretValuePlaceholder")}
                           className="w-full text-[13px] px-3 py-2 rounded-lg outline-none"
                           style={{
                             backgroundColor: C.bgSurface,
@@ -422,7 +422,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                       style={{ color: STATUS_TEXT.error, background: `${C.error}0F`, border: `1px solid ${C.error}26` }}
                     >
                       <AlertCircle size={13} className="shrink-0" />
-                      {createMutation.error instanceof Error ? createMutation.error.message : "Failed to create runtime."}
+                      {createMutation.error instanceof Error ? createMutation.error.message : t("createFailed")}
                     </div>
                   )}
 
@@ -444,7 +444,7 @@ export function AddRuntimeModal({ open, onClose }: Props) {
                     }}
                   >
                     {createMutation.isPending ? <Loader2 size={12} className="animate-spin" /> : null}
-                    Add runtime
+                    {t("addRuntime")}
                   </button>
                 </>
               )}
