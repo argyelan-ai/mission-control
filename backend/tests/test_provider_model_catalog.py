@@ -11,6 +11,8 @@ fixture.
 
 from __future__ import annotations
 
+import uuid
+
 import json
 
 import httpx
@@ -975,6 +977,42 @@ async def test_openai_runtimes_stay_separate_providers(session):
     )
     keys = {t.key for t in await model_catalog.build_provider_targets(session)}
     assert keys == {"openai:ollama-cloud", "openai:qwen-general"}
+
+
+@pytest.mark.asyncio
+async def test_same_vendor_endpoint_collapses_into_one_provider(session):
+    """Two Ollama rows, one endpoint, one credential → ONE provider.
+
+    Per-row grouping listed Ollama Cloud twice with an identical 17-model body —
+    34 rows for 17 models (operator report, 2026-07-31).
+    """
+    secret = uuid.uuid4()
+    await add_runtime(
+        session, slug="ollama-cloud", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", api_key_secret_id=secret,
+    )
+    await add_runtime(
+        session, slug="ollama-cloud-glm-5-2", runtime_type="cloud",
+        endpoint="https://ollama.com/v1/", api_key_secret_id=secret,
+    )
+    targets = await model_catalog.build_provider_targets(session)
+    assert len(targets) == 1, "same endpoint + same credential is one provider"
+    assert sorted(targets[0].runtime_slugs) == ["ollama-cloud", "ollama-cloud-glm-5-2"]
+
+
+@pytest.mark.asyncio
+async def test_same_vendor_different_credential_stays_separate(session):
+    """Different keys can mean different entitlements — must not be merged."""
+    await add_runtime(
+        session, slug="ollama-a", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", api_key_secret_id=uuid.uuid4(),
+    )
+    await add_runtime(
+        session, slug="ollama-b", runtime_type="cloud",
+        endpoint="https://ollama.com/v1", api_key_secret_id=uuid.uuid4(),
+    )
+    targets = await model_catalog.build_provider_targets(session)
+    assert len(targets) == 2, "different credentials must stay separate providers"
 
 
 @pytest.mark.asyncio

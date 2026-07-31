@@ -1707,6 +1707,229 @@ async def agent_post_thread_message(
     )
 
 
+# ── Thread read (context reconstruction) ─────────────────────────────────
+# Agent-side counterpart of GET /tasks/{task_id}/thread (tasks.py:2632).
+# An agent that lost its context (container recreate, /clear, crash) can
+# re-read its own thread instead of guessing. Strictly read-only: see
+# docs/context-reconstruction-design.md §5.1.
+
+async def _resolve_thread_task_for_agent(
+    agent: Agent,
+    task_id: uuid.UUID | None,
+    session: AsyncSession,
+) -> "Task | None":
+    """Resolve which task's thread the agent wants to read.
+
+    Deliberately NOT _resolve_active_task_for_agent: that one trusts
+    agent.current_task_id without re-checking ownership or status, and raises
+    422 when nothing resolves. A recovery-shaped read must degrade to an empty
+    page instead of exploding.
+
+    Chain (mirrors the /me/poll resolution at agents.py:2816-2839):
+      1. explicit task_id — ownership enforced, 403 otherwise
+      2. agent.current_task_id — only if still assigned to this agent and in
+         an active status. It is NULL by design for every non-lead worker
+         under subagent dispatch, hence step 3.
+      3. the agent's freshest active task
+      4. None -> the caller renders an empty page
+    """
+    if task_id is not None:
+        task = await session.get(Task, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Task {task_id} nicht gefunden.")
+        if task.assigned_agent_id != agent.id and task.owner_agent_id != agent.id:
+            raise HTTPException(
+                status_code=403,
+                detail="Du kannst nur Threads deiner eigenen Tasks lesen.",
+            )
+        return task
+
+    if agent.current_task_id is not None:
+        pointed = (
+            await session.exec(
+                select(Task)
+                .where(Task.id == agent.current_task_id)
+                .where(Task.assigned_agent_id == agent.id)
+                .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))  # type: ignore[union-attr]
+                .limit(1)
+            )
+        ).first()
+        if pointed is not None:
+            return pointed
+
+    # `waiting` belongs in this fallback even though /me/poll excludes it from
+    # its own. Poll's exclusion is about claimability — a parked task must not
+    # re-park the agent (agents.py:2820-2828). Reading has no claim semantics,
+    # and a parked task is the strongest case for this verb: parking clears
+    # current_task_id while the task stays `waiting` and still assigned
+    # (task_runner.py:511-513), so without this the agent that asked a blocking
+    # question is the one agent who cannot read the answer to it. Ordering by
+    # updated_at keeps the agent's *current* work ahead of a parked one.
+    return (
+        await session.exec(
+            select(Task)
+            .where(Task.assigned_agent_id == agent.id)
+            .where(Task.status.in_(["in_progress", "blocked", "review", "waiting"]))  # type: ignore[union-attr]
+            .order_by(Task.updated_at.desc())  # type: ignore[union-attr]
+            .limit(1)
+        )
+    ).first()
+
+
+_EMPTY_THREAD_PAGE = {
+    "messages": [],
+    "has_more_before": False,
+    "latest_seq": 0,
+    "my_acked_seq": 0,
+    "budget_truncated": False,
+}
+
+# Everything that enters an agent's context here is bounded — dispatch
+# 2000/2500/4000 (dispatch_message_builder.py:62-64), memory 800, lessons 400,
+# the waiting recap 1500, mc_logs 4000. `limit` bounds the message *count*,
+# not their size, so a thread read was the one unbounded payload. Matched to
+# DISPATCH_HARD_CHARS: this lands in the same place a dispatch prompt does.
+THREAD_READ_MAX_CHARS = 4000
+_TRUNCATION_MARKER = "\n\n… [gekuerzt — ganze Nachricht via `mc thread --task-id … --json`]"
+
+
+def _apply_thread_char_budget(rows: list) -> tuple[list, bool, bool]:
+    """Trim an ascending-seq page to THREAD_READ_MAX_CHARS.
+
+    Drops from the OLD end: an agent rebuilding context needs the newest
+    exchange, not the opening of the task. Returns
+    (kept_rows, budget_truncated, dropped_any) — `dropped_any` feeds
+    has_more_before so a budget-trimmed page still advertises that older
+    messages exist and can be paged to.
+
+    A single message larger than the whole budget is truncated rather than
+    dropped: dropping it would hand the agent an empty page with no
+    explanation of why.
+    """
+    kept: list = []
+    used = 0
+    for message in reversed(rows):  # newest first
+        body = message.body or ""
+        if not kept and len(body) > THREAD_READ_MAX_CHARS:
+            message.body = body[:THREAD_READ_MAX_CHARS] + _TRUNCATION_MARKER
+            return [message], True, len(rows) > 1
+        if used + len(body) > THREAD_READ_MAX_CHARS:
+            return list(reversed(kept)), True, True
+        kept.append(message)
+        used += len(body)
+    return list(reversed(kept)), False, False
+
+
+@router.get("/me/thread")
+async def agent_read_own_thread(
+    task_id: uuid.UUID | None = Query(None),
+    since_seq: int | None = Query(None, ge=0),
+    before_seq: int | None = Query(None, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
+    agent: Agent = Depends(require_scope(Scope.TASKS_READ)),
+):
+    """Read your own task thread — seq-paged, ascending seq order.
+
+    The recovery counterpart to `mc inbox`: **this consumes nothing.** `mc
+    inbox` acks (delivery), `mc thread` looks up (context). Reading here never
+    creates or advances an AgentThreadCursor, so an agent rebuilding its
+    context after a restart still receives all of its unread mail.
+
+    - no params: the newest `limit` messages of your current task
+    - task_id:   an explicit task of yours (any status — history is the point)
+    - since_seq: forward delta — messages with seq > since_seq
+    - before_seq: backward pagination — the `limit` messages with seq < before_seq
+
+    No active task, or a task that was never messaged, reads as an empty page
+    rather than an error, and GET never creates the thread.
+    """
+    from sqlalchemy import func
+
+    from app.models.thread import AgentThreadCursor, Message
+    from app.routers.tasks import _serialize_thread_message
+
+    if since_seq is not None and before_seq is not None:
+        raise HTTPException(
+            status_code=400,
+            detail="since_seq and before_seq are mutually exclusive",
+        )
+
+    task = await _resolve_thread_task_for_agent(agent, task_id, session)
+    if task is None:
+        return {"task_id": None, "task_title": None, "task_status": None, **_EMPTY_THREAD_PAGE}
+
+    base = {
+        "task_id": str(task.id),
+        "task_title": task.title,
+        "task_status": task.status,
+    }
+    if task.thread_id is None:
+        return {**base, **_EMPTY_THREAD_PAGE}
+
+    thread_id = task.thread_id
+
+    latest_seq = (
+        await session.exec(
+            select(func.coalesce(func.max(Message.seq), 0)).where(Message.thread_id == thread_id)
+        )
+    ).one()
+
+    if since_seq is not None:
+        result = await session.exec(
+            select(Message)
+            .where(Message.thread_id == thread_id, Message.seq > since_seq)
+            .order_by(Message.seq.asc())  # type: ignore[union-attr]
+            .limit(limit)
+        )
+        rows = list(result.all())
+    else:
+        stmt = select(Message).where(Message.thread_id == thread_id)
+        if before_seq is not None:
+            stmt = stmt.where(Message.seq < before_seq)
+        result = await session.exec(stmt.order_by(Message.seq.desc()).limit(limit))  # type: ignore[union-attr]
+        rows = list(reversed(result.all()))
+
+    rows, budget_truncated, budget_dropped = _apply_thread_char_budget(rows)
+
+    has_more_before = budget_dropped
+    if rows and not has_more_before:
+        older = await session.exec(
+            select(Message.seq)
+            .where(Message.thread_id == thread_id, Message.seq < rows[0].seq)
+            .limit(1)
+        )
+        has_more_before = older.first() is not None
+
+    # Read-only cursor lookup: report where the agent's ack stands without
+    # creating the row if it does not exist yet.
+    cursor = (
+        await session.exec(
+            select(AgentThreadCursor).where(
+                AgentThreadCursor.agent_id == agent.id,
+                AgentThreadCursor.thread_id == thread_id,
+            )
+        )
+    ).first()
+
+    agent_ids = {m.sender_id for m in rows if m.sender_id is not None}
+    agent_map: dict[uuid.UUID, Agent] = {}
+    if agent_ids:
+        agents_result = await session.exec(select(Agent).where(Agent.id.in_(agent_ids)))  # type: ignore[arg-type]
+        agent_map = {a.id: a for a in agents_result.all()}
+
+    return {
+        **base,
+        "messages": [
+            _serialize_thread_message(m, agent_map=agent_map, delivery=None) for m in rows
+        ],
+        "has_more_before": has_more_before,
+        "latest_seq": latest_seq,
+        "my_acked_seq": cursor.last_acked_seq if cursor is not None else 0,
+        "budget_truncated": budget_truncated,
+    }
+
+
 # PATCH /boards/{board_id}/tasks/{task_id} (the 600-line state-machine
 # endpoint), `_find_reviewer` / `_find_last_developer` etc. now live in
 # routers/agent_task_status.py + services/work_context.py. The shim

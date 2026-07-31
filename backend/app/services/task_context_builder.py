@@ -806,21 +806,6 @@ async def _load_dispatch_context(
     return ctx
 
 
-async def get_last_checkpoint(session: AsyncSession, task_id: uuid.UUID) -> str | None:
-    """Loads a task's last checkpoint comment (for recovery context)."""
-    result = await session.exec(
-        select(TaskComment)
-        .where(
-            TaskComment.task_id == task_id,
-            TaskComment.comment_type == "checkpoint",
-        )
-        .order_by(TaskComment.created_at.desc())  # type: ignore[union-attr]
-        .limit(1)
-    )
-    checkpoint = result.first()
-    return checkpoint.content if checkpoint else None
-
-
 WAITING_RESUME_RECAP_MAX_CHARS = 1500  # keep the resume briefing bounded (Task 9)
 
 

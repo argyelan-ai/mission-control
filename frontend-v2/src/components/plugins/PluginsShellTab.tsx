@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Terminal as XTerm } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal, Power, Loader2 } from "lucide-react";
@@ -12,6 +13,7 @@ import "@xterm/xterm/css/xterm.css";
 import { EntityIcon } from "@/components/shared/EntityIcon";
 
 export function PluginsShellTab() {
+  const t = useTranslations("skills.shell");
   const termRef = useRef<HTMLDivElement>(null);
   const termInstance = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -134,7 +136,7 @@ export function PluginsShellTab() {
     },
     onError: (e: Error) => {
       setStarting(false);
-      notify.error(`Failed to start shell: ${e.message}`);
+      notify.error(t("startFailed", { error: e.message }));
     },
   });
 
@@ -153,7 +155,7 @@ export function PluginsShellTab() {
       // ignore
     }
     termInstance.current?.clear();
-    termInstance.current?.writeln("\x1b[33m[Session ended]\x1b[0m");
+    termInstance.current?.writeln(`\x1b[33m${t("sessionEnded")}\x1b[0m`);
   };
 
   return (
@@ -173,7 +175,7 @@ export function PluginsShellTab() {
               className="text-[10px] px-1.5 py-0.5 rounded"
               style={{ background: `${C.online}1A`, color: C.online }}
             >
-              connected
+              {t("connected")}
             </span>
           )}
         </div>
@@ -186,7 +188,7 @@ export function PluginsShellTab() {
               style={{ backgroundColor: C.accent, color: C.onAccent }}
             >
               {starting ? <Loader2 size={12} className="animate-spin" /> : <Terminal size={12} />}
-              Start installer
+              {t("startInstaller")}
             </button>
           ) : (
             <button
@@ -199,7 +201,7 @@ export function PluginsShellTab() {
               }}
             >
               <Power size={12} />
-              Stop
+              {t("stop")}
             </button>
           )}
         </div>
@@ -215,15 +217,14 @@ export function PluginsShellTab() {
             color: "var(--color-text-muted)",
           }}
         >
-          Start the installer to set up MCP servers, CLI plugins, or custom skills.
-          The installer knows the MC API + Vault — just tell it what you want.
+          {t("helpText")}
           <br />
           <code className="text-[11px] mt-1 inline-block" style={{ color: STATUS_TEXT.info }}>
-            "Install Brave Search MCP for Researcher"
+            {t("helpExample")}
           </code>
           <br />
           <span className="text-[10px] mt-1 inline-block" style={{ color: "var(--color-text-muted)", opacity: 0.7 }}>
-            Also via task delegation: <code>mc delegate --to Installer ...</code>
+            {t("helpDelegation")} <code>mc delegate --to Installer ...</code>
           </span>
         </div>
       )}
