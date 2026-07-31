@@ -120,6 +120,7 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "ask": "chat:write",
     "msg": "chat:write",
     "inbox": None,  # GET /agent/me/inbox — require_agent only (Nudge+Pull)
+    "thread": "tasks:read",  # GET /agent/me/thread — require_scope(TASKS_READ)
     "checklist": "tasks:write",
     "question": "tasks:help",
     "help": "tasks:help",

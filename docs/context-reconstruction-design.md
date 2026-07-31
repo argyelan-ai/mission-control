@@ -1,6 +1,6 @@
 # Context Reconstruction — Design & Handoff
 
-**Status:** Stage 1 implemented — branch green (4402 passed), not deployed
+**Status:** Stage 1 implemented, rebased onto current `main` (2026-07-31) — not deployed
 **Datum:** 2026-07-28
 **Branch:** `feat/context-reconstruction`
 **Scope:** Backend (`agent_scoped.py`), `mc` CLI, bridge adapters, `docker/shared/poll.sh`
@@ -1002,6 +1002,51 @@ in order to drop the *noise*; lowering the severity would have kept both goals.
   instead of `mc done` — a briefing problem, not necessarily context loss.
 
 The recipe is recorded here so whoever wants it does not have to re-derive it.
+
+### 10.5 Rebase onto 57 new main commits (2026-07-31)
+
+`origin/main` moved 57 commits (the whole i18n rollout) while this branch sat
+undeployed. 17 of the 20 commits replayed clean; the conflict was where it was
+predicted to be, and it was a *semantic* one, not a textual one.
+
+**PR #195 had solved the same problem differently.** It filters the card's verb
+list through the agent's effective scopes; this branch cuts the list to 17
+lifecycle verbs and points at `mc docs tasks` for the rest. Neither supersedes
+the other, so both were kept and composed: `filter_card_verbs_by_scopes()`
+returns `CARD_VERBS ∩ scope-allowed`.
+
+The intersection is load-bearing, not tidiness. `CARD.md.j2` renders
+`canonical_verbs[verb]`, and after #195 that dict is itself scope-filtered — so
+a card verb the agent may not call would have raised an undefined-key error at
+render time. The `planner` role proves it is reachable: no `tasks:write`, so 9
+of the 17 lifecycle verbs correctly drop out and its card renders 8.
+
+Three further things the rebase surfaced:
+
+- **A real gap, not a test artifact.** `thread` was in `CANONICAL_VERBS` but
+  #195's `CANONICAL_VERB_SCOPES` (which did not exist when this branch was
+  written) had no entry for it. The contract test caught it. Mapped to
+  `tasks:read`, matching both the endpoint's `require_scope` and the value the
+  mc-cli REGISTRY already carried.
+- **A test that had stopped testing its own claim.**
+  `test_developer_card_is_smaller_than_board_lead_card` ("fewer verbs → fewer
+  bytes") still passed, but only because of the lead-only prose sections —
+  developer and lead now render identical verb lists. Replaced with a planner
+  probe, which is the honest one.
+- **The byte budget was restored to 5120.** PR #187 raised it to 5632 because
+  the card had no room for the comm_v2 inbox-reply gate. Worst case measured
+  over the full matrix is now 4323 bytes, so the original 5KB guard fits again
+  with ~800 bytes of headroom. A budget the card sits 1.3KB under is not a
+  guard, it is a comment.
+
+Measured effect of #195 and CARD_VERBS together — neither number was reachable
+by either change alone:
+
+| Card (worst case per role) | before #195 | after #195 | + CARD_VERBS |
+|---|---|---|---|
+| orchestrator + board lead | 5402 | 5402 | **3952** |
+| developer | 5179 | 4791 | **3729** |
+| planner | 5179 | 4791 | **3116** |
 
 ---
 
