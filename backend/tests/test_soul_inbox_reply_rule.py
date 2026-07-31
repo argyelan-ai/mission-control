@@ -86,6 +86,34 @@ def test_reply_style_is_scannable_not_prose():
     assert "wall of text" in soul
 
 
+def test_reply_style_threshold_is_sharp():
+    """Messung 31.07.2026: die alte Schwelle "one or two sentences -> plain
+    text" war ein Schlupfloch — 2-4-Satz-Antworten lasen sich legitim als
+    Fliesstext. Neue Schwelle: EIN kurzer Satz darf plain sein, ab zwei
+    Saetzen oder sobald etwas Aufzaehlbares drinsteckt -> Bullets."""
+    soul = _soul().lower()
+    assert "one short sentence" in soul
+    assert "enumerable" in soul
+    # Das alte Schlupfloch ("One or two sentences -> plain text") darf nicht
+    # wieder reinrutschen. "One or two sentences are plenty" (Antwortlaenge
+    # bei Acks) ist ein anderer, legitimer Satz — darum der volle Wortlaut:
+    assert "one or two sentences → plain text" not in soul
+
+
+def test_reply_style_survives_without_comm_v2():
+    """Messung 31.07.2026: die Stilregel stand NUR im comm_v2-Block — Agenten
+    ohne comm_v2 (Downloader, Shakespeare) chatten aber real ueber Slack mit
+    Mark und hatten die Regel GAR NICHT in der ausgelieferten SOUL. Sie muss
+    ungegated drinstehen — aber ohne tote comm_v2-Werkzeug-Referenzen."""
+    soul = _soul(comm_v2=False).lower()
+    assert "scannable" in soul
+    assert "bullets" in soul
+    assert "wall of text" in soul
+    assert "one short sentence" in soul
+    assert "enumerable" in soul
+    assert "update/evidence/next" in soul
+
+
 def test_reply_style_separates_chat_from_report():
     """Chat != Bericht: das Update/Evidence/Next-Geruest gehoert in
     Task-Kommentare, nicht in Thread-Antworten."""
