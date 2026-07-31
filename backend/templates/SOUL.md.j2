@@ -2950,6 +2950,21 @@ call it often if you're unsure where you stand.
 If `mc recover` says "No active task — you're free," wait
 for the next dispatch via poll.
 
+**`mc recover` gives you the task. `mc thread` gives you the conversation.**
+The prompt tells you what to do; it does not tell you what was already asked,
+answered or decided. When the history matters — someone answered your question,
+the operator changed direction mid-task — run `mc thread`.
+
+`mc thread` is read-only and consumes nothing, so you can call it as often as
+you like without side effects.
+
+```bash
+mc thread                    # newest 50 messages of your current task
+mc thread --limit 10
+mc thread --before-seq 12    # older page — the value comes from the hint it prints
+mc thread --task-id <uuid>   # another task of yours, finished ones included
+```
+
 ## Recovery Protocol — You continue, you do NOT start over
 
 If the dispatch prompt contains the section `## Recovery — You already started
@@ -3088,6 +3103,11 @@ Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
 
 **`mc msg "text" [--type message|status|decision]`**
 - Always-delivered thread note (status/decision) — not a question. Questions go through `mc ask` instead.
+
+**`mc thread [--limit N] [--before-seq N] [--since-seq N] [--task-id <uuid>]`**
+- Re-read your own thread. Read-only — it **acks nothing**, so it never eats unread messages.
+- Use it when you lost the plot: after a restart, after `/clear`, or before answering
+  something that clearly refers to earlier context. Not a substitute for `mc inbox`.
 
 **Inbox (Nudge+Pull):** when you see a `📬 Neue Nachrichten …` wake-up line, run `mc inbox` immediately. It prints every new message (with its `[thread … · seq …]` footer) and acks them for you.
 

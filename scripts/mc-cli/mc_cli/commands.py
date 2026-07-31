@@ -1042,6 +1042,80 @@ def _cmd_inbox(args, client, cfg):
     return 0
 
 
+def _cmd_thread(args, client, cfg):
+    """mc thread — den eigenen Task-Thread nachlesen (Kontext-Rekonstruktion).
+
+    Gegenstueck zu `mc inbox`: **verbraucht nichts.** `mc inbox` ackt (das
+    Abholen IST die Zustellung), `mc thread` schaut nur nach. Nach einem
+    Restart/Crash/`/clear` liest du hier den Gespraechsverlauf nach, ohne dass
+    dir dabei ungelesene Nachrichten verloren gehen.
+
+    Nutzung:
+      mc thread                       # neueste 50 Nachrichten des aktuellen Tasks
+      mc thread --limit 10
+      mc thread --before-seq 12       # aeltere Seite (Wert aus dem Hinweis unten)
+      mc thread --since-seq 12        # nur was seither dazukam
+      mc thread --task-id <uuid>      # ein anderer eigener Task (auch abgeschlossen)
+    """
+    resp = client.request(
+        "GET",
+        "/api/v1/agent/me/thread",
+        query={
+            "task_id": getattr(args, "task_id", None),
+            "limit": args.limit,
+            "since_seq": getattr(args, "since_seq", None),
+            "before_seq": getattr(args, "before_seq", None),
+        },
+    ) or {}
+
+    if getattr(args, "json", False):
+        print(json.dumps(resp, indent=2, default=str))
+        return 0
+
+    if not resp.get("task_id"):
+        print("Kein aktiver Task — nichts nachzulesen.")
+        return 0
+
+    print(f"# Thread — {resp.get('task_title')} ({resp.get('task_status')})")
+    print(
+        f"# task {resp['task_id']} · latest_seq {resp.get('latest_seq', 0)} "
+        f"· dein ack: {resp.get('my_acked_seq', 0)}"
+    )
+    print()
+
+    messages = resp.get("messages") or []
+    if not messages:
+        print("Keine Nachrichten in diesem Thread.")
+        return 0
+
+    for m in messages:
+        author = (m.get("author") or {}).get("display") or "?"
+        print(f"[seq {m.get('seq')} · {author} · {m.get('created_at', '?')}]")
+        print(m.get("body") or "")
+        print()
+
+    if resp.get("budget_truncated"):
+        # Never let a partial history look complete — an agent acting
+        # confidently on half the story is worse than one that knows it is
+        # missing a piece.
+        print("# ⚠ gekuerzt: Zeichen-Budget erreicht, aeltere Nachrichten fehlen.")
+    if resp.get("has_more_before"):
+        print(f"# aeltere Nachrichten: mc thread --before-seq {messages[0].get('seq')}")
+    return 0
+
+
+def _add_thread_args(p):
+    p.add_argument("--task-id", dest="task_id",
+                   help="Anderer eigener Task (default: aktueller Task)")
+    p.add_argument("--limit", type=int, default=50,
+                   help="Anzahl Nachrichten pro Seite (1-200, default 50)")
+    p.add_argument("--since-seq", dest="since_seq", type=int,
+                   help="Nur Nachrichten neuer als dieses seq")
+    p.add_argument("--before-seq", dest="before_seq", type=int,
+                   help="Aeltere Seite: Nachrichten aelter als dieses seq")
+    p.add_argument("--json", action="store_true", help="Rohes JSON statt Transkript")
+
+
 def _add_ask_args(p):
     p.add_argument(
         "question",
@@ -1748,6 +1822,10 @@ def _cmd_recover(args, client, cfg):
     print(f"# Title: {task['title']}  |  Status: {task.get('status', '?')}")
     print(f"# dispatch_attempt_id: {task['dispatch_attempt_id']}")
     print(f"# Context-File: /tmp/mc-context.env aktualisiert")
+    # Der Prompt sagt dir WAS zu tun ist, nicht was schon besprochen wurde.
+    # Genau hier — direkt nach einem Restart — braucht der Agent den Zeiger
+    # auf den Gespraechsverlauf, sonst kennt er das Verb nie.
+    print("# Gespraechsverlauf nachlesen: `mc thread` (read-only, ackt nichts)")
     print()
     print(task["prompt"])
     return 0
@@ -2359,6 +2437,14 @@ REGISTRY: dict[str, CommandSpec] = {
         scope="",
         handler=_cmd_inbox,
         add_args=lambda p: None,
+    ),
+    "thread": CommandSpec(
+        name="thread",
+        help="Eigenen Task-Thread nachlesen (read-only, ackt NICHT — dafuer ist `mc inbox` da)",
+        endpoints=("GET /me/thread",),
+        scope="tasks:read",  # backend require_scope(Scope.TASKS_READ)
+        handler=_cmd_thread,
+        add_args=_add_thread_args,
     ),
     "help": CommandSpec(
         name="help",

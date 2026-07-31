@@ -18,7 +18,7 @@ from app.database import get_session
 from app.models.agent import Agent
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
-from app.services import runtime_manager, runtime_readiness
+from app.services import runtime_manager, runtime_readiness, runtime_naming
 from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
@@ -446,6 +446,27 @@ async def create_lmstudio_runtime(body: AddLMStudioRuntimeBody, current_user=Dep
     return {**new_rt, **state_info}
 
 
+def _grouped_sort_key(rt: dict) -> tuple:
+    """Group runtimes by provider, then order within the group.
+
+    Sorting by ``ui_order`` alone scattered the list: catalogue-bound rows are
+    created with the default 999 and landed in a heap at the end, so the two
+    Anthropic models sat apart and the Ollama ones did too (operator report,
+    2026-07-31). Provider membership is derived from the endpoint — the same
+    rule runtime_naming/model_catalog use — so a newly bound model files itself
+    next to its siblings without anyone maintaining ui_order.
+
+    Unknown providers (local vLLM, LM Studio, unsloth) keep their curated
+    ui_order and sort after the known cloud providers, which is where they sat
+    before. display_name breaks ties so bound siblings have a stable order
+    instead of depending on insertion time.
+    """
+    provider = runtime_naming.resolve_provider(rt.get("endpoint"))
+    if provider is not None:
+        return (0, provider.label, rt.get("ui_order") or 999, rt.get("display_name") or "")
+    return (1, "", rt.get("ui_order") or 999, rt.get("display_name") or "")
+
+
 @router.get("")
 async def list_runtimes(
     session: AsyncSession = Depends(get_session),
@@ -469,7 +490,7 @@ async def list_runtimes(
         # Deliberately overwrites the DEPRECATED legacy string field of the
         # same name from model_dump() — frontend type is `host?: HostRef | null`.
         result.append({**rt_dict, **state_info, "host": _host_ref(host)})
-    result.sort(key=lambda x: x.get("ui_order", 99))
+    result.sort(key=_grouped_sort_key)
     return {"runtimes": result}
 
 
