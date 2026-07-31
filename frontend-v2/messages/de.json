@@ -764,5 +764,36 @@
     "viewMode": "Ansicht",
     "listView": "Listenansicht",
     "gridView": "Rasteransicht"
+  },
+  "repos": {
+    "title": "Repos",
+    "subtitle": "GitHub-Repos und ihre Arbeitsregeln für Agenten",
+    "importRepo": "Repo importieren",
+    "private": "Privat",
+    "public": "Öffentlich",
+    "archived": "Archiviert",
+    "rulesSet": "Regeln ✓",
+    "noRules": "Keine Regeln",
+    "synced": "Synchronisiert {ago}",
+    "neverSynced": "Nie synchronisiert",
+    "githubBanner": "GitHub ist nicht verbunden — die Registry funktioniert lokal, aber zum Importieren und Erstellen von Repos braucht es GitHub-Owner + Token.",
+    "connectGithub": "GitHub verbinden",
+    "showArchived": "Archivierte Repos anzeigen",
+    "loading": "Lade Repos...",
+    "emptyTitle": "Noch keine Repos registriert",
+    "emptyHint": "Importiere ein bestehendes GitHub-Repo, um Arbeitsregeln zuzuweisen."
+  },
+  "loops": {
+    "title": "Loops",
+    "subtitle": "Ergebnisgetriebene Aufgaben-Loops — Ziel setzen, ein Runner arbeitet den Backlog Runde für Runde ab.",
+    "newLoop": "Neuer Loop",
+    "dismissError": "Fehler ausblenden",
+    "noBoard": "Kein Board ausgewählt",
+    "loading": "Lade Loops...",
+    "emptyTitle": "Noch keine Loops",
+    "emptyHint": "Erstelle einen Loop — ein Runner arbeitet den Backlog ab, bis er fertig ist oder dich braucht.",
+    "deleteTitle": "Loop löschen",
+    "deleteBody": "\"{name}\" löschen? Das kann nicht rückgängig gemacht werden.",
+    "delete": "Löschen"
   }
 }

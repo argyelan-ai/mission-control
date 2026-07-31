@@ -764,5 +764,36 @@
     "viewMode": "View mode",
     "listView": "List view",
     "gridView": "Grid view"
+  },
+  "repos": {
+    "title": "Repos",
+    "subtitle": "GitHub repos and their working rules for agents",
+    "importRepo": "Import repo",
+    "private": "Private",
+    "public": "Public",
+    "archived": "Archived",
+    "rulesSet": "Rules ✓",
+    "noRules": "No rules",
+    "synced": "Synced {ago}",
+    "neverSynced": "Never synced",
+    "githubBanner": "GitHub is not connected — the registry works locally, but importing and creating repos needs a GitHub owner + token.",
+    "connectGithub": "Connect GitHub",
+    "showArchived": "Show archived repos",
+    "loading": "Loading repos...",
+    "emptyTitle": "No repos registered yet",
+    "emptyHint": "Import an existing GitHub repo to assign working rules."
+  },
+  "loops": {
+    "title": "Loops",
+    "subtitle": "Outcome-driven task loops — set a goal, let a runner grind the backlog round by round.",
+    "newLoop": "New loop",
+    "dismissError": "Dismiss error",
+    "noBoard": "No board selected",
+    "loading": "Loading loops...",
+    "emptyTitle": "No loops yet",
+    "emptyHint": "Create a loop to have a runner grind through a backlog until it's done or needs you.",
+    "deleteTitle": "Delete loop",
+    "deleteBody": "Delete \"{name}\"? This cannot be undone.",
+    "delete": "Delete"
   }
 }
