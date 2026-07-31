@@ -1,6 +1,7 @@
 import { type ClassValue, clsx } from "clsx";
 import { twMerge } from "tailwind-merge";
 import { formatDistanceToNow } from "date-fns";
+import { de as deLocale } from "date-fns/locale";
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -46,12 +47,17 @@ export function severityColor(severity: string): string {
   }
 }
 
-export function timeAgo(date: string | null): string {
-  if (!date) return "never";
+export function timeAgo(date: string | null, locale: string = "en"): string {
+  if (!date) return locale === "de" ? "nie" : "never";
   try {
-    return formatDistanceToNow(new Date(date), { addSuffix: true });
+    return formatDistanceToNow(new Date(date), {
+      addSuffix: true,
+      // Omitting `locale` for "en" preserves date-fns' default (en-US) output
+      // byte-for-byte — do not pass an explicit enUS locale object here.
+      locale: locale === "de" ? deLocale : undefined,
+    });
   } catch {
-    return "unknown";
+    return locale === "de" ? "unbekannt" : "unknown";
   }
 }
 

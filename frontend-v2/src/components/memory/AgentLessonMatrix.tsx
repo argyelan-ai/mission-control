@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocale } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { GraduationCap, ChevronRight, Bot } from "lucide-react";
 import { api } from "@/lib/api";
@@ -43,6 +44,7 @@ export function AgentLessonMatrix({
   lessons: BoardMemory[];
   onOpen: (entry: BoardMemory) => void;
 }) {
+  const locale = useLocale();
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
 
   const { data: agents } = useQuery({
@@ -161,7 +163,7 @@ export function AgentLessonMatrix({
                     {/* Phase 5 MSY-02: cosine merge candidate flag */}
                     {lesson.merge_candidate_id != null && <MergeCandidateBadge />}
                     <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                      {timeAgo(lesson.created_at)}
+                      {timeAgo(lesson.created_at, locale)}
                     </span>
                     {lesson.auto_generated && (
                       <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>

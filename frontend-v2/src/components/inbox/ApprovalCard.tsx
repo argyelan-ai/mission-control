@@ -3,7 +3,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { motion } from "framer-motion";
 import {
   CheckCircle, XCircle, AlertTriangle, ShieldAlert,
@@ -81,6 +81,7 @@ interface ApprovalCardProps {
 
 export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps) {
   const t = useTranslations("inbox");
+  const locale = useLocale();
   const [note, setNote] = useState("");
 
   // Dispatch install/uninstall variants to dedicated card
@@ -148,7 +149,7 @@ export function ApprovalCard({ approval, onResolve, loading }: ApprovalCardProps
               )}
 
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
-                {timeAgo(approval.created_at)}
+                {timeAgo(approval.created_at, locale)}
               </span>
             </div>
 

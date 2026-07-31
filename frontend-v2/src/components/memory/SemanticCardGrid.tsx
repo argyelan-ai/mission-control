@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { useLocale } from "next-intl";
 import { Pin, Database, Plus } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -24,6 +25,7 @@ export function SemanticCardGrid({
   onOpen: (entry: BoardMemory) => void;
   onNew: () => void;
 }) {
+  const locale = useLocale();
   const qc = useQueryClient();
 
   const pinMutation = useMutation({
@@ -98,7 +100,7 @@ export function SemanticCardGrid({
           {/* Phase 5 MSY-02: cosine merge candidate flag */}
           {item.merge_candidate_id != null && <MergeCandidateBadge />}
           <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-            {timeAgo(item.created_at)}
+            {timeAgo(item.created_at, locale)}
           </span>
         </div>
 

@@ -484,6 +484,7 @@ function ConfigRow({
 }
 
 function RunRow({ run }: { run: ScheduledJobRun }) {
+  const locale = useLocale();
   const t = useTranslations("schedule");
   const duration =
     run.finished_at != null
@@ -500,7 +501,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
         className="flex-1 min-w-0 truncate"
         style={{ color: C.textSecondary }}
       >
-        {timeAgo(run.started_at)}
+        {timeAgo(run.started_at, locale)}
         {run.retry_attempt > 0 && (
           <span className="ml-1.5" style={{ color: C.textMuted }}>
             {t("retryAttempt", { count: run.retry_attempt })}
@@ -539,6 +540,7 @@ function RunRow({ run }: { run: ScheduledJobRun }) {
 }
 
 function TaskRow({ task, agentName }: { task: Task; agentName: string | null }) {
+  const locale = useLocale();
   const status = task.status as TaskStatus;
   const ts = task.completed_at ?? task.started_at ?? null;
   return (
@@ -575,7 +577,7 @@ function TaskRow({ task, agentName }: { task: Task; agentName: string | null }) 
           className="text-[10px] flex-shrink-0"
           style={{ color: C.textMuted }}
         >
-          {timeAgo(ts)}
+          {timeAgo(ts, locale)}
         </span>
       )}
     </Link>

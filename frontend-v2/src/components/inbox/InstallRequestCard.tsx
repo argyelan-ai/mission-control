@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion } from "framer-motion";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Check, X, Package, Puzzle, Server } from "lucide-react";
 import { cn, timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -46,6 +46,7 @@ function parseActionType(actionType: string): {
 
 export function InstallRequestCard({ approval, onResolve }: Props) {
   const t = useTranslations("inbox");
+  const locale = useLocale();
   const payload = approval.payload as InstallApprovalPayload | null;
   const [isResolving, setIsResolving] = useState<"approve" | "reject" | null>(null);
   const [rejectReason, setRejectReason] = useState("");
@@ -106,7 +107,7 @@ export function InstallRequestCard({ approval, onResolve }: Props) {
               )}
 
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
-                {timeAgo(approval.created_at)}
+                {timeAgo(approval.created_at, locale)}
               </span>
             </div>
 

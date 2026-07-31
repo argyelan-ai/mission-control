@@ -329,7 +329,7 @@ export function JobModal({
   const applyTemplate = (tpl: JobTemplate) => {
     setForm((prev) => ({
       ...prev,
-      name: prev.name || tpl.name,
+      name: prev.name || t(`jobTemplates.${tpl.key}.name`),
       schedule_type: tpl.defaults.schedule_type ?? prev.schedule_type,
       schedule_time: tpl.defaults.schedule_time ?? prev.schedule_time,
       schedule_cron: tpl.defaults.schedule_cron ?? prev.schedule_cron ?? null,
@@ -441,10 +441,10 @@ export function JobModal({
                       >
                         <EntityIcon value={tpl.icon} size={16} />
                         <span className="text-sm font-medium" style={{ color: C.textPrimary }}>
-                          {tpl.name}
+                          {t(`jobTemplates.${tpl.key}.name`)}
                         </span>
                         <span className="text-[10px] leading-snug" style={{ color: C.textMuted }}>
-                          {tpl.description}
+                          {t(`jobTemplates.${tpl.key}.description`)}
                         </span>
                       </button>
                     ))}

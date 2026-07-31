@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { BookOpen } from "lucide-react";
 import { cn, contextPercent, contextColor, timeAgo } from "@/lib/utils";
@@ -146,6 +146,7 @@ interface AgentCardProps {
 
 export function AgentCard({ agent, className }: AgentCardProps) {
   const t = useTranslations("agents");
+  const locale = useLocale();
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
@@ -224,7 +225,7 @@ export function AgentCard({ agent, className }: AgentCardProps) {
             {/* Footer: last seen + provision */}
             <div className="mt-3 flex items-center justify-between">
               <span className="text-[10px] text-[var(--color-text-muted)]">
-                {timeAgo(agent.last_seen_at)}
+                {timeAgo(agent.last_seen_at, locale)}
               </span>
               <ProvisionBadge status={agent.provision_status} />
             </div>

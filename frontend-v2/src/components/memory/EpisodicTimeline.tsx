@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
+import { useLocale } from "next-intl";
 import { motion } from "framer-motion";
 import { Clock } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
@@ -51,6 +52,7 @@ export function EpisodicTimeline({
   entries: BoardMemory[];
   onOpen: (entry: BoardMemory) => void;
 }) {
+  const locale = useLocale();
   const grouped = useMemo(() => groupByDay(entries), [entries]);
 
   if (entries.length === 0) {
@@ -123,7 +125,7 @@ export function EpisodicTimeline({
                       {/* Phase 5 MSY-02: cosine merge candidate flag */}
                       {item.merge_candidate_id != null && <MergeCandidateBadge />}
                       <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-                        {timeAgo(item.created_at)}
+                        {timeAgo(item.created_at, locale)}
                       </span>
                       {item.auto_generated && (
                         <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-muted)" }}>

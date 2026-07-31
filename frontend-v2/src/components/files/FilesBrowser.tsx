@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -249,6 +249,7 @@ function FileRow({
   onSelectFile: (subpath: string) => void;
   onToggleSelect: (subpath: string, on: boolean) => void;
 }) {
+  const locale = useLocale();
   const entrySubpath = subpath ? `${subpath}/${entry.name}` : entry.name;
   const Icon = fileIcon(entry.name, entry.is_directory);
   const color = fileIconColor(entry.name, entry.is_directory);
@@ -286,7 +287,7 @@ function FileRow({
         {entry.is_directory ? "—" : humanSize(entry.size)}
       </td>
       <td className="px-4 py-2.5 text-right text-xs hidden sm:table-cell" style={{ color: C.textMuted }}>
-        {timeAgo(mtimeToIso(entry.mtime))}
+        {timeAgo(mtimeToIso(entry.mtime), locale)}
       </td>
     </tr>
   );

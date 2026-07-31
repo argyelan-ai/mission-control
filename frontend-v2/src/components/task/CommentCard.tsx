@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useLocale } from "next-intl";
 import ReactMarkdown from "react-markdown";
 import remarkBreaks from "remark-breaks";
 import { parseComment, type ParsedComment } from "@/lib/parseComment";
@@ -334,6 +335,7 @@ function StructuredBody({ parsed }: { parsed: ParsedComment }) {
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export function CommentCard({ comment, agentMap }: CommentCardProps) {
+  const locale = useLocale();
   const type = resolveType(comment);
   const color = TYPE_COLORS[type];
   const author = resolveAuthor(comment, agentMap);
@@ -438,7 +440,7 @@ export function CommentCard({ comment, agentMap }: CommentCardProps) {
             flexShrink: 0,
           }}
         >
-          {timeAgo(comment.created_at)}
+          {timeAgo(comment.created_at, locale)}
         </span>
       </div>
 

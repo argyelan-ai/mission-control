@@ -122,7 +122,7 @@ export default function StatusBar() {
         >
           ⌘K
         </kbd>
-        <span>PALETTE</span>
+        <span>{t("commandPaletteLabel")}</span>
       </button>
     </div>
   );

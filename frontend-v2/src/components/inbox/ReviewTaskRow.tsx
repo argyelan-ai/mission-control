@@ -8,7 +8,7 @@ import {
   ExternalLink, MessageSquare, Pause, UserCheck,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { cn, timeAgo } from "@/lib/utils";
 import { api } from "@/lib/api";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -39,6 +39,7 @@ export function ReviewTaskRow({
   loading,
 }: ReviewTaskRowProps) {
   const t = useTranslations("inbox");
+  const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
   const [showRejectInput, setShowRejectInput] = useState(false);
   const [rejectComment, setRejectComment] = useState("");
@@ -96,7 +97,7 @@ export function ReviewTaskRow({
                 </span>
               )}
               <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
-                {timeAgo(task.updated_at)}
+                {timeAgo(task.updated_at, locale)}
               </span>
             </div>
             <div className="flex items-center gap-2 mt-2">

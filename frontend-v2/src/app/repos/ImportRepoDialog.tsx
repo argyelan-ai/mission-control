@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CheckCircle2, Github, Loader2, Lock, Search, Globe2 } from "lucide-react";
 import { ResponsiveModal } from "@/components/shared/ResponsiveModal";
@@ -39,6 +39,7 @@ function extractErrorDetail(err: unknown): string | null {
  */
 export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
   const t = useTranslations("repos.import");
+  const locale = useLocale();
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [imported, setImported] = useState<Set<string>>(new Set());
@@ -181,7 +182,7 @@ export function ImportRepoDialog({ open, onClose }: ImportRepoDialogProps) {
                   )}
                   {c.pushed_at && (
                     <p className="text-[10px] mt-0.5" style={{ color: C.textDim }}>
-                      {t("lastPushed", { ago: timeAgo(c.pushed_at) })}
+                      {t("lastPushed", { ago: timeAgo(c.pushed_at, locale) })}
                     </p>
                   )}
                 </div>

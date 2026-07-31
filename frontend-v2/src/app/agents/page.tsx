@@ -5,7 +5,7 @@ import Link from "next/link";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import {
   Plus, X, Loader2, Bot, Users, RotateCcw, Settings, BarChart3,
   Layout, ChevronDown, Archive, MoreVertical,
@@ -332,6 +332,7 @@ function AgentRosterRow({
   onMenu: (a: Agent) => void;
 }) {
   const t = useTranslations("agents");
+  const locale = useLocale();
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const prov = PROVISION_MAP[agent.provision_status] ?? PROVISION_MAP.local;
   const model = agent.model ? agent.model.split("/").pop() : null;
@@ -453,6 +454,7 @@ function AgentActionsSheet({
   onClose: () => void;
 }) {
   const t = useTranslations("agents");
+  const locale = useLocale();
   useBodyScrollLock(true);
   // Esc closes (panel register rule 4) — backdrop click is below.
   useEffect(() => {
@@ -512,7 +514,7 @@ function AgentActionsSheet({
                 <StatusDot status={dot} />
                 <span className="capitalize">{agent.status}</span>
                 <span>· {t("contextPct", { pct })}</span>
-                {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at)}</span>}
+                {agent.last_seen_at && <span>· {timeAgo(agent.last_seen_at, locale)}</span>}
               </div>
             </div>
           </div>
@@ -572,6 +574,7 @@ function AgentActionsSheet({
 
 export default function AgentsPage() {
   const t = useTranslations("agents");
+  const locale = useLocale();
   const qc = useQueryClient();
   const { activeBoardId } = useAppStore();
 
@@ -826,7 +829,7 @@ export default function AgentsPage() {
                         </span>
                         {agent.archived_at && (
                           <span className="block text-[10px] truncate mt-0.5" style={{ color: C.textMuted }}>
-                            {t("archivedAgo", { ago: timeAgo(agent.archived_at) })}
+                            {t("archivedAgo", { ago: timeAgo(agent.archived_at, locale) })}
                           </span>
                         )}
                       </Link>

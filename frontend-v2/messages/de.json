@@ -396,7 +396,8 @@
       "reconfigureTitle": "Templates neu generieren + zum Worker pushen",
       "recreateTitle": "Container {name} komplett neu erstellen?",
       "recreateBody": "Das zieht das aktuelle Docker-Image (~30-90s). Die laufende Worker-Session wird beendet.",
-      "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true)."
+      "recreateWarn": "Achtung: Der Agent arbeitet gerade an einer Aufgabe — der Lauf wird abgebrochen. Bestätige, um trotzdem fortzufahren (force=true).",
+      "runtimeLabel": "Runtime"
     }
   },
   "inbox": {
@@ -496,7 +497,8 @@
     "close": "Schliessen",
     "boardNamePlaceholder": "Board-Name",
     "creating": "ERSTELLE…",
-    "createBoard": "BOARD ERSTELLEN"
+    "createBoard": "BOARD ERSTELLEN",
+    "commandPaletteLabel": "PALETTE"
   },
   "login": {
     "consoleAccess": "Konsole · Zugang",
@@ -635,6 +637,32 @@
     "editJob": "Job bearbeiten",
     "templateHint": "Template wählen oder eigene Konfiguration erstellen.",
     "templates": "Templates",
+    "jobTemplates": {
+      "dailyStandup": {
+        "name": "Täglicher Standup",
+        "description": "Täglicher Standup-Task für das Team"
+      },
+      "weekdayMorning": {
+        "name": "Wochentage Morgen",
+        "description": "Mo–Fr um 08:30 — perfekt für Daily Reports"
+      },
+      "weeklyCleanup": {
+        "name": "Wöchentliche Bereinigung",
+        "description": "Wöchentliche Code-Qualitätsprüfung (So 22:00)"
+      },
+      "hourlyHealth": {
+        "name": "Stündlicher Health Check",
+        "description": "Stündlicher System-Health-Check"
+      },
+      "every4h": {
+        "name": "Alle 4 Stunden",
+        "description": "Periodischer Sync-Job, 6x am Tag"
+      },
+      "monthlyReport": {
+        "name": "Monatsbericht",
+        "description": "1. des Monats um 09:00"
+      }
+    },
     "jobSection": "Job",
     "nameRequiredLabel": "Name *",
     "nameRequired": "Name ist erforderlich.",
@@ -823,7 +851,10 @@
     "typeLesson": "Lektion",
     "typeLessonHint": "Lernerfahrung",
     "typeReference": "Referenz",
-    "typeReferenceHint": "Link / Quelle"
+    "typeReferenceHint": "Link / Quelle",
+    "filterLabel": "Filter",
+    "scopeLabel": "Scope",
+    "agentLabel": "Agent"
   },
   "insights": {
     "tabOverview": "Übersicht",

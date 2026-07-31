@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { useState } from "react";
 import AppShell from "@/components/layout/AppShell";
@@ -99,6 +99,7 @@ const tooltipStyle = {
 // ── Page ─────────────────────────────────────────────────────────────────────
 export default function InsightsPage() {
   const tr = useTranslations("insights");
+  const locale = useLocale();
   const [days, setDays] = useState(30);
   const [activeTab, setActiveTab] = useState<"overview" | "cost" | "performance" | "reports">("overview");
 
@@ -238,7 +239,7 @@ export default function InsightsPage() {
             <div className="flex items-center gap-3 shrink-0">
               {insights?.analyzed_at && (
                 <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>
-                  {tr("analyzedAgo", { ago: timeAgo(insights.analyzed_at) })}
+                  {tr("analyzedAgo", { ago: timeAgo(insights.analyzed_at, locale) })}
                 </span>
               )}
               <div className="relative">
@@ -515,7 +516,7 @@ export default function InsightsPage() {
                             <td className="px-5 py-2.5 text-sm tabular-nums" style={{ color: "var(--color-text-body)" }}>{fmtK(s.tokens_out)}</td>
                             <td className="px-5 py-2.5 text-sm font-medium tabular-nums" style={{ color: C.accent }}>{fmtUsd(s.cost_usd)}</td>
                             <td className="px-5 py-2.5 text-xs" style={{ color: "var(--color-text-muted)" }}>
-                              {s.last_event_at ? timeAgo(s.last_event_at) : "—"}
+                              {s.last_event_at ? timeAgo(s.last_event_at, locale) : "—"}
                             </td>
                           </tr>
                         ))}
@@ -897,7 +898,7 @@ export default function InsightsPage() {
                       <div key={r.id} className="rounded-md p-5" style={{ background: IN_bg, border: `1px solid ${C.border}` }}>
                         <div className="flex items-center gap-2 mb-3">
                           <Clock size={12} style={{ color: "var(--color-text-muted)" }} />
-                          <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>{timeAgo(r.created_at)}</span>
+                          <span className="font-mono text-[10px]" style={{ color: "var(--color-text-muted)" }}>{timeAgo(r.created_at, locale)}</span>
                           {r.title && (
                             <span className="text-sm font-semibold ml-2" style={{ color: "var(--color-text-primary)" }}>{r.title}</span>
                           )}

@@ -30,6 +30,7 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
+import { useLocale } from "next-intl";
 import { timeAgo } from "@/lib/utils";
 import { C } from "@/lib/colors";
 import type { TaskTimelineEntry } from "@/lib/types";
@@ -84,6 +85,7 @@ const SOURCE_LABEL: Record<TaskTimelineEntry["source"], string> = {
 // ── Row ──────────────────────────────────────────────────────────────────────
 
 function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: boolean }) {
+  const locale = useLocale();
   const { icon: Icon, color } = getKindMeta(entry.kind);
   const absolute = new Date(entry.ts).toLocaleString();
 
@@ -124,7 +126,7 @@ function TimelineRow({ entry, isLast }: { entry: TaskTimelineEntry; isLast: bool
         <span style={{ color: C.textDim }}>{SOURCE_LABEL[entry.source]}</span>
         <span style={{ color: C.textDim }}>·</span>
         <span title={absolute} style={{ color: C.textMuted }}>
-          {timeAgo(entry.ts)}
+          {timeAgo(entry.ts, locale)}
         </span>
       </div>
     </div>
