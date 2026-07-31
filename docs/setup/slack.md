@@ -126,8 +126,8 @@ ready. If something is wrong, it says what Slack said, in plain words.
 
 ## 8. Create the channel and invite the bot
 
-Make the channel the fleet should talk in — `#mission-control` is a good
-default — and invite the bot into it:
+Make the channel the fleet should talk in — `#your-fleet-channel` below stands
+for whatever you name it — and invite the bot into it:
 
 ```
 /invite @your-app-name
@@ -143,7 +143,7 @@ Two settings in `.env`, then `docker compose up -d backend`:
 
 ```
 SLACK_TEAM_CHAT_ENABLED=true
-SLACK_DEFAULT_CHANNEL=#mission-control
+SLACK_DEFAULT_CHANNEL=#your-fleet-channel
 CHAT_CHANNELS=telegram,slack
 ```
 

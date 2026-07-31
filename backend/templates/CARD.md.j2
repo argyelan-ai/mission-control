@@ -45,9 +45,11 @@ you must never skip.
 
 ## Verbs (`mc <verb>`)
 
-{% for verb, desc in canonical_verbs.items() -%}
-- `{{ verb }}` — {{ desc }}
+{% for verb in card_verbs -%}
+- `{{ verb }}` — {{ canonical_verbs[verb] }}
 {% endfor %}
+Capability verbs (delegate, deliverable, vault-*, memory, telegram, verify,
+pdf, help, …) are in `mc docs tasks` — full reference, offline, no network.
 {%- if harness != 'omp' %}
 ## Close protocol
 
