@@ -1,0 +1,51 @@
+# Recyclarr config — keeps Radarr's TRaSH custom formats + scores in sync
+# automatically, so the German + Apple-TV tuning never drifts.
+#
+# Recyclarr (https://recyclarr.dev) is a small CLI/container that pulls the
+# upstream TRaSH-Guides definitions and pushes them into Radarr on a schedule.
+# It complements the one-shot radarr-setup.py in ../media-downloader/ — that
+# script bootstraps the setup, Recyclarr keeps it current.
+#
+# Install (QNAP Container Station or any Docker host on the LAN):
+#   docker run --rm -it \
+#     -v /share/Container/recyclarr:/config \
+#     ghcr.io/recyclarr/recyclarr sync
+# Put your Radarr API key in a RECYCLARR_RADARR_API_KEY environment variable or
+# in the secrets section — never commit it.
+
+radarr:
+  main:
+    base_url: http://<nas-ip>:7878
+    api_key: !env_var RECYCLARR_RADARR_API_KEY
+
+    # Use TRaSH's German score set so the release-title language logic matches
+    # our "German first, don't block fallbacks" intent.
+    quality_profiles:
+      - name: 4K / HD - DE
+        reset_unmatched_scores:
+          enabled: true
+        min_format_score: 0
+
+    custom_formats:
+      # ── Language: prefer German (dual-audio first) ──────────────────────────
+      - trash_ids:
+          - 0dc8aec3bd1c47cd6c40c46ecd27e846  # German DL (Dual Language)
+          - 8f9707b7f3fb0f22b48d4e5ef94ba6fa  # German DL (undefined)
+          - 8385c07a3b03e6d1479d92a45f8c9c4e  # German
+        assign_scores_to:
+          - name: 4K / HD - DE
+      # ── Block cinema rips + junk ────────────────────────────────────────────
+      - trash_ids:
+          - b8cd450cbfa689c0259a01d9e29ba3d6  # 3D (unwanted)
+          - ed38b889b31be83fda192888e2286d83  # BR-DISK
+          - 90cedc1fea7ea5d11298bebd3d1d3223  # EVO (no WEBDL)
+          - 90a6f9a284dff5103f6346090e6280c8  # LQ
+          - dc98083864ea246d05a42df0d05f81cc  # x265 (HD) — 0 in German context (HEVC is fine on Apple TV)
+        assign_scores_to:
+          - name: 4K / HD - DE
+
+# NOTE: trash_ids above are the canonical TRaSH-Guides identifiers. Run
+# `recyclarr list custom-formats radarr` to see the current set, and
+# `recyclarr sync --preview` to review changes before applying. Set the
+# x265 (HD) score to 0 (not the TRaSH default -10000): German HD releases are
+# frequently x265, and the Apple TV decodes HEVC natively.
