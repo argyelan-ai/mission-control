@@ -232,6 +232,13 @@ German DL WEB-1080p (8.4 GB), downloading at 12 MB/s (~60 %). Will import to
 ---
 
 ## Troubleshooting
+- **FAILURE/HEALTH with mass `430 Article not available`** (check the NZBGet log) → the
+  post was DMCA-removed from the backbone, NOT a server/config problem — the server
+  answered per article, so auth+connection are fine. Expected for fresh German releases
+  of US blockbusters. Try the next release or wait for a repost; report honestly.
+- **Evidence discipline:** never claim "other downloads worked in parallel" without checking
+  the actual timestamps in NZBGet history/log first. A SUCCESS entry in history may be days
+  old. Wrong evidence in a report is worse than no evidence.
 - **Radarr 401** → API key derivation failed; re-run the login flow (section 0).
 - **`MovieExistsValidator` (400)** → already added; re-search the existing id (section 3).
 - **NZBGet 401** → wrong creds; the working user is in the vault `nzbget` credential.
