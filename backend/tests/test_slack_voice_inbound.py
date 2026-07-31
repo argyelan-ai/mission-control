@@ -155,8 +155,11 @@ async def test_failed_transcription_tells_the_operator(async_session):
 
 
 @pytest.mark.asyncio
-async def test_non_audio_file_shares_stay_ignored(async_session):
-    """A shared PDF is not a voice message; the old behaviour holds."""
+async def test_a_non_audio_share_is_announced_not_silently_dropped(async_session):
+    """A shared PDF is still not ingested (that arrives with the references
+    work) — but the drop must be SAID. Before, the file vanished without a
+    trace: the operator sends a document and, as far as he can tell, is
+    ignored — the exact failure mode the voice work already closed for audio."""
     await _boss(async_session)
     adapter = _Adapter()
     event = _voice_event()
@@ -169,6 +172,30 @@ async def test_non_audio_file_shares_stay_ignored(async_session):
 
     stt.assert_not_awaited()
     assert list((await async_session.exec(select(Message))).all()) == []
+    assert adapter.sent, "the drop must be announced in the channel"
+    assert "Datei" in adapter.sent[0][1]
+
+
+@pytest.mark.asyncio
+async def test_a_caption_beside_a_non_audio_share_survives(async_session):
+    """PDF + typed text: before, BOTH were lost — the handler returned before
+    the caption was even read (the concept called this the caption bug). The
+    file still waits for the references work, but the typed words are a
+    message like any other and must reach Boss."""
+    await _boss(async_session)
+    adapter = _Adapter()
+    event = _voice_event(text="schau dir Kapitel 3 an")
+    event["files"] = [{"id": "F1", "mimetype": "application/pdf"}]
+
+    with _channel_ours(), patch(
+        "app.services.slack_voice.transcribe_event_audio", new_callable=AsyncMock,
+    ) as stt:
+        await ingest_slack_event(event, adapter=adapter, session=async_session)
+
+    stt.assert_not_awaited()
+    msgs = list((await async_session.exec(select(Message))).all())
+    assert [m.body for m in msgs] == ["schau dir Kapitel 3 an"]
+    assert adapter.sent and "Datei" in adapter.sent[0][1]
 
 
 @pytest.mark.asyncio

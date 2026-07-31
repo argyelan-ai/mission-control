@@ -135,6 +135,10 @@ HARD_GATE_NAMES = [
     "**Credentials live in the Vault, never inline.**",
     "**5-Minute-Blocker Rule.**",
     "**Deliverables only under `/deliverables/<task_id>/`.**",
+    # Chat style is deliberately NOT comm_v2-gated: agents without comm_v2
+    # (Downloader, Shakespeare) still chat with the operator via Slack —
+    # gating the rule left exactly those agents writing walls of text.
+    "**Chat style — scannable, not prose.**",
 ]
 
 # The inbox->msg gate (PR #187, incident 2026-07-28: FreeCode answered Mark

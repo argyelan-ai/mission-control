@@ -77,8 +77,23 @@ def test_card_rule_asks_what_the_message_changes():
 def test_card_rule_carries_the_scannable_style():
     """Marks Wunsch 30.07.2026: laengere Chat-Antworten scannbar — Bullets +
     fette Lead-ins statt Textwand. Kurzform in der Card (Byte-Budget), die
-    Vollform steht in der SOUL."""
+    Vollform steht in der SOUL. Schwelle geschaerft 31.07.: EIN kurzer Satz
+    plain, ab zwei Saetzen oder Aufzaehlbarem -> Bullets."""
     lowered = _card().lower()
+    assert "scannable" in lowered
+    assert "bullets" in lowered
+    assert "wall of text" in lowered
+    assert "one short sentence" in lowered
+    assert "enumerable" in lowered
+
+
+def test_card_style_rule_survives_without_comm_v2():
+    """Messung 31.07.2026: die Stilregel hing am comm_v2-Gate — Agenten ohne
+    comm_v2 (Downloader, Shakespeare) chatten aber real ueber Slack mit Mark
+    und bekamen sie nie. Sie muss ungegated in der Card stehen, OHNE tote
+    Referenzen auf Werkzeuge, die es ohne comm_v2 nicht gibt (mc inbox,
+    mc msg) — das prueft test_card_rule_is_absent_without_comm_v2."""
+    lowered = _card(comm_v2=False).lower()
     assert "scannable" in lowered
     assert "bullets" in lowered
     assert "wall of text" in lowered

@@ -31,7 +31,7 @@ export function FileCard({
 
   const sendToTelegram = useMutation({
     mutationFn: () =>
-      request("/api/v1/me/telegram", {
+      request("/api/v1/agent/me/telegram", {
         method: "POST",
         body: JSON.stringify({
           text: `Aus dem Vault: ${displayTitle}`,

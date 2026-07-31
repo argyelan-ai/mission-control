@@ -144,6 +144,31 @@ def _force_close_open_checklist(client: Client, cfg: Config) -> int:
     return len(pending)
 
 
+def _warn_report_gate_if_unmet(task: dict, target_status: str) -> None:
+    """Frueher Hinweis auf die Report-Pflicht — Spiegel des Backend-Gates in
+    agent_task_status.py (Report-back hard gate): PATCH auf 'done' wird mit
+    422 abgelehnt solange `report_sent_to_telegram=false` bei einem Root-Task
+    mit `report_back_required=true` und Telegram-Channel.
+
+    Nur ein stderr-Hinweis, KEIN Abbruch: das Backend bleibt die Autoritaet
+    (die lokale Task-Kopie kann stale sein, z.B. Report gerade eben gesendet).
+    `is False` statt falsy-Check: fehlt das Feld (aelteres Backend), schweigen
+    wir statt falsch zu warnen.
+    """
+    if (
+        target_status == "done"
+        and task.get("report_back_required")
+        and not task.get("parent_task_id")
+        and (task.get("report_back_channel") or "telegram") == "telegram"
+        and task.get("report_sent_to_telegram") is False
+    ):
+        print(
+            "# Hinweis: Report-Pflicht — erst `mc telegram \"…\"` senden, "
+            "sonst lehnt das Backend mit 422 ab.",
+            file=sys.stderr,
+        )
+
+
 def _cmd_done(args, client, cfg):
     if getattr(args, "force", False):
         closed = _force_close_open_checklist(client, cfg)
@@ -169,6 +194,7 @@ def _cmd_done(args, client, cfg):
         )
         return _patch_status(client, cfg, "review")
 
+    _warn_report_gate_if_unmet(task, "done")
     return _patch_status(client, cfg, "done")
 
 
@@ -544,6 +570,10 @@ def _preflight_finish(client: Client, cfg, target_status: str) -> dict:
             f"Task-Status ist '{current}' — `mc finish` erwartet 'in_progress' oder 'review'. "
             f"Vermutlich wurde der Task bereits abgeschlossen, gestoppt oder wartet auf Approval."
         )
+
+    # Report-Gate-Vorpruefung: klarer Hinweis VOR dem Statuswechsel statt
+    # kryptischer 422 danach. Nicht-blockierend — das Backend entscheidet.
+    _warn_report_gate_if_unmet(task, target_status)
 
     # 2. Checklist-Items: jede Open-Item blockt PATCH mit 422.
     items = client.request("GET", f"{base}/checklist") or []

@@ -647,6 +647,119 @@ def test_me_prints_full_json_not_bare_id(capsys):
     assert "current_task" in out
 
 
+# ── Report-Gate-Vorpruefung — Hinweis vor dem 422 (Slack quick wins) ───────
+#
+# Backend lehnt PATCH 'done' mit 422 ab solange report_sent_to_telegram=false
+# bei report_back_required Telegram-Root-Tasks. Der Agent erfuhr das bisher
+# erst NACH dem Abschlussversuch. `_warn_report_gate_if_unmet` gibt den
+# Hinweis vorher auf stderr aus — blockiert aber NIE (Backend = Autoritaet).
+
+
+def _task_report_gate(status="in_progress", sent=False, **overrides):
+    t = _task(status=status)
+    t["report_back_required"] = True
+    t["parent_task_id"] = None
+    t["report_back_channel"] = "telegram"
+    t["report_sent_to_telegram"] = sent
+    t.update(overrides)
+    return t
+
+
+def test_finish_warns_when_report_gate_unmet(capsys):
+    """report_sent=false → Hinweis auf stderr, PATCH laeuft trotzdem."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_report_gate(sent=False)),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Report-Pflicht" in err
+    assert "mc telegram" in err
+    assert "422" in err
+    # Nicht-blockierend: PATCH wurde trotzdem versucht.
+    assert any(c["method"] == "PATCH" for c in client.calls)
+
+
+def test_finish_no_warning_when_report_already_sent(capsys):
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_report_gate(sent=True)),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+def test_finish_no_warning_when_field_missing(capsys):
+    """Aelteres Backend ohne report_sent_to_telegram im /detail → schweigen
+    statt falsch warnen (Feld fehlt → kein `is False`-Match)."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task()),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+def test_finish_no_warning_for_subtask(capsys):
+    """Backend-Gate gilt nur fuer Root-Tasks — Subtasks sind bypassed."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_report_gate(sent=False, parent_task_id="parent-uuid")),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_finish(_Args(), client, cfg)
+    assert rc == 0
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+def test_finish_no_warning_when_target_is_review(capsys):
+    """Gate greift nur bei PATCH 'done' — --review ist nicht betroffen."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_report_gate(sent=False)),
+        ("GET", "/checklist", []),
+        ("GET", "/comments", []),
+        ("POST", "/comments", {"id": "c"}),
+        ("PATCH", "/tasks/", {"status": "review"}),
+    ])
+    rc = commands._cmd_finish(_Args(review=True), client, cfg)
+    assert rc == 0
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+def test_done_warns_when_report_gate_unmet(capsys):
+    """`mc done` (ohne finish) laeuft nicht durch _preflight_finish — der
+    Hinweis muss auch dort kommen."""
+    cfg = _mock_cfg()
+    client = _mock_client([
+        ("GET", "/detail", _task_report_gate(sent=False)),
+        ("PATCH", "/tasks/", {"status": "done"}),
+    ])
+    rc = commands._cmd_done(_DoneArgs(), client, cfg)
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Report-Pflicht" in err
+    assert any(c["method"] == "PATCH" for c in client.calls)
+
+
 def test_done_on_plain_task_keeps_done_behavior():
     cfg = _mock_cfg()
     client = _mock_client([

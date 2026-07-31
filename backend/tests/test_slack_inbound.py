@@ -364,17 +364,57 @@ async def test_a_reply_in_a_thread_lands_in_that_conversation(async_session, ada
 
 
 @pytest.mark.asyncio
-async def test_an_unknown_thread_is_asked_about_not_guessed(
+async def test_an_unmapped_thread_reply_reaches_boss_instead_of_vanishing(
     async_session, adapter, transport
 ):
-    """Two decoy threads: an implementation that takes 'the nearest one' fails
-    here. Without them the test would be trivially green on an empty database."""
+    """2026-07-31: the operator replied inside a Slack thread on a
+    channel-level Boss message ("ladet bitte supergirl herunter"). Channel
+    root messages have no thread row, so the reply's thread_ts mapped to
+    nothing, the handler asked back — and the order was LOST.
+
+    A reply under OUR channel is still the operator talking to MC. The new
+    contract: deliver it to the general chat (Boss), and say so in the Slack
+    thread so the operator knows where the conversation continues. Decoy
+    threads stay: an implementation that guesses 'the nearest thread' must
+    still fail here."""
+    await _agent(async_session, "Boss", "boss")
     known = Thread(kind="task", slack_thread_ts="1753699200.000900")
     lonely = Thread(kind="task")
     async_session.add(known)
     async_session.add(lonely)
     await async_session.commit()
+    await async_session.refresh(known)
+    await async_session.refresh(lonely)
 
+    await _ingest(
+        async_session,
+        adapter,
+        message_event(
+            text="ladet bitte supergirl herunter",
+            ts="9.9",
+            thread_ts="1753699200.00099999",
+        ),
+    )
+
+    # The order survives — in the general chat, not in a guessed task thread.
+    assert [m.body for m in await _all_messages(async_session)] == [
+        "ladet bitte supergirl herunter"
+    ]
+    assert await _messages(async_session, known.id) == []
+    assert await _messages(async_session, lonely.id) == []
+
+    # And the operator is told in the thread where the answer will appear.
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["thread_ts"] == "1753699200.00099999"
+    assert "Boss" in transport.calls[0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_without_a_boss_an_unmapped_reply_still_gets_the_ask_back(
+    async_session, adapter, transport
+):
+    """The fallback needs somewhere to fall — no Boss, no general chat. Then
+    the old ask-back is the honest answer, not silence."""
     await _ingest(
         async_session,
         adapter,
