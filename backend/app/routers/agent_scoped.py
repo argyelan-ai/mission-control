@@ -3764,29 +3764,52 @@ async def agent_visual_verify(
     "/telegram/send",
     dependencies=[Depends(require_scope(Scope.CHAT_WRITE))],
 )
-async def agent_send_telegram_report(
+async def agent_send_operator_report(
     body: TelegramReportBody,
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Agent sends a report message to the operator's reports Telegram chat.
+    """Agent sends the final report to the operator — wherever he reads it.
 
     Use this endpoint for info delivery at task end (summary, deliverable
     list, recommendation). NO status spam — only reports relevant at the end.
-    HTML parse mode: use `<b>`, `<i>`, `<code>`, `<a href="...">...</a>`.
+    HTML parse mode: use `<b>`, `<i>`, `<code>`, `<a href="...">...</a>` —
+    the Slack backend converts to mrkdwn itself.
+
+    Channel-neutral since 2026-07-31 (OperatorReports adapter,
+    services/operator_reports.py): plain-text reports fan out to every
+    configured backend (Telegram bot, Slack #mc-reports). Attachments
+    (photo/document/vault) still ride Telegram only — Slack file upload
+    arrives with the next phase.
 
     Side effect: if the agent has an active task (current_task_id),
-    `task.report_sent_to_telegram = True` is set — so the `mc done` guard
+    `task.report_sent_to_operator = True` is set — so the `mc done` guard
     knows the report-back contract is fulfilled.
+
+    Route history: `/telegram/send` and `/me/telegram` stay as aliases;
+    `/me/report` is the canonical route.
     """
+    from app.services.operator_reports import report_backends, send_report
     from app.services.telegram_reports import telegram_reports
 
-    if not telegram_reports.configured:
+    _wants_attachment = bool(
+        body.deliverable_id or body.document_deliverable_id or body.vault_path
+    )
+    if _wants_attachment and not telegram_reports.configured:
         raise HTTPException(
             status_code=503,
             detail=(
-                "Reports-Bot nicht konfiguriert. Der Operator muss "
-                "TELEGRAM_REPORTS_BOT_TOKEN + TELEGRAM_REPORTS_CHAT_ID setzen."
+                "Anhaenge laufen bis zur naechsten Ausbaustufe ueber den "
+                "Telegram-Reports-Bot, und der ist nicht konfiguriert "
+                "(TELEGRAM_REPORTS_BOT_TOKEN + TELEGRAM_REPORTS_CHAT_ID)."
+            ),
+        )
+    if not _wants_attachment and not report_backends():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Kein Report-Kanal konfiguriert. Der Operator muss den "
+                "Telegram-Reports-Bot ODER SLACK_REPORTS_CHANNEL einrichten."
             ),
         )
 
@@ -3821,12 +3844,12 @@ async def agent_send_telegram_report(
     # final Telegram send belongs to the orchestrator (Boss), not the
     # worker. Otherwise the operator gets a worker message AND a Boss
     # consolidation message = duplicate. Exception: long-running watch tasks
-    # where Boss explicitly sets autonomous_telegram=True — then the worker
+    # where Boss explicitly sets autonomous_report=True — then the worker
     # may report autonomously.
     if (
         resolved_task is not None
         and resolved_task.parent_task_id is not None
-        and not resolved_task.autonomous_telegram
+        and not resolved_task.autonomous_report
     ):
         raise HTTPException(
             status_code=422,
@@ -3834,7 +3857,7 @@ async def agent_send_telegram_report(
                 "Subtask sendet kein Telegram an den Operator — der Orchestrator (Parent-Task) "
                 "konsolidiert + sendet final. Liefere stattdessen: `mc deliverable` + "
                 "Reflection-Comment + `mc done`. Wenn Boss bewusst Autonomie wollte, "
-                "muesste der Brief das Flag `autonomous_telegram=true` enthalten."
+                "muesste der Brief das Flag `autonomous_report=true` enthalten."
             ),
         )
 
@@ -3844,11 +3867,11 @@ async def agent_send_telegram_report(
     # but don't set it again.
     from sqlalchemy import update as _sa_update
     claimed = False
-    if resolved_task is not None and not resolved_task.report_sent_to_telegram:
+    if resolved_task is not None and not resolved_task.report_sent_to_operator:
         upd = await session.exec(
             _sa_update(Task)
-            .where(Task.id == resolved_task.id, Task.report_sent_to_telegram == False)  # noqa: E712
-            .values(report_sent_to_telegram=True)
+            .where(Task.id == resolved_task.id, Task.report_sent_to_operator == False)  # noqa: E712
+            .values(report_sent_to_operator=True)
         )
         await session.commit()
         claimed = upd.rowcount == 1
@@ -3861,7 +3884,7 @@ async def agent_send_telegram_report(
             await session.exec(
                 _sa_update(Task)
                 .where(Task.id == resolved_task.id)
-                .values(report_sent_to_telegram=False)
+                .values(report_sent_to_operator=False)
             )
             await session.commit()
         except Exception as _rb_exc:
@@ -3999,46 +4022,72 @@ async def agent_send_telegram_report(
 
         document_path = str(candidate)
 
-    # Telegram send AFTER flag claim — try/except also catches httpx exceptions (B1-Fix)
-    try:
-        if photo_path is not None:
-            # Caption = text (truncated to 1024 by telegram_reports.send_photo)
-            result = await telegram_reports.send_photo(photo_path, caption=text)
-        elif document_path is not None:
-            result = await telegram_reports.send_document(document_path, caption=text)
-        else:
-            result = await telegram_reports.send(text)
-    except Exception as send_exc:
-        # Network/timeout/HTTP-level errors — roll back the flag so the agent can retry
-        logger.warning(
-            "Telegram-Send Exception (%s): %s — rolling back flag claim",
-            type(send_exc).__name__, send_exc,
-        )
-        await _rollback_claim()
-        raise HTTPException(
-            status_code=503,
-            detail=f"Telegram-Send fehlgeschlagen ({type(send_exc).__name__}). Retry moeglich.",
-        )
+    # Send AFTER flag claim — try/except also catches httpx exceptions (B1-Fix)
+    if photo_path is not None or document_path is not None:
+        # Attachment path: Telegram only until files.uploadV2 lands (next
+        # phase) — behaviour byte-identical to before the adapter.
+        try:
+            if photo_path is not None:
+                # Caption = text (truncated to 1024 by telegram_reports.send_photo)
+                result = await telegram_reports.send_photo(photo_path, caption=text)
+            else:
+                result = await telegram_reports.send_document(document_path, caption=text)
+        except Exception as send_exc:
+            # Network/timeout/HTTP-level errors — roll back the flag so the agent can retry
+            logger.warning(
+                "Telegram-Send Exception (%s): %s — rolling back flag claim",
+                type(send_exc).__name__, send_exc,
+            )
+            await _rollback_claim()
+            raise HTTPException(
+                status_code=503,
+                detail=f"Telegram-Send fehlgeschlagen ({type(send_exc).__name__}). Retry moeglich.",
+            )
 
-    send_failed = result is None or not result.get("ok")
-    if send_failed:
-        await _rollback_claim()
-        if result is None:
-            raise HTTPException(status_code=503, detail="Telegram-Send fehlgeschlagen.")
-        raise HTTPException(
-            status_code=422,
-            detail=f"Telegram API: {result.get('description', 'unbekannter Fehler')}",
-        )
+        send_failed = result is None or not result.get("ok")
+        if send_failed:
+            await _rollback_claim()
+            if result is None:
+                raise HTTPException(status_code=503, detail="Telegram-Send fehlgeschlagen.")
+            raise HTTPException(
+                status_code=422,
+                detail=f"Telegram API: {result.get('description', 'unbekannter Fehler')}",
+            )
+        message_id = result.get("result", {}).get("message_id")
+        channels_delivered = ["telegram"]
+    else:
+        # Text path: fan out to every configured backend. Delivered = at
+        # least one accepted; a partial failure is logged, not raised — the
+        # operator got his report. send_report contains backend exceptions,
+        # so nothing here can leak the claim.
+        delivered, results = await send_report(text)
+        if not delivered:
+            await _rollback_claim()
+            details = "; ".join(f"{r.backend}: {r.detail}" for r in results) or "kein Backend"
+            if any(not r.retryable for r in results):
+                # Semantic rejection (Telegram "can't parse entities", Slack
+                # msg_too_long): the agent must fix the content — 422, with
+                # the API description verbatim, exactly the old contract.
+                raise HTTPException(status_code=422, detail=details)
+            raise HTTPException(
+                status_code=503,
+                detail=f"Report-Zustellung fehlgeschlagen ({details}). Retry moeglich.",
+            )
+        # Telegram's message id survives the fan-out (the old response
+        # carried it); with several backends the Telegram one wins.
+        message_id = next((r.message_id for r in results if r.ok and r.message_id), None)
+        channels_delivered = [r.backend for r in results if r.ok]
 
     logger.info(
-        "Telegram-Report von %s gesendet (%d chars, task=%s, claimed=%s)",
-        agent.name, len(text),
+        "Operator-Report von %s gesendet via %s (%d chars, task=%s, claimed=%s)",
+        agent.name, ",".join(channels_delivered), len(text),
         resolved_task.id if resolved_task else None,
         claimed,
     )
     return {
         "ok": True,
-        "message_id": result.get("result", {}).get("message_id"),
+        "message_id": message_id,
+        "channels": channels_delivered,
     }
 
 
@@ -4099,6 +4148,25 @@ async def agent_me_create_deliverable(
 
 
 @router.post(
+    "/me/report",
+    dependencies=[Depends(require_scope(Scope.CHAT_WRITE))],
+)
+async def agent_me_send_report(
+    body: TelegramReportBody,
+    agent: Agent = Depends(require_agent),
+    session: AsyncSession = Depends(get_session),
+):
+    """Send the final operator report — the canonical, channel-neutral route.
+
+    Identical behaviour to POST /telegram/send (task resolution via
+    body.task_id > current_task_id > spawn_session_key is already integrated
+    there). `mc report` calls this; `mc telegram` remains an alias until the
+    Telegram decommission phase.
+    """
+    return await agent_send_operator_report(body=body, agent=agent, session=session)
+
+
+@router.post(
     "/me/telegram",
     dependencies=[Depends(require_scope(Scope.CHAT_WRITE))],
 )
@@ -4107,14 +4175,9 @@ async def agent_me_send_telegram_report(
     agent: Agent = Depends(require_agent),
     session: AsyncSession = Depends(get_session),
 ):
-    """Send a Telegram report — /me/*-consistent path.
-
-    Identical behavior to POST /telegram/send (task resolution via
-    body.task_id > current_task_id > spawn_session_key is already integrated
-    there). This endpoint exists for API consistency — all three delivery
-    actions under /me/*.
-    """
-    return await agent_send_telegram_report(body=body, agent=agent, session=session)
+    """Historical alias of POST /me/report — kept so running agent sessions
+    and older CLIs keep working until the decommission phase."""
+    return await agent_send_operator_report(body=body, agent=agent, session=session)
 
 
 # ── Credentials Read (agent-scoped) ──────────────────────────────────────────

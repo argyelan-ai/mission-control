@@ -130,18 +130,20 @@ class Task(SQLModel, table=True):
 
     # Completion contract — what the operator expects
     report_back_required: bool = False
-    report_back_channel: str | None = None      # "telegram" | "discord" | None
+    report_back_channel: str | None = None      # "telegram" | "discord" | None (None = active reports adapter)
     report_back_chat_id: str | None = None       # Telegram chat_id or Discord channel_id
     report_back_requirements: str | None = None  # "summary,screenshot,before_after" (comma-separated)
     report_back_status: str | None = "none"      # Deprecated (old Henry fallback flow) — no longer actively used
-    # Gate flag: set by `mc telegram` with current_task_id, checked by the status=done guard
-    report_sent_to_telegram: bool = False
+    # Gate flag: set by `mc report` (né `mc telegram`) with current_task_id,
+    # checked by the status=done guard. Channel-neutral since the operator
+    # reports adapter (2026-07-31): "sent to the operator", wherever he reads.
+    report_sent_to_operator: bool = False
     # Routing rule "whoever dispatches, sends": subtasks (parent_task_id NOT NULL)
-    # normally must NOT send mc telegram to the operator — the orchestrator
+    # normally must NOT send the final operator report — the orchestrator
     # (Boss) consolidates + sends the final message. Exception for long-running watch
-    # tasks (e.g. "watch channel and report events"): Boss sets autonomous_telegram=True
+    # tasks (e.g. "watch channel and report events"): Boss sets autonomous_report=True
     # in the subtask brief, then the worker is allowed to send itself.
-    autonomous_telegram: bool = Field(default=False)
+    autonomous_report: bool = Field(default=False)
     skip_review: bool = Field(default=False)      # Scheduler tasks: skip the review gate
 
     # Requester / Origin Tracking

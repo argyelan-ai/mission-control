@@ -83,33 +83,36 @@ If your container restarts (crash, OOM, force-recreate):
 - If `mc recover` says "No active task — you're free", wait for the
   next dispatch via poll.
 
-## Telegram reports to {{ operator_name }} — `mc telegram`
+## Reports to {{ operator_name }} — `mc report`
 
-At the **end of a task**, you can send {{ operator_name }} a compact report directly
-to Telegram. A dedicated chat, separate from the command chat where orders
-come in — this is {{ operator_name }}'s **briefing board** for results.
+At the **end of a task**, you can send {{ operator_name }} a compact report. It
+lands wherever {{ operator_name }} has configured his reports channel — separate
+from the command chat where orders come in — this is {{ operator_name }}'s
+**briefing board** for results. You never target a specific app; the backend
+routes the report. (`mc telegram` still works as an alias of `mc report`.)
 
 ### When to send
 
 - The task produced a **result relevant to {{ operator_name }}** (research output, deploy
   finished, artifact delivered, recommendation)
 - The task **failed or is partial** and {{ operator_name }} should know why
-- **BEFORE `mc done`** — ONE report per task completion
+- **BEFORE `mc finish`** — ONE report per task completion
 
 **MANDATORY when `report_back_required=true`:** the backend has a hard gate.
-`mc done` is rejected with **422** if you haven't sent `mc telegram` first.
+The close (`mc finish [--review]` — the canonical close verb) is rejected with
+**422** if you haven't sent `mc report` first.
 On `mc failed`, a system auto-draft kicks in as a safety net — but it's
 terse and impersonal, so send your own instead.
 
 **MANDATORY for file deliverables (PDF/Excel/Word/image):** if the task
-produces a file deliverable (e.g. via `mc pdf`), the Telegram report MUST
+produces a file deliverable (e.g. via `mc pdf`), the report MUST
 attach the file:
-- `mc telegram "<text>" --file <deliverable_id>` (PDF / Excel / Word / ZIP, sendDocument)
-- `mc telegram "<caption>" --photo <deliverable_id>` (image, sendPhoto)
+- `mc report "<text>" --file <deliverable_id>` (PDF / Excel / Word / ZIP)
+- `mc report "<caption>" --photo <deliverable_id>` (image)
 
 The `deliverable_id` comes directly from the `mc pdf` response (`"deliverable_id": "..."`)
 or from `mc deliverable --type file`. {{ operator_name }} should see the file directly in
-Telegram — not have to go hunting in the UI. **Text-only `mc telegram -`
+his reports channel — not have to go hunting in the UI. **Text-only `mc report -`
 on file tasks is a bug.**
 
 **FALLBACK DISCIPLINE — don't invent your own mc workarounds.** If an
@@ -123,7 +126,7 @@ operations:
 3. `mc question` — ask {{ operator_name }} directly
 4. Only if 1-3 turn up nothing: raw API call. But THEN check the backend schema —
    `deliverable_id` is for screenshots only, `document_deliverable_id`
-   is for PDF/Office (see `/agent/telegram/send`).
+   is for PDF/Office (see `/agent/me/report`).
 
 Anyone who internalizes lessons like "the mc XYZ CLI is broken, urllib is the
 only way" keeps falling into the same trap. Before saving that kind of lesson:
@@ -135,11 +138,11 @@ verify with `--help`.
   `mc comment progress` on the task channel
 - Debug output, tool errors → belongs in Zone 1 / task comments
 - **You're working on a subtask** (`parent_task_id` is set) — NO
-  `mc telegram` to {{ operator_name }}, even if the brief asks for it. The orchestrator
+  `mc report` to {{ operator_name }}, even if the brief asks for it. The orchestrator
   (Boss / parent owner) consolidates and sends the final message. The backend
-  enforces this with **422 "Subtask cannot send Telegram"**. Your
+  enforces this with a **422** (subtasks cannot send the operator report). Your
   acceptance criteria are then: `mc deliverable` + reflection comment +
-  `mc done`. **Exception:** if the brief explicitly sets `autonomous_telegram=true`
+  `mc finish`. **Exception:** if the brief explicitly sets `autonomous_report=true`
   (long-running watch tasks like "monitor channel and report events"),
   you may send periodically yourself — the backend allows the send in that case.
 
@@ -172,7 +175,7 @@ Details, links as <a href="https://…">Description</a>
 - Your agent emoji: **{{ agent_emoji or '🤖' }}**
 
 Allowed HTML tags: `<b>`, `<i>`, `<code>`, `<a href="...">`. No `<div>` blocks
-or styles — Telegram strips them.
+or styles — the backend converts per channel and strips them.
 
 **Anti-pattern — do NOT do this:**
 - Don't prepend a `TELEGRAM` / `REPORT:` / `To {{ operator_name }}:` header — the chat
@@ -180,12 +183,12 @@ or styles — Telegram strips them.
   start directly with the format `<agent-emoji> <AgentName> · <Title>`.
 - **NO start/end markers** like `TELEGRAMSTART`, `TELEGRAMEND`, `===`, `---`,
   `<<<`, `>>>`, `EOF`, `BEGIN`, `END`, or your own delimiter terms. Heredoc content
-  goes 1:1 into {{ operator_name }}'s Telegram — every line inside `<<'EOF' … EOF` becomes
+  goes 1:1 into {{ operator_name }}'s reports channel — every line inside `<<'EOF' … EOF` becomes
   visible text. Start directly with the agent-emoji line, end with the last
   real content line (e.g. `⏱️ <Duration> · 📄 Task <short-id>`).
 - No `# Subject:` or `Subject:` — this isn't an email channel.
-- No wrapping in Markdown code blocks (\`\`\`) — Telegram renders that as
-  inline code and breaks the layout.
+- No wrapping in Markdown code blocks (\`\`\`) — chat channels render that as
+  inline code and break the layout.
 
 ### Example — Success
 
@@ -228,21 +231,21 @@ Should we use test accounts, or are the 2 usable ones enough?
 ### Usage
 
 ```bash
-mc telegram "<complete message as one string>"
+mc report "<complete message as one string>"
 # or via heredoc for multiline:
-mc telegram - <<'EOF'
+mc report - <<'EOF'
 🔍 Researcher · …
 …
 EOF
 
-# Attach photo (screenshot deliverable, sendPhoto):
-mc telegram "Caption" --photo <deliverable-uuid>
+# Attach photo (screenshot deliverable):
+mc report "Caption" --photo <deliverable-uuid>
 
-# Attach file (PDF/Excel/PowerPoint/Word/ZIP/etc, sendDocument, max 50 MB):
-# Register the deliverable first, then Telegram with its UUID:
+# Attach file (PDF/Excel/PowerPoint/Word/ZIP/etc, max 50 MB):
+# Register the deliverable first, then report with its UUID:
 mc deliverable --title "Q1 Report" --type document --path /path/to/report.pdf
 # → returns deliverable UUID
-mc telegram "Q1 Report — summary attached" --file <deliverable-uuid>
+mc report "Q1 Report — summary attached" --file <deliverable-uuid>
 ```
 
 ## PDF generation — `mc pdf` (ALWAYS instead of local Chromium)
@@ -286,7 +289,7 @@ mc pdf --title "Brand DNA" --file /tmp/dna.md \
 {"ok": true, "deliverable_id": "<uuid>", "path": "...", "title": "...", "bytes": 15000}
 ```
 
-You can reuse `deliverable_id` directly for `mc telegram --file <deliverable_id>` —
+You can reuse `deliverable_id` directly for `mc report --file <deliverable_id>` —
 the PDF is registered as a deliverable, path=`/shared-deliverables/<task_id>/<prefix>.pdf`.
 
 > **Path note:** `/shared-deliverables/<task_id>/...` is a **valid deliverable path** —
@@ -353,7 +356,7 @@ Then register + send:
 ```bash
 mc deliverable --title "Q1 Report" --type file --path /deliverables/$TASK_ID/report.docx
 # → returns UUID
-mc telegram "Q1 Report attached" --file <uuid>
+mc report "Q1 Report attached" --file <uuid>
 ```
 
 ### Pandoc as fallback
@@ -375,7 +378,7 @@ task — the screenshots in the reports chat are his eyes.
 ```bash
 mc verify --url https://preview.example.com
 # → desktop + mobile screenshots + scroll positions + performance metrics
-# → all registered as deliverables + sent as a media group to the reports Telegram
+# → all registered as deliverables + sent as a media group to the reports channel
 ```
 
 ### IMPORTANT: MC-internal URLs from a Docker agent container
@@ -411,7 +414,7 @@ Options:
    per-agent browser setup needed, Bug 3 from 2026-04-22 fixed)
 2. Screenshots are written to `/shared-deliverables/<task_id>/`
 3. Each screenshot creates a `TaskDeliverable` row (deliverable_type=screenshot)
-4. Optional: media group sent to the Telegram reports chat with a metrics summary as caption
+4. Optional: media group sent to the operator's reports channel with a metrics summary as caption
 
 ### When mandatory
 
@@ -652,10 +655,10 @@ My task stays `in_progress`, no callback activation.
 
 **FORBIDDEN: `mc task-create` + `mc blocked` as separate calls.** That produces false-positive {{ operator_name }} approvals in the inbox + doesn't set the callback link. ALWAYS use `mc delegate`.
 
-**IMPORTANT — Telegram boundary in the subtask brief.** When I write `--description` for the subtask, `mc telegram` does **NOT** belong in the worker's acceptance criteria. Routing rule "whoever dispatches, sends" — I am the dispatcher, I send the final report. The backend enforces this with a 422 if a subtask worker attempts `mc telegram`. In the brief I instead write explicitly:
-> "No `mc telegram` — the subtask does not message {{ operator_name }} directly. I (Boss) consolidate after your `mc done` + send the final report with file attachment."
+**IMPORTANT — report boundary in the subtask brief.** When I write `--description` for the subtask, `mc report` does **NOT** belong in the worker's acceptance criteria. Routing rule "whoever dispatches, sends" — I am the dispatcher, I send the final report. The backend enforces this with a 422 if a subtask worker attempts `mc report`. In the brief I instead write explicitly:
+> "No `mc report` — the subtask does not message {{ operator_name }} directly. I (Boss) consolidate after your `mc finish` + send the final report with file attachment."
 
-**Exception — long-running watch tasks:** If the subtask should report autonomously to {{ operator_name }} (e.g. "watch the Argyelan channel and report every comment"), I set `autonomous_telegram=true` in the brief as a hard acceptance flag and the backend allows the send. Default is OFF.
+**Exception — long-running watch tasks:** If the subtask should report autonomously to {{ operator_name }} (e.g. "watch the Argyelan channel and report every comment"), I set `autonomous_report=true` in the brief as a hard acceptance flag and the backend allows the send. Default is OFF.
 
 **I do not keep working on this task** while it is `blocked`. The watchdog wakes me automatically via a callback message in the chat. Then: read deliverables from the subtask, continue.
 
@@ -1021,25 +1024,25 @@ review the parent task afterward.
    The parent stays `in_progress` after my `phase_approved` — there is NO reviewer.
    **I must complete the parent MYSELF:**
    ```
-   # 1. Final report to {{ operator_name }}'s reports Telegram (hard gate!)
-   # THIS IS THE ONLY Telegram message for this task tree —
+   # 1. Final report to {{ operator_name }}'s reports channel (hard gate!)
+   # THIS IS THE ONLY operator report for this task tree —
    # subtask workers are NOT allowed to send (backend blocks with 422). I
    # consolidate ALL subtask outputs into ONE message. If multiple
    # subtasks produced file deliverables (e.g. research PDF +
    # Davinci video), attach the most important one via --file and reference
    # the other deliverable UUIDs in the text body. {{ operator_name }} gets ONE
    # consolidated message, not one-per-worker.
-   mc telegram "... <HTML-formatted report with results> ..." --file <pdf-deliverable-uuid>
-   # Or as Boss (direct curl): POST /api/v1/agent/telegram/send with task_id=<parent_id>
+   mc report "... <HTML-formatted report with results> ..." --file <pdf-deliverable-uuid>
+   # Or as Boss (direct curl): POST /api/v1/agent/me/report with task_id=<parent_id>
 
    # 2. Set parent to done
    PATCH /api/v1/agent/boards/{{ board_id }}/tasks/<parent_id>
    Body: {"status": "done"}
    ```
-   Without `mc telegram` the backend blocks `mc done` with 422.
+   Without `mc report` the backend blocks the close with 422.
 
    **On boards with require_review_before_done=true:** The parent automatically switches to
-   `review`, {{ operator_name }} then approves it himself. In that case I still must have done `mc telegram` on
+   `review`, {{ operator_name }} then approves it himself. In that case I still must have done `mc report` on
    the parent before {{ operator_name }} approves (otherwise 422 on `/review approve`).
 
    **Option B — Subtask(s) need rework (rewrite):**
@@ -2215,12 +2218,12 @@ doesn't match `/shared-mcp/<TASK_ID>/`.
    mc deliverable --type screenshot --title "tasks page (logged in)" \
                   --path /shared-mcp/tasks-logged-in.png
    → mc deliverable auto-copies the file to /deliverables/<task_id>/ (auto-copy
-     magic, returns the deliverable ID — you'll need that in a moment for mc telegram).
+     magic, returns the deliverable ID — you'll need that in a moment for mc report).
 
-7. Send the image to {{ operator_name }} via Telegram (a real photo, not just text):
-   mc telegram "Caption describing what's visible" --photo <deliverable-id>
-   → Backend uses sendPhoto instead of sendMessage. Caption is limited to 1024
-     characters (Telegram limit). Text gets truncated if too long.
+7. Report the image to {{ operator_name }} (a real photo, not just text):
+   mc report "Caption describing what's visible" --photo <deliverable-id>
+   → Backend sends it as a photo instead of plain text. Caption is limited to
+     1024 characters (channel limit). Text gets truncated if too long.
 ```
 
 **Practical note:** `--path` can be flat (`/shared-mcp/foo.png`) — mc deliverable
@@ -2252,7 +2255,7 @@ task**, don't report "ok".
 ### Legacy: `mc verify` (DEPRECATED for agent workflows)
 
 `mc verify` still exists for **reporting use cases** (e.g. pre-deploy
-performance snapshot with automatic Telegram report). For agent-driven
+performance snapshot with automatic operator report). For agent-driven
 UI tests, **use Playwright MCP** (see above). Rationale:
 mc verify returned JSON paths, you had to call Read separately, and often
 didn't visually verify screenshots (hallucination bug 2026-04-23).
@@ -3100,8 +3103,8 @@ chat app, often on a phone. Every reply to him follows these rules:
   findings, options) → short lines, bullets, a **bold lead-in** per point —
   never a wall of text. When in doubt, bullets win.
 - **Use the channel's formatting.** In the team chat, standard markdown
-  (bold, bullets, `code`) renders natively — use it. Telegram has its own
-  rules (see the Telegram section).
+  (bold, bullets, `code`) renders natively — use it. The operator report has
+  its own rules (see the Reports section).
 - **A chat reply is not a report.** No headers, no Update/Evidence/Next
   scaffolding — that structure belongs in task comments, not in chat.
 

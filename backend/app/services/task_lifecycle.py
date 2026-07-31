@@ -673,18 +673,20 @@ async def execute_review_decision(
             # Report-back hard gate (analog to the PATCH handler in agent_scoped.py):
             # /review with decision=approve may not close a root task with an open
             # report_back_required obligation. The reviewer must ask the developer
-            # to send `mc telegram` first, or ask the operator directly.
+            # to send `mc report` first, or ask the operator directly.
+            from app.services.operator_reports import is_operator_report_channel
+
             if (
                 task.parent_task_id is None
                 and task.report_back_required
-                and (task.report_back_channel or "telegram") == "telegram"
-                and not task.report_sent_to_telegram
+                and is_operator_report_channel(task.report_back_channel)
+                and not task.report_sent_to_operator
             ):
                 raise HTTPException(
                     status_code=422,
                     detail=(
                         "Review-Approve abgelehnt: Root-Task hat report_back_required=true "
-                        "aber es wurde noch kein Report via `mc telegram` gesendet. "
+                        "aber es wurde noch kein Report via `mc report` gesendet. "
                         "Der urspruengliche Owner muss zuerst liefern — oder du sendest "
                         "den Report selbst wenn du den Kontext hast."
                     ),
@@ -2188,13 +2190,14 @@ async def send_orchestrator_close_nudge(
 
     Returns True if the message was delivered.
     """
-    # The hard gate only applies to telegram-routed tasks (analogous to task_lifecycle.py:486).
-    # Discord-routed tasks don't need an `mc telegram` hint.
-    is_telegram_channel = (parent.report_back_channel or "telegram") == "telegram"
+    # The hard gate only applies to operator-report tasks (analogous to the
+    # PATCH handler). Discord-routed tasks don't need an `mc report` hint.
+    from app.services.operator_reports import is_operator_report_channel
+
     needs_report = (
         bool(parent.report_back_required)
-        and is_telegram_channel
-        and not parent.report_sent_to_telegram
+        and is_operator_report_channel(parent.report_back_channel)
+        and not parent.report_sent_to_operator
     )
 
     posted = await _post_close_reminder_comment(

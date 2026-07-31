@@ -347,7 +347,7 @@ class LoopRunnerService:
                     "outcome": outcome},
         )
 
-        if loop.telegram_reports:
+        if loop.operator_reports:
             await self._send_round_telegram_report(
                 loop, round_no=loop.current_round_no, outcome=outcome,
                 reflection=reflection, note=note,
@@ -464,8 +464,12 @@ class LoopRunnerService:
         self, loop: Loop, *, round_no: int, outcome: str,
         reflection: str | None, note: str,
     ) -> None:
-        """Kompakter Telegram-Report nach jeder Runde (L2, Opt-out via
-        `loop.telegram_reports`). Fehler dürfen den Runner nie stören."""
+        """Kompakter Report an den Operator nach jeder Runde (L2, Opt-out via
+        `loop.operator_reports`). Fehler dürfen den Runner nie stören.
+
+        Geht noch direkt an den Telegram-Reports-Bot; der Umzug auf den
+        OperatorReports-Adapter kommt mit den übrigen passiven Callsites
+        (Datei-Fähigkeit, PR 2 des Slack-Umbaus)."""
         try:
             from app.services.telegram_reports import telegram_reports
             if not telegram_reports.configured:

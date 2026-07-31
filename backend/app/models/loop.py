@@ -49,7 +49,10 @@ class Loop(SQLModel, table=True):
     )  # z.B. ["merge_decision", "scope_change", "destructive"]
 
     # ── Reporting (L2) ──────────────────────────────────────────────────
-    telegram_reports: bool = True  # Opt-out: kompakter Report nach jeder Runde
+    # Kanal-neutral seit dem OperatorReports-Adapter (2026-07-31, hiess
+    # telegram_reports): kompakter Report nach jeder Runde, wohin auch immer
+    # der Operator seine Reports bekommt.
+    operator_reports: bool = True  # Opt-out
 
     # ── Stop-Bedingungen (L1: Runden + Zeit; Token/USD = L3) ───────────
     # L3: Kosten-Budget — geprüft an Rundengrenzen (Summe der

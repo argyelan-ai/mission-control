@@ -125,6 +125,9 @@ services:
       # verschluesselt in der secrets-Tabelle (ADR-033).
       SLACK_TEAM_CHAT_ENABLED: ${SLACK_TEAM_CHAT_ENABLED:-false}
       SLACK_DEFAULT_CHANNEL: ${SLACK_DEFAULT_CHANNEL:-}
+      # Reports-Kanal (#mc-reports) fuer den OperatorReports-Adapter — leer =
+      # Slack-Reports aus, Telegram-Bot bleibt alleiniger Report-Weg.
+      SLACK_REPORTS_CHANNEL: ${SLACK_REPORTS_CHANNEL:-}
       JARVIS_TELEGRAM_ENABLED: ${JARVIS_TELEGRAM_ENABLED:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       JARVIS_TEXT_MODEL: ${JARVIS_TEXT_MODEL:-gpt-4o-mini}

@@ -38,14 +38,17 @@ def test_flow1_lifecycle_universal():
     # ACK error note (already-ACKed awareness)
     assert "In Progress" in flows
     # Non-relevant flows NOT present with heartbeat-only
-    assert "Flow 2" not in flows  # telegram
+    assert "Flow 2" not in flows  # operator report
     assert "Flow 4" not in flows  # delegation
 
 
-def test_flow2_telegram_chat_write():
+def test_flow2_report_chat_write():
     flows = _flows_section(_gen(scopes=["heartbeat", "chat:write"]))
     assert "Flow 2" in flows
-    assert "mc telegram" in flows
+    # `mc report` is the canonical, channel-neutral report verb — the flow
+    # must not teach the legacy `mc telegram` alias or promise a channel.
+    assert "mc report" in flows
+    assert "mc telegram" not in flows
     assert "--file" in flows
     assert "--photo" in flows
     assert "mc verify" in flows

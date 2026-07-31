@@ -1734,42 +1734,45 @@ async def agent_update_task(
             updates["blocker_question"] = updates["blocker_question"][:150]
 
     # ── Report-back hard gate on status=done ─────────────────────────
-    # Only applies to Telegram-channel root tasks. Discord delivery + subtasks bypassed.
-    # Only applies to agent-scoped PATCH (this handler), not user auth.
-    _telegram_delivery = (task.report_back_channel or "telegram") == "telegram"
+    # Applies to operator-report root tasks (channel NULL/"telegram"/"report"
+    # — the active adapter decides the wire). Discord delivery + subtasks
+    # bypassed. Only applies to agent-scoped PATCH (this handler), not user auth.
+    from app.services.operator_reports import is_operator_report_channel
+
+    _operator_delivery = is_operator_report_channel(task.report_back_channel)
     if (
         updates.get("status") == "done"
         and task.report_back_required
         and task.parent_task_id is None
-        and _telegram_delivery
-        and not task.report_sent_to_telegram
+        and _operator_delivery
+        and not task.report_sent_to_operator
     ):
         raise HTTPException(
             status_code=422,
             detail=(
-                "Task hat report_back_required=true (telegram) aber es wurde noch kein "
-                "Report via `mc telegram` gesendet. Schicke zuerst eine Zusammenfassung "
-                "an den Reports-Chat des Operators, dann `mc done`. "
-                "(Format-Template siehe deine SOUL.md unter 'Telegram-Reports an den Operator'.)"
+                "Task hat report_back_required=true aber es wurde noch kein "
+                "Report via `mc report` gesendet. Schicke zuerst eine Zusammenfassung "
+                "an den Operator, dann `mc done`. "
+                "(Format-Template siehe deine SOUL.md unter 'Reports an den Operator'.)"
             ),
         )
 
     # ── Report-back auto-draft on status=failed ──────────────────────
-    # Only for Telegram root tasks. Atomic flag claim prevents double-send on
-    # parallelen PATCH-Requests (C4 Race-Fix).
+    # Only for operator-report root tasks. Atomic flag claim prevents
+    # double-send on parallel PATCH requests (C4 Race-Fix).
     if (
         updates.get("status") == "failed"
         and task.report_back_required
         and task.parent_task_id is None
-        and _telegram_delivery
-        and not task.report_sent_to_telegram
+        and _operator_delivery
+        and not task.report_sent_to_operator
     ):
         from sqlalchemy import update as _sa_update
         # Atomic Claim: nur ein Request bekommt rowcount=1, andere sehen Flag=true
         _claim = await session.exec(
             _sa_update(Task)
-            .where(Task.id == task.id, Task.report_sent_to_telegram == False)  # noqa: E712
-            .values(report_sent_to_telegram=True)
+            .where(Task.id == task.id, Task.report_sent_to_operator == False)  # noqa: E712
+            .values(report_sent_to_operator=True)
         )
         await session.commit()
         _claimed = _claim.rowcount == 1
@@ -1789,7 +1792,7 @@ async def agent_update_task(
                     await session.exec(
                         _sa_update(Task)
                         .where(Task.id == task.id)
-                        .values(report_sent_to_telegram=False)
+                        .values(report_sent_to_operator=False)
                     )
                     await session.commit()
             except Exception as e:
@@ -1803,7 +1806,7 @@ async def agent_update_task(
                     await session.exec(
                         _sa_update(Task)
                         .where(Task.id == task.id)
-                        .values(report_sent_to_telegram=False)
+                        .values(report_sent_to_operator=False)
                     )
                     await session.commit()
                 except Exception:
@@ -2081,7 +2084,7 @@ async def agent_update_task(
     # report_back.delivered event when the task is done + the report flag was set (happy path)
     if (
         updates.get("status") == "done"
-        and task.report_sent_to_telegram
+        and task.report_sent_to_operator
         and task.report_back_required
         and task.parent_task_id is None
     ):

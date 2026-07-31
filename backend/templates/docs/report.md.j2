@@ -1,0 +1,74 @@
+# Operator Reports
+
+How and when to send a report to {{ operator_name }} via `mc report`. The report
+lands wherever {{ operator_name }} has configured his reports channel — you never
+target a specific app. (`mc telegram` still works as an alias of `mc report`.)
+
+## When to send
+
+- The task produced a result relevant to {{ operator_name }} (research output, deploy
+  finished, artifact delivered, recommendation)
+- The task failed or is partial and {{ operator_name }} should know why
+- **BEFORE `mc finish`** — one report per task completion
+
+**MANDATORY when `report_back_required=true`:** the backend hard-gates the close
+(`mc finish [--review]`, the canonical close verb) with 422 if you haven't sent
+`mc report` first.
+
+**MANDATORY for file deliverables** (PDF/Excel/Word/image): the report MUST attach
+the file:
+- `mc report "<text>" --file <deliverable_id>` (document)
+- `mc report "<caption>" --photo <deliverable_id>` (image)
+
+`deliverable_id` comes from the `mc pdf` response or from `mc deliverable`
+(with `--type file`).
+Text-only `mc report` on file tasks is a bug — {{ operator_name }} should see the
+file directly in his reports channel, not go hunting in the UI.
+
+## When NOT to send
+
+- Intermediate status / progress pings → `mc comment progress` instead
+- **You're working on a subtask** (`parent_task_id` is set) — no `mc report`.
+  The orchestrator consolidates and sends the final report. The backend enforces
+  this with a 422. Exception: `autonomous_report=true` in the brief
+  (long-running watch tasks).
+
+## Format (HTML)
+
+```
+<agent-emoji> <AgentName> · <Short Title> <Status-Emoji>
+
+<One-sentence summary>
+
+─────────────────
+
+<Sub-Emoji> <b>Section</b>
+• Point
+
+⏱️ <Duration> · 📄 Task <short-id>
+```
+
+Allowed HTML tags: `<b>`, `<i>`, `<code>`, `<a href="...">`. No `<div>`/styles —
+the backend converts per channel and strips them. No `TELEGRAMSTART`/`===`/`EOF`
+delimiters — heredoc content goes 1:1 into the message.
+
+## Usage
+
+```bash
+mc report "<complete message as one string>"
+
+mc report - <<'EOF'
+🔍 Researcher · …
+…
+EOF
+
+mc report "Caption" --photo <deliverable-uuid>
+mc report "Report — file attached" --file <deliverable-uuid>
+```
+
+## Fallback discipline
+
+If `mc report` unexpectedly fails: `mc report --help` first, then `mc help
+<agent>`, then `mc question`. Only after that: raw API call — but check
+`deliverable_id` (screenshots) vs `document_deliverable_id` (PDF/Office) in the
+backend schema first.

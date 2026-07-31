@@ -88,23 +88,35 @@ def is_own_message(event: dict) -> bool:
 
 
 async def channel_is_ours(channel: str | None) -> bool:
-    """Hard gate: only the configured team-chat channel is processed.
+    """Hard gate: only channels MC actively serves are processed.
 
     The Slack twin of Telegram's chat_id gate. The app may be invited into
     other channels (or receive its own DMs); nothing from there may drive MC.
+
+    Two channels count as ours: the team chat (``slack_default_channel``)
+    and the reports channel (``slack_reports_channel``). The reports channel
+    is write-mostly, but the operator WILL answer a report right where he
+    read it — and a single-valued gate silently discarded exactly such
+    messages once before (2026-07-29, the missing_scope incident's sibling).
+    An answered report routes like a channel-root message: to Boss.
     """
     from app.config import settings
     from app.services.slack_client import resolve_channel_id
 
     if not channel:
         return False
-    configured = (getattr(settings, "slack_default_channel", "") or "").strip()
-    if not configured:
-        return False
-    if configured.lstrip("#") == channel:
-        return True
-    resolved = await resolve_channel_id(configured)
-    return bool(resolved) and resolved == channel
+    for configured in (
+        (getattr(settings, "slack_default_channel", "") or "").strip(),
+        (getattr(settings, "slack_reports_channel", "") or "").strip(),
+    ):
+        if not configured:
+            continue
+        if configured.lstrip("#") == channel:
+            return True
+        resolved = await resolve_channel_id(configured)
+        if resolved and resolved == channel:
+            return True
+    return False
 
 
 def room_for(event: dict) -> str | None:

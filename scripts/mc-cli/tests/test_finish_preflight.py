@@ -679,7 +679,7 @@ def test_finish_warns_when_report_gate_unmet(capsys):
     assert rc == 0
     err = capsys.readouterr().err
     assert "Report-Pflicht" in err
-    assert "mc telegram" in err
+    assert "mc report" in err
     assert "422" in err
     # Nicht-blockierend: PATCH wurde trotzdem versucht.
     assert any(c["method"] == "PATCH" for c in client.calls)
@@ -770,3 +770,88 @@ def test_done_on_plain_task_keeps_done_behavior():
     assert rc == 0
     patch_call = next(c for c in client.calls if c["method"] == "PATCH")
     assert patch_call["body"]["status"] == "done"
+
+
+# ── Feld-Doppelleben: report_sent_to_operator vs. report_sent_to_telegram ──
+#
+# Das Backend benannte das Flag kanal-neutral um (report_sent_to_telegram →
+# report_sent_to_operator). Ein neues Backend liefert im /detail nur den
+# NEUEN Namen, ein altes nur den ALTEN. Die Vorpruefung muss beide kennen —
+# sonst ist sie nach dem Backend-Deploy stumm (neues Backend + alter Check)
+# bzw. gegen ein altes Backend nie aktiv (alter Feldname + neuer Check).
+# Diese Tests treffen _warn_report_gate_if_unmet direkt: das Gate ist pure
+# Task-Dict-Logik, der HTTP-Rahmen ist oben schon abgedeckt.
+
+
+def _gate_task(**fields):
+    t = {
+        "report_back_required": True,
+        "parent_task_id": None,
+        "report_back_channel": "telegram",
+    }
+    t.update(fields)
+    return t
+
+
+def test_warn_fires_on_new_operator_field(capsys):
+    """Neues Backend: nur report_sent_to_operator=false im /detail → warnen."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_sent_to_operator=False), "done"
+    )
+    err = capsys.readouterr().err
+    assert "Report-Pflicht" in err
+    assert "mc report" in err
+
+
+def test_warn_fires_on_old_telegram_field_only(capsys):
+    """Altes Backend: nur report_sent_to_telegram=false im /detail → warnen."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_sent_to_telegram=False), "done"
+    )
+    assert "Report-Pflicht" in capsys.readouterr().err
+
+
+def test_new_field_true_silences_stale_old_field(capsys):
+    """Uebergangs-Backend liefert BEIDE Felder: der neue Name gewinnt —
+    operator=true darf nicht vom stalen telegram=false uebertoent werden."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_sent_to_operator=True, report_sent_to_telegram=False),
+        "done",
+    )
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+def test_new_field_false_wins_over_old_true(capsys):
+    """Spiegelbild: operator=false muss warnen, auch wenn das alte Feld
+    (stale) true behauptet."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_sent_to_operator=False, report_sent_to_telegram=True),
+        "done",
+    )
+    assert "Report-Pflicht" in capsys.readouterr().err
+
+
+def test_warn_silent_when_both_fields_missing(capsys):
+    """Backend ohne Report-Gate: kein Feld → schweigen statt falsch warnen."""
+    commands._warn_report_gate_if_unmet(_gate_task(), "done")
+    assert "Report-Pflicht" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("channel", [None, "telegram", "report", "operator"])
+def test_neutral_channel_spellings_trigger_gate(capsys, channel):
+    """Channel-Menge spiegelt is_operator_report_channel im Backend: NULL,
+    historisch 'telegram', neutral 'report'/'operator' = Operator-Delivery."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_back_channel=channel, report_sent_to_operator=False),
+        "done",
+    )
+    assert "Report-Pflicht" in capsys.readouterr().err
+
+
+def test_discord_channel_stays_exempt(capsys):
+    """'discord' ist eine explizit andere Route — kein Gate, keine Warnung."""
+    commands._warn_report_gate_if_unmet(
+        _gate_task(report_back_channel="discord", report_sent_to_operator=False),
+        "done",
+    )
+    assert "Report-Pflicht" not in capsys.readouterr().err

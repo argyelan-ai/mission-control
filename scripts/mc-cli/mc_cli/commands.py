@@ -147,23 +147,39 @@ def _force_close_open_checklist(client: Client, cfg: Config) -> int:
 def _warn_report_gate_if_unmet(task: dict, target_status: str) -> None:
     """Frueher Hinweis auf die Report-Pflicht — Spiegel des Backend-Gates in
     agent_task_status.py (Report-back hard gate): PATCH auf 'done' wird mit
-    422 abgelehnt solange `report_sent_to_telegram=false` bei einem Root-Task
-    mit `report_back_required=true` und Telegram-Channel.
+    422 abgelehnt solange der Operator-Report bei einem Root-Task mit
+    `report_back_required=true` und Operator-Channel noch nicht gesendet ist.
+
+    Feld-Doppelleben: das Backend nannte das Flag frueher
+    `report_sent_to_telegram`, kanal-neutral heisst es jetzt
+    `report_sent_to_operator`. Ein neues Backend liefert im Task-GET nur den
+    neuen Namen, ein altes nur den alten — wir pruefen BEIDE (neuer Name
+    gewinnt), sonst ist die Warnung nach einem Backend-Deploy stumm bzw.
+    warnt gegen ein altes Backend nie.
+
+    Channel-Menge spiegelt `is_operator_report_channel` im Backend: NULL,
+    "telegram" (historisch), "report"/"operator" (neutral) heisst
+    Operator-Delivery; alles andere (z.B. "discord") ist eine explizit
+    andere Route und vom Gate befreit.
 
     Nur ein stderr-Hinweis, KEIN Abbruch: das Backend bleibt die Autoritaet
     (die lokale Task-Kopie kann stale sein, z.B. Report gerade eben gesendet).
-    `is False` statt falsy-Check: fehlt das Feld (aelteres Backend), schweigen
-    wir statt falsch zu warnen.
+    `is False` statt falsy-Check: fehlen beide Felder (Backend ohne Gate),
+    schweigen wir statt falsch zu warnen.
     """
+    sent = task.get("report_sent_to_operator")
+    if sent is None:
+        sent = task.get("report_sent_to_telegram")
     if (
         target_status == "done"
         and task.get("report_back_required")
         and not task.get("parent_task_id")
-        and (task.get("report_back_channel") or "telegram") == "telegram"
-        and task.get("report_sent_to_telegram") is False
+        and (task.get("report_back_channel") or "operator")
+        in ("operator", "report", "telegram")
+        and sent is False
     ):
         print(
-            "# Hinweis: Report-Pflicht — erst `mc telegram \"…\"` senden, "
+            "# Hinweis: Report-Pflicht — erst `mc report \"…\"` senden, "
             "sonst lehnt das Backend mit 422 ab.",
             file=sys.stderr,
         )
@@ -1705,8 +1721,25 @@ def _add_verify_args(p):
     )
 
 
-def _cmd_telegram(args, client, cfg):
-    """Sende einen strukturierten Report an den Reports-Telegram-Chat des Operators.
+# Endpoint-Kette fuer den Operator-Report, neuestes zuerst. Es gibt KEINEN
+# automatischen Fallback-Mechanismus im Client — die `endpoints`-Tupel der
+# CommandSpecs sind reine Introspektion (backend/tests/test_mc_cli_endpoints.py);
+# das 404-Hopping lebt bewusst hand-codiert im Handler (gleiches Muster wie
+# `mc pdf` / `mc deliverable`). HTTP 404 = Backend kennt die Route noch nicht
+# -> naechster Eintrag; jeder andere Fehler propagiert sofort.
+_REPORT_ENDPOINT_CHAIN = (
+    "/api/v1/agent/me/report",      # kanonisch, kanal-neutral (neues Backend)
+    "/api/v1/agent/me/telegram",    # Alias-Route (aelteres Backend ohne /me/report)
+    "/api/v1/agent/telegram/send",  # aeltestes Backend ohne /me/*
+)
+
+
+def _cmd_report(args, client, cfg):
+    """Sende einen strukturierten Report an den Operator — wohin (Telegram,
+    Slack, …), entscheidet die Server-Konfiguration, nicht der Agent.
+
+    Ein Handler fuer zwei Verben: `mc report` (kanonisch) und `mc telegram`
+    (historischer Alias — laufende Agent-Sessions kennen nur den alten Namen).
 
     Text kommt als Positional-Arg ODER via stdin (bei `-` oder leerem arg). Unterstuetzt
     HTML-Tags: <b>fett</b>, <i>kursiv</i>, <code>code</code>, <a href="...">link</a>.
@@ -1718,9 +1751,12 @@ def _cmd_telegram(args, client, cfg):
     poll.sh beim Dispatch gesetzt) und schickt sie als `task_id` mit — damit das
     Backend das Report-Sent-Flag auf dem korrekten Task setzen kann.
     """
+    # argparse setzt dest="command" auf den aufgerufenen Verb-Namen — so nennen
+    # Fehlermeldungen das Verb, das der Agent tatsaechlich getippt hat.
+    verb = getattr(args, "command", None) or "report"
     # Same convention as every other prose verb (resolve_text_arg) — this one
     # had it first, hand-rolled; sharing it is what stops the two drifting.
-    text = resolve_text_arg(args.text, verb="telegram")
+    text = resolve_text_arg(args.text, verb=verb)
 
     body: dict = {"text": text}
     photo_id = getattr(args, "photo", None)
@@ -1746,19 +1782,27 @@ def _cmd_telegram(args, client, cfg):
         pass
 
     from .errors import ClientError as _ClientError
-    try:
-        resp = client.request("POST", "/api/v1/agent/me/telegram", body=body)
-    except _ClientError as e:
-        if "HTTP 404" in str(e):
-            # Altes Backend ohne /me/* — Fallback auf alten Pfad
-            resp = client.request("POST", "/api/v1/agent/telegram/send", body=body)
-        else:
+    resp = None
+    for i, path in enumerate(_REPORT_ENDPOINT_CHAIN):
+        try:
+            resp = client.request("POST", path, body=body)
+            break
+        except _ClientError as e:
+            if "HTTP 404" in str(e) and i + 1 < len(_REPORT_ENDPOINT_CHAIN):
+                continue
             raise
     _emit(resp)
     return 0
 
 
-def _add_telegram_args(p):
+# Historischer Name — Tests und aeltere Imports referenzieren ihn direkt.
+_cmd_telegram = _cmd_report
+
+
+def _add_report_args(p, *, verb="report"):
+    """Argumente fuer `mc report` und den Alias `mc telegram` — EIN Builder,
+    damit die beiden Verben nie auseinanderdriften. `verb` steuert nur die
+    Beispiele in den Help-Texten."""
     p.add_argument(
         "text",
         nargs="?",
@@ -1773,10 +1817,10 @@ def _add_telegram_args(p):
         default=None,
         metavar="DELIVERABLE_ID",
         help=(
-            "Optional: Screenshot-Deliverable als Telegram-Photo anhaengen "
-            "(text wird zur Caption, 1024 Zeichen Telegram-Limit). "
+            "Optional: Screenshot-Deliverable als Bild anhaengen "
+            "(text wird zur Caption; bei Telegram 1024 Zeichen Caption-Limit). "
             "Deliverable muss type=screenshot sein und ein resolvable File haben. "
-            "Beispiel: mc telegram \"Caption\" --photo <deliverable-uuid>"
+            f"Beispiel: mc {verb} \"Caption\" --photo <deliverable-uuid>"
         ),
     )
     p.add_argument(
@@ -1784,13 +1828,17 @@ def _add_telegram_args(p):
         default=None,
         metavar="DELIVERABLE_ID",
         help=(
-            "Optional: Datei (PDF/Excel/PowerPoint/Word/ZIP/...) als Telegram-Document "
+            "Optional: Datei (PDF/Excel/PowerPoint/Word/ZIP/...) als Dokument "
             "anhaengen — keine Kompression, max 50 MB. text wird zur Caption "
-            "(1024 Zeichen Telegram-Limit). Deliverable muss einen File-Pfad haben "
-            "(type != url, type != data). Mutex zu --photo. "
-            "Beispiel: mc telegram \"Q1 Report anbei\" --file <deliverable-uuid>"
+            "(bei Telegram 1024 Zeichen Caption-Limit). Deliverable muss einen "
+            "File-Pfad haben (type != url, type != data). Mutex zu --photo. "
+            f"Beispiel: mc {verb} \"Q1 Report anbei\" --file <deliverable-uuid>"
         ),
     )
+
+
+def _add_telegram_args(p):
+    _add_report_args(p, verb="telegram")
 
 
 def _cmd_memory(args, client, cfg):
@@ -2511,12 +2559,31 @@ REGISTRY: dict[str, CommandSpec] = {
         handler=_cmd_deliverable_get,
         add_args=_add_deliverable_get_args,
     ),
+    "report": CommandSpec(
+        name="report",
+        help=(
+            "Report an den Operator senden — wohin (Telegram, Slack, …), "
+            "entscheidet die Server-Konfiguration (Info-Delivery am Task-Ende)"
+        ),
+        endpoints=(
+            "POST /me/report",      # primary (kanal-neutral, auto-resolves task)
+            "POST /me/telegram",    # fallback (aelteres Backend ohne /me/report)
+            "POST /telegram/send",  # fallback (aeltestes Backend ohne /me/*)
+        ),
+        scope="chat:write",
+        handler=_cmd_report,
+        add_args=_add_report_args,
+    ),
     "telegram": CommandSpec(
         name="telegram",
-        help="Report an den Telegram-Reports-Chat des Operators senden (Info-Delivery am Task-Ende)",
+        help=(
+            "Report an den Operator senden (Alias von `mc report` — "
+            "historischer Name, Info-Delivery am Task-Ende)"
+        ),
         endpoints=(
-            "POST /me/telegram",    # primary (auto-resolves task)
-            "POST /telegram/send",  # fallback (old backend)
+            "POST /me/report",      # primary (same handler as `mc report`)
+            "POST /me/telegram",    # fallback (aelteres Backend ohne /me/report)
+            "POST /telegram/send",  # fallback (aeltestes Backend ohne /me/*)
         ),
         scope="chat:write",
         handler=_cmd_telegram,

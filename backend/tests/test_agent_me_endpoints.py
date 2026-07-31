@@ -281,7 +281,7 @@ def _mock_telegram():
 
 @pytest.mark.asyncio
 async def test_me_telegram_board_lead_path(client, fake_redis):
-    """POST /me/telegram uses agent.current_task_id and sets report_sent_to_telegram."""
+    """POST /me/telegram uses agent.current_task_id and sets report_sent_to_operator."""
     from app.models.task import Task
 
     board_id, agent_id, task_id, token = await _setup_board_lead_with_current_task()
@@ -299,7 +299,7 @@ async def test_me_telegram_board_lead_path(client, fake_redis):
     # Flag set
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
-        assert task.report_sent_to_telegram is True
+        assert task.report_sent_to_operator is True
 
 
 @pytest.mark.asyncio
@@ -322,7 +322,7 @@ async def test_me_telegram_worker_spawn_session_key_path(client, fake_redis):
     # Flag set on the correct task (worker path)
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         task = await s.get(Task, task_id)
-        assert task.report_sent_to_telegram is True
+        assert task.report_sent_to_operator is True
 
 
 @pytest.mark.asyncio
@@ -353,3 +353,67 @@ async def test_me_telegram_body_override(client, fake_redis):
         )
 
     assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_me_report_is_the_canonical_route(client, fake_redis):
+    """POST /me/report — same handler as /me/telegram, plus the channels list
+    that tells the CLI where the report actually landed."""
+    board_id, agent_id, token = await _setup_agent_no_task()
+
+    async with _mock_telegram():
+        resp = await client.post(
+            "/api/v1/agent/me/report",
+            json={"text": "Abschlussbericht."},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["channels"] == ["telegram"]
+
+
+@pytest.mark.asyncio
+async def test_me_report_slack_only_delivers_without_telegram(client, fake_redis, monkeypatch):
+    """The point of the adapter: Telegram unconfigured is no longer a 503 as
+    long as ANOTHER backend is. This is the state after the decommission."""
+    from unittest.mock import AsyncMock, patch
+
+    from app.config import settings
+    from app.services.operator_reports import ReportResult, SlackReportsBackend
+
+    board_id, agent_id, token = await _setup_agent_no_task()
+    monkeypatch.setattr(settings, "slack_reports_channel", "#mc-reports", raising=False)
+
+    with patch("app.services.telegram_reports.telegram_reports") as tg, patch.object(
+        SlackReportsBackend, "send_text", new_callable=AsyncMock,
+        return_value=ReportResult("slack", True),
+    ):
+        tg.configured = False
+        resp = await client.post(
+            "/api/v1/agent/me/report",
+            json={"text": "Nur Slack konfiguriert."},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["channels"] == ["slack"]
+
+
+@pytest.mark.asyncio
+async def test_me_report_without_any_backend_is_503(client, fake_redis, monkeypatch):
+    from unittest.mock import patch
+
+    from app.config import settings
+
+    board_id, agent_id, token = await _setup_agent_no_task()
+    monkeypatch.setattr(settings, "slack_reports_channel", "", raising=False)
+
+    with patch("app.services.telegram_reports.telegram_reports") as tg:
+        tg.configured = False
+        resp = await client.post(
+            "/api/v1/agent/me/report",
+            json={"text": "niemand hoert zu"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert resp.status_code == 503

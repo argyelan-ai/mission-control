@@ -383,7 +383,7 @@ async def test_cross_review_allowed(client):
 #
 # The old auto-sent logic (`report_back_status = "sent"` when owner/lead
 # sets done) was replaced by the hard gate in agent_scoped.py:
-# `task.report_sent_to_telegram` is set ONLY by an explicit `mc telegram`
+# `task.report_sent_to_operator` is set ONLY by an explicit `mc telegram`
 # call. `mc done` without the flag → 422. `mc failed` without
 # the flag → auto-draft.
 #

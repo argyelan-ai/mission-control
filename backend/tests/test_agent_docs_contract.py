@@ -367,3 +367,56 @@ def test_every_l2_doc_starts_with_h1_title():
     docs = generate_reference_docs({"operator_name": "Mark"})
     for topic, content in docs.items():
         assert content.startswith("# "), f"docs/{topic}.md must start with '# <Title>', got: {content[:40]!r}"
+
+
+# ── Operator-report contract (channel-neutral `mc report`) ───────────────
+#
+# The report path is channel-neutral since 2026-07-31: `mc report` is the
+# canonical verb (`mc telegram` stays a functional alias until the Telegram
+# decommission), the report lands wherever the operator configured it
+# (Telegram bot and/or Slack #mc-reports). Agent-facing teaching must
+# therefore neither teach `mc telegram` as the way to report nor promise
+# that the report arrives in Telegram.
+
+@pytest.mark.parametrize("role", ROLES)
+def test_soul_mandatory_report_spots_teach_mc_report(role):
+    """The MANDATORY report teachings in SOUL.md pin `mc report`:
+    the report_back hard gate, the file-attachment duty, and the subtask
+    boundary/autonomy flag — and `mc telegram` survives only as the single
+    alias mention."""
+    agent = _make_agent(role)
+    ctx = build_agent_context(agent, agents_on_board=[])
+    soul = render_agent_file("SOUL.md.j2", ctx)
+
+    # MANDATORY 1 — report_back hard gate teaches mc report
+    assert "if you haven't sent `mc report` first" in soul
+    # MANDATORY 2 — file deliverables attach via mc report
+    assert '`mc report "<text>" --file <deliverable_id>`' in soul
+    # MANDATORY 3 — subtask boundary + autonomy flag use the new names
+    assert "`autonomous_report=true`" in soul
+    assert "autonomous_telegram" not in soul
+
+    # `mc telegram` appears exactly once: the alias note. Everything else
+    # must teach the canonical verb.
+    assert soul.count("mc telegram") == 1, (
+        f"SOUL.md (role={role}) must mention `mc telegram` only in the alias "
+        f"note, found {soul.count('mc telegram')} occurrences"
+    )
+    assert "alias of `mc report`" in soul
+
+
+def test_report_doc_topic_renders_and_telegram_topic_is_gone():
+    """docs/report.md.j2 renders as the `report` topic (channel-neutral),
+    and the old `telegram` topic no longer exists."""
+    docs = generate_reference_docs({"operator_name": "Mark"})
+    assert "report" in docs, "DOC_TOPICS must carry the `report` topic"
+    assert "telegram" not in docs, "the `telegram` topic was renamed to `report`"
+
+    content = docs["report"]
+    assert content.startswith("# Operator Reports")
+    assert "mc report" in content
+    # The alias is mentioned (agents may still see `mc telegram` in old
+    # threads), but the doc must not promise the Telegram channel as the
+    # destination — the operator's configuration decides.
+    assert "alias of `mc report`" in content
+    assert "via `mc telegram`" not in content

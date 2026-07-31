@@ -77,7 +77,8 @@ CANONICAL_VERBS: dict[str, str] = {
     "delegate": "Delegate a subtask to another agent with a callback wait.",
     "deliverable": "Register a deliverable.",
     "deliverable-get": "Read a deliverable's full content (verification route).",
-    "telegram": "Send a report to the operator's Telegram reports chat.",
+    "report": "Send the final report to the operator's reports channel.",
+    "telegram": "Send the final report to the operator (alias of `mc report`).",
     "verify": "Visual verification — screenshots + metrics via mc-playwright.",
     "pdf": "Render Markdown to PDF via the mc-playwright sidecar.",
     "memory": "Search memory (Qdrant + board memory).",
@@ -135,6 +136,7 @@ CANONICAL_VERB_SCOPES: dict[str, str | None] = {
     "delegate": "tasks:create",
     "deliverable": "tasks:write",
     "deliverable-get": "tasks:read",
+    "report": "chat:write",
     "telegram": "chat:write",
     "verify": "chat:write",
     "pdf": "tasks:write",
@@ -181,7 +183,7 @@ def filter_verbs_by_scopes(scopes: list[str] | None) -> dict[str, str]:
 #
 # The split is by kind, not by taste: the card carries the **task lifecycle**
 # (anything that moves task state, plus talking and re-orienting), while
-# **capability** verbs (vault, memory, telegram, pdf, verify, deliverable,
+# **capability** verbs (vault, memory, report, pdf, verify, deliverable,
 # delegate, plugins, …) live in `mc docs tasks`. An agent needs the lifecycle
 # to work at all; it needs a capability only when the task calls for one, and
 # then it can afford a lookup.
@@ -278,8 +280,8 @@ class DocTopicSpec:
 
 
 DOC_TOPICS: dict[str, DocTopicSpec] = {
-    "telegram": DocTopicSpec(
-        title="Telegram Reports",
+    "report": DocTopicSpec(
+        title="Operator Reports",
         audience="all",
         max_bytes=9000,
         when_to_read="Before sending a report to the operator, or when a file/photo needs to be attached.",
