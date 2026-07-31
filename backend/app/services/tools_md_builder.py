@@ -775,7 +775,7 @@ EOF
 
 # Send the screenshot to the operator via Telegram (via mc verify for URLs, or mc deliverable+telegram)
 # For live URLs: the visual verification service takes a screenshot + metrics + posts automatically
-mc verify https://APP_NAME.your-domain.com --caption "Deploy check: APP_NAME.your-domain.com — [OK/issues]"
+mc verify --url https://APP_NAME.your-domain.com --caption "Deploy check: APP_NAME.your-domain.com — [OK/issues]"
 
 # Or for a local screenshot: register as a deliverable (type=screenshot) first,
 # then attach to Telegram with --photo
@@ -1451,14 +1451,18 @@ Rules:
             "# Simple text report (Markdown supported)\n"
             "mc telegram \"**Status** — weather research done. 3 sources cross-validated, details in the deliverable.\"\n"
             "\n"
-            "# With an image (e.g. screenshot, chart, mockup) — max 10 MB\n"
-            "mc telegram \"Frontend mockup v2\" --photo /deliverables/$TASK_ID/mockup-v2.png\n"
+            "# With an image — --photo takes a DELIVERABLE-UUID (type=screenshot), NOT a file path.\n"
+            "# Register the file as a deliverable first, then attach it by ID — max 10 MB\n"
+            "mc deliverable --type screenshot --title \"Frontend mockup v2\" --path /deliverables/$TASK_ID/mockup-v2.png\n"
+            "# → response contains the deliverable id\n"
+            "mc telegram \"Frontend mockup v2\" --photo <deliverable-uuid>\n"
             "\n"
-            "# With a document (PDF, Word, Excel, ZIP) — max 50 MB\n"
-            "mc telegram \"Weather report week 17\" --file /shared-deliverables/$TASK_ID/report.pdf\n"
+            "# With a document (PDF, Word, Excel, ZIP) — --file also takes a DELIVERABLE-UUID — max 50 MB\n"
+            "# (mc deliverable and mc pdf both return the id in their response)\n"
+            "mc telegram \"Weather report week 17\" --file <deliverable-uuid>\n"
             "\n"
             "# Visual verification (screenshot + metrics of a live URL)\n"
-            "mc verify https://example.your-domain.com --caption \"Landing page deploy verified\"\n"
+            "mc verify --url https://example.your-domain.com --caption \"Landing page deploy verified\"\n"
             "# → sidecar takes a Playwright screenshot + LCP/CLS and posts to Telegram automatically\n"
             "```"
         )
