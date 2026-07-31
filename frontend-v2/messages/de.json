@@ -1190,6 +1190,75 @@
     "mcpRemove": "Entfernen",
     "mcpRemovedWithAgents": "Server entfernt. {count} Agent(en) aktualisiert.",
     "mcpRemoved": "Server entfernt.",
-    "mcpRemoveFailed": "Server konnte nicht entfernt werden"
+    "mcpRemoveFailed": "Server konnte nicht entfernt werden",
+    "pluginMatrix": {
+      "loadingGithubSkills": "GitHub-Skills werden geladen...",
+      "noGithubSkills": "Keine GitHub-Skill-Repos installiert.",
+      "installVia": "Installation via:",
+      "skillCount": "{count} Skills",
+      "noAgentsOrPlugins": "Keine CLI-Bridge-Agenten oder Plugins gefunden",
+      "githubSkillRepos": "GitHub-Skill-Repos",
+      "unsavedChanges": "Ungespeicherte Änderungen",
+      "discard": "Verwerfen",
+      "save": "Speichern",
+      "pluginCol": "Plugin",
+      "tableAria": "Plugin-Team-Zuweisungen",
+      "savedNotice": "Team-Zuweisungen gespeichert"
+    },
+    "skillMatrix": {
+      "loading": "Skills + Agenten werden geladen...",
+      "noSkills": "Keine Custom Skills gefunden.",
+      "skillsLiveIn": "Skills liegen in",
+      "customSkillsCount": "Custom Skills ({count})",
+      "reset": "Zurücksetzen",
+      "save": "Speichern",
+      "enableAll": "Alle aktivieren",
+      "disableAll": "Alle deaktivieren",
+      "skillCol": "Skill",
+      "tableAria": "Skill-Team-Zuweisungen",
+      "saved": "Skills gespeichert",
+      "saveFailed": "Speichern fehlgeschlagen"
+    },
+    "shell": {
+      "connected": "verbunden",
+      "startInstaller": "Installer starten",
+      "stop": "Stopp",
+      "startFailed": "Shell konnte nicht gestartet werden: {error}",
+      "sessionEnded": "[Sitzung beendet]",
+      "helpText": "Starte den Installer, um MCP-Server, CLI-Plugins oder Custom Skills einzurichten. Der Installer kennt die MC-API + Vault — sag ihm einfach, was du willst.",
+      "helpExample": "\"Install Brave Search MCP for Researcher\"",
+      "helpDelegation": "Auch via Task-Delegation:"
+    },
+    "mcpMatrix": {
+      "noServers": "Keine MCP-Server installiert",
+      "noServersHint": "Boss kann Installationsanfragen einreichen, oder du installierst via CLI.",
+      "serverCol": "MCP-Server",
+      "tableAria": "MCP-Server-Zuweisung",
+      "aboutServer": "Über {name}",
+      "removeServer": "{name} entfernen",
+      "activate": "{name} für {agent} aktivieren",
+      "deactivate": "{name} für {agent} deaktivieren",
+      "assignFailed": "MCP-Zuweisung fehlgeschlagen"
+    },
+    "mcpAddModal": {
+      "title": "MCP-Server hinzufügen",
+      "close": "Schliessen",
+      "name": "Name",
+      "namePlaceholder": "z. B. filesystem",
+      "nameInvalid": "Nur a-z, 0-9, _, - erlaubt",
+      "transport": "Transport",
+      "command": "Befehl",
+      "commandPlaceholder": "z. B. uvx my-mcp-server",
+      "args": "Args (kommagetrennt)",
+      "argsPlaceholder": "--port,8080,--verbose",
+      "url": "URL",
+      "urlPlaceholder": "https://example.com/mcp",
+      "urlInvalid": "URL ist erforderlich",
+      "description": "Beschreibung",
+      "descriptionPlaceholder": "Optional",
+      "cancel": "Abbrechen",
+      "add": "Hinzufügen",
+      "added": "MCP-Server \"{name}\" hinzugefügt"
+    }
   }
 }
