@@ -9,7 +9,7 @@
  */
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { useQuery } from "@tanstack/react-query";
@@ -50,6 +50,7 @@ function VisibilityBadge({ visibility }: { visibility: Repo["visibility"] }) {
 
 function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
   const t = useTranslations("repos");
+  const locale = useLocale();
   const projects = repo.linked_projects;
   const shownProjects = projects.slice(0, 3);
   const restCount = projects.length - shownProjects.length;
@@ -112,7 +113,7 @@ function RepoCard({ repo, onClick }: { repo: Repo; onClick: () => void }) {
             )}
             <span style={{ color: C.borderSubtle }}>·</span>
             <span className="text-xs" style={{ color: C.textDim }}>
-              {repo.last_synced_at ? t("synced", { ago: timeAgo(repo.last_synced_at) }) : t("neverSynced")}
+              {repo.last_synced_at ? t("synced", { ago: timeAgo(repo.last_synced_at, locale) }) : t("neverSynced")}
             </span>
           </div>
           {shownProjects.length > 0 && (

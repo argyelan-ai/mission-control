@@ -5,7 +5,7 @@
  */
 
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useAppStore } from "@/lib/store";
 import { api } from "@/lib/api";
 import type { ActivityEvent, MetricsSnapshot, MetricsHistoryResponse, SystemStatus } from "@/lib/types";
@@ -15,6 +15,7 @@ import { SectionHeading, ServiceDot, SparklineChart } from "./primitives";
 
 function SystemActivityFeed() {
   const t = useTranslations("home");
+  const locale = useLocale();
   const { activeBoardId } = useAppStore();
   const { data: events = [] } = useQuery({
     queryKey: ["activity", activeBoardId, "compact"],
@@ -48,7 +49,7 @@ function SystemActivityFeed() {
           />
           <div className="min-w-0 flex-1">
             <div className="text-[11px] truncate" style={{ color: C.textSecondary }}>{event.title}</div>
-            <div className="text-[10px]" style={{ color: C.textMuted }}>{timeAgo(event.created_at)}</div>
+            <div className="text-[10px]" style={{ color: C.textMuted }}>{timeAgo(event.created_at, locale)}</div>
           </div>
         </div>
       ))}

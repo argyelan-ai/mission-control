@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useLocale } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
@@ -206,6 +207,7 @@ function MemoryModal({
   boardId: string;
 }) {
   const qc = useQueryClient();
+  const locale = useLocale();
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [editTitle, setEditTitle] = useState("");
   const [editContent, setEditContent] = useState("");
@@ -392,7 +394,7 @@ function MemoryModal({
               {entry.title || "(No title)"}
             </h2>
             <div className="flex gap-3 flex-wrap text-xs mb-5" style={{ color: "var(--color-text-muted)" }}>
-              <span>{timeAgo(entry.created_at)}</span>
+              <span>{timeAgo(entry.created_at, locale)}</span>
               {entry.auto_generated && <span>· Auto-generated</span>}
               {entry.source && <span>· {entry.source}</span>}
             </div>
@@ -782,6 +784,7 @@ export default function LegacyMemoryPage() {
 
 // ── Memory List component ─────────────────────────────────────────────────────
 function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: BoardMemory) => void }) {
+  const locale = useLocale();
   return (
     <div className="rounded-2xl overflow-hidden" style={{ border: `1px solid var(--color-border)` }}>
       {entries.map((entry, i) => {
@@ -805,7 +808,7 @@ function MemoryList({ entries, onOpen }: { entries: BoardMemory[]; onOpen: (e: B
                   {entry.title || "(No title)"}
                 </div>
                 <div className="text-[11px] mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                  {timeAgo(entry.created_at)}{entry.auto_generated ? " · Auto" : ""}
+                  {timeAgo(entry.created_at, locale)}{entry.auto_generated ? " · Auto" : ""}
                 </div>
               </div>
             </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -41,6 +41,7 @@ function formatDeletedAt(iso: string): string {
 
 export function TrashView() {
   const tr = useTranslations("files");
+  const locale = useLocale();
   const qc = useQueryClient();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [purgeOpen, setPurgeOpen] = useState(false);
@@ -169,7 +170,7 @@ export function TrashView() {
                 {formatDeletedAt(deletedAt)}
               </span>
               <span className="text-[11px]" style={{ color: C.textMuted }}>
-                {timeAgo(deletedAt)}
+                {timeAgo(deletedAt, locale)}
               </span>
             </div>
 

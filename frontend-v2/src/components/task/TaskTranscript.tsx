@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useLocale } from "next-intl";
 import { useQuery } from "@tanstack/react-query";
 import { Radio, Info } from "lucide-react";
 import { api } from "@/lib/api";
@@ -19,6 +20,7 @@ const COMMENT_TYPE_LABELS: Record<string, string> = {
 // ── Transcript Message ──────────────────────────────────────────────────────
 
 function TranscriptMessage({ message }: { message: TranscriptMessageType }) {
+  const locale = useLocale();
   const [expanded, setExpanded] = useState(false);
   const isAgent = message.role === "agent";
   const content = message.content ?? "";
@@ -56,7 +58,7 @@ function TranscriptMessage({ message }: { message: TranscriptMessageType }) {
         )}
         {message.ts && (
           <span className="text-[10px]" style={{ color: C.textMuted }}>
-            {timeAgo(message.ts)}
+            {timeAgo(message.ts, locale)}
           </span>
         )}
       </div>

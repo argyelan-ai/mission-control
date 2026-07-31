@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useCallback, useMemo, useEffect } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
@@ -668,7 +668,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
         }}
       >
         <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs font-mono text-[var(--color-text-muted)]">RUNTIME</span>
+          <span className="text-xs font-mono text-[var(--color-text-muted)]">{t("runtimeLabel")}</span>
           <span
             className="text-[9px] px-1.5 py-0.5 rounded font-mono uppercase tracking-wide"
             style={{
@@ -698,7 +698,7 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-mono text-[var(--color-text-muted)]">RUNTIME</span>
+              <span className="text-xs font-mono text-[var(--color-text-muted)]">{t("runtimeLabel")}</span>
               {selectedRuntime?.state === "ready" && (
                 <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: C.online }} />
               )}
@@ -1405,6 +1405,7 @@ function OverviewTab({
   setActiveTab: (tab: Tab) => void;
 }) {
   const t = useTranslations("agents.detail");
+  const locale = useLocale();
   const displaySkills = agent.skill_filter ?? agent.skills ?? [];
 
   const { data: activity } = useQuery({
@@ -1644,7 +1645,7 @@ function OverviewTab({
                     />
                     <div className="min-w-0 flex-1">
                       <div className="text-xs truncate text-[var(--color-text-primary)]">{ev.title}</div>
-                      <div className="text-[10px] mt-0.5 text-[var(--color-text-muted)]">{timeAgo(ev.created_at)}</div>
+                      <div className="text-[10px] mt-0.5 text-[var(--color-text-muted)]">{timeAgo(ev.created_at, locale)}</div>
                     </div>
                   </div>
                 ))}
@@ -1711,6 +1712,7 @@ function ActionButton({
 
 export default function AgentDetailPage() {
   const t = useTranslations("agents");
+  const locale = useLocale();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const qc = useQueryClient();
@@ -1923,7 +1925,7 @@ export default function AgentDetailPage() {
                       ))}
                     </select>
                   </span>
-                  <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at) })}</span>
+                  <span>{t("detail.lastSeenAgo", { ago: timeAgo(agent.last_seen_at, locale) })}</span>
                 </div>
 
                 {/* Context bar */}

@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { CheckCircle, Send, XCircle } from "lucide-react";
 import { timeAgo } from "@/lib/utils";
 import { GlassCard } from "@/components/shared/GlassCard";
@@ -105,6 +105,7 @@ interface Props {
 
 export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
   const t = useTranslations("inbox");
+  const locale = useLocale();
   const payload = (approval.payload ?? {}) as unknown as XPostApprovalPayload;
   const text = payload.text ?? "";
   const over = text.length > MAX_TWEET_LENGTH;
@@ -138,7 +139,7 @@ export function XPostApprovalCard({ approval, onResolve, loading }: Props) {
             </span>
           )}
           <span className="text-[10px] ml-auto text-[var(--color-text-muted)]">
-            {timeAgo(approval.created_at)}
+            {timeAgo(approval.created_at, locale)}
           </span>
         </div>
 

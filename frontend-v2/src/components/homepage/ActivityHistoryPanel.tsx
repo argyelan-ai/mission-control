@@ -9,7 +9,7 @@ import { useEffect } from "react";
 import { motion } from "framer-motion";
 import { X } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
@@ -19,6 +19,7 @@ import { C } from "./colors";
 
 export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
   const t = useTranslations("home");
+  const locale = useLocale();
   const { activeBoardId } = useAppStore();
   const { data: events = [] } = useQuery({
     queryKey: ["activity", "full-history"],
@@ -99,7 +100,7 @@ export function ActivityHistoryPanel({ onClose }: { onClose: () => void }) {
                     <div className="flex-1 min-w-0">
                       <div className="text-[12px] leading-relaxed" style={{ color: C.textPrimary }}>{event.title}</div>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-[10px]" style={{ color: C.textMuted }}>{timeAgo(event.created_at)}</span>
+                        <span className="text-[10px]" style={{ color: C.textMuted }}>{timeAgo(event.created_at, locale)}</span>
                         {event.severity && event.severity !== "info" && (
                           <span
                             className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded-sm uppercase"

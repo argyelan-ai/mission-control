@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
@@ -210,6 +210,7 @@ export function RepoDetailPanel({
   onClose: () => void;
 }) {
   const t = useTranslations("repos.detail");
+  const locale = useLocale();
   const queryClient = useQueryClient();
   const [description, setDescription] = useState("");
   const [rulesMd, setRulesMd] = useState("");
@@ -313,10 +314,10 @@ export function RepoDetailPanel({
                   {repo.source === "imported" ? t("sourceImported") : t("sourceMc")}
                 </span>
                 <span>{t("created")}</span>
-                <span style={{ color: C.textSecondary }}>{timeAgo(repo.created_at)}</span>
+                <span style={{ color: C.textSecondary }}>{timeAgo(repo.created_at, locale)}</span>
                 <span>{t("lastSynced")}</span>
                 <span style={{ color: C.textSecondary }}>
-                  {repo.last_synced_at ? timeAgo(repo.last_synced_at) : t("never")}
+                  {repo.last_synced_at ? timeAgo(repo.last_synced_at, locale) : t("never")}
                 </span>
               </div>
             </div>

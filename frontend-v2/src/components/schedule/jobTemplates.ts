@@ -3,12 +3,15 @@
  *
  * Clicking a template chip prefills the trigger + tag fields. The user
  * can still tweak everything afterwards.
+ *
+ * `key` resolves to `schedule.jobTemplates.<key>.name` / `.description` in
+ * the message catalogs (messages/en.json + messages/de.json) — render sites
+ * must call `t()`, never read a hardcoded label off this array.
  */
 
 export interface JobTemplate {
   id: string;
-  name: string;
-  description: string;
+  key: string;
   icon: string; // emoji
   defaults: Partial<{
     schedule_type: string;
@@ -24,8 +27,7 @@ export interface JobTemplate {
 export const JOB_TEMPLATES: JobTemplate[] = [
   {
     id: "daily-standup",
-    name: "Daily Standup",
-    description: "Taeglicher Standup-Task fuer das Team",
+    key: "dailyStandup",
     icon: "☀️",
     defaults: {
       schedule_type: "daily",
@@ -35,8 +37,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
   },
   {
     id: "weekday-morning",
-    name: "Wochentage Morgen",
-    description: "Mo-Fr um 08:30 — perfekt fuer Daily Reports",
+    key: "weekdayMorning",
     icon: "🗓️",
     defaults: {
       schedule_type: "weekdays",
@@ -47,8 +48,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
   },
   {
     id: "weekly-cleanup",
-    name: "Weekly Cleanup",
-    description: "Woechentliche Code-Qualitaets-Pruefung (So 22:00)",
+    key: "weeklyCleanup",
     icon: "🧹",
     defaults: {
       schedule_type: "cron",
@@ -58,8 +58,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
   },
   {
     id: "hourly-health",
-    name: "Hourly Health Check",
-    description: "Stuendlicher System-Health-Check",
+    key: "hourlyHealth",
     icon: "🩺",
     defaults: {
       schedule_type: "interval",
@@ -69,8 +68,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
   },
   {
     id: "every-4h",
-    name: "Alle 4 Stunden",
-    description: "Periodischer Sync-Job, 6x am Tag",
+    key: "every4h",
     icon: "🔄",
     defaults: {
       schedule_type: "interval",
@@ -80,8 +78,7 @@ export const JOB_TEMPLATES: JobTemplate[] = [
   },
   {
     id: "monthly-report",
-    name: "Monthly Report",
-    description: "1. des Monats um 09:00",
+    key: "monthlyReport",
     icon: "📊",
     defaults: {
       schedule_type: "cron",

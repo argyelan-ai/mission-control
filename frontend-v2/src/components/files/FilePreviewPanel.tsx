@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ interface FilePreviewPanelProps {
 
 export function FilePreviewPanel({ root, subpath, onClose }: FilePreviewPanelProps) {
   const tr = useTranslations("files");
+  const locale = useLocale();
   const open = subpath !== null;
 
   const { data: meta } = useQuery({
@@ -48,7 +49,7 @@ export function FilePreviewPanel({ root, subpath, onClose }: FilePreviewPanelPro
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs" style={{ color: C.textMuted }}>
                 <span className="font-mono">{root.label}</span>
                 {meta && <span className="tabular-nums">{humanSize(meta.size)}</span>}
-                {meta && <span>{timeAgo(mtimeToIso(meta.mtime))}</span>}
+                {meta && <span>{timeAgo(mtimeToIso(meta.mtime), locale)}</span>}
                 {meta?.agent_slug && <span>{meta.agent_slug}</span>}
               </div>
             </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale } from "next-intl";
 import { cn } from "@/lib/utils";
 import { timeAgo } from "@/lib/utils";
 import { StatusDot } from "./StatusDot";
@@ -62,6 +63,7 @@ function getStatusForEvent(eventType: string): StatusType {
 }
 
 export function ActivityFeed({ events, className }: ActivityFeedProps) {
+  const locale = useLocale();
   if (!events.length) {
     return (
       <div className={cn("text-sm text-[var(--color-text-muted)] py-6 text-center", className)}>
@@ -124,7 +126,7 @@ export function ActivityFeed({ events, className }: ActivityFeedProps) {
                     {event.agent_name}
                   </span>
                 )}
-                <span>{timeAgo(event.created_at)}</span>
+                <span>{timeAgo(event.created_at, locale)}</span>
               </div>
             </div>
           </div>

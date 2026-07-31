@@ -131,6 +131,8 @@ export function VaultFilterStrip({
   open,
   onOpenChange,
 }: VaultFilterStripProps) {
+  // `tr` (not `t`) — the TYPE row below shadows `t` as its .map() loop var.
+  const tr = useTranslations("vault");
   const prefersReducedMotion = useReducedMotion();
 
   function toggleScope(scope: VaultScope) {
@@ -195,7 +197,7 @@ export function VaultFilterStrip({
           }}
         >
           <SlidersHorizontal size={14} strokeWidth={2} />
-          <span className="font-mono uppercase tracking-widest text-[11px]">Filter</span>
+          <span className="font-mono uppercase tracking-widest text-[11px]">{tr("filterLabel")}</span>
           {activeCount > 0 && (
             <span
               className="inline-flex items-center justify-center font-mono rounded-full"
@@ -251,7 +253,7 @@ export function VaultFilterStrip({
                 className="flex items-center gap-2 overflow-x-auto scrollbar-none"
                 style={{ overscrollBehaviorX: "contain" }}
               >
-                <StripLabel>SCOPE</StripLabel>
+                <StripLabel>{tr("scopeLabel")}</StripLabel>
                 {SCOPES.map((s) => (
                   <Chip
                     key={s.value}
@@ -268,7 +270,7 @@ export function VaultFilterStrip({
                   className="flex items-center gap-2 overflow-x-auto scrollbar-none"
                   style={{ overscrollBehaviorX: "contain" }}
                 >
-                  <StripLabel>AGENT</StripLabel>
+                  <StripLabel>{tr("agentLabel")}</StripLabel>
                   {agents.map((agent) => (
                     <Chip
                       key={agent}
@@ -285,7 +287,7 @@ export function VaultFilterStrip({
                 className="flex items-center gap-2 overflow-x-auto scrollbar-none"
                 style={{ overscrollBehaviorX: "contain" }}
               >
-                <StripLabel>TYPE</StripLabel>
+                <StripLabel>{tr("typeLabel")}</StripLabel>
                 {TYPES.map((t) => (
                   <Chip
                     key={t.value}

@@ -1,5 +1,6 @@
 "use client";
 
+import { useLocale } from "next-intl";
 import { timeAgo } from "@/lib/utils";
 import { Pill } from "@/components/shared/Pill";
 import type { TaskEvent } from "@/lib/types";
@@ -34,6 +35,7 @@ interface TaskHistoryProps {
 }
 
 export function TaskHistory({ events, isLoading }: TaskHistoryProps) {
+  const locale = useLocale();
   if (isLoading) {
     return (
       <div className="text-xs" style={{ color: C.textMuted }}>
@@ -84,7 +86,7 @@ export function TaskHistory({ events, isLoading }: TaskHistoryProps) {
             </span>
             <span style={{ color: C.textMuted }}>·</span>
             <span style={{ color: C.textMuted }}>
-              {timeAgo(event.created_at)}
+              {timeAgo(event.created_at, locale)}
             </span>
             {event.reason && (
               <>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -353,6 +353,7 @@ function SearchResults({
   onOpen: (r: FsSearchResult) => void;
 }) {
   const tr = useTranslations("files");
+  const locale = useLocale();
   const rootLabel = (key: string) => roots.find((r) => r.key === key)?.label ?? key;
 
   if (loading) {
@@ -400,7 +401,7 @@ function SearchResults({
               </div>
               <div className="flex items-center gap-3 shrink-0 text-xs" style={{ color: C.textMuted }}>
                 <span className="tabular-nums hidden sm:inline">{humanSize(r.size)}</span>
-                <span className="hidden sm:inline">{timeAgo(mtimeToIso(r.mtime))}</span>
+                <span className="hidden sm:inline">{timeAgo(mtimeToIso(r.mtime), locale)}</span>
               </div>
             </button>
           );

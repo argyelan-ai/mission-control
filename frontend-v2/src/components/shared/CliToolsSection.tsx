@@ -23,7 +23,7 @@ import {
   AlertCircle,
   X,
 } from "lucide-react";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { api } from "@/lib/api";
 import type { CliToolStatus, CliUpdatePhase, CliUpdateProgress } from "@/lib/types";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
@@ -452,6 +452,7 @@ function UpdateModal({
 
 export function CliToolsSection() {
   const t = useTranslations("runtimes.cliTools");
+  const locale = useLocale();
   const queryClient = useQueryClient();
   const addNotification = useNotificationStore((s) => s.addNotification);
   const [modalTool, setModalTool] = useState<string | null>(null);
@@ -521,7 +522,7 @@ export function CliToolsSection() {
             </span>
           </div>
           <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {t("subtitle", { time: timeAgo(checkedAt) })}
+            {t("subtitle", { time: timeAgo(checkedAt, locale) })}
           </p>
         </div>
         <button

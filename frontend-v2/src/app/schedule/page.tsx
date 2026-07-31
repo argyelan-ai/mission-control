@@ -314,6 +314,7 @@ function WeekCalendar({
 
 function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
   const t = useTranslations("schedule");
+  const locale = useLocale();
   const unreliable = useMemo(() => {
     return [...jobs]
       .filter(
@@ -391,7 +392,7 @@ function HealthTab({ jobs }: { jobs: ScheduledJob[] }) {
                       className="text-[10px] mt-0.5"
                       style={{ color: C.textMuted }}
                     >
-                      {t("lastRun", { ago: timeAgo(j.last_run_at) })}
+                      {t("lastRun", { ago: timeAgo(j.last_run_at, locale) })}
                     </div>
                   )}
                 </div>

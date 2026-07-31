@@ -23,7 +23,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import {
   RotateCcw,
   Loader2,
@@ -210,6 +210,7 @@ function ProviderGroup({
   bindingModelId: string | null;
 }) {
   const t = useTranslations("runtimes.modelCatalog");
+  const locale = useLocale();
   const models = provider.models ?? [];
   const newCount = provider.new_count ?? models.filter((m) => !m.bound).length;
   const chrome = STATUS_CHROME[provider.status] ?? STATUS_CHROME.ok;
@@ -260,7 +261,7 @@ function ProviderGroup({
               <chrome.Icon size={11} className={`shrink-0 ${TONE_TEXT[chrome.tone]}`} />
               <span className={TONE_TEXT[chrome.tone]}>{t(chrome.labelKey)}</span>
               <span className="text-dim">·</span>
-              <span className="text-muted">{t("checked", { time: timeAgo(provider.cached_at) })}</span>
+              <span className="text-muted">{t("checked", { time: timeAgo(provider.cached_at, locale) })}</span>
             </div>
           </div>
         </button>
@@ -334,6 +335,7 @@ interface PendingBind {
 
 export function ModelCatalogSection() {
   const t = useTranslations("runtimes.modelCatalog");
+  const locale = useLocale();
   const queryClient = useQueryClient();
   const addNotification = useNotificationStore((s) => s.addNotification);
   const [pending, setPending] = useState<PendingBind | null>(null);
@@ -429,7 +431,7 @@ export function ModelCatalogSection() {
             )}
           </div>
           <p className="text-xs mt-0.5 text-muted">
-            {t("subtitle", { time: timeAgo(newestCachedAt) })}
+            {t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
           </p>
         </div>
         <button

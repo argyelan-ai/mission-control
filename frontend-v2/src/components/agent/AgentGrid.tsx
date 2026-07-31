@@ -2,7 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { motion, AnimatePresence } from "framer-motion";
 import { LayoutGrid, List, Filter } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -156,6 +156,7 @@ import { contextPercent, contextColor, timeAgo } from "@/lib/utils";
 
 function AgentListRow({ agent }: { agent: Agent }) {
   const t = useTranslations("agents");
+  const locale = useLocale();
   const pct = contextPercent(agent.context_tokens, agent.context_max);
   const barColor = contextColor(pct);
 
@@ -200,7 +201,7 @@ function AgentListRow({ agent }: { agent: Agent }) {
 
           {/* Last seen */}
           <span className="text-[10px] text-[var(--color-text-muted)] shrink-0 hidden md:block w-20 text-right">
-            {timeAgo(agent.last_seen_at)}
+            {timeAgo(agent.last_seen_at, locale)}
           </span>
 
           {/* Provision */}

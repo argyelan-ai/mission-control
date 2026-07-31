@@ -22,7 +22,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { Check, ChevronDown, ChevronRight, MoreHorizontal, Square, CheckSquare, AlertCircle, Trash2, X } from "lucide-react";
@@ -478,6 +478,7 @@ export function TaskDetailBody({
   onClose: () => void;
 }) {
   const t = useTranslations("tasks");
+  const locale = useLocale();
   const qc = useQueryClient();
   const [activeTab, setActiveTab] = useState<"thread" | "comments" | "timeline" | "history" | "transcript" | "deliverables" | "e2e" | "workspace">("thread");
   const [checklistOpen, setChecklistOpen] = useState(false);
@@ -715,7 +716,7 @@ export function TaskDetailBody({
                 {t("createdBy")}
               </span>
               <span className="text-xs" style={{ color: C.textPrimary }}>
-                {creatorName ?? "—"} · {timeAgo(task.created_at)}
+                {creatorName ?? "—"} · {timeAgo(task.created_at, locale)}
               </span>
             </div>
             <div className="px-2.5 py-2" style={{ background: C.bgSurface }}>
@@ -723,7 +724,7 @@ export function TaskDetailBody({
                 {t("started")}
               </span>
               <span className="text-xs" style={{ color: C.textPrimary }}>
-                {task.started_at ? timeAgo(task.started_at) : "—"}
+                {task.started_at ? timeAgo(task.started_at, locale) : "—"}
               </span>
             </div>
           </div>
