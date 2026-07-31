@@ -6,10 +6,10 @@ description: Search, add and download movies (in German, Apple-TV/Plex-optimized
 # mc-media-downloader
 
 Delegate movie downloads to Radarr (automation brain) + NZBGet (Usenet downloader),
-running on Mark's QNAP NAS. Everything lands on the NAS, ready for Apple TV / Plex.
+running on the QNAP NAS. Everything lands on the NAS, ready for Apple TV / Plex.
 
 **Golden rules**
-1. **German first.** Mark wants every movie in German. The Radarr profile `4K / HD - DE`
+1. **German first.** Every movie must be in German. The Radarr profile `4K / HD - DE`
    (id 7) enforces German audio and prefers `German DL` (dual-audio) releases.
 2. **No CAM.** A `CAM / Telesync / Screener` custom format (score -10000) plus disabled
    CAM/TS qualities plus `minimumAvailability: released` block cinema rips three ways.
@@ -114,7 +114,7 @@ fresh search on the existing movie id (below).
 |----|------|------|
 | 7  | **4K / HD - DE** | **default** — German, HD+4K, CAM-blocked, Apple-TV sizes |
 | 6  | HD - 720p/1080p | German, HD only (no 4K), smaller |
-| 9  | Magyar Filmek | Hungarian audio (Mark's mother tongue) — only if explicitly asked |
+| 9  | Magyar Filmek | Hungarian audio — only if explicitly requested |
 
 Only use another profile if the task explicitly asks for it.
 

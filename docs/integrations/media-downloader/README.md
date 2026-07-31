@@ -7,7 +7,7 @@ directly on a board — and the **Downloader** agent finds it, adds it to Radarr
 and starts the Usenet download through NZBGet.
 
 ```
-Mark ── "lade Film X auf Deutsch" ──▶ Boss ──(mc delegate --to Downloader)──▶ Downloader
+Operator ── "lade Film X auf Deutsch" ──▶ Boss ──(mc delegate --to Downloader)──▶ Downloader
                                                                                  │
                                                      Radarr (search + quality)   │  NZBGet (Usenet)
                                                      ┌───────────────────────────┴───────────────┐
