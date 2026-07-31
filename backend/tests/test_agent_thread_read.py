@@ -403,3 +403,33 @@ async def test_short_thread_is_not_flagged_as_truncated(client: AsyncClient, asy
     body = (await _thread(client, token)).json()
     assert body["budget_truncated"] is False
     assert body["messages"][0]["body"] == "kurz"
+
+
+# ── Scope reachability ───────────────────────────────────────────────────
+#
+# `mc inbox` needs no scope (require_agent only) but `mc thread` needs
+# tasks:read, because it also returns the task's title and status. That
+# asymmetry is harmless only as long as no role can be *messaged* without
+# also being allowed to *re-read* — a role with chat:write but no tasks:read
+# would receive nudges and have no way to recover the conversation behind
+# them, and would silently lose the verb from its Operating Card.
+#
+# This is the same failure class PR #195 documented: a stale scope value on
+# `inbox` would have taken the verb away from agents without chat:write and
+# made them go quiet. Verified 2026-07-31: no role is affected. This test
+# exists so that a future role definition cannot introduce one unnoticed.
+
+def test_every_role_that_can_be_messaged_can_also_re_read():
+    from app.scopes import AgentRole, Scope, get_default_scopes
+
+    stranded = [
+        role.value
+        for role in AgentRole
+        if Scope.CHAT_WRITE.value in set(get_default_scopes(role))
+        and Scope.TASKS_READ.value not in set(get_default_scopes(role))
+    ]
+    assert not stranded, (
+        "role(s) can be sent thread messages but may not call GET /me/thread "
+        f"to re-read them: {stranded} — give them tasks:read, or drop the "
+        "require_scope on the endpoint"
+    )
