@@ -348,7 +348,7 @@ class LoopRunnerService:
         )
 
         if loop.operator_reports:
-            await self._send_round_telegram_report(
+            await self._send_round_operator_report(
                 loop, round_no=loop.current_round_no, outcome=outcome,
                 reflection=reflection, note=note,
             )
@@ -460,19 +460,19 @@ class LoopRunnerService:
         )).all()
         return list(rows)
 
-    async def _send_round_telegram_report(
+    async def _send_round_operator_report(
         self, loop: Loop, *, round_no: int, outcome: str,
         reflection: str | None, note: str,
     ) -> None:
         """Kompakter Report an den Operator nach jeder Runde (L2, Opt-out via
         `loop.operator_reports`). Fehler dürfen den Runner nie stören.
 
-        Geht noch direkt an den Telegram-Reports-Bot; der Umzug auf den
-        OperatorReports-Adapter kommt mit den übrigen passiven Callsites
-        (Datei-Fähigkeit, PR 2 des Slack-Umbaus)."""
+        Läuft über den OperatorReports-Adapter (Fan-out Telegram + Slack,
+        PR 2 des Slack-Umbaus) — kein Backend konfiguriert = gleicher
+        stiller Skip wie zuvor bei unkonfiguriertem Reports-Bot."""
         try:
-            from app.services.telegram_reports import telegram_reports
-            if not telegram_reports.configured:
+            from app.services.operator_reports import report_backends, send_report
+            if not report_backends():
                 return
             lines = [
                 f"🔁 <b>{loop.name}</b> — Runde {round_no}/{loop.max_rounds}: "
@@ -486,9 +486,9 @@ class LoopRunnerService:
                 lines.append(
                     f"Verbleibend: {remaining} Runde{'n' if remaining != 1 else ''}"
                 )
-            await telegram_reports.send("\n".join(lines))
+            await send_report("\n".join(lines))
         except Exception as e:  # noqa: BLE001
-            logger.warning("Loop-Runden-Telegram-Report fehlgeschlagen: %s", e)
+            logger.warning("Loop-Runden-Report fehlgeschlagen: %s", e)
 
     # ── Gates / Pause / Finish ───────────────────────────────────────────
 

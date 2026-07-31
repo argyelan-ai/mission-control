@@ -2,7 +2,7 @@
 
 Orchestrates screenshots/metrics via the mc-playwright service, registers
 each screenshot as a TaskDeliverable, and optionally sends all screenshots
-directly as image attachments to the operator's reports Telegram chat.
+as image attachments to the operator reports adapter (Telegram + Slack).
 
 Addresses Bug 3 (2026-04-22): agents needed their own Playwright setups.
 Now: a dedicated container, agents call it via API.
@@ -18,7 +18,6 @@ import httpx
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.deliverable import TaskDeliverable
-from app.services.telegram_reports import telegram_reports
 
 logger = logging.getLogger("mc.visual_verifier")
 
@@ -123,16 +122,38 @@ async def register_screenshots_as_deliverables(
     return created
 
 
-async def send_screenshots_to_telegram(
+async def send_screenshots_to_operator(
     verify_result: dict,
     caption: str | None = None,
-) -> dict | None:
-    """Sends all screenshots from the verify response as a media group to the reports chat."""
+) -> bool | None:
+    """Sends all screenshots from the verify response to the operator reports
+    adapter (Telegram + Slack #mc-reports).
+
+    The old path was one Telegram media group; the adapter has no group
+    concept (Slack uploads are per-file anyway), so each screenshot goes as
+    its own photo report and the caption rides only on the first — same
+    information, channel-neutral.
+
+    Returns None when there is nothing to send, otherwise True only when
+    EVERY image reached at least one backend — mirroring the media group's
+    all-or-nothing semantics so the caller's dedup marker never suppresses a
+    resend of partially delivered batches.
+    """
+    from app.services.operator_reports import send_report
+
     paths = [s["path"] for s in verify_result.get("screenshots", [])]
     paths += [s["path"] for s in verify_result.get("scroll_shots", [])]
     if not paths:
         return None
-    return await telegram_reports.send_media_group(paths, caption=caption)
+    all_delivered = True
+    for i, path in enumerate(paths):
+        delivered, _results = await send_report(
+            (caption or "") if i == 0 else "",
+            file_path=path,
+            as_photo=True,
+        )
+        all_delivered = all_delivered and delivered
+    return all_delivered
 
 
 def format_metrics_summary(verify_result: dict) -> str:

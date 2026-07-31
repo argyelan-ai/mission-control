@@ -12,8 +12,8 @@ path used to run over the Gateway chat RPC with wait-for-reply. Without the
 Gateway this synchronous loop is no longer possible. Until Phase 31 delivers
 a cli-bridge-based replacement, agents respond in the meeting with a
 placeholder and the meeting still runs to completion (BoardMemory +
-auto-summary). Telegram notification goes via telegram_bot.send_message
-directly to the Bot API.
+auto-summary). The operator summary notification goes through the
+operator-reports adapter (Telegram + Slack fan-out).
 """
 
 import asyncio
@@ -34,7 +34,6 @@ from app.redis_client import RedisKeys, get_redis
 from app.services.activity import emit_event
 from app.services.discord import send_to_discord_channel
 from app.services.sse import broadcast
-from app.services.telegram_bot import telegram_bot
 from app.utils import create_tracked_task, utcnow
 
 logger = logging.getLogger("mc.meetings")
@@ -254,21 +253,24 @@ async def _run_meeting(meeting_id: uuid.UUID, board_id: uuid.UUID) -> None:
                 "decisions_count": len(meeting.decisions or []),
             })
 
-            # Telegram to the operator — direct Bot API (no Gateway dependency)
+            # Summary to the operator — via the reports adapter (Telegram +
+            # Slack fan-out, no Gateway dependency)
             decisions_text = ""
             if meeting.decisions:
                 decisions_text = "\n".join(
                     f"- {d.get('text', d)}" for d in meeting.decisions[:5]
                 )
             try:
-                await telegram_bot.send_message(
+                from app.services.operator_reports import send_report
+
+                await send_report(
                     f"<b>Meeting abgeschlossen</b>\n\n"
                     f"{meeting.title}\n"
                     f"{len(meeting.decisions or [])} Entscheidungen\n"
                     f"{decisions_text}"
                 )
             except Exception as e:
-                logger.warning("Meeting Telegram notify failed: %s", e)
+                logger.warning("Meeting operator notify failed: %s", e)
 
             # Optional: per-board lead Discord channel notify
             if lead and getattr(lead, "discord_channel_id", None):

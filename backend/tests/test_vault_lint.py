@@ -371,10 +371,11 @@ async def test_vault_lint_loop_sleep_first_semantics(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_vault_lint_loop_swallows_telegram_failure(tmp_path, monkeypatch):
-    """When >5 issues + telegram raises, loop must NOT crash."""
+async def test_vault_lint_loop_swallows_report_failure(tmp_path, monkeypatch):
+    """When >5 issues + the reports adapter raises, loop must NOT crash."""
     import asyncio
     import app.main as main_mod
+    import app.services.operator_reports as op_mod
     import app.services.vault_lint as vault_lint_mod
     from app.config import settings as cfg
 
@@ -397,16 +398,18 @@ async def test_vault_lint_loop_swallows_telegram_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(vault_lint_mod, "write_lint_report", fake_write)
 
-    # Force telegram to look configured but raise on send_message.
-    monkeypatch.setattr(type(main_mod.telegram_bot), "configured", property(lambda self: True))
+    # Force the adapter to look configured but raise on send_report.
+    # (The loop lazily imports report_backends/send_report from the module,
+    # so patching the module attributes is the seam.)
+    monkeypatch.setattr(op_mod, "report_backends", lambda: ["fake-backend"])
 
     send_calls = {"n": 0}
 
-    async def boom_send(text, reply_markup=None):
+    async def boom_send(text, **kwargs):
         send_calls["n"] += 1
-        raise RuntimeError("telegram down")
+        raise RuntimeError("reports adapter down")
 
-    monkeypatch.setattr(main_mod.telegram_bot, "send_message", boom_send)
+    monkeypatch.setattr(op_mod, "send_report", boom_send)
 
     task = asyncio.create_task(main_mod._vault_lint_loop(vault))
     # Let it run at least one iteration (sleep=0 → fires immediately).
@@ -417,7 +420,7 @@ async def test_vault_lint_loop_swallows_telegram_failure(tmp_path, monkeypatch):
     except (asyncio.CancelledError, Exception):
         pass
 
-    # Loop survived: send_message was attempted, exception swallowed.
+    # Loop survived: send_report was attempted, exception swallowed.
     assert send_calls["n"] >= 1
     # Task ended via CancelledError (clean), not via crash.
     assert task.cancelled() or task.done()

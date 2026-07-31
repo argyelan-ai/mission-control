@@ -121,15 +121,15 @@ async def render_and_send_failure_draft(
 ) -> bool:
     """Renders + sends an auto-draft report for failed tasks.
 
-    Returns True on successful send, False if the reports bot is not configured
-    or the send failed. Never raises exceptions — the caller must NOT block the
-    status=failed transition on this.
+    Returns True on successful delivery (at least one report backend accepted),
+    False if no backend is configured or the send failed. Never raises
+    exceptions — the caller must NOT block the status=failed transition on this.
     """
-    from app.services.telegram_reports import telegram_reports
+    from app.services.operator_reports import report_backends, send_report
 
-    if not telegram_reports.configured:
+    if not report_backends():
         logger.info(
-            "Reports-Bot nicht konfiguriert — Auto-Draft fuer Task %s uebersprungen",
+            "Kein Report-Backend konfiguriert — Auto-Draft fuer Task %s uebersprungen",
             task.id,
         )
         return False
@@ -150,12 +150,14 @@ async def render_and_send_failure_draft(
     if len(text) > 4000:
         text = _truncate(text, 4000)
 
-    result = await telegram_reports.send(text)
-    if result is None or not result.get("ok"):
+    delivered, results = await send_report(text)
+    if not delivered:
+        detail = next(
+            (r.detail for r in results if not r.ok and r.detail),
+            "unconfigured/network",
+        )
         logger.warning(
-            "Auto-Draft send fehlgeschlagen fuer Task %s: %s",
-            task.id,
-            (result or {}).get("description", "unconfigured/network"),
+            "Auto-Draft send fehlgeschlagen fuer Task %s: %s", task.id, detail,
         )
         return False
     return True

@@ -95,11 +95,15 @@ async def check_once() -> int:
         ok = await _set_private(owner, repo["name"])
         if ok:
             count += 1
-            # Optional: send a Telegram alert so the operator notices
+            # Optional: send an operator alert (reports adapter: Telegram +
+            # Slack) so the operator notices
             try:
-                from app.services.telegram_reports import telegram_reports
-                if telegram_reports.configured:
-                    await telegram_reports.send(
+                from app.services.operator_reports import (
+                    report_backends,
+                    send_report,
+                )
+                if report_backends():
+                    await send_report(
                         f"⚠️ <b>Security-Alert</b> · Repo auto-privatisiert\n\n"
                         f"<code>{owner}/{repo['name']}</code> war PUBLIC — Defense-in-Depth-Monitor hat "
                         f"es auf private gesetzt.\n\n"
@@ -107,7 +111,7 @@ async def check_once() -> int:
                         f"<code>--private</code> aufgerufen. SOUL-Regel greift jetzt."
                     )
             except Exception as e:
-                logger.debug("Telegram-alert skipped: %s", e)
+                logger.debug("Operator-alert skipped: %s", e)
     return count
 
 

@@ -112,6 +112,46 @@ async def test_round_completion_sends_telegram_report(fake_redis):
 
 
 @pytest.mark.asyncio
+async def test_round_report_fans_out_to_telegram_and_slack(fake_redis, monkeypatch):
+    """PR 2 (Slack-Umbau): der Runden-Report läuft über den OperatorReports-
+    Adapter — mit konfiguriertem Slack-Reports-Kanal landet er in BEIDEN
+    Backends (Fan-out wie in test_operator_reports.py vorgemacht)."""
+    from app.config import settings as cfg
+    from app.services.slack_client import SlackPostResult, SlackTransport
+
+    board = await _mk_board()
+    loop = await _mk_loop(board, max_rounds=1)
+    await _tick(fake_redis)
+    fresh = await _get_loop(loop.id)
+    await _set_task_status(fresh.current_task_id, "done")
+
+    monkeypatch.setattr(cfg, "slack_reports_channel", "#mc-reports", raising=False)
+    mock_reports = _mock_configured_reports_service()
+    slack_posts: list[tuple[str, str]] = []
+
+    async def _post_message(self, *, channel, text, **kwargs):
+        slack_posts.append((channel, text))
+        return SlackPostResult(ok=True, ts="1.0")
+
+    with patch("app.services.telegram_reports.telegram_reports", mock_reports), \
+         patch("app.services.slack_client.resolve_channel_id",
+               new_callable=AsyncMock, return_value="C0REPORTS"), \
+         patch.object(SlackTransport, "post_message", _post_message):
+        await _tick(fake_redis)  # evaluate round 1
+
+    # Telegram leg (through the adapter's Telegram backend)
+    mock_reports.send.assert_awaited_once()
+    tg_text = mock_reports.send.await_args.args[0]
+    assert loop.name in tg_text
+    # Slack leg: same report, mrkdwn-converted, in the reports channel
+    assert len(slack_posts) == 1
+    channel, slack_text = slack_posts[0]
+    assert channel == "C0REPORTS"
+    assert loop.name in slack_text
+    assert "DONE" in slack_text
+
+
+@pytest.mark.asyncio
 async def test_telegram_reports_opt_out_skips_send(fake_redis):
     board = await _mk_board()
     loop = await _mk_loop(board, max_rounds=1, operator_reports=False)
@@ -366,7 +406,7 @@ async def test_budget_usd_stops_loop(make_board, make_task, fake_redis):
         runner = LoopRunnerService()
         with patch("app.services.loop_runner.emit_event", new_callable=AsyncMock) as emitted, \
              patch("app.services.activity.broadcast", new_callable=AsyncMock), \
-             patch.object(runner, "_send_round_telegram_report", new_callable=AsyncMock):
+             patch.object(runner, "_send_round_operator_report", new_callable=AsyncMock):
             fresh_task = await s.get(type(task), task.id)
             await runner._complete_round(s, loop, outcome="done", task=fresh_task)
         await s.refresh(loop)
@@ -397,7 +437,7 @@ async def test_no_budget_no_stop(make_board, make_task, fake_redis):
         runner = LoopRunnerService()
         with patch("app.services.activity.emit_event", new_callable=AsyncMock), \
              patch("app.services.activity.broadcast", new_callable=AsyncMock), \
-             patch.object(runner, "_send_round_telegram_report", new_callable=AsyncMock), \
+             patch.object(runner, "_send_round_operator_report", new_callable=AsyncMock), \
              patch.object(runner, "_start_round", new_callable=AsyncMock) as next_round:
             fresh_task = await s.get(type(task), task.id)
             await runner._complete_round(s, loop, outcome="done", task=fresh_task)

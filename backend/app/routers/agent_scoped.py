@@ -3535,12 +3535,12 @@ async def agent_visual_verify(
 
     Calls the central mc-playwright service (no more per-agent browser
     setup needed). Registers each screenshot as a TaskDeliverable.
-    If send_to_telegram=True, also sends the screenshots as a media group
-    to the operator's reports chat.
+    If send_to_telegram=True, also sends the screenshots (one photo report
+    each) to the operator reports adapter (Telegram + Slack).
     """
     from app.services.visual_verifier import (
         verify_url, register_screenshots_as_deliverables,
-        send_screenshots_to_telegram, format_metrics_summary,
+        send_screenshots_to_operator, format_metrics_summary,
     )
 
     # Load task + ownership check
@@ -3736,8 +3736,8 @@ async def agent_visual_verify(
             metrics_block = format_metrics_summary(result)
             if metrics_block:
                 caption_html = (caption_html + "\n\n" + metrics_block).strip() if caption_html else metrics_block
-            tg_result = await send_screenshots_to_telegram(result, caption=caption_html or None)
-            tg_sent = tg_result is not None and (tg_result.get("ok") if isinstance(tg_result, dict) else False)
+            tg_result = await send_screenshots_to_operator(result, caption=caption_html or None)
+            tg_sent = tg_result is True
             if tg_sent and redis is not None:
                 # Task-Key TTL 24h — long enough for a normal task lifecycle,
                 # short enough that tasks reopened after a long time still get
