@@ -44,6 +44,14 @@ __all__ = [
 # test_agent_docs_contract.py::test_canonical_verbs_are_registered verifies
 # every key here is still a real REGISTRY entry — CI catches drift in
 # either direction (new verb undocumented, or documented verb removed).
+#
+# These descriptions render onto EVERY Operating Card, including agents
+# without comm_v2 — so a description must not name a comm_v2-only tool
+# (`mc inbox`, `mc msg`, `mc ask`) even as a contrast, or it becomes a
+# dangling pointer for the agents that do not have it. Draw those contrasts
+# in the comm_v2-gated SOUL blocks instead, where the tool exists. Guarded
+# by test_card_inbox_reply_rule.py::test_card_rule_is_absent_without_comm_v2;
+# `thread` tripped it exactly this way on 2026-07-31.
 CANONICAL_VERBS: dict[str, str] = {
     "ack": "Confirm dispatch (status -> in_progress) — always your first call.",
     "done": "Set status -> done directly — for the mandatory close, prefer `mc finish`.",
@@ -62,7 +70,7 @@ CANONICAL_VERBS: dict[str, str] = {
     "ask": "Ask a thread-native question — --blocking pauses on the answer.",
     "msg": "Post a plain message/status/decision on the task thread (no questions — use `mc ask`).",
     "inbox": "Pull new thread messages and ack them (on 📬 nudge).",
-    "thread": "Re-read your own task thread — read-only, acks nothing (`mc inbox` consumes).",
+    "thread": "Re-read your own task thread — read-only, consumes nothing.",
     "checklist": "Manage the task checklist (add/done/skip/list).",
     "question": "Ask the operator a clarifying question.",
     "help": "Ask another agent for help.",
