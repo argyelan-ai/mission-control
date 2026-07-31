@@ -601,7 +601,6 @@ from app.services.task_context_builder import (  # noqa: F401
     DispatchContext,
     _load_dispatch_context,
     _ensure_task_workspace,
-    get_last_checkpoint,
     build_recovery_context,
 )
 

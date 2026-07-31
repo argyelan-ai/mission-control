@@ -3082,10 +3082,24 @@ async def agent_active_task_recovery(
     except Exception:
         cached_attempt = None
 
+    # Attempt-id writes go through the audit helper — task_attempt_audit is
+    # declared its exclusive writer (models/task_attempt_audit.py:4). This path
+    # used to assign the field directly, so recovery-driven rotations left no
+    # trace: the live DB has 158 recoveries and zero audit rows from any of
+    # them. That is the one trail that separates "the agent wrote from stale
+    # context" from "the task was legitimately re-dispatched" after the fact.
+    # Only an actual change is audited; the two reuse branches must stay silent
+    # or a row per recovery call would bury the real rotations.
+    _new_attempt: str | None = None
+    _audit_reason: str | None = None
+
     if cached_attempt:
         # Reuse the last attempt_id instead of generating a new one — prevents
         # the agent from invalidating its own previous headers.
-        active.dispatch_attempt_id = cached_attempt.decode() if isinstance(cached_attempt, bytes) else cached_attempt
+        _cached = cached_attempt.decode() if isinstance(cached_attempt, bytes) else cached_attempt
+        if _cached != active.dispatch_attempt_id:
+            _new_attempt = _cached
+            _audit_reason = "recovery_redis_cached_attempt"
     elif active.dispatch_attempt_id:
         # Race fix (2026-05-12): if the task already has an attempt_id
         # (assigned via /me/poll or auto_dispatch_task), don't overwrite it.
@@ -3098,11 +3112,19 @@ async def agent_active_task_recovery(
         except Exception:
             pass
     else:
-        active.dispatch_attempt_id = str(uuid.uuid4())
+        _new_attempt = str(uuid.uuid4())
+        _audit_reason = "recovery_no_prior_attempt"
         try:
-            await redis.setex(cache_key, 30, active.dispatch_attempt_id)
+            await redis.setex(cache_key, 30, _new_attempt)
         except Exception:
             pass
+
+    if _new_attempt is not None:
+        from app.services.dispatch_attempt_audit import set_dispatch_attempt_id
+        await set_dispatch_attempt_id(
+            session, active, _new_attempt,
+            caller="agent_recovery", reason=_audit_reason,
+        )
 
     active.updated_at = _dt.datetime.now(tz=_dt.timezone.utc)
     session.add(active)
