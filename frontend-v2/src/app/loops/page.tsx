@@ -9,6 +9,7 @@
  */
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Loader2, Plus, Repeat, X } from "lucide-react";
 import AppShell from "@/components/layout/AppShell";
@@ -37,6 +38,7 @@ function extractApiError(err: unknown): string {
 }
 
 export default function LoopsPage() {
+  const t = useTranslations("loops");
   const qc = useQueryClient();
   const activeBoardId = useAppStore((s) => s.activeBoardId);
   const [createOpen, setCreateOpen] = useState(false);
@@ -105,10 +107,10 @@ export default function LoopsPage() {
             <div className="label-sys mb-2">Operations · Loops</div>
             <h1 className="display text-xl font-semibold flex items-center gap-2" style={{ color: C.textPrimary }}>
               <Repeat size={18} style={{ color: C.accent }} />
-              Loops
+              {t("title")}
             </h1>
             <p className="text-[13px] mt-0.5" style={{ color: C.textSecondary }}>
-              Outcome-driven task loops — set a goal, let a runner grind the backlog round by round.
+              {t("subtitle")}
             </p>
           </div>
           <button
@@ -118,7 +120,7 @@ export default function LoopsPage() {
             style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
           >
             <Plus size={11} />
-            New loop
+            {t("newLoop")}
           </button>
         </div>
 
@@ -131,7 +133,7 @@ export default function LoopsPage() {
             <span className="flex-1">{actionError}</span>
             <button
               type="button"
-              aria-label="Dismiss error"
+              aria-label={t("dismissError")}
               onClick={() => setActionError(null)}
               className="cursor-pointer shrink-0"
             >
@@ -142,14 +144,14 @@ export default function LoopsPage() {
 
         {!activeBoardId && (
           <div className="text-sm py-8 text-center" style={{ color: C.textMuted }}>
-            No board selected
+            {t("noBoard")}
           </div>
         )}
 
         {activeBoardId && isLoading && (
           <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
             <Loader2 size={13} className="animate-spin" />
-            <span className="text-xs">Loading loops...</span>
+            <span className="text-xs">{t("loading")}</span>
           </div>
         )}
 
@@ -161,10 +163,10 @@ export default function LoopsPage() {
             <Repeat size={28} style={{ color: C.textDim }} />
             <div>
               <p className="text-sm font-medium" style={{ color: C.textSecondary }}>
-                No loops yet
+                {t("emptyTitle")}
               </p>
               <p className="text-xs mt-1" style={{ color: C.textMuted }}>
-                Create a loop to have a runner grind through a backlog until it's done or needs you.
+                {t("emptyHint")}
               </p>
             </div>
             <button
@@ -173,7 +175,7 @@ export default function LoopsPage() {
               style={{ background: C.accentSubtle, border: `1px solid ${C.borderAccent}`, color: C.accent }}
             >
               <Plus size={11} />
-              New loop
+              {t("newLoop")}
             </button>
           </div>
         )}
@@ -219,13 +221,9 @@ export default function LoopsPage() {
       {/* v3 confirm — replaces native confirm() (panel register rule 3) */}
       <ConfirmDialog
         open={!!deleteTarget}
-        title="Delete loop"
-        body={
-          deleteTarget
-            ? `Delete "${deleteTarget.name}"? This cannot be undone.`
-            : undefined
-        }
-        confirmLabel="Delete"
+        title={t("deleteTitle")}
+        body={deleteTarget ? t("deleteBody", { name: deleteTarget.name }) : undefined}
+        confirmLabel={t("delete")}
         loading={deleteMutation.isPending}
         onConfirm={() => {
           if (!deleteTarget) return;
