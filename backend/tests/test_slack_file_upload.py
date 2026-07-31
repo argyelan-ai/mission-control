@@ -129,3 +129,28 @@ async def test_a_missing_local_file_fails_before_any_network(monkeypatch):
     assert result.ok is False
     assert result.code == "local_file"
     assert fake.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_ram_cap_refuses_oversized_files_before_any_network(
+    monkeypatch, tmp_path
+):
+    """The byte hop buffers in RAM; a 1 GB deliverable next to Postgres in a
+    5 GB VM is an outage, not an upload. Refused locally, with advice."""
+    import os as _os
+
+    big = tmp_path / "huge.zip"
+    big.write_bytes(b"x")
+    real_getsize = _os.path.getsize
+    monkeypatch.setattr(
+        slack_client.os.path, "getsize",
+        lambda p: 101 * 1024 * 1024 if str(p).endswith("huge.zip") else real_getsize(p),
+    )
+    fake = _FakeSlack()
+    _patch_transport(monkeypatch, fake)
+
+    result = await upload_file(channel="C0REPORTS", path=str(big))
+
+    assert result.ok is False
+    assert result.code == "file_too_large"
+    assert fake.calls == []

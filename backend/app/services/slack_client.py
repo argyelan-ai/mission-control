@@ -24,6 +24,7 @@ key names, prefixes we detected as *wrong*, and Slack's own error codes.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -421,6 +422,10 @@ class SlackTransport:
 # and nowhere else — callers hand over a path and a channel, nothing more.
 
 
+# RAM guard for the byte hop, not a Slack rule (Slack itself takes 1 GB).
+_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+
+
 @dataclass(frozen=True)
 class SlackUploadResult:
     """Outcome of one two-stage upload. Carries no token material."""
@@ -444,8 +449,6 @@ async def upload_file(
     The byte hop uses a long timeout: reports attach PDFs and screenshots,
     and a 50 MB document on a slow uplink must not die at the default 10 s.
     """
-    import os
-
     token = await get_bot_token()
     if not token:
         return SlackUploadResult(ok=False, code="no_token", error="No Slack bot token stored.")
@@ -454,6 +457,18 @@ async def upload_file(
         filename = os.path.basename(path)
     except OSError as exc:
         return SlackUploadResult(ok=False, code="local_file", error=f"cannot read {path}: {exc}")
+    # The byte hop buffers the file in RAM (httpx content=). Slack would take
+    # up to 1 GB, but MC runs next to a database in a 5 GB Docker VM — cap
+    # well below that. 100 MB is already double Telegram's document limit.
+    if size > _UPLOAD_MAX_BYTES:
+        return SlackUploadResult(
+            ok=False, code="file_too_large",
+            error=(
+                f"{filename} is {size // (1024 * 1024)} MB — the Slack upload "
+                f"cap is {_UPLOAD_MAX_BYTES // (1024 * 1024)} MB. Deliver a "
+                "download link or split the file."
+            ),
+        )
 
     headers = {"Authorization": f"Bearer {token}"}
     try:
