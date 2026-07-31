@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Plus, FlaskConical, Archive } from "lucide-react";
 import { C } from "@/lib/colors";
 import { Pill } from "@/components/shared/Pill";
@@ -36,6 +37,8 @@ export function ChallengesTab({
   prefillTemplate: PromptTemplate | null;
   onPrefillConsumed: () => void;
 }) {
+  const t = useTranslations("bench.challengesTab");
+  const tCommon = useTranslations("bench.common");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
@@ -62,7 +65,7 @@ export function ChallengesTab({
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between">
         <span className="text-sm" style={{ color: C.textSecondary }}>
-          {rows.length} Challenges
+          {t("count", { count: rows.length })}
         </span>
         <div className="flex items-center gap-2">
           <button
@@ -74,14 +77,14 @@ export function ChallengesTab({
               border: `1px solid ${showArchived ? C.borderAccent : C.border}`,
             }}
           >
-            <Archive size={13} /> Archiv anzeigen
+            <Archive size={13} /> {t("showArchived")}
           </button>
           <button
             onClick={() => setCreateOpen(true)}
             className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            <Plus size={14} /> Neue Challenge
+            <Plus size={14} /> {t("newChallenge")}
           </button>
         </div>
       </div>
@@ -93,13 +96,13 @@ export function ChallengesTab({
         >
           <FlaskConical size={22} style={{ color: C.textDim }} />
           <span className="text-sm" style={{ color: C.textSecondary }}>
-            Noch keine Challenges — starte die erste aus der Prompt Library.
+            {t("emptyState")}
           </span>
         </div>
       )}
 
       {rows.map((ch) => (
-        <ChallengeRow key={ch.id} challenge={ch} onOpen={() => setSelectedId(ch.id)} />
+        <ChallengeRow key={ch.id} challenge={ch} onOpen={() => setSelectedId(ch.id)} archivedLabel={tCommon("archivedPill")} />
       ))}
 
       <NewChallengeDialog
@@ -117,9 +120,11 @@ export function ChallengesTab({
 function ChallengeRow({
   challenge,
   onOpen,
+  archivedLabel,
 }: {
   challenge: BenchChallenge;
   onOpen: () => void;
+  archivedLabel: string;
 }) {
   return (
     <button
@@ -148,7 +153,7 @@ function ChallengeRow({
         <div className="flex items-center gap-1.5 shrink-0">
           {challenge.archived_at && (
             <Pill color={C.textMuted} variant="outline">
-              archiviert
+              {archivedLabel}
             </Pill>
           )}
           <Pill color={BENCH_STATUS_COLOR[challenge.status] ?? C.textMuted}>

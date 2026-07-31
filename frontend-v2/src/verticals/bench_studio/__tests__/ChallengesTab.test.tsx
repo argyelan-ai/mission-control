@@ -89,10 +89,10 @@ describe("ChallengesTab", () => {
   it("shows the empty state when there are no challenges", async () => {
     vi.mocked(benchApi.challenges.list).mockResolvedValue([]);
     renderTab();
-    expect(await screen.findByText(/Noch keine Challenges/)).toBeTruthy();
+    expect(await screen.findByText(/No challenges yet/)).toBeTruthy();
   });
 
-  it("hides archived by default; 'Archiv anzeigen' re-queries with includeArchived", async () => {
+  it("hides archived by default; 'Show archive' re-queries with includeArchived", async () => {
     const user = (await import("@testing-library/user-event")).default;
     renderTab();
     await screen.findByText("Bouncing balls");
@@ -104,10 +104,10 @@ describe("ChallengesTab", () => {
     };
     vi.mocked(benchApi.challenges.list).mockResolvedValue([CHALLENGE, archived]);
 
-    await user.click(screen.getByRole("button", { name: /Archiv anzeigen/ }));
+    await user.click(screen.getByRole("button", { name: /Show archive/ }));
     expect(await screen.findByText("Old run")).toBeTruthy();
     expect(vi.mocked(benchApi.challenges.list)).toHaveBeenCalledWith(true);
     // Archived row is marked:
-    expect(screen.getByText("archiviert")).toBeTruthy();
+    expect(screen.getByText("archived")).toBeTruthy();
   });
 });

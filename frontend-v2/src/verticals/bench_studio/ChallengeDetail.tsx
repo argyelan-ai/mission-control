@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import {
   Archive,
   ArchiveRestore,
@@ -33,12 +34,12 @@ function sharedUrl(absPath: string): string {
   return api.files.contentUrl("shared-deliverables", benchApi.sharedSubpath(absPath));
 }
 
-async function downloadFile(absPath: string, filename: string) {
+async function downloadFile(absPath: string, filename: string, errorMessage: string) {
   const res = await fetch(sharedUrl(absPath), {
     headers: { Authorization: `Bearer ${getToken()}` },
   });
   if (!res.ok) {
-    notify.error("Download fehlgeschlagen");
+    notify.error(errorMessage);
     return;
   }
   const blob = await res.blob();
@@ -61,7 +62,7 @@ async function downloadFile(absPath: string, filename: string) {
  *  location.href. If the tab couldn't be opened at all (global popup
  *  blocker / browser setting), fall back to a same-tab navigation so the
  *  mobile "Öffnen" flow still works. */
-async function openEntryView(challengeId: string, entryId: string) {
+async function openEntryView(challengeId: string, entryId: string, errorMessage: string) {
   const tab = window.open("", "_blank", "noopener");
   try {
     const { token } = await benchApi.entries.viewToken(challengeId, entryId);
@@ -73,7 +74,7 @@ async function openEntryView(challengeId: string, entryId: string) {
     }
   } catch {
     tab?.close();
-    notify.error("Öffnen nicht möglich");
+    notify.error(errorMessage);
   }
 }
 
@@ -129,6 +130,8 @@ export function ChallengeDetail({
   challengeId: string;
   onBack: () => void;
 }) {
+  const t = useTranslations("bench.challengeDetail");
+  const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [draftOpen, setDraftOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -170,10 +173,10 @@ export function ChallengeDetail({
   const stopMutation = useMutation({
     mutationFn: () => benchApi.challenges.stop(challengeId),
     onSuccess: () => {
-      notify.success("Challenge gestoppt");
+      notify.success(t("notifyStopped"));
       invalidate();
     },
-    onError: () => notify.error("Stop nicht möglich"),
+    onError: () => notify.error(t("notifyStopFailed")),
   });
 
   const archiveMutation = useMutation({
@@ -182,59 +185,59 @@ export function ChallengeDetail({
         ? benchApi.challenges.unarchive(challengeId)
         : benchApi.challenges.archive(challengeId),
     onSuccess: (ch) => {
-      notify.success(ch.archived_at ? "Challenge archiviert" : "Archivierung aufgehoben");
+      notify.success(ch.archived_at ? t("notifyArchived") : t("notifyUnarchived"));
       invalidate();
     },
-    onError: () => notify.error("Archivieren nicht möglich"),
+    onError: () => notify.error(t("notifyArchiveFailed")),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => benchApi.challenges.remove(challengeId),
     onSuccess: () => {
-      notify.success("Challenge gelöscht");
+      notify.success(t("notifyDeleted"));
       qc.invalidateQueries({ queryKey: ["bench-challenges"] });
       onBack();
     },
-    onError: () => notify.error("Löschen nicht möglich"),
+    onError: () => notify.error(t("notifyDeleteFailed")),
   });
 
   const rerenderMutation = useMutation({
     mutationFn: () => benchApi.challenges.rerender(challengeId),
     onSuccess: () => {
-      notify.success("Rerender gestartet");
+      notify.success(t("notifyRerenderStarted"));
       qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
     },
-    onError: () => notify.error("Rerender nicht möglich"),
+    onError: () => notify.error(t("notifyRerenderFailed")),
   });
 
   const recomposeMutation = useMutation({
     mutationFn: () => benchApi.challenges.recompose(challengeId),
     onSuccess: () => {
-      notify.success("Video wird neu erstellt");
+      notify.success(t("notifyRecomposeStarted"));
       invalidate();
     },
-    onError: () => notify.error("Recompose nicht möglich"),
+    onError: () => notify.error(t("notifyRecomposeFailed")),
   });
 
   const retryMutation = useMutation({
     mutationFn: (entryId: string) => benchApi.entries.retry(entryId),
     onSuccess: () => {
-      notify.success("Retry gestartet");
+      notify.success(t("notifyRetryStarted"));
       qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
     },
-    onError: () => notify.error("Retry nicht möglich"),
+    onError: () => notify.error(t("notifyRetryFailed")),
   });
 
   const entryRerenderMutation = useMutation({
     mutationFn: (entryId: string) => benchApi.entries.rerender(entryId),
     onMutate: (entryId: string) => setRerenderEntryId(entryId),
     onSuccess: () => {
-      notify.success("Rerender gestartet");
+      notify.success(t("notifyRerenderStarted"));
       qc.invalidateQueries({ queryKey: ["bench-challenge", challengeId] });
     },
     onError: (err) => {
       setRerenderEntryId(null);
-      notify.error(apiErrorDetail(err, "Rerender nicht möglich"));
+      notify.error(apiErrorDetail(err, t("notifyRerenderFailed")));
     },
   });
 
@@ -247,7 +250,7 @@ export function ChallengeDetail({
     mutationFn: (action: ChallengeAction) => request(action.endpoint, { method: action.method }),
     onMutate: (action: ChallengeAction) => setPendingActionId(action.id),
     onSuccess: async (_data, action) => {
-      notify.success(`${action.label} gestartet`);
+      notify.success(t("notifyActionStarted", { label: action.label }));
       // Keep the button disabled/spinning until the refetch this triggers
       // has actually landed (F8, review finding) — invalidateQueries alone
       // resolves once the refetch is *scheduled*, not once fresh data is
@@ -255,13 +258,13 @@ export function ChallengeDetail({
       // stale-disabled-window gap the operator could double-click through.
       await invalidate();
     },
-    onError: (err, action) => notify.error(apiErrorDetail(err, `${action.label} nicht möglich`)),
+    onError: (err, action) => notify.error(apiErrorDetail(err, t("notifyActionFailed", { label: action.label }))),
     onSettled: () => setPendingActionId(null),
   });
 
   function runChallengeAction(action: ChallengeAction) {
     if (!isSafeChallengeActionEndpoint(action.endpoint)) {
-      notify.error("Ungültiger Action-Endpoint — abgebrochen");
+      notify.error(t("invalidEndpoint"));
       return;
     }
     if (action.confirm) {
@@ -299,7 +302,7 @@ export function ChallengeDetail({
       {/* Header */}
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-3 min-w-0">
-          <button onClick={onBack} aria-label="Zurück" style={{ color: C.textSecondary }}>
+          <button onClick={onBack} aria-label={t("backAria")} style={{ color: C.textSecondary }}>
             <ArrowLeft size={18} />
           </button>
           <h2 className="text-lg font-semibold truncate" style={{ color: C.textPrimary }}>
@@ -310,7 +313,7 @@ export function ChallengeDetail({
           </Pill>
           {challenge.archived_at && (
             <Pill color={C.textMuted} variant="outline">
-              archiviert
+              {tCommon("archivedPill")}
             </Pill>
           )}
         </div>
@@ -322,7 +325,7 @@ export function ChallengeDetail({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
               style={{ color: C.error, border: `1px solid ${C.error}55` }}
             >
-              <Square size={13} /> Stoppen
+              <Square size={13} /> {t("stop")}
             </button>
           )}
           {canArchive && (
@@ -334,11 +337,11 @@ export function ChallengeDetail({
             >
               {challenge.archived_at ? (
                 <>
-                  <ArchiveRestore size={13} /> Entarchivieren
+                  <ArchiveRestore size={13} /> {t("unarchive")}
                 </>
               ) : (
                 <>
-                  <Archive size={13} /> Archivieren
+                  <Archive size={13} /> {t("archive")}
                 </>
               )}
             </button>
@@ -346,11 +349,11 @@ export function ChallengeDetail({
           {!isRunning && (
             <button
               onClick={() => setEditOpen(true)}
-              aria-label="Challenge bearbeiten"
+              aria-label={t("editChallengeAria")}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
-              <Pencil size={13} /> Bearbeiten
+              <Pencil size={13} /> {t("edit")}
             </button>
           )}
           {canRecompose && (
@@ -360,13 +363,13 @@ export function ChallengeDetail({
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
               style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
             >
-              <Film size={13} /> Video neu erstellen
+              <Film size={13} /> {t("recompose")}
             </button>
           )}
           {!isRunning && (
             <button
               onClick={() => setDeleteOpen(true)}
-              aria-label="Challenge löschen"
+              aria-label={t("deleteChallengeAria")}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm"
               style={{ color: C.textMuted, border: `1px solid ${C.border}` }}
             >
@@ -379,7 +382,7 @@ export function ChallengeDetail({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm disabled:opacity-40"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            <RefreshCw size={13} /> Neu rendern
+            <RefreshCw size={13} /> {t("rerender")}
           </button>
           <button
             onClick={() => setDraftOpen(true)}
@@ -387,7 +390,7 @@ export function ChallengeDetail({
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            <Send size={13} /> Draft erstellen
+            <Send size={13} /> {t("draft")}
           </button>
           {/* Extension point (ADR-044): overlay-vertical action buttons
               (e.g. a private catalog_publisher "Publish"). Empty/absent
@@ -434,7 +437,7 @@ export function ChallengeDetail({
       {(isComposingVideo || challenge.composed_video_path) && (
         <section>
           <h3 className="text-sm font-medium mb-2" style={{ color: C.textSecondary }}>
-            {challenge.mode === "side_by_side" ? "Grid-Video" : "Benchmark-Video"}
+            {challenge.mode === "side_by_side" ? t("gridVideoTitle") : t("benchmarkVideoTitle")}
           </h3>
           <div className="rounded-xl p-3" style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.borderSubtle}` }}>
             {isComposingVideo ? (
@@ -445,8 +448,8 @@ export function ChallengeDetail({
                 <Loader2 size={22} className="animate-spin" style={{ color: C.accent }} />
                 <span className="text-sm">
                   {challenge.status === "rendering"
-                    ? "Aufnahmen werden gerendert…"
-                    : "Video wird zusammengesetzt…"}
+                    ? t("renderingRecordings")
+                    : t("composingVideo")}
                 </span>
               </div>
             ) : (
@@ -474,7 +477,7 @@ export function ChallengeDetail({
               <div className="flex items-center gap-1.5 shrink-0">
                 {entry.source_kind === "spark" && (
                   <Pill color={C.textMuted} variant="outline">
-                    Vanilla
+                    {t("vanillaPill")}
                   </Pill>
                 )}
                 <Pill color={ENTRY_STATUS_COLOR[entry.status] ?? C.textMuted}>
@@ -498,7 +501,7 @@ export function ChallengeDetail({
               >
                 <Loader2 size={15} className="animate-spin" />
                 <span className="text-xs">
-                  {entry.status === "generating" ? "Wird generiert…" : "Wartet…"}
+                  {entry.status === "generating" ? t("generating") : t("waiting")}
                 </span>
               </div>
             ) : null}
@@ -509,20 +512,20 @@ export function ChallengeDetail({
               {entry.artifact_path && (
                 <>
                   <button
-                    onClick={() => openEntryView(challengeId, entry.id)}
+                    onClick={() => openEntryView(challengeId, entry.id, t("notifyOpenFailed"))}
                     className="flex items-center gap-1 text-xs"
                     style={{ color: C.accent }}
                   >
-                    <ExternalLink size={12} /> Öffnen
+                    <ExternalLink size={12} /> {t("openLink")}
                   </button>
                   <button
                     onClick={() =>
-                      downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`)
+                      downloadFile(entry.artifact_path!, `${entry.model_label}-index.html`, t("notifyDownloadFailed"))
                     }
                     className="flex items-center gap-1 text-xs"
                     style={{ color: C.textSecondary }}
                   >
-                    <Download size={12} /> HTML
+                    <Download size={12} /> {t("htmlDownload")}
                   </button>
                 </>
               )}
@@ -532,7 +535,7 @@ export function ChallengeDetail({
                   className="flex items-center gap-1 text-xs"
                   style={{ color: C.accent }}
                 >
-                  <RotateCcw size={12} /> Retry
+                  <RotateCcw size={12} /> {t("retry")}
                 </button>
               )}
               {canRerenderEntry(entry) && (() => {
@@ -544,7 +547,7 @@ export function ChallengeDetail({
                   <button
                     onClick={() => entryRerenderMutation.mutate(entry.id)}
                     disabled={isRunning || entryRerenderMutation.isPending}
-                    aria-label={`${entry.model_label} neu rendern`}
+                    aria-label={t("rerenderEntryAria", { label: entry.model_label })}
                     className="flex items-center gap-1 text-xs disabled:opacity-40"
                     style={{ color: C.textSecondary }}
                   >
@@ -553,7 +556,7 @@ export function ChallengeDetail({
                     ) : (
                       <RefreshCw size={12} />
                     )}
-                    Rerender
+                    {t("rerenderShort")}
                   </button>
                 );
               })()}
@@ -589,14 +592,12 @@ export function ChallengeDetail({
             className="text-base font-semibold"
             style={{ color: C.textPrimary }}
           >
-            Challenge löschen?
+            {t("deleteTitle")}
           </h2>
         </div>
         <div className="px-5 py-3">
           <p className="text-sm" style={{ color: C.textSecondary }}>
-            „{challenge.title}" wird endgültig gelöscht — inklusive aller Videos und
-            Artefakte unter /shared-deliverables. Verknüpfte Fleet-Tasks bleiben
-            erhalten (Audit-Trail). Nicht rückgängig machbar.
+            {t("deleteBody", { title: challenge.title })}
           </p>
         </div>
         <div
@@ -609,7 +610,7 @@ export function ChallengeDetail({
             className="px-3.5 py-2 rounded-lg text-sm font-medium disabled:opacity-60"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            Abbrechen
+            {tCommon("cancel")}
           </button>
           <button
             onClick={() => deleteMutation.mutate()}
@@ -622,7 +623,7 @@ export function ChallengeDetail({
             ) : (
               <Trash2 size={15} />
             )}
-            Löschen
+            {tCommon("delete")}
           </button>
         </div>
       </ResponsiveModal>
@@ -631,11 +632,11 @@ export function ChallengeDetail({
           no window.confirm (register rule 3) */}
       <ConfirmDialog
         open={confirmAction !== null}
-        kicker="Challenge-Action"
+        kicker={t("actionConfirmKicker")}
         title={confirmAction?.label ?? ""}
         body={confirmAction?.confirm}
         confirmLabel={confirmAction?.label ?? "OK"}
-        cancelLabel="Abbrechen"
+        cancelLabel={tCommon("cancel")}
         danger={confirmAction?.style === "danger"}
         loading={challengeActionMutation.isPending}
         onConfirm={() => {
@@ -665,6 +666,8 @@ function EditChallengeDialog({
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const t = useTranslations("bench.editChallengeDialog");
+  const tCommon = useTranslations("bench.common");
   const [title, setTitle] = useState(challenge.title);
   const [entryEdits, setEntryEdits] = useState<
     Record<string, { model_label: string; display_tag: string }>
@@ -697,11 +700,11 @@ function EditChallengeDialog({
       }
     },
     onSuccess: () => {
-      notify.success("Änderungen gespeichert");
+      notify.success(t("notifySaved"));
       onSaved();
       onClose();
     },
-    onError: () => notify.error("Speichern nicht möglich"),
+    onError: () => notify.error(t("notifySaveFailed")),
   });
 
   const inputStyle = {
@@ -715,51 +718,50 @@ function EditChallengeDialog({
   }
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label="Challenge bearbeiten">
+    <ResponsiveModal open={open} onClose={onClose} aria-label={t("ariaLabel")}>
       <div
         className="flex flex-col gap-4 p-5 rounded-xl w-full max-h-[85vh] overflow-y-auto"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
       >
         <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          Challenge bearbeiten
+          {t("title")}
         </h3>
 
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Titel"
-          aria-label="Titel"
+          placeholder={t("titlePlaceholder")}
+          aria-label={t("titleAria")}
           className="rounded-lg p-2.5 text-sm outline-none"
           style={inputStyle}
         />
 
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium" style={{ color: C.textSecondary }}>
-            Modelle
+            {t("modelsLabel")}
           </span>
           {challenge.entries.map((entry, i) => (
             <div key={entry.id} className="flex gap-2 items-center">
               <input
                 value={entryEdits[entry.id]?.model_label ?? ""}
                 onChange={(e) => setEdit(entry.id, { model_label: e.target.value })}
-                placeholder="Modell-Name"
-                aria-label={`Modell-Name ${i + 1}`}
+                placeholder={t("modelNamePlaceholder")}
+                aria-label={t("modelNameAria", { index: i + 1 })}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
               />
               <input
                 value={entryEdits[entry.id]?.display_tag ?? ""}
                 onChange={(e) => setEdit(entry.id, { display_tag: e.target.value })}
-                placeholder="Tag (leer = Harness-Default)"
-                aria-label={`Tag ${i + 1}`}
+                placeholder={t("tagPlaceholder")}
+                aria-label={t("tagAria", { index: i + 1 })}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
               />
             </div>
           ))}
           <span className="text-xs" style={{ color: C.textMuted }}>
-            Danach „Video neu erstellen" klicken, um das gebrandete Video mit den
-            neuen Namen zu bauen (nutzt die vorhandenen Aufnahmen).
+            {t("recomposeHint")}
           </span>
         </div>
 
@@ -770,7 +772,7 @@ function EditChallengeDialog({
             className="px-3 py-1.5 rounded-lg text-sm disabled:opacity-60"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            Abbrechen
+            {tCommon("cancel")}
           </button>
           <button
             onClick={() => mutation.mutate()}
@@ -778,7 +780,7 @@ function EditChallengeDialog({
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            Speichern
+            {tCommon("save")}
           </button>
         </div>
       </div>

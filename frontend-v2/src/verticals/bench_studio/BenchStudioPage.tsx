@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { C } from "@/lib/colors";
 import { ChallengesTab } from "./ChallengesTab";
@@ -10,6 +11,7 @@ import type { PromptTemplate } from "./types";
 type Tab = "challenges" | "library";
 
 export default function BenchStudioPage() {
+  const t = useTranslations("bench.page");
   const [tab, setTab] = useState<Tab>("challenges");
   // "Challenge starten" from the library prefills the new-challenge dialog:
   const [prefillTemplate, setPrefillTemplate] = useState<PromptTemplate | null>(null);
@@ -23,15 +25,15 @@ export default function BenchStudioPage() {
     <AppShell>
       <div className="flex flex-col gap-6">
         <div>
-          <div className="label-sys mb-2">Experiments · Bench</div>
+          <div className="label-sys mb-2">{t("kicker")}</div>
           <h1
             className="display text-2xl font-semibold"
             style={{ color: C.textPrimary }}
           >
-            Benchmark Studio
+            {t("title")}
           </h1>
           <p className="text-[13px] mt-1" style={{ color: C.textSecondary }}>
-            One-shot model duels — generate, render, compose, post.
+            {t("subtitle")}
           </p>
         </div>
 
@@ -43,8 +45,8 @@ export default function BenchStudioPage() {
         >
           {(
             [
-              ["challenges", "Challenges"],
-              ["library", "Prompt Library"],
+              ["challenges", t("tabChallenges")],
+              ["library", t("tabLibrary")],
             ] as [Tab, string][]
           ).map(([key, label]) => (
             <button

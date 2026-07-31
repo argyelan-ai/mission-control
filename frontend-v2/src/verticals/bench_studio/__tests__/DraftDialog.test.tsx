@@ -48,7 +48,7 @@ describe("DraftDialog", () => {
 
   it("disables submit when empty and when over 280 chars", async () => {
     renderDialog();
-    const submit = screen.getByRole("button", { name: /Draft erstellen/ });
+    const submit = screen.getByRole("button", { name: /Create Draft/ });
     expect(submit).toHaveProperty("disabled", true);
 
     const textarea = screen.getByRole("textbox");
@@ -62,7 +62,7 @@ describe("DraftDialog", () => {
     renderDialog();
     await userEvent.type(screen.getByRole("textbox"), "great duel");
     await userEvent.click(screen.getByRole("checkbox"));
-    await userEvent.click(screen.getByRole("button", { name: /Draft erstellen/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Create Draft/ }));
     expect(benchApi.challenges.draft).toHaveBeenCalledWith("ch-1", {
       tweet_text: "great duel",
       include_speed_labels: true,

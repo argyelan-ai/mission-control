@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Plus, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { C } from "@/lib/colors";
@@ -54,6 +55,8 @@ export function NewChallengeDialog({
   onClose: () => void;
   prefillTemplate: PromptTemplate | null;
 }) {
+  const t = useTranslations("bench.newChallengeDialog");
+  const tCommon = useTranslations("bench.common");
   const qc = useQueryClient();
   const [title, setTitle] = useState("");
   const [promptText, setPromptText] = useState("");
@@ -121,12 +124,12 @@ export function NewChallengeDialog({
         record_duration_s: recordDurationS,
       }),
     onSuccess: () => {
-      notify.success("Challenge gestartet");
+      notify.success(t("notifyStarted"));
       qc.invalidateQueries({ queryKey: ["bench-challenges"] });
       reset();
       onClose();
     },
-    onError: (err) => notify.error(apiErrorDetail(err, "Challenge konnte nicht gestartet werden")),
+    onError: (err) => notify.error(apiErrorDetail(err, t("notifyStartFailed"))),
   });
 
   function reset() {
@@ -246,19 +249,19 @@ export function NewChallengeDialog({
   } as const;
 
   return (
-    <ResponsiveModal open={open} onClose={onClose} aria-label="Neue Challenge">
+    <ResponsiveModal open={open} onClose={onClose} aria-label={t("ariaLabel")}>
       <div
         className="flex flex-col gap-4 p-5 rounded-xl w-full max-h-[85vh] overflow-y-auto"
         style={{ backgroundColor: C.bgElevated, border: `1px solid ${C.border}` }}
       >
         <h3 className="text-base font-semibold" style={{ color: C.textPrimary }}>
-          Neue Challenge
+          {t("title")}
         </h3>
 
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          placeholder="Titel"
+          placeholder={t("titlePlaceholder")}
           className="rounded-lg p-2.5 text-sm outline-none"
           style={inputStyle}
         />
@@ -269,9 +272,9 @@ export function NewChallengeDialog({
           onChange={(e) => handleTemplateSelect(e.target.value)}
           className="rounded-lg p-2.5 text-sm outline-none"
           style={inputStyle}
-          aria-label="Template wählen"
+          aria-label={t("templateSelectAria")}
         >
-          <option value="">Freitext</option>
+          <option value="">{t("freetextOption")}</option>
           {(templates ?? []).map((tpl) => (
             <option key={tpl.id} value={tpl.id}>
               {tpl.title}
@@ -286,13 +289,13 @@ export function NewChallengeDialog({
             // Don't clear templateId — edited text + template ID both win (backend uses text if provided)
           }}
           rows={5}
-          placeholder="Prompt (oder Template oben wählen)"
+          placeholder={t("promptPlaceholder")}
           className="rounded-lg p-3 text-sm resize-none outline-none"
           style={inputStyle}
         />
         {templateId && (
           <span className="text-xs" style={{ color: C.textMuted }}>
-            Aus Template — Kopie wird beim Start eingefroren.
+            {t("fromTemplateHint")}
           </span>
         )}
 
@@ -302,21 +305,21 @@ export function NewChallengeDialog({
             onChange={(e) => setMode(e.target.value as "single" | "side_by_side")}
             className="rounded-lg p-2.5 text-sm outline-none flex-1"
             style={inputStyle}
-            aria-label="Modus"
+            aria-label={t("modeAria")}
           >
-            <option value="side_by_side">Side-by-Side</option>
-            <option value="single">Single</option>
+            <option value="side_by_side">{t("modeSideBySide")}</option>
+            <option value="single">{t("modeSingle")}</option>
           </select>
           <input
             value={seriesLabel}
             onChange={(e) => setSeriesLabel(e.target.value)}
-            placeholder="Serien-Label (optional)"
+            placeholder={t("seriesLabelPlaceholder")}
             className="rounded-lg p-2.5 text-sm outline-none flex-1"
             style={inputStyle}
           />
           <div className="flex flex-col gap-1">
             <label htmlFor="bench-record-duration" className="text-xs" style={{ color: C.textMuted }}>
-              Video-Länge (s)
+              {t("videoLengthLabel")}
             </label>
             <input
               id="bench-record-duration"
@@ -335,7 +338,7 @@ export function NewChallengeDialog({
 
         <div className="flex flex-col gap-2">
           <span className="text-sm font-medium" style={{ color: C.textSecondary }}>
-            Modelle
+            {t("modelsLabel")}
           </span>
           {models.map((m, i) => (
             <div key={i} className="flex gap-2 items-center">
@@ -350,10 +353,10 @@ export function NewChallengeDialog({
                   // resolve at create time — as a placeholder only, never
                   // written into the submitted value (MINOR 1).
                   isAutoSparkRow(m) && !sparkOffline && sparkModels?.active
-                    ? `Label (auto: ${sparkModels.active})`
-                    : "Label (z. B. DeepSeek)"
+                    ? t("labelPlaceholderAuto", { model: sparkModels.active })
+                    : t("labelPlaceholderDefault")
                 }
-                aria-label={`Label ${i + 1}`}
+                aria-label={t("labelAria", { index: i + 1 })}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
               />
@@ -368,10 +371,10 @@ export function NewChallengeDialog({
                 }
                 className="rounded-lg p-2 text-sm outline-none"
                 style={inputStyle}
-                aria-label={`Quelle ${i + 1}`}
+                aria-label={t("sourceAria", { index: i + 1 })}
               >
-                <option value="spark">Direkt-API (vanilla)</option>
-                <option value="agent">Agent</option>
+                <option value="spark">{t("sourceSpark")}</option>
+                <option value="agent">{t("sourceAgent")}</option>
               </select>
               {m.source_kind === "spark" ? (
                 sparkOffline ? (
@@ -384,13 +387,13 @@ export function NewChallengeDialog({
                     <input
                       value={m.spark_model ?? ""}
                       onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
-                      placeholder="vLLM-Modell (leer = aktiv)"
-                      aria-label={`vLLM-Modell ${i + 1}`}
+                      placeholder={t("vllmModelPlaceholderOffline")}
+                      aria-label={t("vllmModelAria", { index: i + 1 })}
                       className="rounded-lg p-2 text-sm outline-none"
                       style={inputStyle}
                     />
                     <span className="text-[11px]" style={{ color: C.warning }}>
-                      Spark offline — Modell manuell eintragen oder später starten
+                      {t("sparkOfflineWarning")}
                     </span>
                   </div>
                 ) : (
@@ -399,9 +402,9 @@ export function NewChallengeDialog({
                     onChange={(e) => setModelWithAutofill(i, { spark_model: e.target.value || null })}
                     className="rounded-lg p-2 text-sm outline-none flex-1"
                     style={inputStyle}
-                    aria-label={`vLLM-Modell ${i + 1}`}
+                    aria-label={t("vllmModelAria", { index: i + 1 })}
                   >
-                    <option value="">Aktives Modell (auto)</option>
+                    <option value="">{t("activeModelAuto")}</option>
                     {(sparkModels?.models ?? []).map((model) => (
                       <option key={model} value={model}>
                         {model}
@@ -415,9 +418,9 @@ export function NewChallengeDialog({
                   onChange={(e) => setModelWithAutofill(i, { agent_id: e.target.value || null })}
                   className="rounded-lg p-2 text-sm outline-none flex-1"
                   style={inputStyle}
-                  aria-label={`Agent ${i + 1}`}
+                  aria-label={t("agentAria", { index: i + 1 })}
                 >
-                  <option value="">Agent wählen …</option>
+                  <option value="">{t("agentSelectPlaceholder")}</option>
                   {(agents ?? []).map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.name}
@@ -428,15 +431,15 @@ export function NewChallengeDialog({
               <input
                 value={m.display_tag ?? ""}
                 onChange={(e) => setModel(i, { display_tag: e.target.value })}
-                placeholder={`Tag (${derivedTag(m)})`}
-                aria-label={`Tag ${i + 1}`}
+                placeholder={t("tagPlaceholder", { tag: derivedTag(m) })}
+                aria-label={t("tagAria", { index: i + 1 })}
                 className="rounded-lg p-2 text-sm outline-none flex-1"
                 style={inputStyle}
               />
               <button
                 onClick={() => setModels((prev) => prev.filter((_, idx) => idx !== i))}
                 disabled={models.length <= 1}
-                aria-label={`Modell ${i + 1} entfernen`}
+                aria-label={t("removeModelAria", { index: i + 1 })}
                 className="disabled:opacity-30"
                 style={{ color: C.textMuted }}
               >
@@ -450,7 +453,7 @@ export function NewChallengeDialog({
             className="self-start flex items-center gap-1 text-xs disabled:opacity-40"
             style={{ color: C.accent }}
           >
-            <Plus size={12} /> Modell hinzufügen
+            <Plus size={12} /> {t("addModel")}
           </button>
         </div>
 
@@ -460,7 +463,7 @@ export function NewChallengeDialog({
             className="px-3 py-1.5 rounded-lg text-sm"
             style={{ color: C.textSecondary, border: `1px solid ${C.border}` }}
           >
-            Abbrechen
+            {tCommon("cancel")}
           </button>
           <button
             onClick={() => mutation.mutate()}
@@ -468,7 +471,7 @@ export function NewChallengeDialog({
             className="px-3 py-1.5 rounded-lg text-sm font-medium disabled:opacity-40"
             style={{ backgroundColor: C.accentSubtle, color: C.accent, border: `1px solid ${C.borderAccent}` }}
           >
-            Challenge starten
+            {t("startChallenge")}
           </button>
         </div>
       </div>
