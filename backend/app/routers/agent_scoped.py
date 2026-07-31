@@ -3535,12 +3535,12 @@ async def agent_visual_verify(
 
     Calls the central mc-playwright service (no more per-agent browser
     setup needed). Registers each screenshot as a TaskDeliverable.
-    If send_to_telegram=True, also sends the screenshots as a media group
-    to the operator's reports chat.
+    If send_to_telegram=True, also sends the screenshots (one photo report
+    each) to the operator reports adapter (Telegram + Slack).
     """
     from app.services.visual_verifier import (
         verify_url, register_screenshots_as_deliverables,
-        send_screenshots_to_telegram, format_metrics_summary,
+        send_screenshots_to_operator, format_metrics_summary,
     )
 
     # Load task + ownership check
@@ -3736,8 +3736,8 @@ async def agent_visual_verify(
             metrics_block = format_metrics_summary(result)
             if metrics_block:
                 caption_html = (caption_html + "\n\n" + metrics_block).strip() if caption_html else metrics_block
-            tg_result = await send_screenshots_to_telegram(result, caption=caption_html or None)
-            tg_sent = tg_result is not None and (tg_result.get("ok") if isinstance(tg_result, dict) else False)
+            tg_result = await send_screenshots_to_operator(result, caption=caption_html or None)
+            tg_sent = tg_result is True
             if tg_sent and redis is not None:
                 # Task-Key TTL 24h — long enough for a normal task lifecycle,
                 # short enough that tasks reopened after a long time still get
@@ -3792,19 +3792,9 @@ async def agent_send_operator_report(
     from app.services.operator_reports import report_backends, send_report
     from app.services.telegram_reports import telegram_reports
 
-    _wants_attachment = bool(
-        body.deliverable_id or body.document_deliverable_id or body.vault_path
-    )
-    if _wants_attachment and not telegram_reports.configured:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Anhaenge laufen bis zur naechsten Ausbaustufe ueber den "
-                "Telegram-Reports-Bot, und der ist nicht konfiguriert "
-                "(TELEGRAM_REPORTS_BOT_TOKEN + TELEGRAM_REPORTS_CHAT_ID)."
-            ),
-        )
-    if not _wants_attachment and not report_backends():
+    # Text AND attachments ride the same fan-out (Telegram photo/document,
+    # Slack files.uploadV2) — one guard: some backend must exist.
+    if not report_backends():
         raise HTTPException(
             status_code=503,
             detail=(
@@ -4022,61 +4012,33 @@ async def agent_send_operator_report(
 
         document_path = str(candidate)
 
-    # Send AFTER flag claim — try/except also catches httpx exceptions (B1-Fix)
-    if photo_path is not None or document_path is not None:
-        # Attachment path: Telegram only until files.uploadV2 lands (next
-        # phase) — behaviour byte-identical to before the adapter.
-        try:
-            if photo_path is not None:
-                # Caption = text (truncated to 1024 by telegram_reports.send_photo)
-                result = await telegram_reports.send_photo(photo_path, caption=text)
-            else:
-                result = await telegram_reports.send_document(document_path, caption=text)
-        except Exception as send_exc:
-            # Network/timeout/HTTP-level errors — roll back the flag so the agent can retry
-            logger.warning(
-                "Telegram-Send Exception (%s): %s — rolling back flag claim",
-                type(send_exc).__name__, send_exc,
-            )
-            await _rollback_claim()
-            raise HTTPException(
-                status_code=503,
-                detail=f"Telegram-Send fehlgeschlagen ({type(send_exc).__name__}). Retry moeglich.",
-            )
-
-        send_failed = result is None or not result.get("ok")
-        if send_failed:
-            await _rollback_claim()
-            if result is None:
-                raise HTTPException(status_code=503, detail="Telegram-Send fehlgeschlagen.")
-            raise HTTPException(
-                status_code=422,
-                detail=f"Telegram API: {result.get('description', 'unbekannter Fehler')}",
-            )
-        message_id = result.get("result", {}).get("message_id")
-        channels_delivered = ["telegram"]
-    else:
-        # Text path: fan out to every configured backend. Delivered = at
-        # least one accepted; a partial failure is logged, not raised — the
-        # operator got his report. send_report contains backend exceptions,
-        # so nothing here can leak the claim.
-        delivered, results = await send_report(text)
-        if not delivered:
-            await _rollback_claim()
-            details = "; ".join(f"{r.backend}: {r.detail}" for r in results) or "kein Backend"
-            if any(not r.retryable for r in results):
-                # Semantic rejection (Telegram "can't parse entities", Slack
-                # msg_too_long): the agent must fix the content — 422, with
-                # the API description verbatim, exactly the old contract.
-                raise HTTPException(status_code=422, detail=details)
-            raise HTTPException(
-                status_code=503,
-                detail=f"Report-Zustellung fehlgeschlagen ({details}). Retry moeglich.",
-            )
-        # Telegram's message id survives the fan-out (the old response
-        # carried it); with several backends the Telegram one wins.
-        message_id = next((r.message_id for r in results if r.ok and r.message_id), None)
-        channels_delivered = [r.backend for r in results if r.ok]
+    # Send AFTER flag claim. Text and attachments take the same fan-out now:
+    # every configured backend gets the report — Telegram photo/document,
+    # Slack two-stage upload. Delivered = at least one accepted; a partial
+    # failure is logged, not raised — the operator got his report.
+    # send_report contains backend exceptions, so nothing here can leak the
+    # claim.
+    _file = photo_path or document_path
+    delivered, results = await send_report(
+        text, file_path=_file, as_photo=photo_path is not None
+    )
+    if not delivered:
+        await _rollback_claim()
+        details = "; ".join(f"{r.backend}: {r.detail}" for r in results) or "kein Backend"
+        if any(not r.retryable for r in results):
+            # Semantic rejection (Telegram "can't parse entities", Slack
+            # msg_too_long/file_uploads_disabled): the agent must fix the
+            # content or the operator the workspace — 422 with the API
+            # description verbatim, exactly the old contract.
+            raise HTTPException(status_code=422, detail=details)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Report-Zustellung fehlgeschlagen ({details}). Retry moeglich.",
+        )
+    # Telegram's message id survives the fan-out (the old response carried
+    # it); with several backends the Telegram one wins.
+    message_id = next((r.message_id for r in results if r.ok and r.message_id), None)
+    channels_delivered = [r.backend for r in results if r.ok]
 
     logger.info(
         "Operator-Report von %s gesendet via %s (%d chars, task=%s, claimed=%s)",

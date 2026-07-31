@@ -84,6 +84,23 @@ class TelegramReportsBackend:
             message_id=result.get("result", {}).get("message_id"),
         )
 
+    async def send_file(self, path: str, caption: str, *, as_photo: bool) -> ReportResult:
+        from app.services.telegram_reports import telegram_reports
+
+        if as_photo:
+            result = await telegram_reports.send_photo(path, caption=caption)
+        else:
+            result = await telegram_reports.send_document(path, caption=caption)
+        if result is None:
+            return ReportResult(self.name, False, "Telegram-Send fehlgeschlagen", retryable=True)
+        if not result.get("ok"):
+            detail = result.get("description", "Telegram API Fehler")
+            return ReportResult(self.name, False, str(detail), retryable=False)
+        return ReportResult(
+            self.name, True,
+            message_id=result.get("result", {}).get("message_id"),
+        )
+
 
 class SlackReportsBackend:
     """Posts into the reports channel via the existing transport.
@@ -94,8 +111,9 @@ class SlackReportsBackend:
     contract, and bending it would break the team chat's invariants. Direct
     transport + ``resolve_channel_id`` (cached, 600s) is the honest shape.
 
-    Text only for now — file attachments arrive with ``files.uploadV2``
-    in the next phase; ``send_file`` then lands here and nowhere else.
+    Files ride the two-stage upload (``slack_client.upload_file``) — the
+    transport owns the byte mechanics, this backend only decides channel
+    and caption.
     """
 
     name = "slack"
@@ -133,6 +151,32 @@ class SlackReportsBackend:
                     result.error or "Slack-Send fehlgeschlagen",
                     retryable=False,
                 )
+        return ReportResult(self.name, True)
+
+    async def send_file(self, path: str, caption: str, *, as_photo: bool) -> ReportResult:
+        from app.config import settings
+        from app.services.slack_client import resolve_channel_id, upload_file
+
+        channel = await resolve_channel_id(settings.slack_reports_channel)
+        if not channel:
+            return ReportResult(
+                self.name, False,
+                f"Reports-Kanal {settings.slack_reports_channel!r} nicht auflösbar",
+            )
+        # Slack has no photo/document split — one upload path for both; the
+        # caption rides as initial_comment (mrkdwn, same converter as text).
+        result = await upload_file(
+            channel=channel,
+            path=path,
+            initial_comment=_html_report_to_mrkdwn(caption) if caption else None,
+        )
+        if not result.ok:
+            retryable = result.code in ("transport_error", "upload_hop", "no_token")
+            return ReportResult(
+                self.name, False,
+                result.error or "Slack-Upload fehlgeschlagen",
+                retryable=retryable,
+            )
         return ReportResult(self.name, True)
 
 
@@ -185,8 +229,14 @@ def report_backends() -> list[TelegramReportsBackend | SlackReportsBackend]:
     return [b for b in (TelegramReportsBackend(), SlackReportsBackend()) if b.configured]
 
 
-async def send_report(text: str) -> tuple[bool, list[ReportResult]]:
-    """Deliver ``text`` to every configured backend.
+async def send_report(
+    text: str,
+    *,
+    file_path: str | None = None,
+    as_photo: bool = False,
+) -> tuple[bool, list[ReportResult]]:
+    """Deliver a report — text, or a file with ``text`` as caption — to every
+    configured backend.
 
     Returns ``(delivered, results)`` — ``delivered`` is True when at least
     one backend accepted. Backend exceptions are contained per backend: one
@@ -198,7 +248,12 @@ async def send_report(text: str) -> tuple[bool, list[ReportResult]]:
     results: list[ReportResult] = []
     for backend in backends:
         try:
-            results.append(await backend.send_text(text))
+            if file_path is not None:
+                results.append(
+                    await backend.send_file(file_path, text, as_photo=as_photo)
+                )
+            else:
+                results.append(await backend.send_text(text))
         except Exception as exc:  # noqa: BLE001 — contained by design
             logger.warning("Report-Backend %s warf %s: %s", backend.name, type(exc).__name__, exc)
             results.append(ReportResult(backend.name, False, f"{type(exc).__name__}: {exc}"))

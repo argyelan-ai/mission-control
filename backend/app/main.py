@@ -632,8 +632,9 @@ async def _vault_lint_loop(vault_path) -> None:
     Per-iteration failures are logged and the loop continues — only an
     explicit ``CancelledError`` (from shutdown) breaks out.
 
-    Telegram pings on >5 total issues; failures swallowed (don't kill the loop
-    if Telegram is unconfigured).
+    Operator ping (reports adapter: Telegram + Slack) on >5 total issues;
+    failures swallowed (don't kill the loop if no report backend is
+    configured or a backend is down).
     """
     interval_seconds = settings.vault_lint_interval_hours * 3600
     logger.info("vault_lint_loop started (interval=%ds)", interval_seconds)
@@ -655,7 +656,12 @@ async def _vault_lint_loop(vault_path) -> None:
             )
             if total > 5:
                 try:
-                    if telegram_bot.configured:
+                    from app.services.operator_reports import (
+                        report_backends,
+                        send_report,
+                    )
+
+                    if report_backends():
                         msg = (
                             f"<b>Vault Lint</b>: {total} issues "
                             f"(orphans={stats.get('orphan_count', 0)}, "
@@ -663,14 +669,14 @@ async def _vault_lint_loop(vault_path) -> None:
                             f"dup_ids={stats.get('duplicate_id_count', 0)}). "
                             f"See <code>_lint/{stats.get('linted_at', '')[:10]}.md</code>."
                         )
-                        await telegram_bot.send_message(msg)
+                        await send_report(msg)
                     else:
                         logger.info(
-                            "vault_lint: %d issues but telegram unconfigured; report written only",
+                            "vault_lint: %d issues but no report backend configured; report written only",
                             total,
                         )
                 except Exception as te:
-                    logger.warning("vault_lint telegram ping failed (non-fatal): %s", te)
+                    logger.warning("vault_lint operator ping failed (non-fatal): %s", te)
         except asyncio.CancelledError:
             logger.info("vault_lint_loop cancelled")
             break

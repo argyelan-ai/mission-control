@@ -68,12 +68,10 @@ async def test_visual_verify_registers_deliverables(client, fake_redis):
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com", "viewports": ["desktop", "mobile"]},
@@ -99,17 +97,16 @@ async def test_visual_verify_registers_deliverables(client, fake_redis):
 
 
 @pytest.mark.asyncio
-async def test_visual_verify_sends_telegram_media_group(client, fake_redis):
-    """With send_to_telegram=true (default), send_media_group is called."""
+async def test_visual_verify_sends_screenshots_via_adapter(client, fake_redis):
+    """With send_to_telegram=true (default), every screenshot goes through the
+    operator-reports adapter as its own photo report."""
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com"},
@@ -118,11 +115,14 @@ async def test_visual_verify_sends_telegram_media_group(client, fake_redis):
 
     assert r.status_code == 200
     assert r.json()["telegram_sent"] is True
-    mock_reports.send_media_group.assert_awaited_once()
-    call_args = mock_reports.send_media_group.await_args
-    # caption should contain the metrics block
-    assert "Performance" in call_args.kwargs.get("caption", "") or \
-           "Performance" in (call_args.args[1] if len(call_args.args) > 1 else "")
+    assert mock_send_report.await_count == 5  # ein Foto-Report pro Screenshot
+    calls = mock_send_report.await_args_list
+    # every send is a photo with a file
+    assert all(c.kwargs.get("as_photo") is True for c in calls)
+    assert all(c.kwargs.get("file_path") for c in calls)
+    # caption (metrics block) rides only on the FIRST image
+    assert "Performance" in calls[0].args[0]
+    assert all(c.args[0] == "" for c in calls[1:])
 
 
 @pytest.mark.asyncio
@@ -131,12 +131,10 @@ async def test_visual_verify_respects_no_telegram(client, fake_redis):
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock()
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com", "send_to_telegram": False},
@@ -145,7 +143,7 @@ async def test_visual_verify_respects_no_telegram(client, fake_redis):
 
     assert r.status_code == 200
     assert r.json()["telegram_sent"] is False
-    mock_reports.send_media_group.assert_not_called()
+    mock_send_report.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -267,12 +265,10 @@ async def test_visual_verify_passes_interaction_params_through(client, fake_redi
         captured_kwargs.update(kwargs)
         return fake
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", side_effect=_capture), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={
@@ -332,12 +328,10 @@ async def test_visual_verify_credential_id_resolves_from_vault(client, fake_redi
         captured_kwargs.update(kwargs)
         return _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", side_effect=_capture), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={
@@ -431,12 +425,10 @@ async def test_visual_verify_dedup_skips_second_send(client, fake_redis, monkeyp
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         # First call — sends
         r1 = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
@@ -458,8 +450,8 @@ async def test_visual_verify_dedup_skips_second_send(client, fake_redis, monkeyp
     assert r2.json()["telegram_sent"] is False
     assert r2.json()["telegram_skipped"] == "already_sent"
 
-    # send_media_group was called only ONCE (second call deduped)
-    assert mock_reports.send_media_group.await_count == 1
+    # only the FIRST call sent its 5 screenshots (second call deduped)
+    assert mock_send_report.await_count == 5
 
 
 @pytest.mark.asyncio
@@ -469,12 +461,10 @@ async def test_visual_verify_force_resend_overrides_dedup(client, fake_redis, mo
     data = await _setup_agent_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r1 = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://example.com"},
@@ -490,8 +480,8 @@ async def test_visual_verify_force_resend_overrides_dedup(client, fake_redis, mo
     assert r1.json()["telegram_sent"] is True
     assert r2.json()["telegram_sent"] is True
     assert r2.json().get("telegram_skipped") is None
-    # Both calls triggered send_media_group
-    assert mock_reports.send_media_group.await_count == 2
+    # Both calls sent their 5 screenshots each
+    assert mock_send_report.await_count == 10
 
 
 @pytest.mark.asyncio
@@ -512,12 +502,10 @@ async def test_visual_verify_dedup_scoped_per_task(client, fake_redis, monkeypat
         await s.commit()
 
     fake = _fake_verify_result()
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r1 = await client.post(
             f"/api/v1/agent/tasks/{data1['task_id']}/visual-verify",
             json={"url": "https://a.example.com"},
@@ -532,7 +520,7 @@ async def test_visual_verify_dedup_scoped_per_task(client, fake_redis, monkeypat
     assert r1.json()["telegram_sent"] is True
     assert r2.json()["telegram_sent"] is True
     # Both tasks send — dedup is per-task, not per-agent
-    assert mock_reports.send_media_group.await_count == 2
+    assert mock_send_report.await_count == 10
 
 
 @pytest.mark.asyncio
@@ -565,12 +553,10 @@ async def test_visual_verify_inline_login_beats_credential_id(client, fake_redis
         captured_kwargs.update(kwargs)
         return _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", side_effect=_capture), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={
@@ -608,12 +594,10 @@ async def test_visual_verify_login_failed_returns_422(client, fake_redis):
         "reason": "Page blieb nach Submit auf der Login-URL",
     }
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={
@@ -631,7 +615,7 @@ async def test_visual_verify_login_failed_returns_422(client, fake_redis):
     assert detail["error"] == "form_login_failed"
     assert "Login-URL" in detail["message"]
     # NO Telegram send if login failed
-    mock_reports.send_media_group.assert_not_called()
+    mock_send_report.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -646,12 +630,10 @@ async def test_visual_verify_login_succeeded_passes_through(client, fake_redis):
         "reason": None,
     }
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={
@@ -674,12 +656,10 @@ async def test_visual_verify_no_login_field_does_not_break(client, fake_redis):
     fake = _fake_verify_result()
     # Deliberately NO "login" key
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com", "send_to_telegram": False},
@@ -731,12 +711,10 @@ async def test_visual_verify_nonverifier_selfcheck_is_silent(client, fake_redis,
     data = await _setup_nonverifier_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com"},
@@ -748,7 +726,7 @@ async def test_visual_verify_nonverifier_selfcheck_is_silent(client, fake_redis,
     assert body["telegram_sent"] is False
     assert body["telegram_skipped"] == "not_verifier"
     assert body["deliverables_registered"] == 5, "Deliverables muessen trotzdem registriert werden"
-    mock_reports.send_media_group.assert_not_awaited()
+    mock_send_report.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -758,12 +736,10 @@ async def test_visual_verify_nonverifier_force_resend_overrides(client, fake_red
     data = await _setup_nonverifier_with_task()
     fake = _fake_verify_result()
 
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r = await client.post(
             f"/api/v1/agent/tasks/{data['task_id']}/visual-verify",
             json={"url": "https://preview.example.com", "force_telegram_resend": True},
@@ -771,7 +747,7 @@ async def test_visual_verify_nonverifier_force_resend_overrides(client, fake_red
         )
 
     assert r.json()["telegram_sent"] is True
-    mock_reports.send_media_group.assert_awaited_once()
+    assert mock_send_report.await_count == 5  # ein Foto-Report pro Screenshot
 
 
 @pytest.mark.asyncio
@@ -792,12 +768,10 @@ async def test_visual_verify_url_window_dedup_across_tasks(client, fake_redis, m
         await s.commit()
 
     fake = _fake_verify_result()
-    mock_reports = MagicMock()
-    mock_reports.configured = True
-    mock_reports.send_media_group = AsyncMock(return_value={"ok": True})
+    mock_send_report = AsyncMock(return_value=(True, []))
 
     with patch("app.services.visual_verifier.verify_url", new_callable=AsyncMock, return_value=fake), \
-         patch("app.services.visual_verifier.telegram_reports", mock_reports):
+         patch("app.services.operator_reports.send_report", mock_send_report):
         r1 = await client.post(
             f"/api/v1/agent/tasks/{data1['task_id']}/visual-verify",
             json={"url": "https://same.example.com"},
@@ -812,4 +786,4 @@ async def test_visual_verify_url_window_dedup_across_tasks(client, fake_redis, m
     assert r1.json()["telegram_sent"] is True
     assert r2.json()["telegram_sent"] is False
     assert r2.json()["telegram_skipped"] == "url_recently_sent"
-    assert mock_reports.send_media_group.await_count == 1
+    assert mock_send_report.await_count == 5

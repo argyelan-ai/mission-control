@@ -553,10 +553,10 @@ class SchedulerService:
             create_tracked_task(self._execute_job(str(dep.id)))
 
     async def _send_failure_notification(self, job: ScheduledJob, error: str | None):
-        """Telegram notification on job failure (Phase 29: direct HTTPS path)."""
+        """Operator notification on job failure (reports adapter: Telegram + Slack)."""
         try:
-            from app.services.telegram_bot import telegram_bot
-            await telegram_bot.send_message(
+            from app.services.operator_reports import send_report
+            await send_report(
                 f"<b>Job fehlgeschlagen: {job.name}</b>\n"
                 f"Error: {error or 'unbekannt'}"
             )

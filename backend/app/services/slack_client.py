@@ -24,6 +24,7 @@ key names, prefixes we detected as *wrong*, and Slack's own error codes.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import time
 from dataclasses import asdict, dataclass
@@ -81,6 +82,14 @@ _SLACK_ERROR_HINTS: dict[str, str] = {
     ),
     "is_archived": "That channel is archived (is_archived). Pick a live channel.",
     "msg_too_long": "Slack refused the message because it is too long (msg_too_long).",
+    "file_uploads_disabled": (
+        "File uploads are disabled in this workspace (file_uploads_disabled) "
+        "— a workspace admin setting, not an MC problem."
+    ),
+    "storage_limit_reached": (
+        "The Slack workspace is out of file storage (storage_limit_reached). "
+        "Delete old files or upgrade the plan; MC cannot free space itself."
+    ),
 }
 
 
@@ -401,6 +410,122 @@ class SlackTransport:
         if code in ("invalid_auth", "token_revoked", "account_inactive"):
             invalidate_bot_token_cache()
         return SlackPostResult(ok=False, code=code, error=message)
+
+
+# ── File upload (two-stage, files.uploadV2 shape) ─────────────────────────
+#
+# `files.upload` (classic) is deprecated; the modern flow is three calls:
+#   1. files.getUploadURLExternal  -> upload_url + file_id
+#   2. HTTP POST of the raw bytes to that URL (no Slack auth on this hop)
+#   3. files.completeUploadExternal with channel_id (+ optional thread_ts)
+# This is MC's first non-JSON Slack call, so it lives here in the transport
+# and nowhere else — callers hand over a path and a channel, nothing more.
+
+
+# RAM guard for the byte hop, not a Slack rule (Slack itself takes 1 GB).
+_UPLOAD_MAX_BYTES = 100 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class SlackUploadResult:
+    """Outcome of one two-stage upload. Carries no token material."""
+
+    ok: bool
+    file_id: str | None = None
+    code: str | None = None
+    error: str | None = None
+
+
+async def upload_file(
+    *,
+    channel: str,
+    path: str,
+    title: str | None = None,
+    initial_comment: str | None = None,
+    thread_ts: str | None = None,
+) -> SlackUploadResult:
+    """Upload one local file into a channel. Never raises.
+
+    The byte hop uses a long timeout: reports attach PDFs and screenshots,
+    and a 50 MB document on a slow uplink must not die at the default 10 s.
+    """
+    token = await get_bot_token()
+    if not token:
+        return SlackUploadResult(ok=False, code="no_token", error="No Slack bot token stored.")
+    try:
+        size = os.path.getsize(path)
+        filename = os.path.basename(path)
+    except OSError as exc:
+        return SlackUploadResult(ok=False, code="local_file", error=f"cannot read {path}: {exc}")
+    # The byte hop buffers the file in RAM (httpx content=). Slack would take
+    # up to 1 GB, but MC runs next to a database in a 5 GB Docker VM — cap
+    # well below that. 100 MB is already double Telegram's document limit.
+    if size > _UPLOAD_MAX_BYTES:
+        return SlackUploadResult(
+            ok=False, code="file_too_large",
+            error=(
+                f"{filename} is {size // (1024 * 1024)} MB — the Slack upload "
+                f"cap is {_UPLOAD_MAX_BYTES // (1024 * 1024)} MB. Deliver a "
+                "download link or split the file."
+            ),
+        )
+
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:
+            r1 = await client.get(
+                f"{SLACK_API_BASE}/files.getUploadURLExternal",
+                headers=headers,
+                params={"filename": filename, "length": size},
+            )
+            b1 = r1.json()
+            if not b1.get("ok"):
+                code = str(b1.get("error") or "unknown_error")
+                return SlackUploadResult(ok=False, code=code, error=explain_slack_error(code))
+
+            with open(path, "rb") as fh:
+                r2 = await client.post(
+                    b1["upload_url"],
+                    content=fh.read(),
+                    timeout=httpx.Timeout(120.0),
+                )
+            if r2.status_code >= 400:
+                return SlackUploadResult(
+                    ok=False, code="upload_hop",
+                    error=f"byte upload answered HTTP {r2.status_code}",
+                )
+
+            complete: dict = {
+                "files": [{"id": b1["file_id"], "title": title or filename}],
+                "channel_id": channel,
+            }
+            if initial_comment:
+                complete["initial_comment"] = initial_comment
+            if thread_ts:
+                complete["thread_ts"] = thread_ts
+            r3 = await client.post(
+                f"{SLACK_API_BASE}/files.completeUploadExternal",
+                headers={**headers, "Content-Type": "application/json"},
+                json=complete,
+            )
+            b3 = r3.json()
+    except httpx.HTTPError as exc:
+        log.warning("slack file upload transport error: %s", type(exc).__name__)
+        return SlackUploadResult(
+            ok=False, code="transport_error",
+            error=f"could not reach Slack ({type(exc).__name__})",
+        )
+    except ValueError:
+        return SlackUploadResult(ok=False, code="bad_response", error="unreadable Slack response")
+
+    if b3.get("ok"):
+        return SlackUploadResult(ok=True, file_id=b1.get("file_id"))
+    code = str(b3.get("error") or "unknown_error")
+    message = explain_slack_error(code)
+    log.warning("slack completeUploadExternal failed — error=%s: %s", code, message)
+    if code in ("invalid_auth", "token_revoked", "account_inactive"):
+        invalidate_bot_token_cache()
+    return SlackUploadResult(ok=False, code=code, error=message)
 
 
 # ── Socket Mode: opening the connection ───────────────────────────────────
