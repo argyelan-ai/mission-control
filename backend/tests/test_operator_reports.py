@@ -153,3 +153,55 @@ def test_long_reports_chunk_on_line_boundaries():
         sum(len(c) for c in chunks) >= len(text) - len(chunks)
     )
     assert all(len(c) <= 3900 for c in chunks)
+
+
+# ── File fan-out ──────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_file_report_fans_out_to_both_backends(monkeypatch, tmp_path):
+    """`mc report --photo/--file` reaches Telegram AND #mc-reports — the
+    whole point of phase 2. The Slack leg rides the two-stage upload."""
+    f = tmp_path / "shot.png"; f.write_bytes(b"png")
+    monkeypatch.setattr(settings, "slack_reports_channel", "#mc-reports", raising=False)
+    uploaded = []
+
+    async def _upload(**kw):
+        uploaded.append(kw)
+        from app.services.slack_client import SlackUploadResult
+        return SlackUploadResult(ok=True, file_id="F1")
+
+    with patch("app.services.telegram_reports.telegram_reports") as tg, patch(
+        "app.services.slack_client.resolve_channel_id", new_callable=AsyncMock,
+        return_value="C0REPORTS",
+    ), patch("app.services.slack_client.upload_file", _upload):
+        tg.configured = True
+        tg.send_photo = AsyncMock(return_value={"ok": True, "result": {"message_id": 7}})
+        delivered, results = await send_report(
+            "<b>Screenshot</b>", file_path=str(f), as_photo=True
+        )
+
+    assert delivered is True
+    assert {r.backend: r.ok for r in results} == {"telegram": True, "slack": True}
+    tg.send_photo.assert_awaited_once()
+    assert uploaded[0]["channel"] == "C0REPORTS"
+    assert uploaded[0]["initial_comment"] == "*Screenshot*"
+
+
+@pytest.mark.asyncio
+async def test_uploads_disabled_is_semantic_not_retryable(monkeypatch, tmp_path):
+    f = tmp_path / "doc.pdf"; f.write_bytes(b"pdf")
+    monkeypatch.setattr(settings, "slack_reports_channel", "#mc-reports", raising=False)
+
+    async def _upload(**kw):
+        from app.services.slack_client import SlackUploadResult
+        return SlackUploadResult(ok=False, code="file_uploads_disabled", error="disabled")
+
+    with patch("app.services.telegram_reports.telegram_reports") as tg, patch(
+        "app.services.slack_client.resolve_channel_id", new_callable=AsyncMock,
+        return_value="C0REPORTS",
+    ), patch("app.services.slack_client.upload_file", _upload):
+        tg.configured = False
+        delivered, results = await send_report("x", file_path=str(f), as_photo=False)
+
+    assert delivered is False
+    assert results[0].retryable is False
