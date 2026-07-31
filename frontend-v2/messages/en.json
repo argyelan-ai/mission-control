@@ -637,32 +637,6 @@
     "editJob": "Edit job",
     "templateHint": "Choose a template or create a custom configuration.",
     "templates": "Templates",
-    "jobTemplates": {
-      "dailyStandup": {
-        "name": "Daily Standup",
-        "description": "Daily standup task for the team"
-      },
-      "weekdayMorning": {
-        "name": "Weekday Mornings",
-        "description": "Mon-Fri at 08:30 — perfect for daily reports"
-      },
-      "weeklyCleanup": {
-        "name": "Weekly Cleanup",
-        "description": "Weekly code quality check (Sun 22:00)"
-      },
-      "hourlyHealth": {
-        "name": "Hourly Health Check",
-        "description": "Hourly system health check"
-      },
-      "every4h": {
-        "name": "Every 4 Hours",
-        "description": "Periodic sync job, 6x per day"
-      },
-      "monthlyReport": {
-        "name": "Monthly Report",
-        "description": "1st of the month at 09:00"
-      }
-    },
     "jobSection": "Job",
     "nameRequiredLabel": "Name *",
     "nameRequired": "Name is required.",
@@ -726,7 +700,33 @@
     "schedDaily": "daily {time}",
     "schedWeekdays": "Mon–Fri {time}",
     "schedEvery": "every {count}h",
-    "schedWeeklyCustom": "weekdays {days} {time}"
+    "schedWeeklyCustom": "weekdays {days} {time}",
+    "jobTemplates": {
+      "dailyStandup": {
+        "name": "Daily Standup",
+        "description": "Daily standup task for the team"
+      },
+      "weekdayMorning": {
+        "name": "Weekday Mornings",
+        "description": "Mon-Fri at 08:30 — perfect for daily reports"
+      },
+      "weeklyCleanup": {
+        "name": "Weekly Cleanup",
+        "description": "Weekly code quality check (Sun 22:00)"
+      },
+      "hourlyHealth": {
+        "name": "Hourly Health Check",
+        "description": "Hourly system health check"
+      },
+      "every4h": {
+        "name": "Every 4 Hours",
+        "description": "Periodic sync job, 6x per day"
+      },
+      "monthlyReport": {
+        "name": "Monthly Report",
+        "description": "1st of the month at 09:00"
+      }
+    }
   },
   "office": {
     "title": "Org Chart",

@@ -637,32 +637,6 @@
     "editJob": "Job bearbeiten",
     "templateHint": "Template wählen oder eigene Konfiguration erstellen.",
     "templates": "Templates",
-    "jobTemplates": {
-      "dailyStandup": {
-        "name": "Täglicher Standup",
-        "description": "Täglicher Standup-Task für das Team"
-      },
-      "weekdayMorning": {
-        "name": "Wochentage Morgen",
-        "description": "Mo–Fr um 08:30 — perfekt für Daily Reports"
-      },
-      "weeklyCleanup": {
-        "name": "Wöchentliche Bereinigung",
-        "description": "Wöchentliche Code-Qualitätsprüfung (So 22:00)"
-      },
-      "hourlyHealth": {
-        "name": "Stündlicher Health Check",
-        "description": "Stündlicher System-Health-Check"
-      },
-      "every4h": {
-        "name": "Alle 4 Stunden",
-        "description": "Periodischer Sync-Job, 6x am Tag"
-      },
-      "monthlyReport": {
-        "name": "Monatsbericht",
-        "description": "1. des Monats um 09:00"
-      }
-    },
     "jobSection": "Job",
     "nameRequiredLabel": "Name *",
     "nameRequired": "Name ist erforderlich.",
@@ -726,7 +700,33 @@
     "schedDaily": "täglich {time}",
     "schedWeekdays": "Mo–Fr {time}",
     "schedEvery": "alle {count}h",
-    "schedWeeklyCustom": "Wochentage {days} {time}"
+    "schedWeeklyCustom": "Wochentage {days} {time}",
+    "jobTemplates": {
+      "dailyStandup": {
+        "name": "Täglicher Standup",
+        "description": "Täglicher Standup-Task für das Team"
+      },
+      "weekdayMorning": {
+        "name": "Wochentage Morgen",
+        "description": "Mo–Fr um 08:30 — perfekt für Daily Reports"
+      },
+      "weeklyCleanup": {
+        "name": "Wöchentliche Bereinigung",
+        "description": "Wöchentliche Code-Qualitätsprüfung (So 22:00)"
+      },
+      "hourlyHealth": {
+        "name": "Stündlicher Health Check",
+        "description": "Stündlicher System-Health-Check"
+      },
+      "every4h": {
+        "name": "Alle 4 Stunden",
+        "description": "Periodischer Sync-Job, 6x am Tag"
+      },
+      "monthlyReport": {
+        "name": "Monatsbericht",
+        "description": "1. des Monats um 09:00"
+      }
+    }
   },
   "office": {
     "title": "Organigramm",
