@@ -37,7 +37,11 @@
     "language": "Sprache",
     "languageHint": "Sprache der Oberfläche. Gilt sofort.",
     "languageEn": "English",
-    "languageDe": "Deutsch"
+    "languageDe": "Deutsch",
+    "title": "Profil",
+    "description": "Deine persönlichen Angaben.",
+    "timezoneAria": "Zeitzone wählen",
+    "roleHint": "Kann nur von einem Admin geändert werden."
   },
   "home": {
     "consoleOverview": "Konsole · Übersicht",
@@ -764,5 +768,222 @@
     "viewMode": "Ansicht",
     "listView": "Listenansicht",
     "gridView": "Rasteransicht"
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "subtitle": "Profil, Sicherheit, Systemkonfiguration",
+    "save": "Speichern",
+    "saved": "Gespeichert",
+    "cancel": "Abbrechen",
+    "sections": {
+      "profile": "Profil",
+      "security": "Sicherheit",
+      "autonomy": "Autonomie",
+      "intelligence": "Intelligence",
+      "apikeys": "API-Keys",
+      "github": "GitHub",
+      "slack": "Slack",
+      "credentials": "Zugangsdaten",
+      "costs": "Kosten",
+      "users": "Benutzer",
+      "shortcuts": "Tastenkürzel",
+      "about": "Über"
+    },
+    "security": {
+      "title": "Sicherheit",
+      "description": "Passwort ändern und Sicherheitseinstellungen verwalten.",
+      "changePassword": "Passwort ändern",
+      "currentPassword": "Aktuelles Passwort",
+      "currentPasswordPlaceholder": "Dein aktuelles Passwort",
+      "newPassword": "Neues Passwort",
+      "newPasswordPlaceholder": "Mind. 6 Zeichen",
+      "confirmPassword": "Neues Passwort bestätigen",
+      "confirmPasswordPlaceholder": "Nochmals eingeben",
+      "mismatch": "Passwörter stimmen nicht überein.",
+      "tooShort": "Das neue Passwort muss mindestens 6 Zeichen lang sein."
+    },
+    "autonomy": {
+      "title": "Autonomie-Stufen",
+      "description": "Lege pro Aktion fest, ob Agenten autonom handeln (L1), dich benachrichtigen (L2) oder auf Freigabe warten (L3).",
+      "action": "Aktion",
+      "custom": "custom",
+      "legend": "L1 = Auto | L2 = Melden | L3 = Freigabe",
+      "levels": {
+        "L1": "Auto",
+        "L2": "Melden",
+        "L3": "Freigabe"
+      },
+      "actions": {
+        "deploy": {
+          "label": "Deploy",
+          "desc": "Vercel/Cloudflare-Deployments"
+        },
+        "external_post": {
+          "label": "Externer Post",
+          "desc": "Social Media, E-Mails"
+        },
+        "config_change": {
+          "label": "Config-Änderung",
+          "desc": "Systemkonfiguration ändern"
+        },
+        "browser_action": {
+          "label": "Browser-Aktion",
+          "desc": "Websites besuchen"
+        },
+        "visual_review": {
+          "label": "Visuelles Review",
+          "desc": "Screenshot-Vergleiche"
+        },
+        "blocker_decision": {
+          "label": "Blocker-Entscheid",
+          "desc": "Blockierte Aufgaben eskalieren"
+        },
+        "question": {
+          "label": "Frage",
+          "desc": "Fragen an den Operator"
+        },
+        "code_change": {
+          "label": "Code-Änderung",
+          "desc": "Code schreiben/ändern"
+        },
+        "mark_done": {
+          "label": "Als erledigt markieren",
+          "desc": "Aufgaben als erledigt markieren"
+        },
+        "dispatch_escalation": {
+          "label": "Dispatch-Eskalation",
+          "desc": "Agent antwortet nicht"
+        },
+        "recovery_failed": {
+          "label": "Recovery fehlgeschlagen",
+          "desc": "Automatische Wiederherstellung fehlgeschlagen"
+        }
+      }
+    },
+    "intelligence": {
+      "title": "Intelligence-Service",
+      "description": "Konfiguration für automatische Analyse und LLM-Destillation.",
+      "serviceActive": "Service aktiv",
+      "serviceActiveHint": "Periodische Analyse im Hintergrund ausführen.",
+      "analysis": "Analyse",
+      "interval": "Analyse-Intervall (Sekunden)",
+      "intervalHint": "Min. 60s",
+      "window": "Analyse-Fenster (Tage)",
+      "ollama": "Ollama / LLM",
+      "model": "Modell",
+      "temperature": "Temperatur",
+      "temperatureHint": "0.0 - 1.0",
+      "maxTokens": "Max. Tokens",
+      "maxTokensHint": "100 - 8192",
+      "systemPrompt": "System-Prompt",
+      "systemPromptAria": "System-Prompt",
+      "systemPromptPlaceholder": "Leer lassen für Standard-Prompt",
+      "systemPromptHint": "Leer lassen für Standard-Prompt. Analysedaten werden automatisch angehängt.",
+      "thresholds": "Schwellenwerte",
+      "outlierMultiplier": "Ausreisser-Multiplikator",
+      "outlierHint": ">1.0x",
+      "successRateMin": "Erfolgsrate min. (%)",
+      "failureMax": "Fehler max.",
+      "analysisStarted": "Analyse gestartet",
+      "analyzeNow": "Jetzt analysieren"
+    },
+    "apikeys": {
+      "title": "API-Keys",
+      "description": "API-Keys für AI-Provider und Integrationen. Alle Keys werden verschlüsselt gespeichert. Provider-Status unter /runtimes (LM Studio / Ollama / vLLM / Anthropic live).",
+      "githubManagedHint": "GitHub-Zugangsdaten werden im GitHub-Bereich verwaltet.",
+      "goToGithub": "Zu GitHub",
+      "slackManagedHint": "Slack-Tokens werden im Slack-Bereich verwaltet — zusammen mit Verbindungstest und Einrichtungsanleitung.",
+      "goToSlack": "Zu Slack",
+      "set": "Gesetzt",
+      "notSet": "Nicht gesetzt",
+      "change": "Ändern",
+      "add": "Hinzufügen",
+      "newValuePlaceholder": "Neuer Wert...",
+      "update": "Aktualisieren",
+      "deleteTitle": "API-Key löschen",
+      "deleteBody": "{label} wirklich löschen?",
+      "delete": "Löschen"
+    },
+    "github": {
+      "title": "GitHub",
+      "description": "GitHub-Owner + Token verbinden, damit Agenten Repos erstellen, pro Aufgabe branchen und Pull Requests öffnen können.",
+      "introBefore": "Einmal verbunden, erstellt MC pro Projekt ein privates Repo und pro Aufgabe einen Branch, Agenten öffnen PRs direkt aus ihrem Workspace, und jedes Repo kann eigene Arbeitsregeln tragen, die in jeden Dispatch einfliessen. Registry verwalten unter",
+      "introLink": "Repos",
+      "statusConnected": "Verbunden",
+      "statusFailed": "Verbindung fehlgeschlagen",
+      "statusNotTested": "Nicht getestet",
+      "statusNotConnected": "Nicht verbunden",
+      "owner": "Owner",
+      "token": "Token",
+      "tokenSet": "Gesetzt ••••",
+      "tokenNotSet": "Nicht gesetzt",
+      "authenticatedAs": "angemeldet als",
+      "ownerType": "Owner-Typ",
+      "rateLimit": "Rate-Limit",
+      "testing": "Teste (bis zu 15s)…",
+      "testConnection": "Verbindung testen",
+      "testFailed": "Verbindungstest fehlgeschlagen.",
+      "savedMsg": "Gespeichert.",
+      "nothingChanged": "Nichts geändert.",
+      "saveFailed": "Speichern fehlgeschlagen.",
+      "ownerPlaceholder": "dein-github-user-oder-org",
+      "ownerAria": "GitHub-Owner",
+      "tokenPlaceholderRotate": "unverändert — zum Rotieren einfügen",
+      "tokenAria": "GitHub-Token"
+    },
+    "users": {
+      "title": "Benutzer verwalten",
+      "description": "Benutzer erstellen, Rollen zuweisen und Konten verwalten.",
+      "newUser": "Neuer Benutzer",
+      "name": "Name",
+      "namePlaceholder": "Name",
+      "email": "E-Mail",
+      "emailPlaceholder": "user@example.com",
+      "password": "Passwort",
+      "passwordPlaceholder": "Mind. 6 Zeichen",
+      "role": "Rolle",
+      "roleAria": "Rolle wählen",
+      "roleChangeAria": "Rolle ändern",
+      "roleAdmin": "Admin",
+      "roleOperator": "Operator",
+      "roleViewer": "Viewer",
+      "createUser": "Benutzer erstellen",
+      "you": "Du",
+      "deactivated": "Deaktiviert",
+      "edit": "Bearbeiten",
+      "deactivate": "Deaktivieren",
+      "activate": "Aktivieren",
+      "save": "Speichern",
+      "cancel": "Abbrechen"
+    },
+    "shortcuts": {
+      "title": "Tastaturkürzel",
+      "description": "Vim-Style-Chords: g drücken, dann einen Buchstaben",
+      "items": {
+        "commandPalette": "Command-Palette öffnen",
+        "sidebar": "Sidebar ein-/ausklappen",
+        "newTask": "Neue Aufgabe",
+        "approveAll": "Alle Freigaben genehmigen",
+        "closeDialog": "Dialog/Palette schliessen",
+        "help": "Hilfe (Command-Palette)",
+        "goHome": "Zu Home",
+        "goTasks": "Zu Aufgaben",
+        "goAgents": "Zu Agenten",
+        "goInbox": "Zum Eingang",
+        "goSettings": "Zu Einstellungen"
+      }
+    },
+    "about": {
+      "title": "Über",
+      "description": "Systeminformationen und Links.",
+      "system": "System",
+      "version": "Version",
+      "frontend": "Frontend",
+      "backend": "Backend",
+      "updateAvailable": "Update verfügbar: {version}",
+      "releaseNotes": "Release-Notes →",
+      "links": "Links",
+      "credits": "Mit Sorgfalt gebaut vom Operator & Claude"
+    }
   }
 }
