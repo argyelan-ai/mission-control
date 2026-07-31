@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Check, ChevronRight, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
@@ -15,19 +16,22 @@ import { StatusDot } from "@/components/shared/StatusDot";
 const BOT_TOKEN_KEY = "slack_bot_token";
 const APP_TOKEN_KEY = "slack_app_token";
 
+// purposeKey pattern: the human explanation lives in the message catalogs
+// (settings.slack.guide.purposes.*); the scope ids themselves are Slack API
+// constants and stay untranslated.
 const BOT_SCOPES = [
-  { scope: "chat:write", purpose: "post messages" },
-  { scope: "chat:write.customize", purpose: "post under each agent's own name and avatar" },
-  { scope: "channels:read", purpose: "see the channels in the workspace" },
-  { scope: "channels:manage", purpose: "create a channel per project" },
-  { scope: "channels:history", purpose: "read the conversation MC is part of" },
-  { scope: "app_mentions:read", purpose: "notice when an agent is mentioned" },
-  { scope: "im:history", purpose: "read direct messages to the app" },
-  { scope: "im:write", purpose: "reply in direct messages" },
-  { scope: "users:read", purpose: "resolve who wrote a message" },
-  { scope: "reactions:write", purpose: "acknowledge a task with an emoji" },
-  { scope: "files:write", purpose: "upload logs and screenshots" },
-  { scope: "files:read", purpose: "download voice messages for transcription" },
+  { scope: "chat:write", purposeKey: "chatWrite" },
+  { scope: "chat:write.customize", purposeKey: "chatWriteCustomize" },
+  { scope: "channels:read", purposeKey: "channelsRead" },
+  { scope: "channels:manage", purposeKey: "channelsManage" },
+  { scope: "channels:history", purposeKey: "channelsHistory" },
+  { scope: "app_mentions:read", purposeKey: "appMentionsRead" },
+  { scope: "im:history", purposeKey: "imHistory" },
+  { scope: "im:write", purposeKey: "imWrite" },
+  { scope: "users:read", purposeKey: "usersRead" },
+  { scope: "reactions:write", purposeKey: "reactionsWrite" },
+  { scope: "files:write", purposeKey: "filesWrite" },
+  { scope: "files:read", purposeKey: "filesRead" },
 ];
 
 const SCOPE_LIST = BOT_SCOPES.map((s) => s.scope).join(", ");
@@ -70,6 +74,7 @@ function TokenField({
   onSave: (value: string) => void;
   saving: boolean;
 }) {
+  const t = useTranslations("settings.slack");
   const [value, setValue] = useState("");
   const [reveal, setReveal] = useState(false);
   const inputId = `slack-${secretKey}`;
@@ -86,7 +91,7 @@ function TokenField({
             type={reveal ? "text" : "password"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
-            placeholder={existing ? `${existing.value_masked} (paste to replace)` : placeholder}
+            placeholder={existing ? t("pasteToReplace", { masked: existing.value_masked }) : placeholder}
             aria-label={label}
             autoComplete="off"
             spellCheck={false}
@@ -104,7 +109,7 @@ function TokenField({
           <button
             type="button"
             onClick={() => setReveal((r) => !r)}
-            aria-label={reveal ? `Hide ${label}` : `Show ${label}`}
+            aria-label={reveal ? t("hideLabel", { label }) : t("showLabel", { label })}
             className="absolute right-3 top-1/2 -translate-y-1/2 cursor-pointer"
             style={{ color: "var(--color-text-muted)" }}
           >
@@ -117,7 +122,7 @@ function TokenField({
           className="shrink-0 px-3 py-2 rounded-lg text-xs font-medium cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed text-[var(--color-on-accent)]"
           style={{ backgroundColor: C.accent }}
         >
-          {saving ? <Loader2 size={12} className="animate-spin" /> : "Save"}
+          {saving ? <Loader2 size={12} className="animate-spin" /> : t("save")}
         </button>
       </div>
       <p className="text-xs mt-1.5" style={{ color: "var(--color-text-muted)" }}>
@@ -130,6 +135,7 @@ function TokenField({
 // ── Setup guide (disclosure) ──────────────────────────────────────────────────
 
 function SetupGuide() {
+  const t = useTranslations("settings.slack.guide");
   const [open, setOpen] = useState(false);
   const [copied, setCopied] = useState<"scopes" | "events" | null>(null);
 
@@ -139,9 +145,20 @@ function SetupGuide() {
       setCopied(what);
       setTimeout(() => setCopied(null), 1600);
     } catch {
-      notify.error("Could not access the clipboard. Select the text and copy it manually.");
+      notify.error(t("clipboardFailed"));
     }
   }
+
+  // Shared tag renderers for t.rich — the catalogs carry <em>/<code>/<hl>
+  // markup, the JSX shape lives here.
+  const richTags = {
+    em: (chunks: React.ReactNode) => <em>{chunks}</em>,
+    code: (chunks: React.ReactNode) => <code style={codeStyle}>{chunks}</code>,
+    strong: (chunks: React.ReactNode) => <strong>{chunks}</strong>,
+    hl: (chunks: React.ReactNode) => (
+      <span style={{ color: "var(--color-text-primary)" }}>{chunks}</span>
+    ),
+  };
 
   return (
     <div className="mc-card" style={cardStyle}>
@@ -160,10 +177,10 @@ function SetupGuide() {
           }}
         />
         <span className="text-sm font-medium" style={{ color: "var(--color-text-primary)" }}>
-          Set up the Slack app
+          {t("toggleTitle")}
         </span>
         <span className="text-xs ml-auto" style={{ color: "var(--color-text-muted)" }}>
-          {open ? "Hide" : "Show"} the seven steps
+          {open ? t("toggleHide") : t("toggleShow")}
         </span>
       </button>
 
@@ -173,44 +190,36 @@ function SetupGuide() {
           className="px-4 pb-4 pt-1 space-y-4 text-sm"
           style={{ color: "var(--color-text-secondary)", maxWidth: "72ch" }}
         >
-          <p>
-            MC runs on your own machine and has no public URL, so Slack cannot call
-            it. MC opens the connection instead, over{" "}
-            <span style={{ color: "var(--color-text-primary)" }}>Socket Mode</span>.
-            That is why there is no Request URL to fill in anywhere, and why the
-            second token exists.
-          </p>
+          <p>{t.rich("intro", richTags)}</p>
 
           <ol className="space-y-3">
-            <GuideStep n={1} title="Create the app">
-              Go to{" "}
-              <a
-                href="https://api.slack.com/apps"
-                target="_blank"
-                rel="noreferrer"
-                className="underline"
-                style={{ color: C.accent }}
-              >
-                api.slack.com/apps
-              </a>
-              , choose <em>Create New App</em>, then <em>From scratch</em>. Name it
-              (for example Mission Control) and pick your workspace.
+            <GuideStep n={1} title={t("step1Title")}>
+              {t.rich("step1Body", {
+                ...richTags,
+                link: (chunks) => (
+                  <a
+                    href="https://api.slack.com/apps"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="underline"
+                    style={{ color: C.accent }}
+                  >
+                    {chunks}
+                  </a>
+                ),
+              })}
             </GuideStep>
 
-            <GuideStep n={2} title="Turn on Socket Mode">
-              Open <em>Socket Mode</em> in the sidebar and enable it.
+            <GuideStep n={2} title={t("step2Title")}>
+              {t.rich("step2Body", richTags)}
             </GuideStep>
 
-            <GuideStep n={3} title="Create the app-level token">
-              It lives under <em>Basic Information → App-Level Tokens</em>, not on
-              the Socket Mode page. Generate a token with the{" "}
-              <code style={codeStyle}>connections:write</code> scope. It starts with{" "}
-              <code style={codeStyle}>xapp-</code>.
+            <GuideStep n={3} title={t("step3Title")}>
+              {t.rich("step3Body", richTags)}
             </GuideStep>
 
-            <GuideStep n={4} title="Add the bot token scopes">
-              Under <em>OAuth &amp; Permissions → Bot Token Scopes</em>, add all
-              {" "}{BOT_SCOPES.length} scopes. Copy them instead of typing them:
+            <GuideStep n={4} title={t("step4Title")}>
+              {t.rich("step4Body", { ...richTags, count: BOT_SCOPES.length })}
               <div
                 className="mt-2 rounded-lg p-3 flex items-start gap-3"
                 style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
@@ -224,40 +233,32 @@ function SetupGuide() {
                 </code>
                 <button
                   onClick={() => copy("scopes", SCOPE_LIST)}
-                  aria-label="Copy scope list"
+                  aria-label={t("copyScopesAria")}
                   className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   {copied === "scopes" ? <Check size={12} /> : <Copy size={12} />}
-                  {copied === "scopes" ? "Copied" : "Copy"}
+                  {copied === "scopes" ? t("copied") : t("copy")}
                 </button>
               </div>
               <ul className="mt-2 space-y-1">
                 {BOT_SCOPES.map((s) => (
                   <li key={s.scope} className="text-xs flex gap-2">
                     <code style={{ ...codeStyle, minWidth: 150 }}>{s.scope}</code>
-                    <span style={{ color: "var(--color-text-muted)" }}>{s.purpose}</span>
+                    <span style={{ color: "var(--color-text-muted)" }}>{t(`purposes.${s.purposeKey}`)}</span>
                   </li>
                 ))}
               </ul>
               <p className="text-xs mt-2" style={{ color: STATUS_TEXT.warning }}>
-                Without <code style={codeStyle}>chat:write.customize</code> every agent
-                posts under the same app name, so the team chat reads like one voice
-                instead of your fleet. It is easy to miss because everything else
-                still works.
+                {t.rich("step4WarnCustomize", richTags)}
               </p>
               <p className="text-xs mt-2" style={{ color: STATUS_TEXT.warning }}>
-                After adding or changing scopes, Slack requires a{" "}
-                <strong>reinstall</strong>: a banner appears at the top of the OAuth
-                page — click <em>Reinstall to workspace</em>. Until then the new
-                scope silently does not apply (voice messages, for example, come
-                back as a login page instead of audio).
+                {t.rich("step4WarnReinstall", richTags)}
               </p>
             </GuideStep>
 
-            <GuideStep n={5} title="Subscribe to events">
-              Under <em>Event Subscriptions</em>, enable events and add these bot
-              events. No Request URL is asked for once Socket Mode is on.
+            <GuideStep n={5} title={t("step5Title")}>
+              {t.rich("step5Body", richTags)}
               <div
                 className="mt-2 rounded-lg p-3 flex items-start gap-3"
                 style={{ backgroundColor: C.bgDeep, border: `1px solid ${C.border}` }}
@@ -267,33 +268,27 @@ function SetupGuide() {
                 </code>
                 <button
                   onClick={() => copy("events", EVENTS.join(", "))}
-                  aria-label="Copy event list"
+                  aria-label={t("copyEventsAria")}
                   className="shrink-0 flex items-center gap-1.5 px-2 py-1 rounded text-xs cursor-pointer"
                   style={{ backgroundColor: C.accentSubtle, color: C.accent }}
                 >
                   {copied === "events" ? <Check size={12} /> : <Copy size={12} />}
-                  {copied === "events" ? "Copied" : "Copy"}
+                  {copied === "events" ? t("copied") : t("copy")}
                 </button>
               </div>
             </GuideStep>
 
-            <GuideStep n={6} title="Install the app">
-              Back under <em>OAuth &amp; Permissions</em>, install the app to the
-              workspace. Copy the <em>Bot User OAuth Token</em>, it starts with{" "}
-              <code style={codeStyle}>xoxb-</code>.
+            <GuideStep n={6} title={t("step6Title")}>
+              {t.rich("step6Body", richTags)}
             </GuideStep>
 
-            <GuideStep n={7} title="Paste both tokens above">
-              Bot token in the first field, app-level token in the second, then run
-              Test connection. Finally invite the bot into a channel with{" "}
-              <code style={codeStyle}>/invite @your-app-name</code>, otherwise it
-              cannot read or post there.
+            <GuideStep n={7} title={t("step7Title")}>
+              {t.rich("step7Body", richTags)}
             </GuideStep>
           </ol>
 
           <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-            The same guide, including a troubleshooting list, is in the repo under{" "}
-            <code style={codeStyle}>docs/setup/slack.md</code>.
+            {t.rich("docsNote", richTags)}
           </p>
         </div>
       )}
@@ -332,6 +327,7 @@ function GuideStep({ n, title, children }: { n: number; title: string; children:
 // ── Tab ───────────────────────────────────────────────────────────────────────
 
 export function SlackTab() {
+  const t = useTranslations("settings.slack");
   const queryClient = useQueryClient();
   const [savingKey, setSavingKey] = useState<string | null>(null);
 
@@ -365,10 +361,10 @@ export function SlackTab() {
     onMutate: ({ key }) => setSavingKey(key),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["secrets"] });
-      notify.success("Token saved");
+      notify.success(t("tokenSaved"));
       await refetch();
     },
-    onError: () => notify.error("Could not save the token"),
+    onError: () => notify.error(t("tokenSaveFailed")),
     onSettled: () => setSavingKey(null),
   });
 
@@ -386,14 +382,14 @@ export function SlackTab() {
     : "error";
 
   const headline = nothingSet
-    ? "Not set up"
+    ? t("statusNotSetUp")
     : status?.connected
     ? status.socket_mode_ready
-      ? `Connected to ${status.team ?? "Slack"}`
-      : `Reachable in ${status.team ?? "Slack"}, Socket Mode not ready`
+      ? t("statusConnectedTo", { team: status.team ?? "Slack" })
+      : t("statusReachableNoSocket", { team: status.team ?? "Slack" })
     : status
-    ? "Not connected"
-    : "Checking…";
+    ? t("statusNotConnected")
+    : t("statusChecking");
 
   return (
     <motion.div
@@ -405,11 +401,10 @@ export function SlackTab() {
     >
       <div className="mb-6">
         <h2 className="text-base font-semibold" style={{ color: "var(--color-text-primary)" }}>
-          Slack
+          {t("title")}
         </h2>
         <p className="text-sm mt-1" style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}>
-          Run the team chat with your agents in Slack. MC connects outwards over Socket
-          Mode, so it works from a self-hosted machine without a public URL.
+          {t("intro")}
         </p>
       </div>
 
@@ -432,7 +427,7 @@ export function SlackTab() {
 
           {status?.connected && status.bot_user && (
             <div className="flex items-center gap-2 text-xs">
-              <span style={{ color: "var(--color-text-muted)" }}>Bot</span>
+              <span style={{ color: "var(--color-text-muted)" }}>{t("bot")}</span>
               <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>
                 {status.bot_user}
               </span>
@@ -440,9 +435,9 @@ export function SlackTab() {
           )}
 
           <div className="flex items-center gap-2 text-xs">
-            <span style={{ color: "var(--color-text-muted)" }}>Socket Mode</span>
+            <span style={{ color: "var(--color-text-muted)" }}>{t("socketMode")}</span>
             <span style={{ color: status?.socket_mode_ready ? C.online : "var(--color-text-secondary)" }}>
-              {status?.socket_mode_ready ? "ready" : "not ready"}
+              {status?.socket_mode_ready ? t("ready") : t("notReady")}
             </span>
           </div>
 
@@ -463,26 +458,26 @@ export function SlackTab() {
             className="mt-1 text-xs px-2.5 py-1.5 rounded-lg cursor-pointer disabled:opacity-50 transition-all"
             style={{ background: "var(--color-bg-elevated)", color: "var(--color-text-secondary)" }}
           >
-            {testing ? "Testing…" : "Test connection"}
+            {testing ? t("testing") : t("testConnection")}
           </button>
         </div>
 
         {/* Tokens */}
         <div className="mc-card p-4 space-y-4" style={cardStyle}>
           <TokenField
-            label="Bot User OAuth Token"
+            label={t("botTokenLabel")}
             secretKey={BOT_TOKEN_KEY}
             placeholder="xoxb-..."
-            hint="OAuth & Permissions → Bot User OAuth Token. Lets agents read and post."
+            hint={t("botTokenHint")}
             existing={botSecret}
             saving={savingKey === BOT_TOKEN_KEY}
             onSave={(value) => saveMutation.mutate({ key: BOT_TOKEN_KEY, value })}
           />
           <TokenField
-            label="App-Level Token"
+            label={t("appTokenLabel")}
             secretKey={APP_TOKEN_KEY}
             placeholder="xapp-..."
-            hint="Basic Information → App-Level Tokens, scope connections:write. Opens the Socket Mode connection."
+            hint={t("appTokenHint")}
             existing={appSecret}
             saving={savingKey === APP_TOKEN_KEY}
             onSave={(value) => saveMutation.mutate({ key: APP_TOKEN_KEY, value })}
