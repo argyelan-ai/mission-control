@@ -121,6 +121,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.config import settings
 from app.models.runtime import Runtime
 from app.redis_client import RedisKeys, get_redis
+from app.services import runtime_naming
 from app.services.harness_compat import (
     resolve_provider_credentials,
     runtime_protocol,
@@ -649,21 +650,47 @@ async def build_provider_targets(session: AsyncSession) -> list[ProviderTarget]:
     ).all()
 
     targets: dict[str, ProviderTarget] = {}
+    _openai_fingerprints: dict[str, tuple[str, str]] = {}
     for rt in sorted(runtimes, key=lambda r: (r.ui_order, r.slug)):
         proto = runtime_protocol(rt)
         if proto not in ADAPTERS:
             continue
         if proto == "openai":
-            # One provider per runtime — each has its own endpoint and key.
-            key = f"openai:{rt.slug}"
+            # Group by PROVIDER where one is recognisable, otherwise per row.
+            #
+            # Per-row alone was too fine: ollama-cloud and ollama-cloud-glm-5-2
+            # point at the same https://ollama.com/v1 with the same
+            # api_key_secret_id, so the catalog listed Ollama Cloud twice with an
+            # identical 17-model body — 34 rows for 17 models (operator report,
+            # 2026-07-31). Local endpoints (vLLM, LM Studio, unsloth) are each
+            # their own box, so per-row stays right for them and their keys stay
+            # unchanged.
+            #
+            # Merging requires an IDENTICAL endpoint AND credential: two rows can
+            # share a vendor while using different accounts, and different keys
+            # can mean different model entitlements. A row matching the vendor
+            # but not the credential falls back to its own key.
+            provider = runtime_naming.resolve_provider(rt.endpoint, protocol=proto)
+            fingerprint = (
+                (rt.endpoint or "").rstrip("/").lower(),
+                str(rt.api_key_secret_id or "-"),
+            )
+            key = f"openai:{provider.slug_prefix}" if provider else f"openai:{rt.slug}"
+            existing_openai = targets.get(key)
+            if existing_openai is not None:
+                if _openai_fingerprints.get(key) == fingerprint:
+                    existing_openai.runtime_slugs.append(rt.slug)
+                    continue
+                key = f"openai:{rt.slug}"
             targets[key] = ProviderTarget(
                 key=key,
                 protocol=proto,
-                label=rt.display_name,
+                label=provider.label if provider else rt.display_name,
                 runtime_slugs=[rt.slug],
                 endpoint=rt.endpoint,
                 runtime=rt,
             )
+            _openai_fingerprints[key] = fingerprint
             continue
         # Single-endpoint protocols collapse into one provider; several runtime
         # rows (anthropic-claude-opus / -sonnet) share one upstream catalog.
