@@ -3272,3 +3272,13 @@ curl "$MC_API_URL/api/v1/agent/vault/related/$TASK_ID" -H "Authorization: Bearer
 
 Use case: Researcher writes two lessons with `task_id=$TASK_ID` during weather research. Later, Shakespeare finds the weather wrapper via search while writing content — and with `vault/related` immediately sees the research lessons + the PDF wrapper from the same task.
 {% endif %}
+
+{# ── Optional operator addendum ───────────────────────────────────────────
+   Deployment-specific context that does not belong in the public template:
+   the operator's jurisdiction, house rules, standing permissions, internal
+   policies. Create `SOUL.operator.md.j2` next to this file to have it
+   appended to every agent's system prompt. Absent by default — this repo
+   ships no such file, and `ignore missing` keeps rendering unaffected.
+   Keep private deployments' copies out of version control (or in a private
+   overlay), since the content is by nature operator-specific.            #}
+{% include "SOUL.operator.md.j2" ignore missing %}
