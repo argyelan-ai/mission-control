@@ -165,12 +165,21 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
 
     subtype = event.get("subtype")
     voice_note = None
+    dropped_file_share = False
     if subtype == "file_share":
-        # A native Slack voice clip (or an uploaded audio file). Anything else
-        # shared — PDFs, images — stays ignored exactly as before.
-        voice_note = await _transcribe_voice(event, adapter)
-        if voice_note is None:
-            return
+        from app.services import slack_voice
+
+        if slack_voice.pick_audio_file(event) is None:
+            # Not a voice clip — a PDF, an image. File ingest arrives with the
+            # references work; until then the file is not taken. But the drop
+            # is SAID, and a caption typed alongside is a message like any
+            # other. Before, the handler returned here and BOTH vanished
+            # silently (the caption bug).
+            dropped_file_share = True
+        else:
+            voice_note = await _transcribe_voice(event, adapter)
+            if voice_note is None:
+                return
     elif subtype:
         # Edits, deletions, joins, thread broadcasts of an edit …
         # A plain message from a human has no subtype at all.
@@ -183,12 +192,39 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
         text = f"{caption}\n{voice_note}".strip() if caption else voice_note
     else:
         text = caption
+
+    if dropped_file_share:
+        await _reply(
+            adapter,
+            room_for(event),
+            "📎 Dateien kann ich hier noch nicht annehmen — die Datei wurde "
+            "NICHT übernommen."
+            + (" Dein Text ist angekommen." if text else ""),
+        )
+
     if not text:
         logger.info("slack inbound: message without usable text — ignored")
         return
 
     room = room_for(event)
     route = await route_inbound(session, adapter, room, text=text)
+    if route.thread is None and room is not None:
+        # A reply inside a Slack thread MC cannot map — typically the operator
+        # answering a channel-level message, which has no thread row.
+        # 2026-07-31 this dropped a real order after an ask-back ("ladet bitte
+        # supergirl herunter"). The operator talking under OUR channel is
+        # never "unknown": hand the message to the general chat (Boss) and
+        # say so in the thread, so the conversation continues visibly.
+        fallback = await route_inbound(session, adapter, None, text=text)
+        if fallback.thread is not None:
+            await _reply(
+                adapter,
+                room,
+                "Dieser Slack-Thread ist keinem MC-Gespräch zugeordnet — ich "
+                "habe deine Nachricht an Boss übergeben. Die Antwort kommt "
+                "im Kanal.",
+            )
+            route = fallback
     if route.thread is None:
         # The neutral path already worded the reason (unknown room / no Boss);
         # deliver it where the operator is looking.
