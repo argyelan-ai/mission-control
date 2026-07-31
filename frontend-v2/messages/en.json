@@ -802,6 +802,75 @@
     "mcpRemove": "Remove",
     "mcpRemovedWithAgents": "Server removed. {count} agent(s) updated.",
     "mcpRemoved": "Server removed.",
-    "mcpRemoveFailed": "Failed to remove server"
+    "mcpRemoveFailed": "Failed to remove server",
+    "pluginMatrix": {
+      "loadingGithubSkills": "Loading GitHub skills...",
+      "noGithubSkills": "No GitHub skill repos installed.",
+      "installVia": "Install via:",
+      "skillCount": "{count} Skills",
+      "noAgentsOrPlugins": "No CLI-bridge agents or plugins found",
+      "githubSkillRepos": "GitHub skill repos",
+      "unsavedChanges": "Unsaved changes",
+      "discard": "Discard",
+      "save": "Save",
+      "pluginCol": "Plugin",
+      "tableAria": "Plugin team assignments",
+      "savedNotice": "Team assignments saved"
+    },
+    "skillMatrix": {
+      "loading": "Loading skills + agents...",
+      "noSkills": "No custom skills found.",
+      "skillsLiveIn": "Skills live in",
+      "customSkillsCount": "Custom Skills ({count})",
+      "reset": "Reset",
+      "save": "Save",
+      "enableAll": "Enable all",
+      "disableAll": "Disable all",
+      "skillCol": "Skill",
+      "tableAria": "Skill team assignments",
+      "saved": "Skills saved",
+      "saveFailed": "Failed to save"
+    },
+    "shell": {
+      "connected": "connected",
+      "startInstaller": "Start installer",
+      "stop": "Stop",
+      "startFailed": "Failed to start shell: {error}",
+      "sessionEnded": "[Session ended]",
+      "helpText": "Start the installer to set up MCP servers, CLI plugins, or custom skills. The installer knows the MC API + Vault — just tell it what you want.",
+      "helpExample": "\"Install Brave Search MCP for Researcher\"",
+      "helpDelegation": "Also via task delegation:"
+    },
+    "mcpMatrix": {
+      "noServers": "No MCP servers installed",
+      "noServersHint": "Boss can submit install requests, or you can install via CLI.",
+      "serverCol": "MCP Server",
+      "tableAria": "MCP server assignment",
+      "aboutServer": "About {name}",
+      "removeServer": "Remove {name}",
+      "activate": "Activate {name} for {agent}",
+      "deactivate": "Deactivate {name} for {agent}",
+      "assignFailed": "MCP assignment failed"
+    },
+    "mcpAddModal": {
+      "title": "Add MCP server",
+      "close": "Close",
+      "name": "Name",
+      "namePlaceholder": "e.g. filesystem",
+      "nameInvalid": "Only a-z, 0-9, _, - allowed",
+      "transport": "Transport",
+      "command": "Command",
+      "commandPlaceholder": "e.g. uvx my-mcp-server",
+      "args": "Args (comma-separated)",
+      "argsPlaceholder": "--port,8080,--verbose",
+      "url": "URL",
+      "urlPlaceholder": "https://example.com/mcp",
+      "urlInvalid": "URL is required",
+      "description": "Description",
+      "descriptionPlaceholder": "Optional",
+      "cancel": "Cancel",
+      "add": "Add",
+      "added": "MCP server \"{name}\" added"
+    }
   }
 }

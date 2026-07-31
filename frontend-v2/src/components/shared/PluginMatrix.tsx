@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslations } from "next-intl";
 import { Save, Undo2, Loader2, Check, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Agent, CliPlugin, GithubSkillRepo } from "@/lib/types";
@@ -13,6 +14,7 @@ interface PluginAssignment {
 }
 
 function GithubSkillsSection() {
+  const t = useTranslations("skills.pluginMatrix");
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const { data, isLoading } = useQuery({
     queryKey: ["github-skills"],
@@ -24,15 +26,15 @@ function GithubSkillsSection() {
 
   if (isLoading) return (
     <div className="flex items-center gap-2 text-xs py-4" style={{ color: "var(--color-text-muted)" }}>
-      <Loader2 size={12} className="animate-spin" /> Loading GitHub skills...
+      <Loader2 size={12} className="animate-spin" /> {t("loadingGithubSkills")}
     </div>
   );
 
   if (!repos.length) return (
     <div className="text-xs py-4" style={{ color: "var(--color-text-muted)" }}>
-      No GitHub skill repos installed.{" "}
+      {t("noGithubSkills")}{" "}
       <span style={{ color: "var(--color-text-dim)" }}>
-        Install via: <code style={{ color: C.info }}>~/.agents/skills/install-skill.sh owner/repo</code>
+        {t("installVia")} <code style={{ color: C.info }}>~/.agents/skills/install-skill.sh owner/repo</code>
       </span>
     </div>
   );
@@ -64,7 +66,7 @@ function GithubSkillsSection() {
                 </span>
               </div>
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: `${C.accent}1F`, color: C.accentHover }}>
-                {repo.skills.length} Skills
+                {t("skillCount", { count: repo.skills.length })}
               </span>
               {isOpen ? <ChevronDown size={12} style={{ color: "var(--color-text-muted)" }} /> : <ChevronRight size={12} style={{ color: "var(--color-text-muted)" }} />}
             </button>
@@ -96,6 +98,7 @@ function GithubSkillsSection() {
 }
 
 export function PluginMatrix() {
+  const t = useTranslations("skills.pluginMatrix");
   const qc = useQueryClient();
   const [draft, setDraft] = useState<PluginAssignment | null>(null);
 
@@ -189,7 +192,7 @@ export function PluginMatrix() {
       setDraft(null);
       qc.invalidateQueries({ queryKey: ["agents"] });
       qc.invalidateQueries({ queryKey: ["cli-plugins"] });
-      notify.success("Team assignments saved");
+      notify.success(t("savedNotice"));
     },
     onError: (e: Error) => notify.error(e.message),
   });
@@ -198,11 +201,11 @@ export function PluginMatrix() {
     return (
       <div className="space-y-6">
         <div className="text-xs text-center py-8 text-[var(--color-text-muted)]">
-          No CLI-bridge agents or plugins found
+          {t("noAgentsOrPlugins")}
         </div>
         <div>
           <h3 className="text-xs font-medium mb-3" style={{ color: "var(--color-text-muted)" }}>
-            GitHub skill repos
+            {t("githubSkillRepos")}
           </h3>
           <GithubSkillsSection />
         </div>
@@ -221,7 +224,7 @@ export function PluginMatrix() {
           }}
         >
           <span className="text-xs" style={{ color: C.accent }}>
-            Unsaved changes
+            {t("unsavedChanges")}
           </span>
           <div className="flex gap-2">
             <button
@@ -234,7 +237,7 @@ export function PluginMatrix() {
               }}
             >
               <Undo2 size={12} />
-              Discard
+              {t("discard")}
             </button>
             <button
               onClick={() => saveMutation.mutate()}
@@ -247,7 +250,7 @@ export function PluginMatrix() {
               ) : (
                 <Save size={12} />
               )}
-              Save
+              {t("save")}
             </button>
           </div>
         </div>
@@ -262,7 +265,7 @@ export function PluginMatrix() {
         } as React.CSSProperties}
         tabIndex={0}
         role="region"
-        aria-label="Plugin team assignments"
+        aria-label={t("tableAria")}
       >
         <table className="w-full text-xs">
           <thead>
@@ -274,7 +277,7 @@ export function PluginMatrix() {
                   color: "var(--color-text-muted)",
                 }}
               >
-                Plugin
+                {t("pluginCol")}
               </th>
               {cliAgents.map((agent) => (
                 <th
@@ -347,7 +350,7 @@ export function PluginMatrix() {
       {/* GitHub Skill-Repos */}
       <div>
         <h3 className="text-xs font-medium mb-3" style={{ color: "var(--color-text-muted)" }}>
-          GitHub skill repos
+          {t("githubSkillRepos")}
         </h3>
         <GithubSkillsSection />
       </div>
