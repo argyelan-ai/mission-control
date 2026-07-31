@@ -4064,11 +4064,18 @@ async def agent_send_operator_report(
         if not delivered:
             await _rollback_claim()
             details = "; ".join(f"{r.backend}: {r.detail}" for r in results) or "kein Backend"
+            if any(not r.retryable for r in results):
+                # Semantic rejection (Telegram "can't parse entities", Slack
+                # msg_too_long): the agent must fix the content — 422, with
+                # the API description verbatim, exactly the old contract.
+                raise HTTPException(status_code=422, detail=details)
             raise HTTPException(
                 status_code=503,
                 detail=f"Report-Zustellung fehlgeschlagen ({details}). Retry moeglich.",
             )
-        message_id = None
+        # Telegram's message id survives the fan-out (the old response
+        # carried it); with several backends the Telegram one wins.
+        message_id = next((r.message_id for r in results if r.ok and r.message_id), None)
         channels_delivered = [r.backend for r in results if r.ok]
 
     logger.info(

@@ -46,7 +46,7 @@ async def test_telegram_report_sends_when_configured(client, fake_redis):
         )
 
     assert resp.status_code == 200
-    assert resp.json() == {"ok": True, "message_id": 42}
+    assert resp.json() == {"ok": True, "message_id": 42, "channels": ["telegram"]}
     mock_service.send.assert_called_once()
 
 
@@ -66,7 +66,8 @@ async def test_telegram_report_503_when_not_configured(client, fake_redis):
         )
 
     assert resp.status_code == 503
-    assert "TELEGRAM_REPORTS_BOT_TOKEN" in resp.json()["detail"]
+    assert "Telegram-Reports-Bot" in resp.json()["detail"]
+    assert "SLACK_REPORTS_CHANNEL" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

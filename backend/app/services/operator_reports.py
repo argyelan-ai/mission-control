@@ -38,11 +38,22 @@ _SLACK_CHUNK = 3900
 
 @dataclass
 class ReportResult:
-    """One backend's verdict. ``detail`` is human-readable, for the 5xx path."""
+    """One backend's verdict.
+
+    ``retryable`` distinguishes the two failure classes the old endpoint
+    already told apart: a transport problem (timeout, network — try again,
+    HTTP 503) versus a semantic rejection (Telegram "can't parse entities",
+    Slack ``msg_too_long`` — the AGENT must fix the content, HTTP 422, and
+    the description must reach it verbatim for self-correction).
+    ``message_id`` preserves the Telegram message id the old response
+    carried.
+    """
 
     backend: str
     ok: bool
     detail: str | None = None
+    retryable: bool = True
+    message_id: int | None = None
 
 
 class TelegramReportsBackend:
@@ -60,10 +71,18 @@ class TelegramReportsBackend:
         from app.services.telegram_reports import telegram_reports
 
         result = await telegram_reports.send(text)
-        if result is None or not result.get("ok"):
-            detail = (result or {}).get("description", "Telegram-Send fehlgeschlagen")
-            return ReportResult(self.name, False, str(detail))
-        return ReportResult(self.name, True)
+        if result is None:
+            return ReportResult(self.name, False, "Telegram-Send fehlgeschlagen", retryable=True)
+        if not result.get("ok"):
+            # A Telegram API rejection ("can't parse entities", …) is the
+            # agent's content, not the wire — non-retryable, description
+            # passes through verbatim so the agent can fix its HTML.
+            detail = result.get("description", "Telegram API Fehler")
+            return ReportResult(self.name, False, str(detail), retryable=False)
+        return ReportResult(
+            self.name, True,
+            message_id=result.get("result", {}).get("message_id"),
+        )
 
 
 class SlackReportsBackend:
@@ -106,7 +125,14 @@ class SlackReportsBackend:
         for chunk in _chunks(body, _SLACK_CHUNK):
             result = await transport.post_message(channel=channel, text=chunk)
             if not result.ok:
-                return ReportResult(self.name, False, result.error or "Slack-Send fehlgeschlagen")
+                # Slack error codes (msg_too_long, invalid_blocks, …) are
+                # semantic; pure transport problems surface as exceptions
+                # above and stay retryable via send_report's containment.
+                return ReportResult(
+                    self.name, False,
+                    result.error or "Slack-Send fehlgeschlagen",
+                    retryable=False,
+                )
         return ReportResult(self.name, True)
 
 
