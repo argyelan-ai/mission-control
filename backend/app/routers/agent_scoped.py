@@ -1468,6 +1468,14 @@ class MessageCreate(BaseModel):
             raise ValueError("body darf nicht leer sein")
         return v
 
+    @field_validator("message_type")
+    @classmethod
+    def _validate_message_type(cls, v: str) -> str:
+        allowed = ("message", "status", "decision")
+        if v not in allowed:
+            raise ValueError(f"message_type muss eines von {allowed} sein (Fragen → /ask)")
+        return v
+
 
 def _message_attachment(payload: "MessageCreate"):
     """(body, ChatAttachment|None) fuer die beiden Message-Endpoints.
@@ -1488,14 +1496,6 @@ def _message_attachment(payload: "MessageCreate"):
         path=path, mime=mimetypes.guess_type(path)[0], title=name
     )
     return f"{payload.body}\n\n📎 {name}", attachment
-
-    @field_validator("message_type")
-    @classmethod
-    def _validate_message_type(cls, v: str) -> str:
-        allowed = ("message", "status", "decision")
-        if v not in allowed:
-            raise ValueError(f"message_type muss eines von {allowed} sein (Fragen → /ask)")
-        return v
 
 
 class MessageResponse(BaseModel):
