@@ -221,3 +221,49 @@ async def test_resolution_without_mapping_is_silent(monkeypatch):
     await operator_approvals.update_resolved(APPROVAL_ID, "approved")
 
     assert transport.calls == [], "no stored ts -> nothing to answer, no error"
+
+
+# ── Transport-Ebene: blocks erreichen wirklich den Draht ──────────────────
+#
+# Der Fake-Transport oben zeichnet `blocks` auf, egal was der echte damit
+# täte — diese Probe hier geht bis auf die httpx-Ebene: chat.postMessage
+# muss die Block-Kit-Buttons im JSON-Body tragen (Sabotage-Probe R4 fand
+# genau diese Testlücke).
+
+
+@pytest.mark.asyncio
+async def test_real_transport_puts_blocks_on_the_wire(monkeypatch):
+    import httpx
+
+    from app.services import slack_client as sc
+
+    seen: dict = {}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        import json
+
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json={"ok": True, "ts": "1.0"})
+
+    real_client = httpx.AsyncClient
+
+    def _client(**kw):
+        kw["transport"] = httpx.MockTransport(_handler)
+        return real_client(**kw)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _client)
+    monkeypatch.setattr(
+        sc, "get_bot_token", AsyncMock(return_value="xoxb-test")
+    )
+
+    blocks = [{"type": "actions", "elements": [
+        {"type": "button", "text": {"type": "plain_text", "text": "Entblocken"},
+         "url": "http://mc.test/x"},
+    ]}]
+    result = await sc.SlackTransport().post_message(
+        channel="C-APPR", text="fallback", blocks=blocks
+    )
+
+    assert result.ok is True
+    assert seen.get("blocks") == blocks, "blocks must reach the JSON payload"
+    assert seen.get("text") == "fallback", "text stays as the notification fallback"
