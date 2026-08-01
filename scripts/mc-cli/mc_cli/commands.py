@@ -1761,9 +1761,11 @@ def _cmd_report(args, client, cfg):
     body: dict = {"text": text}
     photo_id = getattr(args, "photo", None)
     file_id = getattr(args, "file", None)
-    if photo_id and file_id:
+    vault_path = getattr(args, "vault_path", None)
+    if sum(1 for v in (photo_id, file_id, vault_path) if v) > 1:
         raise UsageError(
-            "--photo und --file schliessen sich aus. Nutze EINEN von beiden."
+            "--photo, --file und --vault-path schliessen sich aus. "
+            "Nutze EINEN von ihnen."
         )
     if photo_id:
         # Photo-Anhang via Screenshot-Deliverable. Backend macht sendPhoto
@@ -1773,6 +1775,11 @@ def _cmd_report(args, client, cfg):
         # File-Anhang (PDF/Office/ZIP/...) via beliebiges Deliverable mit Pfad.
         # Backend macht sendDocument (keine Kompression, max 50 MB).
         body["document_deliverable_id"] = file_id
+    elif vault_path:
+        # Ad-hoc-Anhang via Vault-Wrapper-Pfad (aus `mc vault-search`) — fuer
+        # Dateien OHNE Task/Deliverable. Das API-Feld existiert seit dem
+        # Voice-Concierge; das Backend loest den Wrapper zur Binary auf.
+        body["vault_path"] = vault_path
     try:
         _, task_id = cfg.require_task_context()
         body["task_id"] = str(task_id)
@@ -1833,6 +1840,18 @@ def _add_report_args(p, *, verb="report"):
             "(bei Telegram 1024 Zeichen Caption-Limit). Deliverable muss einen "
             "File-Pfad haben (type != url, type != data). Mutex zu --photo. "
             f"Beispiel: mc {verb} \"Q1 Report anbei\" --file <deliverable-uuid>"
+        ),
+    )
+    p.add_argument(
+        "--vault-path",
+        dest="vault_path",
+        default=None,
+        metavar="WRAPPER_PFAD",
+        help=(
+            "Optional: Datei via Vault-Wrapper-Pfad anhaengen (relativer Pfad "
+            "aus `mc vault-search`, z.B. 'wrappers/files/report.md') — fuer "
+            "Ad-hoc-Dateien OHNE Deliverable/Task. Mutex zu --photo/--file. "
+            f"Beispiel: mc {verb} \"Datei anbei\" --vault-path wrappers/files/x.md"
         ),
     )
 
