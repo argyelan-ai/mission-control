@@ -1021,9 +1021,13 @@ def _cmd_msg(args, client, cfg):
         path = f"/api/v1/agent/threads/{args.thread}/messages"
     else:
         path = "/api/v1/agent/tasks/current/messages"
-    resp = client.request(
-        "POST", path, body={"body": text, "message_type": args.type}
-    )
+    body = {"body": text, "message_type": args.type}
+    if getattr(args, "vault_path", None):
+        # Datei-Anhang via Vault-Wrapper (aus `mc vault-search`). Der Anhang
+        # reist ueber den Chat-Spiegel (Slack-Upload/Telegram-sendDocument);
+        # der Thread-Verlauf bekommt eine sichtbare 📎-Zeile.
+        body["vault_path"] = args.vault_path
+    resp = client.request("POST", path, body=body)
     _emit(resp)
     return 0
 
@@ -1043,6 +1047,12 @@ def _add_msg_args(p):
         "--thread", dest="thread", default=None,
         help="Thread-ID (aus dem `mc inbox`-Footer) — Antwort geht in genau "
              "diesen Thread statt in den des aktuellen Tasks.",
+    )
+    p.add_argument(
+        "--vault-path", dest="vault_path", default=None, metavar="WRAPPER_PFAD",
+        help="Optional: Datei anhaengen — Vault-Wrapper-Pfad aus "
+             "`mc vault-search` (z.B. 'wrappers/files/x.md'). Die Datei geht "
+             "in den Chat-Thread mit (Slack/Telegram).",
     )
 
 
