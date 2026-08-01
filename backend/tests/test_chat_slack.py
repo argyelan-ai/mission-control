@@ -378,6 +378,47 @@ def test_an_unknown_slack_error_is_passed_through_not_swallowed():
     assert "wildly_unexpected" in slack_client.explain_slack_error("wildly_unexpected")
 
 
+# ── 4b. Attachments: the upload needs the ID, not the "#name" ─────────────
+
+
+@pytest.mark.asyncio
+async def test_attachment_upload_resolves_the_channel_name_to_an_id(
+    monkeypatch, transport, faces, tmp_path
+):
+    """`chat.postMessage` accepts "#name"; `completeUploadExternal` accepts
+    ONLY the channel ID. Live finding 2026-08-01: the raw configured "#…"
+    made every attachment upload die with invalid_arguments."""
+    from unittest.mock import AsyncMock
+
+    from app.services.chat_adapter import ChatAttachment
+
+    monkeypatch.setattr(settings, "slack_team_chat_enabled", True, raising=False)
+    monkeypatch.setattr(settings, "slack_default_channel", "#team", raising=False)
+    monkeypatch.setattr(
+        slack_client, "_token_cache", (float("inf"), "xoxb-TEST-token"), raising=False
+    )
+    monkeypatch.setattr(
+        slack_client, "resolve_channel_id",
+        AsyncMock(return_value="C-RESOLVED"),
+    )
+    adapter = SlackChatAdapter(transport=transport, faces=faces)
+    f = tmp_path / "anhang.pdf"
+    f.write_bytes(b"%PDF-1.4 id-test")
+
+    ok = await adapter.send(
+        None,
+        OutboundChatMessage(
+            body="Datei kommt", attachment=ChatAttachment(path=str(f), title="anhang.pdf")
+        ),
+    )
+
+    assert ok is True
+    upload = [c for c in transport.calls if "path" in c][-1]
+    assert upload["channel"] == "C-RESOLVED", (
+        "the upload must receive the resolved ID, never the raw #name"
+    )
+
+
 # ── 5. Switch + configuration ─────────────────────────────────────────────
 
 
