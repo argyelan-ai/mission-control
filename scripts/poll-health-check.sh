@@ -46,6 +46,12 @@ declare -a PATTERNS=(
 # Telegram Bot env
 ENV_FILE="$HOME/Workspace/Projects/mission-control/.env"
 
+# Slack Incoming Webhook (R4): Datei mit genau der Webhook-URL, 600er-Rechte.
+# BEWUSST eine Datei und kein MC-API-Call — dieser Waechter muss auch alarmieren
+# koennen, wenn MC selbst am Boden liegt (MC-Unabhaengigkeit ist die Invariante).
+# Telegram laeuft parallel weiter (Telegram bleibt optionaler Kanal).
+SLACK_WEBHOOK_FILE="${SLACK_WEBHOOK_FILE:-$HOME/.mc/secrets/mission-control/slack-webhook-alerts}"
+
 log() { echo "[$(date '+%Y-%m-%dT%H:%M:%S')] $*" >> "$LOG_FILE"; }
 
 if [ ! -f "$POLL_LOG" ]; then
@@ -53,18 +59,22 @@ if [ ! -f "$POLL_LOG" ]; then
     exit 0  # Kein Fail — vielleicht ist Boss grade nicht aufgesetzt
 fi
 
-if [ ! -f "$ENV_FILE" ]; then
-    log "WARNING: .env fehlt — kein Telegram-Alert moeglich: $ENV_FILE"
-    exit 0
-fi
-
 # Token + Chat-ID aus .env ziehen (nur diese zwei Keys — keine anderen leaken)
 # shellcheck disable=SC1090
-REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
-REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+REPORTS_TOKEN=""
+REPORTS_CHAT=""
+if [ -f "$ENV_FILE" ]; then
+    REPORTS_TOKEN=$(grep -E '^TELEGRAM_REPORTS_BOT_TOKEN=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+    REPORTS_CHAT=$(grep -E '^TELEGRAM_REPORTS_CHAT_ID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"' | tr -d "'")
+fi
 
-if [ -z "$REPORTS_TOKEN" ] || [ -z "$REPORTS_CHAT" ]; then
-    log "WARNING: TELEGRAM_REPORTS_BOT_TOKEN oder _CHAT_ID nicht in .env — kein Alert moeglich"
+SLACK_WEBHOOK=""
+if [ -f "$SLACK_WEBHOOK_FILE" ]; then
+    SLACK_WEBHOOK=$(head -n 1 "$SLACK_WEBHOOK_FILE" | tr -d '[:space:]')
+fi
+
+if { [ -z "$REPORTS_TOKEN" ] || [ -z "$REPORTS_CHAT" ]; } && [ -z "$SLACK_WEBHOOK" ]; then
+    log "WARNING: weder Telegram-Env noch Slack-Webhook-Datei vorhanden — kein Alert moeglich"
     exit 0
 fi
 
@@ -145,27 +155,54 @@ for pattern_spec in "${PATTERNS[@]}"; do
         continue
     fi
 
-    # Alert senden via Reports-Bot
-    msg="⚠️ <b>MC Health-Check Alert</b>
+    # Alert senden — Fan-out an beide Kanaele (Telegram + Slack-Webhook);
+    # gesendet gilt, wenn MINDESTENS einer angekommen ist. Ein toter Kanal
+    # darf weder den anderen noch den naechsten Pattern-Check blockieren.
+    sample=$(echo "$first_match" | head -c 300)
+    now_human=$(date '+%Y-%m-%d %H:%M:%S')
+    sent_any=0
+
+    if [ -n "$REPORTS_TOKEN" ] && [ -n "$REPORTS_CHAT" ]; then
+        msg="⚠️ <b>MC Health-Check Alert</b>
 
 <b>Pattern:</b> ${label}
 
 <b>Log-Sample:</b>
-<code>$(echo "$first_match" | head -c 300 | sed 's/</&lt;/g; s/>/&gt;/g')</code>
+<code>$(echo "$sample" | sed 's/</\&lt;/g; s/>/\&gt;/g')</code>
 
 <b>Datei:</b> <code>${POLL_LOG}</code>
-<b>Zeit:</b> $(date '+%Y-%m-%d %H:%M:%S')
+<b>Zeit:</b> ${now_human}
 
 <i>Naechster Alert fuer dieses Pattern fruehestens in $((ALERT_COOLDOWN/60))min.</i>"
 
-    response=$(curl -sf "https://api.telegram.org/bot${REPORTS_TOKEN}/sendMessage" \
-        -d "chat_id=${REPORTS_CHAT}" \
-        --data-urlencode "text=${msg}" \
-        -d "parse_mode=HTML" \
-        --max-time 10 2>&1) || {
-        log "ERROR: Telegram-Alert fehlgeschlagen fuer '$label': $response"
-        continue
-    }
+        response=$(curl -sf "https://api.telegram.org/bot${REPORTS_TOKEN}/sendMessage" \
+            -d "chat_id=${REPORTS_CHAT}" \
+            --data-urlencode "text=${msg}" \
+            -d "parse_mode=HTML" \
+            --max-time 10 2>&1) && sent_any=1 || \
+            log "ERROR: Telegram-Alert fehlgeschlagen fuer '$label': $response"
+    fi
+
+    if [ -n "$SLACK_WEBHOOK" ]; then
+        # JSON sicher via python3 bauen (Log-Samples enthalten Quotes/Backslashes)
+        slack_payload=$(python3 - "$label" "$sample" "$POLL_LOG" "$now_human" <<'PYEOF'
+import json, sys
+label, sample, poll_log, now = sys.argv[1:5]
+print(json.dumps({"text": (
+    f":warning: *MC Health-Check Alert*\n\n"
+    f"*Pattern:* {label}\n\n*Log-Sample:*\n```{sample}```\n"
+    f"*Datei:* `{poll_log}`\n*Zeit:* {now}"
+)}))
+PYEOF
+        )
+        slack_response=$(curl -sf -X POST -H 'Content-type: application/json' \
+            -d "$slack_payload" "$SLACK_WEBHOOK" --max-time 10 2>&1) && sent_any=1 || \
+            log "ERROR: Slack-Alert fehlgeschlagen fuer '$label': $slack_response"
+    fi
+
+    if [ "$sent_any" -eq 0 ]; then
+        continue  # kein Kanal hat angenommen -> kein Cooldown setzen, retry beim naechsten Lauf
+    fi
 
     log "ALERT gesendet: '$label' — sample: $first_match"
     _set_last_alert "$label" "$NOW_EPOCH"

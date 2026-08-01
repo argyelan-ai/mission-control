@@ -365,6 +365,7 @@ class SlackTransport:
         icon_emoji: str | None = None,
         thread_ts: str | None = None,
         silent: bool = True,
+        blocks: list[dict] | None = None,
     ) -> SlackPostResult:
         """Post one message.
 
@@ -377,6 +378,10 @@ class SlackTransport:
         `reply_broadcast` — a threaded reply stays inside its thread (quiet)
         unless it is broadcast back into the channel (loud). Outside a thread
         there is nothing to decide: the message lands in the channel either way.
+
+        `blocks` is Block Kit (approval URL buttons). Slack renders blocks
+        INSTEAD of `text`; `text` then serves as the notification fallback —
+        callers must still pass a meaningful one.
         """
         token = await get_bot_token()
         if not token:
@@ -398,6 +403,8 @@ class SlackTransport:
             payload["thread_ts"] = thread_ts
             if not silent:
                 payload["reply_broadcast"] = True
+        if blocks:
+            payload["blocks"] = blocks
 
         try:
             async with httpx.AsyncClient(timeout=_REQUEST_TIMEOUT) as client:

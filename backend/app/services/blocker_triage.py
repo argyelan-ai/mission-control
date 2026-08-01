@@ -253,8 +253,8 @@ async def escalate_blocker_to_operator(
     await clear_triage_payload(task.id)
 
     try:
-        from app.services.telegram_bot import telegram_bot
-        await telegram_bot.send_approval_telegram(
+        from app.services import operator_approvals
+        await operator_approvals.send_approval(
             approval.id, agent_name, task.title,
             blocker_payload.get("blocker_comment") or blocker_payload.get("question") or "",
         )

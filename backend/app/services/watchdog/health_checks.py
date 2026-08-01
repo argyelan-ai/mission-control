@@ -96,8 +96,8 @@ class HealthChecksMixin:
                 agent_name = payload.get("blocked_agent_name") or payload.get("agent_name") or "Agent"
                 task_title = payload.get("task_title") or approval.description[:60]
                 try:
-                    from app.services.telegram_bot import telegram_bot
-                    await telegram_bot.send_approval_telegram(
+                    from app.services import operator_approvals
+                    await operator_approvals.send_approval(
                         approval.id, agent_name, task_title,
                         f"⏰ Reminder ({payload['renewal_count'] * 24}h offen): "
                         f"{payload.get('question') or approval.description}",

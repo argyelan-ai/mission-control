@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     # Backend-Containers (5-GB-VM), deshalb ein bewusst kleines Default —
     # identisch zum Upload-Cap des References-Routers (25 MB).
     slack_file_ingest_max_bytes: int = 25 * 1024 * 1024
+    # Approvals-Kanal (#mc-approvals): Kanal-ID (C…) oder #name. Leer = keine
+    # Slack-Approvals; die Telegram-Approval-Buttons laufen unabhaengig davon
+    # weiter (Fan-out, services/operator_approvals.py). Der Bot muss Mitglied
+    # sein.
+    slack_approvals_channel: str = ""
 
     # ── Kanal-Schalter fuer den Team-Chat (ADR-072) ──────────────────────
     # Komma-Liste der aktiven Chat-Kanaele, z.B. "telegram", "slack" oder

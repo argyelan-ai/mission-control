@@ -43,7 +43,7 @@ scopes=["tasks:read", "tasks:write", "heartbeat"],
 
     captured_calls = []
 
-    async def _fake_send_approval(approval_id, agent_name, task_title, blocker_comment):
+    async def _fake_send_approval(approval_id, agent_name, task_title, blocker_comment, tokens=None):
         captured_calls.append({
             "approval_id": approval_id,
             "agent_name": agent_name,
