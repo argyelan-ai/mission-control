@@ -495,9 +495,15 @@ class SlackChatAdapter(BaseChatAdapter):
             # Text first (it carries the sender identity — uploads always post
             # as the app), then the file into the same thread. The text names
             # the file (📎 line), so a failed upload degrades visibly.
+            # ⚠️ completeUploadExternal accepts ONLY a channel ID — unlike
+            # chat.postMessage, which also takes "#name". Live finding
+            # 2026-08-01: the raw configured "#…" produced invalid_arguments.
             try:
+                from app.services.slack_client import resolve_channel_id
+
+                upload_channel = await resolve_channel_id(channel) or channel
                 up = await self._transport().upload_file(
-                    channel=channel,
+                    channel=upload_channel,
                     path=message.attachment.path,
                     title=message.attachment.title,
                     thread_ts=(str(room) if room else None),
