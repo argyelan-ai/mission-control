@@ -220,6 +220,49 @@ class TelegramBotService:
             logger.warning("sendPhoto error: %s", e)
         return None
 
+    async def send_document(
+        self,
+        document_path: str,
+        caption: str | None = None,
+        message_thread_id: int | None = None,
+        disable_notification: bool = False,
+    ) -> int | None:
+        """Send a local file as a Telegram document, return message_id or None.
+
+        Team-chat counterpart of the reports bot's sendDocument (the chat
+        adapter's ``files`` capability, mc msg attachment). Same thread/silence
+        semantics as ``send_message``; the caption is capped at Telegram's
+        1024-character limit.
+        """
+        import pathlib
+
+        path = pathlib.Path(document_path)
+        if not path.is_file():
+            logger.warning("send_document skipped: %s (missing)", document_path)
+            return None
+        client = await self._get_client()
+        data: dict = {"chat_id": settings.telegram_chat_id}
+        if caption:
+            data["caption"] = caption[:1024]
+        if message_thread_id:  # None und 0 (Allgemein-Thema) fallen weg
+            data["message_thread_id"] = message_thread_id
+        if disable_notification:
+            data["disable_notification"] = True
+        try:
+            with open(document_path, "rb") as f:
+                resp = await client.post(
+                    self._api_url("sendDocument"),
+                    data=data,
+                    files={"document": (path.name, f)},
+                )
+            result = resp.json()
+            if result.get("ok"):
+                return result["result"]["message_id"]
+            logger.warning("sendDocument failed: %s", result.get("description"))
+        except Exception as e:
+            logger.warning("sendDocument error: %s", e)
+        return None
+
     async def edit_message_text(self, message_id: int, text: str) -> bool:
         """Edit message text (removes inline keyboard). Returns success."""
         client = await self._get_client()

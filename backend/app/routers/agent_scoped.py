@@ -1455,6 +1455,11 @@ class MessageCreate(BaseModel):
     body: str
     message_type: str = "message"
     reply_to: uuid.UUID | None = None
+    # Optional: Datei-Anhang via Vault-Wrapper-Pfad (aus `mc vault-search`).
+    # Der Anhang reist ueber den Chat-Spiegel (Slack-Upload / Telegram-
+    # sendDocument, ChatCapabilities.files); der Body bekommt eine sichtbare
+    # 📎-Zeile, damit der Thread-Verlauf die Datei fuer jeden Leser nennt.
+    vault_path: str | None = None
 
     @field_validator("body")
     @classmethod
@@ -1462,6 +1467,27 @@ class MessageCreate(BaseModel):
         if not v.strip():
             raise ValueError("body darf nicht leer sein")
         return v
+
+
+def _message_attachment(payload: "MessageCreate"):
+    """(body, ChatAttachment|None) fuer die beiden Message-Endpoints.
+
+    EIN Aufloeser fuer beide Routen: vault_path -> Binary (geguarded), Body
+    bekommt die 📎-Zeile. Ohne vault_path unveraendert durchgereicht.
+    """
+    if not payload.vault_path:
+        return payload.body, None
+
+    import mimetypes
+
+    from app.services.chat_adapter import ChatAttachment
+
+    path = _resolve_vault_attachment_path(payload.vault_path)
+    name = os.path.basename(path)
+    attachment = ChatAttachment(
+        path=path, mime=mimetypes.guess_type(path)[0], title=name
+    )
+    return f"{payload.body}\n\n📎 {name}", attachment
 
     @field_validator("message_type")
     @classmethod
@@ -1582,14 +1608,16 @@ async def agent_post_message(
     if task is not None:
         apply_ack_handshake(session, task, agent)
 
+    body_text, attachment = _message_attachment(payload)
     message = await post_message(
         session,
         thread_id=thread.id,
         sender_type="agent",
         sender_id=agent.id,
         message_type=payload.message_type,
-        body=payload.body,
+        body=body_text,
         reply_to=payload.reply_to,
+        attachment=attachment,
     )
 
     if task is not None:
@@ -1675,14 +1703,16 @@ async def agent_post_thread_message(
     if task is not None:
         apply_ack_handshake(session, task, agent)
 
+    body_text, attachment = _message_attachment(payload)
     message = await post_message(
         session,
         thread_id=thread.id,
         sender_type="agent",
         sender_id=agent.id,
         message_type=payload.message_type,
-        body=payload.body,
+        body=body_text,
         reply_to=payload.reply_to,
+        attachment=attachment,
     )
 
     # An answer to a pending question clears its awaiting flag, so a question
@@ -3406,6 +3436,56 @@ class TelegramReportBody(BaseModel):
     vault_path: str | None = None
 
 
+def _resolve_vault_attachment_path(vault_path: str) -> str:
+    """Vault-Wrapper-Pfad -> absoluter Pfad der Binary. Wirft HTTPException.
+
+    Ein Aufloeser fuer beide Verwender (Operator-Report --vault-path und
+    mc msg --vault-path): Wrapper im Vault-Root finden, Frontmatter lesen,
+    ``attachment_path`` gegen den Vault-Root guarden. Die Guards sind die
+    bewaehrten aus dem Voice-Concierge-Pfad — hier wohnen sie EINMAL.
+    """
+    from app.config import settings as _settings
+    from app.helpers.vault_frontmatter import FrontmatterError, parse_frontmatter
+    from app.routers.vault import _safe_path as _vault_safe_path
+
+    vault_root = _settings.vault_path.resolve()
+    wrapper_abs = _vault_safe_path(vault_path, _settings.vault_path)
+    if not wrapper_abs.exists() or not wrapper_abs.is_file():
+        raise HTTPException(
+            status_code=404, detail=f"Vault-Wrapper nicht gefunden: {vault_path}"
+        )
+    try:
+        post = parse_frontmatter(wrapper_abs)
+    except FrontmatterError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Wrapper-Frontmatter ungueltig: {exc}"
+        )
+
+    attachment_rel = post.metadata.get("attachment_path")
+    if not attachment_rel:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Wrapper hat keinen attachment_path — kinds 'document' und 'url' "
+                "haben keine Binary zum Versand. Voice soll Inhalt inline lesen."
+            ),
+        )
+
+    candidate = (wrapper_abs.parent / str(attachment_rel)).resolve()
+    try:
+        candidate.relative_to(vault_root)
+    except ValueError:
+        raise HTTPException(
+            status_code=400, detail="attachment_path verlaesst den Vault-Root",
+        )
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail=f"attachment fehlt auf der Disk: {attachment_rel}",
+        )
+    return str(candidate)
+
+
 class PdfGenerateBody(BaseModel):
     """Body for agent-initiated PDF generation via mc-playwright."""
     title: str
@@ -3970,47 +4050,11 @@ async def agent_send_operator_report(
 
     # If vault_path is given: wrapper-based delivery. Voice-Concierge only
     # knows the wrapper path from vault_search, not the deliverable_id.
-    # We read the wrapper frontmatter, resolve attachment_path to the actual
-    # binary under /vault/attachments/{files,images,audio}/ and send it
-    # via sendDocument. body.text becomes the caption.
+    # The shared resolver reads the wrapper frontmatter, guards the
+    # attachment_path against the vault root and returns the binary's path;
+    # body.text becomes the caption.
     if body.vault_path is not None:
-        from app.config import settings as _settings
-        from app.helpers.vault_frontmatter import FrontmatterError, parse_frontmatter
-        from app.routers.vault import _safe_path as _vault_safe_path
-
-        vault_root = _settings.vault_path.resolve()
-        wrapper_abs = _vault_safe_path(body.vault_path, _settings.vault_path)
-        if not wrapper_abs.exists() or not wrapper_abs.is_file():
-            raise HTTPException(status_code=404, detail=f"Vault-Wrapper nicht gefunden: {body.vault_path}")
-        try:
-            post = parse_frontmatter(wrapper_abs)
-        except FrontmatterError as exc:
-            raise HTTPException(status_code=422, detail=f"Wrapper-Frontmatter ungueltig: {exc}")
-
-        attachment_rel = post.metadata.get("attachment_path")
-        if not attachment_rel:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "Wrapper hat keinen attachment_path — kinds 'document' und 'url' "
-                    "haben keine Binary zum Versand. Voice soll Inhalt inline lesen."
-                ),
-            )
-
-        candidate = (wrapper_abs.parent / str(attachment_rel)).resolve()
-        try:
-            candidate.relative_to(vault_root)
-        except ValueError:
-            raise HTTPException(
-                status_code=400, detail="attachment_path verlaesst den Vault-Root",
-            )
-        if not candidate.exists() or not candidate.is_file():
-            raise HTTPException(
-                status_code=404,
-                detail=f"attachment fehlt auf der Disk: {attachment_rel}",
-            )
-
-        document_path = str(candidate)
+        document_path = _resolve_vault_attachment_path(body.vault_path)
 
     # Send AFTER flag claim. Text and attachments take the same fan-out now:
     # every configured backend gets the report — Telegram photo/document,

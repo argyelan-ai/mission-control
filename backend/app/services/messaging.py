@@ -31,7 +31,9 @@ FINISH_NUDGE_BODY = "Du hast Fertigstellung signalisiert — bitte `mc finish` a
 BACKFILL_SEED_BODY = "Migration: bisheriger Verlauf liegt in den Kommentaren dieses Tasks."
 
 
-async def _maybe_mirror_to_chat(session: AsyncSession, message) -> None:
+async def _maybe_mirror_to_chat(
+    session: AsyncSession, message, attachment=None
+) -> None:
     """Best-effort outbound Chat-Spiegel (P2.3, kanal-neutral seit ADR-072).
 
     Spiegelt in JEDEN aktiven Kanal (``chat_adapter.sendable_chat_adapters()``
@@ -42,7 +44,7 @@ async def _maybe_mirror_to_chat(session: AsyncSession, message) -> None:
     try:
         from app.services.chat_outbound import mirror_message_to_all
 
-        await mirror_message_to_all(session, message)
+        await mirror_message_to_all(session, message, attachment=attachment)
     except Exception as e:  # noqa: BLE001 — Spiegel darf post_message nie kippen
         logger.warning("chat mirror hook failed: %s", e)
 
@@ -135,6 +137,7 @@ async def post_message(
     mentions: list[str] | None = None,
     question_meta: dict | None = None,
     mirror_to_telegram: bool = True,
+    attachment=None,
 ) -> Message:
     """Post a message onto a thread, allocating its seq atomically.
 
@@ -147,6 +150,10 @@ async def post_message(
     The parameter name still says "telegram" because it is part of this
     function's published signature (callers + tests); it means "mirror into
     the chat channels" and is channel-neutral since ADR-072.
+
+    ``attachment`` (a ``chat_adapter.ChatAttachment``) rides the mirror only —
+    it is NOT stored on the Message row; the caller puts a visible 📎 line
+    into ``body`` so the thread log names the file for every reader.
     """
     if message_type not in MESSAGE_TYPES:
         raise ValueError(
@@ -173,7 +180,7 @@ async def post_message(
     await session.refresh(message)
 
     if mirror_to_telegram:
-        await _maybe_mirror_to_chat(session, message)
+        await _maybe_mirror_to_chat(session, message, attachment=attachment)
 
     return message
 

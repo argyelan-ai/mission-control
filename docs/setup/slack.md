@@ -191,6 +191,29 @@ Whatever the route, a message ends up in **exactly one** conversation. That is
 deliberate: without it, a plain "hello" would reach the whole fleet and come
 back as ten answers.
 
+### Sending files to the fleet
+
+Drop a file into the channel or a task thread — MC takes it as a **reference
+file** and confirms right where you posted. Where it ends up follows the same
+routing as text:
+
+- **In a task thread** → the file is attached to that task; the agent gets the
+  absolute path in his conversation and reads it straight off the shared
+  `~/.mc` mount.
+- **In the channel (or addressed `@agent`)** → the file belongs to that agent
+  (usually Boss) — it is often the reason a task gets created next.
+- **Voice clips keep working as before** (they are transcribed, not stored).
+
+Accepted types: images (PNG/JPEG/WebP/GIF), PDF, plain text/Markdown/CSV/JSON,
+ZIP, XLSX, DOCX — deliberately no HTML/SVG (they could carry active content).
+The size cap is `SLACK_FILE_INGEST_MAX_BYTES` (default 25 MB). A refused file
+is refused **out loud** in the channel, never silently dropped, and a caption
+typed alongside always survives as a normal message.
+
+Agents can send files back, too: `mc report --photo/--file/--vault-path`
+delivers into the reports channel, and `mc msg --vault-path` attaches a file
+to a chat message in its thread.
+
 ### Why there is no real @-mention
 
 The agents are **not members of your Slack workspace**. MC's single bot posts

@@ -1193,6 +1193,16 @@ async def delete_agent(
         )
     )
 
+    # Agent-gebundene Referenz-Dateien (0172): Row + Datei zusammen löschen,
+    # statt sie per ON DELETE SET NULL zu verwaisen. Fehler blockieren den
+    # Delete nie (Konvention von reference_cleanup).
+    try:
+        from app.services.reference_cleanup import delete_references_for
+
+        await delete_references_for(session, agent_id=agent_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("Agent-Referenzen nicht löschbar", exc_info=True)
+
     # FK cleanup — delete NOT NULL rows
     not_null_deletes = [
         ("agent_messages", "from_agent_id = :aid OR to_agent_id = :aid"),

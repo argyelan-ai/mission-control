@@ -58,6 +58,7 @@ async def mirror_message_to_telegram(
     topic_client: ForumTopicClient,
     bot,
     now: datetime | None = None,
+    attachment=None,
 ) -> bool:
     """Spiegle eine Thread-Message in ihr Telegram-Thema.
 
@@ -68,4 +69,6 @@ async def mirror_message_to_telegram(
     from app.services.chat_outbound import mirror_message
 
     adapter = TelegramChatAdapter(topic_client=topic_client, bot=bot)
-    return await mirror_message(session, message, adapter, now=now)
+    return await mirror_message(
+        session, message, adapter, now=now, attachment=attachment
+    )

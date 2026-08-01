@@ -35,7 +35,7 @@ logger = logging.getLogger("mc.chat_telegram")
 class TelegramChatAdapter(BaseChatAdapter):
     key = "telegram"
     label = "Telegram"
-    capabilities = ChatCapabilities(sender_identity=False, rooms=True)
+    capabilities = ChatCapabilities(sender_identity=False, rooms=True, files=True)
 
     def __init__(self, *, topic_client=None, bot=None):
         """Transports are injectable so tests (and the legacy P2.3 entry point
@@ -116,6 +116,17 @@ class TelegramChatAdapter(BaseChatAdapter):
         # laesst den falsy Wert ohnehin weg; wir sind hier explizit.
         thread_arg = None if room in (None, GENERAL_TOPIC_ID) else room
         try:
+            if message.attachment is not None:
+                # Datei + Text in EINEM sendDocument: der (prefix-degradierte)
+                # Body wird zur Caption. Die Pipeline reicht ein Attachment nur
+                # herein, weil capabilities.files True ist.
+                sent = await self._bot().send_document(
+                    message.attachment.path,
+                    caption=self.render_sender_prefix(message),
+                    message_thread_id=thread_arg,
+                    disable_notification=message.silent,
+                )
+                return sent is not None
             await self._bot().send_message(
                 self.render_sender_prefix(message),
                 message_thread_id=thread_arg,
@@ -126,7 +137,9 @@ class TelegramChatAdapter(BaseChatAdapter):
             logger.warning("telegram send failed: %s", e)
             return False
 
-    async def mirror_message(self, session: AsyncSession, message, *, now=None) -> bool:
+    async def mirror_message(
+        self, session: AsyncSession, message, *, now=None, attachment=None
+    ) -> bool:
         """Telegram's outbound entry point.
 
         Overridden (the base runs the neutral pipeline directly) so the P2.3
@@ -142,4 +155,5 @@ class TelegramChatAdapter(BaseChatAdapter):
             topic_client=self._topic_client(),
             bot=self._bot(),
             now=now,
+            attachment=attachment,
         )

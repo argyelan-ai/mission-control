@@ -84,10 +84,30 @@ class ChatCapabilities:
     rooms           — does the channel have per-thread rooms? False → the
                       neutral pipeline skips ``ensure_room`` and sends
                       everything to the channel's default room.
+    files           — can a message carry a file (Slack upload, Telegram
+                      sendDocument)? False → the neutral pipeline strips the
+                      attachment BEFORE ``send`` sees it; the message body
+                      already names the file, so the degradation is visible,
+                      never silent.
     """
 
     sender_identity: bool
     rooms: bool
+    files: bool = False
+
+
+@dataclass(frozen=True)
+class ChatAttachment:
+    """One local file travelling with a message (Pfad + MIME + Titel).
+
+    The path is absolute and already validated by the caller (vault guard /
+    deliverable resolution) — an adapter only reads and uploads it, it never
+    decides WHAT may leave the system.
+    """
+
+    path: str
+    mime: str | None = None
+    title: str | None = None
 
 
 @dataclass(frozen=True)
@@ -98,11 +118,14 @@ class OutboundChatMessage:
     "which task does this topic belong to?") — no identity to render.
     ``silent`` is the ping decision the neutral pipeline already made
     (night quiet hours + loudness rule); the adapter only executes it.
+    ``attachment`` is only ever set for adapters whose ``capabilities.files``
+    is True — the neutral pipeline strips it for everyone else.
     """
 
     body: str
     sender: ChatSender | None = None
     silent: bool = False
+    attachment: ChatAttachment | None = None
 
 
 @runtime_checkable
@@ -162,11 +185,17 @@ class ChatAdapter(Protocol):
         raises."""
         ...
 
-    async def mirror_message(self, session: AsyncSession, message, *, now=None) -> bool:
+    async def mirror_message(
+        self, session: AsyncSession, message, *, now=None, attachment=None
+    ) -> bool:
         """Channel entry for the outbound pipeline. The default implementation
         (``BaseChatAdapter``) simply runs the neutral pipeline against this
         adapter; an adapter overrides it only to wire its own transport
-        objects in (see ``chat_telegram.TelegramChatAdapter``)."""
+        objects in (see ``chat_telegram.TelegramChatAdapter``).
+
+        ``attachment`` (a ``ChatAttachment``) is transient by design: the
+        Message row does not store it — only the live mirror of the posting
+        that carried it delivers the file; the stored body names it."""
         ...
 
 
@@ -205,10 +234,14 @@ class BaseChatAdapter:
     ) -> bool:
         return False
 
-    async def mirror_message(self, session: AsyncSession, message, *, now=None) -> bool:
+    async def mirror_message(
+        self, session: AsyncSession, message, *, now=None, attachment=None
+    ) -> bool:
         from app.services import chat_outbound
 
-        return await chat_outbound.mirror_message(session, message, self, now=now)
+        return await chat_outbound.mirror_message(
+            session, message, self, now=now, attachment=attachment
+        )
 
 
 # ── Registry ──────────────────────────────────────────────────────────────
@@ -317,6 +350,7 @@ def chat_channel_catalog() -> list[dict[str, Any]]:
             "capabilities": {
                 "sender_identity": adapter.capabilities.sender_identity,
                 "rooms": adapter.capabilities.rooms,
+                "files": getattr(adapter.capabilities, "files", False),
             },
         }
         for adapter in all_chat_adapters()
