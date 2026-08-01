@@ -157,6 +157,18 @@ These deliberately mirror the Telegram pair (`TELEGRAM_TEAM_CHAT_ENABLED` /
 `TELEGRAM_CHAT_ID`). Only the two *tokens* are secrets and live in the
 database; a channel name is not a secret and stays in `.env`.
 
+**Optional companion channels.** Two more variables light up additional
+surfaces; each is independent, and each runs *alongside* Telegram if you have
+that configured too (fan-out, not failover):
+
+| Variable | What it does when set |
+|---|---|
+| `SLACK_REPORTS_CHANNEL` | Final task reports (`mc report`, text and files) land here — completion artifacts, kept out of the conversation channel. |
+| `SLACK_APPROVALS_CHANNEL` | Approvals ("agent blocked — decide") arrive as messages with **Entblocken/Abbrechen** buttons. The buttons open MC's own quick-resolve page (`MC_BASE_URL` must be reachable from your phone, e.g. via Tailscale) — no Slack interactivity setup needed. The decision is answered with a ✅/❌ reply on the approval message. |
+
+Invite the bot into each channel you configure (`/invite`), same as the main
+one.
+
 **What you will see.** Every MC conversation — a task, a side thread — opens
 its **own Slack thread** in that channel: a parent message named after the
 task (`#1a2b3c4d Slack anbinden`), and the whole conversation as replies

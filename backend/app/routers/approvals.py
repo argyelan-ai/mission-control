@@ -762,13 +762,11 @@ async def resolve_approval(
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_approval_resolved_hooks(session, approval, payload.status)
 
-    # ── Update Telegram message (remove buttons) ──
-    try:
-        await telegram_bot.update_resolved_telegram(
-            approval_id, payload.status, payload.resolver_note,
-        )
-    except Exception as e:
-        logger.warning("Telegram update failed: %s", e)
+    # ── Resolution in jeden Approval-Kanal spiegeln (Telegram-Edit + Slack-Reply) ──
+    from app.services import operator_approvals
+    await operator_approvals.update_resolved(
+        approval_id, payload.status, payload.resolver_note,
+    )
 
     await emit_event(
         session,
@@ -976,11 +974,9 @@ async def quick_resolve_confirm(
         from app.verticals import hooks as vertical_hooks
         await vertical_hooks.run_approval_resolved_hooks(session, approval, status)
 
-    # Update Telegram message
-    try:
-        await telegram_bot.update_resolved_telegram(approval_id, status)
-    except Exception as e:
-        logger.warning("Telegram update failed: %s", e)
+    # Resolution in jeden Approval-Kanal spiegeln (Telegram-Edit + Slack-Reply)
+    from app.services import operator_approvals
+    await operator_approvals.update_resolved(approval_id, status)
 
     await emit_event(
         session,

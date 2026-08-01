@@ -517,8 +517,8 @@ class LoopRunnerService:
         await session.refresh(approval)
 
         try:
-            from app.services.telegram_bot import telegram_bot
-            await telegram_bot.send_approval_telegram(
+            from app.services import operator_approvals
+            await operator_approvals.send_approval(
                 approval.id, f"Loop '{loop.name}'", description,
                 f"Runde {loop.rounds_completed}/{loop.max_rounds} — "
                 f"Approve = weiterlaufen, Reject = pausiert lassen.",

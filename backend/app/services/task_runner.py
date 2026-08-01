@@ -934,8 +934,8 @@ class TaskRunnerService:
 
         # D-2: direct Telegram push (action-required channel)
         try:
-            from app.services.telegram_bot import telegram_bot
-            await telegram_bot.send_approval_telegram(
+            from app.services import operator_approvals
+            await operator_approvals.send_approval(
                 approval.id,
                 agent.name,
                 task.title,
@@ -1619,8 +1619,8 @@ class TaskRunnerService:
 
             # Telegram push (Mark's action-required channel).
             try:
-                from app.services.telegram_bot import telegram_bot
-                await telegram_bot.send_approval_telegram(
+                from app.services import operator_approvals
+                await operator_approvals.send_approval(
                     approval.id, agent.name, task.title,
                     f"Silent-Abort: {agent.name} verstummt seit {int(mins_silent)}min "
                     f"auf '{task.title[:50]}'. Re-dispatchen oder abbrechen?",

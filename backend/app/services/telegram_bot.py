@@ -334,12 +334,21 @@ class TelegramBotService:
         agent_name: str,
         task_title: str,
         blocker_comment: str,
+        tokens: tuple[str, str] | None = None,
     ) -> None:
-        """Send approval notification with URL buttons (no polling needed)."""
+        """Send approval notification with URL buttons (no polling needed).
+
+        ``tokens`` lets the channel-neutral fan-out (operator_approvals) hand
+        in ONE shared approve/reject pair for every channel. Two pairs would
+        overwrite each other's sibling-cleanup key
+        (``mc:telegram:approval_tokens:{id}``) and leave stale single-use
+        tokens alive after the first click. None = create our own (the
+        legacy single-channel behaviour).
+        """
         if not self.configured:
             return
 
-        approve_token, reject_token = await create_approval_tokens(approval_id)
+        approve_token, reject_token = tokens or await create_approval_tokens(approval_id)
 
         base = settings.mc_base_url.rstrip("/")
         approve_url = f"{base}/api/v1/approvals/{approval_id}/quick-resolve?token={approve_token}"
