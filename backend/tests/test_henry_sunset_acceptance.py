@@ -90,7 +90,7 @@ async def test_dispatch_escalation_calls_telegram_post_henry_removal(
     captured_telegram_calls: list[dict] = []
 
     async def _fake_send_approval(approval_id, agent_name, task_title,
-                                   blocker_comment=None):
+                                   blocker_comment=None, tokens=None):
         captured_telegram_calls.append({
             "approval_id": approval_id,
             "agent_name": agent_name,
