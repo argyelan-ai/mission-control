@@ -25,7 +25,7 @@ async def _thread(session) -> Thread:
 def mirror_spy(monkeypatch):
     calls: list[str] = []
 
-    async def spy(session, message, *, topic_client, bot, now=None):
+    async def spy(session, message, *, topic_client, bot, now=None, attachment=None):
         calls.append(message.body)
         return True
 

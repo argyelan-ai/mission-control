@@ -177,20 +177,19 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
 
     subtype = event.get("subtype")
     voice_note = None
-    dropped_file_share = False
+    pending_files: list[dict] = []
     if subtype == "file_share":
-        from app.services import slack_voice
+        from app.services import slack_file_ingest, slack_voice
 
-        if slack_voice.pick_audio_file(event) is None:
-            # Not a voice clip — a PDF, an image. File ingest arrives with the
-            # references work; until then the file is not taken. But the drop
-            # is SAID, and a caption typed alongside is a message like any
-            # other. Before, the handler returned here and BOTH vanished
-            # silently (the caption bug).
-            dropped_file_share = True
-        else:
+        # Audio goes to the voice path (STT), everything else to the file
+        # ingest (References, ADR-053) — one shared audio definition, so no
+        # file is ever claimed by both branches or by neither.
+        pending_files = slack_file_ingest.non_audio_files(event)
+        if slack_voice.pick_audio_file(event) is not None:
             voice_note = await _transcribe_voice(event, adapter)
-            if voice_note is None:
+            if voice_note is None and not pending_files:
+                # Transcription failed and said so in the channel; with no
+                # other files there is nothing left to route.
                 return
     elif subtype:
         # Edits, deletions, joins, thread broadcasts of an edit …
@@ -205,17 +204,8 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
     else:
         text = caption
 
-    if dropped_file_share:
-        await _reply(
-            adapter,
-            room_for(event),
-            "📎 Dateien kann ich hier noch nicht annehmen — die Datei wurde "
-            "NICHT übernommen."
-            + (" Dein Text ist angekommen." if text else ""),
-        )
-
-    if not text:
-        logger.info("slack inbound: message without usable text — ignored")
+    if not text and not pending_files:
+        logger.info("slack inbound: message without usable content — ignored")
         return
 
     room = room_for(event)
@@ -239,8 +229,36 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
             route = fallback
     if route.thread is None:
         # The neutral path already worded the reason (unknown room / no Boss);
-        # deliver it where the operator is looking.
+        # deliver it where the operator is looking. Shared files are NOT taken
+        # without a destination — the notice explains the situation.
         await _reply(adapter, room, route.notice or "")
+        return
+
+    file_note = ""
+    if pending_files:
+        from app.services.reference_ingest import serialize_reference
+        from app.services.slack_file_ingest import ingest_event_files
+
+        outcome = await ingest_event_files(session, route.thread, pending_files)
+        if outcome.stored:
+            # The agent reads the file straight off the shared ~/.mc mount —
+            # the absolute path in the thread message IS the delivery.
+            file_note = "\n".join(
+                f"📎 Referenz-Datei: {serialize_reference(r)['abs_path']} "
+                f"({r.original_name}, {_fmt_size(r.size)})"
+                for r in outcome.stored
+            )
+        reply_lines = []
+        if outcome.stored:
+            names = ", ".join(r.original_name for r in outcome.stored)
+            reply_lines.append(f"📎 {names} — angehängt an {outcome.owner_label}.")
+        reply_lines.extend(f"⚠️ {reason}" for reason in outcome.rejected)
+        await _reply(adapter, room, "\n".join(reply_lines))
+
+    body = f"{text}\n\n{file_note}".strip() if file_note else text
+    if not body:
+        # Every file was rejected and no caption was typed — the reply above
+        # already said so; there is nothing to put on the thread.
         return
 
     from app.services.messaging import post_message
@@ -248,15 +266,16 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
     await post_message(
         session,
         thread_id=route.thread.id,
-        body=text,
+        body=body,
         mentions=route.mentions,
         **INBOUND_MESSAGE_KWARGS,  # sender_type=user + loop protection
     )
     logger.info(
-        "inbound Slack -> thread %s (room=%s, addressed=%s)",
+        "inbound Slack -> thread %s (room=%s, addressed=%s, files=%d)",
         route.thread.id,
         room or "channel",
         route.addressed_agent.name if route.addressed_agent else "-",
+        len(pending_files),
     )
 
 
@@ -288,6 +307,15 @@ async def _transcribe_voice(event: dict, adapter) -> str | None:
         "transkribieren. Bitte einmal als Text senden.",
     )
     return None
+
+
+def _fmt_size(size: int) -> str:
+    """1234567 -> "1.2 MB" — for the operator, not for parsing."""
+    if size >= 1024 * 1024:
+        return f"{size / (1024 * 1024):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size} B"
 
 
 async def _reply(adapter, room, text: str) -> None:

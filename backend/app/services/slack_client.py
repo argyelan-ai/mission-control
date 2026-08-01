@@ -336,7 +336,25 @@ class SlackTransport:
     honest than two. Never raises — every failure comes back as
     `SlackPostResult(ok=False, ...)`, because a chat outage must not break
     agent work (ADR-072).
+
+    ``upload_file`` delegates to the module-level two-stage upload below —
+    it lives on the transport so the chat adapter's injectable seam (and the
+    TCK's fake transport) covers file sends too.
     """
+
+    async def upload_file(
+        self,
+        *,
+        channel: str,
+        path: str,
+        title: str | None = None,
+        initial_comment: str | None = None,
+        thread_ts: str | None = None,
+    ) -> "SlackUploadResult":
+        return await upload_file(
+            channel=channel, path=path, title=title,
+            initial_comment=initial_comment, thread_ts=thread_ts,
+        )
 
     async def post_message(
         self,

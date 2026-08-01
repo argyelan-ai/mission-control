@@ -341,7 +341,7 @@ class SlackChatAdapter(BaseChatAdapter):
     key = "slack"
     label = "Slack"
     # The difference to Telegram, and the reason this channel exists.
-    capabilities = ChatCapabilities(sender_identity=True, rooms=True)
+    capabilities = ChatCapabilities(sender_identity=True, rooms=True, files=True)
 
     def __init__(self, *, transport=None, faces=None):
         """Transport and face lookup are injectable so tests never touch the
@@ -489,4 +489,24 @@ class SlackChatAdapter(BaseChatAdapter):
 
         if not result.ok:
             logger.warning("slack send failed: %s", result.error)
-        return result.ok
+            return False
+
+        if message.attachment is not None:
+            # Text first (it carries the sender identity — uploads always post
+            # as the app), then the file into the same thread. The text names
+            # the file (📎 line), so a failed upload degrades visibly.
+            try:
+                up = await self._transport().upload_file(
+                    channel=channel,
+                    path=message.attachment.path,
+                    title=message.attachment.title,
+                    thread_ts=(str(room) if room else None),
+                )
+            except Exception as e:  # noqa: BLE001 — a send error must never raise
+                logger.warning("slack attachment upload failed: %s", e)
+                return False
+            if not up.ok:
+                logger.warning("slack attachment upload failed: %s", up.error)
+                return False
+
+        return True

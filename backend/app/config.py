@@ -69,6 +69,11 @@ class Settings(BaseSettings):
     # Reports sind Abschluss-Artefakte, kein Gespraech (services/
     # operator_reports.py). Der Bot muss Mitglied sein.
     slack_reports_channel: str = ""
+    # Groessen-Cap fuer Dateien, die der Operator UEBER SLACK an MC schickt
+    # (Datei-Ingest -> References, ADR-053). Der Download puffert im RAM des
+    # Backend-Containers (5-GB-VM), deshalb ein bewusst kleines Default —
+    # identisch zum Upload-Cap des References-Routers (25 MB).
+    slack_file_ingest_max_bytes: int = 25 * 1024 * 1024
 
     # ── Kanal-Schalter fuer den Team-Chat (ADR-072) ──────────────────────
     # Komma-Liste der aktiven Chat-Kanaele, z.B. "telegram", "slack" oder

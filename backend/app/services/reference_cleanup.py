@@ -21,13 +21,18 @@ async def delete_references_for(
     *,
     task_id: uuid.UUID | None = None,
     project_id: uuid.UUID | None = None,
+    agent_id: uuid.UUID | None = None,
 ) -> int:
-    if bool(task_id) == bool(project_id):
+    """Referenzen GENAU EINES Besitzers (task/project/agent) löschen."""
+    owners = [x for x in (task_id, project_id, agent_id) if x is not None]
+    if len(owners) != 1:
         return 0
-    cond = (
-        ReferenceFile.task_id == task_id
-        if task_id else ReferenceFile.project_id == project_id
-    )
+    if task_id is not None:
+        cond = ReferenceFile.task_id == task_id
+    elif project_id is not None:
+        cond = ReferenceFile.project_id == project_id
+    else:
+        cond = ReferenceFile.agent_id == agent_id
     refs = (await session.exec(select(ReferenceFile).where(cond))).all()
     return await _delete_rows(session, refs)
 

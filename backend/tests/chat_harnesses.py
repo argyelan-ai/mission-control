@@ -35,6 +35,9 @@ class SentRecord:
     text: str
     silent: bool
     sender_name: str | None = None
+    #: set when a FILE reached the wire (Slack upload / Telegram sendDocument)
+    #: — the files-capability law asserts on it.
+    attachment_path: str | None = None
 
 
 @dataclass
@@ -68,6 +71,20 @@ class _FakeTelegramBot:
             SentRecord(room=message_thread_id, text=text, silent=disable_notification)
         )
         return 1
+
+    async def send_document(
+        self, document_path, caption=None, message_thread_id=None,
+        disable_notification=False,
+    ):
+        if self.broken:
+            raise RuntimeError("telegram transport down")
+        self._sent.append(
+            SentRecord(
+                room=message_thread_id, text=caption or "",
+                silent=disable_notification, attachment_path=document_path,
+            )
+        )
+        return 2
 
 
 class _FakeForumClient:
@@ -177,6 +194,25 @@ class _FakeSlackTransport:
         # Every post has a ts; the one from a post WITHOUT thread_ts is what
         # ensure_room stores as the room ref (that is how Slack threads work).
         return SlackPostResult(ok=True, ts=f"{self._next_ts}.000100")
+
+    async def upload_file(
+        self, *, channel, path, title=None, initial_comment=None, thread_ts=None,
+    ):
+        from app.services.slack_client import SlackUploadResult
+
+        self.calls.append(
+            {"channel": channel, "path": path, "title": title, "thread_ts": thread_ts}
+        )
+        if self.broken:
+            return SlackUploadResult(
+                ok=False, code="transport_error", error="could not reach Slack",
+            )
+        self._sent.append(
+            SentRecord(
+                room=thread_ts, text=title or "", silent=True, attachment_path=path,
+            )
+        )
+        return SlackUploadResult(ok=True, file_id="F-TEST")
 
 
 class _StaticFaces:

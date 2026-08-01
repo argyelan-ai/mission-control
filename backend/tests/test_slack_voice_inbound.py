@@ -155,15 +155,16 @@ async def test_failed_transcription_tells_the_operator(async_session):
 
 
 @pytest.mark.asyncio
-async def test_a_non_audio_share_is_announced_not_silently_dropped(async_session):
-    """A shared PDF is still not ingested (that arrives with the references
-    work) — but the drop must be SAID. Before, the file vanished without a
-    trace: the operator sends a document and, as far as he can tell, is
-    ignored — the exact failure mode the voice work already closed for audio."""
+async def test_a_failed_non_audio_share_is_announced_not_silently_dropped(async_session):
+    """A shared PDF whose download fails must be SAID. The file ingest itself
+    (the success path) lives in test_slack_file_ingest.py — here the event has
+    no download URL, so the ingest rejects it; the operator sends a document
+    and must not, as far as he can tell, be ignored — the exact failure mode
+    the voice work already closed for audio."""
     await _boss(async_session)
     adapter = _Adapter()
     event = _voice_event()
-    event["files"] = [{"id": "F1", "mimetype": "application/pdf"}]
+    event["files"] = [{"id": "F1", "name": "doku.pdf", "mimetype": "application/pdf"}]
 
     with _channel_ours(), patch(
         "app.services.slack_voice.transcribe_event_audio", new_callable=AsyncMock,
@@ -172,20 +173,21 @@ async def test_a_non_audio_share_is_announced_not_silently_dropped(async_session
 
     stt.assert_not_awaited()
     assert list((await async_session.exec(select(Message))).all()) == []
-    assert adapter.sent, "the drop must be announced in the channel"
-    assert "Datei" in adapter.sent[0][1]
+    assert adapter.sent, "the failed ingest must be announced in the channel"
+    assert "doku.pdf" in adapter.sent[0][1]
+    assert "⚠️" in adapter.sent[0][1]
 
 
 @pytest.mark.asyncio
 async def test_a_caption_beside_a_non_audio_share_survives(async_session):
     """PDF + typed text: before, BOTH were lost — the handler returned before
-    the caption was even read (the concept called this the caption bug). The
-    file still waits for the references work, but the typed words are a
-    message like any other and must reach Boss."""
+    the caption was even read (the concept called this the caption bug). Even
+    when the file itself cannot be taken (no download URL here), the typed
+    words are a message like any other and must reach Boss."""
     await _boss(async_session)
     adapter = _Adapter()
     event = _voice_event(text="schau dir Kapitel 3 an")
-    event["files"] = [{"id": "F1", "mimetype": "application/pdf"}]
+    event["files"] = [{"id": "F1", "name": "doku.pdf", "mimetype": "application/pdf"}]
 
     with _channel_ours(), patch(
         "app.services.slack_voice.transcribe_event_audio", new_callable=AsyncMock,
@@ -195,7 +197,7 @@ async def test_a_caption_beside_a_non_audio_share_survives(async_session):
     stt.assert_not_awaited()
     msgs = list((await async_session.exec(select(Message))).all())
     assert [m.body for m in msgs] == ["schau dir Kapitel 3 an"]
-    assert adapter.sent and "Datei" in adapter.sent[0][1]
+    assert adapter.sent and "doku.pdf" in adapter.sent[0][1]
 
 
 @pytest.mark.asyncio

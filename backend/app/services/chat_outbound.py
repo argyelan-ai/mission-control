@@ -137,12 +137,18 @@ async def mirror_message(
     adapter: ChatAdapter,
     *,
     now: datetime | None = None,
+    attachment=None,
 ) -> bool:
     """Spiegle eine Thread-Message in den Raum ihres Threads auf ``adapter``.
 
     Gibt True zurueck, wenn ein Sendeversuch lief, sonst False (uebersprungen
     oder Kanal nicht bereit). Wirft NIE — jeder Fehler wird geloggt, damit der
     Aufrufer (`post_message`) und die Agentenarbeit nie kippen.
+
+    ``attachment`` (ChatAttachment) erreicht nur Kanaele mit
+    ``capabilities.files`` — fuer alle anderen wird es HIER gestrippt, nicht
+    im Adapter. Sichtbar degradiert bleibt es trotzdem: der Message-Body nennt
+    die Datei (der Endpoint haengt die 📎-Zeile VOR dem Speichern an).
     """
     try:
         reason = _skip_reason(message)
@@ -171,8 +177,12 @@ async def mirror_message(
         silent = _should_disable_notification(
             message, now or datetime.now(tz=OPERATOR_TZ)
         )
+        carried = attachment if getattr(adapter.capabilities, "files", False) else None
         return await adapter.send(
-            room, OutboundChatMessage(body=message.body, sender=sender, silent=silent)
+            room,
+            OutboundChatMessage(
+                body=message.body, sender=sender, silent=silent, attachment=carried
+            ),
         )
     except Exception as e:  # noqa: BLE001 — der Spiegel darf post_message nie kippen
         logger.warning("mirror_message (%s) fehlgeschlagen: %s", adapter.key, e)
@@ -180,7 +190,11 @@ async def mirror_message(
 
 
 async def mirror_message_to_all(
-    session: AsyncSession, message: Message, *, now: datetime | None = None
+    session: AsyncSession,
+    message: Message,
+    *,
+    now: datetime | None = None,
+    attachment=None,
 ) -> int:
     """Spiegle in JEDEN aktiven Kanal (der Operator darf mehrere gleichzeitig
     fahren). Gibt die Zahl der erfolgten Sendeversuche zurueck. Kein aktiver
@@ -190,7 +204,9 @@ async def mirror_message_to_all(
     sent = 0
     for adapter in sendable_chat_adapters():
         try:
-            if await adapter.mirror_message(session, message, now=now):
+            if await adapter.mirror_message(
+                session, message, now=now, attachment=attachment
+            ):
                 sent += 1
         except Exception as e:  # noqa: BLE001 — ein Kanal darf die anderen nicht kippen
             logger.warning("chat mirror via %s failed: %s", adapter.key, e)

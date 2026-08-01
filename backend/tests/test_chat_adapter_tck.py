@@ -192,6 +192,67 @@ async def test_bot_notice_carries_no_sender(async_session, harness):
     assert harness.sent[-1].text == "Zu welcher Aufgabe gehört das?"
 
 
+# ── 1b. Datei-Faehigkeit (Slack-Umbau R3) ─────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_files_capable_channels_put_the_file_on_the_wire(
+    async_session, harness, tmp_path
+):
+    """Gesetz: ``capabilities.files`` ist wahr genau dann, wenn ein Attachment
+    den Transport erreicht. Die neutrale Pipeline strippt Attachments fuer
+    Kanaele ohne die Faehigkeit — der Body traegt dort die 📎-Zeile (vom
+    Endpoint), also bleibt die Degradation sichtbar."""
+    from app.services.chat_adapter import ChatAttachment
+
+    thread = await _thread(async_session)
+    await harness.bind_room(async_session, thread)
+    f = tmp_path / "anhang.pdf"
+    f.write_bytes(b"%PDF-1.4 tck")
+
+    ok = await harness.adapter.mirror_message(
+        async_session,
+        _msg(thread, body="Datei kommt\n\n📎 anhang.pdf"),
+        now=DAY,
+        attachment=ChatAttachment(path=str(f), mime="application/pdf", title="anhang.pdf"),
+    )
+
+    assert ok is True
+    delivered = [r for r in harness.sent if r.attachment_path]
+    if harness.adapter.capabilities.files:
+        assert delivered and delivered[-1].attachment_path == str(f), (
+            "a files-capable channel must actually transmit the attachment"
+        )
+    else:
+        assert not delivered
+        assert "anhang.pdf" in harness.sent[-1].text, (
+            "without the capability the body must still name the file"
+        )
+
+
+@pytest.mark.asyncio
+async def test_attachment_failure_degrades_instead_of_raising(
+    async_session, harness, tmp_path
+):
+    if not harness.adapter.capabilities.files:
+        pytest.skip(f"{harness.key}: channel has no file capability")
+    from app.services.chat_adapter import ChatAttachment
+
+    room = await harness.bind_room(async_session, await _thread(async_session))
+    f = tmp_path / "anhang.pdf"
+    f.write_bytes(b"%PDF-1.4 tck")
+    harness.break_transport()
+
+    ok = await harness.adapter.send(
+        room,
+        OutboundChatMessage(
+            body="Datei kommt",
+            attachment=ChatAttachment(path=str(f), title="anhang.pdf"),
+        ),
+    )
+    assert ok is False
+
+
 # ── 2. Neutrale Regeln werden benutzt, nicht nachgebaut ───────────────────
 
 
@@ -361,6 +422,9 @@ class _DummyAdapter(BaseChatAdapter):
                 text=message.body,
                 silent=message.silent,
                 sender_name=message.sender.display_name if message.sender else None,
+                attachment_path=(
+                    message.attachment.path if message.attachment else None
+                ),
             )
         )
         return True
@@ -374,6 +438,37 @@ def two_channels(monkeypatch):
         reg, "_ADAPTERS", {**reg._registry(), "dummy": dummy}, raising=False
     )
     return dummy
+
+
+@pytest.mark.asyncio
+async def test_attachment_is_stripped_for_channels_without_the_capability(
+    async_session, monkeypatch, two_channels, tmp_path
+):
+    """Der Strip sitzt in der PIPELINE, nicht im Adapter: ein Kanal ohne
+    ``files`` bekommt das Attachment nie zu sehen — der Body (mit seiner
+    📎-Zeile) kommt trotzdem an."""
+    from app.services.chat_adapter import ChatAttachment
+    from app.services.chat_outbound import mirror_message_to_all
+
+    assert two_channels.capabilities.files is False, "Fixture-Annahme"
+    monkeypatch.setattr(settings, "chat_channels", "dummy", raising=False)
+    thread = await _thread(async_session)
+    f = tmp_path / "anhang.pdf"
+    f.write_bytes(b"%PDF-1.4 strip")
+
+    count = await mirror_message_to_all(
+        async_session,
+        _msg(thread, body="Datei kommt\n\n📎 anhang.pdf"),
+        now=DAY,
+        attachment=ChatAttachment(path=str(f), title="anhang.pdf"),
+    )
+
+    assert count == 1
+    rec = two_channels.sent[-1]
+    assert rec.attachment_path is None, (
+        "a files=False channel must never see the attachment object"
+    )
+    assert "anhang.pdf" in rec.text
 
 
 def test_empty_switch_means_no_explicit_selection(monkeypatch):
@@ -499,7 +594,9 @@ def test_catalog_reports_every_channel(monkeypatch, two_channels):
     assert {"telegram", "dummy"} <= set(catalog)
     assert catalog["dummy"]["selected"] is True
     assert catalog["telegram"]["selected"] is False
-    assert set(catalog["dummy"]["capabilities"]) == {"sender_identity", "rooms"}
+    assert set(catalog["dummy"]["capabilities"]) == {
+        "sender_identity", "rooms", "files",
+    }
 
 
 def test_sender_is_a_value_not_a_string():

@@ -29,6 +29,7 @@ class _Args:
     text = "Report fertig: alles gruen."
     photo = None
     file = None
+    vault_path = None
     task_id = None
 
 
@@ -212,6 +213,38 @@ def test_report_photo_and_file_are_mutually_exclusive():
 
     with pytest.raises(UsageError):
         commands._cmd_report(A(), _client([]), _cfg())
+
+
+# ── --vault-path: Ad-hoc-Datei ohne Deliverable (Slack-Umbau R3) ───────────
+
+
+def test_report_vault_path_travels_in_the_body():
+    class A(_Args):
+        vault_path = "wrappers/files/report.md"
+
+    client = _client([("/me/report", {"ok": True, "channels": ["slack"]})])
+    rc = commands._cmd_report(A(), client, _cfg())
+    assert rc == 0
+    assert client.calls[0]["body"]["vault_path"] == "wrappers/files/report.md"
+    assert "deliverable_id" not in client.calls[0]["body"]
+
+
+def test_report_vault_path_excludes_the_deliverable_flags():
+    class A(_Args):
+        vault_path = "wrappers/files/report.md"
+        photo = "d-1"
+
+    with pytest.raises(UsageError):
+        commands._cmd_report(A(), _client([]), _cfg())
+
+
+def test_both_verbs_parse_vault_path():
+    from mc_cli.__main__ import build_parser
+
+    parser = build_parser()
+    for verb in ("report", "telegram"):
+        args = parser.parse_args([verb, "hallo", "--vault-path", "wrappers/f/x.md"])
+        assert args.vault_path == "wrappers/f/x.md"
 
 
 def test_report_reads_stdin_on_dash(monkeypatch):

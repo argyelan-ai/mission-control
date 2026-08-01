@@ -22,11 +22,8 @@ from __future__ import annotations
 
 import logging
 
-import httpx
-
 logger = logging.getLogger("mc.slack_voice")
 
-_DOWNLOAD_TIMEOUT = 30.0
 #: Voice clips are seconds long (a few hundred KB). Anything beyond this is
 #: not a voice message, whatever its mimetype claims — refuse to buffer it.
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024
@@ -71,50 +68,15 @@ def slack_transcript_fallback(file: dict) -> str | None:
 async def download_slack_audio(file: dict) -> bytes | None:
     """The clip's bytes, or None with a logged reason. Never raises.
 
-    ``url_private_download`` is served only with the bot token — and only when
-    the app holds the ``files:read`` scope. Slack answers a scope problem with
-    an HTML login page and status 200, so the content type is checked too:
-    HTML here means "no access", not "audio".
+    The Slack-specific download (bot token, ``url_private_download``, the
+    HTML-means-missing-scope trap, streamed size cap) lives in
+    ``slack_files.download_slack_file`` — shared with the generic file ingest.
+    Only the cap is voice-specific: anything beyond 25 MB is not a voice
+    message, whatever its mimetype claims.
     """
-    from app.services.slack_client import get_bot_token
+    from app.services.slack_files import download_slack_file
 
-    url = file.get("url_private_download") or file.get("url_private")
-    if not url:
-        logger.warning("slack voice: file %s has no download url", file.get("id"))
-        return None
-
-    token = await get_bot_token()
-    if not token:
-        logger.warning("slack voice: no bot token — cannot download audio")
-        return None
-
-    try:
-        async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
-            resp = await client.get(
-                url, headers={"Authorization": f"Bearer {token}"},
-                follow_redirects=True,
-            )
-    except httpx.HTTPError as exc:
-        logger.warning("slack voice: download failed: %s", type(exc).__name__)
-        return None
-
-    if resp.status_code != 200:
-        logger.warning("slack voice: download HTTP %s", resp.status_code)
-        return None
-    content_type = resp.headers.get("content-type", "")
-    if "text/html" in content_type:
-        logger.warning(
-            "slack voice: got an HTML page instead of audio — the app is "
-            "probably missing the files:read scope (re-install after adding it)"
-        )
-        return None
-    if len(resp.content) > _MAX_AUDIO_BYTES:
-        logger.warning(
-            "slack voice: file %s exceeds %d bytes — not a voice clip, refusing",
-            file.get("id"), _MAX_AUDIO_BYTES,
-        )
-        return None
-    return resp.content
+    return await download_slack_file(file, max_bytes=_MAX_AUDIO_BYTES)
 
 
 async def transcribe_event_audio(event: dict) -> str | None:
