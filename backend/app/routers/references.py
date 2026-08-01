@@ -9,7 +9,6 @@ Upload-Muster nach routers/memory.upload_attachment (Path-Traversal-Guard
 auf dem ROHEN Multipart-Namen, MIME-Allowlist, Grössen-/Anzahl-Caps).
 """
 
-import hashlib
 import logging
 import os
 import uuid
@@ -24,36 +23,24 @@ from app.database import get_session
 from app.models.board import Project
 from app.models.reference_file import ReferenceFile
 from app.models.task import Task
-from app.services.fs_roots import mc_home
+
+# Der Storage-Kern (Allowlist, Caps, Traversal-Guard, Row + Index) ist mit dem
+# Slack-Datei-Ingest geteilt — services/reference_ingest.py ist die eine
+# Implementierung, hier bleibt nur HTTP. Die Re-Exports halten bestehende
+# Importe (Tests, slack_inbound-Doku) am Leben.
+from app.services.reference_ingest import (  # noqa: F401  (re-export)
+    ALLOWED_MIMES,
+    MAX_BYTES,
+    MAX_FILES_PER_ENTITY,
+    ReferenceIngestError,
+    references_root as _references_root,
+    serialize_reference as _serialize,
+    store_reference,
+)
 
 logger = logging.getLogger("mc.references")
 
 router = APIRouter(prefix="/api/v1/references", tags=["references"])
-
-# KEIN text/html und KEIN image/svg+xml: der browsable Files-Root served
-# Inhalte inline mit Endungs-MIME — aktive Inhalte wären Stored XSS im
-# App-Origin (Review-Fund M1).
-ALLOWED_MIMES = {
-    "image/png", "image/jpeg", "image/webp", "image/gif",
-    "application/pdf", "text/plain", "text/markdown", "text/csv",
-    "application/json", "application/zip",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",   # xlsx
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",  # docx
-}
-MAX_BYTES = 25 * 1024 * 1024  # 25 MB
-MAX_FILES_PER_ENTITY = 20
-
-
-def _references_root() -> str:
-    return str(mc_home() / "references")
-
-
-def _serialize(ref: ReferenceFile) -> dict:
-    return {
-        **ref.model_dump(),
-        # Absoluter Pfad, wie ihn Agenten (gleicher ~/.mc-Mount) lesen können.
-        "abs_path": os.path.join(_references_root(), ref.rel_path),
-    }
 
 
 async def _resolve_target(
@@ -84,68 +71,28 @@ async def upload_reference(
 ):
     board_id, kind, entity_id = await _resolve_target(session, task_id, project_id)
 
+    # MIME zuerst und als 415 (der Storage-Kern würde denselben Fehler als
+    # generische Reason liefern — der HTTP-Kontrakt hier ist älter und bleibt).
     if file.content_type not in ALLOWED_MIMES:
         raise HTTPException(415, f"MIME {file.content_type} not allowed")
-
-    count = len((await session.exec(
-        select(ReferenceFile).where(
-            (ReferenceFile.task_id == task_id) if task_id
-            else (ReferenceFile.project_id == project_id)
-        )
-    )).all())
-    if count >= MAX_FILES_PER_ENTITY:
-        raise HTTPException(400, f"Max {MAX_FILES_PER_ENTITY} Referenzen pro {kind}")
 
     contents = await file.read()
     if len(contents) > MAX_BYTES:
         raise HTTPException(413, "File too large (max 25 MB)")
 
-    # Traversal-Guard auf dem ROHEN Namen, vor basename (memory.py Pitfall 6).
-    raw_name = file.filename or "file"
-    if ".." in raw_name or "/" in raw_name or "\\" in raw_name:
-        raise HTTPException(400, "Invalid filename")
-    safe_orig = os.path.basename(raw_name)
-
-    rel_dir = os.path.join(kind, str(entity_id))
-    file_dir = os.path.join(_references_root(), rel_dir)
-    os.makedirs(file_dir, exist_ok=True)
-
-    sha = hashlib.sha256(contents).hexdigest()[:16]
-    fname = f"{sha}-{safe_orig}"
-    target = os.path.join(file_dir, fname)
-    real_dir = os.path.realpath(file_dir)
-    real_target = os.path.realpath(target)
-    if not real_target.startswith(real_dir + os.sep):
-        raise HTTPException(400, "Path escapes references root")
-
-    with open(target, "wb") as f:
-        f.write(contents)
-
-    ref = ReferenceFile(
-        board_id=board_id,
-        task_id=task_id,
-        project_id=project_id,
-        rel_path=os.path.join(rel_dir, fname),
-        original_name=safe_orig,
-        mime=file.content_type,
-        size=len(contents),
-        note=(note or "").strip() or None,
-    )
-    session.add(ref)
-    await session.commit()
-    await session.refresh(ref)
-
-    # Best-effort: sofort in den Files-Index (statt auf den Walker zu warten).
     try:
-        from app.services.file_indexer import _upsert
-        await _upsert(
-            session, "references", ref.rel_path,
-            name=fname, is_directory=False, size=ref.size, mime=ref.mime,
-            mtime=os.path.getmtime(target), task_id=task_id,
+        ref = await store_reference(
+            session,
+            contents=contents,
+            filename=file.filename or "file",
+            mime=file.content_type,
+            board_id=board_id,
+            task_id=task_id,
+            project_id=project_id,
+            note=note,
         )
-        await session.commit()
-    except Exception:  # noqa: BLE001
-        logger.debug("Referenz-Index-Upsert übersprungen", exc_info=True)
+    except ReferenceIngestError as exc:
+        raise HTTPException(400, str(exc))
 
     return _serialize(ref)
 
