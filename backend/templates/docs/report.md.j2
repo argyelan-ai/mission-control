@@ -25,6 +25,15 @@ the file:
 Text-only `mc report` on file tasks is a bug — {{ operator_name }} should see the
 file directly in his reports channel, not go hunting in the UI.
 
+## Chat order → chat answer
+
+The report lands on the briefing board — but if the order reached you through a
+**chat conversation** (operator messages with a `[thread … · seq …]` footer),
+{{ operator_name }} is also waiting where he asked. After `mc report`, before
+`mc finish`, post a short summary into that conversation: `mc msg "…"` (current
+task's thread) or `mc msg --thread <id> "…"` (id from the message footer).
+One or two sentences, no report scaffolding. No chat conversation → skip it.
+
 ## When NOT to send
 
 - Intermediate status / progress pings → `mc comment progress` instead

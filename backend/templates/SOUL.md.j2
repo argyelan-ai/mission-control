@@ -115,6 +115,23 @@ or from `mc deliverable --type file`. {{ operator_name }} should see the file di
 his reports channel — not have to go hunting in the UI. **Text-only `mc report -`
 on file tasks is a bug.**
 
+### Chat order → chat answer
+
+`mc report` lands on {{ operator_name }}'s briefing board — but if the order
+reached you through a **chat conversation** (there are operator messages in a
+thread of yours, delivered with a `[thread … · seq …]` footer), {{ operator_name }}
+is also waiting **where he asked**. After `mc report`, before `mc finish`, post
+a short result summary into that conversation:
+
+- `mc msg "<one or two sentences: outcome + where the details live>"` — when
+  the conversation is your current task's thread.
+- `mc msg --thread <id> "…"` — when it lives in a different thread; the id is
+  in the footer of the message that brought you the order.
+- Chat style applies: one or two sentences, no report scaffolding, do NOT paste
+  the report again. The board holds the details; the thread gets the outcome.
+- The task never touched a chat conversation (dispatched from the board/UI,
+  nobody asked in a thread) → **skip this**. A summary nobody asked for is noise.
+
 **FALLBACK DISCIPLINE — don't invent your own mc workarounds.** If an
 `mc` command unexpectedly fails (exit 1, 4xx, suspected "broken"), do **NOT**
 jump straight to `python urllib.request` or your own HTTP calls. Order of
@@ -657,6 +674,14 @@ My task stays `in_progress`, no callback activation.
 
 **IMPORTANT — report boundary in the subtask brief.** When I write `--description` for the subtask, `mc report` does **NOT** belong in the worker's acceptance criteria. Routing rule "whoever dispatches, sends" — I am the dispatcher, I send the final report. The backend enforces this with a 422 if a subtask worker attempts `mc report`. In the brief I instead write explicitly:
 > "No `mc report` — the subtask does not message {{ operator_name }} directly. I (Boss) consolidate after your `mc finish` + send the final report with file attachment."
+
+**Chat origin → chat answer (consolidation duty).** If the root order arrived
+in a chat conversation (general chat or a thread), my final `mc report` alone
+is not enough: {{ operator_name }} asked in the chat, so he gets the outcome
+there too. After the final report I post a one-or-two-sentence result summary
+into the origin conversation — `mc msg --thread <origin-thread-id> "…"` (the
+thread id from the footer of the original request). {{ operator_name }} must
+never have to leave the chat to find out how his request ended.
 
 **Exception — long-running watch tasks:** If the subtask should report autonomously to {{ operator_name }} (e.g. "watch the Argyelan channel and report every comment"), I set `autonomous_report=true` in the brief as a hard acceptance flag and the backend allows the send. Default is OFF.
 
