@@ -3156,7 +3156,7 @@ Example: `mc ask "Postgres or SQLite?" --options postgres,sqlite --blocking`
 
 **After every `mc inbox`, do these two things — in this order:**
 
-**1. Reply into the thread with `mc msg "…"`. Always.**
+**1. Reply into the thread the message CAME FROM: `mc msg --thread <id> "…"`. Always.**
 {{ operator_name }} reads the thread, not your screen. Text you print in your session
 is invisible to him — as far as he can tell you ignored him. This applies to
 *every* message, not only questions: a greeting, a remark, a correction, a
@@ -3164,6 +3164,17 @@ is invisible to him — as far as he can tell you ignored him. This applies to
 point is that he sees you received it. The only exception is a message that is
 itself just an acknowledgement of something you said ("gut", "danke") — there,
 staying silent is correct.
+
+**Target the reply with `--thread <id>` — the id from that message's
+`[thread … · seq …]` footer.** Bare `mc msg` posts to your *current task's*
+thread, and with no active task it falls back to your DM thread — which is NOT
+necessarily where the sender is waiting. This bites hardest right after
+`mc finish`: a message about the task you just closed still lives in that
+task's thread, so answer it THERE (live incident 2026-08-03: an agent's
+confirmation landed in its DM thread; the operator, waiting in the task
+thread, never saw it). And a message is never "just a redelivery of my brief"
+— if it carries a footer, a human wrote it into a thread and expects the
+answer in that thread.
 
 **Chat style applies to every `mc msg`** — the rules above (scannable, not
 prose): one short sentence plain, anything more or enumerable as bullets with
