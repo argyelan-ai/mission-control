@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, Fragment } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import AppShell from "@/components/layout/AppShell";
 import { useParams, useRouter } from "next/navigation";
@@ -39,6 +39,7 @@ import type {
 import { MCPServerMatrix } from "@/components/mcp/MCPServerMatrix";
 import { AgentActions } from "@/components/agent/AgentActions";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { groupRuntimesByProvider } from "@/lib/groupRuntimes";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -719,16 +720,30 @@ function RuntimeSelectionSection({ agent, agentId }: { agent: Agent; agentId: st
               }}
             >
               <option value="">{t("fallbackOption")}</option>
-              {runtimesData?.runtimes.map((r) => {
-                const compatHint = r.enabled ? "" : ` · ${t("runtimeDisabled")}`;
-                return (
-                  <option key={r.id} value={r.id} disabled={!r.enabled}>
-                    {r.display_name} · {r.runtime_type}
-                    {r.model_identifier ? ` · ${r.model_identifier}` : ""}
-                    {compatHint}
-                  </option>
-                );
-              })}
+              {/* Grouped by vendor via <optgroup>: the API already returns the
+                  rows in provider order, this only makes that visible. The
+                  label comes from the server (`provider_label`) — deriving it
+                  here would be a second copy of a backend rule. Rows without a
+                  recognised vendor (local vLLM, LM Studio) keep their flat
+                  position after the grouped ones. */}
+              {groupRuntimesByProvider(runtimesData?.runtimes ?? []).map(
+                ({ label, runtimes }) => {
+                  const options = runtimes.map((r) => (
+                    <option key={r.id} value={r.id} disabled={!r.enabled}>
+                      {r.display_name} · {r.runtime_type}
+                      {r.model_identifier ? ` · ${r.model_identifier}` : ""}
+                      {r.enabled ? "" : ` · ${t("runtimeDisabled")}`}
+                    </option>
+                  ));
+                  return label ? (
+                    <optgroup key={label} label={label}>
+                      {options}
+                    </optgroup>
+                  ) : (
+                    <Fragment key="__ungrouped">{options}</Fragment>
+                  );
+                },
+              )}
             </select>
             <div className="text-[10px] text-[var(--color-text-muted)] mt-1.5">
               {isHostInplace ? (

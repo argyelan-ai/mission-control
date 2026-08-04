@@ -489,7 +489,18 @@ async def list_runtimes(
         # ADR-048: `host` in the payload = {id, slug, display_name} | null.
         # Deliberately overwrites the DEPRECATED legacy string field of the
         # same name from model_dump() — frontend type is `host?: HostRef | null`.
-        result.append({**rt_dict, **state_info, "host": _host_ref(host)})
+        provider = runtime_naming.resolve_provider(rt.endpoint)
+        result.append({
+            **rt_dict,
+            **state_info,
+            "host": _host_ref(host),
+            # Group label for the UI, derived from the SAME rule the sort and
+            # the catalog use. Sent from here so the picker does not re-derive
+            # provider membership client-side — that split is what let the
+            # frontend and backend disagree about switchability before.
+            # None = no recognised vendor (local vLLM, LM Studio, unsloth).
+            "provider_label": provider.label if provider else None,
+        })
     result.sort(key=_grouped_sort_key)
     return {"runtimes": result}
 
