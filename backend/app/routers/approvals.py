@@ -900,7 +900,10 @@ async def quick_resolve_confirm(
     # Resolve approval
     approval.status = status
     approval.resolved_at = utcnow()
-    approval.resolver_note = "Via Telegram link"
+    # Channel-neutral on purpose: the same quick-resolve link goes out via
+    # Telegram AND Slack (operator_approvals fan-out) and this route cannot
+    # tell which client the click came from.
+    approval.resolver_note = "Via quick-resolve link"
     session.add(approval)
     await session.commit()
 
@@ -917,7 +920,7 @@ async def quick_resolve_confirm(
                 session.add(TaskComment(
                     task_id=task.id,
                     author_type="user",
-                    content="**Blocker geloest** — Operator hat via Telegram entschieden. Details im Approval-Datensatz.",
+                    content="**Blocker geloest** — Operator hat per Quick-Resolve-Link entschieden. Details im Approval-Datensatz.",
                     comment_type="resolution",
                 ))
 
@@ -928,7 +931,7 @@ async def quick_resolve_confirm(
                 from app.services.dispatch_attempt_audit import clear_dispatch_attempt_id
                 await clear_dispatch_attempt_id(
                     session, task,
-                    caller="approval", reason="telegram_unblock_redispatch",
+                    caller="approval", reason="quick_resolve_unblock_redispatch",
                 )
                 task.spawn_session_key = None
                 task.spawn_run_id = None
@@ -937,7 +940,7 @@ async def quick_resolve_confirm(
                 from app.services.task_lifecycle import record_task_event
                 await record_task_event(
                     session, task.id, "blocked", "inbox",
-                    changed_by="user", reason="telegram_unblock_redispatch",
+                    changed_by="user", reason="quick_resolve_unblock_redispatch",
                 )
                 await session.commit()
                 logger.info("Task %s unblocked via Telegram → inbox for re-dispatch", task.id)

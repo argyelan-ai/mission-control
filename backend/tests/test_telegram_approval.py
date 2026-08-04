@@ -259,10 +259,23 @@ async def test_quick_resolve_post_resolves_approval(client, fake_redis):
     async with AsyncSession(test_engine, expire_on_commit=False) as s:
         approval = await s.get(Approval, approval_id)
         assert approval.status == "approved"
-        assert "Telegram link" in approval.resolver_note
+        # Channel-neutral: the same link goes out via Telegram AND Slack
+        # (operator_approvals fan-out) — the note must not claim one of them.
+        assert approval.resolver_note == "Via quick-resolve link"
 
         task = await s.get(Task, data["task"].id)
         assert task.status == "inbox"  # Blocker → inbox → auto_dispatch (background)
+
+        # The audit comment must stay channel-neutral too.
+        from sqlmodel import select
+        from app.models.task import TaskComment
+        comments = (await s.exec(
+            select(TaskComment).where(TaskComment.task_id == task.id)
+        )).all()
+        resolution = [c for c in comments if c.comment_type == "resolution"]
+        assert resolution, "unblock must leave a resolution audit comment"
+        assert "Telegram" not in resolution[0].content
+        assert "Quick-Resolve-Link" in resolution[0].content
 
 
 # ── Test: Double-Click → Token Consumed ─────────────────────────────────
