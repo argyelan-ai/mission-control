@@ -55,12 +55,12 @@ scope **`connections:write`**, and generate it. Copy the value, it starts with
 
 ## 4. Add the bot token scopes
 
-Open **OAuth & Permissions → Scopes → Bot Token Scopes** and add all twelve
+Open **OAuth & Permissions → Scopes → Bot Token Scopes** and add all six
 scopes. Copy this line rather than typing the scopes by hand, a typo here
 surfaces much later as a confusing permission error:
 
 ```
-chat:write, chat:write.customize, channels:read, channels:manage, channels:history, app_mentions:read, im:history, im:write, users:read, reactions:write, files:write, files:read
+chat:write, chat:write.customize, channels:read, channels:history, files:write, files:read
 ```
 
 What each one buys you:
@@ -69,16 +69,16 @@ What each one buys you:
 |---|---|
 | `chat:write` | Post messages at all |
 | `chat:write.customize` | Post under each agent's own name and avatar |
-| `channels:read` | List the channels in the workspace |
-| `channels:manage` | Create a channel per project |
-| `channels:history` | Read the conversation in channels the bot is in |
-| `app_mentions:read` | Notice when an agent is mentioned |
-| `im:history` | Read direct messages sent to the app |
-| `im:write` | Reply in direct messages |
-| `users:read` | Resolve who wrote a message |
-| `reactions:write` | Acknowledge a task with an emoji |
-| `files:write` | Upload logs and screenshots |
-| `files:read` | Download voice messages so they can be transcribed |
+| `channels:read` | Resolve `#channel-names` to the IDs the file APIs insist on |
+| `channels:history` | Receive the conversation in channels the bot is in |
+| `files:write` | Upload reports, logs and screenshots |
+| `files:read` | Download voice messages and files you send to the agents |
+
+That is the complete list — MC follows least privilege here. (Earlier
+versions of this guide asked for six more scopes — `channels:manage`,
+`app_mentions:read`, `im:history`, `im:write`, `users:read`,
+`reactions:write` — that MC never actually calls. If you granted them
+already, nothing breaks; removing them is optional tidiness.)
 
 **Do not skip `chat:write.customize`.** Without it Slack refuses the
 per-message username and icon, so every agent posts as the same app. The chat
@@ -94,11 +94,16 @@ takes effect.
 
 ## 5. Subscribe to events
 
-Under **Event Subscriptions**, turn events on and add these **bot events**:
+Under **Event Subscriptions**, turn events on and add this **bot event**:
 
 ```
-message.channels, app_mention, message.im
+message.channels
 ```
+
+That one event carries everything MC reacts to — regular messages, `@name`
+mentions (they arrive as message text), voice notes and file shares. MC only
+listens in the channels you configure, so `app_mention` and `message.im`
+subscriptions would either duplicate messages or be ignored.
 
 With Socket Mode enabled, Slack does not ask for a Request URL here.
 
