@@ -95,3 +95,6 @@ docs/agent-state.md
 # Fontshare fonts are licensed for use but must not be redistributed
 # verbatim — generated at Docker build time by fetch_fonts.py, never in git.
 docker/mc-playwright/templates/bench/fonts/embedded-fonts.css
+
+# Operator-specific SOUL addendum (private overlay) — never commit here.
+backend/templates/SOUL.operator.md.j2
