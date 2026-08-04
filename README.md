@@ -242,7 +242,7 @@ sessions); host-level fleet extras need the manual install above.
 | Agent git workflow (repos, PRs, merges) | Settings → GitHub (in-app) or `GH_TOKEN`+`GITHUB_OWNER` in `.env` |
 | Slack team chat with the fleet | Settings → Slack (in-app), step-by-step: [docs/setup/slack.md](docs/setup/slack.md) |
 | Discord notifications + per-agent channels | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` |
-| Telegram approvals / reports | `TELEGRAM_*` tokens + chat IDs |
+| Telegram approvals / reports / team chat | `TELEGRAM_*` tokens + chat IDs, step-by-step: [docs/setup/telegram.md](docs/setup/telegram.md) |
 | Voice agent (LiveKit + realtime speech) | `LIVEKIT_*`, `XAI_API_KEY`, `JARVIS_AGENT_TOKEN` |
 | Remote LLM runtime host via SSH | `DGX_SSH_HOST`, `DGX_SSH_USER` + SSH-key mount |
 | Reachability from other devices | `PUBLIC_HOST`, `LIVEKIT_NODE_IP`, TLS via `caddy/Caddyfile.tls.example` |
