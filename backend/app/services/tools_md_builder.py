@@ -1310,6 +1310,12 @@ mc ask "Deploy now or wait for review?" --blocking --priority high
 # Plain thread note — status/decision, not a question (mc ask rejects
 # message_type=question redirection the other way: use mc ask for that).
 mc msg "Migrated 3/5 tables, continuing." --type status
+
+# Replying to an inbox message? ALWAYS target its thread explicitly —
+# the id is in that message's [thread ... seq ...] footer. Bare mc msg
+# posts to your current task's thread (or, with no active task, your DM
+# thread) — not necessarily where the sender is waiting.
+mc msg --thread <id> "Done — details are on the board."
 ```
 
 `--to boss|mark|agent` (default boss), `--priority low|medium|high|critical`

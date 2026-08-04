@@ -134,3 +134,44 @@ def test_rule_is_absent_without_comm_v2():
     Verweis auf ein Werkzeug, das er nicht hat."""
     soul = _soul(comm_v2=False)
     assert "mc inbox" not in soul
+
+
+def test_reply_targets_the_source_thread():
+    """Live-Vorfall 03.08.2026: Agent las die Operator-Nachricht NACH mc finish
+    (Nudge kommt erst an der Turn-Grenze), antwortete mit nacktem `mc msg` —
+    und die Antwort fiel in den DM-Thread zurueck (kein aktiver Task mehr),
+    waehrend der Operator im Task-Thread wartete. Die Regel muss das explizite
+    Thread-Targeting mit der Footer-ID lehren."""
+    soul = _soul()
+    assert "mc msg --thread <id>" in soul
+    lowered = soul.lower()
+    assert "came from" in lowered
+    assert "footer" in lowered
+    # Das WARUM: nackter mc msg faellt auf Task-/DM-Thread zurueck.
+    assert "dm thread" in lowered
+    # Der konkrete Fehlermodus: Nachricht zum gerade geschlossenen Task.
+    assert "mc finish" in soul
+
+
+def test_reply_rule_kills_the_redelivery_excuse():
+    """Der Agent tat die Operator-Nachricht als 'Redelivery des Briefings' ab
+    und liess sie unbeantwortet im falschen Thread versanden. Eine Nachricht
+    mit Thread-Footer ist von einem Menschen in einen Thread geschrieben —
+    das muss die SOUL explizit sagen. (Nicht auf das blosse Wort 'redelivery'
+    pruefen — das steht schon im at-least-once-Absatz der Delivery-Doku.)"""
+    soul = _soul().lower()
+    assert "just a redelivery" in soul
+    assert "a human wrote it into a thread" in soul
+
+
+def test_tools_md_teaches_thread_targeting():
+    """TOOLS.md ist die Referenz-Doku der beiden Verben — sie muss dasselbe
+    Targeting lehren wie die SOUL, sonst driften Regel und Referenz."""
+    from app.services.tools_md_builder import generate_tools_md
+
+    tools_md = generate_tools_md(
+        name="TestAgent", emoji="🤖", raw_token="tok", board_id="board-uuid-123",
+        is_board_lead=False, comm_v2=True,
+    )
+    assert "mc msg --thread <id>" in tools_md
+    assert "footer" in tools_md.lower()
