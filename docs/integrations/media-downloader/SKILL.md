@@ -19,6 +19,9 @@ running on the QNAP NAS. Everything lands on the NAS, ready for Apple TV / Plex.
 4. **Never print or commit credentials.** Fetch them from the vault at runtime (below).
 5. **Confirm, don't guess.** If a movie title is ambiguous (remakes, franchises), pick by
    year/TMDb id and say which one you added.
+6. **Never suggest what's already on the NAS.** Before ANY suggestion/research list and
+   before adding a movie, check the library (section 1a). The library reflects the disk
+   truth — trust `hasFile`.
 
 ---
 
@@ -77,6 +80,42 @@ curl -s "${AH[@]}" "$R/movie/lookup/tmdb?tmdbId=693134"
 ```
 
 Take the **full lookup object** for the chosen movie — you POST it back with a few fields added.
+
+---
+
+## 1a. Inventory check — MANDATORY before every suggestion list and every add
+
+The Radarr library reflects what is really on the NAS (`hasFile: true` = playable in Plex).
+**Every** research/suggestion list MUST be filtered against it — movies the operator
+already has are either dropped or explicitly marked "already on NAS". Skipping this
+step is a bug.
+
+```bash
+# One call, build a lookup set of everything already on disk:
+curl -s "${AH[@]}" "$R/movie" > /tmp/library.json
+python3 - <<'EOF'
+import json
+lib = json.load(open('/tmp/library.json'))
+have = {m['tmdbId'] for m in lib if m.get('hasFile')}
+wish = {m['tmdbId'] for m in lib if not m.get('hasFile')}
+print(f"{len(have)} on disk, {len(wish)} known-but-missing")
+json.dump({'have': sorted(have), 'wish': sorted(wish)}, open('/tmp/have.json','w'))
+EOF
+# Then for each candidate: lookup its tmdbId (section 1) and test membership.
+# tmdbId in 'have'  -> "already on NAS" (never re-suggest for download)
+# tmdbId in 'wish'  -> already in Radarr, still unfound — say so instead of re-adding
+```
+
+### Required format for every suggestion list
+
+One line per movie, nothing less:
+
+**Title (Year)** — [IMDb](https://www.imdb.com/title/<imdbId>/) — rating — one-sentence pitch — already on NAS: yes/no
+
+- `imdbId` (e.g. `tt0133093`) comes straight from the lookup object; the rating is in
+  `ratings.imdb.value` (fallback `ratings.tmdb.value`).
+- If `imdbId` is empty, link TMDb instead: `https://www.themoviedb.org/movie/<tmdbId>`.
+- This applies to the downloader's own research AND to lists assembled by an orchestrator.
 
 ---
 
@@ -179,7 +218,8 @@ curl -s "${AH[@]}" "$R/movie?tmdbId=693134" | python3 -c "import sys,json;d=json
 
 ## 6. Report back (task comment)
 
-When you finish, report concretely:
+Any list of proposed movies uses the mandatory line format from section 1a (IMDb link,
+rating, pitch, already-on-NAS flag). For download tasks, report concretely:
 - **What** you added (title + year + TMDb id + profile).
 - **State**: searching / downloading (X %) / imported to NAS / no German release found.
 - If **no German release** exists yet: say so plainly — the movie stays monitored, Radarr
@@ -192,6 +232,13 @@ German DL WEB-1080p (8.4 GB), downloading at 12 MB/s (~60 %). Will import to
 ---
 
 ## Troubleshooting
+- **FAILURE/HEALTH with mass `430 Article not available`** (check the NZBGet log) → the
+  post was DMCA-removed from the backbone, NOT a server/config problem — the server
+  answered per article, so auth+connection are fine. Expected for fresh German releases
+  of US blockbusters. Try the next release or wait for a repost; report honestly.
+- **Evidence discipline:** never claim "other downloads worked in parallel" without checking
+  the actual timestamps in NZBGet history/log first. A SUCCESS entry in history may be days
+  old. Wrong evidence in a report is worse than no evidence.
 - **Radarr 401** → API key derivation failed; re-run the login flow (section 0).
 - **`MovieExistsValidator` (400)** → already added; re-search the existing id (section 3).
 - **NZBGet 401** → wrong creds; the working user is in the vault `nzbget` credential.
