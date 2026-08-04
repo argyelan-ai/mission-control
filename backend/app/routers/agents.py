@@ -2599,6 +2599,19 @@ def _is_own_message(message, agent: Agent) -> bool:
     return message.sender_type == "agent" and message.sender_id == agent.id
 
 
+def _is_briefing_message(message) -> bool:
+    """True for the persisted dispatch briefing (system line with marker).
+
+    The briefing already reached the agent as its dispatch prompt — delivering
+    it AGAIN as a "new message" taught agents to shrug off the whole inbox as
+    "just a redelivery of my brief", burying real operator messages next to it
+    (live incident 2026-08-04). It advances cursors like any other message but
+    never appears in a delivery payload."""
+    from app.services.dispatch_delivery import _BRIEFING_MARKER_PREFIX
+
+    return _BRIEFING_MARKER_PREFIX in (message.body or "")
+
+
 def _serialize_message(message) -> dict:
     return {
         "id": str(message.id),
@@ -2693,7 +2706,11 @@ async def _collect_new_messages(session: AsyncSession, agent: Agent, acked: dict
         if msgs[-1].seq > cursor.last_delivered_seq:
             cursor.last_delivered_seq = msgs[-1].seq
             changed = True
-        out.extend(_serialize_message(m) for m in msgs if not _is_own_message(m, agent))
+        out.extend(
+            _serialize_message(m)
+            for m in msgs
+            if not _is_own_message(m, agent) and not _is_briefing_message(m)
+        )
 
     if changed:
         await session.commit()
@@ -3205,7 +3222,10 @@ async def agent_inbox(
     resolved, changed = await _resolve_agent_threads_with_cursors(session, agent)
     for thread, cursor in resolved:
         msgs = await _unacked_thread_messages(session, thread, cursor)
-        non_own = [m for m in msgs if not _is_own_message(m, agent)]
+        non_own = [
+            m for m in msgs
+            if not _is_own_message(m, agent) and not _is_briefing_message(m)
+        ]
         if not non_own:
             continue
         out.extend(_serialize_message(m) for m in non_own)
