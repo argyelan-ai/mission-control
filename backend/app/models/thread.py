@@ -54,6 +54,18 @@ class Thread(SQLModel, table=True):
         # NULL nicht selbst eindeutig — mehrere ungemappte Threads bleiben also
         # erlaubt, genau wie bei Telegram.
         UniqueConstraint("slack_thread_ts", name="uq_threads_slack_thread_ts"),
+        # Ein Task hat hoechstens EINEN Task-Thread. Partiell (kind='task'),
+        # damit side-Threads desselben Tasks unberuehrt bleiben. Muss identisch
+        # in Migration 0173 stehen (gleiche Begruendung wie oben): ein stale
+        # Task-Objekt liess den Dispatcher am 2026-08-04 einen zweiten Thread
+        # anlegen — die Operator-Nachricht im ersten wurde dadurch unsichtbar.
+        Index(
+            "uq_threads_task_per_task",
+            "task_id",
+            unique=True,
+            sqlite_where=text("kind = 'task'"),
+            postgresql_where=text("kind = 'task'"),
+        ),
     )
 
     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)

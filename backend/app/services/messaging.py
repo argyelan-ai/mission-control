@@ -69,17 +69,49 @@ async def _next_seq(session: AsyncSession, thread_id: uuid.UUID) -> int:
 
 
 async def ensure_task_thread(session: AsyncSession, task: Task) -> Thread:
-    """Return task's Thread(kind="task"), creating it on first use. Idempotent."""
-    if task.thread_id is not None:
-        result = await session.exec(select(Thread).where(Thread.id == task.thread_id))
-        existing = result.one_or_none()
-        if existing is not None:
-            return existing
+    """Return task's Thread(kind="task"), creating it on first use. Idempotent.
+
+    Select-first by (kind, task_id) instead of trusting ``task.thread_id``:
+    a stale task object — loaded before another writer committed the thread —
+    would otherwise create a SECOND thread for the same task and overwrite
+    ``task.thread_id``, orphaning the first conversation. Live incident
+    2026-08-04: the dispatcher held its task object since claim time while the
+    operator posted a thread message; the dispatch briefing then landed in a
+    fresh duplicate thread and the operator's message became invisible to the
+    agent (thread scope walks ``task.thread_id``).
+    """
+    existing = (
+        await session.exec(
+            select(Thread)
+            .where(Thread.kind == "task", Thread.task_id == task.id)
+            .order_by(Thread.created_at.asc(), Thread.id.asc())  # type: ignore[union-attr]
+        )
+    ).first()
+    if existing is not None:
+        if task.thread_id != existing.id:
+            task.thread_id = existing.id
+            session.add(task)
+            await session.commit()
+        return existing
 
     thread = Thread(kind="task", task_id=task.id)
     session.add(thread)
-    await session.commit()
-    await session.refresh(thread)
+    try:
+        await session.commit()
+    except IntegrityError:
+        # Two writers raced past the SELECT — uq_threads_task_per_task
+        # (Migration 0173) lets exactly one win; adopt the winner.
+        await session.rollback()
+        winner = (
+            await session.exec(
+                select(Thread).where(Thread.kind == "task", Thread.task_id == task.id)
+            )
+        ).first()
+        if winner is None:
+            raise
+        thread = winner
+    else:
+        await session.refresh(thread)
 
     task.thread_id = thread.id
     session.add(task)
