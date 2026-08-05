@@ -404,6 +404,18 @@ class RedisKeys:
     def model_catalog_notified(provider_key: str, model_id: str) -> str:
         return f"mc:model-catalog:notified:{provider_key}:{model_id}"
 
+    # ── Local Model Registry ─────────────────────────────────────────────
+    # Same shape as the provider catalog above: one lock so only one worker
+    # refreshes per tick, plus one long-lived "already told the operator" key
+    # per recipe slug so a new local model is announced ONCE.
+    @staticmethod
+    def local_registry_check_lock() -> str:
+        return "mc:local-registry:check-lock"
+
+    @staticmethod
+    def local_registry_notified(slug: str) -> str:
+        return f"mc:local-registry:notified:{slug}"
+
     # ── CLI Tool Update Check ────────────────────────────────────────────
     @staticmethod
     def cli_update_check_lock() -> str:

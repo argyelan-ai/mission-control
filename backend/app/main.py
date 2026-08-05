@@ -82,6 +82,7 @@ from app.routers import (
     mcp_servers,
     model_prices,
     models,
+    local_registry,
     loops,
     references,
     project_git,
@@ -109,6 +110,7 @@ from app.routers import (
 from app.services.embedding_retry import embedding_retry
 from app.services.cli_update_check import cli_update_checker
 from app.services.model_catalog_check import model_catalog_checker
+from app.services.local_registry import local_registry_checker
 from app.services.intelligence import intelligence
 from app.services.file_indexer import file_indexer
 from app.services.obsidian_export import obsidian_export
@@ -155,6 +157,7 @@ async def lifespan(app: FastAPI):
     await _seed_scheduled_jobs()
     await _seed_playbook_assets()
     await _seed_runtimes()
+    await _seed_local_recipes()
     await _seed_hosts()
     await _seed_github_token()
     await scheduler.start()
@@ -217,6 +220,9 @@ async def lifespan(app: FastAPI):
             await apply_channel_overrides(_cc_session)
     except Exception as e:
         logger.warning("channel overrides at startup failed (env defaults stay): %s", e)
+    # Local Model Registry — refresh the curated local-model catalogue from the
+    # configured registries. Inert unless settings.local_registry_sources is set.
+    await local_registry_checker.start()
     await telegram_bot.start()
     # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us —
     # this opens the Socket Mode websocket outbound. Silently inert unless the
@@ -444,6 +450,7 @@ async def lifespan(app: FastAPI):
     await runtime_watcher.stop()
     await cli_update_checker.stop()
     await model_catalog_checker.stop()
+    await local_registry_checker.stop()
     await runtime_schedule_service.stop()
     await loop_runner.stop()
     await task_runner.stop()
@@ -543,6 +550,18 @@ async def _seed_runtimes() -> None:
             await seed_runtimes(session)
     except Exception as e:
         logger.warning("Runtime seeding failed (non-critical): %s", e)
+
+
+async def _seed_local_recipes() -> None:
+    """Import config/local-recipes.json into the DB on first run (idempotent)."""
+    try:
+        from sqlmodel.ext.asyncio.session import AsyncSession
+        from app.services.local_registry import seed_local_recipes
+
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            await seed_local_recipes(session)
+    except Exception as e:
+        logger.warning("Local recipe seeding failed (non-critical): %s", e)
 
 
 async def _seed_hosts() -> None:
@@ -838,6 +857,7 @@ app.include_router(internal.router)  # /api/v1/internal/bootstrap — agent cont
 app.include_router(model_prices.router)
 app.include_router(models.router)
 app.include_router(runtimes.router)
+app.include_router(local_registry.router)  # /api/v1/local-registry — curated local model/recipe registry
 app.include_router(hosts.router)  # /api/v1/hosts — host registry CRUD + metrics (ADR-048)
 app.include_router(repos.router)  # /api/v1/repos — repo registry + per-repo rules (ADR-050)
 app.include_router(loops.router)  # /api/v1/loops — ergebnisgesteuerte Task-Schleifen (ADR-051)
