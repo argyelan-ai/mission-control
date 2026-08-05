@@ -270,7 +270,9 @@ STUCK_BLOCK_MINUTES_SLOW = 45     # default for slow/local runtimes with documen
 # Runtime-types whose tmux working-marker detection false-negatives during long
 # local reasoning → need a materially higher stale floor before we trust the
 # frozen last_task_activity_at as a "dead turn".
-_SLOW_RUNTIME_TYPES = {"vllm_docker", "lmstudio", "openai_compatible", "unsloth", "cloud"}
+_SLOW_RUNTIME_TYPES = {
+    "vllm_docker", "llamacpp_docker", "lmstudio", "openai_compatible", "unsloth", "cloud",
+}
 
 
 def _stuck_block_default_for(agent, runtime=None) -> int:

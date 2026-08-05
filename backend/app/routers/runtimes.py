@@ -121,7 +121,8 @@ class RuntimeCreate(BaseModel):
     """Generic runtime creation — supersedes LMS-specific AddLMStudioRuntimeBody."""
     slug: str
     display_name: str
-    runtime_type: str  # lmstudio | vllm_docker | unsloth | openai_compatible | cloud
+    # lmstudio | vllm_docker | llamacpp_docker | unsloth | openai_compatible | cloud
+    runtime_type: str
     endpoint: str
     healthcheck_path: str | None = "/v1/models"
     model_identifier: str | None = None
@@ -656,7 +657,7 @@ async def stop_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Stops a runtime (vllm_docker only)."""
+    """Stops a runtime (docker engines: vllm_docker / llamacpp_docker)."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -673,7 +674,7 @@ async def restart_runtime(
     session: AsyncSession = Depends(get_session),
     current_user=Depends(require_user),
 ):
-    """Restarts a runtime (vllm_docker only)."""
+    """Restarts a runtime (docker engines: vllm_docker / llamacpp_docker)."""
     rt, host = await _resolve_runtime_and_host(session, runtime_id)
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
@@ -850,6 +851,14 @@ async def switch_sparkrun_recipe(
     if not rt:
         raise HTTPException(status_code=404, detail=f"Runtime '{runtime_id}' nicht gefunden")
 
+    # Deliberately vllm_docker ONLY — llamacpp_docker is not admitted here.
+    # A "recipe" in this endpoint means a sparkrun recipe (`uvx sparkrun`),
+    # which exists only for vLLM on the DGX Spark. llama.cpp has no equivalent:
+    # switching its model means a different container / launch_command (or,
+    # later, llama-swap which does hot model switching behind one port). Opening
+    # this gate would let the UI offer sparkrun recipes for an engine that
+    # cannot run them, and switch_recipe would write a launch_command that
+    # starts vLLM under a llamacpp runtime row.
     if rt.runtime_type != "vllm_docker":
         raise HTTPException(
             status_code=422,

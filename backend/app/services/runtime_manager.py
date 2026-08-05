@@ -3,11 +3,16 @@ RuntimeManager — manages local model runtimes via SSH + Docker / LM Studio CLI
 
 Supported runtime_type:
 - vllm_docker: Docker container on DGX Spark, controllable via SSH docker commands
+- llamacpp_docker: llama.cpp's `llama-server` in the official ggml-org image —
+  same lifecycle as vllm_docker (SSH + docker, OpenAI-compatible endpoint), but
+  for small GGUF models and with `/health` instead of `/v1/models` as the
+  default probe. The image is multi-arch, so the identical tag runs on the
+  ARM64 DGX Spark and on an x86 box.
 - lmstudio: single model in LM Studio, controllable via SSH lms load/unload
 - unsloth: Unsloth Studio (FastAPI web UI) in a tmux session on the host,
   controllable via SSH tmux new-/kill-session. No Docker because no ARM64 image.
 
-State detection for vllm_docker:
+State detection for vllm_docker / llamacpp_docker:
 1. SSH: docker inspect --format='{{.State.Status}}' <container>
 2. If running: HTTP probe → 200 = "ready", otherwise = "warming"
 
@@ -45,6 +50,19 @@ _REGISTRY_PATH = Path(__file__).parent.parent.parent / "config" / "runtimes.json
 
 # Valid runtime states
 RuntimeState = str  # "stopped" | "starting" | "warming" | "ready" | "failed" | "unknown"
+
+# runtime_types that are "a docker container on a host, reachable over SSH,
+# serving an OpenAI-compatible endpoint". They share all four lifecycle chains
+# (state/start/stop/restart) — only the launch-verification and the default
+# healthcheck path differ per engine.
+DOCKER_ENGINE_TYPES = ("vllm_docker", "llamacpp_docker")
+
+# Probe path used when a runtime row leaves healthcheck_path unset. vLLM and
+# LM Studio answer /v1/models; llama-server has a dedicated /health that is 200
+# only once the model is actually loaded (503 "Loading model" before that), so
+# it distinguishes ready from warming more precisely than /v1/models would.
+_DEFAULT_HEALTHCHECK_PATHS = {"llamacpp_docker": "/health"}
+_FALLBACK_HEALTHCHECK_PATH = "/v1/models"
 
 
 def load_registry() -> list[dict]:
@@ -428,6 +446,28 @@ async def _running_solo_containers(
     return sorted({x for x in out.splitlines() if x.strip()})
 
 
+async def _labelled_containers(
+    slug: str | None, *, host: ResolvedHost | None = None
+) -> list[str]:
+    """Ids of running containers carrying ``mc.runtime.slug=<slug>``, nothing else.
+
+    The narrow counterpart to ``_running_solo_containers`` for engines that
+    share a box instead of owning it (llamacpp_docker). Raises like that one so
+    a docker/SSH failure reads as *unknown*, never as "nothing is running".
+    """
+    safe = _sanitize_slug(slug) if slug else None
+    if not safe:
+        return []
+    out, err, ec = await _ssh_run(
+        f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}",
+        host=host,
+        timeout=20,
+    )
+    if ec != 0:
+        raise RuntimeError(err or f"docker ps query failed (exit {ec})")
+    return sorted({x for x in out.splitlines() if x.strip()})
+
+
 async def evict_spark_runtime_containers(
     slug: str | None,
     *,
@@ -592,6 +632,119 @@ async def verify_spark_vllm_process_started(
             await asyncio.sleep(_verify_poll_interval)
 
 
+async def _container_runs_llamacpp_server(
+    container_name: str, *, host: ResolvedHost | None = None
+) -> bool:
+    """True when ``llama-server`` shows up in the container's process list.
+
+    The llama.cpp analogue of ``_container_runs_vllm_server``, minus the
+    endpoint reconstruction: llama-server is always started with an explicit
+    ``--port`` that the runtime row already records in its endpoint, so there
+    is nothing to infer.
+
+    Uses plain ``docker top`` rather than ``docker top -o cmd``: the ``-o``
+    form is rejected by Docker Desktop's ps shim ("Couldn't find PID field in
+    ps output", reproduced 2026-08-05 on macOS/ARM64) while the bare form
+    prints a CMD column on every platform. Matching the substring on any
+    output line is safe — the header row is ``UID PID PPID …  CMD``.
+    """
+    try:
+        stdout, _, exit_code = await _ssh_run(
+            f"docker top {shlex_quote(container_name)} 2>/dev/null", host=host
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("docker top %s fehlgeschlagen: %s", container_name, e)
+        return False
+    if exit_code != 0:
+        return False
+    return any("llama-server" in line for line in stdout.splitlines())
+
+
+async def verify_llamacpp_process_started(
+    slug: str,
+    *,
+    host: ResolvedHost | None = None,
+    timeout: float = 25.0,
+) -> bool:
+    """Poll for a live ``llama-server`` process inside the labelled container.
+
+    The llamacpp counterpart to ``verify_spark_vllm_process_started`` (which
+    matches on ``vllm serve`` and therefore never fires here).
+
+    Why SSH/``docker top`` and NOT an HTTP poll on ``/health``: measured on
+    2026-08-05 against ghcr.io/ggml-org/llama.cpp:server (b10276), llama-server
+    binds its HTTP port only *after* the GGUF is fetched. For a 400 MB model
+    the port was flatly refusing connections for the first ~9 s, answered 503
+    "Loading model" at t+10 s and 200 at t+11 s. A weights fetch is unbounded
+    (tens of GB over a slow link), so a bounded HTTP poll cannot tell "still
+    downloading" from "crashed on startup" and would report a false failure for
+    every genuinely slow launch. The process check is true throughout download
+    AND load, and false exactly in the case worth catching: the container is up
+    but the server died (bad flags, missing GGUF, OOM) — the same 0.4 s
+    exit-on-bad-quant we reproduced locally.
+    """
+    import asyncio
+
+    safe = _sanitize_slug(slug)
+    deadline = asyncio.get_running_loop().time() + timeout
+    while True:
+        try:
+            out, _, ec = await _ssh_run(
+                f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)}",
+                host=host,
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("verify-llamacpp: container lookup raised for %s: %s", slug, exc)
+            out, ec = "", -1
+        container_id = next((x for x in out.splitlines() if x.strip()), None)
+        if ec == 0 and container_id:
+            if await _container_runs_llamacpp_server(container_id, host=host):
+                return True
+        if asyncio.get_running_loop().time() >= deadline:
+            return False
+        if _verify_poll_interval:
+            await asyncio.sleep(_verify_poll_interval)
+
+
+async def stop_llamacpp_containers_by_label(
+    slug: str | None, *, host: ResolvedHost | None = None
+) -> dict:
+    """Stop only the containers labelled ``mc.runtime.slug=<slug>``.
+
+    Deliberately NOT ``evict_spark_runtime_containers``: that one also sweeps
+    every ``sparkrun_*_solo`` and ``vllm_node`` container on the box, because a
+    vLLM recipe switch needs the whole GPU free before the next model starts.
+    llama.cpp runtimes are the opposite case — small GGUF models that exist
+    precisely to run *alongside* a big model. Reusing the eviction sweep would
+    make "stop the little llama.cpp helper" silently kill the vLLM next to it.
+    """
+    safe = _sanitize_slug(slug) if slug else None
+    if not safe:
+        return {"ok": False, "message": "Kein Slug/Label — Container nicht auffindbar.", "stopped": []}
+    stop_cmd = (
+        f"docker ps -q --filter label=mc.runtime.slug={shlex_quote(safe)} "
+        f"| xargs -r docker stop"
+    )
+    try:
+        out, err, ec = await _ssh_run(stop_cmd, host=host, timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("llamacpp stop raised for %s: %s", slug, exc)
+        return {"ok": False, "message": f"Stop fehlgeschlagen: {exc}", "stopped": []}
+    if ec != 0:
+        return {"ok": False, "message": err or f"docker stop schlug fehl (exit {ec})", "stopped": []}
+    stopped = [x for x in out.splitlines() if x.strip()]
+    return {
+        "ok": True,
+        "message": (
+            f"Container mit Label mc.runtime.slug={safe} gestoppt: {stopped}"
+            if stopped
+            else f"Kein laufender Container mit Label mc.runtime.slug={safe} — gilt als gestoppt."
+        ),
+        "stopped": stopped,
+    }
+
+
 # ── PORSCHE control plane (unsloth_porsche) ──────────────────────────────────
 # The PORSCHE Windows box is NOT reachable via SSH/tmux like the DGX. It runs a
 # Flask control server on :5555 (POST /powershell, GET /health) and sleeps when
@@ -666,7 +819,7 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
     """
     runtime_type = runtime.get("runtime_type", "")
     endpoint = runtime.get("endpoint", "")
-    healthcheck_path = runtime.get("healthcheck_path", "/v1/models")
+    healthcheck_path = runtime.get("healthcheck_path", _FALLBACK_HEALTHCHECK_PATH)
     host = host or resolve_host_from_runtime_fields(runtime)
 
     if runtime_type == "lmstudio":
@@ -688,10 +841,16 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
             "container_status": None,
         }
 
-    if runtime_type == "vllm_docker":
+    if runtime_type in DOCKER_ENGINE_TYPES:
         container_name = runtime.get("container_name", "")
         if not container_name:
             return {"state": "unknown", "http_reachable": False, "container_status": None}
+        # Engine-specific probe path only when the row leaves it unset; an
+        # explicit healthcheck_path on the runtime always wins.
+        if not healthcheck_path:
+            healthcheck_path = _DEFAULT_HEALTHCHECK_PATHS.get(
+                runtime_type, _FALLBACK_HEALTHCHECK_PATH
+            )
 
         try:
             stdout, _, exit_code = await _ssh_run(
@@ -789,7 +948,7 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
 async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Starts a runtime.
 
-    vllm_docker: docker start via SSH
+    vllm_docker / llamacpp_docker: docker start via SSH
     lmstudio: lms load via SSH
     host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
@@ -818,9 +977,10 @@ async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> d
             logger.error("LMS load fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
-    if runtime_type == "vllm_docker":
+    if runtime_type in DOCKER_ENGINE_TYPES:
         container_name = (runtime.get("container_name") or "").strip()
         launch_command = (runtime.get("launch_command") or "").strip()
+        is_llamacpp = runtime_type == "llamacpp_docker"
         try:
             # Path A — try `docker start` on a previously-known container.
             # Skipped when container_name is empty (sparkrun assigns random
@@ -900,22 +1060,36 @@ async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> d
                     # original incident — MC reported success while nothing
                     # was serving. Catch it here instead of discovering it via
                     # a mysteriously "unreachable" runtime minutes later.
-                    serving = await verify_spark_vllm_process_started(
-                        str(runtime_slug), host=host
-                    )
+                    # llama-server never matches "vllm serve", so llamacpp rows
+                    # get the equivalent check on their own process name.
+                    if is_llamacpp:
+                        serving = await verify_llamacpp_process_started(
+                            str(runtime_slug), host=host
+                        )
+                        process_label, likely_cause = (
+                            "llama-server",
+                            "falsches GGUF/Repo, fehlende Flags oder Crash",
+                        )
+                    else:
+                        serving = await verify_spark_vllm_process_started(
+                            str(runtime_slug), host=host
+                        )
+                        process_label, likely_cause = (
+                            "vllm-serve",
+                            "falsche tp/Flags oder Crash",
+                        )
                     if not serving:
                         logger.error(
-                            "Runtime %s: container appeared but no vllm serve "
-                            "process found inside it (likely bad tp/flags or "
-                            "immediate crash). Log: %s",
-                            runtime["id"], log_path,
+                            "Runtime %s: container appeared but no %s process "
+                            "found inside it (%s). Log: %s",
+                            runtime["id"], process_label, likely_cause, log_path,
                         )
                         return {
                             "ok": False,
                             "message": (
                                 f"{runtime['display_name']}: Container erschien, aber "
-                                f"kein vllm-serve-Prozess gestartet (wahrscheinlich "
-                                f"falsche tp/Flags oder Crash). Logs: {log_path}"
+                                f"kein {process_label}-Prozess gestartet (wahrscheinlich "
+                                f"{likely_cause}). Logs: {log_path}"
                             ),
                         }
                 logger.info(
@@ -1002,7 +1176,7 @@ async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> d
 async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Stops a runtime.
 
-    vllm_docker: docker stop via SSH
+    vllm_docker / llamacpp_docker: docker stop via SSH
     lmstudio: lms unload via SSH
     host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
@@ -1025,18 +1199,22 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
             logger.error("LMS unload fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
-    if runtime_type == "vllm_docker":
+    if runtime_type in DOCKER_ENGINE_TYPES:
         container_name = (runtime.get("container_name") or "").strip()
         # RC-1 fix: container_name is None right after a recipe switch (sparkrun
         # assigns a fresh random id each run). Running `docker stop ` with an
         # empty arg errors and was silently swallowed, leaving the old model up.
-        # Fall back to label/solo eviction so the model is actually stopped.
+        # Fall back to label eviction so the model is actually stopped — but
+        # scoped per engine: vLLM gets the full solo/manual sweep (it needs the
+        # whole GPU free), llama.cpp only its own label (it is a co-tenant).
         if not container_name:
             slug = runtime.get("slug") or runtime.get("id")
             logger.info(
-                "stop_runtime: empty container_name for %s — evicting by label/solo",
+                "stop_runtime: empty container_name for %s — stopping by label",
                 runtime.get("id"),
             )
+            if runtime_type == "llamacpp_docker":
+                return await stop_llamacpp_containers_by_label(slug, host=host)
             return await evict_spark_runtime_containers(slug, host=host)
         try:
             _, stderr, exit_code = await _ssh_run(
@@ -1097,7 +1275,7 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
 async def restart_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Restarts a runtime.
 
-    vllm_docker: docker restart via SSH
+    vllm_docker / llamacpp_docker: docker restart via SSH
     lmstudio: lms unload + lms load via SSH
     host: resolved host of the runtime (ADR-048); None → legacy chain.
     Returns: {"ok": bool, "message": str}
@@ -1125,7 +1303,7 @@ async def restart_runtime(runtime: dict, *, host: ResolvedHost | None = None) ->
             logger.error("LMS restart fehlgeschlagen für %s: %s", runtime["id"], e)
             return {"ok": False, "message": f"SSH-Fehler: {e}"}
 
-    if runtime_type == "vllm_docker":
+    if runtime_type in DOCKER_ENGINE_TYPES:
         container_name = runtime.get("container_name") or None
         # container_name is None after every recipe-switch (the DB field is cleared
         # and only re-populated once the new container appears). Running
@@ -1135,7 +1313,12 @@ async def restart_runtime(runtime: dict, *, host: ResolvedHost | None = None) ->
         if not container_name:
             slug = runtime.get("slug") or runtime.get("id")
             try:
-                discovered = await _running_solo_containers(slug, host=host)
+                if runtime_type == "llamacpp_docker":
+                    # Label-only: the solo/manual sweep would happily hand back
+                    # the big vLLM container and restart THAT instead.
+                    discovered = await _labelled_containers(slug, host=host)
+                else:
+                    discovered = await _running_solo_containers(slug, host=host)
             except Exception as e:  # noqa: BLE001
                 logger.error("Restart: container-discovery fehlgeschlagen für %s: %s", runtime["id"], e)
                 return {

@@ -346,12 +346,52 @@ Seit 2026-04-19 ist diese Registry DB-backed (`runtimes` Tabelle) statt JSON-har
 |---|---|---|---|
 | `lmstudio` | `lms load/unload` via SSH | Host der Runtime (Host-Registry) | Start/Stop pro Modell |
 | `vllm_docker` | `docker start/stop/restart` via SSH | Host der Runtime (Host-Registry) | Start/Stop Container |
+| `llamacpp_docker` | `docker start/stop/restart` via SSH (wie `vllm_docker`) | Host der Runtime (Host-Registry) | Start/Stop Container |
 | `unsloth` | tmux `new-session` / `kill-session` via SSH | Host der Runtime (Host-Registry) | Start/Stop Studio |
 | `openai_compatible` | Nur Health-Probe (remote Lifecycle) | Extern | Enable/Disable |
 | `cloud` | Nur Health-Probe (z. B. Ollama Cloud) | Extern | Enable/Disable |
 | `unsloth_porsche` | Start/Stop via Flask `:5555` (PowerShell) + Wake-on-LAN | Host der Runtime (Host-Registry, kind `flask_wol`) | Wecken/Start/Stop, power-managed |
 | `hermes` | Host-side Hermes-Worker (launchd) | Mac | Enable/Disable |
 | `omp` | Native omp-**TUI** (tmux Window 0) + `bridge.py`-Poll-Treiber (Window 1) im `mc-omp-agent` Container (ADR-049; ersetzt das Headless-`bridge.py --serve`-Modell von ADR-045) | Host der Runtime (Host-Registry, Qwen vLLM) | Enable/Disable + Switch |
+
+##### `llamacpp_docker` — GGUF-Zweitmotor neben vLLM
+
+`llamacpp_docker` fährt `llama-server` aus dem offiziellen Image
+`ghcr.io/ggml-org/llama.cpp:server` (CPU) bzw. `:server-cuda` (GPU). Das Image
+ist multi-arch — derselbe Tag läuft auf dem ARM64-DGX-Spark und auf x86, es gibt
+also keinen zweiten Build-Pfad. Der Typ teilt sich **alle vier Lifecycle-Ketten**
+mit `vllm_docker` (`runtime_manager.DOCKER_ENGINE_TYPES`): SSH + Docker auf dem
+aufgeloesten Host, OpenAI-kompatibler Endpoint, HTTP-Health-Probe. Er zaehlt zu
+`_OPENAI_TYPES`, `_PROBEABLE_RUNTIME_TYPES` und `runtime_protocol() == "openai"`,
+Agents binden ihn also wie jede andere OpenAI-Runtime (openclaude-Image).
+
+Drei bewusste Unterschiede:
+
+1. **Health-Pfad `/health` statt `/v1/models`** (Default, nur wenn die Row
+   `healthcheck_path` leer laesst). `llama-server` antwortet dort 503
+   `"Loading model"` waehrend des Ladens und 200 erst wenn das Modell wirklich
+   steht — das trennt `warming` von `ready` schaerfer als `/v1/models`.
+2. **Eigene Start-Verifikation** `verify_llamacpp_process_started()`: die
+   vLLM-Variante matcht auf `vllm serve` und greift hier nie. Bewusst per SSH /
+   `docker top` und **nicht** per HTTP-Poll — gemessen am 05.08.2026 bindet
+   `llama-server` den Port erst *nach* dem GGUF-Download (bei 400 MB ~9 s
+   Connection-Refused, dann 503, dann 200). Ein Download ist unbegrenzt lang,
+   ein HTTP-Poll koennte "laedt noch" nicht von "abgestuerzt" unterscheiden und
+   wuerde jeden langsamen Start faelschlich als Fehler melden.
+3. **Stop/Restart nur label-scoped** (`stop_llamacpp_containers_by_label`,
+   `_labelled_containers`) statt ueber `evict_spark_runtime_containers`: die
+   Eviction raeumt zusaetzlich alle `sparkrun_*_solo`- und `vllm_node`-Container
+   ab, weil ein vLLM-Recipe-Switch die ganze GPU braucht. llama.cpp ist der
+   umgekehrte Fall — kleine Modelle, die *neben* dem grossen laufen sollen.
+   Wiederverwendung der Eviction wuerde "stoppe den kleinen Helfer" still zum
+   Abschuss des vLLM daneben machen.
+
+**Kein Recipe-Switch:** `POST /runtimes/{id}/switch-recipe` bleibt hart auf
+`vllm_docker`. "Recipe" heisst dort sparkrun-Recipe, das es nur fuer vLLM auf
+dem Spark gibt. Modellwechsel bei llama.cpp = anderer Container bzw. anderes
+`launch_command`; hot-swapping hinter einem Port waere ein spaeterer
+llama-swap-PR. Seed-Vorlage: `llamacpp-example` in `backend/config/runtimes.json`
+(`enabled: false`).
 
 #### Host-Registry (NEU 2026-07-02, ADR-048)
 
@@ -412,8 +452,8 @@ lock for multi-worker dedup, `settings.runtime_watcher_enabled` kill-switch,
 `settings.runtime_watcher_interval` default 90s) that supersedes **D-22**
 (ADR-028's "no periodic background probing" call — see ADR-054 for the
 full reversal rationale). Every tick it probes all `enabled` runtimes of a
-probeable `runtime_type` (`vllm_docker`, `lmstudio`, `openai_compatible`,
-`unsloth`) via `GET {endpoint}/v1/models` (reuses the Phase-15
+probeable `runtime_type` (`vllm_docker`, `llamacpp_docker`, `lmstudio`,
+`openai_compatible`, `unsloth`) via `GET {endpoint}/v1/models` (reuses the Phase-15
 `probe_runtime_model` helper) and writes a live snapshot to Redis
 (`mc:runtime-live:{slug}`, TTL 3×interval — `reachable`, `served_model`,
 `latency_ms`, `last_probe_at`), feeding the `/runtimes` cockpit live-dot
