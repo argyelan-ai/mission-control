@@ -158,6 +158,10 @@ class DelegateCreate(BaseModel):
     assigned_agent_id: uuid.UUID
     priority: Literal["low", "medium", "high", "critical"] | None = None
     callback: bool = True  # True = Parent wartet auf Callback; False = Fire-and-Forget
+    # Herkunfts-Gespraech (thread-anchor fix 2026-08-05). Ohne Angabe erbt der
+    # Subtask die Herkunft des Parent-Tasks — der Konsolidierungs-Report des
+    # Orchestrators landet damit im richtigen Chat-Thread.
+    origin_thread_id: uuid.UUID | None = None
 
 
 class DelegateResponse(BaseModel):
@@ -1089,6 +1093,24 @@ async def agent_delegate_task(
             detail="Selbst-Delegation ist nicht erlaubt. Eigenarbeit direkt am Task machen.",
         )
 
+    # Origin link: explicit value must be a conversation the delegating agent
+    # takes part in; without one the subtask inherits the parent's origin, so
+    # the orchestrator's consolidation report reaches the ordering thread.
+    origin_thread_id = payload.origin_thread_id
+    if origin_thread_id is not None:
+        from app.services.thread_scope import thread_agent_may_write_to
+
+        if await thread_agent_may_write_to(session, agent, origin_thread_id) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "origin_thread_id verweist auf kein Gespraech, an dem du "
+                    "teilnimmst — Herkunft muss ein eigener Thread sein."
+                ),
+            )
+    else:
+        origin_thread_id = current_task.origin_thread_id
+
     # Construct subtask in-memory (not persisted yet)
     subtask = Task(
         id=uuid.uuid4(),
@@ -1102,6 +1124,7 @@ async def agent_delegate_task(
         task_type="story",
         assigned_agent_id=target_agent.id,
         owner_agent_id=agent.id,
+        origin_thread_id=origin_thread_id,
         # Callback pattern: subtask points back to the delegating agent
         callback_agent_id=agent.id if payload.callback else None,
         is_auto_created=True,
@@ -4083,6 +4106,31 @@ async def agent_send_operator_report(
     # it); with several backends the Telegram one wins.
     message_id = next((r.message_id for r in results if r.ok and r.message_id), None)
     channels_delivered = [r.backend for r in results if r.ok]
+
+    # Origin mirror (thread-anchor fix, 2026-08-05): the order came from a
+    # conversation — put the result INTO that conversation. The chat pipeline
+    # then delivers it as a Slack thread reply under the operator's message.
+    # Best-effort by contract: the report reached the operator above, so a
+    # failing mirror is logged, never raised.
+    if resolved_task is not None and resolved_task.origin_thread_id is not None:
+        try:
+            from app.services import messaging as _messaging
+
+            mirror_text = text
+            if _file:
+                mirror_text += "\n\n📎 Anhang im Reports-Kanal."
+            await _messaging.post_message(
+                session,
+                thread_id=resolved_task.origin_thread_id,
+                sender_type="agent",
+                sender_id=agent.id,
+                body=mirror_text,
+            )
+        except Exception as _mirror_exc:  # noqa: BLE001 — best-effort, s.o.
+            logger.warning(
+                "Origin-Mirror fehlgeschlagen (Task %s -> Thread %s): %s",
+                resolved_task.id, resolved_task.origin_thread_id, _mirror_exc,
+            )
 
     logger.info(
         "Operator-Report von %s gesendet via %s (%d chars, task=%s, claimed=%s)",

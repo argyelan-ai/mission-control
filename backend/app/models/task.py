@@ -102,6 +102,26 @@ class Task(SQLModel, table=True):
         ),
     )
 
+    # The conversation the order CAME from (thread-anchor fix, 2026-08-05) —
+    # distinct from thread_id (the task's own work thread). Set at creation,
+    # inherited by delegated subtasks; the report endpoint mirrors the final
+    # report into it, so the result reaches the operator's chat thread without
+    # relying on agent discipline. SET NULL: a vanished conversation must
+    # never block or delete a task.
+    origin_thread_id: uuid.UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid(as_uuid=True),
+            ForeignKey(
+                "threads.id",
+                use_alter=True,
+                name="fk_tasks_origin_thread_id",
+                ondelete="SET NULL",
+            ),
+            nullable=True,
+        ),
+    )
+
     # Content Pipeline Link
     pipeline_id: uuid.UUID | None = Field(
         default=None,
