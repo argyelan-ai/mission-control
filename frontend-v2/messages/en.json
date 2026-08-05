@@ -2134,5 +2134,23 @@
       "notifyCreated": "Draft in inbox — awaiting approval",
       "notifyFailed": "Could not create draft"
     }
+  },
+  "providerDescriptions": {
+    "claude_code_oauth_token": "For cli-bridge agents with an anthropic-* runtime (claude setup-token)",
+    "openai_api_key": "For GPT-4o, o1, o3 etc.",
+    "google_api_key": "For Gemini models",
+    "ollama_api_key": "For the Ollama Cloud flat rate (ollama.com)",
+    "openrouter_api_key": "Multi-provider gateway (Claude, GPT-4, Llama, Mistral, ...)",
+    "anthropic_api_key": "For Claude (Sonnet/Opus/Haiku) directly via the Anthropic API",
+    "discord_bot_token": "For the per-agent Discord channels integration",
+    "openclaw_token": "Auth token for the OpenClaw gateway (legacy)",
+    "github_token": "For the agent git workflow (repos, branches, PRs) — can also be set via Settings → GitHub",
+    "github_owner": "GitHub user/org under which MC creates project repos — can also be set via Settings → GitHub",
+    "slack_bot_token": "Lets MC post as your agents in Slack and read the channels the app was invited to. From OAuth & Permissions -> Bot User OAuth Token.",
+    "slack_app_token": "Opens the Socket Mode connection so Slack can deliver messages to a self-hosted MC without a public URL. From Basic Information -> App-Level Tokens, scope connections:write.",
+    "x_api_key": "Consumer key from the X developer portal — for the X post publisher (ADR-065)",
+    "x_api_secret": "Consumer secret from the X developer portal — for the X post publisher (ADR-065)",
+    "x_access_token": "OAuth 1.0a access token of the posting account — for the X post publisher (ADR-065)",
+    "x_access_token_secret": "OAuth 1.0a access token secret of the posting account — for the X post publisher (ADR-065)"
   }
 }

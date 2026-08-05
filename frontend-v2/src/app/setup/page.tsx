@@ -46,6 +46,7 @@ const inputStyle = {
 
 export default function SetupWizardPage() {
   const t = useTranslations("setup");
+  const tProviderDesc = useTranslations("providerDescriptions");
   const router = useRouter();
   const [step, setStep] = useState<2 | 3 | 4>(2);
 
@@ -243,7 +244,9 @@ export default function SetupWizardPage() {
                 </select>
                 {providers[selected] && (
                   <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
-                    {providers[selected].description}
+                    {tProviderDesc.has(providers[selected].key)
+                      ? tProviderDesc(providers[selected].key)
+                      : providers[selected].description}
                   </p>
                 )}
               </div>

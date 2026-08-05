@@ -1057,6 +1057,7 @@ function ApiKeysSection({
 }) {
   const t = useTranslations("settings.apikeys");
   const tRoot = useTranslations("settings");
+  const tProviderDesc = useTranslations("providerDescriptions");
   const queryClient = useQueryClient();
   const [addingKey, setAddingKey] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
@@ -1213,7 +1214,7 @@ function ApiKeysSection({
                       </span>
                     </div>
                     <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                      {tmpl.description}
+                      {tProviderDesc.has(tmpl.key) ? tProviderDesc(tmpl.key) : tmpl.description}
                     </p>
                     {existing && (
                       <div
