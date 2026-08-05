@@ -36,6 +36,7 @@ import { HostMetricsBar, HostsSection } from "./HostsSection";
 import { AutostartToggle } from "./AutostartToggle";
 import { CliToolsSection } from "@/components/shared/CliToolsSection";
 import { ModelCatalogSection } from "@/components/shared/ModelCatalogSection";
+import { LocalModelBrowser } from "@/components/shared/LocalModelBrowser";
 import { BindAgentModal } from "@/components/shared/BindAgentModal";
 import { SparkRecipeSwitcher } from "@/components/shared/SparkRecipeSwitcher";
 import Link from "next/link";
@@ -1857,6 +1858,9 @@ export default function RuntimesPage() {
 
         {/* Modell-Katalog (was es bei den Anbietern gibt) */}
         <ModelCatalogSection />
+
+        {/* Lokale Modelle (was auf eigener Hardware läuft) */}
+        <LocalModelBrowser />
 
         {/* CLI-Tools (festgebackene Agent-Werkzeuge) */}
         <CliToolsSection />

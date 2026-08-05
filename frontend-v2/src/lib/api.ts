@@ -1803,6 +1803,35 @@ export const api = {
         body: JSON.stringify({ provider_key: providerKey, model_id: modelId }),
       }),
   },
+  // Lokale Modell-Registry — /api/v1/local-registry. Kuratierte Rezepte für
+  // eigene Hardware. Der Deploy läuft NICHT über diesen Router, sondern über
+  // den bestehenden sparkrun-Switch (api.runtimes.sparkrun.switchRecipe) —
+  // hier gibt es bewusst keinen zweiten Start-Pfad.
+  localRegistry: {
+    list: (params?: {
+      engine?: string;
+      arch?: string;
+      enabled?: boolean;
+      q?: string;
+    }): Promise<import("@/lib/types").LocalRegistryResponse> => {
+      const qs = new URLSearchParams(
+        Object.entries(params ?? {})
+          .filter(([, v]) => v != null && v !== "")
+          .map(([k, v]) => [k, String(v)]),
+      ).toString();
+      return request(`/api/v1/local-registry${qs ? `?${qs}` : ""}`);
+    },
+    refresh: (): Promise<import("@/lib/types").LocalRegistryRefreshResult> =>
+      request("/api/v1/local-registry/refresh", { method: "POST" }),
+    setEnabled: (
+      slug: string,
+      enabled: boolean,
+    ): Promise<import("@/lib/types").LocalRecipe> =>
+      request(`/api/v1/local-registry/${slug}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      }),
+  },
   lmstudio: {
     list: (): Promise<LMStudioModelsResponse> =>
       request("/api/v1/runtimes/lmstudio/models"),
