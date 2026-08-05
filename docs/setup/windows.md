@@ -24,19 +24,15 @@ Docker Desktop exposes Docker inside WSL2 automatically (Settings →
 Resources → WSL integration). Open http://localhost in your Windows browser —
 WSL2 forwards it.
 
-## Alternative: native PowerShell
+## Native PowerShell (currently not supported)
 
-If you prefer staying in PowerShell:
+Running `docker compose` directly from PowerShell against a Windows checkout
+does **not** work today: the compose file expects POSIX paths and `${HOME}`,
+which a native Windows environment doesn't provide, so the stack fails on
+its bind mounts. Use WSL2 above — it is the supported path.
 
-```powershell
-git clone https://github.com/argyelan-ai/mission-control.git
-cd mission-control
-.\setup.ps1                                          # generates .env with secure secrets
-docker compose up -d          # pulls prebuilt images (or builds); migrations run automatically
-start http://localhost
-```
-
-`setup.ps1` mirrors `setup.sh` (same secrets, PowerShell-native crypto RNG).
+A one-click `setup.ps1` bootstrapper that sets up WSL2 + Docker and runs the
+standard installer for you is on the roadmap (see the README).
 
 ## Known limitations on Windows
 
@@ -48,3 +44,30 @@ start http://localhost
 - File-permission mapping (`HOST_UID`) differs from Linux hosts; `setup.ps1`
   pins the container default (1000). If bind-mounted volumes show permission
   errors, run inside WSL2 instead.
+
+## Windows Server / company hypervisors
+
+Mission Control is a Linux-container stack, so on server infrastructure the
+clean way to run it is a **small Linux VM next to your Windows VMs** — not
+inside Windows Server itself:
+
+1. On your hypervisor (Hyper-V or VMware ESXi), create a Linux VM —
+   Ubuntu Server 24.04, 2 vCPU / 8 GB RAM / 40 GB disk is a comfortable
+   start.
+2. Inside the VM, install Docker (`curl -fsSL https://get.docker.com | sh`)
+   and git.
+3. Run the standard one-liner from the README. Done — MC is reachable at the
+   VM's address (bind beyond localhost via `MC_BIND_ADDRESS`, see the
+   README's security notes, or put it on your
+   [Tailscale](https://tailscale.com) tailnet).
+
+This keeps your Windows Server untouched and matches how companies typically
+run Docker workloads.
+
+**If the Windows Server VM is all you have** (no rights to create a VM): WSL2
+inside a Windows Server 2022+ VM works, but on ESXi the VM needs **nested
+virtualization** enabled first (VM settings → CPU → *Expose hardware assisted
+virtualization to the guest OS*; on Hyper-V:
+`Set-VMProcessor -ExposeVirtualizationExtensions $true`). Expect a
+performance overhead and check your organisation's policy — many admin teams
+prefer the separate Linux VM for exactly this reason.
