@@ -241,7 +241,7 @@ troubleshooting): [docs/setup/github.md](docs/setup/github.md).
 <details>
 <summary><b>More screenshots</b> — first-run wizard, agent registry, runtime manager</summary>
 
-*The first-run wizard — from empty install to configured in three steps:*
+*The first-run wizard — from empty install to configured in four steps:*
 ![First-run wizard](docs/assets/mc-setup-wizard.png)
 
 *The agent registry — one fleet, mixed runtimes (Claude + local Qwen via vLLM):*
