@@ -2316,6 +2316,74 @@ export interface HostMetrics {
   status?: string | null;
 }
 
+// ── Box-Wizard (POST /hosts/probe, /hosts/{id}/bootstrap) ───────────────────
+
+export interface HostProbeGpu {
+  name: string;
+  /** null = the GPU was found but nvidia-smi didn't report a usable size. */
+  vram_gb: number | null;
+}
+
+export interface HostProbeDocker {
+  installed: boolean;
+  version: string | null;
+  /** docker itself reports an `nvidia` runtime → `--gpus all` works today. */
+  nvidia_runtime: boolean;
+  runtimes: string | null;
+  /** nvidia-ctk exists — toolkit installed, daemon may still not know it. */
+  toolkit_installed: boolean;
+}
+
+/**
+ * Inventory of a box. `reachable: false` is a normal answer (box off, wrong
+ * key, firewalled) and carries `reason` — every other field keeps its shape so
+ * the UI never branches on which keys exist.
+ */
+export interface HostProbeResult {
+  reachable: boolean;
+  reason: string | null;
+  arch: string | null;
+  os: string | null;
+  kernel: string | null;
+  user: string | null;
+  gpus: HostProbeGpu[];
+  nvidia_smi: boolean;
+  docker: HostProbeDocker;
+  disk_free_gb: number | null;
+  ram_gb: number | null;
+  in_docker_group: boolean;
+  sudo_nopasswd: boolean;
+  pkg_manager: string | null;
+  raw: string;
+}
+
+export interface HostBootstrapLogLine {
+  ts: number | null;
+  level: "info" | "warn" | "error";
+  text: string;
+}
+
+/** "idle" until a run was started; needs_sudo = stopped, waiting on a human. */
+export type HostBootstrapStatus =
+  | "idle"
+  | "running"
+  | "done"
+  | "failed"
+  | "needs_sudo";
+
+export interface HostBootstrapLog {
+  host_id: string;
+  status: HostBootstrapStatus;
+  phase: string | null;
+  message: string | null;
+  /** What the run actually changed, e.g. ["docker_installed"]. */
+  actions: string[];
+  running: boolean;
+  lines: HostBootstrapLogLine[];
+  /** Send this back as `cursor` on the next poll to get only new lines. */
+  cursor: number;
+}
+
 // ── CLI Sessions ─────────────────────────────────────────────────────────────
 export interface CliGlobalSession {
   task_id: string;

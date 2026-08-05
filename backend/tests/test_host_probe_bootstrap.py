@@ -682,6 +682,33 @@ def test_build_launch_command_rejects_bad_slug_and_port():
         )
 
 
+@pytest.mark.asyncio
+async def test_launch_command_endpoint_renders(auth_client):
+    resp = await auth_client.post("/api/v1/hosts/launch-command", json={
+        "engine": "llamacpp_docker",
+        "model_identifier": "Qwen/Qwen3-8B-GGUF",
+        "slug": "qwen3-8b",
+        "port": 8080,
+    })
+    assert resp.status_code == 200, resp.text
+    cmd = resp.json()["launch_command"]
+    assert "--label mc.runtime.slug=qwen3-8b" in cmd
+    assert "-p 8080:8080" in cmd
+
+
+@pytest.mark.asyncio
+async def test_launch_command_endpoint_bad_template_is_400(auth_client):
+    resp = await auth_client.post("/api/v1/hosts/launch-command", json={
+        "engine": "llamacpp_docker",
+        "model_identifier": "M",
+        "slug": "x",
+        "port": 8080,
+        "launch_template": "docker run {gpus}",
+    })
+    assert resp.status_code == 400
+    assert "Unbekannte Platzhalter" in resp.json()["detail"]
+
+
 def test_build_launch_command_unsupported_engine():
     with pytest.raises(ValueError, match="sparkrun"):
         build_launch_command(

@@ -30,7 +30,7 @@ from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.host import Host
 from app.models.runtime import Runtime
-from app.services import host_bootstrap, host_probe, runtime_manager
+from app.services import host_bootstrap, host_probe, launch_template, runtime_manager
 from app.services.host_resolver import ResolvedHost, resolved_host_from_row
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
@@ -207,6 +207,51 @@ async def probe_host(
         )
 
     return await host_probe.probe_host(resolved)
+
+
+class LaunchCommandBody(BaseModel):
+    """A registry entry plus the two things the operator chose (slug, port)."""
+
+    model_config = {"protected_namespaces": ()}
+
+    engine: str
+    model_identifier: str
+    slug: str = Field(min_length=1, max_length=64)
+    port: int = Field(ge=1, le=65535)
+    launch_template: str | None = None
+    container_name: str | None = None
+    image: str | None = None
+
+
+@router.post("/launch-command")
+async def preview_launch_command(
+    body: LaunchCommandBody,
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Render a registry entry into the ``launch_command`` for a new runtime.
+
+    Pure function behind an endpoint — nothing is created, started or written.
+    It exists so the renderer lives in exactly one place: the wizard shows the
+    command it is about to store, then posts that same string to the existing
+    ``POST /runtimes``. Reimplementing the templating in TypeScript would mean
+    two renderers drifting apart, with the shell command as the casualty.
+
+    A bad template is a 400 with the reason (unknown placeholder, missing
+    ``mc.runtime.slug`` label, unsupported engine) — all operator-fixable.
+    """
+    try:
+        command = launch_template.build_launch_command(
+            engine=body.engine,
+            model_identifier=body.model_identifier,
+            slug=body.slug,
+            port=body.port,
+            launch_template=body.launch_template,
+            container_name=body.container_name,
+            image=body.image,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"launch_command": command}
 
 
 @router.post("/{host_id}/bootstrap", status_code=202)
