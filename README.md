@@ -30,6 +30,11 @@ the problem Mission Control exists to solve:
 - **From prompt to merge is a manual slog.** Copy-pasting agent output into
   commits doesn't scale. In MC every task gets its own branch, an automatic
   PR and a review — the way a real team works.
+- **Paying twice for the same model.** Most agent platforms want an API key
+  and bill per token — on top of the Claude subscription you already have.
+  MC runs the real Claude Code binary on your **existing Pro/Max plan**
+  (`claude setup-token`): no API key, no separate metered bill. Or skip
+  Anthropic entirely and use your own GPU.
 
 ## How it works
 
@@ -50,7 +55,8 @@ curl -fsSL https://raw.githubusercontent.com/argyelan-ai/mission-control/main/in
 
 It checks prerequisites, pulls the prebuilt images (or builds locally),
 configures secrets, boots the stack and opens the browser — where a first-run
-wizard walks you through admin account, LLM provider key and a demo board.
+wizard walks you through admin account, LLM access (an API key — or just your
+existing Claude subscription) and a demo board.
 Updating later is `./install.sh --update`.
 
 ### Runs on
@@ -75,6 +81,10 @@ Mission Control treats local LLMs as first-class citizens, not a fallback.
 Point an agent at any OpenAI-compatible endpoint — a vLLM box with your GPU,
 LM Studio on your desktop, Ollama, or a hosted `/v1` — or run Claude Code
 with your Anthropic subscription. Mix both in one fleet.
+
+**Already on Claude Pro or Max? You're done.** Agents run the genuine Claude
+Code binary authenticated via `claude setup-token` — your existing
+subscription powers the whole fleet. No API key, no second metered bill.
 
 | Runtime | What it is | Agent harness |
 |---|---|---|
