@@ -1,15 +1,30 @@
+<div align="center">
+
 # Mission Control
 
-[![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?color=0fa3a3)](https://github.com/argyelan-ai/mission-control/releases)
-[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-0fa3a3.svg)](LICENSE)
+**Your self-hosted AI agent fleet — with guardrails, a real git workflow
+and zero cloud.**
 
-**Your self-hosted AI agent fleet — with guardrails, a real git workflow and
-zero cloud.** Create agents, give them souls, dispatch tasks, watch them
-ship — from a single dark-mode control room, running entirely on your own
-hardware.
+Create agents, give them souls, dispatch tasks, watch them ship — from a
+single dark-mode control room, running entirely on your own hardware.
+
+[![CI](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml/badge.svg)](https://github.com/argyelan-ai/mission-control/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/argyelan-ai/mission-control?color=0fa3a3&labelColor=1c1c1c)](https://github.com/argyelan-ai/mission-control/releases)
+[![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-0fa3a3?labelColor=1c1c1c)](LICENSE)
+
+[![Claude Code](https://img.shields.io/badge/Claude_Code-Pro%2FMax_ready-0fa3a3?labelColor=1c1c1c&logo=claude&logoColor=white)](#run-your-own-models--zero-cloud)
+[![vLLM](https://img.shields.io/badge/vLLM-self--hosted-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+[![Ollama](https://img.shields.io/badge/Ollama-supported-0fa3a3?labelColor=1c1c1c&logo=ollama&logoColor=white)](#run-your-own-models--zero-cloud)
+[![LM Studio](https://img.shields.io/badge/LM_Studio-supported-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+[![OpenAI-compatible](https://img.shields.io/badge/any_OpenAI--compatible-%2Fv1-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
+
+[Install](#install-in-one-line) · [Why](#why-mission-control) ·
+[Platforms](#runs-on) · [Docs](docs/) · [Roadmap](#roadmap) ·
+[Community](#community)
 
 ![Mission Control — control room](docs/assets/mc-home.png)
+
+</div>
 
 ## Why Mission Control
 
@@ -107,30 +122,46 @@ mix.
 
 **Orchestration with guardrails**
 Boards, projects and phase-based planning; a dispatch-ACK handshake so no
-task silently disappears; watchdogs for timeouts, stuck reviews and silent
-aborts; review gates and human approval queues; 16 fine-grained API scopes
-per agent.
+task silently disappears; review gates and human approval queues;
+autonomous loops that grind through a backlog round by round — each round
+passing the same gates (ADR-051); cron automations with run history;
+16 fine-grained API scopes per agent.
+
+**Resilient by design**
+Watchdogs for timeouts, stuck reviews and silent aborts; automatic
+re-assignment when an agent goes dark; **context recovery** — a crashed or
+recycled agent reconstructs its task thread and keeps going instead of
+starting from zero; runtime switches roll back automatically on failed
+health checks; automatic daily backups (`make backup-schedule`).
 
 **A real git workflow**
 One repo per project, one branch per task, automatic PRs and squash-merges
 via the GitHub CLI. A first-class repos registry with per-repo work rules
 (test commands, branch policy, house style) injected into every dispatch.
 
+**Your fleet, in your pocket**
+Run the whole operation from Slack: dispatch work by chat message, get
+reports and files back in-thread, approve risky actions from your phone —
+plus Discord per-agent channels, Telegram approvals and a real-time voice
+assistant. Remote access via [Tailscale](#access-from-your-phone-anywhere-tailscale),
+never the public internet.
+
 **Knowledge & memory**
 A Markdown vault as source of truth, hybrid full-text + vector search
-(Qdrant), per-agent lessons, daily LLM-distilled insights, cost and token
-tracking.
+(Qdrant), per-agent lessons, daily LLM-distilled insights — and full cost
+transparency: token spend and cost per agent and per task.
 
 **Live & hands-on**
-A real terminal into every agent from the browser; Slack team chat (Socket
-Mode, no public URL needed), Discord per-agent channels, Telegram approvals;
-a real-time voice assistant; a playful 3D office view of who's working on
-what.
+A real terminal into every agent from the browser — watch it work, type
+into its session; one-click agent creation from role templates (reviewer,
+lead, researcher); a playful 3D office view of who's working on what.
 
 **Built in the open**
 [71 architecture decision records](docs/decisions/), 5,000+ tests, and a CI
 pipeline that boots a fresh install end-to-end on every commit — the same
-one-liner you run is the one that's tested.
+one-liner you run is the one that's tested. Secure by default: everything
+binds to localhost until you opt in, Docker is reachable only through a
+filtering socket-proxy, secrets are Fernet-encrypted.
 
 <details>
 <summary><b>Full feature list</b></summary>
@@ -143,8 +174,10 @@ one-liner you run is the one that's tested.
 - **Repos registry** — one repo shared across projects, GitHub import, per-repo work rules injected into every dispatch (ADR-050)
 - **Approvals & inbox** — human sign-off gates for risky actions, with a review queue
 - **Workflows, automations & scheduler** — reusable action sequences and cron jobs with run history
+- **Autonomous loops** — agents work down a backlog in rounds, every round passing the full gates (ADR-051)
 - **Multi-agent consensus** — ask several agents the same question, aggregate the answers
 - **Watchdogs** — ACK timeouts, stuck-review escalation, silent-abort auto-block (ADR-046)
+- **Context recovery** — crashed/recycled agents reconstruct their task thread and continue (ADR-026)
 
 ### Agents & runtimes
 - **Agent registry & detail** — overview, skills, config and memory per agent; templates for one-click roles
