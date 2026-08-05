@@ -80,9 +80,19 @@ jobs:
         run: |
           ./setup.sh   # nur fuer die config-Validierung; install.sh ruft es erneut (idempotent)
           docker compose config -q
-      - name: setup.ps1 parses (Windows path is experimental but must not be broken)
+      - name: setup.ps1 parses under Windows PowerShell rules
         shell: pwsh
-        run: $null = [scriptblock]::Create((Get-Content -Raw setup.ps1))
+        # ParseFile statt scriptblock::Create — findet auch die Fehlerklasse
+        # "UTF-8 ohne BOM + Nicht-ASCII wird unter PS 5.1 zu Smart-Quotes"
+        # (live auf einem echten Windows gefunden, 2026-08-05). Das Script
+        # ist deshalb bewusst ASCII-only.
+        run: |
+          $bytes = [IO.File]::ReadAllBytes("setup.ps1")
+          $nonAscii = $bytes | Where-Object { $_ -gt 127 }
+          if ($nonAscii) { throw "setup.ps1 must stay ASCII-only (PS 5.1 reads BOM-less UTF-8 as ANSI): $($nonAscii.Count) bytes > 127" }
+          $errs = $null
+          $null = [System.Management.Automation.Language.Parser]::ParseFile("$PWD/setup.ps1", [ref]$null, [ref]$errs)
+          if ($errs.Count -gt 0) { $errs | ForEach-Object { Write-Error $_.Message }; exit 1 }
       - name: install.sh — the advertised one-liner IS the tested path
         # Baut + bootet den vollen Stack, laeuft Migrationen, wartet auf health.
         run: ./install.sh --here
