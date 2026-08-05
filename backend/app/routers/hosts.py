@@ -9,12 +9,19 @@ Writes are admin-only — same rationale as runtime writes
 (test_runtime_readiness_gate): ssh_host/control_url determine WHERE
 remote commands land. Responses include ssh_key_path (just a
 path, not a secret) — key CONTENTS are never read or served.
+
+Beyond CRUD this router carries the Box-Wizard's two remote operations:
+``POST /probe`` (read-only inventory, services/host_probe) and
+``POST /{id}/bootstrap`` + ``GET /{id}/bootstrap/log`` (idempotent
+docker/nvidia-toolkit setup, services/host_bootstrap). Both are admin-only
+and both go through runtime_manager._ssh_run — there is exactly one SSH
+implementation in this codebase.
 """
 
 import uuid
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -23,8 +30,8 @@ from app.auth import require_user, require_role, Role
 from app.database import get_session
 from app.models.host import Host
 from app.models.runtime import Runtime
-from app.services import runtime_manager
-from app.services.host_resolver import resolved_host_from_row
+from app.services import host_bootstrap, host_probe, runtime_manager
+from app.services.host_resolver import ResolvedHost, resolved_host_from_row
 
 router = APIRouter(prefix="/api/v1/hosts", tags=["hosts"])
 
@@ -136,6 +143,121 @@ async def create_host(
     await session.commit()
     await session.refresh(host)
     return host
+
+
+# ── Box-Wizard: probe + bootstrap ────────────────────────────────────────────
+#
+# Router ordering: the static ``/probe`` path is declared before ``/{host_id}``
+# so FastAPI can never parse "probe" as a host slug. Same rule as
+# local_registry's ``/refresh`` — cheap now, correct the day someone adds a
+# ``POST /{host_id}``.
+
+
+class HostProbeBody(BaseModel):
+    """Either an existing host (``host_id``) or ad-hoc credentials.
+
+    Ad-hoc is the wizard's step 1: the operator types connection details for a
+    box that has no row yet, and only once the probe succeeds does the row get
+    created. Probing before persisting is the whole point — otherwise every
+    typo leaves a dead host behind.
+    """
+
+    host_id: str | None = None
+    ssh_host: str | None = Field(default=None, max_length=128)
+    ssh_user: str | None = Field(default=None, max_length=64)
+    ssh_key_path: str | None = Field(default=None, max_length=512)
+
+
+@router.post("/probe")
+async def probe_host(
+    body: HostProbeBody,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Read-only hardware/software inventory of a box over SSH.
+
+    Admin-only for the same reason writes are: ssh_host decides WHERE a remote
+    command lands, and this endpoint accepts one from the request body.
+
+    An unreachable box is a 200 with ``reachable: false`` and a reason — see
+    services/host_probe. Only a malformed request (no host at all) is a 4xx.
+    """
+    if body.host_id:
+        host = await _get_host(session, body.host_id)
+        if not host:
+            raise HTTPException(status_code=404, detail=f"Host '{body.host_id}' nicht gefunden")
+        if host.kind != "ssh":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Host '{host.slug}' hat kind='{host.kind}' — Probe gibt es nur für SSH-Hosts.",
+            )
+        resolved = resolved_host_from_row(host)
+    else:
+        if not body.ssh_host:
+            raise HTTPException(
+                status_code=422,
+                detail="ssh_host oder host_id muss gesetzt sein.",
+            )
+        resolved = ResolvedHost(
+            ssh_host=body.ssh_host,
+            ssh_user=body.ssh_user,
+            ssh_key_path=body.ssh_key_path,
+            kind="ssh",
+            source="settings",
+        )
+
+    return await host_probe.probe_host(resolved)
+
+
+@router.post("/{host_id}/bootstrap", status_code=202)
+async def bootstrap_host(
+    host_id: str,
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_role(Role.ADMIN)),
+):
+    """Start the idempotent bootstrap run (docker + nvidia toolkit + group).
+
+    Returns immediately; progress is polled from
+    ``GET /{host_id}/bootstrap/log``. 409 while a run for this host is still
+    going — two concurrent apt runs on one box is how a dpkg lock deadlock
+    starts.
+    """
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+    if host.kind != "ssh":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Host '{host.slug}' hat kind='{host.kind}' — Bootstrap gibt es nur für SSH-Hosts.",
+        )
+
+    current = await host_bootstrap.get_status(str(host.id))
+    if current and current.get("status") == host_bootstrap.STATUS_RUNNING:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Für Host '{host.slug}' läuft bereits ein Bootstrap.",
+        )
+
+    await host_bootstrap.start_bootstrap(str(host.id), resolved_host_from_row(host))
+    return {"status": "started", "host_id": str(host.id)}
+
+
+@router.get("/{host_id}/bootstrap/log")
+async def bootstrap_log(
+    host_id: str,
+    cursor: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+    current_user=Depends(require_user),
+):
+    """Bootstrap progress since ``cursor`` (status + new lines in one read).
+
+    ``status`` is ``idle`` when no run was ever started for this host, or the
+    1h TTL has expired.
+    """
+    host = await _get_host(session, host_id)
+    if not host:
+        raise HTTPException(status_code=404, detail=f"Host '{host_id}' nicht gefunden")
+    return await host_bootstrap.read_log(str(host.id), cursor)
 
 
 @router.patch("/{host_id}")
