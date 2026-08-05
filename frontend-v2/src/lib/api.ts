@@ -51,6 +51,8 @@ import type {
   SecretEntry,
   SkillsResponse,
   SlackConnectionResult,
+  ChannelSettingsResponse,
+  TelegramConnectionResult,
   SystemMetrics,
   SystemStatus,
   Automation,
@@ -1516,6 +1518,21 @@ export const api = {
   slack: {
     testConnection: () =>
       request<SlackConnectionResult>("/api/v1/slack/test-connection", { method: "POST" }),
+  },
+
+  // ── Channels (settings page: per-function toggles + Telegram test) ─────────
+  channels: {
+    getSettings: () =>
+      request<ChannelSettingsResponse>("/api/v1/channels/settings"),
+    updateSettings: (settings: Record<string, string | boolean>) =>
+      request<{ ok: boolean; applied: string[] }>("/api/v1/channels/settings", {
+        method: "PUT",
+        body: JSON.stringify({ settings }),
+      }),
+    telegramTestConnection: () =>
+      request<TelegramConnectionResult>("/api/v1/channels/telegram/test-connection", {
+        method: "POST",
+      }),
   },
 
   // ── Discord (Phase 29-01 router; singleton guild) ───────────────────────────

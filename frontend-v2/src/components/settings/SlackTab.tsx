@@ -7,9 +7,10 @@ import { useTranslations } from "next-intl";
 import { Check, ChevronRight, Copy, Eye, EyeOff, Loader2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { notify } from "@/lib/notify";
-import type { SecretEntry, SlackConnectionResult } from "@/lib/types";
+import type { ChannelSettingsResponse, SecretEntry, SlackConnectionResult } from "@/lib/types";
 import { C, STATUS_TEXT } from "@/lib/colors";
 import { StatusDot } from "@/components/shared/StatusDot";
+import { ChannelToggleRow } from "@/components/settings/TelegramTab";
 
 // The two fixed fields. Key names match the backend secret catalog
 // (routers/secrets.py) so an operator finds them instead of inventing them.
@@ -484,8 +485,67 @@ export function SlackTab() {
           />
         </div>
 
+        <SlackFunctionToggles />
+
         <SetupGuide />
       </div>
     </motion.div>
+  );
+}
+
+// ── Per-function toggles (channels settings page) ────────────────────────────
+
+function SlackFunctionToggles() {
+  const t = useTranslations("settings.slack");
+  const queryClient = useQueryClient();
+  const [savingSetting, setSavingSetting] = useState<string | null>(null);
+
+  const { data: channelSettings } = useQuery<ChannelSettingsResponse>({
+    queryKey: ["channel-settings"],
+    queryFn: () => api.channels.getSettings(),
+  });
+
+  const saveSetting = useMutation({
+    mutationFn: ({ key, value }: { key: string; value: boolean }) =>
+      api.channels.updateSettings({ [key]: value }),
+    onMutate: ({ key }) => setSavingSetting(key),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["channel-settings"] });
+      notify.success(t("settingSaved"));
+    },
+    onError: () => notify.error(t("settingSaveFailed")),
+    onSettled: () => setSavingSetting(null),
+  });
+
+  const values = channelSettings?.values ?? {};
+  const boolOf = (key: string) =>
+    typeof values[key] === "boolean" ? (values[key] as boolean) : true;
+
+  const toggles: { key: string; labelKey: string; hintKey: string }[] = [
+    { key: "slack_reports_enabled", labelKey: "toggleReports", hintKey: "toggleReportsHint" },
+    { key: "slack_approvals_enabled", labelKey: "toggleApprovals", hintKey: "toggleApprovalsHint" },
+    { key: "slack_team_chat_enabled", labelKey: "toggleTeamChat", hintKey: "toggleTeamChatHint" },
+  ];
+
+  return (
+    <div className="mc-card p-4" style={cardStyle}>
+      <div className="text-sm font-medium mb-2" style={{ color: "var(--color-text-primary)" }}>
+        {t("togglesTitle")}
+      </div>
+      <p className="text-xs mb-2" style={{ color: "var(--color-text-muted)", maxWidth: "72ch" }}>
+        {t("togglesHint")}
+      </p>
+      {toggles.map((row) => (
+        <ChannelToggleRow
+          key={row.key}
+          label={t(row.labelKey)}
+          hint={t(row.hintKey)}
+          value={boolOf(row.key)}
+          saving={savingSetting === row.key}
+          testId={`toggle-${row.key}`}
+          onChange={(next) => saveSetting.mutate({ key: row.key, value: next })}
+        />
+      ))}
+    </div>
   );
 }
