@@ -8,15 +8,15 @@ naive datetimes meeting aware ones is a recurring 500 in this codebase.
 Two indexes: slug is the upsert key (unique), source_registry answers "what did
 this registry bring in?" when auditing an imported source.
 
-Revision ID: 0175_local_recipes
-Revises: 0174_task_origin_thread
+Revision ID: 0176_local_recipes
+Revises: 0175_app_settings
 """
 import sqlalchemy as sa
 
 from alembic import op
 
-revision = "0175_local_recipes"
-down_revision = "0174_task_origin_thread"
+revision = "0176_local_recipes"
+down_revision = "0175_app_settings"
 branch_labels = None
 depends_on = None
 
