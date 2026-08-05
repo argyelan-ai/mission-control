@@ -166,6 +166,14 @@ class ChatAdapter(Protocol):
         guessing."""
         ...
 
+    async def bind_room(self, session: AsyncSession, thread, room: ChatRoomRef) -> bool:
+        """Anchor a freshly created thread to an existing native room, so
+        replies arrive IN that room instead of opening a new one (Slack: the
+        operator's channel-root message IS the thread anchor). Channels
+        without such a concept return False and nothing changes — the thread
+        then behaves like an unanchored one. Never raises."""
+        ...
+
     async def handle_task_done(self, session: AsyncSession, task) -> None:
         """A task reached ``done`` — do the channel's room bookkeeping
         (Telegram: rename the topic to ``✓ …`` and close the thread). Never

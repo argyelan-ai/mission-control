@@ -172,16 +172,19 @@ async def test_an_inbound_message_is_stored_with_the_mirror_suppressed(
 
 @pytest.mark.asyncio
 async def test_the_channel_belongs_to_boss(async_session, adapter):
+    """A channel-root message is Boss's — as its own anchored conversation
+    (thread-anchor fix 2026-08-05), so Boss's answer threads under it."""
     boss = await _agent(async_session, "Boss", "boss")
 
     await _ingest(async_session, adapter, message_event(text="hallo"))
 
     thread = (
         await async_session.exec(
-            select(Thread).where(Thread.kind == "dm", Thread.agent_id == boss.id)
+            select(Thread).where(Thread.kind == "chat", Thread.agent_id == boss.id)
         )
     ).first()
     assert thread is not None
+    assert thread.slack_thread_ts == message_event()["ts"]
     assert [m.body for m in await _messages(async_session, thread.id)] == ["hallo"]
 
 
@@ -209,7 +212,7 @@ async def test_an_at_name_addresses_that_agent_and_only_that_agent(
 
     rex_thread = (
         await async_session.exec(
-            select(Thread).where(Thread.kind == "dm", Thread.agent_id == rex.id)
+            select(Thread).where(Thread.kind == "chat", Thread.agent_id == rex.id)
         )
     ).first()
     assert rex_thread is not None
@@ -372,11 +375,12 @@ async def test_an_unmapped_thread_reply_reaches_boss_instead_of_vanishing(
     root messages have no thread row, so the reply's thread_ts mapped to
     nothing, the handler asked back — and the order was LOST.
 
-    A reply under OUR channel is still the operator talking to MC. The new
-    contract: deliver it to the general chat (Boss), and say so in the Slack
-    thread so the operator knows where the conversation continues. Decoy
-    threads stay: an implementation that guesses 'the nearest thread' must
-    still fail here."""
+    A reply under OUR channel is still the operator talking to MC. The
+    contract since the thread-anchor fix (2026-08-05): the parent ts becomes
+    the anchor of a fresh Boss conversation, so the answer arrives in exactly
+    this Slack thread — no ask-back, no notice, no detour over the channel
+    root. Decoy threads stay: an implementation that guesses 'the nearest
+    thread' must still fail here."""
     await _agent(async_session, "Boss", "boss")
     known = Thread(kind="task", slack_thread_ts="1753699200.000900")
     lonely = Thread(kind="task")
@@ -403,10 +407,17 @@ async def test_an_unmapped_thread_reply_reaches_boss_instead_of_vanishing(
     assert await _messages(async_session, known.id) == []
     assert await _messages(async_session, lonely.id) == []
 
-    # And the operator is told in the thread where the answer will appear.
-    assert len(transport.calls) == 1
-    assert transport.calls[0]["thread_ts"] == "1753699200.00099999"
-    assert "Boss" in transport.calls[0]["text"]
+    # The conversation IS the Slack thread now: anchored to the parent ts,
+    # owned by Boss — his answer will appear right there, so there is nothing
+    # to announce and no notice call.
+    anchored = (
+        await async_session.exec(
+            select(Thread).where(Thread.slack_thread_ts == "1753699200.00099999")
+        )
+    ).one_or_none()
+    assert anchored is not None
+    assert anchored.kind == "chat"
+    assert transport.calls == []
 
 
 @pytest.mark.asyncio
@@ -565,7 +576,7 @@ async def test_an_answer_in_the_reports_channel_reaches_boss(
 
     thread = (
         await async_session.exec(
-            select(Thread).where(Thread.kind == "dm", Thread.agent_id == boss.id)
+            select(Thread).where(Thread.kind == "chat", Thread.agent_id == boss.id)
         )
     ).first()
     assert thread is not None

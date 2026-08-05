@@ -84,6 +84,14 @@ class TelegramChatAdapter(BaseChatAdapter):
 
         return await _thread_for_topic(session, int(room))
 
+    async def bind_room(
+        self, session: AsyncSession, thread, room: ChatRoomRef
+    ) -> bool:
+        # Telegram has no channel-root anchor: a group message either lives in
+        # a forum topic (already a room) or in the general chat. Nothing to
+        # bind — the thread behaves like an unanchored one.
+        return False
+
     async def handle_task_done(self, session: AsyncSession, task) -> None:
         # Module attribute (not a from-import): the topic module owns Marks
         # rules about WHICH owner may be marked done, and stays the single

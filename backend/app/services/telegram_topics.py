@@ -140,8 +140,10 @@ def _truncate(name: str, limit: int = TELEGRAM_TOPIC_NAME_MAX) -> str:
 
 def _is_general_thread(thread: Thread) -> bool:
     """Der Allgemein-Chat ist der DM-Thread (Mark <-> Boss) — er bekommt nie ein
-    eigenes Forum-Thema, sondern schreibt in den Chat-Stamm."""
-    return thread.kind == "dm"
+    eigenes Forum-Thema, sondern schreibt in den Chat-Stamm. Slack-verankerte
+    Gespraeche (kind="chat") behandeln wir auf Telegram genauso: ihr Anker ist
+    ein Slack-Konzept, ein Forum-Thema dafuer waere ein leerer Doppelgaenger."""
+    return thread.kind in ("dm", "chat")
 
 
 async def _load_task(session: AsyncSession, task_id) -> Task | None:

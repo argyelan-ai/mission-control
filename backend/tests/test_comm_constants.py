@@ -10,7 +10,9 @@ def test_question_priorities_match_task_priorities():
     assert QUESTION_PRIORITIES == ("low", "medium", "high", "critical")
 
 def test_thread_kinds():
-    assert THREAD_KINDS == ("task", "side", "dm")
+    # "chat": one anchored conversation per operator channel-root message
+    # (thread-anchor fix 2026-08-05).
+    assert THREAD_KINDS == ("task", "side", "dm", "chat")
 
 def test_waiting_timeout_two_hours():
     assert WAITING_TIMEOUT_SECONDS == 7200

@@ -59,11 +59,15 @@ async def message_threads_for_agent(agent: Agent, session: AsyncSession) -> list
     tasks_by_thread = {
         t.thread_id: t for t in active_res.all() if t.thread_id is not None
     }
-    # DM thread of this agent (Mark <-> agent, no task). Second tuple entry is
-    # None: no task, hence no done/failed fast-forward — a DM has no "finished
-    # history" that may be skipped.
+    # DM thread of this agent (Mark <-> agent, no task) plus its anchored chat
+    # conversations (one per operator channel-root message, thread-anchor fix
+    # 2026-08-05). Second tuple entry is None: no task, hence no done/failed
+    # fast-forward — a conversation has no "finished history" to skip.
     dm_res = await session.exec(
-        select(Thread).where(Thread.kind == "dm", Thread.agent_id == agent.id)
+        select(Thread).where(
+            Thread.kind.in_(("dm", "chat")),  # type: ignore[union-attr]
+            Thread.agent_id == agent.id,
+        )
     )
     dm_pairs = [(th, None) for th in dm_res.all()]
     if not tasks_by_thread:
