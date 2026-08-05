@@ -71,12 +71,15 @@ describe("First-Run-Wizard", () => {
     );
   });
 
-  it("skip provider key, skip GitHub, then demo seed creates board + 8 tasks", async () => {
+  it("skip provider key, skip GitHub, then demo seed creates board + crew + 8 tasks", async () => {
     mockAuthed();
     vi.spyOn(api.secrets, "providers").mockResolvedValue(PROVIDERS as never);
     const board = vi
       .spyOn(api.boards, "create")
       .mockResolvedValue({ id: "b1" } as never);
+    const agent = vi
+      .spyOn(api.agents, "create")
+      .mockResolvedValue({ id: "a1" } as never);
     const task = vi.spyOn(api.tasks, "create").mockResolvedValue({} as never);
 
     render(<SetupWizardPage />);
@@ -92,7 +95,11 @@ describe("First-Run-Wizard", () => {
     );
     await screen.findByText("Demo board created");
     expect(board).toHaveBeenCalledTimes(1);
+    expect(agent).toHaveBeenCalledTimes(4);
     expect(task).toHaveBeenCalledTimes(8);
+    // Assigned tasks carry the crew's agent id; inbox tasks stay unassigned.
+    const bodies = task.mock.calls.map((c) => c[1] as Record<string, unknown>);
+    expect(bodies.filter((b) => b.assigned_agent_id === "a1")).toHaveLength(6);
 
     await userEvent.click(screen.getByRole("button", { name: /Go to command center/ }));
     expect(replace).toHaveBeenCalledWith("/");

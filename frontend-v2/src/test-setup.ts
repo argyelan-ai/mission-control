@@ -32,6 +32,9 @@ vi.mock("next-intl", async () => {
   const makeT = (ns?: string) => {
     const t = (key: string, values?: Record<string, unknown>) =>
       interpolate(resolve(ns, key), values);
+    // Mirrors next-intl's t.has(): true iff the key resolves to a real catalog
+    // string (resolve() falls back to the key itself when missing).
+    t.has = (key: string) => resolve(ns, key) !== key;
     t.rich = (key: string, values?: Record<string, unknown>) => {
       const s = interpolate(resolve(ns, key), values);
       const nodes: unknown[] = [];
