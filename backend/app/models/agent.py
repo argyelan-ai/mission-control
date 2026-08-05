@@ -56,7 +56,12 @@ class Agent(SQLModel, table=True):
     # but its DB row + files + token remain, so it can be restored. Delete is
     # gated on this being set. Kept as a plain timestamp, not a status enum —
     # `status`/`provision_status` stay orthogonal (runtime/provisioning state).
-    archived_at: datetime | None = Field(default=None, index=True)
+    # timestamptz (0175): agent_lifecycle stamps tz-aware utcnow(); a naive
+    # column made asyncpg reject the value and 500 every archive call.
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True, index=True),
+    )
     model: str | None = None
     is_board_lead: bool = False
 

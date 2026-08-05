@@ -103,7 +103,7 @@ def _call(method: str, path: str, body: dict | None = None,
         detail = e.read().decode(errors="replace")[:300]
         if tolerate_http_errors:
             print(f"  warning: {method} {path} failed ({e.code}): {detail}")
-            return None
+            return {"__failed__": e.code}
         sys.exit(f"{method} {path} failed ({e.code}): {detail}")
     except urllib.error.URLError as e:
         sys.exit(f"Backend not reachable at {API} ({e.reason}) — is the stack up?")
@@ -134,14 +134,25 @@ def cleanup() -> None:
     for agent in _demo_agents_on(board["id"]):
         _call("POST", f"/api/v1/agents/{agent['id']}/archive",
               tolerate_http_errors=True)
-        _call("DELETE", f"/api/v1/agents/{agent['id']}",
-              tolerate_http_errors=True)
-        print(f"Demo agent '{agent['name']}' removed.")
+        result = _call("DELETE", f"/api/v1/agents/{agent['id']}",
+                       tolerate_http_errors=True)
+        if isinstance(result, dict) and "__failed__" in result:
+            print(f"Demo agent '{agent['name']}' could NOT be removed — "
+                  f"archive/delete it in the UI.")
+        else:
+            print(f"Demo agent '{agent['name']}' removed.")
     _call("DELETE", f"/api/v1/boards/{board['id']}")
     print(f"Demo board '{board['name']}' deleted.")
 
 
 def seed() -> None:
+    # Task creation stamps created_by_user_id, which needs at least the first
+    # admin account to exist — without it the API rejects the insert. Guard
+    # with a clear message instead of a raw 500.
+    setup = _call("GET", "/api/v1/auth/setup-required") or {}
+    if setup.get("setup_required"):
+        sys.exit("No admin account yet — open the UI, register the first "
+                 "admin (and finish the wizard), then re-run the seed.")
     if _find_demo_board():
         sys.exit(f"Demo board already exists (slug '{SLUG}') — "
                  "run with --cleanup first if you want a fresh one.")
