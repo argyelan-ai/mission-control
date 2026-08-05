@@ -209,24 +209,21 @@ async def _ingest(session: AsyncSession, event: dict, adapter) -> None:
         return
 
     room = room_for(event)
-    route = await route_inbound(session, adapter, room, text=text)
+    # Thread-anchor fix (2026-08-05): a channel-root message carries its own
+    # ``ts`` as the anchor — it opens an MC conversation whose replies arrive
+    # as Slack thread replies UNDER the operator's message, instead of landing
+    # in the one Boss DM thread that can only speak to the channel root.
+    anchor = event.get("ts") if room is None else None
+    route = await route_inbound(session, adapter, room, text=text, anchor=anchor)
     if route.thread is None and room is not None:
-        # A reply inside a Slack thread MC cannot map — typically the operator
-        # answering a channel-level message, which has no thread row.
-        # 2026-07-31 this dropped a real order after an ask-back ("ladet bitte
-        # supergirl herunter"). The operator talking under OUR channel is
-        # never "unknown": hand the message to the general chat (Boss) and
-        # say so in the thread, so the conversation continues visibly.
-        fallback = await route_inbound(session, adapter, None, text=text)
-        if fallback.thread is not None:
-            await _reply(
-                adapter,
-                room,
-                "Dieser Slack-Thread ist keinem MC-Gespräch zugeordnet — ich "
-                "habe deine Nachricht an Boss übergeben. Die Antwort kommt "
-                "im Kanal.",
-            )
-            route = fallback
+        # A reply inside a Slack thread MC cannot map — the operator answering
+        # under a message MC posted top-level (a report, a notice). 2026-07-31
+        # this dropped a real order after an ask-back ("ladet bitte supergirl
+        # herunter"). The operator talking under OUR channel is never
+        # "unknown": the parent ts becomes the anchor of a fresh conversation
+        # with Boss, so the answer arrives in exactly this Slack thread — no
+        # ask-back, no detour over the channel root.
+        route = await route_inbound(session, adapter, None, text=text, anchor=room)
     if route.thread is None:
         # The neutral path already worded the reason (unknown room / no Boss);
         # deliver it where the operator is looking. Shared files are NOT taken

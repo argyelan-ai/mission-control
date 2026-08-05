@@ -161,6 +161,7 @@ async def route_inbound(
     room: ChatRoomRef | None,
     *,
     text: str | None = None,
+    anchor: ChatRoomRef | None = None,
 ) -> InboundRoute:
     """Die Routing-Entscheidung — kanal-neutral, ohne Seiteneffekte.
 
@@ -168,23 +169,43 @@ async def route_inbound(
     durch. Ohne ``text`` ist das Verhalten Byte fuer Byte das bisherige (so
     ruft Telegram weiterhin auf) — kein Kanal aendert sich, weil ein anderer
     dazukommt.
+
+    ``anchor`` ist der Thread-Anker-Fix (2026-08-05): kann der Kanal die
+    Wurzel-Nachricht des Operators nativ zum Gespraechsfaden machen (Slack:
+    ihre ``ts``), reicht er sie hier durch. Die Nachricht oeffnet dann ihr
+    eigenes Gespraech (``kind="chat"``), an den Anker gebunden — jede Antwort
+    erscheint als echte Thread-Antwort UNTER der Nachricht statt als neue
+    Kanal-Nachricht aus dem einen Boss-DM-Thread. Ohne ``anchor`` bleibt das
+    Verhalten unveraendert (Telegram uebergibt keinen).
     """
     if room is None:
         addressed, handles = await resolve_addressed_agent(session, text)
-        if addressed is not None:
+        target = addressed
+        if target is None:
+            target = (
+                await session.exec(select(Agent).where(Agent.slug == BOSS_SLUG))
+            ).first()
+            if target is None:
+                logger.warning(
+                    "Allgemein-Chat: Boss-Agent nicht gefunden — Nachricht verworfen"
+                )
+                return InboundRoute(notice=NO_BOSS_REPLY, mentions=handles)
+
+        thread = None
+        if anchor is not None:
+            thread = await _anchored_chat_thread(session, adapter, target, anchor, text)
+        if thread is None:
             from app.services.messaging import ensure_dm_thread
 
-            thread = await ensure_dm_thread(session, addressed)
-            logger.info("inbound: @%s adressiert -> DM-Thread %s", addressed.name, thread.id)
-            return InboundRoute(
-                thread=thread, mentions=handles, addressed_agent=addressed
+            thread = await ensure_dm_thread(session, target)
+            logger.info(
+                "inbound: %s -> DM-Thread %s",
+                f"@{target.name} adressiert" if addressed else "Allgemein-Chat",
+                thread.id,
             )
-
-        thread = await general_chat_thread(session)
-        if thread is None:
-            logger.warning("Allgemein-Chat: Boss-Agent nicht gefunden — Nachricht verworfen")
-            return InboundRoute(notice=NO_BOSS_REPLY, mentions=handles)
-        return InboundRoute(thread=thread, mentions=handles)
+        return InboundRoute(
+            thread=thread, mentions=handles, addressed_agent=addressed
+        )
 
     thread = await adapter.resolve_thread_for_room(session, room)
     if thread is None:
@@ -195,6 +216,43 @@ async def route_inbound(
     # den Faden zu wechseln, weil jemand einen Namen erwaehnt, waere Raten.
     _, handles = await resolve_addressed_agent(session, text)
     return InboundRoute(thread=thread, mentions=handles)
+
+
+async def _anchored_chat_thread(
+    session: AsyncSession,
+    adapter: ChatAdapter,
+    agent: Agent,
+    anchor: ChatRoomRef,
+    text: str | None,
+) -> Thread | None:
+    """Das Gespraech zu diesem Anker — vorhandenes wiederverwendet (Slack
+    liefert Events mehrfach), sonst neu angelegt und gebunden.
+
+    None nur, wenn der Kanal den Anker nicht binden kann und auch kein
+    Gespraech dazu existiert — der Aufrufer faellt dann auf den DM-Weg
+    zurueck, es geht nie eine Nachricht verloren.
+    """
+    from app.services.messaging import create_chat_thread
+
+    existing = await adapter.resolve_thread_for_room(session, anchor)
+    if existing is not None:
+        return existing
+
+    title = (text or "").strip().splitlines()[0][:80] if text else None
+    thread = await create_chat_thread(session, agent, title=title or None)
+    if await adapter.bind_room(session, thread, anchor):
+        logger.info(
+            "inbound: Wurzel-Nachricht -> Chat-Thread %s (Anker %s, %s)",
+            thread.id, anchor, agent.name,
+        )
+        return thread
+
+    # Bind verloren (Race: derselbe Anker wurde parallel gebunden) — der
+    # Gewinner hat das Gespraech, der frische Thread bleibt leer zurueck.
+    winner = await adapter.resolve_thread_for_room(session, anchor)
+    if winner is not None:
+        return winner
+    return None
 
 
 async def general_chat_thread(session: AsyncSession) -> Thread | None:

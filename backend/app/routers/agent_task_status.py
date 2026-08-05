@@ -454,6 +454,10 @@ class AgentTaskCreate(BaseModel):
     # Requester / Origin Tracking
     requester_channel: str | None = None  # "telegram" | "discord" | "web" | "agent"
     requester_id: str | None = None       # Chat-ID, User-ID, oder Agent-UUID
+    # The conversation the order came from (thread-anchor fix 2026-08-05).
+    # The final report is mirrored into it server-side; delegated subtasks
+    # inherit it. Must be a thread the creating agent takes part in.
+    origin_thread_id: uuid.UUID | None = None
     # Project System — Phase-Kontext
     phase_id: uuid.UUID | None = None
     triggered_by_deliverable_id: uuid.UUID | None = None
@@ -1074,6 +1078,22 @@ async def agent_create_task(
             await reopen_parent_for_new_subtask(
                 session, payload.parent_task_id,
                 new_subtask_title=getattr(payload, "title", None),
+            )
+
+    # Origin link (thread-anchor fix): an agent may only link conversations it
+    # takes part in — the same rule that governs where it listens and speaks.
+    if payload.origin_thread_id is not None:
+        from app.services.thread_scope import thread_agent_may_write_to
+
+        if await thread_agent_may_write_to(
+            session, agent, payload.origin_thread_id
+        ) is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "origin_thread_id verweist auf kein Gespraech, an dem du "
+                    "teilnimmst — Herkunft muss ein eigener Thread sein."
+                ),
             )
 
     task_data = payload.model_dump(exclude={"assigned_agent_id", "depends_on", "credentials", "source_task_id", "callback_agent_id"})

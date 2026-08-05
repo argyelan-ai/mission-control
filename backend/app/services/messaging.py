@@ -157,6 +157,25 @@ async def ensure_dm_thread(session: AsyncSession, agent: Agent) -> Thread:
     return thread
 
 
+async def create_chat_thread(
+    session: AsyncSession, agent: Agent, title: str | None = None
+) -> Thread:
+    """One operator request from a chat channel = one conversation.
+
+    Unlike ``ensure_dm_thread`` this is NOT idempotent by design: every
+    channel-root message opens its own thread, so channel adapters can anchor
+    it to their native thread (Slack ``thread_ts``) and replies arrive AS a
+    thread reply instead of a new channel message. Deduplication against
+    redelivered events happens at the anchor, not here (the anchor column is
+    unique, the caller resolves before creating).
+    """
+    thread = Thread(kind="chat", agent_id=agent.id, title=title or f"Chat {agent.name}")
+    session.add(thread)
+    await session.commit()
+    await session.refresh(thread)
+    return thread
+
+
 async def post_message(
     session: AsyncSession,
     *,

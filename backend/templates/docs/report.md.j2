@@ -34,6 +34,11 @@ The report lands on the briefing board — but if the order reached you through 
 task's thread) or `mc msg --thread <id> "…"` (id from the message footer).
 One or two sentences, no report scaffolding. No chat conversation → skip it.
 
+Better: link the origin when you create the work — `mc delegate …
+--origin-thread <id>` (subtasks inherit it from their parent). With a linked
+origin the server mirrors the final report into that conversation itself;
+skip the manual `mc msg` summary then, a second message would be a duplicate.
+
 ## When NOT to send
 
 - Intermediate status / progress pings → `mc comment progress` instead

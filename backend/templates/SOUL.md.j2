@@ -132,6 +132,13 @@ a short result summary into that conversation:
 - The task never touched a chat conversation (dispatched from the board/UI,
   nobody asked in a thread) → **skip this**. A summary nobody asked for is noise.
 
+Link the origin when you create the work: turning a chat order into tasks,
+pass the conversation along — `mc delegate … --origin-thread <id>` (id from
+the footer; subtasks inherit it from their parent). A task with a linked
+origin gets its final report mirrored into that conversation **by the
+server**. If the origin link is set, skip the manual `mc msg` summary — the
+mirror already delivers the result, a second message would be a duplicate.
+
 **FALLBACK DISCIPLINE — don't invent your own mc workarounds.** If an
 `mc` command unexpectedly fails (exit 1, 4xx, suspected "broken"), do **NOT**
 jump straight to `python urllib.request` or your own HTTP calls. Order of

@@ -76,6 +76,11 @@ class _Adapter:
             )
         ).one_or_none()
 
+    async def bind_room(self, session, thread, room):
+        # No anchoring in this stub: the ingest then falls back to the DM
+        # route, which is exactly the pre-anchor behaviour these tests pin.
+        return False
+
 
 async def _boss(session: AsyncSession) -> Agent:
     from app.auth import generate_agent_token

@@ -440,6 +440,29 @@ class SlackChatAdapter(BaseChatAdapter):
             )
         ).one_or_none()
 
+    async def bind_room(
+        self, session: AsyncSession, thread: Thread, room: ChatRoomRef
+    ) -> bool:
+        """Anchor ``thread`` to the Slack thread ``room`` (a message ts).
+
+        Used by the inbound path: the operator's channel-root message IS the
+        anchor, so every later mirror of this thread arrives as a reply UNDER
+        that message — the whole point of the thread-anchor fix. A ts can
+        anchor only one thread (uq_threads_slack_thread_ts); losing the race
+        means another ingest of the same event already bound it, and the
+        caller re-resolves. Never raises.
+        """
+        if not room:
+            return False
+        thread.slack_thread_ts = str(room)
+        session.add(thread)
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            return False
+        return True
+
     async def handle_task_done(self, session: AsyncSession, task) -> None:
         """No room bookkeeping on Slack.
 

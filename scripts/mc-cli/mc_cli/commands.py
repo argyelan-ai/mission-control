@@ -1258,6 +1258,8 @@ def _cmd_delegate(args, client, cfg):
     }
     if args.priority:
         body["priority"] = args.priority
+    if getattr(args, "origin_thread", None):
+        body["origin_thread_id"] = args.origin_thread
 
     resp = client.request(
         "POST",
@@ -1289,6 +1291,15 @@ def _add_delegate_args(p):
         "--no-callback",
         action="store_true",
         help="Fire-and-Forget — Parent bleibt in_progress, kein Auto-Resume bei Subtask-done",
+    )
+    p.add_argument(
+        "--origin-thread",
+        metavar="THREAD_ID",
+        help=(
+            "Herkunfts-Gespraech (Thread-ID aus dem mc-inbox-Footer). Der finale "
+            "Report wird serverseitig in diesen Chat-Thread gespiegelt. Ohne "
+            "Angabe erbt der Subtask die Herkunft des Parent-Tasks."
+        ),
     )
 
 
