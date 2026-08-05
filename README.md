@@ -125,7 +125,7 @@ Boards, projects and phase-based planning; a dispatch-ACK handshake so no
 task silently disappears; review gates and human approval queues;
 autonomous loops that grind through a backlog round by round — each round
 passing the same gates (ADR-051); cron automations with run history;
-16 fine-grained API scopes per agent.
+21 fine-grained API scopes per agent.
 
 **Resilient by design**
 Watchdogs for timeouts, stuck reviews and silent aborts; automatic
@@ -184,7 +184,7 @@ filtering socket-proxy, secrets are Fernet-encrypted.
 - **Multi-runtime fleet** — agents as Docker containers or native host processes
 - **Runtime registry & one-click switching** — move an agent between Claude and local models with rollback
 - **Live sessions** — real terminal into every agent, right in the browser
-- **Scope-based permissions** — 16 fine-grained API scopes per agent, PBKDF2 agent tokens
+- **Scope-based permissions** — 21 fine-grained API scopes per agent, PBKDF2 agent tokens
 - **Skills & CLI plugins** — per-agent capability allow-lists from a shared plugin cache
 - **Slack, Discord & Telegram** — team chat with the agents, per-agent channels, notifications, approvals on your phone
 - **Voice assistant** — real-time spoken conversation with the fleet
