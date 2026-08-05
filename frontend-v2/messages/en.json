@@ -976,7 +976,8 @@
       "costs": "Costs",
       "users": "Users",
       "shortcuts": "Shortcuts",
-      "about": "About"
+      "about": "About",
+      "telegram": "Telegram"
     },
     "security": {
       "title": "Security",
@@ -1091,7 +1092,9 @@
       "update": "Update",
       "deleteTitle": "Delete API key",
       "deleteBody": "Really delete {label}?",
-      "delete": "Delete"
+      "delete": "Delete",
+      "telegramManagedHint": "Telegram tokens are managed in the Telegram section, together with the connection test and the function toggles.",
+      "goToTelegram": "Go to Telegram"
     },
     "github": {
       "title": "GitHub",
@@ -1288,7 +1291,17 @@
           "filesWrite": "upload logs and screenshots",
           "filesRead": "download voice messages for transcription"
         }
-      }
+      },
+      "togglesTitle": "Functions",
+      "togglesHint": "Switch a configured function off without deleting tokens. Off behaves exactly like not configured; Telegram keeps running independently.",
+      "toggleReports": "Reports",
+      "toggleReportsHint": "Final agent reports and deliverables into the reports channel.",
+      "toggleApprovals": "Approvals",
+      "toggleApprovalsHint": "Blocker approvals with buttons in the approvals channel.",
+      "toggleTeamChat": "Team chat",
+      "toggleTeamChatHint": "Mirror thread conversations into the Slack channel.",
+      "settingSaved": "Saved — applied immediately",
+      "settingSaveFailed": "Saving failed"
     },
     "costs": {
       "title": "Model Price Table",
@@ -1340,6 +1353,45 @@
       "deleteTitle": "Delete price",
       "deleteBody": "Really delete the price for \"{pattern}\"?",
       "delete": "Delete"
+    },
+    "telegram": {
+      "title": "Telegram",
+      "intro": "Optional channel beside Slack: reports, approval buttons and the Jarvis voice assistant can also reach you on Telegram. Two bots keep info delivery out of the command chat. Changes apply immediately — no restart.",
+      "commandBot": "Command bot",
+      "reportsBot": "Reports bot",
+      "botNotSetUp": "not set up",
+      "botConnected": "connected as @{username}",
+      "botConnectedNoChat": "connected as @{username} — chat ID missing",
+      "botNotConnected": "token invalid or Telegram unreachable",
+      "testing": "Testing…",
+      "testConnection": "Test connection",
+      "commandTokenLabel": "Bot token (commands + approvals)",
+      "commandTokenHint": "From @BotFather → /newbot. Approval buttons and operator notes ride this bot.",
+      "chatIdLabel": "Chat ID (command chat)",
+      "chatIdHint": "Your private chat with the command bot. Send the bot a message, then read the ID from getUpdates or @userinfobot.",
+      "reportsTokenLabel": "Reports bot token",
+      "reportsTokenHint": "A second bot from @BotFather keeps final reports and files out of the command chat.",
+      "reportsChatIdLabel": "Chat ID (reports chat)",
+      "reportsChatIdHint": "Usually the same ID as above — the two bots may share one chat.",
+      "togglesTitle": "Functions",
+      "togglesHint": "Switch a configured function off without deleting tokens. Off behaves exactly like not configured; Slack keeps running independently.",
+      "toggleReports": "Reports",
+      "toggleReportsHint": "Final agent reports and deliverables.",
+      "toggleApprovals": "Approvals",
+      "toggleApprovalsHint": "Blocker approvals with inline buttons.",
+      "toggleTeamChat": "Team chat",
+      "toggleTeamChatHint": "Mirror thread conversations into the Telegram group (forum topics).",
+      "toggleJarvis": "Jarvis assistant",
+      "toggleJarvisHint": "Text and voice messages to the command bot are answered by Jarvis.",
+      "save": "Save",
+      "pasteToReplace": "{masked} (paste to replace)",
+      "hideLabel": "Hide {label}",
+      "showLabel": "Show {label}",
+      "tokenSaved": "Token saved — applied immediately",
+      "tokenSaveFailed": "Saving the token failed",
+      "settingSaved": "Saved — applied immediately",
+      "settingSaveFailed": "Saving failed",
+      "docsNote": "Full setup guide: docs/setup/telegram.md in the repository. The health watchdog reads its Telegram credentials from .env on purpose (it must work when MC is down) — it is not affected by these settings."
     }
   },
   "skills": {

@@ -53,6 +53,17 @@ class Settings(BaseSettings):
     # Flotte lauffaehig bleibt, solange die Brücke nicht vollstaendig gebaut ist.
     telegram_team_chat_enabled: bool = False
 
+    # ── Per-function channel toggles (channels settings page) ────────────
+    # Default True: presence of credentials keeps deciding whether a function
+    # actually sends (exactly today's behaviour) — the toggles let the
+    # operator switch a CONFIGURED function off without deleting tokens.
+    # Runtime-overridable from the app_settings store
+    # (services/channel_config.py); env is the default, not the master.
+    telegram_reports_enabled: bool = True
+    telegram_approvals_enabled: bool = True
+    slack_reports_enabled: bool = True
+    slack_approvals_enabled: bool = True
+
     # Slack Team-Chat (ADR-072). Bewusst dasselbe Paar wie bei Telegram:
     # ein Schalter + ein Ziel. Die beiden Slack-TOKEN liegen dagegen NICHT
     # hier, sondern verschluesselt in der `secrets`-Tabelle (System-Token,

@@ -63,8 +63,14 @@ class TelegramReportsBackend:
 
     @property
     def configured(self) -> bool:
+        from app.config import settings
         from app.services.telegram_reports import telegram_reports
 
+        # Toggle first (channels settings page): credentials decide whether
+        # sending CAN work, the toggle lets the operator switch a configured
+        # function off without deleting tokens.
+        if not getattr(settings, "telegram_reports_enabled", True):
+            return False
         return telegram_reports.configured
 
     async def send_text(self, text: str) -> ReportResult:
@@ -122,6 +128,8 @@ class SlackReportsBackend:
     def configured(self) -> bool:
         from app.config import settings
 
+        if not getattr(settings, "slack_reports_enabled", True):
+            return False
         return bool((getattr(settings, "slack_reports_channel", "") or "").strip())
 
     async def send_text(self, text: str) -> ReportResult:

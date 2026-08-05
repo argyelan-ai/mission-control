@@ -44,6 +44,10 @@ def _slack_redis_key(approval_id: str) -> str:
 def _slack_channel() -> str:
     from app.config import settings
 
+    # Toggle first (channels settings page): a configured but switched-off
+    # function behaves exactly like an unconfigured one.
+    if not getattr(settings, "slack_approvals_enabled", True):
+        return ""
     return (getattr(settings, "slack_approvals_channel", "") or "").strip()
 
 
@@ -67,11 +71,15 @@ async def send_approval(
         logger.warning("approval tokens for %s failed: %s", approval_id, e)
 
     try:
+        from app.config import settings
         from app.services.telegram_bot import telegram_bot
 
-        await telegram_bot.send_approval_telegram(
-            approval_id, agent_name, task_title, blocker_comment, tokens=tokens
-        )
+        # Toggle (channels settings page): configured-but-off behaves like
+        # unconfigured — the Slack leg stays independent.
+        if getattr(settings, "telegram_approvals_enabled", True):
+            await telegram_bot.send_approval_telegram(
+                approval_id, agent_name, task_title, blocker_comment, tokens=tokens
+            )
     except Exception as e:  # noqa: BLE001
         logger.warning("telegram approval push %s failed: %s", approval_id, e)
 
