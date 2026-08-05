@@ -209,6 +209,10 @@ services:
       # renderer) needs it INSIDE the container; the volume interpolation
       # below only resolves it on the host.
       MC_REPO_PATH: ${MC_REPO_PATH:-${HOME}/Workspace/Projects/mission-control}
+      # Agent image naming for the compose renderer (see .env.example):
+      # default pulls the published GHCR images; prefix "" = bare local names.
+      MC_AGENT_IMAGE_PREFIX: ${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}
+      MC_AGENT_IMAGE_TAG: ${MC_AGENT_IMAGE_TAG:-latest}
       # Host UID — used by cli_terminal._user_default_tmux_socket() to build the
       # tmux socket path (/tmp/tmux-<uid>/default) that the host-pty-bridge will
       # attach to. Without this, getuid() returns 1000 (the in-container user)

@@ -59,14 +59,40 @@ logger = logging.getLogger("mc.compose_renderer")
 COMPOSE_WRITE_LOCK_KEY = "mc:compose:agents-yml:write"
 COMPOSE_WRITE_LOCK_TTL = 60  # seconds
 
-CLAUDE_IMAGE = "mc-claude-agent:latest"
-OPENCLAUDE_IMAGE = "mc-agent-base:latest"
+# Agent image names are prefix+tag configurable so self-hosters run the
+# published GHCR images while developers can keep bare local names
+# (MC_AGENT_IMAGE_PREFIX="" in .env). scripts/build-agent-images.sh tags
+# every local build under BOTH names, so a local build always wins over a
+# registry pull regardless of the prefix in use.
+_AGENT_IMAGE_PREFIX = os.environ.get("MC_AGENT_IMAGE_PREFIX", "ghcr.io/argyelan-ai/")
+_AGENT_IMAGE_TAG = os.environ.get("MC_AGENT_IMAGE_TAG", "latest")
+
+
+def _agent_image(name: str) -> str:
+    return f"{_AGENT_IMAGE_PREFIX}{name}:{_AGENT_IMAGE_TAG}"
+
+
+def _image_is(image: str | None, base_name: str) -> bool:
+    """True if ``image`` refers to ``base_name`` regardless of registry
+    prefix or tag — legacy agents.yml files carry bare local names
+    (``mc-kimi-agent:latest``) while new renders carry GHCR-prefixed ones.
+    """
+    if not image:
+        return False
+    repo = image.rsplit(":", 1)[0]
+    return repo == base_name or repo.endswith(f"/{base_name}")
+
+
+CLAUDE_IMAGE = _agent_image("mc-claude-agent")
+OPENCLAUDE_IMAGE = _agent_image("mc-agent-base")
 # ADR-045: third harness image — omp headless driver (bridge.py --serve) instead
 # of an interactive openclaude pane. Selected by runtime_type == "omp".
-OMP_IMAGE = "mc-omp-agent:latest"
+# omp/kimi binaries are pinned arm64-only, so these two are NOT published to
+# GHCR yet — build-agent-images.sh dual-tags them locally instead.
+OMP_IMAGE = _agent_image("mc-omp-agent")
 # Fourth harness image — Kimi Code CLI (tmux+poll.sh like claude, own binary).
 # Selected by harness == "kimi" / runtime_type == "kimi".
-KIMI_IMAGE = "mc-kimi-agent:latest"
+KIMI_IMAGE = _agent_image("mc-kimi-agent")
 
 HARNESS_IMAGES: dict[str, str] = {
     "claude": CLAUDE_IMAGE,
@@ -577,11 +603,11 @@ def _rewrite_compose(
 
         # omp headless harness (ADR-045) needs its session-transcript dir
         # mounted so the token harvester can see it — see _OMP_SESSIONS_TARGET.
-        if final_image == OMP_IMAGE:
+        if _image_is(final_image, "mc-omp-agent"):
             body_lines = _ensure_omp_sessions_volume(body_lines, slug)
 
         # kimi harness needs its KIMI_CODE_HOME mount (config + OAuth files).
-        if final_image == KIMI_IMAGE:
+        if _image_is(final_image, "mc-kimi-agent"):
             body_lines = _ensure_kimi_config_volume(body_lines, slug)
 
         # Referenz-Dateien-Mount für ALLE Agent-Services (ADR-053).

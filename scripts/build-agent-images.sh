@@ -61,13 +61,29 @@ read_manifest
 
 WHICH="both"
 DOCKER_ARGS=()
+SYNC_ONLY=0
 for arg in "$@"; do
   case "$arg" in
     claude|openclaude|omp|mc-omp-agent|kimi|mc-kimi-agent|both|all) WHICH="$arg" ;;
+    --sync-only) SYNC_ONLY=1 ;;   # CI: materialize shared sources, no build
     -*|--*) DOCKER_ARGS+=("$arg") ;;
     *) echo "Unknown argument: $arg" >&2; exit 1 ;;
   esac
 done
+
+# The compose renderer emits GHCR-prefixed image names by default (so fresh
+# installs pull instead of build). Tag every local build under the prefixed
+# name too — a locally built image then always shadows the registry pull.
+# MC_AGENT_IMAGE_PREFIX="" disables the extra tag (bare local names only).
+IMAGE_PREFIX="${MC_AGENT_IMAGE_PREFIX-ghcr.io/argyelan-ai/}"
+
+tag_prefixed() {
+  local tag="$1"
+  if [ -n "$IMAGE_PREFIX" ]; then
+    docker tag "$tag" "${IMAGE_PREFIX}${tag}"
+    echo "→ Tagged ${IMAGE_PREFIX}${tag}"
+  fi
+}
 
 sync_cli_into() {
   local dst="$1/mc-cli"
@@ -106,6 +122,7 @@ build_image() {
   sync_recycler_lib_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+  tag_prefixed "$tag"
 }
 
 # kimi image: tmux+poll.sh harness like claude/openclaude, but WITHOUT the
@@ -121,6 +138,7 @@ build_image_kimi() {
   sync_poll_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+  tag_prefixed "$tag"
 }
 
 # omp image (ADR-045): a headless bridge, no poll.sh / recycler-lib.sh — it ships
@@ -134,7 +152,19 @@ build_image_omp() {
   sync_cli_into "$ctx"
   echo "→ Building $tag from $ctx"
   docker build "${version_args[@]}" "${DOCKER_ARGS[@]+"${DOCKER_ARGS[@]}"}" -t "$tag" "$ctx"
+  tag_prefixed "$tag"
 }
+
+if [ "$SYNC_ONLY" = "1" ]; then
+  sync_cli_into "$ROOT/docker/mc-claude-agent"
+  sync_poll_into "$ROOT/docker/mc-claude-agent"
+  sync_recycler_lib_into "$ROOT/docker/mc-claude-agent"
+  sync_cli_into "$ROOT/docker/mc-agent-base"
+  sync_poll_into "$ROOT/docker/mc-agent-base"
+  sync_recycler_lib_into "$ROOT/docker/mc-agent-base"
+  echo "✓ Shared sources materialized (sync-only)."
+  exit 0
+fi
 
 case "$WHICH" in
   claude)

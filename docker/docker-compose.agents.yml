@@ -31,7 +31,7 @@
 
 # Claude-Fleet Base (7 Anthropic-Agents)
 x-claude-agent-base: &claude-agent-base
-  image: mc-claude-agent:latest
+  image: ghcr.io/argyelan-ai/mc-claude-agent:latest
   restart: unless-stopped
   networks:
     - mission-control_default
@@ -47,7 +47,7 @@ x-claude-agent-base: &claude-agent-base
 
 # OpenClaude Base (nur Sparky)
 x-openclaude-agent-base: &openclaude-agent-base
-  image: mc-agent-base:latest
+  image: ghcr.io/argyelan-ai/mc-agent-base:latest
   restart: unless-stopped
   networks:
     - mission-control_default
@@ -66,7 +66,7 @@ x-openclaude-agent-base: &openclaude-agent-base
 # produced by the SAME OpenAI-style code path as the openclaude fleet
 # (OPENAI_BASE_URL/OPENAI_MODEL/OPENAI_API_KEY) — no duplicated token routing.
 x-omp-agent-base: &omp-agent-base
-  image: mc-omp-agent:latest
+  image: ghcr.io/argyelan-ai/mc-omp-agent:latest
   restart: unless-stopped
   networks:
     - mission-control_default
@@ -77,7 +77,7 @@ x-omp-agent-base: &omp-agent-base
 # Moonshot-OAuth als Datei-Grant im per-Agent kimi-config-Mount; kein
 # Env-Token — siehe docker/mc-kimi-agent/Dockerfile).
 x-kimi-agent-base: &kimi-agent-base
-  image: mc-kimi-agent:latest
+  image: ghcr.io/argyelan-ai/mc-kimi-agent:latest
   restart: unless-stopped
   networks:
     - mission-control_default
@@ -112,7 +112,7 @@ services:
       - docker/.env.agents
   mc-agent-freecode:
     <<: *claude-agent-base
-    image: mc-claude-agent:latest
+    image: ghcr.io/argyelan-ai/mc-claude-agent:latest
     container_name: mc-agent-freecode
     environment:
       - AGENT_NAME=freecode
@@ -138,7 +138,7 @@ services:
       - docker/.env.agents
   mc-agent-tester:
     <<: *claude-agent-base
-    image: mc-claude-agent:latest
+    image: ghcr.io/argyelan-ai/mc-claude-agent:latest
     container_name: mc-agent-tester
     environment:
       - AGENT_NAME=tester
@@ -167,7 +167,7 @@ services:
       - docker/.env.agents
   mc-agent-deployer:
     <<: *claude-agent-base
-    image: mc-claude-agent:latest
+    image: ghcr.io/argyelan-ai/mc-claude-agent:latest
     container_name: mc-agent-deployer
     build:
       context: ./mc-claude-agent
@@ -198,7 +198,7 @@ services:
       - docker/.env.agents
   mc-agent-researcher:
     <<: *claude-agent-base
-    image: mc-claude-agent:latest
+    image: ghcr.io/argyelan-ai/mc-claude-agent:latest
     container_name: mc-agent-researcher
     environment:
       - AGENT_NAME=researcher
@@ -224,7 +224,7 @@ services:
       - docker/.env.agents
   mc-agent-shakespeare:
     <<: *claude-agent-base
-    image: mc-agent-base:latest
+    image: ghcr.io/argyelan-ai/mc-agent-base:latest
     container_name: mc-agent-shakespeare
     environment:
       - AGENT_NAME=shakespeare
@@ -249,7 +249,7 @@ services:
       - docker/.env.agents
   mc-agent-davinci:
     <<: *claude-agent-base
-    image: mc-claude-agent:latest
+    image: ghcr.io/argyelan-ai/mc-claude-agent:latest
     container_name: mc-agent-davinci
     build:
       context: ./mc-claude-agent
@@ -283,7 +283,7 @@ services:
       - docker/.env.agents
   mc-agent-sparky:
     <<: *openclaude-agent-base
-    image: mc-omp-agent:latest
+    image: ghcr.io/argyelan-ai/mc-omp-agent:latest
     container_name: mc-agent-sparky
     build:
       context: ./mc-agent-base
