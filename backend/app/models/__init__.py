@@ -36,6 +36,7 @@ from app.models.webhook import Webhook, WebhookPayload
 from app.models.checklist import TaskChecklistItem
 from app.models.host import Host  # noqa: F401
 from app.models.runtime import Runtime  # noqa: F401
+from app.models.local_recipe import LocalRecipe  # noqa: F401
 from app.models.runtime_schedule import RuntimeSchedule, RuntimeScheduleRun  # noqa: F401
 from app.models.project_phase import ProjectPhase  # noqa: F401
 from app.models.deliverable_reference import DeliverableReference  # noqa: F401
