@@ -1882,6 +1882,57 @@ export interface ModelCatalogBindResult {
   message?: string | null;
 }
 
+// ── Lokale Modell-Registry (/api/v1/local-registry) ──────────────────────────
+// Schwester des Anbieter-Katalogs, aber für eigene Hardware: kuratierte Rezepte,
+// die auf Spark/GB10 & Co. laufen. Gleicher Vertrag wie dort — der Eintrag sagt
+// nur, dass es das Rezept GIBT. `running` ist ein serverseitig abgeleiteter
+// Hinweis aus den Runtime-Zeilen, nie ein gespeicherter Zustand.
+export interface LocalRecipe {
+  slug: string;
+  display_name: string;
+  description: string | null;
+  /** "sparkrun" | "vllm_docker" | "llamacpp_docker" */
+  engine: string;
+  model_identifier: string;
+  quant: string | null;
+  est_weights_gb: number | null;
+  /** Mindest-VRAM laut Rezept. null = die Quelle sagt nichts dazu. */
+  min_vram_gb: number | null;
+  context_len: number | null;
+  /** "arm64" | "x86_64" | "any" */
+  arch: string;
+  gb10_validated: boolean;
+  /** Name des sparkrun-Rezepts — nur damit ist ein Deploy über switch-recipe möglich. */
+  recipe_ref: string | null;
+  launch_template: string | null;
+  source_registry: string;
+  source_url: string | null;
+  tags: string[];
+  notes: string | null;
+  enabled: boolean;
+  first_seen_at: string | null; // ISO
+  updated_at: string | null; // ISO
+  running: boolean;
+}
+
+export interface LocalRegistryResponse {
+  recipes: LocalRecipe[];
+  total: number;
+  /** Konfigurierte Quell-URLs (leer = nur der mitgelieferte Seed). */
+  sources: string[];
+}
+
+export interface LocalRegistryRefreshResult {
+  /** Quellen, die eine brauchbare Antwort lieferten. */
+  fetched: number;
+  added: number;
+  updated: number;
+  /** Quellen, die gar nicht nutzbar waren — `reasons` nennt welche und warum. */
+  failed: number;
+  reasons: string[];
+  notified: string[];
+}
+
 // Phase 15 T2.1 — return shape of switch_agent_runtime() service. Used by
 // both POST /agents/{id}/preview-runtime-switch (dry_run=true) and the
 // `_switch` summary attached to PATCH /agents/{id} when runtime_id changes.
