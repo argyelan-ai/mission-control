@@ -110,7 +110,7 @@ async def test_reports_toggle_switches_a_configured_telegram_off():
 async def test_reports_toggle_switches_a_configured_slack_off():
     from app.services.operator_reports import SlackReportsBackend
 
-    settings.slack_reports_channel = "#mc-reports"
+    settings.slack_reports_channel = "#x-reports"
     assert SlackReportsBackend().configured is True
     settings.slack_reports_enabled = False
     assert SlackReportsBackend().configured is False
@@ -120,8 +120,8 @@ async def test_reports_toggle_switches_a_configured_slack_off():
 async def test_approvals_toggle_silences_the_slack_leg():
     from app.services.operator_approvals import _slack_channel
 
-    settings.slack_approvals_channel = "#mc-approvals"
-    assert _slack_channel() == "#mc-approvals"
+    settings.slack_approvals_channel = "#x-approvals"
+    assert _slack_channel() == "#x-approvals"
     settings.slack_approvals_enabled = False
     assert _slack_channel() == ""
 
