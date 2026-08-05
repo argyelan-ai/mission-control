@@ -189,7 +189,11 @@ class RuntimeWatcher:
                     severity="warning",
                     detail={"slug": runtime.slug, "endpoint": runtime.endpoint},
                 )
-            await self._maybe_auto_recover(session, redis, runtime, fails)
+            try:
+                await self._maybe_auto_recover(session, redis, runtime, fails)
+            except Exception:  # noqa: BLE001 — an add-on must never be the
+                # reason the remaining runtimes in this tick go unprobed.
+                logger.exception("auto-recovery failed for %s", runtime.slug)
             return
 
         if switching is not None:
