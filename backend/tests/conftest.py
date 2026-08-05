@@ -113,6 +113,30 @@ async def setup_db():
 
 
 @pytest.fixture(autouse=True)
+async def isolate_redis_singleton():
+    """No test may reach the developer's real Redis.
+
+    Most code takes `redis` from a fixture, but service code that calls
+    ``get_redis()`` itself (runtime_grace, for one) would otherwise open the
+    module-level singleton against ``settings.redis_url`` — which on a dev box
+    IS the running Mission Control instance, sharing a key namespace with it.
+    A test switching the "qwen-general" runtime would then write real keys and
+    blind the real watcher for 20 minutes. Point the singleton at an in-memory
+    server for every test; the ``client`` fixture still layers its own
+    ``fake_redis`` on top and restores this one afterwards.
+    """
+    import app.redis_client as redis_client
+
+    server = fakeredis.aioredis.FakeServer()
+    isolated = fakeredis.aioredis.FakeRedis(server=server, decode_responses=True)
+    original = redis_client._redis
+    redis_client._redis = isolated
+    yield isolated
+    redis_client._redis = original
+    await isolated.aclose()
+
+
+@pytest.fixture(autouse=True)
 def reset_github_config_cache():
     """The github_config TTL cache must never leak between tests (ADR-055)."""
     from app.services.github_config import invalidate_github_config_cache

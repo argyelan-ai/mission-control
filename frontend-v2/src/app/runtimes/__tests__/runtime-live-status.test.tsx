@@ -73,6 +73,23 @@ describe("RuntimeCard live status", () => {
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
   });
 
+  it("shows a switching chip instead of the unreachable error during a recipe switch", async () => {
+    const live: RuntimeLiveStatus = {
+      reachable: false,
+      served_model: null,
+      latency_ms: null,
+      last_probe_at: "2026-08-05T00:00:00Z",
+      consecutive_failures: 0,
+      drift: false,
+      status: "switching",
+      phase: "evicting",
+      switch_source: "switch_recipe",
+    };
+    renderWithQuery(<RuntimeCard runtime={RUNTIME} live={live} />);
+    expect(await screen.findByText(/switching model/i)).toBeInTheDocument();
+    expect(screen.queryByText(/unreachable/i)).toBeNull();
+  });
+
   it("renders neither served-model nor drift/unreachable text without a live prop", async () => {
     renderWithQuery(<RuntimeCard runtime={RUNTIME} />);
     await waitFor(() => expect(api.runtimes.db.agents).toHaveBeenCalled());

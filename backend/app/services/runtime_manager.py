@@ -37,6 +37,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import settings
 from app.models.runtime import Runtime
+from app.services import runtime_grace
 from app.services.host_resolver import (
     ResolvedHost,
     resolve_host_from_runtime_fields,
@@ -945,7 +946,44 @@ async def get_runtime_state(runtime: dict, *, host: ResolvedHost | None = None) 
     return {"state": "unknown", "http_reachable": False, "container_status": None}
 
 
-async def start_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+def _grace_slug(runtime: dict) -> str | None:
+    """Key a runtime is tracked under in runtime_grace. Registry dicts predate
+    the slug column, so fall back to the id the same way start/restart do."""
+    value = runtime.get("slug") or runtime.get("id")
+    return str(value) if value else None
+
+
+async def start_runtime(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    grace_source: str = runtime_grace.SOURCE_MANUAL,
+) -> dict:
+    """Starts a runtime (see :func:`_start_runtime_impl`).
+
+    Wraps the actual start with the switch-grace marker (PR5) for docker
+    engine types: those take 2–15 minutes to serve, and without the marker the
+    watcher reports the warmup as an outage. Non-docker types start fast
+    enough that they never needed it. ``grace_source`` records who asked —
+    ``switch_recipe`` and the watcher's auto-recovery pass their own value.
+
+    The marker is cleared here only when the start call itself fails; a
+    successful start stays "in flight" until a probe confirms the engine
+    serves (runtime_watcher), which is the only honest end of the window.
+    """
+    slug = _grace_slug(runtime)
+    is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
+    if is_docker:
+        await runtime_grace.mark_switching(
+            slug, runtime_grace.PHASE_LAUNCHING, grace_source
+        )
+    result = await _start_runtime_impl(runtime, host=host)
+    if is_docker and not result.get("ok"):
+        await runtime_grace.clear_switching(slug)
+    return result
+
+
+async def _start_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Starts a runtime.
 
     vllm_docker / llamacpp_docker: docker start via SSH
@@ -1272,7 +1310,30 @@ async def stop_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> di
     return {"ok": False, "message": f"Unbekannter runtime_type: {runtime_type}"}
 
 
-async def restart_runtime(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
+async def restart_runtime(
+    runtime: dict,
+    *,
+    host: ResolvedHost | None = None,
+    grace_source: str = runtime_grace.SOURCE_MANUAL,
+) -> dict:
+    """Restarts a runtime — same switch-grace wrapper as :func:`start_runtime`.
+
+    A `docker restart` drops the engine into the identical multi-minute reload
+    window, so it needs the same protection from false unreachable alarms.
+    """
+    slug = _grace_slug(runtime)
+    is_docker = runtime.get("runtime_type") in DOCKER_ENGINE_TYPES
+    if is_docker:
+        await runtime_grace.mark_switching(
+            slug, runtime_grace.PHASE_LAUNCHING, grace_source
+        )
+    result = await _restart_runtime_impl(runtime, host=host)
+    if is_docker and not result.get("ok"):
+        await runtime_grace.clear_switching(slug)
+    return result
+
+
+async def _restart_runtime_impl(runtime: dict, *, host: ResolvedHost | None = None) -> dict:
     """Restarts a runtime.
 
     vllm_docker / llamacpp_docker: docker restart via SSH

@@ -372,6 +372,26 @@ class RedisKeys:
     def runtime_drift_candidate(slug: str) -> str:
         return f"mc:runtime-drift:{slug}"
 
+    # ── Switch Grace + Auto-Recovery (PR5, services/runtime_grace.py) ────
+    # runtime_switching: "this runtime is expected to be unreachable right
+    # now" — set by switch_recipe/start_runtime, cleared by the watcher once a
+    # probe succeeds. TTL is the safety net against a backend crash mid-switch.
+    @staticmethod
+    def runtime_switching(slug: str) -> str:
+        return f"mc:runtime-switching:{slug}"
+
+    # One auto-recovery attempt per 15 min per runtime; the SET-nx claim on
+    # this key is what keeps two workers from starting the engine twice.
+    @staticmethod
+    def runtime_recovery_cooldown(slug: str) -> str:
+        return f"mc:runtime-recovery:cooldown:{slug}"
+
+    # Consecutive FAILED auto-recoveries. At 2 the watcher gives up until an
+    # operator intervenes ("after 2 failed attempts, stop and ask").
+    @staticmethod
+    def runtime_recovery_failures(slug: str) -> str:
+        return f"mc:runtime-recovery:failures:{slug}"
+
     @staticmethod
     def agent_switch_progress(agent_id: str) -> str:
         return f"mc:agent:{agent_id}:runtime-switch-progress"

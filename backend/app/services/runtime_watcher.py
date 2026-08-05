@@ -11,6 +11,14 @@ Every tick it probes all enabled probeable runtimes via ``/v1/models``:
      ``runtime.model_changed`` and flags bound cli-bridge agents,
   3. runs the propagation sync pass for flagged agents that are now idle.
 
+PR5 adds two operational behaviours on top:
+  - switch grace: a runtime marked in-flight by ``runtime_grace`` (recipe
+    switch, manual start, cold load) is reported as ``switching`` instead of
+    counted as a failure — planned downtime no longer pages the operator,
+  - auto-recovery: a confirmed outage on a docker engine whose host answers
+    again gets exactly ONE start attempt per cooldown window, giving up after
+    two consecutive attempts (see :meth:`RuntimeWatcher._maybe_auto_recover`).
+
 Supersedes decision D-22 (periodic probing rejected) — see ADR-054.
 Same lifecycle pattern as IntelligenceService: singleton, asyncio loop,
 Redis lock for multi-worker dedup.
@@ -35,6 +43,13 @@ from app.services.agent_runtime_switch import (
     _PROBEABLE_RUNTIME_TYPES,
     probe_runtime_model,
 )
+from app.services.host_resolver import resolve_host_for_runtime
+from app.services.runtime_grace import (
+    SOURCE_AUTO_RECOVERY,
+    clear_switching,
+    get_switching,
+)
+from app.services.runtime_manager import DOCKER_ENGINE_TYPES
 from app.services.runtime_model_resolver import (
     invalidate_cached_model,
     session_scope,
@@ -51,6 +66,13 @@ logger = logging.getLogger(__name__)
 # (transient blips and engine restarts must not spam the activity feed).
 UNREACHABLE_EVENT_THRESHOLD = 3
 _STARTUP_GRACE = 20  # seconds — let DB/Redis/other services come up first
+
+# Auto-recovery (PR5). One attempt per runtime per cooldown window; after this
+# many consecutive attempts that did not bring the engine back, stop and hand
+# over to the operator rather than restarting in a loop.
+AUTO_RECOVERY_COOLDOWN = 900  # 15 min — longer than a normal warmup
+AUTO_RECOVERY_MAX_ATTEMPTS = 2
+AUTO_RECOVERY_FAILURE_TTL = 6 * 3600  # attempts "age out" after 6h of quiet
 
 
 def _utcnow_iso() -> str:
@@ -134,8 +156,24 @@ class RuntimeWatcher:
         served = await probe_runtime_model(runtime)
         latency_ms = int((time.monotonic() - started) * 1000)
         redis = await get_redis()
+        switching = await get_switching(runtime.slug, redis)
 
         if served is None:
+            if switching is not None:
+                # Planned downtime (recipe switch, cold load, recovery start).
+                # No failure counting, no event — that combination is what
+                # produced the notification storm on every switch. The 20-min
+                # TTL on the marker guarantees we fall back to normal
+                # alerting even if nobody ever clears it.
+                await self._write_live(
+                    redis, runtime.slug,
+                    reachable=False, served_model=None, latency_ms=None,
+                    consecutive_failures=await self._read_failures(redis, runtime.slug),
+                    status="switching",
+                    phase=switching.get("phase"),
+                    switch_source=switching.get("source"),
+                )
+                return
             fails = await self._bump_failures(redis, runtime.slug)
             await self._write_live(
                 redis, runtime.slug,
@@ -151,9 +189,16 @@ class RuntimeWatcher:
                     severity="warning",
                     detail={"slug": runtime.slug, "endpoint": runtime.endpoint},
                 )
+            await self._maybe_auto_recover(session, redis, runtime, fails)
             return
 
+        if switching is not None:
+            # The engine answers again — whatever start put us in grace has
+            # finished. This is the single place a switch window ends, so no
+            # caller has to poll for readiness itself.
+            await clear_switching(runtime.slug)
         await redis.delete(self._fail_key(runtime.slug))
+        await redis.delete(RedisKeys.runtime_recovery_failures(runtime.slug))
         await self._write_live(
             redis, runtime.slug,
             reachable=True, served_model=served, latency_ms=latency_ms,
@@ -193,6 +238,128 @@ class RuntimeWatcher:
         )
         await mark_agents_for_sync(session, runtime)
 
+    # ── Auto-recovery ────────────────────────────────────────────────────
+
+    async def _maybe_auto_recover(
+        self, session: AsyncSession, redis, runtime: Runtime, fails: int
+    ) -> None:
+        """One start attempt for a docker engine whose host is back but whose
+        container is gone (PR5).
+
+        The autostart flag file (``runtime_autostart``) only covers "start on
+        host boot". After a hard crash the Spark comes back, the flag never
+        fires for an already-running host, and the engine stays down until
+        someone notices. This closes that gap — deliberately narrow:
+
+        - only a CONFIRMED outage (fail counter at the unreachable threshold),
+          never a single blip,
+        - never during a planned switch (the caller returns early on grace),
+        - only docker engines on an SSH-reachable host — nothing else can be
+          started without operator context,
+        - only when the box itself answers again, so we don't hammer a box
+          that is simply off,
+        - one attempt per 15 min (Redis SET-nx claim, which also makes this
+          safe across workers),
+        - and after two consecutive attempts that did not bring the engine
+          back, we stop and tell the operator instead of retrying forever.
+
+        Everything is best-effort: any failure here must leave the watcher
+        exactly as functional as it was before.
+        """
+        if not settings.runtime_auto_recovery_enabled:
+            return
+        if fails < UNREACHABLE_EVENT_THRESHOLD:
+            return
+        if not runtime.enabled or runtime.runtime_type not in DOCKER_ENGINE_TYPES:
+            return
+        try:
+            host = await resolve_host_for_runtime(session, runtime)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("auto-recovery: host resolution failed for %s: %s",
+                         runtime.slug, exc)
+            return
+        if host is None or host.kind != "ssh":
+            return
+
+        failures = await self._read_recovery_failures(redis, runtime.slug)
+        if failures >= AUTO_RECOVERY_MAX_ATTEMPTS:
+            return  # given up already — the event was emitted at the transition
+
+        if not await self._host_answers(runtime, host):
+            return  # box is down, not just the container — nothing to recover
+
+        if not await self._claim_recovery_cooldown(redis, runtime.slug):
+            return
+
+        # Counted BEFORE the attempt: a start call that returns ok but never
+        # produces a serving engine must not be able to loop forever. The
+        # counter is cleared by the next probe that actually sees the engine.
+        attempt = await self._bump_recovery_failures(redis, runtime.slug)
+        await emit_event(
+            session,
+            "runtime.auto_recovery_started",
+            f"{runtime.slug}: host reachable but engine down — starting "
+            f"(attempt {attempt}/{AUTO_RECOVERY_MAX_ATTEMPTS})",
+            severity="info",
+            detail={"slug": runtime.slug, "attempt": attempt,
+                    "consecutive_failures": fails},
+        )
+
+        from app.services.runtime_manager import start_runtime
+        from app.services.sparkrun_manager import _to_runtime_dict  # noqa: SLF001
+
+        try:
+            result = await start_runtime(
+                _to_runtime_dict(runtime), host=host,
+                grace_source=SOURCE_AUTO_RECOVERY,
+            )
+        except Exception as exc:  # noqa: BLE001
+            result = {"ok": False, "message": f"start_runtime raised: {exc}"}
+
+        if result.get("ok"):
+            await emit_event(
+                session,
+                "runtime.auto_recovery_succeeded",
+                f"{runtime.slug}: start accepted — {result.get('message')}",
+                severity="info",
+                detail={"slug": runtime.slug, "attempt": attempt},
+            )
+            return
+
+        await emit_event(
+            session,
+            "runtime.auto_recovery_failed",
+            f"{runtime.slug}: auto-recovery start failed — {result.get('message')}",
+            severity="warning",
+            detail={"slug": runtime.slug, "attempt": attempt,
+                    "reason": result.get("message")},
+        )
+        if attempt >= AUTO_RECOVERY_MAX_ATTEMPTS:
+            await emit_event(
+                session,
+                "runtime.auto_recovery_given_up",
+                f"{runtime.slug}: {attempt} auto-recovery attempts failed — "
+                f"no further attempts until an operator starts it",
+                severity="warning",
+                detail={"slug": runtime.slug, "attempts": attempt},
+            )
+
+    async def _host_answers(self, runtime: Runtime, host) -> bool:
+        """Is the box itself up (container missing) or the whole box down?
+
+        A trivial SSH command is the cheapest honest answer — `get_runtime_state`
+        would do the same round trip plus a docker inspect we don't need.
+        """
+        from app.services.runtime_manager import _ssh_run  # noqa: SLF001
+
+        try:
+            _, _, exit_code = await _ssh_run("true", host=host, timeout=15)
+        except Exception as exc:  # noqa: BLE001 — box unreachable is the norm here
+            logger.debug("auto-recovery: %s host not reachable: %s",
+                         runtime.slug, exc)
+            return False
+        return exit_code == 0
+
     # ── Redis helpers ────────────────────────────────────────────────────
 
     @staticmethod
@@ -203,6 +370,34 @@ class RuntimeWatcher:
         fails = int(await redis.incr(self._fail_key(slug)))
         await redis.expire(self._fail_key(slug), self._interval * 10)
         return fails
+
+    async def _read_failures(self, redis, slug: str) -> int:
+        """Current fail count WITHOUT incrementing (grace snapshots)."""
+        try:
+            return int(await redis.get(self._fail_key(slug)) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _read_recovery_failures(self, redis, slug: str) -> int:
+        try:
+            return int(await redis.get(RedisKeys.runtime_recovery_failures(slug)) or 0)
+        except (TypeError, ValueError):
+            return 0
+
+    async def _bump_recovery_failures(self, redis, slug: str) -> int:
+        key = RedisKeys.runtime_recovery_failures(slug)
+        count = int(await redis.incr(key))
+        await redis.expire(key, AUTO_RECOVERY_FAILURE_TTL)
+        return count
+
+    async def _claim_recovery_cooldown(self, redis, slug: str) -> bool:
+        """SET-nx claim — the winner is the single worker that may act."""
+        return bool(
+            await redis.set(
+                RedisKeys.runtime_recovery_cooldown(slug), "1",
+                nx=True, ex=AUTO_RECOVERY_COOLDOWN,
+            )
+        )
 
     async def _write_live(self, redis, slug: str, **fields) -> None:
         payload = {"last_probe_at": _utcnow_iso(), **fields}

@@ -259,9 +259,14 @@ async def switch_recipe(
       4. Trigger ``runtime_model_resolver.invalidate_and_reprobe`` so the
          new model_identifier gets picked up automatically.
 
+    Throughout steps 1–4 the runtime is marked as switching
+    (``runtime_grace``) so the watcher treats the unavoidable downtime as
+    expected instead of an outage. Aborts clear the mark; a successful switch
+    leaves it to the watcher, which drops it when the engine serves again.
+
     Returns a status dict with ``ok``, ``message``, optional ``model``.
     """
-    from app.services import runtime_manager
+    from app.services import runtime_grace, runtime_manager
     from app.services.activity import emit_event
     from app.services.runtime_model_resolver import invalidate_and_reprobe
 
@@ -359,6 +364,16 @@ async def switch_recipe(
         new_recipe, slug=runtime.slug, tp_override=tp_override
     )
 
+    # Switch-grace (PR5): from here on the engine is deliberately down. The
+    # marker is set BEFORE the eviction — the gap between "model killed" and
+    # "marker written" is exactly where the watcher used to fire its false
+    # unreachable alarms. Every path below this line must either clear it
+    # (abort) or hand it on; a successful switch keeps it until the watcher
+    # sees the new engine serve.
+    await runtime_grace.mark_switching(
+        runtime.slug, runtime_grace.PHASE_EVICTING, runtime_grace.SOURCE_SWITCH
+    )
+
     # 1. Evict ALL running Spark model containers (label + solo sweep) and wait
     # until the box is free. A failed eviction ABORTS — starting a second model
     # on top of a still-occupied GPU/RAM is the exact failure we're fixing.
@@ -366,6 +381,7 @@ async def switch_recipe(
         runtime.slug, host=host
     )
     if not evict_result.get("ok"):
+        await runtime_grace.clear_switching(runtime.slug)
         logger.error(
             "switch_recipe: eviction failed for %s — aborting switch: %s",
             runtime.slug, evict_result.get("message"),
@@ -392,8 +408,13 @@ async def switch_recipe(
     # 3. Start with new recipe. Re-read dict so it reflects the persisted
     # launch_command.
     runtime_dict = _to_runtime_dict(runtime)
-    start_result = await runtime_manager.start_runtime(runtime_dict, host=host)
+    start_result = await runtime_manager.start_runtime(
+        runtime_dict, host=host, grace_source=runtime_grace.SOURCE_SWITCH
+    )
     if not start_result.get("ok"):
+        # start_runtime already dropped the marker on its own failure; the
+        # explicit clear keeps this path correct even if that changes.
+        await runtime_grace.clear_switching(runtime.slug)
         # Surface the launch failure as a first-class activity event — this is
         # the fix for the original incident's silent failure mode: sparkrun
         # reported success (exit 0, fire-and-forget) while vLLM never actually
@@ -418,6 +439,13 @@ async def switch_recipe(
             "old_recipe": old_recipe,
             "new_recipe": new_recipe,
         }
+
+    # Launch accepted — the box is now loading weights, which is the longest
+    # part of the window (up to 15 min on a cold first load). The watcher
+    # clears this once the engine answers.
+    await runtime_grace.mark_switching(
+        runtime.slug, runtime_grace.PHASE_LOADING, runtime_grace.SOURCE_SWITCH
+    )
 
     # 4. Trigger probe — won't complete instantly (vllm takes minutes to load),
     # but kicks off the auto-detection so the next request gets the new model.

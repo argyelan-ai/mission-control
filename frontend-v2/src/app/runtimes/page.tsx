@@ -1409,9 +1409,26 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
             <div className="flex items-center gap-2 text-xs mt-0.5" style={{ color: C.textSecondary }}>
               <span
                 className="inline-block h-1.5 w-1.5 rounded-full shrink-0"
-                style={{ background: live.reachable ? STATUS.online : STATUS.error }}
+                style={{
+                  background: live.reachable
+                    ? STATUS.online
+                    : live.status === "switching"
+                      ? STATUS.warning
+                      : STATUS.error,
+                }}
               />
-              {live.reachable ? (
+              {/* Planned downtime (recipe switch / start / cold load) reads as
+                  a warning chip, not the red "unreachable" line — the engine is
+                  down on purpose and comes back in 2-15 minutes. */}
+              {!live.reachable && live.status === "switching" ? (
+                <span
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium shrink-0"
+                  style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
+                  title={t("switchingTitle")}
+                >
+                  {live.phase === "evicting" ? t("switchingEvicting") : t("switchingLoading")}
+                </span>
+              ) : live.reachable ? (
                 <>
                   <span className="truncate" title={live.served_model ?? undefined}>
                     {t("engineServes", { model: live.served_model ?? "—" })}

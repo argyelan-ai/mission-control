@@ -1963,6 +1963,10 @@ export interface RuntimeLiveStatus {
   last_probe_at: string;
   consecutive_failures: number;
   drift: boolean;
+  /** "switching" = planned downtime (recipe switch / start / cold load), not an outage. */
+  status?: string;
+  phase?: "evicting" | "launching" | "loading" | string | null;
+  switch_source?: string | null;
 }
 
 export interface RuntimesLiveResponse {
