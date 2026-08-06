@@ -2322,5 +2322,12 @@
     "x_api_secret": "Consumer Secret aus dem X-Developer-Portal — für den X-Post-Publisher (ADR-065)",
     "x_access_token": "OAuth-1.0a-Access-Token des postenden Accounts — für den X-Post-Publisher (ADR-065)",
     "x_access_token_secret": "OAuth-1.0a-Access-Token-Secret des postenden Accounts — für den X-Post-Publisher (ADR-065)"
+  },
+  "common": {
+    "section": {
+      "collapse": "{name} einklappen",
+      "expand": "{name} ausklappen",
+      "jumpTo": "Zu Abschnitt springen"
+    }
   }
 }
