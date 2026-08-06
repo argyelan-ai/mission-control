@@ -221,7 +221,6 @@ services:
       MC_AGENTS_ROOT: ${HOME}/.mc/agents
     volumes:
       - ${HOME}/.mc:${HOME}/.mc
-      - ${HOME}/.agents/skills:${HOME}/.agents/skills:ro
       # Host-specific extras (SSH keys for remote runtimes, free-code sandbox
       # mounts, custom Caddyfile) belong in docker-compose.override.yml —
       # see docker-compose.override.example.yml. Do NOT hardcode them here.
@@ -240,42 +239,13 @@ services:
       # rw seit 05.07.: Task-Delete räumt /shared-mcp/<task_id>/ mit
       # (E2E-Videos/Screenshots, services/mcp_media_cleanup.py) — vorher ro.
       - ${HOME}/.mc/mcp-screenshots:/shared-mcp
-      # Token-Harvester liest Boss-Transkripte (read-only — keine Schreibzugriffe).
-      # Boss schreibt seine JSONL-Sessions in ~/.claude/projects/ (Host-native).
-      # Boss-Attribution via cwd/gitBranch-Heuristik verhindert, dass private
-      # Sessions des Operators faelschlicherweise dem Boss zugerechnet werden.
-      - ${HOME}/.claude:${HOME}/.claude:ro
-      # Grok: EIN Verzeichnis-Mount, read-only. Ersetzt die frueheren Einzel-
-      # Mounts (logs/, sessions/, auth.json) — Konsumenten: Token-Harvester
-      # (Bench #18: logs/unified.jsonl + sessions/) und Modellkatalog
-      # (read_grok_token() liest auth.json fuer cli-chat-proxy/v1/models).
-      #
-      # ⚠️ Warum NICHT die einzelne auth.json (Live-Gate-Fund 30.07.): Grok
-      # ERSETZT die Datei bei jeder Token-Rotation atomar (neue Datei + rename).
-      # Ein Einzeldatei-Bind haengt am INODE, nicht am Pfad — nach der ersten
-      # Rotation zeigt er ins Leere ("-????????? auth.json" im Container) und
-      # der Katalog faellt still auf credential_missing zurueck. Ein
-      # Verzeichnis-Bind uebersteht das Ersetzen von Dateien darin.
-      # Privacy-Delta gegenueber vorher: logs/ + sessions/ (die sensiblen
-      # Prompt-Inhalte) waren bereits gemountet; neu hinzu kommen im Kern
-      # auth.json (der Zweck) und models_cache.json.
-      # Auf einem Host ohne Grok-CLI diesen Mount in docker-compose.override.yml
-      # herausnehmen.
-      - ${HOME}/.grok:${HOME}/.grok:ro
-      # Token-Harvester Hermes-Quelle (Bench #18 PR1): NUR state.db — NIEMALS
-      # das ganze ~/.hermes/-Verzeichnis mounten (enthaelt Secrets: .env,
-      # auth.json). Der Harvester kopiert die Datei vor dem Oeffnen in ein
-      # Tempverzeichnis (nie live lesen/sperren).
-      # ⚠️ -wal/-shm werden BEWUSST NICHT gemountet (Review-Fix, 21.07.):
-      # Docker legt fuer eine fehlende Bind-Mount-Quelle eine DIRECTORY auf dem
-      # Host an (verifiziert), und Hermes raeumt state.db-wal/-shm bei einem
-      # sauberen Shutdown selbst weg. Ein Backend-Recreate im falschen Moment
-      # wuerde also ~/.hermes/state.db-wal als Verzeichnis auf dem Host anlegen
-      # und Hermes' eigene SQLite-DB beim naechsten Start kaputt machen. Der
-      # Harvester liest deshalb NUR die gecheckpointete Haupt-Datei (state.db)
-      # — Tradeoff: Events aus dem noch ungecheckpointeten WAL fehlen bis zum
-      # naechsten SQLite-Checkpoint (Minuten), fuer Kosten-Analytics kein Problem.
-      - ${HOME}/.hermes/state.db:${HOME}/.hermes/state.db:ro
+      # Host-agent integration sources (Boss ~/.claude transcripts, Grok
+      # ~/.grok, Hermes ~/.hermes/state.db for the token harvester / model
+      # catalog) are OPT-IN mounts: a fresh install has none of these tools,
+      # and Docker would create the missing paths as empty root-owned
+      # directories in $HOME. If you run host agents, copy the block from
+      # docker-compose.override.example.yml (it documents the sharp edges:
+      # Grok auth.json inode rotation, Hermes -wal/-shm corruption risk).
       # Templates als Live-Mount — Aenderungen an *.j2 werden vom
       # template_renderer.py (FileSystemLoader mit auto_reload) sofort
       # aufgenommen. Kein Backend-Rebuild mehr bei Template-Aenderungen.

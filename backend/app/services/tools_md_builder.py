@@ -2,8 +2,9 @@
 ToolsMdBuilder — generates TOOLS.md for agents.
 
 Extracted from agents.py for better testability and shorter files.
-Pure function (no DB dependency, pure string generation).
+Pure string generation, no DB dependency (reads settings.mc_repo_path).
 """
+from app.config import settings
 from app.constants import REFLECTION_MIN_CHARS, REFLECTION_REQUIRED_FIELDS
 
 
@@ -134,7 +135,7 @@ curl -s -X POST "$MC_API_URL/api/v1/agent/boards/{board_id}/tasks" \\
   -H "Content-Type: application/json" \\
   -d '{{
     "title": "Concrete task for the agent",
-    "description": "## Goal\\nConcretely what should be achieved.\\n\\n## Context\\n- Path: ~/Workspace/Projects/mission-control/\\n- URL: http://localhost\\n\\n## Guardrails\\n- Do not change the DB schema\\n\\n## Expected output\\n- PR with changes\\n\\n## Definition of Done\\n- Tests green",
+    "description": "## Goal\\nConcretely what should be achieved.\\n\\n## Context\\n- Path: ~/projects/your-app/\\n- URL: http://localhost\\n\\n## Guardrails\\n- Do not change the DB schema\\n\\n## Expected output\\n- PR with changes\\n\\n## Definition of Done\\n- Tests green",
     "credentials": "email: admin@mc.local / password: xxx",
     "parent_task_id": "YOUR-TASK-ID-HERE",
     "assigned_agent_id": "AGENT-UUID-HERE",
@@ -643,13 +644,13 @@ NEVER: db, redis.
 ### Shell commands (run directly)
 
 Restart (fast, no rebuild):
-  cd ~/Workspace/Projects/mission-control && docker compose restart backend
+  cd {settings.mc_repo_path} && docker compose restart backend
 
 Rebuild (after code changes):
-  cd ~/Workspace/Projects/mission-control && docker compose up --build -d backend
+  cd {settings.mc_repo_path} && docker compose up --build -d backend
 
 Backup before larger deployments:
-  cd ~/Workspace/Projects/mission-control && ./backup.sh
+  cd {settings.mc_repo_path} && ./backup.sh
 
 Check logs:
   docker compose logs backend --tail=50

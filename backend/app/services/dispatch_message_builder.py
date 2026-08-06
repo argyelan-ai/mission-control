@@ -917,7 +917,7 @@ The requesting agent automatically resumes with your result.
         subtask_body = (
             '{"title": "Concrete task", '
             '"description": "## Goal\\nWhat exactly should be achieved.\\n\\n'
-            '## Context\\n- Path: ~/Workspace/Projects/mission-control/\\n'
+            '## Context\\n- Path: ~/projects/your-app/\\n'
             '- URL: http://localhost\\n- Stack: FastAPI + Next.js\\n\\n'
             '## Guardrails\\n- Do not change the DB schema\\n- PR only, do not merge\\n\\n'
             '## Expected Output\\n- PR with changes\\n- Before/after screenshots\\n\\n'

@@ -8,6 +8,10 @@
 #
 # Note: `volumes` lists in an override are MERGED (appended) with the base
 # docker-compose.yml, so the entries below are additions, not replacements.
+#
+# IMPORTANT: when you uncomment the `# services:` block below, DELETE the
+# `services: {}` placeholder line first — two top-level `services` keys make
+# compose fail with 'mapping key "services" already defined'.
 
 services: {}
 
@@ -19,6 +23,26 @@ services: {}
 #       # DGX box via DGX_SSH_HOST/DGX_SSH_USER in .env). Mounts your SSH keys
 #       # read-only into the backend container.
 #       - ~/.ssh:/home/mcuser/.ssh:ro
+#
+#       # ── Host-agent integrations (optional) ────────────────────────────
+#       # Sources for the token harvester and model catalog when you run
+#       # host-side agents (Boss/Hermes/Grok). A stock install does not have
+#       # these tools — leave the block commented out, or Docker will create
+#       # the missing paths as empty directories in your $HOME.
+#       #
+#       # Boss transcripts (Claude Code writes JSONL sessions host-natively;
+#       # attribution via cwd/gitBranch heuristics keeps the operator's own
+#       # sessions out of the agent's numbers):
+#       - ~/.claude:${HOME}/.claude:ro
+#       # Grok: ONE directory mount, read-only. Never mount auth.json as a
+#       # single file — Grok replaces it atomically on token rotation and a
+#       # single-file bind sticks to the dead inode.
+#       - ~/.grok:${HOME}/.grok:ro
+#       # Hermes: ONLY state.db — never the whole ~/.hermes/ (contains
+#       # secrets), and deliberately no -wal/-shm: Docker would create a
+#       # missing bind source as a DIRECTORY and corrupt Hermes' SQLite on
+#       # its next start. The harvester copies the file before opening it.
+#       - ~/.hermes/state.db:${HOME}/.hermes/state.db:ro
 #
 #       # ── free-code sandbox (optional, host-specific) ────────────────────
 #       # Local sandbox env for the free-code bridge agent. Paths are examples;
