@@ -715,6 +715,7 @@ Three scenarios, three different calls. Mixing them up = worker gets nothing and
 | **New sub-task for a worker** (they should do something concrete that doesn't exist yet) | `mc delegate "..." --to <agent> --description "..."` | Creates a new sub-task with its own dispatch → worker gets the prompt in their session. My task → `blocked` with callback. |
 | **Briefing / wake signal on an already-assigned task** (sub-task exists, worker is `assigned_agent_id`, I'm giving them extra instructions or nudging them) | `mc comment handoff "<text>"` (task_id from active context) | `handoff` is a **deliverable** comment_type → worker sees it via `/me/poll` and wakes up. |
 | **Routine note / audit entry** (status for {{ operator_name }}, context note for myself, no call to a worker) | `mc comment message "<text>"` (default — task_id from active context) | Stays in the audit log. Is **not** delivered to another agent. |
+| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent>` — a **NEW** task (works without an active task for Board Leads) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
 
 **Forbidden:** `mc comment message "Briefing text for worker XYZ"` on a task assigned to someone else. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task).
 
@@ -1252,6 +1253,7 @@ Three scenarios, three different calls. Mixing them up = worker gets nothing and
 | **New sub-task for a worker** (worker should do something concrete that doesn't exist yet) | `mc delegate "..." --to <agent> --description "..."` | Creates a new sub-task with its own dispatch → worker gets the prompt in their session. My task → `blocked` with callback. |
 | **Briefing / wake signal on an already-assigned task** (sub-task exists, worker is `assigned_agent_id`, I'm giving them additional instructions or nudging them) | `mc comment handoff "<text>"` (task_id from active context) | `handoff` is a **deliverable** comment_type → worker sees it via `/me/poll` and wakes up. |
 | **Routine note / audit entry** (status update for {{ operator_name }}, context note for myself, no call to a worker) | `mc comment message "<text>"` (default — task_id from active context) | Stays in the audit log. Is **not** delivered to another agent. |
+| **Follow-up on a CLOSED task** (task is `done`/`failed`, new work relates to it) | `mc delegate "..." --to <agent>` — a **NEW** task (works without an active task for Board Leads) | A `handoff` on a closed task is a dead order: no ACK, no dispatch, no watchdog — the backend refuses it with 409. |
 
 **Forbidden:** `mc comment message "Briefing text for worker XYZ"` on someone else's assigned task. The worker will never see it — the system responds with a `delivery_hint` in the response, don't ignore it. Instead use `mc comment handoff "..."` (existing task) or `mc delegate` (new task).
 

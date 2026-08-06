@@ -255,6 +255,28 @@ async def agent_add_comment(
     if not task or task.board_id != board_id:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    # ── Closed-task guard (live incident 2026-08-06) ─────────────────────
+    # A delivered-type comment on a closed task has no vessel: no ACK, no
+    # status, no dispatch record, no watchdog. The worker receives a wall of
+    # text without a mandate to reopen anything — the order dies silently.
+    # Hard 409 on purpose (Bug 9's soft delivery_hint would not have been
+    # read); `review` tasks are NOT closed, so review feedback keeps flowing,
+    # and plain `message` notes stay allowed as audit trail.
+    _DELIVERED_ON_CLOSED = ("handoff", "blocker", "feedback", "resolution")
+    if payload.comment_type in _DELIVERED_ON_CLOSED and task.status in (
+        "done",
+        "failed",
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Task ist {task.status} — ein `{payload.comment_type}`-Kommentar "
+                "erreicht hier niemanden mehr. Ein Folgeauftrag gehoert in einen "
+                "NEUEN Task: `mc delegate \"…\" --to <agent> --description \"…\"` "
+                "(geht auch ohne aktiven Task, wenn du Board Lead bist)."
+            ),
+        )
+
     # ── Auto-ACK: first comment from the assigned agent → set ack_at ──
     # Shared handshake (§3.3) — same implementation as the Message channel.
     from app.services.task_lifecycle import apply_ack_handshake
