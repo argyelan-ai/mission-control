@@ -19,7 +19,7 @@ single dark-mode control room, running entirely on your own hardware.
 [![OpenAI-compatible](https://img.shields.io/badge/any_OpenAI--compatible-%2Fv1-0fa3a3?labelColor=1c1c1c)](#run-your-own-models--zero-cloud)
 
 [Install](#install-in-one-line) · [Why](#why-mission-control) ·
-[Platforms](#runs-on) · [Docs](docs/) · [Roadmap](#roadmap) ·
+[Platforms](#runs-on) · [Handbook](docs/handbook/index.md) · [Roadmap](#roadmap) ·
 [Community](#community)
 
 ![Mission Control — control room](docs/assets/mc-home.png)
@@ -86,7 +86,8 @@ Updating later is `./install.sh --update`.
 | **Windows 10/11** | WSL2 + the one-liner — [guide](docs/setup/windows.md); a one-click bootstrapper is on the [roadmap](#roadmap) | ~10 min |
 | **Windows Server / company VM** (Hyper-V, VMware ESXi) | a small Linux VM next to your Windows VMs — [guide](docs/setup/windows.md#windows-server--company-hypervisors) | ~10 min |
 
-Details: [Quickstart](#quickstart) · [Windows](docs/setup/windows.md) ·
+Details: [Quickstart](#quickstart) · [Handbook](docs/handbook/index.md) ·
+[Windows](docs/setup/windows.md) ·
 [Updating](docs/setup/updating.md) ·
 [Build a vertical](docs/setup/build-a-vertical.md).
 

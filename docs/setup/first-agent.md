@@ -208,7 +208,9 @@ On the agent's detail page:
 
 Create a task (Tasks/Pipeline board) and assign it to the agent, or let
 Board-Lead dispatch pick it. Watch the status flow: `inbox` →
-`in_progress` (the agent ACKs within ~10 min or gets re-assigned) → `review`
+`in_progress` (the agent ACKs within a runtime-dependent window — 15 min for
+Docker cli-bridge agents, 5 for host agents; at half time the dispatch is
+silently retried, at the full timeout the operator gets an escalation) → `review`
 → `done`. Task comments show the agent's progress updates; the Pipeline
 board on the homepage shows all agents' lanes at a glance.
 

@@ -11,7 +11,26 @@ and PRs welcome.
   current versions) — https://docs.docker.com/desktop/install/windows-install/
 - **git** — https://git-scm.com/download/win
 
-## Recommended: run inside WSL2 (the Linux path)
+## Easiest: let the bootstrapper do it
+
+`setup.ps1` is a WSL2 bootstrapper: it checks Windows version, virtualization,
+WSL2, the Ubuntu distro and Docker Desktop, installs what is missing
+(idempotent across the one WSL2 reboot), then runs the standard Linux
+installer inside WSL and opens the browser. Verified end-to-end on a real
+Windows 11 box.
+
+```powershell
+git clone https://github.com/argyelan-ai/mission-control.git
+cd mission-control
+.\setup.ps1              # or:  .\setup.ps1 -CheckOnly   (report only, changes nothing)
+```
+
+Note: the first backend boot on a cold WSL2 disk can be slow enough to trip
+the compose health window — the container self-heals; if the installer
+reports an unhealthy backend, wait a minute and run `docker compose up -d`
+inside WSL again.
+
+## Manual: run inside WSL2 (the Linux path)
 
 Everything from the README works 1:1 inside a WSL2 distro (Ubuntu), including
 the one-liner:
