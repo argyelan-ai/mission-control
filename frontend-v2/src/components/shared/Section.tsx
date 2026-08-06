@@ -104,7 +104,7 @@ export function Section({
         </h2>
         {count != null && (
           <span
-            className="label-sys tabular-nums rounded-sm px-1.5 py-px"
+            className="label-sys tabular-nums rounded-sm px-1.5 py-0.5"
             style={{ background: C.border }}
             data-testid={`section-count-${id}`}
           >
@@ -166,9 +166,14 @@ export function Section({
  */
 export function SectionOrFragment({
   embedded,
+  embeddedTitle = true,
   children,
   ...section
-}: SectionProps & { embedded?: boolean }) {
+}: SectionProps & {
+  embedded?: boolean;
+  /** false when the parent already names this surface (e.g. a tab label). */
+  embeddedTitle?: boolean;
+}) {
   if (!embedded) return <Section {...section}>{children}</Section>;
 
   // Embedded is a demotion, not a deletion: the sub-heading is one type step
@@ -178,13 +183,17 @@ export function SectionOrFragment({
     <div id={section.id} data-testid={`section-${section.id}`} className="scroll-mt-4">
       <div className="flex items-center gap-2 mb-2">
         <div className="min-w-0 flex-1 flex items-center gap-2 flex-wrap">
-          <h3 className="label-sys" style={{ color: C.textSecondary }}>
-            {section.title}
-          </h3>
-          {section.count != null && (
-            <span className="label-sys tabular-nums" style={{ color: C.textDim }}>
-              {section.count}
-            </span>
+          {embeddedTitle && (
+            <>
+              <h3 className="label-sys" style={{ color: C.textSecondary }}>
+                {section.title}
+              </h3>
+              {section.count != null && (
+                <span className="label-sys tabular-nums" style={{ color: C.textDim }}>
+                  {section.count}
+                </span>
+              )}
+            </>
           )}
           {section.badge}
         </div>

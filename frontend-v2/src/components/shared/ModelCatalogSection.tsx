@@ -138,7 +138,6 @@ function ModelRow({
         "data-cli-only": isCliOnly ? "true" : "false",
       }}
       tone={isNew ? "accent" : "idle"}
-      className="!py-1 !min-h-7"
       name={
         <span
           className="font-mono text-[11px]"
@@ -418,6 +417,8 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
   return (
     <SectionOrFragment
       embedded={embedded}
+      // The Models tab strip already names and counts this surface.
+      embeddedTitle={false}
       id="model-catalog"
       title={t("title")}
       hint={t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
@@ -426,7 +427,7 @@ export function ModelCatalogSection({ embedded = false }: { embedded?: boolean }
         totalNew > 0 ? (
           <span
             data-testid="catalog-total-new"
-            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
+            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-0.5"
           >
             {totalNew} {t("newLabel")}
           </span>

@@ -438,6 +438,8 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
   return (
     <SectionOrFragment
       embedded={embedded}
+      // The Models tab strip already names and counts this surface.
+      embeddedTitle={false}
       id="local-models"
       title={t("title")}
       hint={t("subtitle", { time: timeAgo(lastUpdated, locale) })}
@@ -446,7 +448,7 @@ export function LocalModelBrowser({ embedded = false }: { embedded?: boolean } =
         newCount > 0 ? (
           <span
             data-testid="local-registry-new-count"
-            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
+            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-0.5"
           >
             {newCount} {t("newLabel")}
           </span>
