@@ -64,6 +64,7 @@ from app.routers import (
     auth,
     files,
     boards,
+    channels,
     clawhub,
     cli_plugins,
     cli_tools,
@@ -205,6 +206,17 @@ async def lifespan(app: FastAPI):
     # so a newly shipped provider model no longer waits for someone to open the
     # /runtimes page.
     await model_catalog_checker.start()
+    # Channels settings (DB overrides + secrets-stored Telegram tokens) MUST
+    # be applied before the chat loops start — telegram_bot.start() decides
+    # "configured?" from the settings singleton this call patches.
+    try:
+        from app.database import async_session_maker
+        from app.services.channel_config import apply_channel_overrides
+
+        async with async_session_maker() as _cc_session:
+            await apply_channel_overrides(_cc_session)
+    except Exception as e:
+        logger.warning("channel overrides at startup failed (env defaults stay): %s", e)
     await telegram_bot.start()
     # Slack inbound (ADR-072). MC has no public URL, so Slack cannot call us —
     # this opens the Socket Mode websocket outbound. Silently inert unless the
@@ -835,6 +847,7 @@ app.include_router(runtime_schedules.router)
 app.include_router(tags.router)
 app.include_router(secrets.router)
 app.include_router(slack.router)  # /api/v1/slack — Slack channel setup + connection test
+app.include_router(channels.router)  # /api/v1/channels — channel settings page + Telegram connection test
 app.include_router(credentials.router)
 app.include_router(skills.router)
 app.include_router(clawhub.router)

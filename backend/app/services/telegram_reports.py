@@ -28,11 +28,20 @@ TELEGRAM_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
 
 
 class TelegramReportsService:
-    """Singleton sender for the reports bot."""
+    """Singleton sender for the reports bot.
 
-    def __init__(self) -> None:
-        self._token = settings.telegram_reports_bot_token or None
-        self._chat_id = settings.telegram_reports_chat_id or None
+    Token/chat-id are read from ``settings`` at CALL time — the old
+    import-time freeze meant a token change (settings page, secrets
+    rotation) silently required a backend restart to take effect.
+    """
+
+    @property
+    def _token(self) -> str | None:
+        return settings.telegram_reports_bot_token or None
+
+    @property
+    def _chat_id(self) -> str | None:
+        return settings.telegram_reports_chat_id or None
 
     @property
     def configured(self) -> bool:
