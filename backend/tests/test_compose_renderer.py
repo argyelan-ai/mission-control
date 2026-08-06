@@ -285,8 +285,13 @@ async def test_renders_openclaude_image_for_cross_cli_switch(async_session, comp
     services = parsed["services"]
     # Override should now be present.
     assert services["mc-agent-davinci"].get("image") == OPENCLAUDE_IMAGE
-    # Sparky stays on its base, no extra change.
-    assert "image" not in services["mc-agent-sparky"] or services["mc-agent-sparky"]["image"] == OPENCLAUDE_IMAGE
+    # Sparky stays on its base, no extra change. A legacy fixture carries the
+    # bare local image name; the renderer leaves untouched services as-is, so
+    # compare prefix-agnostically (see _image_is).
+    from app.services.compose_renderer import _image_is
+    assert "image" not in services["mc-agent-sparky"] or _image_is(
+        services["mc-agent-sparky"]["image"], "mc-agent-base"
+    )
 
 
 @pytest.mark.asyncio

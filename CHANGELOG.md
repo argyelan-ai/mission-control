@@ -7,6 +7,14 @@ follow [SemVer](https://semver.org/) with a `0.x` "expect movement" caveat.
 ## [Unreleased]
 
 ### Added
+- **Agent images can come from GHCR** — the compose renderer derives agent
+  image names from `MC_AGENT_IMAGE_PREFIX`/`MC_AGENT_IMAGE_TAG`. The default
+  stays `""` (bare local names) until the v0.2.0 release publishes
+  `mc-claude-agent` + `mc-agent-base`; the release flips the default.
+  **Upgrade note for existing installs:** once the prefix becomes active,
+  run `./scripts/build-agent-images.sh all` once — it now dual-tags local
+  builds so they shadow the registry pull. omp/kimi images remain local-only
+  (arm64-pinned binaries).
 
 - **Solo-capability-aware sparkrun recipe switching (ADR-059):** the
   `/runtimes` recipe switcher now knows which sparkrun recipes actually fit
