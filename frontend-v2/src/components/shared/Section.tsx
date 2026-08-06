@@ -195,10 +195,15 @@ export function SectionOrFragment({
               )}
             </>
           )}
-          {section.badge}
+          {embeddedTitle && section.badge}
         </div>
-        {section.actions && (
-          <div className="flex items-center gap-1.5 shrink-0">{section.actions}</div>
+        {(section.actions || (!embeddedTitle && section.badge)) && (
+          // Without a title the badge would sit alone on an otherwise empty
+          // line; keep it with the actions so the row reads as one strip.
+          <div className="flex items-center gap-1.5 shrink-0">
+            {!embeddedTitle && section.badge}
+            {section.actions}
+          </div>
         )}
       </div>
       {children}
