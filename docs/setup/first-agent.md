@@ -144,12 +144,15 @@ will fail.
 ```bash
 python3 -m pip install --user jinja2 websockets   # one-time
 brew install tmux                                 # if you don't have it
-python3 scripts/cli-bridge.py &                   # keep this running (its own terminal/tmux/screen, or a launchd job)
+make bridge-install                               # supervised service: starts at login, respawns on crash
 ```
 
-There's no bundled launchd job for this yet — for anything beyond a local
-test, keep it running under your process supervisor of choice (`tmux`,
-`screen`, or your own `launchd`/`systemd` unit).
+`make bridge-install` sets up a launchd agent (macOS) or a systemd user unit
+(Linux) via `scripts/cli-bridge-service.sh`. `make bridge-status` checks it,
+`make bridge-uninstall` removes it. On headless Linux boxes run
+`loginctl enable-linger $USER` once so the user unit survives logout. For a
+quick throwaway test, `python3 scripts/cli-bridge.py &` in a terminal still
+works.
 
 ## 4. Create the agent
 

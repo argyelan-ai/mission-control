@@ -56,3 +56,12 @@ backup: ## Back up DB + ~/.mc now (keeps the last 10)
 
 backup-schedule: ## Install a daily 03:00 automatic backup (launchd/cron)
 	./scripts/schedule-backup.sh
+
+bridge-install: ## Run cli-bridge.py as a managed service (launchd/systemd)
+	./scripts/cli-bridge-service.sh
+
+bridge-uninstall: ## Stop + remove the cli-bridge service
+	./scripts/cli-bridge-service.sh --remove
+
+bridge-status: ## Is the cli-bridge reachable?
+	./scripts/cli-bridge-service.sh --status

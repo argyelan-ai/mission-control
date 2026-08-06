@@ -34,7 +34,9 @@ import time
 from typing import Optional
 import uuid
 
-PORT = 18792
+# Overridable so a second instance can run for tests/migrations; the backend
+# side stays on the default (free_code_bridge_url / host.docker.internal:18792).
+PORT = int(os.environ.get("CLI_BRIDGE_PORT", "18792"))
 HOME = Path.home()
 LOG_DIR = Path(os.environ.get("CLI_BRIDGE_LOG_DIR", HOME / "Workspace/Sandboxes/free-code-local/logs"))
 LOG_DIR.mkdir(parents=True, exist_ok=True)
