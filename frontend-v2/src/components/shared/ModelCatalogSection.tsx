@@ -45,6 +45,7 @@ import type {
 } from "@/lib/types";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
+import { Section } from "@/components/shared/Section";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // ── Status-Vokabular ─────────────────────────────────────────────────────────
@@ -410,30 +411,22 @@ export function ModelCatalogSection() {
     : null;
 
   return (
-    <div className="mt-8">
-      {/* Sektions-Kopf — spiegelt die CLI-Tools-/vLLM-Header dieser Seite */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          aria-hidden
-          className="w-px self-stretch min-h-[36px] bg-gradient-to-b from-[var(--color-accent)] to-transparent"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-primary">{t("title")}</h2>
-            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">{t("providersBadge")}</span>
-            {totalNew > 0 && (
-              <span
-                data-testid="catalog-total-new"
-                className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-              >
-                {totalNew} {t("newLabel")}
-              </span>
-            )}
-          </div>
-          <p className="text-xs mt-0.5 text-muted">
-            {t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
-          </p>
-        </div>
+    <Section
+      id="model-catalog"
+      title={t("title")}
+      hint={t("subtitle", { time: timeAgo(newestCachedAt, locale) })}
+      count={providers.length}
+      badge={
+        totalNew > 0 ? (
+          <span
+            data-testid="catalog-total-new"
+            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
+          >
+            {totalNew} {t("newLabel")}
+          </span>
+        ) : undefined
+      }
+      actions={
         <button
           type="button"
           onClick={() => refreshMutation.mutate()}
@@ -447,7 +440,8 @@ export function ModelCatalogSection() {
           )}
           {t("refreshNow")}
         </button>
-      </div>
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2 text-muted">
@@ -506,6 +500,6 @@ export function ModelCatalogSection() {
         onConfirm={() => pending && bindMutation.mutate(pending)}
         onCancel={() => setPending(null)}
       />
-    </div>
+    </Section>
   );
 }

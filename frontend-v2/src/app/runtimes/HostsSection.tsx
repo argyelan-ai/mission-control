@@ -21,6 +21,7 @@ import { useAppStore } from "@/lib/store";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { BoxWizard } from "./BoxWizard";
+import { Section } from "@/components/shared/Section";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -661,33 +662,14 @@ export function HostsSection() {
   });
 
   return (
-    <div className="mt-8">
-      {/* Section header — matches vLLM/LM Studio section style */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          className="w-px"
-          style={{
-            alignSelf: "stretch",
-            background: `linear-gradient(to bottom, ${C.textDim} 0%, transparent 100%)`,
-            minHeight: "36px",
-          }}
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>{t("title")}</h2>
-            <span
-              className="text-xs px-1.5 py-px rounded"
-              style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
-            >
-              {t("registryBadge")}
-            </span>
-          </div>
-          <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {t("subtitle")}
-          </p>
-        </div>
-        {isAdmin && (
-          <div className="flex items-center gap-1.5 shrink-0">
+    <Section
+      id="hosts"
+      title={t("title")}
+      hint={t("subtitle")}
+      count={(hosts ?? []).length}
+      actions={
+        isAdmin ? (
+          <>
             {/* Wizard = der geführte Weg (testen → Basis → Modell → läuft).
                 „Host" bleibt daneben als Direkteingabe für alle, die genau
                 wissen was sie eintragen — und für flask_wol/local, die der
@@ -717,9 +699,10 @@ export function HostsSection() {
               <Plus size={11} />
               {t("addHostButton")}
             </button>
-          </div>
-        )}
-      </div>
+          </>
+        ) : undefined
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -775,6 +758,6 @@ export function HostsSection() {
       )}
 
       {wizardOpen && <BoxWizard onClose={() => setWizardOpen(false)} />}
-    </div>
+    </Section>
   );
 }

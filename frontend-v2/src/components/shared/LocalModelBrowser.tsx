@@ -46,6 +46,7 @@ import type {
 } from "@/lib/types";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
+import { Section } from "@/components/shared/Section";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { SshProcessDeployDialog } from "@/components/shared/SshProcessDeployDialog";
 
@@ -450,32 +451,22 @@ export function LocalModelBrowser() {
   };
 
   return (
-    <div className="mt-8">
-      {/* Sektions-Kopf — gleiche Anatomie wie Modell-Katalog / CLI-Tools */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          aria-hidden
-          className="w-px self-stretch min-h-[36px] bg-gradient-to-b from-[var(--color-accent)] to-transparent"
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold text-primary">{t("title")}</h2>
-            <span className="label-sys rounded-sm bg-surface px-1.5 py-px">
-              {t("ownHardwareBadge")}
-            </span>
-            {newCount > 0 && (
-              <span
-                data-testid="local-registry-new-count"
-                className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
-              >
-                {newCount} {t("newLabel")}
-              </span>
-            )}
-          </div>
-          <p className="text-xs mt-0.5 text-muted">
-            {t("subtitle", { time: timeAgo(lastUpdated, locale) })}
-          </p>
-        </div>
+    <Section
+      id="local-models"
+      title={t("title")}
+      hint={t("subtitle", { time: timeAgo(lastUpdated, locale) })}
+      count={recipes.length}
+      badge={
+        newCount > 0 ? (
+          <span
+            data-testid="local-registry-new-count"
+            className="label-sys text-accent border border-accent bg-accent-subtle rounded-sm px-1.5 py-px"
+          >
+            {newCount} {t("newLabel")}
+          </span>
+        ) : undefined
+      }
+      actions={
         <button
           type="button"
           onClick={() => refreshMutation.mutate()}
@@ -489,7 +480,8 @@ export function LocalModelBrowser() {
           )}
           {t("refreshNow")}
         </button>
-      </div>
+      }
+    >
 
       {/* Filterleiste */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -633,6 +625,6 @@ export function LocalModelBrowser() {
           onClose={() => setInstalling(null)}
         />
       )}
-    </div>
+    </Section>
   );
 }

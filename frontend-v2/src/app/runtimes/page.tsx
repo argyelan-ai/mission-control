@@ -43,6 +43,8 @@ import Link from "next/link";
 import { Plug } from "lucide-react";
 import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { EntityIcon } from "@/components/shared/EntityIcon";
+import { OverflowMenu } from "@/components/shared/OverflowMenu";
+import { Section, SectionNav } from "@/components/shared/Section";
 
 // ── State Configuration ───────────────────────────────────────────────────────
 
@@ -106,10 +108,14 @@ function ActionButton({
   loading: boolean;
   variant: "success" | "danger" | "default";
 }) {
+  // Outlined, not filled. A filled error-red Stop button on every running
+  // runtime made red the loudest colour on a page where nothing is wrong —
+  // and red already means "failed" elsewhere. The hue still carries the
+  // action; the fill only appears on hover.
   const colors = {
-    success: { bg: `${C.online}14`, border: `${C.online}33`, text: C.online },
-    danger:  { bg: `${C.error}14`, border: `${C.error}33`, text: C.error },
-    default: { bg: C.borderSubtle, border: C.borderSubtle, text: C.textMuted },
+    success: { border: `${C.online}40`, text: C.online, hover: `${C.online}1A` },
+    danger:  { border: `${C.error}33`, text: STATUS_TEXT.error, hover: `${C.error}1A` },
+    default: { border: C.borderActive, text: C.textMuted, hover: C.bgHover },
   };
   const c = colors[variant];
 
@@ -118,11 +124,16 @@ function ActionButton({
       onClick={onClick}
       disabled={disabled}
       title={label}
-      className="flex items-center justify-center w-7 h-7 rounded-lg transition-all cursor-pointer disabled:cursor-not-allowed"
+      aria-label={label}
+      className="action-btn flex items-center justify-center w-7 h-7 min-w-[28px] rounded-md transition-colors cursor-pointer disabled:cursor-not-allowed"
       style={{
-        background: disabled ? "transparent" : c.bg,
-        border: `1px solid ${disabled ? "transparent" : c.border}`,
-        color: disabled ? C.borderActive : c.text,
+        background: "transparent",
+        // Disabled used to render at rgba(168,168,168,0.16) — about 1.1:1, so
+        // the operator could not tell "disabled" from "not there". textDim
+        // clears the 3:1 floor for UI components (WCAG 1.4.11).
+        border: `1px solid ${disabled ? C.borderSubtle : c.border}`,
+        color: disabled ? C.textDim : c.text,
+        ["--action-hover" as string]: c.hover,
       }}
     >
       {loading ? <Loader2 size={12} className="animate-spin" /> : <Icon size={12} />}
@@ -979,12 +990,12 @@ function ModelCatalog() {
 
 // ── Runtime Row ───────────────────────────────────────────────────────────────
 
-// ── Bound Agents Footer (Phase 15 T3.3) ─────────────────────────────────
+// ── Bound Agents (Phase 15 T3.3) ────────────────────────────────────────
 // Shows the agents currently using this runtime + a "Bind Agent" button
 // that opens BindAgentModal. Only visible for runtimes that have a slug
 // (DB-managed); legacy JSON runtimes are skipped.
 
-function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
+function BoundAgents({ runtime }: { runtime: Runtime }) {
   const t = useTranslations("runtimes");
   const [bindOpen, setBindOpen] = useState(false);
   const slug = runtime.slug ?? runtime.id;
@@ -1009,21 +1020,18 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
     },
   });
 
+  // Inline chips in the meta line, not a bordered footer bar. The old footer
+  // cost a full row plus a divider on every card, and stacked five identical
+  // "Bind agent" buttons down the page.
   return (
     <>
-      <div
-        className="px-3 py-2 border-t flex items-center gap-2 flex-wrap"
-        style={{ borderColor: C.borderSubtle }}
-      >
-        <span
-          className="text-[10px] font-mono uppercase tracking-wider"
-          style={{ color: C.textMuted }}
-        >
+      <span className="inline-flex items-center gap-1.5 flex-wrap">
+        <span className="label-sys" style={{ color: C.textDim }}>
           {t("agentsLabel")}
         </span>
         {isLoading && <Loader2 size={11} className="animate-spin" style={{ color: C.textMuted }} />}
         {!isLoading && bound.length === 0 && (
-          <span className="text-[11px]" style={{ color: C.textMuted }}>
+          <span className="text-xs" style={{ color: C.textMuted }}>
             {t("noneUnbound")}
           </span>
         )}
@@ -1031,7 +1039,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
           <span key={a.id} className="inline-flex items-center gap-1">
             <Link
               href={`/agents/${a.id}`}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md font-mono text-[10px] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md font-mono text-[10px] leading-none min-h-[24px] hover:bg-[var(--color-bg-hover)] transition-colors cursor-pointer"
               style={{
                 backgroundColor: C.accentSubtle,
                 color: C.textSecondary,
@@ -1043,7 +1051,7 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
             </Link>
             {a.pending_runtime_sync && (
               <span
-                className="rounded px-1 text-[10px]"
+                className="rounded px-1 py-0.5 text-[10px]"
                 style={{ color: STATUS_TEXT.warning, border: `1px solid ${STATUS.warning}` }}
                 title={t("pendingSyncTitle")}
               >
@@ -1054,33 +1062,27 @@ function BoundAgentsFooter({ runtime }: { runtime: Runtime }) {
         ))}
         <button
           onClick={() => setBindOpen(true)}
-          className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
+          title={t("bindAgent")}
+          className="inline-flex items-center gap-1 px-1.5 py-1 rounded-md text-[10px] leading-none min-h-[24px] cursor-pointer transition-colors hover:bg-[var(--color-bg-hover)]"
           style={{
-            color: C.accent,
-            border: `1px dashed ${C.borderAccent}`,
+            color: C.textSecondary,
+            border: `1px dashed ${C.borderActive}`,
           }}
         >
           <Plug size={10} />
           {t("bindAgent")}
         </button>
-      </div>
-
-      {anyPending && (
-        <div
-          className="px-3 pb-2 flex items-center gap-2 text-[11px]"
-          style={{ color: C.textSecondary }}
-        >
-          <span>{t("syncPendingHint")}</span>
+        {anyPending && (
           <button
             onClick={() => syncNowMutation.mutate()}
-            className="underline cursor-pointer"
+            className="underline cursor-pointer text-xs"
             style={{ color: STATUS_TEXT.warning }}
             title={t("syncNowTitle")}
           >
             {t("syncNow")}
           </button>
-        </div>
-      )}
+        )}
+      </span>
 
       <BindAgentModal
         open={bindOpen}
@@ -1342,7 +1344,7 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
               </span>
             )}
           </div>
-          <div className="flex items-center gap-1.5 mt-0.5">
+          <div className="flex items-center gap-x-1.5 gap-y-1 mt-1 flex-wrap">
             {sizeGb != null && sizeGb > 0 && (
               <>
                 <span className="text-xs tabular-nums" style={{ color: C.textMuted }}>
@@ -1412,6 +1414,8 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
                 <AutostartToggle slug={runtime.slug ?? runtime.id} />
               </>
             )}
+            <span style={{ color: C.borderSubtle }}>·</span>
+            <BoundAgents runtime={runtime} />
           </div>
           {!isProbeable && (
             <RuntimeModelEditor runtime={runtime} onMessage={setActionMsg} />
@@ -1465,76 +1469,75 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
 
         </div>
 
-        {/* Actions */}
+        {/* Actions — the one action that matches the current state stays on the
+            row; everything else moves behind the overflow menu. Seven icon
+            buttons per card were mostly disabled and unreadable. */}
         <div className="flex items-center gap-1.5 shrink-0 self-end sm:self-auto">
-          {isLmStudio && (
-            <button
-              onClick={() => setSettingsOpen(v => !v)}
-              title={t("ctxSettings")}
-              aria-label={t("ctxSettings")}
-              style={{
-                padding: "4px",
-                borderRadius: "6px",
-                background: settingsOpen ? C.accentSubtle : "transparent",
-                border: `1px solid ${settingsOpen ? C.borderAccent : "transparent"}`,
-                color: settingsOpen ? C.accent : C.textMuted,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                transition: "all 0.15s",
-              }}
-            >
-              <Settings2 size={13} />
-            </button>
-          )}
-          {isPowerManaged && (
+          {canStart ? (
             <ActionButton
-              icon={Power}
-              label={t("wake")}
-              // Enabled when the box is asleep, or generally whenever it is not
-              // yet serving (state !== "ready"); WoL is cheap and idempotent.
-              disabled={(!isAsleep && effectiveState === "ready") || isMutating}
-              onClick={() => wakeMutation.mutate()}
-              loading={wakeMutation.isPending}
+              icon={Play}
+              label={t("start")}
+              disabled={isMutating}
+              onClick={() => startMutation.mutate()}
+              loading={startMutation.isPending}
               variant="success"
             />
-          )}
-          <ActionButton
-            icon={Play}
-            label={t("start")}
-            disabled={!canStart || isMutating}
-            onClick={() => startMutation.mutate()}
-            loading={startMutation.isPending}
-            variant="success"
-          />
-          <ActionButton
-            icon={Square}
-            label={t("stop")}
-            disabled={!canStop || isMutating}
-            onClick={() => stopMutation.mutate()}
-            loading={stopMutation.isPending}
-            variant="danger"
-          />
-          {runtime.runtime_type !== "lmstudio" && (
+          ) : (
             <ActionButton
-              icon={RotateCcw}
-              label={t("restart")}
+              icon={Square}
+              label={t("stop")}
               disabled={!canStop || isMutating}
-              onClick={() => restartMutation.mutate()}
-              loading={restartMutation.isPending}
-              variant="default"
+              onClick={() => stopMutation.mutate()}
+              loading={stopMutation.isPending}
+              variant="danger"
             />
           )}
-          {isProbeable && (
-            <ActionButton
-              icon={RefreshCw}
-              label={t("reprobe")}
-              disabled={isMutating}
-              onClick={() => probeMutation.mutate()}
-              loading={probeMutation.isPending}
-              variant="default"
-            />
-          )}
+          <OverflowMenu
+            label={t("moreActions", { name: runtime.display_name })}
+            testId={`runtime-more-${runtime.slug ?? runtime.id}`}
+            actions={[
+              ...(isPowerManaged
+                ? [{
+                    id: "wake",
+                    label: t("wake"),
+                    icon: Power,
+                    // WoL is cheap and idempotent — offer it whenever the box
+                    // is not already serving.
+                    disabled: (!isAsleep && effectiveState === "ready") || isMutating,
+                    loading: wakeMutation.isPending,
+                    onClick: () => wakeMutation.mutate(),
+                  }]
+                : []),
+              ...(runtime.runtime_type !== "lmstudio"
+                ? [{
+                    id: "restart",
+                    label: t("restart"),
+                    icon: RotateCcw,
+                    disabled: !canStop || isMutating,
+                    loading: restartMutation.isPending,
+                    onClick: () => restartMutation.mutate(),
+                  }]
+                : []),
+              ...(isProbeable
+                ? [{
+                    id: "reprobe",
+                    label: t("reprobe"),
+                    icon: RefreshCw,
+                    disabled: isMutating,
+                    loading: probeMutation.isPending,
+                    onClick: () => probeMutation.mutate(),
+                  }]
+                : []),
+              ...(isLmStudio
+                ? [{
+                    id: "ctx",
+                    label: t("ctxSettings"),
+                    icon: Settings2,
+                    onClick: () => setSettingsOpen((v) => !v),
+                  }]
+                : []),
+            ]}
+          />
           {runtime.runtime_type === "vllm_docker" && (
             <SparkRecipeSwitcher runtimeId={runtime.id} />
           )}
@@ -1566,9 +1569,6 @@ export function RuntimeCard({ runtime, sizeGb, live }: { runtime: Runtime; sizeG
           {actionMsg}
         </div>
       )}
-
-      {/* Bound Agents Footer (Phase 15 T3.3) */}
-      <BoundAgentsFooter runtime={runtime} />
 
     </motion.div>
   );
@@ -1683,6 +1683,10 @@ function KvResetScheduleToggle() {
 
 export default function RuntimesPage() {
   const t = useTranslations("runtimes");
+  const tHosts = useTranslations("runtimes.hosts");
+  const tCatalog = useTranslations("runtimes.modelCatalog");
+  const tLocal = useTranslations("runtimes.localRegistry");
+  const tCli = useTranslations("runtimes.cliTools");
   const queryClient = useQueryClient();
   const [addOpen, setAddOpen] = useState(false);
 
@@ -1771,18 +1775,21 @@ export default function RuntimesPage() {
         {/* Host metrics — one bar per enabled host (ADR-048) */}
         <HostMetricsBar />
 
+        {/* Jump bar — the page runs past 2300 px, so CLI-Tools used to be
+            reachable only by scrolling through everything above it. */}
+        <SectionNav
+          items={[
+            { id: "vllm", label: "vLLM Docker", count: vllmRuntimes.length },
+            { id: "lmstudio", label: "LM Studio", count: lmsRuntimes.length + unattachedModels.length },
+            { id: "hosts", label: tHosts("title") },
+            { id: "model-catalog", label: tCatalog("title") },
+            { id: "local-models", label: tLocal("title") },
+            { id: "cli-tools", label: tCli("title") },
+          ]}
+        />
+
         {/* vLLM Docker section */}
-        <div className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.info} 0%, transparent 100%)`, minHeight: "36px" }} />
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>vLLM Docker</h2>
-                <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>Container</span>
-              </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>{t("vllmHint")}</p>
-            </div>
-          </div>
+        <Section id="vllm" title="vLLM Docker" hint={t("vllmHint")} count={vllmRuntimes.length}>
 
           {isLoading && (
             <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -1812,21 +1819,16 @@ export default function RuntimesPage() {
               )}
             </div>
           )}
-        </div>
+        </Section>
 
         {/* LM Studio section */}
-        <div>
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-px" style={{ alignSelf: "stretch", background: `linear-gradient(to bottom, ${C.accent} 0%, transparent 100%)`, minHeight: "36px" }} />
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>LM Studio</h2>
-                <span className="text-xs px-1.5 py-px rounded" style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}>LLM</span>
-              </div>
-              <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>{t("lmsHint")}</p>
-            </div>
-            <KvResetScheduleToggle />
-          </div>
+        <Section
+          id="lmstudio"
+          title="LM Studio"
+          hint={t("lmsHint")}
+          count={lmsRuntimes.length + unattachedModels.length}
+          actions={<KvResetScheduleToggle />}
+        >
 
           <ModelCatalog />
 
@@ -1879,7 +1881,7 @@ export default function RuntimesPage() {
               </>
             );
           })()}
-        </div>
+        </Section>
 
         {/* Hosts Registry (ADR-048) */}
         <HostsSection />

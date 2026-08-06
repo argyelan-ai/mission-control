@@ -2159,7 +2159,8 @@
       "resultTitle": "Runtime angelegt und gestartet",
       "resultState": "Status: {state}",
       "resultHint": "Beim ersten Start dauert das Laden der Gewichte einige Minuten. Die Runtime-Karte zeigt den Live-Status."
-    }
+    },
+    "moreActions": "Weitere Aktionen für {name}"
   },
   "bench": {
     "common": {

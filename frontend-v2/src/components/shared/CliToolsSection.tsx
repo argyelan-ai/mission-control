@@ -30,6 +30,7 @@ import { C, STATUS, STATUS_TEXT } from "@/lib/colors";
 import { useNotificationStore } from "@/lib/store";
 import { timeAgo } from "@/lib/utils";
 import { useBodyScrollLock } from "@/hooks/useBodyScrollLock";
+import { Section } from "@/components/shared/Section";
 
 // ── Phase model ───────────────────────────────────────────────────────────────
 // The build pipeline moves manifest → build → recreate → done|failed. "idle"
@@ -498,33 +499,12 @@ export function CliToolsSection() {
   const openTool = modalTool ? tools.find((tool) => tool.tool === modalTool) ?? null : null;
 
   return (
-    <div className="mt-8">
-      {/* Section header — mirrors the vLLM/LM Studio headers on this page */}
-      <div className="flex items-center gap-3 mb-4">
-        <div
-          className="w-px"
-          style={{
-            alignSelf: "stretch",
-            background: `linear-gradient(to bottom, ${C.accent} 0%, transparent 100%)`,
-            minHeight: "36px",
-          }}
-        />
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h2 className="text-sm font-semibold" style={{ color: C.textPrimary }}>
-              {t("title")}
-            </h2>
-            <span
-              className="text-xs px-1.5 py-px rounded"
-              style={{ color: C.textMuted, background: C.border, fontSize: "10px", letterSpacing: "0.06em" }}
-            >
-              {t("fleetBadge")}
-            </span>
-          </div>
-          <p className="text-xs mt-0.5" style={{ color: C.textMuted }}>
-            {t("subtitle", { time: timeAgo(checkedAt, locale) })}
-          </p>
-        </div>
+    <Section
+      id="cli-tools"
+      title={t("title")}
+      hint={t("subtitle", { time: timeAgo(checkedAt, locale) })}
+      count={tools.length}
+      actions={
         <button
           onClick={() => checkMutation.mutate()}
           disabled={checkMutation.isPending}
@@ -534,7 +514,8 @@ export function CliToolsSection() {
           {checkMutation.isPending ? <Loader2 size={11} className="animate-spin" /> : <RotateCcw size={11} />}
           {t("checkNow")}
         </button>
-      </div>
+      }
+    >
 
       {isLoading && (
         <div className="flex items-center gap-2 py-2" style={{ color: C.textMuted }}>
@@ -574,6 +555,6 @@ export function CliToolsSection() {
           onClose={() => setModalTool(null)}
         />
       )}
-    </div>
+    </Section>
   );
 }

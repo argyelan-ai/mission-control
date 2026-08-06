@@ -2159,7 +2159,8 @@
       "resultTitle": "Runtime created and started",
       "resultState": "Status: {state}",
       "resultHint": "Loading the weights takes a few minutes on the first start. The runtime card shows the live status."
-    }
+    },
+    "moreActions": "More actions for {name}"
   },
   "bench": {
     "common": {
